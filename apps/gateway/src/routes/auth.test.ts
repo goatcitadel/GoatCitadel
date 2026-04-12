@@ -603,7 +603,7 @@ describe("auth routes", () => {
     });
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({
-      error: "Companion session admin access requires operator authentication.",
+      error: "Operator authentication is required for this control-plane route.",
     });
   });
 

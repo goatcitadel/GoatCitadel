@@ -43,11 +43,15 @@ const databaseVerifySchema = z.object({
 });
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/api/v1/admin/retention", async (_request, reply) => {
+  const operatorOnly = {
+    preHandler: fastify.requireOperatorAuth,
+  } as const;
+
+  fastify.get("/api/v1/admin/retention", operatorOnly, async (_request, reply) => {
     return reply.send(fastify.gateway.getRetentionPolicy());
   });
 
-  fastify.patch("/api/v1/admin/retention", async (request, reply) => {
+  fastify.patch("/api/v1/admin/retention", operatorOnly, async (request, reply) => {
     const parsed = retentionPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -75,7 +79,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(updated);
   });
 
-  fastify.post("/api/v1/admin/retention/prune", async (request, reply) => {
+  fastify.post("/api/v1/admin/retention/prune", operatorOnly, async (request, reply) => {
     const parsed = pruneSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -86,7 +90,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(result);
   });
 
-  fastify.get("/api/v1/admin/backups", async (request, reply) => {
+  fastify.get("/api/v1/admin/backups", operatorOnly, async (request, reply) => {
     const parsed = backupListQuery.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -95,7 +99,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items });
   });
 
-  fastify.post("/api/v1/admin/backups/create", async (request, reply) => {
+  fastify.post("/api/v1/admin/backups/create", operatorOnly, async (request, reply) => {
     const parsed = backupCreateSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -108,7 +112,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/admin/backups/restore", async (request, reply) => {
+  fastify.post("/api/v1/admin/backups/restore", operatorOnly, async (request, reply) => {
     const parsed = backupRestoreSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -120,7 +124,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.code(409).send(blocked.response);
   });
 
-  fastify.post("/api/v1/admin/backups/verify", async (request, reply) => {
+  fastify.post("/api/v1/admin/backups/verify", operatorOnly, async (request, reply) => {
     const parsed = backupVerifySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -136,7 +140,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/admin/database/cutover", async (request, reply) => {
+  fastify.post("/api/v1/admin/database/cutover", operatorOnly, async (request, reply) => {
     const parsed = databaseCutoverSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -153,7 +157,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/admin/database/verify", async (request, reply) => {
+  fastify.post("/api/v1/admin/database/verify", operatorOnly, async (request, reply) => {
     const parsed = databaseVerifySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

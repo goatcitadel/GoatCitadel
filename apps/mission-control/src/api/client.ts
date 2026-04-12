@@ -821,7 +821,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     if (sharedEventSource !== source) {
       return;
     }
-    activeEventStreamLeaseId = undefined;
+    clearActiveEventStreamServerIdentity();
     clearStoredRealtimeCursor();
     lastErrorAt = new Date().toISOString();
     const replayGapEvent = buildReplayGapRealtimeEvent(evt.data);
@@ -859,6 +859,7 @@ async function ensureEventStreamConnected(): Promise<void> {
       setEventConnectionState("closed");
       return;
     }
+    clearActiveEventStreamServerIdentity();
     lastErrorAt = new Date().toISOString();
     setEventConnectionState("error");
     recordClientDiagnostic({
@@ -916,6 +917,11 @@ function clearReconnectTimer(): void {
   }
   window.clearTimeout(eventReconnectTimer);
   eventReconnectTimer = null;
+}
+
+function clearActiveEventStreamServerIdentity(): void {
+  activeEventStreamLeaseId = undefined;
+  activeEventStreamGatewayNodeId = undefined;
 }
 
 function setEventConnectionState(state: EventStreamConnectionState): void {

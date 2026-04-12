@@ -29,6 +29,7 @@ describe("durable routes", () => {
     }));
 
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", {
       getDurableDiagnostics,
     } as never);
@@ -51,6 +52,7 @@ describe("durable routes", () => {
     const listDurableRunCheckpoints = vi.fn(() => []);
 
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", {
       listDurableRunCheckpoints,
     } as never);

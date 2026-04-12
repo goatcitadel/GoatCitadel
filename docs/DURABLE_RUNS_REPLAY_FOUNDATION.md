@@ -1,6 +1,15 @@
 # Durable Runs + Replay Foundation
 
-This document tracks the durable execution foundation that now owns shipped resumable operator flows in GoatCitadel.
+This document is historical implementation background for the durable execution foundation that now owns shipped resumable operator flows in GoatCitadel.
+
+The canonical current runtime posture lives in `docs/CANONICAL_RUNTIME_STATE_MODEL.md`. Use that file for shipped behavior, release scope, and authority. This file explains how the durable foundation was assembled and what it introduced; it is not the active rollout source of truth.
+
+## Current Shipped Posture
+
+- Shipped Chat / Cowork / Code operator sends, retry, resume, approval wait/resume, worker restart recovery, and dead-letter recovery now run on durable execution by default.
+- `assistant.durable.enabled`, `executionEnabled`, `chatAutoPromoteEnabled`, and `durableKernelV1Enabled` default to `true` in the shipped gateway runtime.
+- `replayOverridesV1Enabled` remains default-off for replay-with-overrides.
+- The earlier rollout guidance that described durable defaults as off is retired and must not be reintroduced here.
 
 ## Scope
 
@@ -10,10 +19,13 @@ This document tracks the durable execution foundation that now owns shipped resu
 - Add worker discovery that does not depend on same-process nudges.
 - Add read/write operator APIs for pause, resume, wake, retry, and dead-letter recovery.
 
-## Feature Flag
+## Runtime Flags and Defaults
 
-- `assistant.durable.enabled` in gateway config (default: `false`)
+- `assistant.durable.enabled` in gateway config (default: `true` in the shipped runtime)
 - Env override: `GOATCITADEL_DURABLE_FOUNDATION_ENABLED=true|false`
+- `assistant.durable.executionEnabled` (default: `true`)
+- `assistant.durable.chatAutoPromoteEnabled` (default: `true`)
+- `assistant.durable.durableKernelV1Enabled` (default: `true`)
 - Diagnostics toggle (reserved): `assistant.durable.diagnosticsEnabled` and `GOATCITADEL_DURABLE_DIAGNOSTICS_ENABLED`
 
 ## Schema Added
@@ -63,9 +75,8 @@ No existing tables were changed or dropped.
 - [x] Queue consumers / idempotent worker runtime for shipped durable flows
 - [x] DLQ operator actions for shipped durable flows
 
-## Next Step (Activation Plan)
+## Historical Notes
 
-1. Add durable worker loop behind a second flag.
-2. Migrate one low-risk flow (manual replay) to durable queue mode.
-3. Validate retries and checkpoint resume end-to-end in staging.
-4. Add DLQ triage UI and replay-with-overrides action.
+- The early foundation work landed behind explicit rollout flags so storage, queueing, and operator APIs could stabilize before they became the default shipped path.
+- That staged rollout is complete for the shipped operator flows named above.
+- Any future changes in durable ownership should update `docs/CANONICAL_RUNTIME_STATE_MODEL.md` first and then keep this background document aligned.

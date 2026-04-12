@@ -6,7 +6,7 @@ import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.j
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 
 declare module "fastify" {
@@ -16,6 +16,7 @@ declare module "fastify" {
       ttlMs?: number,
       actorId?: string,
     ) => SseTokenIssueResponse;
+    requireOperatorAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
   }
 
   interface FastifyRequest {
@@ -77,6 +78,14 @@ export const authPlugin = fp(async (fastify) => {
       };
     },
   );
+  fastify.decorate("requireOperatorAuth", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (hasOperatorControlPlaneAccess(fastify, request.authActorSource)) {
+      return;
+    }
+    return reply.code(403).send({
+      error: "Operator authentication is required for this control-plane route.",
+    });
+  });
 
   fastify.addHook("onRequest", async (request, reply) => {
     setAuthActor(request, "anonymous", "none");
@@ -324,6 +333,13 @@ function isOnboardingComplete(fastify: FastifyInstance): boolean {
     );
     return true;
   }
+}
+
+function hasOperatorControlPlaneAccess(fastify: FastifyInstance, source: FastifyRequest["authActorSource"]): boolean {
+  if (source === "token" || source === "basic" || source === "loopback") {
+    return true;
+  }
+  return source === "none" && fastify.gatewayConfig.assistant.auth.mode === "none";
 }
 
 function readHeaderToken(value: string | string[] | undefined): string | undefined {

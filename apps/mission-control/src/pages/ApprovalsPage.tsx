@@ -203,34 +203,50 @@ export function ApprovalsPage() {
     }));
   };
 
-  const loadDurableStatus = async (approvalId: string) => {
-    setDurableBusyByApprovalId((prev) => ({ ...prev, [approvalId]: true }));
-    try {
-      const lifecycle = await fetchRuntimeLifecycle({ approvalId });
-      setLifecycleByApprovalId((prev) => ({ ...prev, [approvalId]: lifecycle }));
-      const runId = getCanonicalDurableRunId(lifecycle);
-      if (!runId) {
-        setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: null }));
-        setError("No canonical durable run is linked to this approval yet.");
-        return;
-      }
-      const run = lifecycle.durableRun ?? (await fetchDurableRun(runId));
+  const resolveDurableStatus = async (approvalId: string) => {
+    const lifecycle = await fetchRuntimeLifecycle({ approvalId });
+    const runId = getCanonicalDurableRunId(lifecycle);
+    if (!runId) {
+      return {
+        lifecycle,
+        durable: null,
+      };
+    }
+    const run = lifecycle.durableRun ?? (await fetchDurableRun(runId));
+    let blockedStep: string | undefined;
+    let blockedReason: string | undefined;
+    if (isBlockedDurableStatus(run.status)) {
       const timeline = await fetchDurableRunTimeline(runId, 120);
       const blockingEvent = [...timeline.items]
         .reverse()
         .find((event) => event.eventType === "run_paused" || event.eventType === "run_waiting");
-      const blockedStep = (blockingEvent?.payload?.stepKey as string | undefined) ?? blockingEvent?.stepKey;
-      const blockedReason = blockingEvent?.payload?.reason;
-      setDurableByApprovalId((prev) => ({
-        ...prev,
-        [approvalId]: {
-          runId,
-          status: run.status,
-          blockedStep,
-          blockedReason: typeof blockedReason === "string" ? blockedReason : undefined,
-          updatedAt: run.updatedAt,
-        },
-      }));
+      blockedStep = (blockingEvent?.payload?.stepKey as string | undefined) ?? blockingEvent?.stepKey;
+      const nextBlockedReason = blockingEvent?.payload?.reason;
+      blockedReason = typeof nextBlockedReason === "string" ? nextBlockedReason : undefined;
+    }
+    return {
+      lifecycle,
+      durable: {
+        runId,
+        status: run.status,
+        blockedStep,
+        blockedReason,
+        updatedAt: run.updatedAt,
+      } satisfies ApprovalDurableStatus,
+    };
+  };
+
+  const loadDurableStatus = async (approvalId: string) => {
+    setDurableBusyByApprovalId((prev) => ({ ...prev, [approvalId]: true }));
+    try {
+      const resolved = await resolveDurableStatus(approvalId);
+      setLifecycleByApprovalId((prev) => ({ ...prev, [approvalId]: resolved.lifecycle }));
+      setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: resolved.durable }));
+      if (!resolved.durable?.runId) {
+        setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: null }));
+        setError("No canonical durable run is linked to this approval yet.");
+        return;
+      }
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -240,15 +256,28 @@ export function ApprovalsPage() {
   };
 
   const resumeFromCheckpoint = async (approvalId: string) => {
-    const current = durableByApprovalId[approvalId];
-    if (!current?.runId) {
-      setError("Load durable status first so we can resume from the exact checkpoint.");
-      return;
-    }
     setDurableBusyByApprovalId((prev) => ({ ...prev, [approvalId]: true }));
     try {
+      let current = durableByApprovalId[approvalId];
+      if (!current?.runId) {
+        const resolved = await resolveDurableStatus(approvalId);
+        setLifecycleByApprovalId((prev) => ({ ...prev, [approvalId]: resolved.lifecycle }));
+        setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: resolved.durable }));
+        current = resolved.durable;
+      }
+      if (!current?.runId) {
+        setError("No canonical durable run is linked to this approval yet.");
+        return;
+      }
+      if (current.status !== "paused") {
+        setError(`Run ${current.runId} is ${current.status}, so there is no paused checkpoint to resume.`);
+        return;
+      }
       await resumeDurableRun(current.runId, "operator");
-      await loadDurableStatus(approvalId);
+      const refreshed = await resolveDurableStatus(approvalId);
+      setLifecycleByApprovalId((prev) => ({ ...prev, [approvalId]: refreshed.lifecycle }));
+      setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: refreshed.durable }));
+      setError(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -637,8 +666,8 @@ export function ApprovalsPage() {
               <div className="replay-box approval-support-box">
                 <h4>Checkpoint resume</h4>
                 <p>
-                  Load durable status to see the exact blocked step. Resume continues from the last checkpoint instead
-                  of restarting.
+                  Load durable status to inspect the current checkpoint. Resume continues from the last checkpoint
+                  instead of restarting.
                 </p>
                 <div className="actions">
                   <button
@@ -654,7 +683,7 @@ export function ApprovalsPage() {
                   <button
                     type="button"
                     onClick={() => setPendingResumeApprovalId(approval.approvalId)}
-                    disabled={durableBusy || !durable?.runId || durable.status !== "paused"}
+                    disabled={durableBusy || (durable != null && durable.status !== "paused")}
                     className="gc-button"
                   >
                     Resume paused run
@@ -921,6 +950,10 @@ function getCanonicalDurableRunId(lifecycle: RuntimeLifecycleResponse): string |
     lifecycle.approvalWaitDurableRun?.runId ??
     null
   );
+}
+
+function isBlockedDurableStatus(status: string): boolean {
+  return status === "paused" || status === "waiting";
 }
 
 function formatInferredIds(ids: string[], canonicalId?: string | null): string {

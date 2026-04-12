@@ -18,6 +18,7 @@ const requiredFiles = [
   "docs/1_0_CONTRACT.md",
   "docs/1_0_RELEASE_EVIDENCE.md",
   "docs/CANONICAL_RUNTIME_STATE_MODEL.md",
+  "docs/DURABLE_RUNS_REPLAY_FOUNDATION.md",
   "docs/ENGINEERING_HANDBOOK.md",
 ];
 
@@ -140,6 +141,20 @@ if (/Execution-engine adoption: \*\*in progress\*\*/i.test(runtimeState) || /Rem
 }
 if (!/memory item list\/edit\/forget\/history/i.test(runtimeState)) {
   errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must describe MemoryLifecycleService as the owner of memory item list/edit/forget/history.");
+}
+if (!/historical implementation background/i.test(runtimeState) || !/not the active rollout source of truth/i.test(runtimeState)) {
+  errors.push("docs/CANONICAL_RUNTIME_STATE_MODEL.md must treat docs/DURABLE_RUNS_REPLAY_FOUNDATION.md as historical background, not active rollout truth.");
+}
+
+const durableFoundation = await readFile(path.join(root, "docs", "DURABLE_RUNS_REPLAY_FOUNDATION.md"), "utf8");
+if (!/historical implementation background/i.test(durableFoundation) || !/not the active rollout source of truth/i.test(durableFoundation)) {
+  errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must describe itself as historical implementation background rather than an active rollout plan.");
+}
+if (!/default to `true`/i.test(durableFoundation) || !/Shipped Chat \/ Cowork \/ Code operator sends/i.test(durableFoundation)) {
+  errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must match the shipped durable-by-default posture for Chat/Cowork/Code operator flows.");
+}
+if (/default:\s*`false`/i.test(durableFoundation) || /Next Step \(Activation Plan\)/i.test(durableFoundation) || /keep the feature disabled by default/i.test(durableFoundation)) {
+  errors.push("docs/DURABLE_RUNS_REPLAY_FOUNDATION.md must not reintroduce stale default-off or activation-plan language.");
 }
 
 const readme = await readFile(path.join(root, "README.md"), "utf8");

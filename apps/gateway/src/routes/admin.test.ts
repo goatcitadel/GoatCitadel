@@ -24,6 +24,7 @@ describe("admin routes", () => {
       backupsKeep: 5,
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { getRetentionPolicy } as never);
     await app.register(adminRoutes);
 
@@ -40,6 +41,7 @@ describe("admin routes", () => {
   it("validates prune input and forwards dryRun", async () => {
     const pruneRetention = vi.fn(async () => ({ deletedEvents: 0, dryRun: false }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { pruneRetention } as never);
     await app.register(adminRoutes);
 
@@ -64,6 +66,7 @@ describe("admin routes", () => {
       throw new Error("restore blocked: file path outside workspace");
     });
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { restoreBackup } as never);
     await app.register(adminRoutes);
 
@@ -88,6 +91,7 @@ describe("admin routes", () => {
       restored: true,
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { restoreBackup } as never);
     await app.register(adminRoutes);
 
@@ -114,6 +118,7 @@ describe("admin routes", () => {
   it("uses the shared backup directory resolution for the blocked live-restore payload", async () => {
     process.env.GOATCITADEL_BACKUP_DIR = "C:/custom-backups";
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", {} as never);
     await app.register(adminRoutes);
 
@@ -141,6 +146,7 @@ describe("admin routes", () => {
       issues: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { verifyBackup } as never);
     await app.register(adminRoutes);
 
@@ -167,6 +173,7 @@ describe("admin routes", () => {
       verified: true,
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { verifyBackup } as never);
     await app.register(adminRoutes);
 
@@ -202,6 +209,7 @@ describe("admin routes", () => {
       steps: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { runDatabaseCutover } as never);
     await app.register(adminRoutes);
 
@@ -238,6 +246,7 @@ describe("admin routes", () => {
       issues: [],
     }));
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gateway", { verifyDatabaseCutover } as never);
     await app.register(adminRoutes);
 

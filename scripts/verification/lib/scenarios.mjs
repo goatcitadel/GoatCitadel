@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -394,6 +395,7 @@ export async function runDeepCoreLane(context, options = {}) {
   } finally {
     await stopVerificationStack(stack);
   }
+
 }
 
 async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
@@ -1038,6 +1040,167 @@ export async function runOperatorProofLane(context, options = {}) {
     );
   } finally {
     await stopVerificationStack(stack);
+  }
+
+  const operatorToken = "verification-operator-token";
+  const operatorHeaders = {
+    Authorization: `Bearer ${operatorToken}`,
+  };
+  const authStack = await startVerificationStack(context, {
+    includeUi: false,
+    gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: operatorToken,
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
+    },
+  });
+  try {
+    await ensureOnboardingComplete(authStack.gatewayUrl, "verification-operator-proof-auth", operatorHeaders);
+    await runScenario(
+      context,
+      {
+        id: "operator-proof.auth-boundary.device-companion-denied",
+        lane: "operator-proof",
+        title: "Token-auth stack denies device and companion principals on privileged control-plane routes",
+        subsystem: "gateway",
+      },
+      async () => {
+        const deviceRequest = await requestJson(authStack.gatewayUrl, "/api/v1/auth/device-requests", {
+          method: "POST",
+          body: {
+            deviceLabel: "Verification Device",
+            deviceType: "desktop",
+            platform: "windows",
+          },
+        });
+        assertOk(deviceRequest, "create anonymous device access request");
+        const approvalId = deviceRequest.body?.approvalId;
+        const requestId = deviceRequest.body?.requestId;
+        const requestSecret = deviceRequest.body?.requestSecret;
+        if (!approvalId || !requestId || !requestSecret) {
+          throw new Error(
+            `device request did not return approvalId/requestId/requestSecret: ${JSON.stringify(deviceRequest.body)}`,
+          );
+        }
+
+        const resolvedApproval = await requestJson(
+          authStack.gatewayUrl,
+          `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+          {
+            method: "POST",
+            headers: operatorHeaders,
+            body: {
+              decision: "approve",
+              resolvedBy: "verification-operator-proof",
+              resolutionNote: "verification auth boundary approval resolution",
+            },
+          },
+        );
+        assertOk(resolvedApproval, "approve device access request");
+
+        const approvedStatus = await waitForApprovedDeviceAccessRequest(authStack.gatewayUrl, requestId, requestSecret);
+        const deviceToken = approvedStatus.body?.deviceToken;
+        if (typeof deviceToken !== "string" || deviceToken.length === 0) {
+          throw new Error(`device request approval did not yield a device token: ${JSON.stringify(approvedStatus.body)}`);
+        }
+
+        const companionKeys = generateKeyPairSync("ed25519");
+        const signingPublicKeyPem = companionKeys.publicKey.export({
+          type: "spki",
+          format: "pem",
+        });
+        const exchange = await requestJson(authStack.gatewayUrl, "/api/v1/auth/companion/session/exchange", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${deviceToken}`,
+          },
+          body: {
+            signingPublicKeyPem:
+              typeof signingPublicKeyPem === "string" ? signingPublicKeyPem : signingPublicKeyPem.toString("utf8"),
+            clientName: "Verification Companion",
+            appVersion: "1.0.0",
+          },
+        });
+        assertOk(exchange, "exchange device grant for companion session");
+        const companionToken = exchange.body?.accessToken;
+        if (typeof companionToken !== "string" || companionToken.length === 0) {
+          throw new Error(`companion exchange did not return an access token: ${JSON.stringify(exchange.body)}`);
+        }
+
+        const deniedChecks = [
+          {
+            actor: "device",
+            route: "/api/v1/admin/retention",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/admin/retention", {
+              headers: {
+                Authorization: `Bearer ${deviceToken}`,
+              },
+            }),
+          },
+          {
+            actor: "device",
+            route: "/api/v1/durable/diagnostics",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/durable/diagnostics", {
+              headers: {
+                Authorization: `Bearer ${deviceToken}`,
+              },
+            }),
+          },
+          {
+            actor: "companion",
+            route: "/api/v1/admin/retention",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/admin/retention", {
+              headers: {
+                Authorization: `Bearer ${companionToken}`,
+              },
+            }),
+          },
+          {
+            actor: "companion",
+            route: "/api/v1/auth/devices?view=all",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/auth/devices?view=all", {
+              headers: {
+                Authorization: `Bearer ${companionToken}`,
+              },
+            }),
+          },
+        ];
+
+        for (const denied of deniedChecks) {
+          if (denied.response.status !== 403) {
+            throw new Error(
+              `${denied.actor} credential unexpectedly reached ${denied.route}: ${JSON.stringify({
+                status: denied.response.status,
+                body: denied.response.body,
+              })}`,
+            );
+          }
+        }
+
+        const outPath = path.join(context.artifactRoot, "diagnostics", "operator-proof-auth-boundary.json");
+        await writeJson(outPath, {
+          deviceRequest: deviceRequest.body,
+          resolvedApproval: resolvedApproval.body,
+          approvedStatus: approvedStatus.body,
+          companionExchange: exchange.body,
+          deniedChecks: deniedChecks.map((entry) => ({
+            actor: entry.actor,
+            route: entry.route,
+            status: entry.response.status,
+            body: entry.response.body,
+          })),
+        });
+        return {
+          status: "passed",
+          metrics: {
+            deniedCount: deniedChecks.length,
+          },
+          artifacts: emptyArtifacts({ diagnostics: [relativeToRun(context, outPath)] }),
+        };
+      },
+    );
+  } finally {
+    await stopVerificationStack(authStack);
   }
 }
 
@@ -2427,20 +2590,25 @@ function assertOk(response, label) {
   }
 }
 
-async function ensureOnboardingComplete(gatewayUrl, completedBy) {
-  let onboardingStateResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/state");
+async function ensureOnboardingComplete(gatewayUrl, completedBy, headers = {}) {
+  let onboardingStateResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/state", {
+    headers,
+  });
   assertOk(onboardingStateResponse, "read onboarding state");
   if (onboardingStateResponse.body?.completed) {
     return onboardingStateResponse.body;
   }
   const completeResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/complete", {
     method: "POST",
+    headers,
     body: {
       completedBy,
     },
   });
   assertOk(completeResponse, "complete onboarding");
-  onboardingStateResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/state");
+  onboardingStateResponse = await requestJson(gatewayUrl, "/api/v1/onboarding/state", {
+    headers,
+  });
   assertOk(onboardingStateResponse, "re-read onboarding state");
   if (!onboardingStateResponse.body?.completed) {
     throw new Error(
@@ -2448,6 +2616,32 @@ async function ensureOnboardingComplete(gatewayUrl, completedBy) {
     );
   }
   return onboardingStateResponse.body;
+}
+
+async function waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, requestSecret, attempts = 20) {
+  let latest = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    latest = await requestJson(
+      gatewayUrl,
+      `/api/v1/auth/device-requests/${encodeURIComponent(requestId)}/status`,
+      {
+        headers: {
+          "x-goatcitadel-device-request-secret": requestSecret,
+        },
+      },
+    );
+    assertOk(latest, "read device access request status");
+    if (latest.body?.status === "approved" && typeof latest.body?.deviceToken === "string") {
+      return latest;
+    }
+    if (latest.body?.status === "rejected" || latest.body?.status === "expired") {
+      throw new Error(`device access request ${requestId} resolved as ${latest.body?.status}`);
+    }
+    await delay(500);
+  }
+  throw new Error(
+    `device access request ${requestId} did not reach approved status in time: ${JSON.stringify(latest?.body)}`,
+  );
 }
 
 async function pinVisualRegressionProvider(gatewayUrl) {

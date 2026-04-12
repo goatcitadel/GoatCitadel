@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acceptMemoryMaintenanceRecommendation,
   clearGatewayAuthState,
+  connectEventStream,
   fetchMemoryMaintenancePolicy,
   fetchMemoryMaintenanceRuns,
   getGatewayAuthStorageMode,
@@ -41,6 +42,10 @@ function installMockWindow(): void {
       protocol: "http:",
       hostname: "localhost",
     },
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
     localStorage: createMemoryStorage(),
     sessionStorage: createMemoryStorage(),
   };
@@ -51,6 +56,12 @@ function installMockWindow(): void {
   });
 }
 
+async function settlePromises(iterations = 4): Promise<void> {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("isTrustedGatewayHost", () => {
   beforeEach(() => {
     installMockWindow();
@@ -59,6 +70,7 @@ describe("isTrustedGatewayHost", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     clearGatewayAuthState();
   });
 
@@ -111,6 +123,90 @@ describe("isTrustedGatewayHost", () => {
       username: "operator",
       password: "secret",
     });
+  });
+
+  it("clears stale lease and gateway node identity when the realtime stream errors and retries", async () => {
+    class MockEventSource {
+      public static instances: MockEventSource[] = [];
+      public onopen: ((event: Event) => void) | null = null;
+      public onerror: ((event: Event) => void) | null = null;
+      private readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
+
+      public constructor(_url: string) {
+        MockEventSource.instances.push(this);
+      }
+
+      public addEventListener(type: string, listener: (event: MessageEvent) => void): void {
+        const current = this.listeners.get(type) ?? [];
+        current.push(listener);
+        this.listeners.set(type, current);
+      }
+
+      public emit(type: string, payload: unknown): void {
+        const event = {
+          data: JSON.stringify(payload),
+        } as MessageEvent;
+        for (const listener of this.listeners.get(type) ?? []) {
+          listener(event);
+        }
+      }
+
+      public close(): void {}
+    }
+
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const statuses: Array<{
+      state: string;
+      leaseId?: string;
+      clientId?: string;
+      gatewayNodeId?: string;
+    }> = [];
+    const disconnect = connectEventStream(
+      () => undefined,
+      undefined,
+      (status) => {
+        statuses.push({
+          state: status.state,
+          leaseId: status.leaseId,
+          clientId: status.clientId,
+          gatewayNodeId: status.gatewayNodeId,
+        });
+      },
+    );
+
+    await settlePromises();
+    const source = MockEventSource.instances[0];
+    if (!source) {
+      throw new Error("Expected a realtime EventSource instance.");
+    }
+
+    source.onopen?.(new Event("open"));
+    source.emit("stream-ready", {
+      leaseId: "lease-1",
+      clientId: "client-1",
+      gatewayNodeId: "node-1",
+    });
+    await settlePromises();
+
+    expect(statuses.at(-1)).toMatchObject({
+      state: "open",
+      leaseId: "lease-1",
+      clientId: "client-1",
+      gatewayNodeId: "node-1",
+    });
+
+    source.onerror?.(new Event("error"));
+    await settlePromises();
+
+    expect(statuses.at(-1)).toMatchObject({
+      state: "retrying",
+      leaseId: undefined,
+      clientId: "client-1",
+      gatewayNodeId: undefined,
+    });
+
+    disconnect();
   });
 
   it("migrates legacy localStorage auth into session storage", () => {

@@ -57,12 +57,15 @@ const deadLetterRecoverBodySchema = z.object({
 export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+  const operatorOnly = {
+    preHandler: fastify.requireOperatorAuth,
+  } as const;
 
-  fastify.get("/api/v1/durable/diagnostics", async () => {
+  fastify.get("/api/v1/durable/diagnostics", operatorOnly, async () => {
     return fastify.gateway.getDurableDiagnostics();
   });
 
-  fastify.get("/api/v1/durable/runs", async (request, reply) => {
+  fastify.get("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -72,7 +75,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     };
   });
 
-  fastify.get("/api/v1/durable/dead-letters", async (request, reply) => {
+  fastify.get("/api/v1/durable/dead-letters", operatorOnly, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -82,7 +85,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     };
   });
 
-  fastify.get("/api/v1/durable/runs/:runId/checkpoints", async (request, reply) => {
+  fastify.get("/api/v1/durable/runs/:runId/checkpoints", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const query = listQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -98,7 +101,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     };
   });
 
-  fastify.post("/api/v1/durable/runs", async (request, reply) => {
+  fastify.post("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
     const body = createRunBodySchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
@@ -110,7 +113,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/durable/runs/:runId", async (request, reply) => {
+  fastify.get("/api/v1/durable/runs/:runId", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -124,7 +127,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/durable/runs/:runId/timeline", async (request, reply) => {
+  fastify.get("/api/v1/durable/runs/:runId/timeline", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const query = listQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -144,7 +147,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/durable/runs/:runId/pause", async (request, reply) => {
+  fastify.post("/api/v1/durable/runs/:runId/pause", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = actorBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
@@ -162,7 +165,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/durable/runs/:runId/resume", async (request, reply) => {
+  fastify.post("/api/v1/durable/runs/:runId/resume", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = actorBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
@@ -180,7 +183,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/durable/runs/:runId/cancel", async (request, reply) => {
+  fastify.post("/api/v1/durable/runs/:runId/cancel", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = actorBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
@@ -198,7 +201,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/durable/runs/:runId/retry", async (request, reply) => {
+  fastify.post("/api/v1/durable/runs/:runId/retry", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = retryBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
@@ -216,7 +219,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/durable/runs/:runId/events/wake", async (request, reply) => {
+  fastify.post("/api/v1/durable/runs/:runId/events/wake", operatorOnly, async (request, reply) => {
     const params = runParamsSchema.safeParse(request.params);
     const body = wakeBodySchema.safeParse(request.body);
     if (!params.success || !body.success) {
@@ -234,7 +237,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/durable/dead-letters/:entryId/recover", async (request, reply) => {
+  fastify.post("/api/v1/durable/dead-letters/:entryId/recover", operatorOnly, async (request, reply) => {
     const params = deadLetterParamsSchema.safeParse(request.params);
     const body = deadLetterRecoverBodySchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {

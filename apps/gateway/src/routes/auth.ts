@@ -61,6 +61,10 @@ const sseTokenIssueSchema = z.object({
 });
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
+  const operatorOnly = {
+    preHandler: fastify.requireOperatorAuth,
+  } as const;
+
   fastify.post("/api/v1/auth/sse-token", async (request, reply) => {
     const authMode = fastify.gatewayConfig.assistant.auth.mode;
     if (authMode === "none") {
@@ -153,12 +157,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/sessions", async (request, reply) => {
-    if (!isOperatorAuthSource(request.authActorSource)) {
-      return reply.code(403).send({
-        error: "Companion session admin access requires operator authentication.",
-      });
-    }
+  fastify.get("/api/v1/auth/companion/sessions", operatorOnly, async (request, reply) => {
     const parsed = companionSessionListQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -170,12 +169,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/sessions/:sessionId", async (request, reply) => {
-    if (!isOperatorAuthSource(request.authActorSource)) {
-      return reply.code(403).send({
-        error: "Companion session admin access requires operator authentication.",
-      });
-    }
+  fastify.get("/api/v1/auth/companion/sessions/:sessionId", operatorOnly, async (request, reply) => {
     const params = companionSessionParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -187,12 +181,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/auth/companion/sessions/:sessionId/revoke", async (request, reply) => {
-    if (!isOperatorAuthSource(request.authActorSource)) {
-      return reply.code(403).send({
-        error: "Companion session admin access requires operator authentication.",
-      });
-    }
+  fastify.post("/api/v1/auth/companion/sessions/:sessionId/revoke", operatorOnly, async (request, reply) => {
     const params = companionSessionParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -204,12 +193,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/audit", async (request, reply) => {
-    if (!isOperatorAuthSource(request.authActorSource)) {
-      return reply.code(403).send({
-        error: "Companion audit access requires operator authentication.",
-      });
-    }
+  fastify.get("/api/v1/auth/companion/audit", operatorOnly, async (request, reply) => {
     const parsed = companionAuditQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -227,7 +211,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.gateway.getAuthCredentialPlan());
   });
 
-  fastify.get("/api/v1/auth/devices", async (request, reply) => {
+  fastify.get("/api/v1/auth/devices", operatorOnly, async (request, reply) => {
     const parsed = deviceGrantListQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -239,7 +223,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items });
   });
 
-  fastify.post("/api/v1/auth/devices/:grantId/revoke", async (request, reply) => {
+  fastify.post("/api/v1/auth/devices/:grantId/revoke", operatorOnly, async (request, reply) => {
     const params = deviceGrantParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -258,6 +242,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post(
     "/api/v1/auth/install-token",
     {
+      preHandler: fastify.requireOperatorAuth,
       config: {
         rateLimit: {
           max: 5,
@@ -326,8 +311,4 @@ function readTraceId(
     }
   }
   return readHeaderValue(correlationId);
-}
-
-function isOperatorAuthSource(source: string): boolean {
-  return source === "token" || source === "basic" || source === "loopback";
 }

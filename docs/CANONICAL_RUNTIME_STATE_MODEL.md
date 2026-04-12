@@ -59,7 +59,7 @@ Implementation status:
 - Shipped Chat / Cowork / Code HTTP/SSE send, retry, resume, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics are durably owned for the `1.0` operator path.
 - Queue consumers / idempotent worker runtime for the shipped durable path: complete.
 - DLQ operator actions for the shipped durable path: complete.
-- See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for deeper implementation background.
+- See `docs/DURABLE_RUNS_REPLAY_FOUNDATION.md` for historical implementation background and migration context, not the active rollout source of truth.
 
 Notes:
 - A run records execution intent and outcome for the shipped resumable operator flow set.

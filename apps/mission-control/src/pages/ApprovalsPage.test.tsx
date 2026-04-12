@@ -46,22 +46,21 @@ function rendererText(renderer: ReactTestRenderer): string {
   return collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
 }
 
-async function clickButton(renderer: ReactTestRenderer, label: string): Promise<void> {
-  const instanceText = (node: unknown): string => {
-    if (typeof node === "string") {
-      return node;
-    }
-    if (!node || typeof node !== "object" || !("children" in node)) {
-      return "";
-    }
-    const children = (node as { children?: unknown[] }).children ?? [];
-    return children.map((child) => instanceText(child)).join(" ");
-  };
+function instanceText(node: unknown): string {
+  if (typeof node === "string") {
+    return node;
+  }
+  if (!node || typeof node !== "object" || !("children" in node)) {
+    return "";
+  }
+  const children = (node as { children?: unknown[] }).children ?? [];
+  return children.map((child) => instanceText(child)).join(" ");
+}
 
-  const button = renderer.root.findAll((node) => (
-    node.type === "button"
-      && instanceText(node).replace(/\s+/g, " ").includes(label)
-  ))[0];
+async function clickButton(renderer: ReactTestRenderer, label: string): Promise<void> {
+  const button = renderer.root.findAll(
+    (node) => node.type === "button" && instanceText(node).replace(/\s+/g, " ").includes(label),
+  )[0];
 
   if (!button) {
     throw new Error(`Button not found: ${label}`);
@@ -93,29 +92,30 @@ describe("ApprovalsPage", () => {
       },
     });
     apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
-      items: status === "pending"
-        ? [
-            {
-              approvalId: "approval-1",
-              kind: "shell.exec",
-              riskLevel: "danger",
-              status: "pending",
-              preview: {
-                toolName: "shell.exec",
-                sessionId: "sess-1",
+      items:
+        status === "pending"
+          ? [
+              {
+                approvalId: "approval-1",
+                kind: "shell.exec",
+                riskLevel: "danger",
+                status: "pending",
+                preview: {
+                  toolName: "shell.exec",
+                  sessionId: "sess-1",
+                },
+                payload: {
+                  toolName: "shell.exec",
+                  sessionId: "sess-1",
+                },
+                explanationStatus: "not_requested",
+                explanation: null,
+                explanationError: null,
+                createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
               },
-              payload: {
-                toolName: "shell.exec",
-                sessionId: "sess-1",
-              },
-              explanationStatus: "not_requested",
-              explanation: null,
-              explanationError: null,
-              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-            },
-          ]
-        : [],
+            ]
+          : [],
     }));
   });
 
@@ -215,35 +215,230 @@ describe("ApprovalsPage", () => {
     }
   });
 
+  it("does not render historical blocker details when the current durable run is no longer blocked", async () => {
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+      items:
+        status === "approved"
+          ? [
+              {
+                approvalId: "approval-recovery",
+                kind: "shell.exec",
+                riskLevel: "danger",
+                status: "approved",
+                preview: {},
+                payload: {},
+                linkage: {
+                  durableRunId: "durable-run-42",
+                },
+                explanationStatus: "not_requested",
+                explanation: null,
+                explanationError: null,
+                createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                updatedAt: new Date("2026-03-29T18:10:00.000Z").toISOString(),
+              },
+            ]
+          : [],
+    }));
+    apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      query: {
+        approvalId: "approval-recovery",
+        runId: "durable-run-42",
+      },
+      linked: {
+        sessionIds: [],
+        turnIds: [],
+        runIds: ["durable-run-42"],
+        proactiveRunIds: [],
+        approvalIds: ["approval-recovery"],
+        taskIds: [],
+        workspaceIds: [],
+      },
+      durableRun: {
+        runId: "durable-run-42",
+        status: "completed",
+        updatedAt: new Date("2026-03-29T18:20:00.000Z").toISOString(),
+      },
+      turns: [],
+      toolRuns: [],
+    });
+    apiMocks.fetchDurableRunTimeline.mockResolvedValue({
+      items: [
+        {
+          eventId: "timeline-1",
+          eventType: "run_waiting",
+          stepKey: "checkpoint-step",
+          payload: {
+            stepKey: "checkpoint-step",
+            reason: "Waiting for approval",
+          },
+          timestamp: new Date("2026-03-29T18:05:00.000Z").toISOString(),
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Recovery (1)");
+      await flush();
+      await clickButton(renderer, "Load durable status");
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("Run: durable-run-42 | Status: completed");
+      expect(text).not.toContain("Blocked step:");
+      expect(text).not.toContain("Waiting for approval");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("auto-loads durable status when resuming without a prior manual load", async () => {
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+      items:
+        status === "approved"
+          ? [
+              {
+                approvalId: "approval-recovery",
+                kind: "shell.exec",
+                riskLevel: "danger",
+                status: "approved",
+                preview: {},
+                payload: {},
+                linkage: {
+                  durableRunId: "durable-run-77",
+                },
+                explanationStatus: "not_requested",
+                explanation: null,
+                explanationError: null,
+                createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                updatedAt: new Date("2026-03-29T18:10:00.000Z").toISOString(),
+              },
+            ]
+          : [],
+    }));
+    apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      query: {
+        approvalId: "approval-recovery",
+        runId: "durable-run-77",
+      },
+      linked: {
+        sessionIds: [],
+        turnIds: [],
+        runIds: ["durable-run-77"],
+        proactiveRunIds: [],
+        approvalIds: ["approval-recovery"],
+        taskIds: [],
+        workspaceIds: [],
+      },
+      turns: [],
+      toolRuns: [],
+    });
+    apiMocks.fetchDurableRun.mockResolvedValue({
+      runId: "durable-run-77",
+      status: "paused",
+      updatedAt: new Date("2026-03-29T18:05:00.000Z").toISOString(),
+    });
+    apiMocks.fetchDurableRunTimeline.mockResolvedValue({
+      items: [
+        {
+          eventId: "timeline-2",
+          eventType: "run_paused",
+          stepKey: "checkpoint-step",
+          payload: {
+            stepKey: "checkpoint-step",
+            reason: "Paused for operator review",
+          },
+          timestamp: new Date("2026-03-29T18:04:00.000Z").toISOString(),
+        },
+      ],
+    });
+    apiMocks.resumeDurableRun.mockResolvedValue({
+      runId: "durable-run-77",
+      status: "running",
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Recovery (1)");
+      await flush();
+
+      const resumeButton = renderer.root.findAll(
+        (node) => node.type === "button" && instanceText(node).includes("Resume paused run"),
+      )[0];
+      expect(resumeButton?.props.disabled).toBe(false);
+
+      await act(async () => {
+        resumeButton?.props.onClick();
+      });
+      await flush();
+      const confirmResumeModal = renderer.root.findAll(
+        (node) =>
+          typeof node.type === "function" && node.props?.open === true && node.props?.title === "Resume Durable Run",
+      )[0];
+      await act(async () => {
+        confirmResumeModal?.props.onConfirm();
+      });
+      await flush();
+
+      expect(apiMocks.fetchRuntimeLifecycle).toHaveBeenCalledWith({ approvalId: "approval-recovery" });
+      expect(apiMocks.resumeDurableRun).toHaveBeenCalledWith("durable-run-77", "operator");
+      expect(rendererText(renderer)).not.toContain(
+        "Load durable status first so we can resume from the exact checkpoint.",
+      );
+    } finally {
+      renderer.unmount();
+    }
+  });
+
   it("surfaces inline operator evidence for code-heavy approvals before the raw payload", async () => {
     apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
-      items: status === "pending"
-        ? [
-            {
-              approvalId: "approval-code",
-              kind: "files.apply_patch",
-              riskLevel: "danger",
-              status: "pending",
-              preview: {
-                files: ["apps/mission-control/src/pages/ChatPage.tsx"],
-                patch: "*** Begin Patch\n*** Update File: apps/mission-control/src/pages/ChatPage.tsx\n+const nextValue = true;\n*** End Patch",
+      items:
+        status === "pending"
+          ? [
+              {
+                approvalId: "approval-code",
+                kind: "files.apply_patch",
+                riskLevel: "danger",
+                status: "pending",
+                preview: {
+                  files: ["apps/mission-control/src/pages/ChatPage.tsx"],
+                  patch:
+                    "*** Begin Patch\n*** Update File: apps/mission-control/src/pages/ChatPage.tsx\n+const nextValue = true;\n*** End Patch",
+                },
+                payload: {
+                  command: "apply patch to ChatPage",
+                },
+                explanationStatus: "completed",
+                explanation: {
+                  summary: "Apply a patch to the Chat page.",
+                  riskExplanation: "This changes production UI code.",
+                  saferAlternative: "Review the patch before approving.",
+                  generatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                },
+                explanationError: null,
+                createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
               },
-              payload: {
-                command: "apply patch to ChatPage",
-              },
-              explanationStatus: "completed",
-              explanation: {
-                summary: "Apply a patch to the Chat page.",
-                riskExplanation: "This changes production UI code.",
-                saferAlternative: "Review the patch before approving.",
-                generatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-              },
-              explanationError: null,
-              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-            },
-          ]
-        : [],
+            ]
+          : [],
     }));
 
     let renderer = create(<div />);
@@ -271,34 +466,35 @@ describe("ApprovalsPage", () => {
 
   it("opens the matching live lane for persisted approvals that came from code", async () => {
     apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
-      items: status === "pending"
-        ? [
-            {
-              approvalId: "approval-code-lane",
-              kind: "shell.exec",
-              riskLevel: "danger",
-              status: "pending",
-              preview: {
-                toolName: "shell.exec",
-                sessionId: "sess-code",
+      items:
+        status === "pending"
+          ? [
+              {
+                approvalId: "approval-code-lane",
+                kind: "shell.exec",
+                riskLevel: "danger",
+                status: "pending",
+                preview: {
+                  toolName: "shell.exec",
+                  sessionId: "sess-code",
+                },
+                payload: {
+                  toolName: "shell.exec",
+                  sessionId: "sess-code",
+                },
+                linkage: {
+                  sessionId: "sess-code",
+                  turnId: "turn-code",
+                  originSurface: "code",
+                },
+                explanationStatus: "not_requested",
+                explanation: null,
+                explanationError: null,
+                createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
               },
-              payload: {
-                toolName: "shell.exec",
-                sessionId: "sess-code",
-              },
-              linkage: {
-                sessionId: "sess-code",
-                turnId: "turn-code",
-                originSurface: "code",
-              },
-              explanationStatus: "not_requested",
-              explanation: null,
-              explanationError: null,
-              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-            },
-          ]
-        : [],
+            ]
+          : [],
     }));
 
     let renderer = create(<div />);
@@ -329,11 +525,11 @@ describe("ApprovalsPage", () => {
 
       const liveLaneLink = renderer.root.findAll(
         (node) =>
-          node.type === "a"
-          && typeof node.props.href === "string"
-          && node.props.href.includes("surface=code")
-          && node.props.href.includes("sessionId=sess-code")
-          && node.props.href.includes("turnId=turn-code"),
+          node.type === "a" &&
+          typeof node.props.href === "string" &&
+          node.props.href.includes("surface=code") &&
+          node.props.href.includes("sessionId=sess-code") &&
+          node.props.href.includes("turnId=turn-code"),
       )[0];
 
       expect(liveLaneLink).toBeTruthy();
@@ -344,11 +540,7 @@ describe("ApprovalsPage", () => {
       });
 
       expect(preventDefault).toHaveBeenCalledTimes(1);
-      expect(pushStateSpy).toHaveBeenCalledWith(
-        null,
-        "",
-        expect.stringContaining("surface=code"),
-      );
+      expect(pushStateSpy).toHaveBeenCalledWith(null, "", expect.stringContaining("surface=code"));
       expect(dispatchEventSpy).toHaveBeenCalledWith(expect.objectContaining({ type: "popstate" }));
     } finally {
       Object.defineProperty(window, "history", {
@@ -365,24 +557,25 @@ describe("ApprovalsPage", () => {
 
   it("moves expired pending approvals into history instead of leaving them in the pending queue", async () => {
     apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
-      items: status === "pending"
-        ? [
-            {
-              approvalId: "approval-expired",
-              kind: "shell.exec",
-              riskLevel: "danger",
-              status: "pending",
-              preview: {},
-              payload: {},
-              expiresAt: new Date("2026-03-01T00:00:00.000Z").toISOString(),
-              explanationStatus: "not_requested",
-              explanation: null,
-              explanationError: null,
-              createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-              updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
-            },
-          ]
-        : [],
+      items:
+        status === "pending"
+          ? [
+              {
+                approvalId: "approval-expired",
+                kind: "shell.exec",
+                riskLevel: "danger",
+                status: "pending",
+                preview: {},
+                payload: {},
+                expiresAt: new Date("2026-03-01T00:00:00.000Z").toISOString(),
+                explanationStatus: "not_requested",
+                explanation: null,
+                explanationError: null,
+                createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+                updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+              },
+            ]
+          : [],
     }));
 
     let renderer = create(<div />);
