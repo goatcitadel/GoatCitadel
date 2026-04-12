@@ -1,6 +1,5 @@
 import type {
   ApprovalBulkResolveResult,
-  ApprovalRequest,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
   ToolCatalogEntry,
@@ -52,7 +51,7 @@ export async function resolveApprovalsBulk(input: {
 export async function resolveApprovalWithRemoteToken(
   token: string,
   decision: "approve" | "reject",
-): Promise<{ approval: ApprovalRequest; executedAction?: ToolInvokeResult }> {
+): Promise<ApprovalResolveResponse> {
   return request("/api/v1/approvals/remote-resolve", {
     method: "POST",
     body: JSON.stringify({

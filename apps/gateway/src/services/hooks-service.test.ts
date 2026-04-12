@@ -108,11 +108,16 @@ describe("HooksService", () => {
           allowMutatingHooks: true,
         },
       },
-      fetchImpl: (_url, init) => new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          reject(new Error("timed out"));
-        }, { once: true });
-      }),
+      fetchImpl: (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("timed out"));
+            },
+            { once: true },
+          );
+        }),
     });
 
     service.createWorkspaceHook({
@@ -172,22 +177,22 @@ describe("HooksService", () => {
       },
     });
 
-    await expect(service.runInlineHooks({
-      workspaceId,
-      trigger: "llm.request.before",
-      entityType: "chat_completion",
-      entityId: "session-closed",
-      payload: {
-        messages: [],
-      },
-      parsePatch: () => undefined,
-    })).rejects.toThrow(/fail-closed/i);
+    await expect(
+      service.runInlineHooks({
+        workspaceId,
+        trigger: "llm.request.before",
+        entityType: "chat_completion",
+        entityId: "session-closed",
+        payload: {
+          messages: [],
+        },
+        parsePatch: () => undefined,
+      }),
+    ).rejects.toThrow(/fail-closed/i);
   });
 
   it("skips recursive execution of the same hook/entity pair", async () => {
-    let nestedResult:
-      | Awaited<ReturnType<HooksService["runInlineHooks"]>>
-      | undefined;
+    let nestedResult: Awaited<ReturnType<HooksService["runInlineHooks"]>> | undefined;
     const harness = createHarness({
       workspacePrefs: {
         hooks: {
@@ -283,21 +288,64 @@ describe("HooksService", () => {
     expect(capturedHeaders?.get("x-goatcitadel-signature")).toMatch(/^sha256=/);
   });
 
-  it("rejects hook creation for unknown workspaces even in observe mode", () => {
-    const { service } = createHarness();
+  it("deduplicates repeated after-hook enqueue requests for the same hook/entity pair", () => {
+    const { service, workspaceId, requestedRunIds } = createHarness();
 
-    expect(() => service.createWorkspaceHook({
-      workspaceId: "missing-workspace",
-      label: "observe",
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "after-dedupe",
       trigger: "tool.call.after",
       mode: "observe",
       action: {
         type: "webhook",
         webhook: {
-          url: "https://hooks.example.test/observe",
+          url: "https://hooks.example.test/after-dedupe",
         },
       },
-    })).toThrow(/Unknown workspace/);
+    });
+
+    const first = service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-after-dedupe",
+      payload: {
+        toolName: "shell.exec",
+      },
+    });
+    const second = service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-after-dedupe",
+      payload: {
+        toolName: "shell.exec",
+      },
+    });
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(second[0]?.runId).toBe(first[0]?.runId);
+    expect(requestedRunIds).toEqual([first[0]?.durableRunId, first[0]?.durableRunId]);
+  });
+
+  it("rejects hook creation for unknown workspaces even in observe mode", () => {
+    const { service } = createHarness();
+
+    expect(() =>
+      service.createWorkspaceHook({
+        workspaceId: "missing-workspace",
+        label: "observe",
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: {
+          type: "webhook",
+          webhook: {
+            url: "https://hooks.example.test/observe",
+          },
+        },
+      }),
+    ).toThrow(/Unknown workspace/);
   });
 
   it("skips after-hook delivery when the durable kernel is disabled", () => {
@@ -451,13 +499,18 @@ function createHarness(input?: {
         }
         return record;
       },
+      findByIdempotency: (hookId: string, idempotencyKey: string) =>
+        [...hookRuns.values()].find((run) => run.hookId === hookId && run.idempotencyKey === idempotencyKey),
       listByWorkspace: (id: string) => [...hookRuns.values()].filter((run) => run.workspaceId === id),
-      markAttempt: (runId: string, input: {
-        status: HookRunRecord["status"];
-        attemptCount: number;
-        errorText?: string;
-        requestPayload?: Record<string, unknown>;
-      }) => {
+      markAttempt: (
+        runId: string,
+        input: {
+          status: HookRunRecord["status"];
+          attemptCount: number;
+          errorText?: string;
+          requestPayload?: Record<string, unknown>;
+        },
+      ) => {
         const current = hookRuns.get(runId);
         if (!current) {
           throw new Error(`Unknown hook run ${runId}`);
@@ -473,15 +526,18 @@ function createHarness(input?: {
         hookRuns.set(runId, next);
         return next;
       },
-      markOutcome: (runId: string, input: {
-        status: HookRunRecord["status"];
-        decision?: HookDecision;
-        patchSummary?: HookPatchSummary;
-        errorText?: string;
-        latencyMs?: number;
-        responsePayload?: Record<string, unknown>;
-        completedAt?: string;
-      }) => {
+      markOutcome: (
+        runId: string,
+        input: {
+          status: HookRunRecord["status"];
+          decision?: HookDecision;
+          patchSummary?: HookPatchSummary;
+          errorText?: string;
+          latencyMs?: number;
+          responsePayload?: Record<string, unknown>;
+          completedAt?: string;
+        },
+      ) => {
         const current = hookRuns.get(runId);
         if (!current) {
           throw new Error(`Unknown hook run ${runId}`);
@@ -530,9 +586,7 @@ function createHarness(input?: {
     gatewaySql: {} as never,
     publishRealtime: () => undefined,
     requireFeatureEnabled: () => undefined,
-    isFeatureEnabled: (flag) => flag === "durableKernelV1Enabled"
-      ? (input?.durableKernelEnabled ?? true)
-      : true,
+    isFeatureEnabled: (flag) => (flag === "durableKernelV1Enabled" ? (input?.durableKernelEnabled ?? true) : true),
     normalizeWorkspaceId: (value?: string) => value?.trim() || workspaceId,
   };
 

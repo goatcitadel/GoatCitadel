@@ -76,13 +76,34 @@ export interface DurableRunRecord {
   status: DurableRunStatus;
   attemptCount: number;
   maxAttempts: number;
+  version: number;
   payload: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   startedAt?: string;
   finishedAt?: string;
   lastError?: string;
+  leaseOwnerId?: string;
+  leaseExpiresAt?: string;
+  leaseHeartbeatAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type DurableWakeOutcome =
+  | "woke"
+  | "skipped_paused"
+  | "skipped_not_waiting"
+  | "skipped_event_key_mismatch"
+  | "skipped_correlation_mismatch"
+  | "failed";
+
+export interface DurableWakeResult {
+  runId: string;
+  eventKey: string;
+  correlationId?: string;
+  outcome: DurableWakeOutcome;
+  run?: DurableRunRecord;
+  detail?: string;
 }
 
 export interface DurableCheckpointRecord {

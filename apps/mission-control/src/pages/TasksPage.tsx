@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addTaskActivity,
@@ -71,7 +72,15 @@ const DELIVERABLE_PATH_OPTIONS = [
   "src/",
 ].map((value) => ({ value, label: value }));
 
-const TASK_BOARD_STATUSES: TaskRecord["status"][] = ["inbox", "assigned", "in_progress", "testing", "review", "blocked", "done"];
+const TASK_BOARD_STATUSES: TaskRecord["status"][] = [
+  "inbox",
+  "assigned",
+  "in_progress",
+  "testing",
+  "review",
+  "blocked",
+  "done",
+];
 
 export function TasksPage({ workspaceId = "default" }: { workspaceId?: string }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
@@ -430,9 +439,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     }
     setDurableBusy("wake");
     try {
-      await wakeDurableRun(durableStatus.runId, { eventKey });
+      const result = await wakeDurableRun(durableStatus.runId, { eventKey });
       await loadDurableState(durableStatus.runId);
-      setInfo(`Wake event "${eventKey}" sent.`);
+      setInfo(
+        result.outcome === "woke"
+          ? `Wake event "${eventKey}" sent.`
+          : `Wake event "${eventKey}" skipped: ${result.outcome}.`,
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -573,7 +586,11 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
           {tasks.length === 0 ? (
             <div className="task-queue-empty">
               <p>{viewFilter === "trash" ? "No trashed tasks right now." : "No tasks in this view yet."}</p>
-              <p>{viewFilter === "trash" ? "Moved tasks will appear here for restore or permanent cleanup." : "Create a task to start tracking operator work, checkpoints, and delegated execution."}</p>
+              <p>
+                {viewFilter === "trash"
+                  ? "Moved tasks will appear here for restore or permanent cleanup."
+                  : "Create a task to start tracking operator work, checkpoints, and delegated execution."}
+              </p>
             </div>
           ) : viewFilter === "trash" ? (
             <div className="task-trash-list" role="list" aria-label="Trashed tasks">
@@ -593,7 +610,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     Priority {task.priority} | Updated {new Date(task.updatedAt).toLocaleString()}
                   </p>
                   <p className="task-queue-card-note">
-                    {task.deleteReason ? `Reason: ${task.deleteReason}` : "Open this task to restore or permanently delete it."}
+                    {task.deleteReason
+                      ? `Reason: ${task.deleteReason}`
+                      : "Open this task to restore or permanently delete it."}
                   </p>
                 </button>
               ))}
@@ -618,17 +637,20 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                         >
                           <div className="task-queue-card-head">
                             <strong>{task.title}</strong>
-                            <StatusChip tone={task.status === "blocked" ? "warning" : task.status === "done" ? "success" : "muted"}>
+                            <StatusChip
+                              tone={
+                                task.status === "blocked" ? "warning" : task.status === "done" ? "success" : "muted"
+                              }
+                            >
                               P{task.priority}
                             </StatusChip>
                           </div>
-                          <p className="task-queue-card-meta">
-                            Updated {new Date(task.updatedAt).toLocaleString()}
-                          </p>
+                          <p className="task-queue-card-meta">Updated {new Date(task.updatedAt).toLocaleString()}</p>
                           <p className="task-queue-card-note">
                             {task.proactiveContext?.durableRunId
                               ? `Durable ${task.proactiveContext.durableRunId}`
-                              : task.description?.trim() || "Open the inspector for linkage, deliverables, and recovery details."}
+                              : task.description?.trim() ||
+                                "Open the inspector for linkage, deliverables, and recovery details."}
                           </p>
                         </button>
                       ))}
@@ -655,7 +677,11 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     <StatusChip tone="muted">Priority {selectedTask.priority}</StatusChip>
                     {selectedTask.deletedAt ? <StatusChip tone="warning">In trash</StatusChip> : null}
                     {!selectedTask.deletedAt ? (
-                      <button type="button" onClick={() => setConfirmDelete({ task: selectedTask, mode: "soft" })} className="gc-button">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete({ task: selectedTask, mode: "soft" })}
+                        className="gc-button"
+                      >
                         Move to Trash
                       </button>
                     ) : (
@@ -711,7 +737,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     <button
                       type="button"
                       key={status}
-                      className={["gc-button", (selectedTask.status === status ? "active" : "")].filter(Boolean).join(" ")}
+                      className={["gc-button", selectedTask.status === status ? "active" : ""]
+                        .filter(Boolean)
+                        .join(" ")}
                       disabled={isSelectedTaskDeleted}
                       onClick={() => void onStatusChange(status)}
                     >
@@ -775,7 +803,8 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                       void loadDurableState(durableRunId);
                     }}
                     disabled={durableBusy !== null}
-                   className="gc-button">
+                    className="gc-button"
+                  >
                     {durableBusy === "load" ? "Loading..." : "Load run"}
                   </button>
                   <button
@@ -784,7 +813,8 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                       void onResumeDurable();
                     }}
                     disabled={durableBusy !== null || !durableStatus}
-                   className="gc-button">
+                    className="gc-button"
+                  >
                     {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
                   </button>
                 </div>
@@ -803,7 +833,8 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                         void onWakeDurable();
                       }}
                       disabled={durableBusy !== null}
-                     className="gc-button">
+                      className="gc-button"
+                    >
                       {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
                     </button>
                   </div>
@@ -853,7 +884,12 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customLabel="Activity message"
                     autoSelectFirstOption
                   />
-                  <button type="button" disabled={!canAddActivity} onClick={() => void onAddActivity()} className="gc-button">
+                  <button
+                    type="button"
+                    disabled={!canAddActivity}
+                    onClick={() => void onAddActivity()}
+                    className="gc-button"
+                  >
                     Add Activity
                   </button>
                 </div>
@@ -887,7 +923,12 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customPlaceholder="Optional custom path"
                     customLabel="Deliverable path"
                   />
-                  <button type="button" disabled={!canAddDeliverable} onClick={() => void onAddDeliverable()} className="gc-button">
+                  <button
+                    type="button"
+                    disabled={!canAddDeliverable}
+                    onClick={() => void onAddDeliverable()}
+                    className="gc-button"
+                  >
                     Add Deliverable
                   </button>
                 </div>
@@ -940,7 +981,12 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     customPlaceholder="Optional agent name"
                     customLabel="Agent name"
                   />
-                  <button type="button" disabled={!canAddSubagent} onClick={() => void onAddSubagent()} className="gc-button">
+                  <button
+                    type="button"
+                    disabled={!canAddSubagent}
+                    onClick={() => void onAddSubagent()}
+                    className="gc-button"
+                  >
                     Add Subagent
                   </button>
                 </div>
@@ -968,7 +1014,8 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                           type="button"
                           disabled={isSelectedTaskDeleted}
                           onClick={() => void onCompleteSubagent(session.agentSessionId)}
-                         className="gc-button">
+                          className="gc-button"
+                        >
                           Mark Completed
                         </button>
                       ) : null}
@@ -1007,4 +1054,3 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     </section>
   );
 }
-

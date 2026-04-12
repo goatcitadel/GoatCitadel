@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "./approvals.js";
+import type { ApprovalEffectRecord, ApprovalRequest } from "./approvals.js";
 import type { ChatToolRunRecord, ChatTurnTraceRecord } from "./chat.js";
 import type { DurableRunRecord } from "./durable.js";
 import type { SessionMeta, SessionSummary } from "./session.js";
@@ -22,10 +22,10 @@ export interface RuntimeLifecycleTurnSummary extends Pick<
   durableRunId?: string;
 }
 
-export interface RuntimeLifecycleToolRunSummary extends Pick<
+export type RuntimeLifecycleToolRunSummary = Pick<
   ChatToolRunRecord,
   "toolRunId" | "turnId" | "sessionId" | "toolName" | "status" | "approvalId" | "startedAt" | "finishedAt"
-> {}
+>;
 
 export interface RuntimeLifecycleLinkedIds {
   sessionIds: string[];
@@ -37,9 +37,32 @@ export interface RuntimeLifecycleLinkedIds {
   workspaceIds: string[];
 }
 
+export type RuntimeLifecycleFieldSource =
+  | "query"
+  | "approval_linkage"
+  | "approval_wait_run"
+  | "turn_trace"
+  | "durable_payload"
+  | "durable_metadata"
+  | "task_context"
+  | "proactive_run"
+  | "fallback_payload"
+  | "fallback_preview"
+  | "fallback_metadata";
+
+export interface RuntimeLifecycleResolution {
+  sessionIdSource?: RuntimeLifecycleFieldSource;
+  turnIdSource?: RuntimeLifecycleFieldSource;
+  runIdSource?: RuntimeLifecycleFieldSource;
+  approvalIdSource?: RuntimeLifecycleFieldSource;
+  taskIdSource?: RuntimeLifecycleFieldSource;
+  fallbackSources: RuntimeLifecycleFieldSource[];
+}
+
 export interface RuntimeLifecycleResponse {
   query: RuntimeLifecycleQuery;
   linked: RuntimeLifecycleLinkedIds;
+  resolution?: RuntimeLifecycleResolution;
   session?: SessionMeta;
   sessionSummary?: SessionSummary;
   task?: TaskRecord;
@@ -48,6 +71,7 @@ export interface RuntimeLifecycleResponse {
   proactiveDurableRun?: DurableRunRecord;
   approvalWaitDurableRun?: DurableRunRecord;
   proactiveRuns?: ProactiveRunRecord[];
+  approvalEffects?: ApprovalEffectRecord[];
   turns: RuntimeLifecycleTurnSummary[];
   toolRuns: RuntimeLifecycleToolRunSummary[];
 }

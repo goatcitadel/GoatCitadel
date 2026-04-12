@@ -103,6 +103,7 @@ import type {
   DeviceAccessRequestStatus,
   DeviceAccessRequestStatusResponse,
   DeploymentProfile,
+  ApprovalEffectRecord,
   ApprovalBulkResolveInput,
   ApprovalBulkResolveResult,
   ApprovalCreateInput,
@@ -271,6 +272,7 @@ import type {
   OrchestrationRun,
   PendingApprovalAction,
   RealtimeEvent,
+  RuntimeLifecycleFieldSource,
   RuntimeLifecycleResponse,
   RetentionPolicy,
   RetentionPruneResult,
@@ -382,6 +384,7 @@ import type {
   CapabilityTrendSeries,
   DurableRunCreateRequest,
   DurableRunTimelineEvent,
+  DurableWakeResult,
   DurableRetryPolicy,
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
@@ -582,11 +585,15 @@ import {
   handleInternalMcpApprovalInboxInvoke,
   isInternalMcpApprovalInboxServer,
 } from "./mcp-approval-inbox.js";
-import type { ApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
+import {
+  ApprovalEffectsService,
+  deriveApprovalResolutionEffectsResult,
+  type ApprovalResolutionEffectsResult,
+} from "./approval-resolution-effects-service.js";
 
 export interface ApprovalResolveResult {
   approval: ApprovalRequest;
-  executedAction?: ToolInvokeResult;
+  effects: ApprovalEffectRecord[];
   replay: ApprovalReplayResult;
   durableRunId?: string;
   resolutionEffects?: ApprovalResolutionEffectsResult;
@@ -597,6 +604,7 @@ export interface ApprovalReplayResult {
   events: ApprovalReplayEvent[];
   pendingAction?: PendingApprovalAction;
   durableRunId?: string;
+  effects: ApprovalEffectRecord[];
 }
 
 export interface CompanionSessionRecord {
@@ -1379,6 +1387,7 @@ export class GatewayService {
   /** @internal */ public readonly durableRunService: DurableRunService;
   /** @internal */ public readonly hooksService: HooksService;
   /** @internal */ public readonly approvalWaitRunService: ApprovalWaitRunService;
+  /** @internal */ public readonly approvalEffectsService: ApprovalEffectsService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
   /** @internal */ public readonly chatProactiveService: ChatProactiveService;
@@ -1616,8 +1625,6 @@ export class GatewayService {
     this.approvalWaitRunService = new ApprovalWaitRunService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
       getDurableRun: (runId) => this.getDurableRun(runId),
-      wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
-      requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       getRequestAttribution,
     });
     this.chatLearnedMemoryService = new ChatLearnedMemoryService(serviceCtx);
@@ -1649,6 +1656,16 @@ export class GatewayService {
       get closing() {
         return self.closing;
       },
+    });
+    this.approvalEffectsService = new ApprovalEffectsService(serviceCtx, {
+      backgroundTasks: this.backgroundTasks,
+      wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
+      requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
+      findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
+      executeCodeModePendingApproval: (approvalId) => this.executeCodeModePendingApproval(approvalId),
+      executeApprovedPendingAction: (approvalId) => this.policyEngine.executeApprovedAction(approvalId),
+      enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
+      resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
     });
     this.improvementService = new ImprovementService(serviceCtx, {
       createApproval: (input) => this.createApproval(input),
@@ -1868,6 +1885,7 @@ export class GatewayService {
       this.startMaintenanceScheduler();
     }
     this.durableRunService.startWorker();
+    this.approvalEffectsService.startWorker();
     if (isVerboseLoggingEnabled()) {
       log.info("feature flags", { flags: this.readFeatureFlags() });
     } else {
@@ -2160,6 +2178,15 @@ export class GatewayService {
     let runId = normalizeLifecycleId(input.runId);
     let approvalId = normalizeLifecycleId(input.approvalId);
     let taskId = normalizeLifecycleId(input.taskId);
+    const fallbackSources = new Set<RuntimeLifecycleFieldSource>();
+    const resolution: NonNullable<RuntimeLifecycleResponse["resolution"]> = {
+      sessionIdSource: sessionId ? "query" : undefined,
+      turnIdSource: turnId ? "query" : undefined,
+      runIdSource: runId ? "query" : undefined,
+      approvalIdSource: approvalId ? "query" : undefined,
+      taskIdSource: taskId ? "query" : undefined,
+      fallbackSources: [],
+    };
 
     let approval: ApprovalRequest | undefined;
     if (approvalId) {
@@ -2167,12 +2194,38 @@ export class GatewayService {
       collectLifecycleLinksFromUnknown(linked, approval.linkage);
       collectLifecycleLinksFromUnknown(linked, approval.payload);
       collectLifecycleLinksFromUnknown(linked, approval.preview);
-      sessionId ??= approval.linkage?.sessionId;
-      taskId ??= approval.linkage?.taskId;
+      if (!sessionId && approval.linkage?.sessionId) {
+        sessionId = approval.linkage.sessionId;
+        resolution.sessionIdSource = "approval_linkage";
+      }
+      if (!taskId && approval.linkage?.taskId) {
+        taskId = approval.linkage.taskId;
+        resolution.taskIdSource = "approval_linkage";
+      }
       if (approval.linkage?.proactiveRunId) {
         linked.proactiveRunIds.add(approval.linkage.proactiveRunId);
       }
-      runId ??= approval.linkage?.durableRunId ?? this.storage.approvalWaitRuns.getRunId(approvalId);
+      if (!runId && approval.linkage?.durableRunId) {
+        runId = approval.linkage.durableRunId;
+        resolution.runIdSource = "approval_linkage";
+      }
+      if (!runId) {
+        const approvalWaitRunId = this.storage.approvalWaitRuns.getRunId(approvalId);
+        if (approvalWaitRunId) {
+          runId = approvalWaitRunId;
+          resolution.runIdSource = "approval_wait_run";
+        }
+      }
+      if (!turnId) {
+        const payloadTurnId = typeof approval.payload?.turnId === "string" ? approval.payload.turnId.trim() : "";
+        if (payloadTurnId) {
+          linked.turnIds.add(payloadTurnId);
+          fallbackSources.add("fallback_payload");
+        }
+      }
+      if (approval.preview) {
+        fallbackSources.add("fallback_preview");
+      }
     }
 
     let durableRun: DurableRunRecord | undefined;
@@ -2180,8 +2233,20 @@ export class GatewayService {
       durableRun = this.storage.durableRuns.getRun(runId);
       collectLifecycleLinksFromUnknown(linked, durableRun.payload);
       collectLifecycleLinksFromUnknown(linked, durableRun.metadata);
-      sessionId ??= findLifecycleString(durableRun.payload, ["sessionId"]);
-      taskId ??= findLifecycleString(durableRun.payload, ["taskId"]);
+      if (!sessionId) {
+        const payloadSessionId = findLifecycleString(durableRun.payload, ["sessionId"]);
+        if (payloadSessionId) {
+          sessionId = payloadSessionId;
+          resolution.sessionIdSource = "durable_payload";
+        }
+      }
+      if (!taskId) {
+        const payloadTaskId = findLifecycleString(durableRun.payload, ["taskId"]);
+        if (payloadTaskId) {
+          taskId = payloadTaskId;
+          resolution.taskIdSource = "durable_payload";
+        }
+      }
     }
 
     let task: TaskRecord | undefined;
@@ -2193,9 +2258,18 @@ export class GatewayService {
           linked.workspaceIds.add(task.workspaceId);
         }
         collectLifecycleLinksFromUnknown(linked, task.proactiveContext);
-        sessionId ??= task.proactiveContext?.sessionId;
-        runId ??= task.proactiveContext?.durableRunId;
-        approvalId ??= task.proactiveContext?.approvalId;
+        if (!sessionId && task.proactiveContext?.sessionId) {
+          sessionId = task.proactiveContext.sessionId;
+          resolution.sessionIdSource = "task_context";
+        }
+        if (!runId && task.proactiveContext?.durableRunId) {
+          runId = task.proactiveContext.durableRunId;
+          resolution.runIdSource = "task_context";
+        }
+        if (!approvalId && task.proactiveContext?.approvalId) {
+          approvalId = task.proactiveContext.approvalId;
+          resolution.approvalIdSource = "task_context";
+        }
         if (task.proactiveContext?.proactiveRunId) {
           linked.proactiveRunIds.add(task.proactiveContext.proactiveRunId);
         }
@@ -2227,6 +2301,7 @@ export class GatewayService {
       const linkedRunId = Array.from(linked.runIds)[0];
       if (linkedRunId) {
         runId = linkedRunId;
+        resolution.runIdSource ??= "turn_trace";
         durableRun ??= this.storage.durableRuns.getRun(linkedRunId);
         collectLifecycleLinksFromUnknown(linked, durableRun.payload);
         collectLifecycleLinksFromUnknown(linked, durableRun.metadata);
@@ -2236,6 +2311,7 @@ export class GatewayService {
       const linkedApprovalId = Array.from(linked.approvalIds)[0];
       if (linkedApprovalId) {
         approvalId = linkedApprovalId;
+        resolution.approvalIdSource ??= "turn_trace";
         approval ??= this.storage.approvals.get(linkedApprovalId);
         collectLifecycleLinksFromUnknown(linked, approval.linkage);
       }
@@ -2244,6 +2320,7 @@ export class GatewayService {
       const linkedTaskId = Array.from(linked.taskIds)[0];
       if (linkedTaskId) {
         taskId = linkedTaskId;
+        resolution.taskIdSource ??= "turn_trace";
         task ??= this.storage.tasks.find(linkedTaskId);
       }
     }
@@ -2318,6 +2395,7 @@ export class GatewayService {
         ? durableRun
         : this.findDurableRunMaybe(approvalWaitDurableRunId)
       : undefined;
+    const approvalEffects = approvalId ? this.approvalEffectsService.listByApproval(approvalId) : [];
 
     return {
       query: {
@@ -2326,6 +2404,10 @@ export class GatewayService {
         runId,
         approvalId,
         taskId,
+      },
+      resolution: {
+        ...resolution,
+        fallbackSources: Array.from(fallbackSources),
       },
       linked: {
         sessionIds: Array.from(linked.sessionIds),
@@ -2344,6 +2426,7 @@ export class GatewayService {
       proactiveDurableRun,
       approvalWaitDurableRun,
       proactiveRuns,
+      approvalEffects,
       turns: turns.map((turn) => ({
         turnId: turn.turnId,
         sessionId: turn.sessionId,
@@ -4770,7 +4853,7 @@ export class GatewayService {
       payload?: Record<string, unknown>;
       correlationId?: string;
     },
-  ): DurableRunRecord {
+  ): DurableWakeResult {
     return durableExecutionService.wakeDurableRun(this, runId, event);
   }
 
@@ -6120,6 +6203,10 @@ export class GatewayService {
       decision: input.decision,
       resolvedBy,
     });
+    this.storage.approvals.mergeLinkage(approvalId, {
+      connectorId: tokenRecord.connectorId,
+      tokenId: tokenRecord.tokenId,
+    });
     return this.resolveApproval(approvalId, {
       decision: input.decision,
       editedPayload: input.editedPayload,
@@ -6225,6 +6312,13 @@ export class GatewayService {
 
   /** @internal */ public buildApprovalRealtimeLinks(approval: ApprovalRequest): NonNullable<RealtimeEvent["links"]> {
     return this.approvalWaitRunService.buildApprovalRealtimeLinks(approval);
+  }
+
+  /** @internal */ public enqueueApprovalResolutionEffects(
+    approval: ApprovalRequest,
+    input: ApprovalResolveInput,
+  ): ApprovalEffectRecord[] {
+    return this.approvalEffectsService.enqueueResolutionEffects(approval, input);
   }
 
   /** @internal */ public primeApprovalLifecycle(
@@ -9632,8 +9726,8 @@ export class GatewayService {
       });
     });
 
-    await this.recordApprovalResolutionEffects(approval!, input);
-    this.approvalWaitRunService.wakeApprovalWaitDurableRun(approval!, input);
+    this.enqueueApprovalResolutionEffects(approval!, input);
+    await this.recordApprovalResolution(approval!, input);
     await this.storage.audit.append("approvals", {
       event: "auth.device_request.resolve",
       requestId: request.requestId,
@@ -9660,12 +9754,17 @@ export class GatewayService {
       deviceTokenExpiresAt,
     });
 
+    const effects = this.approvalEffectsService.listByApproval(currentApproval.approvalId);
     return {
       approval: approval!,
+      effects,
       replay: {
         approval: approval!,
         events: this.storage.approvalEvents.listByApprovalId(currentApproval.approvalId),
+        effects,
       },
+      durableRunId: effects.find((effect) => effect.effectKind === "approval_wait_wake")?.targetId,
+      resolutionEffects: deriveApprovalResolutionEffectsResult(effects),
     };
   }
 
@@ -9724,8 +9823,8 @@ export class GatewayService {
     });
 
     if (approval) {
-      await this.recordApprovalResolutionEffects(approval, resolutionInput);
-      this.approvalWaitRunService.wakeApprovalWaitDurableRun(approval, resolutionInput);
+      this.enqueueApprovalResolutionEffects(approval, resolutionInput);
+      await this.recordApprovalResolution(approval, resolutionInput);
     }
     await this.storage.audit.append("approvals", {
       event: "auth.device_request.expire",
@@ -9913,10 +10012,9 @@ export class GatewayService {
     return session;
   }
 
-  /** @internal */ public async recordApprovalResolutionEffects(
+  /** @internal */ public async recordApprovalResolution(
     approval: ApprovalRequest,
     input: ApprovalResolveInput,
-    executedAction?: ToolInvokeResult,
   ): Promise<void> {
     await this.storage.audit.append("approvals", {
       event: "approval.resolve",
@@ -9924,13 +10022,6 @@ export class GatewayService {
       status: approval.status,
       resolvedBy: input.resolvedBy,
       decision: input.decision,
-      executedAction: executedAction
-        ? {
-            outcome: executedAction.outcome,
-            policyReason: executedAction.policyReason,
-            auditEventId: executedAction.auditEventId,
-          }
-        : undefined,
     });
 
     this.publishRealtime(
@@ -9941,7 +10032,6 @@ export class GatewayService {
         status: approval.status,
         decision: input.decision,
         resolvedBy: input.resolvedBy,
-        executedOutcome: executedAction?.outcome,
       },
       {
         eventClass: "domain_fact",

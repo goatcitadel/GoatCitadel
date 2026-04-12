@@ -725,6 +725,7 @@ export class ChatProactiveService {
       },
       startedAt: run.startedAt ?? now,
       finishedAt: status === "completed" || status === "failed" ? now : undefined,
+      clearLease: status === "completed" || status === "failed",
       lastError: status === "failed" ? run.lastError : undefined,
       updatedAt: now,
     });
@@ -776,6 +777,7 @@ export class ChatProactiveService {
       metadata: nextMetadata,
       startedAt: run.startedAt ?? now,
       finishedAt: undefined,
+      clearLease: true,
       lastError: undefined,
       updatedAt: now,
     });
@@ -806,6 +808,7 @@ export class ChatProactiveService {
       status: "completed",
       updatedAt: now,
       finishedAt: now,
+      clearLease: true,
       lastError: undefined,
     });
     this.ctx.storage.durableRuns.createCheckpoint({

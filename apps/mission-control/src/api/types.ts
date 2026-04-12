@@ -6,6 +6,7 @@
  */
 import type {
   AgentProfileRecord,
+  ApprovalEffectRecord,
   ApprovalReplaySnapshot,
   ApprovalRequest,
   A2UIProofLaneDraft,
@@ -40,6 +41,7 @@ export type ApprovalReplayResponse = ApprovalReplaySnapshot;
 export interface ApprovalResolveResponse {
   approval: ApprovalRequest;
   executedAction?: ToolInvokeResult;
+  effects: ApprovalEffectRecord[];
   replay: ApprovalReplayResponse;
   durableRunId?: string;
 }

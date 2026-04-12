@@ -31,7 +31,17 @@ describe("DurableRunService", () => {
   });
 
   it("requeues and resumes recoverable orphaned chat turn runs on worker startup", async () => {
-    const runs = new Map<string, DurableRunRecord>([["run-1", createRun("run-1", "running")]]);
+    const runs = new Map<string, DurableRunRecord>([
+      [
+        "run-1",
+        {
+          ...createRun("run-1", "running"),
+          leaseOwnerId: "worker-old",
+          leaseHeartbeatAt: "2026-03-14T00:00:00.000Z",
+          leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+        },
+      ],
+    ]);
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
     const backgroundTasks = new Set<Promise<void>>();
@@ -207,11 +217,15 @@ function createContext(
             status: input.status ?? "queued",
             attemptCount: input.attemptCount ?? 0,
             maxAttempts: input.maxAttempts ?? 3,
+            version: 1,
             payload: input.payload ?? {},
             metadata: input.metadata,
             startedAt: input.startedAt,
             finishedAt: input.finishedAt,
             lastError: input.lastError,
+            leaseOwnerId: undefined,
+            leaseExpiresAt: undefined,
+            leaseHeartbeatAt: undefined,
             createdAt: input.now ?? "2026-03-14T00:00:00.000Z",
             updatedAt: input.now ?? "2026-03-14T00:00:00.000Z",
           };
@@ -226,7 +240,57 @@ function createContext(
           finishedAt?: string;
           updatedAt?: string;
           lastError?: string;
+          clearLease?: boolean;
+          leaseOwnerId?: string;
+          leaseExpiresAt?: string;
+          leaseHeartbeatAt?: string;
         }) => updateRun(runs, input.runId, input),
+        tryClaimQueuedRun: (input: {
+          runId: string;
+          workerId: string;
+          leaseHeartbeatAt: string;
+          leaseExpiresAt: string;
+          updatedAt?: string;
+        }) => {
+          const current = runs.get(input.runId);
+          if (!current || current.status !== "queued") {
+            return undefined;
+          }
+          return updateRun(runs, input.runId, {
+            status: "running",
+            startedAt: current.startedAt ?? input.leaseHeartbeatAt,
+            updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
+            lastError: undefined,
+            leaseOwnerId: input.workerId,
+            leaseHeartbeatAt: input.leaseHeartbeatAt,
+            leaseExpiresAt: input.leaseExpiresAt,
+          });
+        },
+        renewLease: (input: {
+          runId: string;
+          workerId: string;
+          leaseHeartbeatAt: string;
+          leaseExpiresAt: string;
+          updatedAt?: string;
+        }) => {
+          const current = runs.get(input.runId);
+          if (!current || current.leaseOwnerId !== input.workerId) {
+            return undefined;
+          }
+          return updateRun(runs, input.runId, {
+            updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
+            leaseOwnerId: input.workerId,
+            leaseHeartbeatAt: input.leaseHeartbeatAt,
+            leaseExpiresAt: input.leaseExpiresAt,
+          });
+        },
+        listExpiredRunningRunIds: (nowIso: string) =>
+          Array.from(runs.values())
+            .filter(
+              (run) =>
+                run.status === "running" && typeof run.leaseExpiresAt === "string" && run.leaseExpiresAt <= nowIso,
+            )
+            .map((run) => run.runId),
         createCheckpoint: (input: { runId: string; checkpointKind: string }) => {
           checkpoints.push({
             runId: input.runId,
@@ -318,8 +382,12 @@ function createRun(
     status,
     attemptCount: 0,
     maxAttempts: 3,
+    version: 1,
     payload: {},
     metadata: {},
+    leaseOwnerId: undefined,
+    leaseExpiresAt: undefined,
+    leaseHeartbeatAt: undefined,
     createdAt: "2026-03-14T00:00:00.000Z",
     updatedAt: "2026-03-14T00:00:00.000Z",
     startedAt: "2026-03-14T00:00:00.000Z",
@@ -336,6 +404,10 @@ function updateRun(
     finishedAt?: string;
     updatedAt?: string;
     lastError?: string;
+    leaseOwnerId?: string;
+    leaseExpiresAt?: string;
+    leaseHeartbeatAt?: string;
+    clearLease?: boolean;
   },
 ): DurableRunRecord {
   const current = runs.get(runId);
@@ -344,12 +416,17 @@ function updateRun(
   }
   const next = {
     ...current,
+    version: (current.version ?? 1) + 1,
     ...(patch.status ? { status: patch.status } : {}),
     ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
     ...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
     ...(patch.finishedAt !== undefined ? { finishedAt: patch.finishedAt } : {}),
     ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
     ...(patch.lastError !== undefined ? { lastError: patch.lastError } : {}),
+    ...(patch.clearLease ? { leaseOwnerId: undefined, leaseExpiresAt: undefined, leaseHeartbeatAt: undefined } : {}),
+    ...(patch.leaseOwnerId !== undefined ? { leaseOwnerId: patch.leaseOwnerId } : {}),
+    ...(patch.leaseExpiresAt !== undefined ? { leaseExpiresAt: patch.leaseExpiresAt } : {}),
+    ...(patch.leaseHeartbeatAt !== undefined ? { leaseHeartbeatAt: patch.leaseHeartbeatAt } : {}),
   };
   runs.set(runId, next);
   return next;

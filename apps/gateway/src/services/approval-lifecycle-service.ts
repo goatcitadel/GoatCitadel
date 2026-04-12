@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  type ApprovalEffectRecord,
   clampInt,
   ConflictError,
   type ApprovalBulkResolveInput,
@@ -20,7 +21,7 @@ import {
   type ApprovalRequest,
   type ApprovalResolveInput,
   type ConnectorRecord,
-  type DurableRunRecord,
+  type DurableWakeResult,
   type RealtimeEvent,
   type ToolGrantCreateInput,
   type ToolGrantRecord,
@@ -39,7 +40,7 @@ import type {
 import type { HooksService } from "./hooks-service.js";
 import type { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import {
-  applyApprovalResolutionWakeEffects,
+  deriveApprovalResolutionEffectsResult,
   type ApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
@@ -60,6 +61,8 @@ export interface ApprovalLifecycleHost {
     | "remoteActionTokens"
     | "audit"
     | "approvalWaitRuns"
+    | "approvalEffects"
+    | "approvalInbox"
     | "chatInlineApprovals"
     | "chatSessionMeta"
     | "chatTurnTraces"
@@ -72,7 +75,7 @@ export interface ApprovalLifecycleHost {
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   readonly approvalWaitRunService: Pick<
     ApprovalWaitRunService,
-    "buildApprovalLinkage" | "buildApprovalRealtimeLinks" | "primeApprovalLifecycle" | "wakeApprovalWaitDurableRun"
+    "buildApprovalLinkage" | "buildApprovalRealtimeLinks" | "primeApprovalLifecycle"
   >;
 
   // ── realtime ───────────────────────────────────────────────────────
@@ -111,12 +114,9 @@ export interface ApprovalLifecycleHost {
   wakeDurableRun(
     runId: string,
     event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
-  ): DurableRunRecord;
-  recordApprovalResolutionEffects(
-    approval: ApprovalRequest,
-    input: ApprovalResolveInput,
-    executedAction?: ToolInvokeResult,
-  ): Promise<void>;
+  ): DurableWakeResult;
+  recordApprovalResolution(approval: ApprovalRequest, input: ApprovalResolveInput): Promise<void>;
+  enqueueApprovalResolutionEffects(approval: ApprovalRequest, input: ApprovalResolveInput): ApprovalEffectRecord[];
   enqueueApprovalRemoteTokenDelivery(
     approval: ApprovalRequest,
     connector: ConnectorRecord,
@@ -187,6 +187,7 @@ export function getApprovalReplay(
     events: host.storage.approvalEvents.listByApprovalId(approvalId),
     pendingAction: host.storage.pendingApprovalActions.find(approvalId),
     durableRunId: host.storage.approvalWaitRuns.getRunId(approvalId),
+    effects: host.storage.approvalEffects.listByApproval(approvalId),
   };
 }
 
@@ -462,28 +463,7 @@ export async function resolveApproval(
     return host.resolveDeviceAccessApproval(current, input);
   }
 
-  let executedAction: ToolInvokeResult | undefined;
   const pendingAction = host.storage.pendingApprovalActions.find(approvalId);
-
-  if (input.decision === "approve") {
-    if (pendingAction?.actionType === "code_mode.run") {
-      executedAction = await host.executeCodeModePendingApproval(approvalId);
-    } else {
-      executedAction = await host.policyEngine.executeApprovedAction(approvalId);
-      if (pendingAction?.resolutionStatus === "pending" && executedAction?.outcome !== "executed") {
-        host.storage.pendingApprovalActions.upsertPending({
-          approvalId,
-          actionType: pendingAction.actionType,
-          request: pendingAction.request,
-          createdAt: pendingAction.createdAt,
-        });
-        throw new ConflictError({
-          code: "STATE_CONFLICT",
-          message: `Approved action could not execute and remains pending: ${executedAction?.policyReason ?? "unknown execution error"}`,
-        });
-      }
-    }
-  }
 
   let approval!: ApprovalRequest;
   host.storage.runImmediateTransaction(() => {
@@ -497,7 +477,6 @@ export async function resolveApproval(
         decision: input.decision,
         status: approval.status,
         editedPayload: input.editedPayload,
-        executedOutcome: executedAction?.outcome,
       },
     });
 
@@ -506,58 +485,32 @@ export async function resolveApproval(
         decision: input.decision,
       });
     }
+
+    host.enqueueApprovalResolutionEffects(approval, input);
   });
 
-  const resolutionEffects: ApprovalResolutionEffectsResult | undefined = applyApprovalResolutionWakeEffects(
-    host,
-    approval,
-    input,
-    executedAction,
-  );
+  await host.recordApprovalResolution(approval, input);
+
+  const effects = host.storage.approvalEffects.listByApproval(approvalId);
+  const resolutionEffects: ApprovalResolutionEffectsResult | undefined = deriveApprovalResolutionEffectsResult(effects);
 
   const wakeRunId = resolutionEffects?.approvalWaitDurableRunId;
   if (wakeRunId && approval.linkage?.durableRunId !== wakeRunId) {
     approval = host.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
   }
 
-  await host.recordApprovalResolutionEffects(approval, input, executedAction);
-
-  host.hooksService.enqueueAfterHooks({
-    workspaceId: host.resolveApprovalHookWorkspaceId({
-      approvalId,
-      ...(approval.payload ?? {}),
-    }),
-    trigger: "approval.resolve.after",
-    entityType: "approval",
-    entityId: approval.approvalId,
-    payload: {
-      approval,
-      decision: input.decision,
-      resolvedBy: input.resolvedBy,
-      executedAction,
-    },
-  });
-
   return {
     approval,
-    executedAction,
+    effects,
     replay: {
       approval,
       events: host.storage.approvalEvents.listByApprovalId(approvalId),
       pendingAction: host.storage.pendingApprovalActions.find(approvalId),
+      effects,
     },
     durableRunId: wakeRunId,
     resolutionEffects,
   };
-}
-
-export function wakeApprovalWaitDurableRun(
-  host: ApprovalLifecycleHost,
-  approval: ApprovalRequest,
-  input: ApprovalResolveInput,
-  executedAction?: ToolInvokeResult,
-): string | undefined {
-  return host.approvalWaitRunService.wakeApprovalWaitDurableRun(approval, input, executedAction);
 }
 
 export async function resolveChatToolApproval(

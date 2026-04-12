@@ -76,6 +76,7 @@ A durable human decision point for risky or policy-gated work.
 Authority:
 - Contract shape: `packages/contracts/src/approvals.ts`
 - Persistence: `packages/storage/src/approval-repo.ts`
+- Follow-on effect persistence: `packages/storage/src/approval-effect-repo.ts`
 
 Canonical linkage fields:
 - `sessionId`
@@ -93,6 +94,9 @@ Canonical linkage fields:
 Notes:
 - Approval payloads may still contain legacy nested values, but operator surfaces should prefer explicit `linkage`.
 - Replay snapshots may expose a top-level `durableRunId`, but the approval linkage is the canonical association.
+- Runtime lifecycle responses must expose per-field provenance for `sessionId`, `turnId`, `runId`, `approvalId`, and `taskId`.
+- Approval resolution follow-on truth is owned by `approval + approval_events + approval_effects`.
+- `approval_wait_runs` remains a canonical wait mapping, but it is not the effect-status source after approval resolution; post-resolution wake, pending action execution, inbox finalization, and after-hooks are tracked through effect rows.
 
 ### Realtime Event
 
@@ -126,6 +130,7 @@ Canonical classification fields:
 Notes:
 - Realtime events are not the authoritative historical record for sessions or runs.
 - The stream is retained and pruned. Consumers must treat it as an operator signal lane, not complete history.
+- Producers for approval/run/session/task/proactive events should populate classification and `links` explicitly. Repository inference is compatibility-only.
 
 ## Linkage Rules
 
@@ -138,6 +143,17 @@ Approval creation should attach explicit linkage before the approval is surfaced
 - preserve inbound linkage from the caller when present
 - attach request attribution (`correlationId`, `traceId`) when available
 - attach `durableRunId` once approval-wait lifecycle plumbing exists
+
+## Read Precedence
+
+Operator-facing runtime lifecycle reads should follow this order:
+
+1. explicit stored linkage / explicit realtime envelope links
+2. canonical side-table relationships
+3. durable/task/session canonical references
+4. compatibility fallback inference from payload, preview, or metadata
+
+Fallback reads remain temporary compatibility behavior. Mission Control should label inferred relationships as inferred, not canonical.
 
 ### Approval-related realtime events
 

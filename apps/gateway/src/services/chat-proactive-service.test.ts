@@ -119,30 +119,42 @@ describe("ChatProactiveService", () => {
 
   it("finds approval-linked durable runs in latest-started order without duplicate ids", () => {
     const { service, state } = createHarness();
-    state.proactiveRuns.set("run-old", createProactiveRunRow({
-      runId: "run-old",
-      linkedDurableRunId: "durable-old",
-      approvalId: "approval-1",
-      startedAt: "2026-04-04T18:00:00.000Z",
-    }));
-    state.proactiveRuns.set("run-new-duplicate", createProactiveRunRow({
-      runId: "run-new-duplicate",
-      linkedDurableRunId: "durable-old",
-      approvalId: "approval-1",
-      startedAt: "2026-04-04T19:00:00.000Z",
-    }));
-    state.proactiveRuns.set("run-new", createProactiveRunRow({
-      runId: "run-new",
-      linkedDurableRunId: "durable-new",
-      approvalId: "approval-1",
-      startedAt: "2026-04-04T20:00:00.000Z",
-    }));
-    state.proactiveRuns.set("run-other-approval", createProactiveRunRow({
-      runId: "run-other-approval",
-      linkedDurableRunId: "durable-other",
-      approvalId: "approval-2",
-      startedAt: "2026-04-04T21:00:00.000Z",
-    }));
+    state.proactiveRuns.set(
+      "run-old",
+      createProactiveRunRow({
+        runId: "run-old",
+        linkedDurableRunId: "durable-old",
+        approvalId: "approval-1",
+        startedAt: "2026-04-04T18:00:00.000Z",
+      }),
+    );
+    state.proactiveRuns.set(
+      "run-new-duplicate",
+      createProactiveRunRow({
+        runId: "run-new-duplicate",
+        linkedDurableRunId: "durable-old",
+        approvalId: "approval-1",
+        startedAt: "2026-04-04T19:00:00.000Z",
+      }),
+    );
+    state.proactiveRuns.set(
+      "run-new",
+      createProactiveRunRow({
+        runId: "run-new",
+        linkedDurableRunId: "durable-new",
+        approvalId: "approval-1",
+        startedAt: "2026-04-04T20:00:00.000Z",
+      }),
+    );
+    state.proactiveRuns.set(
+      "run-other-approval",
+      createProactiveRunRow({
+        runId: "run-other-approval",
+        linkedDurableRunId: "durable-other",
+        approvalId: "approval-2",
+        startedAt: "2026-04-04T21:00:00.000Z",
+      }),
+    );
 
     expect(service.findDurableRunIdsForApproval("approval-1")).toEqual(["durable-new", "durable-old"]);
   });
@@ -410,6 +422,7 @@ function createStorage(state: HarnessState) {
           status: input.status ?? "queued",
           attemptCount: input.attemptCount ?? 0,
           maxAttempts: input.maxAttempts ?? 3,
+          version: 1,
           payload: input.payload ?? {},
           metadata: input.metadata,
           startedAt: input.startedAt,

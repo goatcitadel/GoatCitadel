@@ -24,7 +24,7 @@ describe("mcp approval inbox", () => {
     ]);
   });
 
-  it("receives, lists, and resolves approval inbox items end to end", async () => {
+  it("receives, lists, and returns pending inbox state until follow-up effects finalize it", async () => {
     const approvalInbox = createRepo();
     const resolveApprovalWithRemoteTokenId = vi.fn(async () => ({
       approval: {
@@ -88,7 +88,7 @@ describe("mcp approval inbox", () => {
     );
 
     expect(listed.ok).toBe(true);
-    expect((listed.output?.items as Array<{ inboxItemId: string }>)).toHaveLength(1);
+    expect(listed.output?.items as Array<{ inboxItemId: string }>).toHaveLength(1);
 
     const resolved = await handleInternalMcpApprovalInboxInvoke(
       server,
@@ -115,8 +115,7 @@ describe("mcp approval inbox", () => {
     });
     expect(resolved.ok).toBe(true);
     expect(resolved.output?.item).toMatchObject({
-      state: "approved",
-      resolvedBy: "operator:mcp",
+      state: "pending",
     });
     expect(resolved.output?.approval).toMatchObject({
       approvalId: "apr-1",
@@ -174,13 +173,16 @@ describe("mcp approval inbox", () => {
       listByReceiver() {
         return [];
       },
-      markResolved(_inboxItemId: string, input: {
-        state: Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited" | "expired" | "failed">;
-        approvalStatus: ApprovalRequest["status"];
-        resolvedAt?: string;
-        resolvedBy?: string;
-        lastError?: string;
-      }) {
+      markResolved(
+        _inboxItemId: string,
+        input: {
+          state: Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited" | "expired" | "failed">;
+          approvalStatus: ApprovalRequest["status"];
+          resolvedAt?: string;
+          resolvedBy?: string;
+          lastError?: string;
+        },
+      ) {
         if (!resolved && input.state === "approved") {
           resolved = true;
           return {
@@ -284,8 +286,47 @@ describe("mcp approval inbox", () => {
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
-    expect(first.output?.item).toMatchObject({ state: "approved" });
+    expect(first.output?.item).toMatchObject({ state: "pending" });
+    expect(first.output?.approval).toMatchObject({ approvalId: "apr-1", status: "approved" });
     expect(second.output?.item).toMatchObject({ state: "approved" });
+  });
+
+  it("does not mark the inbox item failed when the token was already consumed by a winning resolver", async () => {
+    const approvalInbox = createRepo();
+    approvalInbox.receiveMcpApprovalDelivery({
+      connectorId: "mcp:srv-1",
+      receiverId: "srv-1",
+      approvalId: "apr-1",
+      tokenId: "tok-1",
+      token: "grat_tok_1",
+      approvalKind: "tool.invoke",
+      riskLevel: "danger",
+      approvalStatus: "pending",
+      preview: { summary: "Approve deploy" },
+      expiresAt: "2026-03-21T12:30:00.000Z",
+    });
+    const server = createServer();
+
+    const resolved = await handleInternalMcpApprovalInboxInvoke(
+      server,
+      {
+        serverId: server.serverId,
+        toolName: MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME,
+        arguments: {
+          inboxItemId: "inbox-1",
+          decision: "approve",
+        },
+      },
+      {
+        approvalInbox,
+        resolveApprovalWithRemoteTokenId: vi
+          .fn()
+          .mockRejectedValue(new Error("Remote action token has already been consumed.")),
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.output?.item).toMatchObject({ state: "pending" });
   });
 
   function createRepo() {
@@ -303,7 +344,9 @@ describe("mcp approval inbox", () => {
         preview: Record<string, unknown>;
         expiresAt: string;
       }) {
-        const existing = [...items.values()].find((item) => item.receiverId === input.receiverId && item.tokenId === input.tokenId);
+        const existing = [...items.values()].find(
+          (item) => item.receiverId === input.receiverId && item.tokenId === input.tokenId,
+        );
         if (existing) {
           const updated: ApprovalInboxItemRecord = {
             ...existing,
@@ -349,15 +392,20 @@ describe("mcp approval inbox", () => {
         return item;
       },
       listByReceiver(_receiverKind: "mcp", receiverId: string, input?: { state?: ApprovalInboxItemState }) {
-        return [...items.values()].filter((item) => item.receiverId === receiverId && (!input?.state || item.state === input.state));
+        return [...items.values()].filter(
+          (item) => item.receiverId === receiverId && (!input?.state || item.state === input.state),
+        );
       },
-      markResolved(inboxItemId: string, input: {
-        state: Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited" | "expired" | "failed">;
-        approvalStatus: ApprovalRequest["status"];
-        resolvedAt?: string;
-        resolvedBy?: string;
-        lastError?: string;
-      }) {
+      markResolved(
+        inboxItemId: string,
+        input: {
+          state: Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited" | "expired" | "failed">;
+          approvalStatus: ApprovalRequest["status"];
+          resolvedAt?: string;
+          resolvedBy?: string;
+          lastError?: string;
+        },
+      ) {
         const item = items.get(inboxItemId);
         if (!item) {
           throw new Error(`Missing inbox item ${inboxItemId}`);

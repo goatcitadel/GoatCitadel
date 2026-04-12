@@ -32,6 +32,7 @@ export class ApprovalInboxRepository {
   private readonly insertStmt;
   private readonly getStmt;
   private readonly getByReceiverAndTokenStmt;
+  private readonly getByApprovalAndTokenStmt;
   private readonly listStmt;
   private readonly listByStateStmt;
   private readonly updateOnRedeliveryStmt;
@@ -57,6 +58,14 @@ export class ApprovalInboxRepository {
       WHERE receiver_kind = @receiverKind
         AND receiver_id = @receiverId
         AND token_id = @tokenId
+    `);
+    this.getByApprovalAndTokenStmt = db.prepare(`
+      SELECT *
+      FROM approval_inbox_items
+      WHERE approval_id = @approvalId
+        AND token_id = @tokenId
+      ORDER BY created_at DESC
+      LIMIT 1
     `);
     this.listStmt = db.prepare(`
       SELECT * FROM approval_inbox_items
@@ -214,6 +223,16 @@ export class ApprovalInboxRepository {
       this.getByReceiverAndTokenStmt.get({
         receiverKind,
         receiverId,
+        tokenId,
+      }),
+    );
+    return row ? mapRow(row) : undefined;
+  }
+
+  public findByApprovalAndToken(approvalId: string, tokenId: string): ApprovalInboxItemRecord | undefined {
+    const row = toApprovalInboxRow(
+      this.getByApprovalAndTokenStmt.get({
+        approvalId,
         tokenId,
       }),
     );

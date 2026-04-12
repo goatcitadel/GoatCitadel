@@ -64,10 +64,12 @@ describe("resolveChatToolApproval", () => {
       },
       resolveApproval: vi.fn(async () => ({
         approval: resolvedApproval,
+        effects: [],
         replay: {
           approval: resolvedApproval,
           events: [],
           pendingAction: undefined,
+          effects: [],
         },
         durableRunId: "approval-wait-1",
         resolutionEffects: {
@@ -86,10 +88,13 @@ describe("resolveChatToolApproval", () => {
       allowScope: "once",
     });
 
-    expect(host.resolveApproval).toHaveBeenCalledWith("approval-1", expect.objectContaining({
-      decision: "approve",
-      resolvedBy: "chat-operator",
-    }));
+    expect(host.resolveApproval).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "approve",
+        resolvedBy: "chat-operator",
+      }),
+    );
     expect(result).toMatchObject({
       allowScope: "once",
       resumed: true,

@@ -264,17 +264,16 @@ async function resolveInboxItem(
       editedPayload: normalizeOptionalObject(args?.editedPayload),
       resolutionNote: optionalString(args?.resolutionNote),
     });
-    const updated = deps.approvalInbox.markResolved(inboxItemId, {
-      state: mapDecisionToInboxState(decision),
-      approvalStatus: result.approval.status,
-      resolvedAt: result.approval.resolvedAt ?? new Date().toISOString(),
-      resolvedBy,
-    });
     return {
-      item: updated,
+      item: deps.approvalInbox.get(inboxItemId),
       approval: result.approval,
     };
   } catch (error) {
+    if (shouldDeferInboxTerminalization(error)) {
+      return {
+        item: deps.approvalInbox.get(inboxItemId),
+      };
+    }
     const currentState = Date.parse(item.expiresAt) <= Date.now() ? "expired" : "failed";
     const updated = deps.approvalInbox.markResolved(inboxItemId, {
       state: currentState,
@@ -288,18 +287,6 @@ async function resolveInboxItem(
     }
     throw new Error(updated.lastError, { cause: error });
   }
-}
-
-function mapDecisionToInboxState(
-  decision: "approve" | "reject" | "edit",
-): Extract<ApprovalInboxItemState, "approved" | "rejected" | "edited"> {
-  if (decision === "approve") {
-    return "approved";
-  }
-  if (decision === "reject") {
-    return "rejected";
-  }
-  return "edited";
 }
 
 function requireNonEmptyString(value: unknown, field: string): string {
@@ -325,6 +312,11 @@ function optionalEnumValue<const T extends readonly string[]>(value: unknown, al
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function shouldDeferInboxTerminalization(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return message.includes("already been consumed") || message.includes("already resolved");
 }
 
 function normalizeObject(value: unknown): Record<string, unknown> {

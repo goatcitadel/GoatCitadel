@@ -2,13 +2,10 @@ import {
   NotFoundError,
   type ApprovalLinkage,
   type ApprovalRequest,
-  type ApprovalResolveInput,
   type ApprovalWaitWorkflowPayload,
   type DurableRunCreateRequest,
   type DurableRunRecord,
-  type RealtimeEvent,
   type RealtimeEventLinks,
-  type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { RequestAttribution } from "@goatcitadel/storage";
 import type { ServiceContext } from "./service-context.js";
@@ -16,11 +13,6 @@ import type { ServiceContext } from "./service-context.js";
 export interface ApprovalWaitRunServiceDeps {
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
   getDurableRun(runId: string): DurableRunRecord;
-  wakeDurableRun(
-    runId: string,
-    event: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
-  ): DurableRunRecord;
-  requestRunProcessing(runId: string): void;
   getRequestAttribution?: () => RequestAttribution | undefined;
 }
 
@@ -109,59 +101,6 @@ export class ApprovalWaitRunService {
       createdAt: new Date().toISOString(),
     });
     return run;
-  }
-
-  public wakeApprovalWaitDurableRun(
-    approval: ApprovalRequest,
-    input: ApprovalResolveInput,
-    executedAction?: ToolInvokeResult,
-  ): string | undefined {
-    const runId = this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
-    if (!runId) {
-      return undefined;
-    }
-    this.ctx.storage.approvalWaitRuns.markResolved(
-      approval.approvalId,
-      approval.resolvedAt ?? new Date().toISOString(),
-    );
-    try {
-      this.deps.wakeDurableRun(runId, {
-        eventKey: "approval.resolved",
-        correlationId: approval.approvalId,
-        payload: {
-          approvalId: approval.approvalId,
-          status: approval.status,
-          decision: input.decision,
-          resolvedBy: input.resolvedBy,
-          executedOutcome: executedAction?.outcome,
-        },
-      });
-    } catch (error) {
-      const msg = String((error as Error).message ?? "");
-      if (!msg.includes("not waiting/paused")) {
-        throw error;
-      }
-      this.ctx.publishRealtime(
-        "approval_wake_skipped",
-        "approvals",
-        {
-          approvalId: approval.approvalId,
-          runId,
-          reason: "durable_run_not_waiting",
-          detail: msg,
-        },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            approvalId: approval.approvalId,
-            runId,
-          },
-        } satisfies Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
-      );
-    }
-    this.deps.requestRunProcessing(runId);
-    return runId;
   }
 
   private getCurrentRequestAttribution(): {

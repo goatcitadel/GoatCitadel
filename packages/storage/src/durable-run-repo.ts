@@ -21,6 +21,10 @@ interface DurableRunRow {
   started_at: string | null;
   finished_at: string | null;
   last_error: string | null;
+  lease_owner_id: string | null;
+  lease_expires_at: string | null;
+  lease_heartbeat_at: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +62,7 @@ export class DurableRunRepository {
   private readonly updateRunStmt;
   private readonly listRunsStmt;
   private readonly listRunIdsByStatusStmt;
+  private readonly listExpiredRunningRunIdsStmt;
   private readonly countRunsStmt;
   private readonly statusCountsStmt;
   private readonly insertCheckpointStmt;
@@ -74,10 +79,12 @@ export class DurableRunRepository {
     this.insertRunStmt = db.prepare(`
       INSERT INTO durable_runs (
         run_id, workflow_key, status, attempt_count, max_attempts,
-        payload_json, metadata_json, started_at, finished_at, last_error, created_at, updated_at
+        payload_json, metadata_json, started_at, finished_at, last_error,
+        lease_owner_id, lease_expires_at, lease_heartbeat_at, version, created_at, updated_at
       ) VALUES (
         @runId, @workflowKey, @status, @attemptCount, @maxAttempts,
-        @payloadJson, @metadataJson, @startedAt, @finishedAt, @lastError, @createdAt, @updatedAt
+        @payloadJson, @metadataJson, @startedAt, @finishedAt, @lastError,
+        @leaseOwnerId, @leaseExpiresAt, @leaseHeartbeatAt, @version, @createdAt, @updatedAt
       )
     `);
     this.getRunStmt = db.prepare("SELECT * FROM durable_runs WHERE run_id = ?");
@@ -91,8 +98,13 @@ export class DurableRunRepository {
         started_at = @startedAt,
         finished_at = @finishedAt,
         last_error = @lastError,
+        lease_owner_id = @leaseOwnerId,
+        lease_expires_at = @leaseExpiresAt,
+        lease_heartbeat_at = @leaseHeartbeatAt,
+        version = @nextVersion,
         updated_at = @updatedAt
       WHERE run_id = @runId
+        AND version = @expectedVersion
     `);
     this.listRunsStmt = db.prepare(`
       SELECT * FROM durable_runs
@@ -104,6 +116,15 @@ export class DurableRunRepository {
       FROM durable_runs
       WHERE status = ?
       ORDER BY created_at ASC
+      LIMIT ?
+    `);
+    this.listExpiredRunningRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status = 'running'
+        AND lease_expires_at IS NOT NULL
+        AND lease_expires_at <= ?
+      ORDER BY updated_at ASC, run_id ASC
       LIMIT ?
     `);
     this.countRunsStmt = db.prepare("SELECT COUNT(1) AS count FROM durable_runs");
@@ -187,6 +208,10 @@ export class DurableRunRepository {
     startedAt?: string;
     finishedAt?: string;
     lastError?: string;
+    leaseOwnerId?: string;
+    leaseExpiresAt?: string;
+    leaseHeartbeatAt?: string;
+    version?: number;
     now?: string;
   }): DurableRunRecord {
     const now = input.now ?? new Date().toISOString();
@@ -196,11 +221,15 @@ export class DurableRunRepository {
       status: input.status ?? "queued",
       attemptCount: Math.max(0, Math.floor(input.attemptCount ?? 0)),
       maxAttempts: Math.max(1, Math.floor(input.maxAttempts ?? 3)),
+      version: Math.max(1, Math.floor(input.version ?? 1)),
       payload: normalizeObject(input.payload),
       metadata: normalizeOptionalObject(input.metadata),
       startedAt: input.startedAt,
       finishedAt: input.finishedAt,
       lastError: input.lastError?.trim() || undefined,
+      leaseOwnerId: input.leaseOwnerId?.trim() || undefined,
+      leaseExpiresAt: input.leaseExpiresAt,
+      leaseHeartbeatAt: input.leaseHeartbeatAt,
       createdAt: now,
       updatedAt: now,
     };
@@ -218,6 +247,10 @@ export class DurableRunRepository {
       startedAt: run.startedAt ?? null,
       finishedAt: run.finishedAt ?? null,
       lastError: run.lastError ?? null,
+      leaseOwnerId: run.leaseOwnerId ?? null,
+      leaseExpiresAt: run.leaseExpiresAt ?? null,
+      leaseHeartbeatAt: run.leaseHeartbeatAt ?? null,
+      version: run.version,
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
     });
@@ -241,22 +274,16 @@ export class DurableRunRepository {
     startedAt?: string;
     finishedAt?: string;
     lastError?: string;
+    leaseOwnerId?: string;
+    leaseExpiresAt?: string;
+    leaseHeartbeatAt?: string;
+    clearLease?: boolean;
     updatedAt?: string;
+    expectedVersion?: number;
   }): DurableRunRecord {
     const current = this.getRun(input.runId);
-    const next: DurableRunRecord = {
-      ...current,
-      status: input.status,
-      attemptCount:
-        input.attemptCount !== undefined ? Math.max(0, Math.floor(input.attemptCount)) : current.attemptCount,
-      maxAttempts: input.maxAttempts !== undefined ? Math.max(1, Math.floor(input.maxAttempts)) : current.maxAttempts,
-      metadata: input.metadata !== undefined ? normalizeOptionalObject(input.metadata) : current.metadata,
-      startedAt: input.startedAt !== undefined ? input.startedAt : current.startedAt,
-      finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finishedAt,
-      lastError: input.lastError !== undefined ? input.lastError?.trim() || undefined : current.lastError,
-      updatedAt: input.updatedAt ?? new Date().toISOString(),
-    };
-    this.updateRunStmt.run({
+    const next = this.buildNextRun(current, input);
+    const result = this.updateRunStmt.run({
       runId: next.runId,
       status: next.status,
       attemptCount: next.attemptCount,
@@ -265,9 +292,94 @@ export class DurableRunRepository {
       startedAt: next.startedAt ?? null,
       finishedAt: next.finishedAt ?? null,
       lastError: next.lastError ?? null,
+      leaseOwnerId: next.leaseOwnerId ?? null,
+      leaseExpiresAt: next.leaseExpiresAt ?? null,
+      leaseHeartbeatAt: next.leaseHeartbeatAt ?? null,
+      nextVersion: next.version,
+      expectedVersion: input.expectedVersion ?? current.version,
       updatedAt: next.updatedAt,
     });
+    if ((result.changes ?? 0) < 1) {
+      throw new Error(`Durable run ${input.runId} update conflict`);
+    }
     return this.getRun(next.runId);
+  }
+
+  public tryClaimQueuedRun(input: {
+    runId: string;
+    workerId: string;
+    leaseHeartbeatAt: string;
+    leaseExpiresAt: string;
+    updatedAt?: string;
+  }): DurableRunRecord | undefined {
+    const current = this.getRun(input.runId);
+    if (current.status !== "queued") {
+      return undefined;
+    }
+    const next = this.buildNextRun(current, {
+      runId: input.runId,
+      status: "running",
+      startedAt: current.startedAt ?? input.leaseHeartbeatAt,
+      finishedAt: undefined,
+      lastError: undefined,
+      leaseOwnerId: input.workerId,
+      leaseHeartbeatAt: input.leaseHeartbeatAt,
+      leaseExpiresAt: input.leaseExpiresAt,
+      updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
+    });
+    const result = this.updateRunStmt.run({
+      runId: next.runId,
+      status: next.status,
+      attemptCount: next.attemptCount,
+      maxAttempts: next.maxAttempts,
+      metadataJson: next.metadata ? JSON.stringify(next.metadata) : null,
+      startedAt: next.startedAt ?? null,
+      finishedAt: next.finishedAt ?? null,
+      lastError: next.lastError ?? null,
+      leaseOwnerId: next.leaseOwnerId ?? null,
+      leaseExpiresAt: next.leaseExpiresAt ?? null,
+      leaseHeartbeatAt: next.leaseHeartbeatAt ?? null,
+      nextVersion: next.version,
+      expectedVersion: current.version,
+      updatedAt: next.updatedAt,
+    });
+    return (result.changes ?? 0) > 0 ? this.getRun(input.runId) : undefined;
+  }
+
+  public renewLease(input: {
+    runId: string;
+    workerId: string;
+    leaseHeartbeatAt: string;
+    leaseExpiresAt: string;
+    updatedAt?: string;
+  }): DurableRunRecord | undefined {
+    const current = this.getRun(input.runId);
+    if (current.status !== "running" || current.leaseOwnerId !== input.workerId) {
+      return undefined;
+    }
+    return this.updateRun({
+      runId: input.runId,
+      status: current.status,
+      leaseOwnerId: input.workerId,
+      leaseHeartbeatAt: input.leaseHeartbeatAt,
+      leaseExpiresAt: input.leaseExpiresAt,
+      updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
+      expectedVersion: current.version,
+    });
+  }
+
+  public releaseLease(runId: string, workerId: string, updatedAt?: string): DurableRunRecord | undefined {
+    const current = this.getRun(runId);
+    if (current.leaseOwnerId !== workerId) {
+      return undefined;
+    }
+    return this.updateRun({
+      runId,
+      status: current.status,
+      clearLease: true,
+      updatedAt: updatedAt ?? new Date().toISOString(),
+      expectedVersion: current.version,
+    });
   }
 
   public listRuns(limit = 25): DurableRunRecord[] {
@@ -279,6 +391,12 @@ export class DurableRunRepository {
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
     const rows = this.listRunIdsByStatusStmt.all(status, safeLimit) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listExpiredRunningRunIds(nowIso: string, limit = 500): string[] {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
+    const rows = this.listExpiredRunningRunIdsStmt.all(nowIso, safeLimit) as Array<{ run_id: string }>;
     return rows.map((row) => row.run_id);
   }
 
@@ -455,6 +573,55 @@ export class DurableRunRepository {
     });
     return this.getDeadLetterById(existing.deadLetterId);
   }
+
+  private buildNextRun(
+    current: DurableRunRecord,
+    input: {
+      runId: string;
+      status: DurableRunStatus;
+      attemptCount?: number;
+      maxAttempts?: number;
+      metadata?: Record<string, unknown>;
+      startedAt?: string;
+      finishedAt?: string;
+      lastError?: string;
+      leaseOwnerId?: string;
+      leaseExpiresAt?: string;
+      leaseHeartbeatAt?: string;
+      clearLease?: boolean;
+      updatedAt?: string;
+    },
+  ): DurableRunRecord {
+    const clearLease = input.clearLease ?? false;
+    return {
+      ...current,
+      status: input.status,
+      attemptCount:
+        input.attemptCount !== undefined ? Math.max(0, Math.floor(input.attemptCount)) : current.attemptCount,
+      maxAttempts: input.maxAttempts !== undefined ? Math.max(1, Math.floor(input.maxAttempts)) : current.maxAttempts,
+      metadata: input.metadata !== undefined ? normalizeOptionalObject(input.metadata) : current.metadata,
+      startedAt: input.startedAt !== undefined ? input.startedAt : current.startedAt,
+      finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finishedAt,
+      lastError: input.lastError !== undefined ? input.lastError?.trim() || undefined : current.lastError,
+      leaseOwnerId: clearLease
+        ? undefined
+        : input.leaseOwnerId !== undefined
+          ? input.leaseOwnerId
+          : current.leaseOwnerId,
+      leaseExpiresAt: clearLease
+        ? undefined
+        : input.leaseExpiresAt !== undefined
+          ? input.leaseExpiresAt
+          : current.leaseExpiresAt,
+      leaseHeartbeatAt: clearLease
+        ? undefined
+        : input.leaseHeartbeatAt !== undefined
+          ? input.leaseHeartbeatAt
+          : current.leaseHeartbeatAt,
+      version: current.version + 1,
+      updatedAt: input.updatedAt ?? new Date().toISOString(),
+    };
+  }
 }
 
 function mapDeadLetterRow(row: DurableDeadLetterRow): DurableDeadLetterRecord {
@@ -488,6 +655,10 @@ function isDurableRunRow(value: unknown): value is DurableRunRow {
     (typeof value.started_at === "string" || value.started_at === null) &&
     (typeof value.finished_at === "string" || value.finished_at === null) &&
     (typeof value.last_error === "string" || value.last_error === null) &&
+    (typeof value.lease_owner_id === "string" || value.lease_owner_id === null) &&
+    (typeof value.lease_expires_at === "string" || value.lease_expires_at === null) &&
+    (typeof value.lease_heartbeat_at === "string" || value.lease_heartbeat_at === null) &&
+    typeof value.version === "number" &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );
@@ -580,11 +751,15 @@ function mapRunRow(row: DurableRunRow): DurableRunRecord {
     status: row.status,
     attemptCount: Number(row.attempt_count ?? 0),
     maxAttempts: Number(row.max_attempts ?? 0),
+    version: Number(row.version ?? 1),
     payload: parseRecordJson(row.payload_json),
     metadata: row.metadata_json ? parseRecordJson(row.metadata_json) : undefined,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     lastError: row.last_error ?? undefined,
+    leaseOwnerId: row.lease_owner_id ?? undefined,
+    leaseExpiresAt: row.lease_expires_at ?? undefined,
+    leaseHeartbeatAt: row.lease_heartbeat_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

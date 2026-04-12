@@ -251,7 +251,14 @@ export class HooksService {
       return [];
     }
     return hooks.map((hook) => {
-      const idempotencyKey = buildDeliveryIdempotencyKey(input.trigger, input.entityType, input.entityId);
+      const idempotencyKey = buildAfterHookDeliveryIdempotencyKey(input.trigger, input.entityType, input.entityId);
+      const existing = this.ctx.storage.hookRuns.findByIdempotency(hook.hookId, idempotencyKey);
+      if (existing) {
+        if (existing.status === "queued" && existing.durableRunId) {
+          this.deps.requestDurableRunProcessing(existing.durableRunId);
+        }
+        return existing;
+      }
       const run = this.ctx.storage.hookRuns.create({
         hookId: hook.hookId,
         workspaceId,
@@ -565,6 +572,10 @@ export class HooksService {
 
 function buildDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, entityId: string): string {
   return `${trigger}:${entityType}:${entityId}:${randomUUID()}`;
+}
+
+function buildAfterHookDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, entityId: string): string {
+  return `${trigger}:${entityType}:${entityId}`;
 }
 
 function normalizeDecision(value: unknown): HookDecision | undefined {

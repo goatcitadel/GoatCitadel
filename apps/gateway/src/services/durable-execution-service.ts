@@ -213,12 +213,15 @@ function completeDurableWorkflowRun(
   checkpointState: Record<string, unknown>,
 ): void {
   const now = new Date().toISOString();
+  const current = host.storage.durableRuns.getRun(runId);
   host.storage.durableRuns.updateRun({
     runId,
     status: "completed",
     updatedAt: now,
     finishedAt: now,
+    clearLease: true,
     lastError: undefined,
+    expectedVersion: current.version,
   });
   host.storage.durableRuns.createCheckpoint({
     runId,
@@ -653,22 +656,24 @@ export function wakeDurableRun(
     payload?: Record<string, unknown>;
     correlationId?: string;
   },
-): DurableRunRecord {
-  const run = host.durableRunService.wakeDurableRun(runId, event);
-  host.durableRunService.requestRunProcessing(runId);
-  host.hooksService.enqueueAfterHooks({
-    workspaceId: host.resolveDurableRunHookWorkspaceId(run),
-    trigger: "orchestration.run.woken",
-    entityType: "durable_run",
-    entityId: runId,
-    payload: {
-      runId,
-      eventKey: event.eventKey,
-      correlationId: event.correlationId,
-      payload: event.payload ?? {},
-    },
-  });
-  return run;
+): import("@goatcitadel/contracts").DurableWakeResult {
+  const result = host.durableRunService.wakeDurableRun(runId, event);
+  if (result.outcome === "woke" && result.run) {
+    host.durableRunService.requestRunProcessing(runId);
+    host.hooksService.enqueueAfterHooks({
+      workspaceId: host.resolveDurableRunHookWorkspaceId(result.run),
+      trigger: "orchestration.run.woken",
+      entityType: "durable_run",
+      entityId: runId,
+      payload: {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        payload: event.payload ?? {},
+      },
+    });
+  }
+  return result;
 }
 
 export function recoverDurableDeadLetter(

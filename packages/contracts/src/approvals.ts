@@ -54,6 +54,39 @@ export interface ApprovalCreateInput {
   expiresAt?: string | null;
 }
 
+export type ApprovalEffectKind =
+  | "approval_wait_wake"
+  | "proactive_run_wake"
+  | "linked_chat_turn_wake"
+  | "pending_action_execute"
+  | "approval_inbox_follow_up"
+  | "approval_after_hooks";
+
+export type ApprovalEffectStatus = "pending" | "running" | "completed" | "skipped" | "failed";
+
+export type ApprovalEffectTargetKind = "durable_run" | "chat_turn" | "pending_action" | "remote_token" | "approval";
+
+export interface ApprovalEffectRecord {
+  effectId: string;
+  approvalId: string;
+  effectKind: ApprovalEffectKind;
+  targetKind: ApprovalEffectTargetKind;
+  targetId: string;
+  idempotencyKey: string;
+  status: ApprovalEffectStatus;
+  attemptCount: number;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown>;
+  lastError?: string;
+  claimedBy?: string;
+  claimedAt?: string;
+  leaseExpiresAt?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export interface ApprovalResolveInput {
   decision: "approve" | "reject" | "edit";
   editedPayload?: Record<string, unknown>;
@@ -118,6 +151,7 @@ export interface ApprovalReplaySnapshot {
   events: ApprovalReplayEvent[];
   pendingAction?: PendingApprovalAction;
   durableRunId?: string;
+  effects: ApprovalEffectRecord[];
 }
 
 export type RemoteActionTokenState = "pending" | "consumed" | "expired";

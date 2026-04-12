@@ -105,6 +105,8 @@ export function ApprovalsPage() {
         setSummary(
           `Approval ${approvalId} resolved and action ${result.executedAction.outcome}: ${result.executedAction.policyReason}`,
         );
+      } else if (result.effects.length > 0) {
+        setSummary(`Approval ${approvalId} resolved. ${result.effects.length} follow-on effects queued.`);
       }
       applyResolvedApprovalResult(result);
       setError(null);
@@ -194,6 +196,7 @@ export function ApprovalsPage() {
           workspaceIds: result.approval.linkage?.workspaceId ? [result.approval.linkage.workspaceId] : [],
         },
         approval: result.approval,
+        approvalEffects: result.effects,
         turns: [],
         toolRuns: [],
       },
@@ -205,10 +208,10 @@ export function ApprovalsPage() {
     try {
       const lifecycle = await fetchRuntimeLifecycle({ approvalId });
       setLifecycleByApprovalId((prev) => ({ ...prev, [approvalId]: lifecycle }));
-      const runId = lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? null;
+      const runId = getCanonicalDurableRunId(lifecycle);
       if (!runId) {
         setDurableByApprovalId((prev) => ({ ...prev, [approvalId]: null }));
-        setError("No durable run is linked to this approval yet.");
+        setError("No canonical durable run is linked to this approval yet.");
         return;
       }
       const run = lifecycle.durableRun ?? (await fetchDurableRun(runId));
@@ -651,10 +654,10 @@ export function ApprovalsPage() {
                   <button
                     type="button"
                     onClick={() => setPendingResumeApprovalId(approval.approvalId)}
-                    disabled={durableBusy || !durable?.runId}
+                    disabled={durableBusy || !durable?.runId || durable.status !== "paused"}
                     className="gc-button"
                   >
-                    Resume from checkpoint
+                    Resume paused run
                   </button>
                 </div>
                 {durable ? (
@@ -682,21 +685,40 @@ export function ApprovalsPage() {
             ) : null}
             {lifecycle ? (
               <div className="replay-box">
-                <h4>Canonical linkage</h4>
+                <h4>Runtime linkage</h4>
                 <p className="office-subtitle">
-                  Session: {lifecycle.query.sessionId ?? lifecycle.linked.sessionIds[0] ?? "unlinked"}
+                  Canonical session: {lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId ?? "absent"}
                   {" | "}
-                  Turns: {lifecycle.linked.turnIds.length > 0 ? lifecycle.linked.turnIds.join(", ") : "none"}
+                  Canonical task: {lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId ?? "absent"}
                   {" | "}
-                  Task: {lifecycle.query.taskId ?? lifecycle.linked.taskIds[0] ?? "none"}
+                  Canonical run: {getCanonicalDurableRunId(lifecycle) ?? "absent"}
                 </p>
                 <p className="office-subtitle">
-                  Proactive durable run: {lifecycle.proactiveDurableRun?.runId ?? "none"}
+                  Inferred sessions:{" "}
+                  {formatInferredIds(
+                    lifecycle.linked.sessionIds,
+                    lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId,
+                  )}
                   {" | "}
-                  Approval wait run: {lifecycle.approvalWaitDurableRun?.runId ?? "none"}
+                  Inferred tasks:{" "}
+                  {formatInferredIds(
+                    lifecycle.linked.taskIds,
+                    lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId,
+                  )}
                   {" | "}
-                  Queried run: {lifecycle.query.runId ?? lifecycle.linked.runIds[0] ?? "none"}
+                  Inferred runs: {formatInferredIds(lifecycle.linked.runIds, getCanonicalDurableRunId(lifecycle))}
                 </p>
+                {lifecycle.resolution ? (
+                  <p className="office-subtitle">
+                    Provenance: session {lifecycle.resolution.sessionIdSource ?? "absent"}
+                    {" | "}
+                    turn {lifecycle.resolution.turnIdSource ?? "absent"}
+                    {" | "}
+                    run {lifecycle.resolution.runIdSource ?? "absent"}
+                    {" | "}
+                    task {lifecycle.resolution.taskIdSource ?? "absent"}
+                  </p>
+                ) : null}
                 {approval.linkage?.proactiveRunId || lifecycle.proactiveRuns?.length ? (
                   <p className="office-subtitle">
                     Proactive run: {approval.linkage?.proactiveRunId ?? lifecycle.proactiveRuns?.[0]?.runId ?? "none"}
@@ -725,6 +747,24 @@ export function ApprovalsPage() {
                     ))}
                   </ul>
                 ) : null}
+              </div>
+            ) : null}
+            {(lifecycle?.approvalEffects?.length ?? 0) > 0 || (replay?.effects?.length ?? 0) > 0 ? (
+              <div className="replay-box">
+                <h4>Approval effects</h4>
+                <ul className="compact-list">
+                  {(lifecycle?.approvalEffects ?? replay?.effects ?? []).map((effect) => (
+                    <li key={effect.effectId}>
+                      <strong>{effect.effectKind}</strong>
+                      {" | "}
+                      {effect.status}
+                      {" | "}
+                      {effect.targetKind}:{effect.targetId}
+                      {effect.attemptCount > 0 ? ` | attempts ${effect.attemptCount}` : ""}
+                      {effect.lastError ? ` | error ${effect.lastError}` : ""}
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
             {replay ? (
@@ -872,4 +912,18 @@ function isExpiredApproval(approval: ApprovalsResponse["items"][number]): boolea
   }
   const expiresAtMs = Date.parse(approval.expiresAt);
   return Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now();
+}
+
+function getCanonicalDurableRunId(lifecycle: RuntimeLifecycleResponse): string | null {
+  return (
+    lifecycle.query.runId ??
+    lifecycle.approval?.linkage?.durableRunId ??
+    lifecycle.approvalWaitDurableRun?.runId ??
+    null
+  );
+}
+
+function formatInferredIds(ids: string[], canonicalId?: string | null): string {
+  const inferred = ids.filter((id) => id !== canonicalId);
+  return inferred.length > 0 ? inferred.join(", ") : "none";
 }

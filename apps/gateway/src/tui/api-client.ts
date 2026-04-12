@@ -1,5 +1,7 @@
+/* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import type {
+  ApprovalEffectRecord,
   ApprovalRequest,
   LlmModelRecord,
   LlmRuntimeConfig,
@@ -106,13 +108,25 @@ export class TuiApiClient {
     approval: ApprovalRequest;
     events: ApprovalReplayEvent[];
     pendingAction?: PendingApprovalAction;
+    effects: ApprovalEffectRecord[];
   }> {
     return this.request(`/api/v1/approvals/${encodeURIComponent(approvalId)}/replay`, { method: "GET" });
   }
 
-  public async resolveApproval(approvalId: string, decision: "approve" | "reject"): Promise<{
+  public async resolveApproval(
+    approvalId: string,
+    decision: "approve" | "reject",
+  ): Promise<{
     approval: ApprovalRequest;
     executedAction?: ToolInvokeResult;
+    effects: ApprovalEffectRecord[];
+    replay: {
+      approval: ApprovalRequest;
+      events: ApprovalReplayEvent[];
+      pendingAction?: PendingApprovalAction;
+      effects: ApprovalEffectRecord[];
+    };
+    durableRunId?: string;
   }> {
     return this.request(
       `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
@@ -164,10 +178,14 @@ export class TuiApiClient {
     title?: string;
     projectId?: string;
   }): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/chat/sessions", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/chat/sessions",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async listChatMessages(
@@ -197,10 +215,14 @@ export class TuiApiClient {
       thinkingLevel?: "minimal" | "standard" | "extended";
     },
   ): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async *streamChatMessage(
@@ -219,10 +241,14 @@ export class TuiApiClient {
     const route = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send/stream`;
     const body = { ...input };
     delete (body as { agentMode?: boolean }).agentMode;
-    for await (const event of this.requestStream(route, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }, true)) {
+    for await (const event of this.requestStream(
+      route,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      true,
+    )) {
       yield event;
     }
   }
@@ -232,10 +258,14 @@ export class TuiApiClient {
   }
 
   public async patchChatPrefs(sessionId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/prefs`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }, true);
+    return this.request(
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/prefs`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      },
+      true,
+    );
   }
 
   public async listCosts(scope: "day" | "session" | "agent" | "task"): Promise<TuiCostSummaryResponse> {
@@ -243,10 +273,14 @@ export class TuiApiClient {
   }
 
   public async runCheaper(): Promise<{ mode: string; actions: string[] }> {
-    return this.request("/api/v1/costs/run-cheaper", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      "/api/v1/costs/run-cheaper",
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async listTasks(status?: string): Promise<{ items: Array<Record<string, unknown>>; nextCursor?: string }> {
@@ -259,17 +293,25 @@ export class TuiApiClient {
     description?: string;
     priority?: "low" | "normal" | "high" | "urgent";
   }): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/tasks", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/tasks",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async updateTask(taskId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async listTaskActivities(taskId: string): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -277,10 +319,14 @@ export class TuiApiClient {
   }
 
   public async appendTaskActivity(taskId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/activities`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async listSkills(): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -288,10 +334,14 @@ export class TuiApiClient {
   }
 
   public async reloadSkills(): Promise<{ items: Array<Record<string, unknown>> }> {
-    return this.request("/api/v1/skills/reload", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      "/api/v1/skills/reload",
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async resolveSkills(text: string, explicitSkills?: string[]): Promise<Record<string, unknown>> {
@@ -332,10 +382,14 @@ export class TuiApiClient {
     sourceManifestPath: string;
     installedSkillId?: string;
   }> {
-    return this.request("/api/v1/skills/import/install", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/skills/import/install",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async fetchSkillImportHistory(limit = 100): Promise<{ items: SkillImportHistoryRecord[] }> {
@@ -347,10 +401,14 @@ export class TuiApiClient {
     skillId: string,
     input: { state: SkillRuntimeState; note?: string },
   ): Promise<SkillStateRecord> {
-    return this.request(`/api/v1/skills/${encodeURIComponent(skillId)}/state`, {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      `/api/v1/skills/${encodeURIComponent(skillId)}/state`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async integrationCatalog(kind?: string): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -364,24 +422,39 @@ export class TuiApiClient {
   }
 
   public async createIntegrationConnection(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/integrations/connections", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/integrations/connections",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
-  public async updateIntegrationConnection(connectionId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    }, true);
+  public async updateIntegrationConnection(
+    connectionId: string,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async deleteIntegrationConnection(connectionId: string): Promise<{ deleted: boolean }> {
-    return this.request(`/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`, {
-      method: "DELETE",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/integrations/connections/${encodeURIComponent(connectionId)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async meshStatus(): Promise<Record<string, unknown>> {
@@ -405,31 +478,47 @@ export class TuiApiClient {
   }
 
   public async meshAcquireLease(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/mesh/leases/acquire", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/mesh/leases/acquire",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async meshRenewLease(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/mesh/leases/renew", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/mesh/leases/renew",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async meshReleaseLease(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/mesh/leases/release", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/mesh/leases/release",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async meshClaimSession(sessionId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/mesh/sessions/${encodeURIComponent(sessionId)}/claim`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      `/api/v1/mesh/sessions/${encodeURIComponent(sessionId)}/claim`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async npuStatus(): Promise<NpuRuntimeStatus> {
@@ -441,24 +530,36 @@ export class TuiApiClient {
   }
 
   public async npuStart(): Promise<NpuRuntimeStatus> {
-    return this.request("/api/v1/npu/start", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      "/api/v1/npu/start",
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async npuStop(): Promise<NpuRuntimeStatus> {
-    return this.request("/api/v1/npu/stop", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      "/api/v1/npu/stop",
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async npuRefresh(): Promise<NpuRuntimeStatus> {
-    return this.request("/api/v1/npu/refresh", {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      "/api/v1/npu/refresh",
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async onboardingState(): Promise<OnboardingState> {
@@ -466,17 +567,25 @@ export class TuiApiClient {
   }
 
   public async onboardingBootstrap(input: OnboardingBootstrapInput): Promise<OnboardingBootstrapResult> {
-    return this.request("/api/v1/onboarding/bootstrap", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/onboarding/bootstrap",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async onboardingComplete(completedBy: string): Promise<{ state: OnboardingState }> {
-    return this.request("/api/v1/onboarding/complete", {
-      method: "POST",
-      body: JSON.stringify({ completedBy }),
-    }, true);
+    return this.request(
+      "/api/v1/onboarding/complete",
+      {
+        method: "POST",
+        body: JSON.stringify({ completedBy }),
+      },
+      true,
+    );
   }
 
   public async fetchLlmConfig(): Promise<LlmRuntimeConfig> {
@@ -488,7 +597,9 @@ export class TuiApiClient {
     return this.request(`/api/v1/llm/models${query}`, { method: "GET" });
   }
 
-  public async fetchLlmModels(providerId?: string): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
+  public async fetchLlmModels(
+    providerId?: string,
+  ): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
     const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
     return this.request(`/api/v1/llm/models${query}`, { method: "GET" });
   }
@@ -506,10 +617,14 @@ export class TuiApiClient {
     };
     headers?: Record<string, string>;
   }): Promise<LlmModelPreviewResponse> {
-    return this.request("/api/v1/llm/models/preview", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/llm/models/preview",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async runtimeSettings(): Promise<Record<string, unknown>> {
@@ -517,10 +632,14 @@ export class TuiApiClient {
   }
 
   public async patchRuntimeSettings(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/settings", {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/settings",
+      {
+        method: "PATCH",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async fetchMcpTemplates(): Promise<{ items: Array<McpServerTemplateRecord & { installed: boolean }> }> {
@@ -545,10 +664,14 @@ export class TuiApiClient {
     policy?: Partial<McpServerPolicy>;
     verifiedAt?: string;
   }): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/mcp/servers", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/mcp/servers",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async listEvents(limit = 100): Promise<{ items: RealtimeEvent[]; nextCursor?: string }> {
@@ -592,17 +715,25 @@ export class TuiApiClient {
   }
 
   public async patchMemoryItem(itemId: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/memory/items/${encodeURIComponent(itemId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    }, true);
+    return this.request(
+      `/api/v1/memory/items/${encodeURIComponent(itemId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      },
+      true,
+    );
   }
 
   public async forgetMemoryItem(itemId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/memory/items/${encodeURIComponent(itemId)}/forget`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/memory/items/${encodeURIComponent(itemId)}/forget`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async listMemoryItemHistory(itemId: string, limit = 40): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -616,10 +747,14 @@ export class TuiApiClient {
     namespace?: string;
     query?: string;
   }): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/memory/forget", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/memory/forget",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async listFiles(input?: { dir?: string; limit?: number }): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -636,10 +771,14 @@ export class TuiApiClient {
   }
 
   public async uploadFile(relativePath: string, content: string): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/files/upload", {
-      method: "POST",
-      body: JSON.stringify({ relativePath, content }),
-    }, true);
+    return this.request(
+      "/api/v1/files/upload",
+      {
+        method: "POST",
+        body: JSON.stringify({ relativePath, content }),
+      },
+      true,
+    );
   }
 
   public async listCronJobs(): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -647,31 +786,47 @@ export class TuiApiClient {
   }
 
   public async startCronJob(jobId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/start`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/cron/jobs/${encodeURIComponent(jobId)}/start`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async pauseCronJob(jobId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/pause`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/cron/jobs/${encodeURIComponent(jobId)}/pause`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async runCronJob(jobId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}/run`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/cron/jobs/${encodeURIComponent(jobId)}/run`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async deleteCronJob(jobId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, {
-      method: "DELETE",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/cron/jobs/${encodeURIComponent(jobId)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async listCronReviewQueue(limit = 120): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -679,10 +834,14 @@ export class TuiApiClient {
   }
 
   public async retryCronReviewItem(itemId: string): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/cron/review-queue/${encodeURIComponent(itemId)}/retry`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/cron/review-queue/${encodeURIComponent(itemId)}/retry`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async getCronRunDiff(runId: string): Promise<Record<string, unknown>> {
@@ -704,20 +863,28 @@ export class TuiApiClient {
     testId: string,
     input?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/run`, {
-      method: "POST",
-      body: JSON.stringify(input ?? {}),
-    }, true);
+    return this.request(
+      `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId)}/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(input ?? {}),
+      },
+      true,
+    );
   }
 
   public async runPromptPackBenchmark(
     packId: string,
     input?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/benchmark/run`, {
-      method: "POST",
-      body: JSON.stringify(input ?? {}),
-    }, true);
+    return this.request(
+      `/api/v1/prompt-packs/${encodeURIComponent(packId)}/benchmark/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(input ?? {}),
+      },
+      true,
+    );
   }
 
   public async getPromptPackBenchmark(benchmarkRunId: string): Promise<Record<string, unknown>> {
@@ -734,10 +901,14 @@ export class TuiApiClient {
     packId: string,
     input?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/replay-regression/run`, {
-      method: "POST",
-      body: JSON.stringify(input ?? {}),
-    }, true);
+    return this.request(
+      `/api/v1/prompt-packs/${encodeURIComponent(packId)}/replay-regression/run`,
+      {
+        method: "POST",
+        body: JSON.stringify(input ?? {}),
+      },
+      true,
+    );
   }
 
   public async getPromptPackReplayRegression(runId: string): Promise<Record<string, unknown>> {
@@ -759,10 +930,14 @@ export class TuiApiClient {
   }
 
   public async runImprovementReplay(input?: { sampleSize?: number }): Promise<Record<string, unknown>> {
-    return this.request("/api/v1/improvement/replay/run", {
-      method: "POST",
-      body: JSON.stringify(input ?? {}),
-    }, true);
+    return this.request(
+      "/api/v1/improvement/replay/run",
+      {
+        method: "POST",
+        body: JSON.stringify(input ?? {}),
+      },
+      true,
+    );
   }
 
   public async listImprovementReplayRuns(limit = 40): Promise<{ items: Array<Record<string, unknown>> }> {
@@ -773,18 +948,32 @@ export class TuiApiClient {
     return this.request(`/api/v1/improvement/replay/runs/${encodeURIComponent(runId)}`, { method: "GET" });
   }
 
-  public async createReplayDraft(runId: string, overrides: Array<Record<string, unknown>>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/replay/runs/${encodeURIComponent(runId)}/draft`, {
-      method: "POST",
-      body: JSON.stringify({ overrides }),
-    }, true);
+  public async createReplayDraft(
+    runId: string,
+    overrides: Array<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/api/v1/replay/runs/${encodeURIComponent(runId)}/draft`,
+      {
+        method: "POST",
+        body: JSON.stringify({ overrides }),
+      },
+      true,
+    );
   }
 
-  public async executeReplayOverride(runId: string, overrides: Array<Record<string, unknown>>): Promise<Record<string, unknown>> {
-    return this.request(`/api/v1/replay/runs/${encodeURIComponent(runId)}/execute`, {
-      method: "POST",
-      body: JSON.stringify({ overrides }),
-    }, true);
+  public async executeReplayOverride(
+    runId: string,
+    overrides: Array<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/api/v1/replay/runs/${encodeURIComponent(runId)}/execute`,
+      {
+        method: "POST",
+        body: JSON.stringify({ overrides }),
+      },
+      true,
+    );
   }
 
   public async getReplayDiff(replayRunId: string): Promise<Record<string, unknown>> {
@@ -802,10 +991,14 @@ export class TuiApiClient {
     taskId?: string;
     args?: Record<string, unknown>;
   }): Promise<ToolAccessEvaluateResponse> {
-    return this.request("/api/v1/tools/access/evaluate", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/tools/access/evaluate",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async toolsListGrants(input?: {
@@ -835,17 +1028,25 @@ export class TuiApiClient {
     expiresAt?: string;
     usesRemaining?: number;
   }): Promise<ToolGrantRecord> {
-    return this.request("/api/v1/tools/grants", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/tools/grants",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public async toolsRevokeGrant(grantId: string): Promise<{ revoked: boolean; grantId: string }> {
-    return this.request(`/api/v1/tools/grants/${encodeURIComponent(grantId)}/revoke`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    }, true);
+    return this.request(
+      `/api/v1/tools/grants/${encodeURIComponent(grantId)}/revoke`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+      true,
+    );
   }
 
   public async toolsInvoke(input: {
@@ -861,10 +1062,14 @@ export class TuiApiClient {
       reason?: string;
     };
   }): Promise<ToolInvokeResult> {
-    return this.request("/api/v1/tools/invoke", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }, true);
+    return this.request(
+      "/api/v1/tools/invoke",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      true,
+    );
   }
 
   public streamHeaders(): Record<string, string> {
@@ -896,7 +1101,10 @@ export class TuiApiClient {
     if (this.auth.mode === "token" && this.auth.token) {
       headers.set("Authorization", `Bearer ${this.auth.token}`);
     } else if (this.auth.mode === "basic" && this.auth.username && this.auth.password) {
-      headers.set("Authorization", `Basic ${Buffer.from(`${this.auth.username}:${this.auth.password}`).toString("base64")}`);
+      headers.set(
+        "Authorization",
+        `Basic ${Buffer.from(`${this.auth.username}:${this.auth.password}`).toString("base64")}`,
+      );
     }
 
     const response = await fetch(`${this.baseUrl}${routePath}`, {
@@ -941,11 +1149,7 @@ export class TuiApiClient {
     }
   }
 
-  private async request<T>(
-    routePath: string,
-    init: RequestInit,
-    mutating = false,
-  ): Promise<T> {
+  private async request<T>(routePath: string, init: RequestInit, mutating = false): Promise<T> {
     if (mutating && this.readOnly) {
       throw new Error("Read-only mode is enabled for this TUI session");
     }
@@ -960,7 +1164,10 @@ export class TuiApiClient {
     if (this.auth.mode === "token" && this.auth.token) {
       headers.set("Authorization", `Bearer ${this.auth.token}`);
     } else if (this.auth.mode === "basic" && this.auth.username && this.auth.password) {
-      headers.set("Authorization", `Basic ${Buffer.from(`${this.auth.username}:${this.auth.password}`).toString("base64")}`);
+      headers.set(
+        "Authorization",
+        `Basic ${Buffer.from(`${this.auth.username}:${this.auth.password}`).toString("base64")}`,
+      );
     }
 
     const response = await fetch(`${this.baseUrl}${routePath}`, {

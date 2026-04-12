@@ -23,6 +23,7 @@ interface DurableRunStore {
     updatedAt?: string;
     finishedAt?: string;
     lastError?: string;
+    clearLease?: boolean;
   }): DurableRunRecord;
   createCheckpoint(input: {
     runId: string;
@@ -138,6 +139,7 @@ export function finalizeDurableChatRun(
       status: "waiting",
       updatedAt: now,
       finishedAt: undefined,
+      clearLease: true,
     });
     deps.durableRuns.createCheckpoint({
       runId,
@@ -160,6 +162,7 @@ export function finalizeDurableChatRun(
       status: "cancelled",
       updatedAt: now,
       finishedAt: now,
+      clearLease: true,
     });
     deps.recordDurableTimelineEvent(runId, "run_cancelled", checkpointState);
     deps.patchDurableTraceIfPresent(prepared.turnId, {
@@ -179,6 +182,7 @@ export function finalizeDurableChatRun(
     status: nextStatus,
     updatedAt: now,
     finishedAt: now,
+    clearLease: true,
     lastError: failed ? trace.failure?.message : undefined,
   });
   deps.durableRuns.createCheckpoint({

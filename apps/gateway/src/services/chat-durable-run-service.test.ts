@@ -13,7 +13,6 @@ import {
   beginDurableChatRun,
   finalizeDurableChatRun,
   type ChatDurableRunFinalizeDeps,
-  type ChatDurableThreadEventType,
 } from "./chat-durable-run-service.js";
 
 describe("chat-durable-run-service", () => {
@@ -339,6 +338,7 @@ function createRun(
     status,
     attemptCount: 0,
     maxAttempts: 3,
+    version: 1,
     payload: {},
     metadata: {},
     createdAt: "2026-04-10T00:00:00.000Z",
@@ -370,7 +370,11 @@ function createFinalizeState(options?: {
     ["run-complete", createRun("run-complete", "running")],
   ]);
   const checkpoints: DurableCheckpointRecord[] = [];
-  const timelineEvents: Array<{ runId: string; eventType: DurableRunTimelineEvent["eventType"]; payload?: Record<string, unknown> }> = [];
+  const timelineEvents: Array<{
+    runId: string;
+    eventType: DurableRunTimelineEvent["eventType"];
+    payload?: Record<string, unknown>;
+  }> = [];
   const tracePatches: Array<{ turnId: string; patch: Record<string, unknown> }> = [];
   const deps: ChatDurableRunFinalizeDeps = {
     durableRuns: {
@@ -411,6 +415,7 @@ function updateRun(
     updatedAt?: string;
     finishedAt?: string;
     lastError?: string;
+    clearLease?: boolean;
   },
 ): DurableRunRecord {
   const current = runs.get(runId);
@@ -419,10 +424,12 @@ function updateRun(
   }
   const next: DurableRunRecord = {
     ...current,
+    version: (current.version ?? 1) + 1,
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
     ...(patch.finishedAt !== undefined ? { finishedAt: patch.finishedAt } : {}),
     ...(patch.lastError !== undefined ? { lastError: patch.lastError } : {}),
+    ...(patch.clearLease ? { leaseOwnerId: undefined, leaseExpiresAt: undefined, leaseHeartbeatAt: undefined } : {}),
   };
   runs.set(runId, next);
   return next;

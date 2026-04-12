@@ -43,40 +43,6 @@ describe("ApprovalWaitRunService", () => {
     });
     expect(harness.approvalWaitRuns.getRunId("approval-1")).toBe("run-1");
   });
-
-  it("wakes the mapped approval wait run and schedules processing", () => {
-    const harness = createHarness();
-    const approval = createApproval({
-      status: "approved",
-      resolvedAt: "2026-04-10T12:00:00.000Z",
-      resolvedBy: "operator",
-    });
-    harness.approvalWaitRuns.upsert({
-      approvalId: approval.approvalId,
-      runId: "run-approval-wait",
-    });
-
-    const runId = harness.service.wakeApprovalWaitDurableRun(approval, {
-      decision: "approve",
-      resolvedBy: "operator",
-    });
-
-    expect(runId).toBe("run-approval-wait");
-    expect(harness.wakeDurableRun).toHaveBeenCalledWith(
-      "run-approval-wait",
-      expect.objectContaining({
-        eventKey: "approval.resolved",
-        correlationId: "approval-1",
-        payload: expect.objectContaining({
-          approvalId: "approval-1",
-          status: "approved",
-          decision: "approve",
-        }),
-      }),
-    );
-    expect(harness.requestRunProcessing).toHaveBeenCalledWith("run-approval-wait");
-    expect(harness.approvalWaitRuns.get("approval-1")?.resolvedAt).toBe("2026-04-10T12:00:00.000Z");
-  });
 });
 
 function createHarness(
@@ -86,8 +52,6 @@ function createHarness(
 ) {
   const createdRuns: DurableRunCreateRequest[] = [];
   const approvalWaitRuns = createApprovalWaitRunStore();
-  const wakeDurableRun = vi.fn((runId: string) => createDurableRunRecord(runId));
-  const requestRunProcessing = vi.fn();
   const ctx = {
     storage: {
       approvalWaitRuns,
@@ -101,17 +65,13 @@ function createHarness(
       return createDurableRunRecord(`run-${createdRuns.length}`);
     },
     getDurableRun: (runId) => createDurableRunRecord(runId),
-    wakeDurableRun,
-    requestRunProcessing,
     getRequestAttribution: () => options.attribution,
   });
 
   return {
     approvalWaitRuns,
     createdRuns,
-    requestRunProcessing,
     service,
-    wakeDurableRun,
   };
 }
 
@@ -166,6 +126,7 @@ function createDurableRunRecord(runId: string): DurableRunRecord {
     status: "waiting",
     attemptCount: 0,
     maxAttempts: 3,
+    version: 1,
     payload: {},
     metadata: {},
     createdAt: "2026-04-10T10:00:00.000Z",

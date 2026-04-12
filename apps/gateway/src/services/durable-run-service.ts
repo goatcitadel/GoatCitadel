@@ -7,6 +7,7 @@ import type {
   DurableRunCreateRequest,
   DurableRunRecord,
   DurableRunTimelineEvent,
+  DurableWakeResult,
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
 
@@ -16,6 +17,10 @@ const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   maxDelayMs: 60_000,
   backoffMultiplier: 2,
 };
+const DURABLE_LEASE_TTL_MS = 15_000;
+const DURABLE_WORKER_POLL_MIN_MS = 750;
+const DURABLE_WORKER_POLL_JITTER_MS = 500;
+const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
 
 /**
  * Encapsulates all durable-run lifecycle operations previously inlined
@@ -24,7 +29,8 @@ const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
 export class DurableRunService {
   private workerActive = false;
   private workerRequested = false;
-  private readonly activeRunIds = new Set<string>();
+  private pollTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly workerId = randomUUID();
 
   constructor(
     private readonly ctx: ServiceContext,
@@ -83,6 +89,7 @@ export class DurableRunService {
       return;
     }
     this.reconcileRecoverableRuns();
+    this.ensurePollLoop();
     this.requestRunProcessing();
   }
 
@@ -184,7 +191,9 @@ export class DurableRunService {
         status: "paused",
         startedAt: current.startedAt ?? new Date().toISOString(),
         finishedAt: undefined,
+        clearLease: true,
         updatedAt: new Date().toISOString(),
+        expectedVersion: current.version,
       });
       this.recordDurableTimelineEvent(runId, "run_paused", {
         actorId,
@@ -202,18 +211,20 @@ export class DurableRunService {
   resumeDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
-    if (current.status !== "paused" && current.status !== "waiting") {
+    if (current.status !== "paused") {
       throw new Error(`Durable run ${runId} cannot be resumed from ${current.status}`);
     }
     let next!: DurableRunRecord;
     this.ctx.storage.runImmediateTransaction(() => {
       next = this.ctx.storage.durableRuns.updateRun({
         runId,
-        status: "running",
+        status: "queued",
         startedAt: current.startedAt ?? new Date().toISOString(),
         finishedAt: undefined,
+        clearLease: true,
         updatedAt: new Date().toISOString(),
         lastError: undefined,
+        expectedVersion: current.version,
       });
       this.ctx.storage.durableRuns.createCheckpoint({
         runId,
@@ -246,8 +257,10 @@ export class DurableRunService {
         runId,
         status: "cancelled",
         finishedAt: now,
+        clearLease: true,
         updatedAt: now,
         lastError: `cancelled by ${actorId}`,
+        expectedVersion: current.version,
       });
       this.recordDurableTimelineEvent(runId, "run_cancelled", {
         actorId,
@@ -282,7 +295,9 @@ export class DurableRunService {
         attemptCount: attemptNo,
         updatedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
+        clearLease: true,
         lastError: deadLetter.reason,
+        expectedVersion: current.version,
       });
       this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
         actorId,
@@ -315,7 +330,9 @@ export class DurableRunService {
       attemptCount: attemptNo,
       updatedAt: new Date().toISOString(),
       finishedAt: undefined,
+      clearLease: true,
       lastError: undefined,
+      expectedVersion: current.version,
     });
     this.ctx.publishRealtime("system", "durable", {
       type: "durable_run_retry_scheduled",
@@ -333,30 +350,75 @@ export class DurableRunService {
       payload?: Record<string, unknown>;
       correlationId?: string;
     },
-  ): DurableRunRecord {
+  ): DurableWakeResult {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
-    if (current.status !== "waiting" && current.status !== "paused") {
-      throw new Error(`Durable run ${runId} is not waiting/paused`);
+    if (current.status === "paused") {
+      return {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "skipped_paused",
+        run: current,
+        detail: `Durable run ${runId} is operator-paused.`,
+      };
+    }
+    if (current.status !== "waiting") {
+      return {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "skipped_not_waiting",
+        run: current,
+        detail: `Durable run ${runId} is ${current.status}.`,
+      };
     }
     const waitForEvent = ((
       current.metadata as { waitForEvent?: { eventKey?: string; correlationId?: string } } | undefined
     )?.waitForEvent ?? {}) as { eventKey?: string; correlationId?: string };
     if (waitForEvent.eventKey && waitForEvent.eventKey !== event.eventKey) {
-      throw new Error(`Wake event key mismatch: expected ${waitForEvent.eventKey}`);
+      return {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "skipped_event_key_mismatch",
+        run: current,
+        detail: `Wake event key mismatch: expected ${waitForEvent.eventKey}`,
+      };
     }
     if (waitForEvent.correlationId && waitForEvent.correlationId !== event.correlationId) {
-      throw new Error("Wake correlation mismatch");
+      return {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "skipped_correlation_mismatch",
+        run: current,
+        detail: "Wake correlation mismatch",
+      };
     }
     const now = new Date().toISOString();
-    const next = this.ctx.storage.durableRuns.updateRun({
-      runId,
-      status: "running",
-      updatedAt: now,
-      startedAt: current.startedAt ?? now,
-      finishedAt: undefined,
-      lastError: undefined,
-    });
+    let next!: DurableRunRecord;
+    try {
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId,
+        status: "queued",
+        updatedAt: now,
+        startedAt: current.startedAt ?? now,
+        finishedAt: undefined,
+        clearLease: true,
+        lastError: undefined,
+        expectedVersion: current.version,
+      });
+    } catch (error) {
+      return {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "failed",
+        run: this.ctx.storage.durableRuns.getRun(runId),
+        detail: error instanceof Error ? error.message : "Wake failed",
+      };
+    }
     this.recordDurableTimelineEvent(runId, "run_woken", {
       eventKey: event.eventKey,
       correlationId: event.correlationId,
@@ -367,7 +429,13 @@ export class DurableRunService {
       runId,
       eventKey: event.eventKey,
     });
-    return next;
+    return {
+      runId,
+      eventKey: event.eventKey,
+      correlationId: event.correlationId,
+      outcome: "woke",
+      run: next,
+    };
   }
 
   recoverDurableDeadLetter(
@@ -392,8 +460,10 @@ export class DurableRunService {
         status: "queued",
         updatedAt: new Date().toISOString(),
         finishedAt: undefined,
+        clearLease: true,
         lastError: undefined,
         ...(newMaxAttempts ? { maxAttempts: newMaxAttempts } : {}),
+        expectedVersion: current.version,
       });
       this.recordDurableTimelineEvent(deadLetter.runId, "dead_letter_recovered", {
         actorId,
@@ -469,11 +539,8 @@ export class DurableRunService {
     if (!this.deps) {
       return;
     }
-    const runningRunIds = this.ctx.storage.durableRuns.listRunIdsByStatus("running");
+    const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(new Date().toISOString());
     for (const runId of runningRunIds) {
-      if (this.activeRunIds.has(runId)) {
-        continue;
-      }
       const run = this.ctx.storage.durableRuns.getRun(runId);
       const recoverability = this.deps.isWorkflowRecoverable?.(run) ?? { recoverable: true };
       if (!recoverability.recoverable) {
@@ -488,8 +555,10 @@ export class DurableRunService {
         runId: run.runId,
         status: "queued",
         finishedAt: undefined,
+        clearLease: true,
         lastError: undefined,
         updatedAt: new Date().toISOString(),
+        expectedVersion: run.version,
       });
     }
   }
@@ -498,15 +567,17 @@ export class DurableRunService {
     if (!this.deps) {
       return;
     }
+    const deps = this.deps;
     const timeoutMs = this.ctx.config.assistant.durable.workflowTimeoutMs;
     while (true) {
       const run = this.claimNextQueuedRun();
       if (!run) {
         return;
       }
-      this.activeRunIds.add(run.runId);
       try {
-        await this.executeWithTimeout(this.deps.executeWorkflow(run), timeoutMs, run.runId);
+        await this.executeWithLeaseHeartbeat(run, () =>
+          this.executeWithTimeout(deps.executeWorkflow(run), timeoutMs, run.runId),
+        );
       } catch (error) {
         await this.failWorkflowRun(run, error instanceof Error ? error.message : "Durable workflow execution failed.");
       } finally {
@@ -514,7 +585,6 @@ export class DurableRunService {
         if (current.status === "running") {
           await this.failWorkflowRun(current, "Durable workflow exited without marking a terminal or waiting state.");
         }
-        this.activeRunIds.delete(run.runId);
       }
     }
   }
@@ -537,6 +607,43 @@ export class DurableRunService {
     });
   }
 
+  private async executeWithLeaseHeartbeat<T>(run: DurableRunRecord, execute: () => Promise<T>): Promise<T> {
+    let active = true;
+    let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+    const heartbeat = async () => {
+      if (!active) {
+        return;
+      }
+      const current = this.ctx.storage.durableRuns.getRun(run.runId);
+      if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+        return;
+      }
+      const now = new Date().toISOString();
+      try {
+        this.ctx.storage.durableRuns.renewLease({
+          runId: run.runId,
+          workerId: this.workerId,
+          leaseHeartbeatAt: now,
+          leaseExpiresAt: new Date(Date.now() + DURABLE_LEASE_TTL_MS).toISOString(),
+          updatedAt: now,
+        });
+      } catch {
+        return;
+      }
+      heartbeatTimer = setTimeout(() => void heartbeat(), DURABLE_LEASE_HEARTBEAT_MS);
+    };
+
+    heartbeatTimer = setTimeout(() => void heartbeat(), DURABLE_LEASE_HEARTBEAT_MS);
+    try {
+      return await execute();
+    } finally {
+      active = false;
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+      }
+    }
+  }
+
   private claimNextQueuedRun(): DurableRunRecord | undefined {
     const queuedRunIds = this.ctx.storage.durableRuns.listRunIdsByStatus("queued");
     if (queuedRunIds.length === 0) {
@@ -547,15 +654,17 @@ export class DurableRunService {
     if (!runId) {
       return undefined;
     }
-    const current = this.ctx.storage.durableRuns.getRun(runId);
-    const run = this.ctx.storage.durableRuns.updateRun({
+    const leaseExpiresAt = new Date(Date.now() + DURABLE_LEASE_TTL_MS).toISOString();
+    const run = this.ctx.storage.durableRuns.tryClaimQueuedRun({
       runId,
-      status: "running",
-      startedAt: current.startedAt ?? now,
-      finishedAt: undefined,
-      lastError: undefined,
+      workerId: this.workerId,
+      leaseHeartbeatAt: now,
+      leaseExpiresAt,
       updatedAt: now,
     });
+    if (!run) {
+      return undefined;
+    }
     this.ctx.storage.durableRuns.createCheckpoint({
       runId: run.runId,
       checkpointKind: "run_started",
@@ -598,8 +707,10 @@ export class DurableRunService {
         runId: run.runId,
         status: "failed",
         finishedAt: now,
+        clearLease: true,
         lastError: message,
         updatedAt: now,
+        expectedVersion: run.version,
       });
       this.ctx.storage.durableRuns.createCheckpoint({
         runId: failed.runId,
@@ -621,5 +732,20 @@ export class DurableRunService {
       error: message,
     });
     await this.deps?.onRunFailed?.(failed, message);
+  }
+
+  private ensurePollLoop(): void {
+    if (this.pollTimer) {
+      return;
+    }
+    const scheduleNext = () => {
+      const jitter = Math.floor(Math.random() * DURABLE_WORKER_POLL_JITTER_MS);
+      this.pollTimer = setTimeout(() => {
+        this.pollTimer = undefined;
+        this.requestRunProcessing();
+        scheduleNext();
+      }, DURABLE_WORKER_POLL_MIN_MS + jitter);
+    };
+    scheduleNext();
   }
 }

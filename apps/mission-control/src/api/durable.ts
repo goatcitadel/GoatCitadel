@@ -1,4 +1,9 @@
-import type { DurableRunCreateRequest, DurableRunRecord, DurableRunTimelineEvent } from "@goatcitadel/contracts";
+import type {
+  DurableRunCreateRequest,
+  DurableRunRecord,
+  DurableRunTimelineEvent,
+  DurableWakeResult,
+} from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
 export async function createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
@@ -55,8 +60,8 @@ export async function retryDurableRun(
 export async function wakeDurableRun(
   runId: string,
   input: { eventKey: string; payload?: Record<string, unknown>; correlationId?: string },
-): Promise<DurableRunRecord> {
-  return request<DurableRunRecord>(`/api/v1/durable/runs/${encodeURIComponent(runId)}/events/wake`, {
+): Promise<DurableWakeResult> {
+  return request<DurableWakeResult>(`/api/v1/durable/runs/${encodeURIComponent(runId)}/events/wake`, {
     method: "POST",
     body: JSON.stringify(input),
   });

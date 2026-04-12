@@ -42,6 +42,7 @@ The repo may make these claims at `1.0`:
 - Code Mode is a governed trusted-code surface with explicit operator approval and bounded artifacts.
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable.
 - Durable execution owns the shipped Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md).
+- Approval follow-on work is surfaced through explicit approval effect records rather than inferred from scattered side tables or inline helper effects.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history.
 - Provider secrets may persist in local env or config files when secure-store persistence is unavailable or disabled.
 

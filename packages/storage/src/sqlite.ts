@@ -522,6 +522,74 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "improvement_ledger_v1_schema",
     up: createImprovementLedgerSchema,
   },
+  {
+    version: 58,
+    name: "durable_lease_and_approval_effects_schema",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "durable_runs", "lease_owner_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "durable_runs", "lease_expires_at", "TEXT");
+      addColumnIfMissingIfTableExists(db, "durable_runs", "lease_heartbeat_at", "TEXT");
+      addColumnIfMissingIfTableExists(db, "durable_runs", "version", "INTEGER NOT NULL DEFAULT 1");
+      createApprovalEffectsSchema(db);
+      if (tableExists(db, "durable_runs")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_durable_runs_status_lease_updated
+            ON durable_runs(status, lease_expires_at, updated_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    version: 59,
+    name: "approval_effects_pipeline_schema",
+    up: (db) => {
+      if (!tableExists(db, "approval_effects")) {
+        createApprovalEffectsSchema(db);
+      }
+      addColumnIfMissingIfTableExists(db, "approval_effects", "target_kind", "TEXT");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "idempotency_key", "TEXT");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "payload_json", "TEXT NOT NULL DEFAULT '{}'");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "result_json", "TEXT NOT NULL DEFAULT '{}'");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "claimed_by", "TEXT");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "claimed_at", "TEXT");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "lease_expires_at", "TEXT");
+      addColumnIfMissingIfTableExists(db, "approval_effects", "version", "INTEGER NOT NULL DEFAULT 1");
+      if (tableExists(db, "approval_effects")) {
+        db.exec(`
+          UPDATE approval_effects
+          SET effect_kind = 'approval_wait_wake'
+          WHERE effect_kind = 'wake_durable_run';
+
+          UPDATE approval_effects
+          SET target_kind = COALESCE(NULLIF(target_kind, ''), 'durable_run');
+
+          UPDATE approval_effects
+          SET idempotency_key = approval_id || ':' || effect_kind || ':' || COALESCE(target_kind, 'durable_run') || ':' || target_id
+          WHERE idempotency_key IS NULL OR TRIM(idempotency_key) = '';
+
+          UPDATE approval_effects
+          SET payload_json = COALESCE(NULLIF(payload_json, ''), '{}')
+          WHERE payload_json IS NULL OR TRIM(payload_json) = '';
+
+          UPDATE approval_effects
+          SET result_json = COALESCE(NULLIF(result_json, ''), COALESCE(NULLIF(details_json, ''), '{}'))
+          WHERE result_json IS NULL OR TRIM(result_json) = '';
+
+          UPDATE approval_effects
+          SET version = 1
+          WHERE version IS NULL OR version < 1;
+
+          DROP INDEX IF EXISTS idx_approval_effects_target;
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_effects_idempotency
+            ON approval_effects(idempotency_key);
+          CREATE INDEX IF NOT EXISTS idx_approval_effects_lookup
+            ON approval_effects(approval_id, effect_kind, target_kind, target_id);
+          CREATE INDEX IF NOT EXISTS idx_approval_effects_status_lease_updated
+            ON approval_effects(status, lease_expires_at, updated_at DESC);
+        `);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2718,12 +2786,18 @@ function createDurableRunFoundationSchema(db: DatabaseSync): void {
       started_at TEXT,
       finished_at TEXT,
       last_error TEXT,
+      lease_owner_id TEXT,
+      lease_expires_at TEXT,
+      lease_heartbeat_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_durable_runs_status_updated
       ON durable_runs(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_durable_runs_status_lease_updated
+      ON durable_runs(status, lease_expires_at, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_durable_runs_workflow_created
       ON durable_runs(workflow_key, created_at DESC);
 
@@ -3024,6 +3098,9 @@ function createPhase2ApprovalRuntimeSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_approval_wait_runs_run_id
       ON approval_wait_runs(run_id);
+  `);
+  createApprovalEffectsSchema(db);
+  db.exec(`
 
     CREATE TABLE IF NOT EXISTS remote_action_tokens (
       token_id TEXT PRIMARY KEY,
@@ -3043,6 +3120,44 @@ function createPhase2ApprovalRuntimeSchema(db: DatabaseSync): void {
       ON remote_action_tokens(connector_id, state, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_remote_action_tokens_expires_at
       ON remote_action_tokens(expires_at);
+  `);
+}
+
+function createApprovalEffectsSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approval_effects (
+      effect_id TEXT PRIMARY KEY,
+      approval_id TEXT NOT NULL,
+      effect_kind TEXT NOT NULL,
+      target_kind TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      outcome TEXT,
+      detail TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      details_json TEXT NOT NULL DEFAULT '{}',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      result_json TEXT NOT NULL DEFAULT '{}',
+      last_error TEXT,
+      claimed_by TEXT,
+      claimed_at TEXT,
+      lease_expires_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_effects_idempotency
+      ON approval_effects(idempotency_key);
+    CREATE INDEX IF NOT EXISTS idx_approval_effects_lookup
+      ON approval_effects(approval_id, effect_kind, target_kind, target_id);
+    CREATE INDEX IF NOT EXISTS idx_approval_effects_approval_created
+      ON approval_effects(approval_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_approval_effects_status_lease_updated
+      ON approval_effects(status, lease_expires_at, updated_at DESC);
   `);
 }
 
