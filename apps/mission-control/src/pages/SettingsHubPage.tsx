@@ -49,6 +49,7 @@ export function SettingsHubPage({
         <PageTabs
           items={ITEMS}
           activeId={activeTab}
+          tier="section"
           onSelect={(value) => onTabChange(value as SettingsTab)}
           vertical
           className="settings-hub-nav"

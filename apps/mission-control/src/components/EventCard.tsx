@@ -29,9 +29,7 @@ export function buildRealtimeEventSummary(event: RealtimeEvent): string {
     (event.links?.taskId ? `task ${event.links.taskId.slice(-6)}` : null) ??
     null;
 
-  const prefix = event.source === "system"
-    ? "System"
-    : event.source.charAt(0).toUpperCase() + event.source.slice(1);
+  const prefix = event.source === "system" ? "System" : event.source.charAt(0).toUpperCase() + event.source.slice(1);
 
   return detail
     ? `${prefix} reported ${formatEventType(event.eventType)}: ${detail}.`
@@ -81,7 +79,12 @@ export function EventCard({ event, summary, tracePreview, onLoadTracePreview }: 
         </div>
       </div>
 
-      {(event.traceId || event.correlationId || links?.approvalId || links?.proactiveRunId || links?.taskId || links?.runId) ? (
+      {event.traceId ||
+      event.correlationId ||
+      links?.approvalId ||
+      links?.proactiveRunId ||
+      links?.taskId ||
+      links?.runId ? (
         <div className="event-card-links">
           {event.traceId ? <span>trace {event.traceId}</span> : null}
           {event.correlationId ? <span>correlation {event.correlationId}</span> : null}
@@ -94,7 +97,7 @@ export function EventCard({ event, summary, tracePreview, onLoadTracePreview }: 
 
       {event.correlationId && onLoadTracePreview ? (
         <div className="event-card-actions">
-          <button type="button" className="gc-nav-pill" onClick={onLoadTracePreview}>
+          <button type="button" className="gc-button" onClick={onLoadTracePreview}>
             {tracePreview ? "Refresh trace detail" : "Load trace detail"}
           </button>
         </div>
@@ -104,7 +107,9 @@ export function EventCard({ event, summary, tracePreview, onLoadTracePreview }: 
         <div className="event-card-trace">
           <strong>Trace detail</strong>
           <ul className="compact-list">
-            {tracePreview.map((item) => <li key={`${event.eventId}-${item}`}>{item}</li>)}
+            {tracePreview.map((item) => (
+              <li key={`${event.eventId}-${item}`}>{item}</li>
+            ))}
           </ul>
         </div>
       ) : null}

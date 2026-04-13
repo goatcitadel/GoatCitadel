@@ -39,14 +39,14 @@ describe("IntegrationsHubPage", () => {
     let renderer = create(<div />);
     try {
       await act(async () => {
-        renderer = create(
-          <IntegrationsHubPage activeTab="channels" onTabChange={() => undefined} />,
-        );
+        renderer = create(<IntegrationsHubPage activeTab="channels" onTabChange={() => undefined} />);
       });
 
       expect(integrationsPageMock).not.toHaveBeenCalled();
       expect(channelSetupPageMock).toHaveBeenCalled();
       expect(rendererText(renderer)).toContain("ChannelSetupPage");
+      expect(rendererText(renderer)).toContain("Current lane");
+      expect(rendererText(renderer)).toContain("What this controls");
     } finally {
       renderer.unmount();
     }
@@ -56,13 +56,12 @@ describe("IntegrationsHubPage", () => {
     let renderer = create(<div />);
     try {
       await act(async () => {
-        renderer = create(
-          <IntegrationsHubPage activeTab="mcp" onTabChange={() => undefined} />,
-        );
+        renderer = create(<IntegrationsHubPage activeTab="mcp" onTabChange={() => undefined} />);
       });
 
       expect(integrationsPageMock).not.toHaveBeenCalled();
       expect(rendererText(renderer)).toContain("McpPage");
+      expect(rendererText(renderer)).toContain("Tool connectors and MCP reach define what agents can touch.");
     } finally {
       renderer.unmount();
     }

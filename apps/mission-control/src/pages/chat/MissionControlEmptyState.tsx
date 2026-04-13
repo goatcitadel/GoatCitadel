@@ -9,8 +9,6 @@ export function MissionControlEmptyState({
   projectCount,
   workspaceName,
   approvalsCount,
-  modelLabel,
-  providerLabel,
   onCreateSession,
   onOpenCowork,
   onOpenCode,
@@ -22,8 +20,6 @@ export function MissionControlEmptyState({
   projectCount: number;
   workspaceName: string;
   approvalsCount: number;
-  modelLabel?: string;
-  providerLabel?: string;
   onCreateSession: () => void;
   onOpenCowork: () => void;
   onOpenCode: () => void;
@@ -57,22 +53,34 @@ export function MissionControlEmptyState({
           <p className="mission-empty-shell-kicker">Current workspace</p>
           <strong>{workspaceName}</strong>
         </div>
-        <div className="mission-empty-shell-context-chips">
-          {providerLabel ? <StatusChip tone="muted">{providerLabel}</StatusChip> : null}
-          {modelLabel ? <StatusChip tone="muted">{modelLabel}</StatusChip> : null}
-        </div>
       </div>
       <div className="mission-empty-shell-jump-grid">
-        <button type="button" className="gc-nav-pill mission-empty-shell-jump" onClick={onOpenCowork}>
+        <button
+          type="button"
+          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
+          onClick={onOpenCowork}
+        >
           Open Cowork
         </button>
-        <button type="button" className="gc-nav-pill mission-empty-shell-jump" onClick={onOpenCode}>
+        <button
+          type="button"
+          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
+          onClick={onOpenCode}
+        >
           Open Code
         </button>
-        <button type="button" className="gc-nav-pill mission-empty-shell-jump" onClick={onOpenTasks}>
+        <button
+          type="button"
+          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
+          onClick={onOpenTasks}
+        >
           Open Tasks
         </button>
-        <button type="button" className="gc-nav-pill mission-empty-shell-jump" onClick={onOpenApprovals}>
+        <button
+          type="button"
+          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
+          onClick={onOpenApprovals}
+        >
           Review Approvals
         </button>
       </div>

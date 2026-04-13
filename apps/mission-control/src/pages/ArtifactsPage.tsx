@@ -19,11 +19,13 @@ const ITEMS: Array<{ id: ArtifactsTab; label: string }> = [
 export function ArtifactsPage({ activeTab, workspaceId, onTabChange }: ArtifactsPageProps) {
   return (
     <section className="space-page stack-lg">
-      <SectionTitle
-        title="Artifacts"
-        subtitle="Workspace memory and file trails share one operational browser."
+      <SectionTitle title="Artifacts" subtitle="Workspace memory and file trails share one operational browser." />
+      <PageTabs
+        items={ITEMS}
+        activeId={activeTab}
+        tier="section"
+        onSelect={(value) => onTabChange(value as ArtifactsTab)}
       />
-      <PageTabs items={ITEMS} activeId={activeTab} onSelect={(value) => onTabChange(value as ArtifactsTab)} />
       <EmbeddedPageChromeProvider>
         {activeTab === "files" ? <FilesPage workspaceId={workspaceId} /> : <MemoryPage workspaceId={workspaceId} />}
       </EmbeddedPageChromeProvider>

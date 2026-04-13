@@ -25,7 +25,12 @@ export function ActivityHubPage({ activeTab, workspaceId, onTabChange }: Activit
         title="Activity"
         subtitle="Realtime events, scheduler health, and improvement signals live together here."
       />
-      <PageTabs items={ITEMS} activeId={activeTab} onSelect={(value) => onTabChange(value as ActivityTab)} />
+      <PageTabs
+        items={ITEMS}
+        activeId={activeTab}
+        tier="section"
+        onSelect={(value) => onTabChange(value as ActivityTab)}
+      />
       <EmbeddedPageChromeProvider>
         {activeTab === "scheduler" ? <CronPage /> : null}
         {activeTab === "improvement" ? <ImprovementPage workspaceId={workspaceId} /> : null}

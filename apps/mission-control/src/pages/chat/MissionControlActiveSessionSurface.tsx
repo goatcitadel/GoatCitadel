@@ -5,14 +5,14 @@ import type { EventStreamStatus } from "../../api/shell-client";
 import { ChatComposerShell } from "./ChatComposerShell";
 import { ChatThreadShell } from "./ChatThreadShell";
 import { MissionControlSurfaceHeader } from "./MissionControlSurfaceHeader";
+import { getMissionControlSurfaceConfig } from "./surface-config";
+import type { WorkTrustDescriptor } from "./work-trust";
 
 export interface MissionControlActiveSessionSurfaceProps {
   mode: ChatMode;
   sessionTitle: string;
   summary: string;
-  status: string | null;
-  providerLabel: string;
-  modelLabel: string;
+  trust: WorkTrustDescriptor;
   dockOpen: boolean;
   onToggleDock: () => void;
   loading: boolean;
@@ -80,9 +80,7 @@ export function MissionControlActiveSessionSurface({
   mode,
   sessionTitle,
   summary,
-  status,
-  providerLabel,
-  modelLabel,
+  trust,
   dockOpen,
   onToggleDock,
   loading,
@@ -145,19 +143,22 @@ export function MissionControlActiveSessionSurface({
   onStopActiveTurn,
   onSend,
 }: MissionControlActiveSessionSurfaceProps) {
+  const threadPanelRank = getMissionControlSurfaceConfig(mode).layout.threadPanelRank;
+
   return (
     <>
       <MissionControlSurfaceHeader
         mode={mode}
         sessionTitle={sessionTitle}
         summary={summary}
-        status={status}
-        providerLabel={providerLabel}
-        modelLabel={modelLabel}
+        trust={trust}
         dockOpen={dockOpen}
         onToggleDock={onToggleDock}
       />
-      <article className={`panel gc-surface-card chat-v11-thread mode-${mode}`}>
+      <article
+        className={`panel panel-${threadPanelRank} chat-v11-thread mode-${mode}`}
+        data-thread-rank={threadPanelRank}
+      >
         <ChatThreadShell
           mode={mode}
           loading={loading}

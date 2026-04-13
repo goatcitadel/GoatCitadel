@@ -35,6 +35,7 @@ import { MissionControlEmptyState } from "./chat/MissionControlEmptyState";
 import { ChatWorkSurface, CodeWorkSurface, CoworkWorkSurface } from "./chat/MissionControlWorkSurfaces";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
+import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat/work-trust";
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
@@ -105,6 +106,8 @@ export function ChatPage({
   approvalsCount = 0,
   surface,
   lockSurface = false,
+  workTrust,
+  onWorkTrustSummaryChange,
   onOpenCowork = () => undefined,
   onOpenCode = () => undefined,
   onOpenTasks = () => undefined,
@@ -115,6 +118,8 @@ export function ChatPage({
   approvalsCount?: number;
   surface?: ChatMode;
   lockSurface?: boolean;
+  workTrust?: WorkTrustDescriptor;
+  onWorkTrustSummaryChange?: (summary: string | null) => void;
   onOpenCowork?: () => void;
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
@@ -363,6 +368,14 @@ export function ChatPage({
     mcpServers,
     mcpTemplates,
   });
+
+  useEffect(() => {
+    if (!lockSurface) {
+      return undefined;
+    }
+    onWorkTrustSummaryChange?.(formatWorkProviderModelSummary(selectedProviderLabel, selectedModelLabel));
+    return () => onWorkTrustSummaryChange?.(null);
+  }, [lockSurface, onWorkTrustSummaryChange, selectedModelLabel, selectedProviderLabel]);
 
   const handleCommandExecution = useCallback(
     async (sessionId: string, commandText: string) => {
@@ -929,9 +942,17 @@ export function ChatPage({
             mode={messageMode}
             sessionTitle={selectedSessionLabel}
             summary={workspaceSummaryText}
-            status={selectedTurn?.trace.status ?? null}
-            providerLabel={selectedProviderLabel ?? "Current provider"}
-            modelLabel={selectedModelLabel ?? "Current model"}
+            trust={
+              workTrust ?? {
+                workspaceLabel: workspaceName,
+                gatewayTone: "muted",
+                gatewayLabel: "Gateway state unavailable",
+                approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
+                activeModeLabel: activeModePreset.label,
+                providerModelSummary: formatWorkProviderModelSummary(selectedProviderLabel, selectedModelLabel),
+                runtimeSummary: "Runtime summary unavailable",
+              }
+            }
             dockOpen={dockOpen}
             onToggleDock={handleToggleDock}
             loading={messagesLoading}
@@ -1009,8 +1030,6 @@ export function ChatPage({
             projectCount={projects?.items.length ?? 0}
             workspaceName={workspaceName}
             approvalsCount={approvalsCount}
-            providerLabel={selectedProviderLabel}
-            modelLabel={selectedModelLabel}
             onCreateSession={handleCreateCurrentModeSession}
             onOpenCowork={onOpenCowork}
             onOpenCode={onOpenCode}

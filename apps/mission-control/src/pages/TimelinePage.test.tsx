@@ -33,7 +33,7 @@ vi.mock("../hooks/useRefreshSubscription", () => ({
 import { TimelinePage } from "./TimelinePage";
 
 describe("TimelinePage", () => {
-  it("renders unified timeline sections from the aggregate summary", async () => {
+  it("renders one focused timeline panel with collapsed secondary lanes", async () => {
     apiMocks.connectEventStream.mockImplementation((onEvent: (event: unknown) => void) => {
       streamState.onEvent = onEvent;
       return () => {
@@ -43,22 +43,26 @@ describe("TimelinePage", () => {
     apiMocks.fetchTimelineSummary.mockResolvedValue({
       generatedAt: "2026-04-10T10:00:00.000Z",
       events: {
-        items: [{
-          eventId: "evt-1",
-          sequence: 1,
-          eventType: "runtime.ready",
-          source: "gateway",
-          timestamp: "2026-04-10T10:00:00.000Z",
-          payload: {},
-        }],
+        items: [
+          {
+            eventId: "evt-1",
+            sequence: 1,
+            eventType: "runtime.ready",
+            source: "gateway",
+            timestamp: "2026-04-10T10:00:00.000Z",
+            payload: {},
+          },
+        ],
       },
       sessions: {
-        items: [{
-          sessionId: "session-1",
-          title: "Operator Session",
-          lifecycleStatus: "active",
-          updatedAt: "2026-04-10T10:00:00.000Z",
-        }],
+        items: [
+          {
+            sessionId: "session-1",
+            title: "Operator Session",
+            lifecycleStatus: "active",
+            updatedAt: "2026-04-10T10:00:00.000Z",
+          },
+        ],
       },
       scheduler: {
         jobs: [{ jobId: "job-1", name: "Nightly", enabled: true, schedule: "0 2 * * *" }],
@@ -89,22 +93,26 @@ describe("TimelinePage", () => {
     apiMocks.fetchTimelineSummary.mockResolvedValueOnce({
       generatedAt: "2026-04-10T10:06:00.000Z",
       events: {
-        items: [{
-          eventId: "evt-3",
-          sequence: 3,
-          eventType: "runtime.recovered",
-          source: "gateway",
-          timestamp: "2026-04-10T10:06:00.000Z",
-          payload: {},
-        }],
+        items: [
+          {
+            eventId: "evt-3",
+            sequence: 3,
+            eventType: "runtime.recovered",
+            source: "gateway",
+            timestamp: "2026-04-10T10:06:00.000Z",
+            payload: {},
+          },
+        ],
       },
       sessions: {
-        items: [{
-          sessionId: "session-1",
-          title: "Operator Session",
-          lifecycleStatus: "recovered",
-          updatedAt: "2026-04-10T10:06:00.000Z",
-        }],
+        items: [
+          {
+            sessionId: "session-1",
+            title: "Operator Session",
+            lifecycleStatus: "recovered",
+            updatedAt: "2026-04-10T10:06:00.000Z",
+          },
+        ],
       },
       scheduler: {
         jobs: [{ jobId: "job-1", name: "Nightly", enabled: true, schedule: "0 2 * * *" }],
@@ -125,10 +133,13 @@ describe("TimelinePage", () => {
 
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain("Timeline");
-    expect(text).toContain("Buffered events");
+    expect(text).toContain("Live feed");
     expect(text).toContain("Operator Session");
-    expect(text).toContain("Needs operator review");
-    expect(text).toContain("Weekly report");
-    expect(text).toContain("runtime.recovered");
+    expect(text).toContain("Other lanes");
+    expect(text).toContain("1 review items");
+    expect(text).toContain("1 reports ready");
+    expect(text).toContain("Recovered and progressing");
+    expect(text).toContain("operator-summary-card");
+    expect(text).toContain("stat-card-compact");
   });
 });

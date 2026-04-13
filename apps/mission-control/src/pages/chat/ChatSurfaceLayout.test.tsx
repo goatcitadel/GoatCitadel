@@ -18,8 +18,13 @@ describe("ChatSurfaceLayout", () => {
 
     expect(markup).toContain("with-cowork");
     expect(markup).toContain("with-dock-open");
+    expect(markup).toContain("surface-layout-cowork");
+    expect(markup).toContain("surface-grid-cowork");
+    expect(markup).toContain('data-dominant-artifact="workflow"');
+    expect(markup).toContain('data-thread-placement="support"');
     expect(markup).toContain("Workflow column");
     expect(markup).toContain("Context dock");
+    expect(markup.indexOf("Workflow column")).toBeLessThan(markup.indexOf("Primary column"));
   });
 
   it("omits the dock column when the dock is collapsed", () => {
@@ -36,6 +41,9 @@ describe("ChatSurfaceLayout", () => {
 
     expect(markup).toContain("with-code");
     expect(markup).toContain("with-dock-collapsed");
+    expect(markup).toContain("surface-layout-code");
+    expect(markup).toContain("surface-grid-code");
+    expect(markup).toContain('data-dominant-artifact="workbench"');
     expect(markup).not.toContain("Context dock");
   });
 });

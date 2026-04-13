@@ -3,6 +3,26 @@
   align-items: stretch;
 }
 
+.chat-v11-session-rail {
+  min-width: 0;
+}
+
+.chat-v11-shell[data-session-rail-visibility="tertiary"] .chat-v11-session-rail {
+  opacity: 0.88;
+}
+
+.chat-v11-shell.surface-layout-chat {
+  grid-template-columns: minmax(238px, 282px) minmax(0, 1fr);
+}
+
+.chat-v11-shell.surface-layout-cowork {
+  grid-template-columns: minmax(196px, 224px) minmax(0, 1fr);
+}
+
+.chat-v11-shell.surface-layout-code {
+  grid-template-columns: minmax(172px, 208px) minmax(0, 1fr);
+}
+
 .chat-v11-left {
   gap: 10px;
   padding: 14px;
@@ -107,6 +127,11 @@
   grid-area: secondary;
 }
 
+.chat-v11-artifact-column,
+.chat-v11-support-column {
+  min-width: 0;
+}
+
 .chat-v11-dock-column {
   grid-area: dock;
 }
@@ -117,23 +142,27 @@
   align-items: start;
 }
 
-.chat-v11-main-grid.with-cowork.with-dock-collapsed {
-  grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.2fr);
+.chat-v11-main-grid.surface-grid-chat.with-dock-open {
+  grid-template-columns: minmax(0, 1.18fr) minmax(288px, 336px);
+}
+
+.chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed {
+  grid-template-columns: minmax(420px, 1.34fr) minmax(248px, 0.66fr);
   grid-template-areas: "secondary primary";
 }
 
-.chat-v11-main-grid.with-cowork.with-dock-open {
-  grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.18fr) minmax(300px, 0.78fr);
+.chat-v11-main-grid.surface-grid-cowork.with-dock-open {
+  grid-template-columns: minmax(420px, 1.26fr) minmax(248px, 0.62fr) minmax(272px, 0.66fr);
   grid-template-areas: "secondary primary dock";
 }
 
-.chat-v11-main-grid.with-code.with-dock-collapsed {
-  grid-template-columns: minmax(340px, 1.08fr) minmax(0, 1fr);
+.chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
+  grid-template-columns: minmax(520px, 1.54fr) minmax(228px, 0.56fr);
   grid-template-areas: "secondary primary";
 }
 
-.chat-v11-main-grid.with-code.with-dock-open {
-  grid-template-columns: minmax(340px, 1.08fr) minmax(0, 1fr) minmax(320px, 0.82fr);
+.chat-v11-main-grid.surface-grid-code.with-dock-open {
+  grid-template-columns: minmax(520px, 1.44fr) minmax(228px, 0.54fr) minmax(268px, 0.56fr);
   grid-template-areas: "secondary primary dock";
 }
 
@@ -200,6 +229,7 @@
 
 .chat-v11.mode-cowork .chat-v11-thread {
   border-radius: 16px;
+  min-height: 0;
 }
 
 .chat-v11.mode-cowork .chat-v11-thread-shell {
@@ -215,6 +245,7 @@
 
 .chat-v11.mode-code .chat-v11-thread {
   border-radius: 12px;
+  min-height: 0;
 }
 
 .chat-v11.mode-code .chat-v11-turn-card {
@@ -223,6 +254,70 @@
 
 .chat-v11.mode-code .chat-v11-composer {
   border-radius: 10px;
+}
+
+.surface-primary-code .chat-v11-thread {
+  max-width: 60ch;
+  justify-self: stretch;
+}
+
+.surface-layout-code .chat-v11-support-column .chat-v11-thread {
+  max-width: 44ch;
+}
+
+.surface-workflow-code .chat-code-workbench {
+  min-height: clamp(560px, calc(100vh - 200px), 980px);
+}
+
+.surface-workflow-cowork .chat-cowork-panel {
+  min-height: clamp(520px, calc(100vh - 220px), 940px);
+}
+
+.surface-primary-cowork .chat-v11-thread {
+  max-width: 70ch;
+}
+
+.surface-layout-cowork .chat-v11-support-column .chat-v11-thread {
+  max-width: 52ch;
+}
+
+.chat-v11-support-column .mission-surface-header {
+  padding: 0 0 2px;
+  position: static;
+  backdrop-filter: none;
+}
+
+.chat-v11-support-column .mission-surface-header-copy {
+  gap: 2px;
+}
+
+.chat-v11-support-column .mission-surface-header-copy h2 {
+  font-size: clamp(1.02rem, 1.25vw, 1.28rem);
+  line-height: 1.12;
+}
+
+.chat-v11-support-column .mission-surface-header-copy p,
+.chat-v11-support-column .mission-surface-header-posture {
+  font-size: 0.79rem;
+  line-height: 1.42;
+}
+
+.chat-v11-support-column .mission-surface-header-kicker {
+  font-size: 0.66rem;
+}
+
+.chat-v11-support-column .mission-surface-header-actions {
+  justify-content: flex-start;
+}
+
+.chat-v11-support-column .chat-v11-thread[data-thread-rank="muted"],
+.chat-v11-support-column .chat-v11-thread[data-thread-rank="inset"] {
+  box-shadow: none;
+}
+
+.surface-dock-code .mission-context-dock,
+.surface-dock-cowork .mission-context-dock {
+  gap: 12px;
 }
 
 .chat-v11-thread-shell {
@@ -359,6 +454,11 @@
 
 .chat-v11-secondary-column .chat-code-workbench {
   min-height: clamp(500px, calc(100vh - 240px), 860px);
+}
+
+.chat-v11-shell[data-dominant-artifact="workflow"] .chat-v11-artifact-column,
+.chat-v11-shell[data-dominant-artifact="workbench"] .chat-v11-artifact-column {
+  align-self: stretch;
 }
 
 .chat-cowork-panel,

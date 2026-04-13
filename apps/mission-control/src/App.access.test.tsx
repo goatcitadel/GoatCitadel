@@ -47,9 +47,19 @@ vi.mock("./pages/DashboardPage", () => ({
 }));
 
 vi.mock("./pages/ChatPage", () => ({
-  ChatPage: (props: { workspaceId?: string; surface?: string; lockSurface?: boolean }) => {
+  ChatPage: (props: {
+    workspaceId?: string;
+    surface?: string;
+    lockSurface?: boolean;
+    onWorkTrustSummaryChange?: (summary: string | null) => void;
+  }) => {
+    const { lockSurface, onWorkTrustSummaryChange, surface } = props;
     chatPageMock(props);
-    return <div>{`chat-ready:${props.surface ?? "chat"}:${props.lockSurface ? "locked" : "open"}`}</div>;
+    React.useEffect(() => {
+      onWorkTrustSummaryChange?.("OpenAI / gpt-5.4");
+      return () => onWorkTrustSummaryChange?.(null);
+    }, [onWorkTrustSummaryChange]);
+    return <div>{`chat-ready:${surface ?? "chat"}:${lockSurface ? "locked" : "open"}`}</div>;
   },
 }));
 
@@ -849,6 +859,59 @@ describe("App gateway access gate", () => {
     const text = renderTreeText(renderer!);
     expect(text).toContain("device-access-modal");
     expect(text).toContain("iPhone Safari");
+  });
+
+  it("keeps provider trust in the shell layer for work surfaces", async () => {
+    const { App } = await import("./App");
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = mount(<App />);
+    });
+    await flush();
+
+    const text = await waitForTreeText(renderer!, "OpenAI / gpt-5.4");
+    expect(text).toContain("shell-trust-provider");
+    expect(text).toContain("OpenAI / gpt-5.4");
+    expect(text.split("OpenAI / gpt-5.4").length - 1).toBe(1);
+  });
+
+  it("keeps workload detail collapsed by default and stages it from shell band 2", async () => {
+    const { App } = await import("./App");
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = mount(<App />);
+    });
+    await flush();
+
+    const text = await waitForTreeText(renderer!, "chat-ready:chat:locked");
+    expect(text).toContain("Workload clear");
+    expect(text).not.toContain("Operator status");
+  });
+
+  it("does not auto-expand workload detail when approvals are the only active trust warning", async () => {
+    const { App } = await import("./App");
+    fetchDashboardStateMock.mockResolvedValue({
+      timestamp: new Date().toISOString(),
+      sessions: [],
+      pendingApprovals: 2,
+      activeSubagents: 0,
+      taskStatusCounts: [],
+      recentEvents: [],
+      dailyCostUsd: 0,
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = mount(<App />);
+    });
+    await flush();
+
+    const text = await waitForTreeText(renderer!, "2 decisions");
+    expect(text).toContain("2 decisions");
+    expect(text).toContain("2 approvals waiting");
+    expect(text).not.toContain("Operator status");
   });
 
   it("surfaces remote approval action prompts from realtime events and resolves them with the delivered token", async () => {

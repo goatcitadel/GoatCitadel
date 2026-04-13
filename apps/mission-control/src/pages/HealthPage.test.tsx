@@ -33,7 +33,7 @@ vi.mock("../hooks/useRefreshSubscription", () => ({
 import { HealthPage } from "./HealthPage";
 
 describe("HealthPage", () => {
-  it("renders unified runtime, spend, and backup summary content", async () => {
+  it("renders one focused health lane with compressed secondary context", async () => {
     apiMocks.fetchHealthSummary.mockResolvedValueOnce({
       generatedAt: "2026-04-10T10:00:00.000Z",
       systemVitals: {
@@ -85,11 +85,13 @@ describe("HealthPage", () => {
         },
       },
       backups: {
-        items: [{
-          backupId: "backup-1",
-          createdAt: "2026-04-10T10:00:00.000Z",
-          files: [{ path: "config/llm-providers.json" }],
-        }],
+        items: [
+          {
+            backupId: "backup-1",
+            createdAt: "2026-04-10T10:00:00.000Z",
+            files: [{ path: "config/llm-providers.json" }],
+          },
+        ],
         latest: {
           backupId: "backup-1",
           createdAt: "2026-04-10T10:00:00.000Z",
@@ -148,11 +150,13 @@ describe("HealthPage", () => {
         },
       },
       backups: {
-        items: [{
-          backupId: "backup-2",
-          createdAt: "2026-04-10T10:10:00.000Z",
-          files: [{ path: "data/index.db" }, { path: "config/llm-providers.json" }],
-        }],
+        items: [
+          {
+            backupId: "backup-2",
+            createdAt: "2026-04-10T10:10:00.000Z",
+            files: [{ path: "data/index.db" }, { path: "config/llm-providers.json" }],
+          },
+        ],
         latest: {
           backupId: "backup-2",
           createdAt: "2026-04-10T10:10:00.000Z",
@@ -176,10 +180,13 @@ describe("HealthPage", () => {
 
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain("Health");
-    expect(text).toContain("Recorded spend");
-    expect(text).toContain("Backup Summary");
+    expect(text).toContain("Runtime state");
     expect(text).toContain("Service Manager");
-    expect(text).toContain("Usage coverage");
-    expect(text).toContain("backup-2");
+    expect(text).toContain("Backup ready");
+    expect(text).toContain("Other lane");
+    expect(text).toContain("Spend + backup view");
+    expect(text).toContain("2 files captured");
+    expect(text).toContain("operator-summary-card");
+    expect(text).toContain("stat-card-compact");
   });
 });

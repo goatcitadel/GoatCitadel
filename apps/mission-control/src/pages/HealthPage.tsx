@@ -27,11 +27,11 @@ export function HealthPage({ activeTab, onTabChange }: HealthPageProps) {
   const { data, error, isRefreshing, refresh, setError } = useHealthSummary();
   const [daemonBusy, setDaemonBusy] = useState(false);
 
-  const orderedSections = useMemo(() => {
-    const current = ITEMS.find((item) => item.id === activeTab);
-    const remainder = ITEMS.filter((item) => item.id !== activeTab);
-    return current ? [current, ...remainder] : ITEMS;
-  }, [activeTab]);
+  const activeSection = useMemo<(typeof ITEMS)[number]>(
+    () => ITEMS.find((item) => item.id === activeTab) ?? ITEMS[0]!,
+    [activeTab],
+  );
+  const secondarySections = useMemo(() => ITEMS.filter((item) => item.id !== activeSection.id), [activeSection.id]);
 
   const vitals = data?.systemVitals ? normalizeSystemVitals(data.systemVitals) : null;
   const daemonStatus = data?.daemonStatus ?? null;
@@ -45,86 +45,151 @@ export function HealthPage({ activeTab, onTabChange }: HealthPageProps) {
     await refresh();
   }, [refresh]);
 
-  const runDaemonAction = useCallback(async (action: () => Promise<{ status: unknown }>) => {
-    setDaemonBusy(true);
-    try {
-      await action();
-      await refresh();
-    } catch (nextError) {
-      setError((nextError as Error).message);
-    } finally {
-      setDaemonBusy(false);
-    }
-  }, [refresh, setError]);
+  const runDaemonAction = useCallback(
+    async (action: () => Promise<{ status: unknown }>) => {
+      setDaemonBusy(true);
+      try {
+        await action();
+        await refresh();
+      } catch (nextError) {
+        setError((nextError as Error).message);
+      } finally {
+        setDaemonBusy(false);
+      }
+    },
+    [refresh, setError],
+  );
 
   return (
     <section className="space-page stack-lg">
       <SectionTitle
         title="Health"
-        subtitle="Runtime posture, process health, spend, degraded-state warnings, and backup truth live together here."
+        subtitle="Keep one health narrative in focus while the other lane stays compressed until you need it."
       />
-      <div className="office-kpi-grid">
-        <StatCard label="Primary lane" value={activeTab === "system" ? "Runtime state" : "Spend and usage"} note="Current focus section" tone="accent" />
+      <div className="office-kpi-grid operator-summary-strip">
+        <StatCard
+          label="Primary lane"
+          value={activeSection.label}
+          note="Current focus section"
+          tone="accent"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Runtime state"
+          value={daemonStatus?.running ? "Serving" : "Needs intervention"}
+          note={isRefreshing ? "Refreshing runtime, spend, and backup signals" : "Gateway and daemon posture"}
+          tone={daemonStatus?.running ? "success" : "warning"}
+          compact
+          className="operator-summary-card"
+        />
         <StatCard
           label="Recorded spend"
           value={formatUsd(totalCostUsd)}
-          note={isRefreshing ? "Refreshing runtime, spend, and backup signals" : `${totalTokens.toLocaleString()} tokens in current window`}
+          note={`${totalTokens.toLocaleString()} tokens in current window`}
+          compact
+          className="operator-summary-card"
         />
-        <StatCard label="Latest backup" value={latestBackup ? new Date(latestBackup.createdAt).toLocaleString() : "Unavailable"} note={latestBackup ? `${latestBackup.files.length} files captured` : "No backup record loaded yet"} tone={latestBackup ? "success" : "warning"} />
-        <StatCard label="QMD impact" value={describeQmdImpact(data?.costs.qmd)} note="Compression posture for the current observation window" />
+        <StatCard
+          label="Latest backup"
+          value={latestBackup ? new Date(latestBackup.createdAt).toLocaleString() : "Unavailable"}
+          note={latestBackup ? `${latestBackup.files.length} files captured` : "No backup record loaded yet"}
+          tone={latestBackup ? "success" : "warning"}
+          compact
+          className="operator-summary-card"
+        />
       </div>
-      <PageTabs items={ITEMS} activeId={activeTab} onSelect={(value) => onTabChange(value as HealthTab)} />
+      <PageTabs
+        items={ITEMS}
+        activeId={activeTab}
+        tier="section"
+        ariaLabel="Health focus"
+        onSelect={(value) => onTabChange(value as HealthTab)}
+      />
       {error ? <p className="error">{error}</p> : null}
       <EmbeddedPageChromeProvider>
         <div className="stack-lg">
-          {orderedSections.map((section) => (
-            <Panel
-              key={section.id}
-              title={section.label}
-              subtitle={section.id === "system"
-                ? "Process state, host vitals, and gateway posture stay operator-readable here."
-                : "Usage coverage, QMD impact, and backup truth stay attached to runtime health."}
-              tone={section.id === activeTab ? "accent" : "default"}
-              padding="compact"
-            >
-              {section.id === "system" ? (
-                <div className="stack-lg">
-                  {vitals ? <SystemHostVitalsGrid vitals={vitals} /> : <p className="office-subtitle">System vitals unavailable.</p>}
-                  <SystemServiceManagerPanel
-                    daemonStatus={daemonStatus}
-                    daemonStateTone={daemonStateTone}
-                    daemonControlSupported={daemonStatus?.controllable ?? false}
-                    daemonBusy={daemonBusy}
-                    daemonLogs={daemonLogs}
-                    onStart={() => void runDaemonAction(startDaemon)}
-                    onStop={() => void runDaemonAction(stopDaemon)}
-                    onRestart={() => void runDaemonAction(restartDaemon)}
-                    onRefresh={() => void refreshAndClearError()}
+          <Panel
+            title={activeSection.label}
+            subtitle={
+              activeSection.id === "system"
+                ? "Process state, host vitals, and daemon control stay in one operator-readable runtime lane."
+                : "Spend coverage, compression posture, and backup truth stay attached to runtime health."
+            }
+            tone="accent"
+            rank="primary"
+            padding="compact"
+          >
+            {activeSection.id === "system" ? (
+              <div className="stack-lg">
+                <div className="workflow-summary-strip">
+                  <StatusChip tone={daemonStatus?.running ? "success" : "warning"}>
+                    {daemonStatus?.running ? "Runtime serving" : "Runtime needs intervention"}
+                  </StatusChip>
+                  <StatusChip tone="muted">
+                    {daemonStatus?.host ? `Host ${daemonStatus.host}` : "Host unavailable"}
+                  </StatusChip>
+                  <StatusChip tone={latestBackup ? "success" : "warning"}>
+                    {latestBackup ? "Backup ready" : "Backup missing"}
+                  </StatusChip>
+                </div>
+                {vitals ? (
+                  <SystemHostVitalsGrid vitals={vitals} />
+                ) : (
+                  <p className="office-subtitle">System vitals unavailable.</p>
+                )}
+                <SystemServiceManagerPanel
+                  daemonStatus={daemonStatus}
+                  daemonStateTone={daemonStateTone}
+                  daemonControlSupported={daemonStatus?.controllable ?? false}
+                  daemonBusy={daemonBusy}
+                  daemonLogs={daemonLogs}
+                  onStart={() => void runDaemonAction(startDaemon)}
+                  onStop={() => void runDaemonAction(stopDaemon)}
+                  onRestart={() => void runDaemonAction(restartDaemon)}
+                  onRefresh={() => void refreshAndClearError()}
+                />
+              </div>
+            ) : (
+              <div className="stack-lg">
+                <div className="workflow-summary-strip">
+                  <StatusChip tone="muted">Scope {data?.costs.summary.scope ?? "day"}</StatusChip>
+                  <StatusChip tone="muted">
+                    Tracked {data?.costs.summary.usageAvailability?.trackedEvents ?? 0}
+                  </StatusChip>
+                  <StatusChip tone={latestBackup ? "success" : "warning"}>
+                    {latestBackup ? "Backup ready" : "Backup missing"}
+                  </StatusChip>
+                </div>
+                <div className="office-kpi-grid operator-summary-strip">
+                  <StatCard
+                    label="Usage coverage"
+                    value={`${data?.costs.summary.usageAvailability?.trackedEvents ?? 0} tracked`}
+                    note={`${data?.costs.summary.usageAvailability?.unknownEvents ?? 0} unknown of ${data?.costs.summary.usageAvailability?.totalAgentEvents ?? 0} total agent events`}
+                    compact
+                    className="operator-summary-card"
+                  />
+                  <StatCard
+                    label="QMD impact"
+                    value={describeQmdImpact(data?.costs.qmd)}
+                    note="Compression posture for the current observation window"
+                    compact
+                    className="operator-summary-card"
                   />
                 </div>
-              ) : (
-                <div className="stack-lg">
-                  <div className="workflow-summary-strip">
-                    <StatusChip tone="muted">Scope {data?.costs.summary.scope ?? "day"}</StatusChip>
-                    <StatusChip tone="muted">Tracked {data?.costs.summary.usageAvailability?.trackedEvents ?? 0}</StatusChip>
-                    <StatusChip tone={latestBackup ? "success" : "warning"}>
-                      {latestBackup ? "Backup ready" : "Backup missing"}
-                    </StatusChip>
-                  </div>
-                  <div className="card">
-                    <p><strong>Usage coverage</strong></p>
-                    <p className="office-subtitle">
-                      Tracked {data?.costs.summary.usageAvailability?.trackedEvents ?? 0}
-                      {" · "}
-                      Unknown {data?.costs.summary.usageAvailability?.unknownEvents ?? 0}
-                      {" · "}
-                      Total agent events {data?.costs.summary.usageAvailability?.totalAgentEvents ?? 0}
-                    </p>
-                  </div>
+                <Panel
+                  title="Spend breakdown"
+                  subtitle="Inspect spend and token use without leaving the health surface."
+                  tone="soft"
+                  rank="muted"
+                  padding="compact"
+                >
                   <div className="stack-sm">
                     {(data?.costs.summary.items ?? []).map((item) => (
-                      <div key={item.key} className="card">
-                        <p><strong>{item.key}</strong></p>
+                      <div key={item.key} className="event-card">
+                        <p>
+                          <strong>{item.key}</strong>
+                        </p>
                         <p className="office-subtitle">
                           {item.tokenTotal.toLocaleString()} total tokens
                           {" · "}
@@ -133,26 +198,70 @@ export function HealthPage({ activeTab, onTabChange }: HealthPageProps) {
                       </div>
                     ))}
                   </div>
-                  <Panel
-                    title="Backup Summary"
-                    subtitle="Health keeps the current backup signal in view while you inspect runtime or spend."
-                    tone={latestBackup ? "soft" : "warning"}
-                    padding="compact"
-                  >
-                    {latestBackup ? (
-                      <p className="office-subtitle">
-                        Latest backup {latestBackup.backupId} was created on {new Date(latestBackup.createdAt).toLocaleString()} and captured {latestBackup.files.length} files.
-                      </p>
-                    ) : (
-                      <p className="office-subtitle">
-                        No backup summary is available yet. Create a runtime backup from Runtime once the gateway is healthy.
-                      </p>
-                    )}
-                  </Panel>
-                </div>
-              )}
-            </Panel>
-          ))}
+                </Panel>
+                <Panel
+                  title="Backup Summary"
+                  subtitle="Health keeps the current backup signal in view while you inspect runtime or spend."
+                  tone={latestBackup ? "soft" : "warning"}
+                  rank={latestBackup ? "muted" : "elevated"}
+                  padding="compact"
+                >
+                  {latestBackup ? (
+                    <p className="office-subtitle">
+                      Latest backup {latestBackup.backupId} was created on{" "}
+                      {new Date(latestBackup.createdAt).toLocaleString()} and captured {latestBackup.files.length}{" "}
+                      files.
+                    </p>
+                  ) : (
+                    <p className="office-subtitle">
+                      No backup summary is available yet. Create a runtime backup from Runtime once the gateway is
+                      healthy.
+                    </p>
+                  )}
+                </Panel>
+              </div>
+            )}
+          </Panel>
+          <Panel
+            title="Other lane"
+            subtitle="The adjacent health narrative stays compressed until you focus it."
+            tone="soft"
+            rank="muted"
+            padding="compact"
+          >
+            <div className="office-kpi-grid">
+              {secondarySections.map((section) => (
+                <StatCard
+                  key={section.id}
+                  label={section.label}
+                  value={
+                    section.id === "system"
+                      ? daemonStatus?.running
+                        ? "Serving cleanly"
+                        : "Needs intervention"
+                      : latestBackup
+                        ? "Spend + backup view"
+                        : "Check backup posture"
+                  }
+                  note={
+                    section.id === "system"
+                      ? "Open this lane for daemon control, host vitals, and live service posture."
+                      : "Open this lane for spend coverage, QMD impact, and backup truth."
+                  }
+                  tone={
+                    section.id === "system" && daemonStatus?.running
+                      ? "success"
+                      : section.id === "system"
+                        ? "warning"
+                        : "default"
+                  }
+                  compact
+                  interactive
+                  onClick={() => onTabChange(section.id)}
+                />
+              ))}
+            </div>
+          </Panel>
         </div>
       </EmbeddedPageChromeProvider>
     </section>
@@ -168,9 +277,7 @@ function formatUsd(value: number): string {
   }).format(Number.isFinite(value) ? value : 0);
 }
 
-function describeQmdImpact(
-  qmd: Awaited<ReturnType<typeof fetchHealthSummary>>["costs"]["qmd"] | undefined,
-): string {
+function describeQmdImpact(qmd: Awaited<ReturnType<typeof fetchHealthSummary>>["costs"]["qmd"] | undefined): string {
   if (!qmd || qmd.totalRuns === 0) {
     return "No QMD samples";
   }

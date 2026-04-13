@@ -19,7 +19,12 @@ function mapStateToLabel(state: EventStreamConnectionState): "Live" | "Degraded"
   return "Offline";
 }
 
-function GlobalFreshnessPillInner({ streamState }: { streamState: EventStreamConnectionState }) {
+interface GlobalFreshnessPillProps {
+  streamState: EventStreamConnectionState;
+  variant?: "full" | "compact";
+}
+
+function GlobalFreshnessPillInner({ streamState, variant = "full" }: GlobalFreshnessPillProps) {
   const streamStatus = useEventStreamStatus();
   const label = mapStateToLabel(streamState);
   const freshnessClass = label.toLowerCase();
@@ -28,6 +33,21 @@ function GlobalFreshnessPillInner({ streamState }: { streamState: EventStreamCon
     : streamStatus.lastEventAt
       ? new Date(streamStatus.lastEventAt).toLocaleTimeString()
       : "n/a";
+
+  if (variant === "compact") {
+    return (
+      <div className={`global-freshness-pill compact ${freshnessClass}`} role="status" aria-live="polite">
+        <span className="status-dot" aria-hidden />
+        <span>
+          <strong>{label}</strong>
+        </span>
+        <span className="global-freshness-sep" aria-hidden>
+          ·
+        </span>
+        <span>{lastUpdated}</span>
+      </div>
+    );
+  }
 
   return (
     <div className={`global-freshness-pill ${freshnessClass}`} role="status" aria-live="polite">

@@ -3,8 +3,8 @@ import type { BackupManifestRecord } from "@goatcitadel/contracts";
 import { createBackup, listBackups, verifyBackup } from "../api/client";
 import { FieldHelp } from "../components/FieldHelp";
 import { Panel } from "../components/Panel";
-import { SectionTitle } from "../components/SectionTitle";
 import { StatusChip } from "../components/StatusChip";
+import { TuneHubLayout } from "../components/TuneHubLayout";
 import { LlamaCppPage } from "./LlamaCppPage";
 import { MeshPage } from "./MeshPage";
 import { NpuPage } from "./NpuPage";
@@ -82,11 +82,31 @@ export function RuntimeHubPage() {
   };
 
   return (
-    <section className="space-page stack-lg">
-      <SectionTitle
-        title="Runtime"
-        subtitle="Gateway controls, local runtimes, acceleration targets, and backup operations live in one cockpit."
-      />
+    <TuneHubLayout
+      title="Runtime"
+      subtitle="Gateway controls, local runtimes, acceleration targets, and backup safety need to read like one operator cockpit."
+      summaries={[
+        {
+          label: "Runtime posture",
+          value: latestBackup ? "Protected" : "Needs backup",
+          note: backupSummary,
+          tone: latestBackup ? "success" : "warning",
+        },
+        {
+          label: "Current decision",
+          value: "Gateway + backup safety",
+          note: "Use Runtime when a change can affect serving posture or recoverability",
+          tone: "accent",
+        },
+        {
+          label: "Restore model",
+          value: "Offline only",
+          note: "Filesystem restore stays explicit so the gateway does not overwrite live files",
+        },
+      ]}
+      guideTitle="What this controls"
+      guideBody="Use Runtime for changes that can interrupt serving, alter local acceleration posture, or affect recovery guarantees."
+    >
       {error ? <p className="error">{error}</p> : null}
       {status ? <p className="status-banner">{status}</p> : null}
       <SettingsPage activeTab="runtime" />
@@ -159,6 +179,6 @@ export function RuntimeHubPage() {
       <MeshPage />
       <LlamaCppPage />
       <NpuPage />
-    </section>
+    </TuneHubLayout>
   );
 }

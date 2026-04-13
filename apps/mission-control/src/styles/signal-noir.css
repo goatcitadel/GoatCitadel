@@ -1238,6 +1238,7 @@
   color: rgba(186, 201, 217, 0.82);
 }
 
+.theme-signal-noir .gc-nav-button,
 .theme-signal-noir .gc-nav-pill,
 .theme-signal-noir .space-nav-item,
 .theme-signal-noir .surface-nav-item,
@@ -1251,6 +1252,7 @@
   color: #e9f5ff;
 }
 
+.theme-signal-noir .gc-nav-button:hover,
 .theme-signal-noir .gc-nav-pill:hover,
 .theme-signal-noir .space-nav-item:hover,
 .theme-signal-noir .surface-nav-item:hover,
@@ -1263,6 +1265,7 @@
     0 0 22px rgba(84, 221, 255, 0.08);
 }
 
+.theme-signal-noir .gc-nav-button.active,
 .theme-signal-noir .gc-nav-pill.active,
 .theme-signal-noir .space-nav-item.active,
 .theme-signal-noir .surface-nav-item.active,
@@ -1286,6 +1289,15 @@
     0 14px 28px rgba(0, 0, 0, 0.22);
 }
 
+.theme-signal-noir .status-strip-summary,
+.theme-signal-noir .status-strip-compact-row .gc-nav-button {
+  border-color: rgba(92, 198, 223, 0.14);
+  background: linear-gradient(180deg, rgba(12, 18, 28, 0.96), rgba(7, 12, 19, 1));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 14px 28px rgba(0, 0, 0, 0.18);
+}
+
 .theme-signal-noir .shell-bar .shell-status-link,
 .theme-signal-noir .shell-bar .shell-status-link:hover {
   min-height: auto;
@@ -1297,8 +1309,6 @@
 }
 
 .theme-signal-noir .shell-secondary-nav {
-  padding-top: calc(var(--space-2) * var(--density-scale));
-  padding-bottom: calc(var(--space-3) * var(--density-scale));
   background: linear-gradient(180deg, rgba(7, 11, 18, 0.86), rgba(5, 8, 13, 0.8)), rgba(6, 10, 15, 0.74);
   border-bottom-color: rgba(92, 198, 223, 0.1);
 }

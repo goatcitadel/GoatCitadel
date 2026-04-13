@@ -8,8 +8,10 @@ interface StatusStripProps {
   activeAgentsCount: number;
   dailyCostUsd: number;
   openTasksCount: number;
-  collapsed: boolean;
-  onCollapsedChange: (next: boolean) => void;
+  variant: "compact" | "expanded";
+  context: "work" | "observe" | "tune";
+  placement?: "standalone" | "attached";
+  onToggleVariant: (next: "compact" | "expanded") => void;
   onOpenApprovals: () => void;
   onOpenAgents: () => void;
   onOpenCosts: () => void;
@@ -40,8 +42,10 @@ export function StatusStrip({
   activeAgentsCount,
   dailyCostUsd,
   openTasksCount,
-  collapsed,
-  onCollapsedChange,
+  variant,
+  context,
+  placement = "standalone",
+  onToggleVariant,
   onOpenApprovals,
   onOpenAgents,
   onOpenCosts,
@@ -68,75 +72,116 @@ export function StatusStrip({
     return () => media.removeListener(handleChange);
   }, []);
 
-  const compactSummary = approvalsCount > 0
-    ? `${approvalsCount} decision${approvalsCount === 1 ? "" : "s"} waiting`
-    : openTasksCount > 0
-      ? `${openTasksCount} open task${openTasksCount === 1 ? "" : "s"}`
-      : "Decisions clear";
+  const compactSummary =
+    approvalsCount > 0
+      ? `${approvalsCount} decision${approvalsCount === 1 ? "" : "s"} waiting`
+      : openTasksCount > 0
+        ? `${openTasksCount} open task${openTasksCount === 1 ? "" : "s"}`
+        : "Decisions clear";
+
+  const isExpanded = variant === "expanded";
+  const compactTone = approvalsCount > 0 ? "warning" : activeAgentsCount > 0 ? "live" : "muted";
+  const attached = placement === "attached";
+
+  if (attached && !isExpanded) {
+    return null;
+  }
 
   return (
     <section
-      className={`status-strip-shell${compactViewport ? " compact" : ""}${collapsed ? " collapsed" : " expanded"}`}
+      className={`status-strip-shell status-strip-context-${context}${compactViewport ? " compact" : ""}${isExpanded ? " expanded" : " collapsed"}${attached ? " status-strip-attached" : ""}`}
       aria-label="Operator status"
     >
-      <button
-        type="button"
-        className="gc-button status-strip-summary"
-        aria-expanded={!collapsed}
-        onClick={() => onCollapsedChange(!collapsed)}
-      >
-        <span className="status-strip-summary-copy">
-          <span className="status-strip-summary-label">Operator status</span>
-          <span className="status-strip-summary-value">{compactSummary}</span>
-        </span>
-        <span className="status-strip-summary-caret" aria-hidden>{collapsed ? "▾" : "▴"}</span>
-      </button>
-      {!collapsed ? (
+      {!attached ? (
+        <>
+          <button
+            type="button"
+            className="gc-button status-strip-summary"
+            aria-expanded={isExpanded}
+            onClick={() => onToggleVariant(isExpanded ? "compact" : "expanded")}
+          >
+            <span className="status-strip-summary-copy">
+              <span className="status-strip-summary-label">Operator status</span>
+              <span className="status-strip-summary-value">{compactSummary}</span>
+            </span>
+            <span className="status-strip-summary-caret" aria-hidden>
+              {isExpanded ? "▴" : "▾"}
+            </span>
+          </button>
+          <div className="status-strip-compact-row" aria-label="Operator status summary">
+            <button
+              type="button"
+              className={`gc-nav-button gc-nav-tier-chip${approvalsCount > 0 ? " active" : ""}`}
+              onClick={onOpenApprovals}
+            >
+              {approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear"}
+            </button>
+            <button
+              type="button"
+              className={`gc-nav-button gc-nav-tier-chip${activeAgentsCount > 0 ? " active" : ""}`}
+              onClick={onOpenAgents}
+            >
+              {activeAgentsCount > 0 ? `${activeAgentsCount} agents live` : "No active agents"}
+            </button>
+            <button type="button" className="gc-nav-button gc-nav-tier-chip" onClick={onOpenTasks}>
+              {openTasksCount > 0 ? `${openTasksCount} open tasks` : "No open tasks"}
+            </button>
+            <button
+              type="button"
+              className={`gc-nav-button gc-nav-tier-chip${compactTone === "warning" ? " active" : ""}`}
+              onClick={onOpenCosts}
+            >
+              {formatUsd(dailyCostUsd)} today
+            </button>
+          </div>
+        </>
+      ) : null}
+      {isExpanded ? (
         <div className="status-strip">
-        <div className="status-strip-tier status-strip-tier-primary" aria-label="Critical operator priorities">
-          <StatCard
-            label={approvalsLabel}
-            value={approvalsCount}
-            note={approvalsNote ?? (approvalsCount > 0 ? "Needs operator review now" : "No blockers")}
-            tone={approvalsCount > 0 ? "warning" : "success"}
-            className={`status-strip-card status-strip-card-approvals${approvalsCount > 0 ? " is-attention" : ""}`}
-            compact
-            interactive
-            onClick={onOpenApprovals}
-          />
-          <StatCard
-            label="Active agents"
-            value={activeAgentsCount}
-            note={activeAgentsCount > 0 ? "Inspect live herd" : "No active agents"}
-            tone={activeAgentsCount > 0 ? "accent" : "default"}
-            className="status-strip-card status-strip-card-agents"
-            compact
-            interactive
-            onClick={onOpenAgents}
-          />
-        </div>
-        <div className="status-strip-tier status-strip-tier-secondary" aria-label="Monitoring and background state">
-          <StatCard
-            label="Spend today"
-            value={formatUsd(dailyCostUsd)}
-            note="Provider and runtime spend"
-            tone="default"
-            className="status-strip-card status-strip-card-spend"
-            compact
-            interactive
-            onClick={onOpenCosts}
-          />
-          <StatCard
-            label="Open tasks"
-            value={openTasksCount}
-            note={openTasksCount > 0 ? "Trailboard queue" : "No open tasks"}
-            tone={openTasksCount > 0 ? "accent" : "default"}
-            className="status-strip-card status-strip-card-tasks"
-            compact
-            interactive
-            onClick={onOpenTasks}
-          />
-        </div>
+          <div className="status-strip-tier status-strip-tier-primary" aria-label="Critical operator priorities">
+            <StatCard
+              label={approvalsLabel}
+              value={approvalsCount}
+              note={approvalsNote ?? (approvalsCount > 0 ? "Needs operator review now" : "No blockers")}
+              tone={approvalsCount > 0 ? "warning" : "success"}
+              className={`status-strip-card status-strip-card-approvals${approvalsCount > 0 ? " is-attention" : ""}`}
+              compact
+              interactive
+              onClick={onOpenApprovals}
+            />
+            <StatCard
+              label="Active agents"
+              value={activeAgentsCount}
+              note={activeAgentsCount > 0 ? "Inspect live herd" : "No active agents"}
+              tone={activeAgentsCount > 0 ? "accent" : "default"}
+              className="status-strip-card status-strip-card-agents"
+              compact
+              interactive
+              onClick={onOpenAgents}
+            />
+          </div>
+          <div className="status-strip-tier status-strip-tier-secondary" aria-label="Monitoring and background state">
+            <StatCard
+              label="Spend today"
+              value={formatUsd(dailyCostUsd)}
+              note="Provider and runtime spend"
+              tone="default"
+              className="status-strip-card status-strip-card-spend"
+              compact
+              interactive
+              onClick={onOpenCosts}
+            />
+            <StatCard
+              label="Open tasks"
+              value={openTasksCount}
+              note={openTasksCount > 0 ? "Trailboard queue" : "No open tasks"}
+              tone={openTasksCount > 0 ? "accent" : "default"}
+              className="status-strip-card status-strip-card-tasks"
+              compact
+              interactive
+              onClick={onOpenTasks}
+            />
+          </div>
         </div>
       ) : null}
     </section>
