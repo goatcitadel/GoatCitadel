@@ -10,7 +10,7 @@
 
 GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflows. It gives you a Mission Control UI, a Fastify gateway, shared orchestration and policy packages, and a local-first runtime model that stays explicit about tools, approvals, and system state.
 
-![GoatCitadel Mission Control](docs/screenshots/mission-control/operate-chat-live.png)
+![GoatCitadel Mission Control](docs/screenshots/mission-control/operate-chat.png)
 
 ## What it does
 
@@ -23,9 +23,9 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 ## What's new on `main`
 
-- **Capability system foundations**: tools, runtime skills, candidate bundles, proposals, and Code Mode runs now live on one GoatCitadel-native capability model with inspectable vs callable catalogs.
-- **Governed Code Mode v1**: trusted, operator-approved code can run through a child-process harness with immutable snapshots, persisted artifacts, bounded IPC, and an explicit read-only wrapper allowlist.
-- **Sharper Skills Hub and approvals**: Mission Control now surfaces lifecycle/trust metadata, candidate/proposal review queues, and a composer-adjacent approval footer with richer Code Mode inspection details.
+- **Guided `llama.cpp` setup**: Mission Control now includes richer local-runtime setup, diagnostics, and provider handoff for `llama.cpp`, with the operator rollout notes captured in [docs/LLAMA_CPP_INTEGRATION_MEMO.md](./docs/LLAMA_CPP_INTEGRATION_MEMO.md).
+- **Approval delivery auth clarified**: remote approval delivery now keeps connector delivery auth boundaries explicit, making channel-backed approval routing easier to reason about during setup and testing.
+- **Windows installers refreshed**: the published Windows x64 and arm64 installer artifacts were regenerated after the `1.0.0` cut so the public install path stays aligned with the current branch.
 
 ## What ships in this repo
 
@@ -142,6 +142,8 @@ Not safe to over-claim yet:
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal
 
 ## Screenshots
+
+Refreshed on April 12, 2026 from the sanitized Mission Control demo runtime used for public-share docs.
 
 Full gallery: [docs/screenshots/mission-control](./docs/screenshots/mission-control)
 

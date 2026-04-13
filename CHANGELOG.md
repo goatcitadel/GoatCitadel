@@ -12,6 +12,10 @@ All notable changes to GoatCitadel are documented in this file.
   - assembled release ZIP with artifacts, docs, and provenance metadata
 - Release-facing docs for reproducible builds, supported platforms, smoke tests, and dependency policy.
 - `CODEOWNERS` coverage for release-bearing paths.
+- Guided `llama.cpp` setup and integration flow:
+  - Mission Control setup and diagnostics for local `llama.cpp` runtime validation
+  - provider/config templates that treat `llama.cpp` as a first-class local runtime option
+  - operator rollout notes in `docs/LLAMA_CPP_INTEGRATION_MEMO.md`
 
 ### Changed
 
@@ -19,6 +23,9 @@ All notable changes to GoatCitadel are documented in this file.
 - Release workflow is expanded from raw installer publishing to a signed proof-package handoff.
 - Approval control routes are now explicitly operator-fenced, while remote approval token resolution remains on its separate capability-token path.
 - Mission Control Channel Setup now shows only shipped guided channels instead of mixing visible built-ins with manual/later-state copy.
+- Remote approval delivery now keeps connector delivery auth boundaries explicit instead of implying that approval-control fencing covers the delivery path.
+- Public Windows x64 and arm64 installer artifacts were refreshed after the `1.0.0` cut.
+- README and Mission Control screenshot gallery were refreshed to match the current main-branch UI and docs posture.
 
 ### Verification
 
