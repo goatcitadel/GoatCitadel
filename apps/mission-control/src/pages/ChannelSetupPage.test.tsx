@@ -26,7 +26,9 @@ vi.mock("../state/dev-diagnostics-store", () => ({
 }));
 vi.mock("../components/ActionButton", () => ({
   ActionButton: ({ label, onClick, disabled }: { label: string; onClick?: () => void; disabled?: boolean }) => (
-    <button type="button" disabled={disabled} onClick={onClick}>{label}</button>
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {label}
+    </button>
   ),
 }));
 vi.mock("../components/CardSkeleton", () => ({
@@ -38,7 +40,17 @@ vi.mock("../components/FieldHelp", () => ({
   ),
 }));
 vi.mock("../components/Panel", () => ({
-  Panel: ({ title, subtitle, actions, children }: { title?: string; subtitle?: string; actions?: React.ReactNode; children?: React.ReactNode }) => (
+  Panel: ({
+    title,
+    subtitle,
+    actions,
+    children,
+  }: {
+    title?: string;
+    subtitle?: string;
+    actions?: React.ReactNode;
+    children?: React.ReactNode;
+  }) => (
     <section>
       {title ? <h2>{title}</h2> : null}
       {subtitle ? <p>{subtitle}</p> : null}
@@ -67,12 +79,13 @@ function rendererText(renderer: ReactTestRenderer): string {
 }
 
 function catalogButton(renderer: ReactTestRenderer, label: string) {
-  return renderer.root.findAll((node) => (
-    node.type === "button"
-    && typeof node.props.className === "string"
-    && node.props.className.includes("channel-setup-catalog-item")
-    && node.findAllByType("strong").some((strongNode) => strongNode.children.join("") === label)
-  ))[0];
+  return renderer.root.findAll(
+    (node) =>
+      node.type === "button" &&
+      typeof node.props.className === "string" &&
+      node.props.className.includes("channel-setup-catalog-item") &&
+      node.findAllByType("strong").some((strongNode) => strongNode.children.join("") === label),
+  )[0];
 }
 
 function createDefinition(catalogId: string, label: string) {
@@ -100,13 +113,15 @@ function createDefinition(catalogId: string, label: string) {
           id: "collect-values",
           kind: "field-collection",
           title: "Paste your connection values",
-          fields: [{
-            key: "defaultChannel",
-            label: "Default Channel",
-            type: "text",
-            required: true,
-            explanation: "Channel",
-          }],
+          fields: [
+            {
+              key: "defaultChannel",
+              label: "Default Channel",
+              type: "text",
+              required: true,
+              explanation: "Channel",
+            },
+          ],
         },
         {
           id: "finish",
@@ -165,37 +180,81 @@ describe("ChannelSetupPage", () => {
 
     apiMocks.fetchIntegrationCatalog.mockResolvedValue({
       items: [
-        { catalogId: "channel.discord", label: "Discord", description: "Discord", kind: "channel", capabilities: [], maturity: "beta", key: "discord" },
-        { catalogId: "channel.slack", label: "Slack", description: "Slack", kind: "channel", capabilities: [], maturity: "beta", key: "slack" },
-        { catalogId: "channel.google-chat", label: "Google Chat", description: "Google Chat", kind: "channel", capabilities: [], maturity: "beta", key: "google-chat" },
-        { catalogId: "channel.teams", label: "Teams", description: "Teams", kind: "channel", capabilities: [], maturity: "beta", key: "teams" },
-        { catalogId: "channel.tui", label: "TUI", description: "Terminal UI", kind: "channel", capabilities: [], maturity: "beta", key: "tui" },
+        {
+          catalogId: "channel.discord",
+          label: "Discord",
+          description: "Discord",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "discord",
+        },
+        {
+          catalogId: "channel.slack",
+          label: "Slack",
+          description: "Slack",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "slack",
+        },
+        {
+          catalogId: "channel.google-chat",
+          label: "Google Chat",
+          description: "Google Chat",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "google-chat",
+        },
+        {
+          catalogId: "channel.teams",
+          label: "Teams",
+          description: "Teams",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "teams",
+        },
+        {
+          catalogId: "channel.tui",
+          label: "TUI",
+          description: "Terminal UI",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "tui",
+        },
       ],
     });
-    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(createSetupDefinitionList(
-      { catalogId: "channel.discord", label: "Discord" },
-      { catalogId: "channel.slack", label: "Slack" },
-      { catalogId: "channel.google-chat", label: "Google Chat" },
-      { catalogId: "channel.teams", label: "Teams" },
-    ));
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(
+      createSetupDefinitionList(
+        { catalogId: "channel.discord", label: "Discord" },
+        { catalogId: "channel.slack", label: "Slack" },
+        { catalogId: "channel.google-chat", label: "Google Chat" },
+        { catalogId: "channel.teams", label: "Teams" },
+      ),
+    );
     apiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [] });
     apiMocks.fetchChannelSetupDrafts.mockResolvedValue({
-      items: [{
-        draftId: "11111111-1111-1111-1111-111111111111",
-        catalogId: "channel.discord",
-        lifecycleMode: "repair",
-        label: "Discord Repair",
-        enabled: true,
-        draft: {
-          defaultChannel: "#ops",
+      items: [
+        {
+          draftId: "11111111-1111-1111-1111-111111111111",
+          catalogId: "channel.discord",
+          lifecycleMode: "repair",
+          label: "Discord Repair",
+          enabled: true,
+          draft: {
+            defaultChannel: "#ops",
+          },
+          contentVersion: "content.v1",
+          adapterVersion: "adapter.v1",
+          validationVersion: "validation.v1",
+          testVersion: "test.v1",
+          createdAt: "2026-03-29T00:00:00.000Z",
+          updatedAt: "2026-03-29T00:05:00.000Z",
         },
-        contentVersion: "content.v1",
-        adapterVersion: "adapter.v1",
-        validationVersion: "validation.v1",
-        testVersion: "test.v1",
-        createdAt: "2026-03-29T00:00:00.000Z",
-        updatedAt: "2026-03-29T00:05:00.000Z",
-      }],
+      ],
     });
     apiMocks.fetchChannelSetupDefinition.mockImplementation(async (catalogId: string) => {
       if (catalogId === "channel.google-chat") {
@@ -225,6 +284,8 @@ describe("ChannelSetupPage", () => {
       expect(text).toContain("Guided Setup");
       expect(text).toContain("Start guided setup for Discord");
       expect(text).toContain("Guided flows are available for Discord, Google Chat, Slack, Teams.");
+      expect(text).not.toContain("TUI");
+      expect(text).not.toContain("Manual for now");
       expect(text).toContain("Recent drafts");
       expect(text).toContain("Resume Draft");
       expect(apiMocks.fetchChannelSetupDefinitions).toHaveBeenCalledOnce();
@@ -258,15 +319,17 @@ describe("ChannelSetupPage", () => {
       const text = rendererText(renderer);
       expect(text).toContain("Repair");
       expect(text).toContain("Discord Repair");
-      expect(recordClientDiagnosticMock).toHaveBeenCalledWith(expect.objectContaining({
-        event: "channel_draft_resumed",
-      }));
+      expect(recordClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "channel_draft_resumed",
+        }),
+      );
     } finally {
       renderer.unmount();
     }
   });
 
-  it("does not fetch guided setup definitions for manual-only channels", async () => {
+  it("hides built-in channels that are outside the guided rollout set", async () => {
     let renderer = create(<div />);
     try {
       await act(async () => {
@@ -274,18 +337,12 @@ describe("ChannelSetupPage", () => {
       });
 
       const tuiButton = catalogButton(renderer, "TUI");
-
-      expect(tuiButton).toBeDefined();
-
-      const initialCalls = apiMocks.fetchChannelSetupDefinition.mock.calls.length;
-
-      await act(async () => {
-        tuiButton?.props.onClick();
-      });
-
-      expect(apiMocks.fetchChannelSetupDefinition.mock.calls.length).toBe(initialCalls);
       const text = rendererText(renderer);
-      expect(text).toContain("Manual path only for now");
+      expect(tuiButton).toBeUndefined();
+      expect(text).not.toContain("Manual for now");
+      expect(text).not.toContain("Guided setup coming later");
+      expect(text).not.toContain("Manual path only for now");
+      expect(text).not.toContain("later phase");
     } finally {
       renderer.unmount();
     }
@@ -315,10 +372,12 @@ describe("ChannelSetupPage", () => {
   });
 
   it("uses the backend setup-definition list to classify guided versus manual channels", async () => {
-    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(createSetupDefinitionList(
-      { catalogId: "channel.discord", label: "Discord" },
-      { catalogId: "channel.teams", label: "Teams" },
-    ));
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(
+      createSetupDefinitionList(
+        { catalogId: "channel.discord", label: "Discord" },
+        { catalogId: "channel.teams", label: "Teams" },
+      ),
+    );
 
     let renderer = create(<div />);
     try {
@@ -328,27 +387,45 @@ describe("ChannelSetupPage", () => {
 
       const text = rendererText(renderer);
       expect(text).toContain("Guided flows are available for Discord, Teams.");
-      expect(text).toContain("Manual for now");
+      expect(text).not.toContain("Manual for now");
+      expect(text).not.toContain("Guided setup coming later");
+      expect(text).not.toContain("Manual path only for now");
+      expect(text).not.toContain("later phase");
 
       const slackButton = catalogButton(renderer, "Slack");
-      expect(slackButton).toBeDefined();
+      const tuiButton = catalogButton(renderer, "TUI");
+      expect(slackButton).toBeUndefined();
+      expect(tuiButton).toBeUndefined();
+      expect(rendererText(renderer)).not.toContain("Slack");
+    } finally {
+      renderer.unmount();
+    }
+  });
 
+  it("shows a neutral empty state when no guided definitions are available", async () => {
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue({ items: [] });
+
+    let renderer = create(<div />);
+    try {
       await act(async () => {
-        slackButton?.props.onClick();
+        renderer = create(<ChannelSetupPage />);
       });
 
-      expect(apiMocks.fetchChannelSetupDefinition).not.toHaveBeenCalledWith("channel.slack");
-      expect(rendererText(renderer)).toContain("Guided coverage: ");
-      expect(rendererText(renderer)).toContain("Discord, Teams");
+      const text = rendererText(renderer);
+      expect(text).toContain("No guided channel setup available");
+      expect(text).toContain("Use Integrations to manage channel connections until a guided setup appears here.");
+      expect(text).not.toContain("Manual for now");
+      expect(text).not.toContain("Guided setup coming later");
+      expect(text).not.toContain("later phase");
     } finally {
       renderer.unmount();
     }
   });
 
   it("defaults to the first guided channel when Discord is not in the guided rollout set", async () => {
-    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(createSetupDefinitionList(
-      { catalogId: "channel.teams", label: "Teams" },
-    ));
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(
+      createSetupDefinitionList({ catalogId: "channel.teams", label: "Teams" }),
+    );
 
     let renderer = create(<div />);
     try {
@@ -363,6 +440,46 @@ describe("ChannelSetupPage", () => {
         catalogId: "channel.teams",
         limit: 12,
       });
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("renders only guided-rollout connections in the managed connections panel", async () => {
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(
+      createSetupDefinitionList(
+        { catalogId: "channel.discord", label: "Discord" },
+        { catalogId: "channel.teams", label: "Teams" },
+      ),
+    );
+    apiMocks.fetchIntegrationConnections.mockResolvedValue({
+      items: [
+        {
+          connectionId: "connection-guided",
+          catalogId: "channel.discord",
+          label: "Discord Guided",
+          status: "connected",
+        },
+        {
+          connectionId: "connection-legacy",
+          catalogId: "channel.tui",
+          label: "Legacy TUI",
+          status: "connected",
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+
+      const text = rendererText(renderer);
+      expect(text).toContain("Discord Guided");
+      expect(text).not.toContain("Legacy TUI");
+      expect(text).toContain("Edit");
+      expect(text).toContain("Repair");
     } finally {
       renderer.unmount();
     }

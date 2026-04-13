@@ -81,6 +81,16 @@ export function ChannelSetupPage() {
     [guidedDefinitions],
   );
 
+  const guidedCatalog = useMemo(
+    () => catalog.filter((item) => guidedCatalogIds.has(item.catalogId)),
+    [catalog, guidedCatalogIds],
+  );
+
+  const guidedConnections = useMemo(
+    () => connections.filter((item) => guidedCatalogIds.has(item.catalogId)),
+    [connections, guidedCatalogIds],
+  );
+
   useEffect(() => {
     void loadPage();
   }, []);
@@ -102,6 +112,29 @@ export function ChannelSetupPage() {
     void loadDrafts(selectedCatalogId);
   }, [guidedCatalogIds, selectedCatalogId]);
 
+  useEffect(() => {
+    if (guidedCatalog.length === 0) {
+      if (selectedCatalogId) {
+        setSelectedCatalogId("");
+        setDraft(null);
+        setValidation(null);
+        setTestResult(null);
+      }
+      return;
+    }
+    if (guidedCatalogIds.has(selectedCatalogId)) {
+      return;
+    }
+    const preferred = guidedCatalog.find((item) => item.catalogId === "channel.discord") ?? guidedCatalog[0] ?? null;
+    if (!preferred) {
+      return;
+    }
+    setSelectedCatalogId(preferred.catalogId);
+    setDraft(null);
+    setValidation(null);
+    setTestResult(null);
+  }, [guidedCatalog, guidedCatalogIds, selectedCatalogId]);
+
   const visibleSteps = useMemo(() => {
     if (!definition) {
       return [];
@@ -109,7 +142,7 @@ export function ChannelSetupPage() {
     return definition.wizard.steps.filter((step) => isStepVisible(step, draft?.draft));
   }, [definition, draft?.draft]);
 
-  const selectedCatalog = catalog.find((item) => item.catalogId === selectedCatalogId) ?? null;
+  const selectedCatalog = guidedCatalog.find((item) => item.catalogId === selectedCatalogId) ?? null;
   const currentStep = visibleSteps.find((step) => step.id === currentStepId) ?? null;
 
   useEffect(() => {
@@ -571,8 +604,8 @@ export function ChannelSetupPage() {
         <LoadingState />
       ) : (
         <ChannelSetupContent
-          catalog={catalog}
-          connections={connections}
+          catalog={guidedCatalog}
+          connections={guidedConnections}
           guidedCatalogIds={guidedCatalogIds}
           guidedChannelLabels={guidedChannelLabels}
           selectedCatalog={selectedCatalog}
@@ -669,41 +702,53 @@ function ChannelSetupContent(props: {
       <div className="stack-md">
         <Panel
           title="Available guided channels"
-          subtitle={`Guided flows are available for ${props.guidedChannelLabels || "the current rollout set"}. Other channels stay on the legacy/manual path for now.`}
+          subtitle={
+            props.catalog.length > 0
+              ? `Guided flows are available for ${props.guidedChannelLabels || "the current rollout set"}.`
+              : "This page only shows channels with shipped guided setup coverage."
+          }
         >
-          <div className="channel-setup-catalog">
-            {props.catalog.map((item) => {
-              const selected = item.catalogId === props.selectedCatalogId;
-              const supported = props.guidedCatalogIds.has(item.catalogId);
-              return (
-                <button
-                  key={item.catalogId}
-                  type="button"
-                  className={["gc-button", (`channel-setup-catalog-item${selected ? " selected" : ""}`)].filter(Boolean).join(" ")}
-                  onClick={() => props.onSelectCatalog(item.catalogId)}
-                >
-                  <div className="channel-setup-catalog-top">
-                    <strong>{item.label}</strong>
-                    <StatusChip tone={supported ? "success" : "muted"}>
-                      {supported ? "Guided" : "Manual for now"}
-                    </StatusChip>
-                  </div>
-                  <FieldHelp>{item.description}</FieldHelp>
-                </button>
-              );
-            })}
-          </div>
-          <div className="channel-setup-start-bar">
-            <ActionButton
-              label={
-                props.definition ? `Set up ${props.selectedCatalog?.label ?? "channel"}` : "Guided setup coming later"
-              }
-              disabled={!props.definition || props.busyAction !== null}
-              pending={props.busyAction === "start"}
-              onClick={() => void props.onStartDraft("create")}
-              variant="primary"
+          {props.catalog.length === 0 ? (
+            <GCEmptyState
+              title="No guided channel setup available"
+              subtitle="Use Integrations to manage channel connections until a guided setup appears here."
             />
-          </div>
+          ) : (
+            <>
+              <div className="channel-setup-catalog">
+                {props.catalog.map((item) => {
+                  const selected = item.catalogId === props.selectedCatalogId;
+                  return (
+                    <button
+                      key={item.catalogId}
+                      type="button"
+                      className={["gc-button", `channel-setup-catalog-item${selected ? " selected" : ""}`]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onClick={() => props.onSelectCatalog(item.catalogId)}
+                    >
+                      <div className="channel-setup-catalog-top">
+                        <strong>{item.label}</strong>
+                        <StatusChip tone="success">Guided</StatusChip>
+                      </div>
+                      <FieldHelp>{item.description}</FieldHelp>
+                    </button>
+                  );
+                })}
+              </div>
+              {props.selectedCatalog ? (
+                <div className="channel-setup-start-bar">
+                  <ActionButton
+                    label={`Set up ${props.selectedCatalog.label}`}
+                    disabled={!props.definition || props.busyAction !== null}
+                    pending={props.busyAction === "start"}
+                    onClick={() => void props.onStartDraft("create")}
+                    variant="primary"
+                  />
+                </div>
+              ) : null}
+            </>
+          )}
         </Panel>
 
         {props.recentDrafts.length > 0 ? (
@@ -741,8 +786,8 @@ function ChannelSetupContent(props: {
         >
           {props.connections.length === 0 ? (
             <GCEmptyState
-              title="No channel connections yet"
-              subtitle="Start with Discord or Telegram to exercise the new guided setup flow."
+              title="No guided channel connections yet"
+              subtitle="Guided-channel connections appear here after setup."
             />
           ) : (
             <div className="channel-setup-connection-list">
@@ -799,23 +844,19 @@ function ChannelSetupContent(props: {
 
       <div className="stack-md">
         {!props.selectedCatalog ? (
-          <Panel title="Select a channel">
-            <GCEmptyState title="Pick a channel to begin" subtitle="The wizard shell will appear here." />
+          <Panel title="Guided channel setup">
+            <GCEmptyState
+              title="No guided channel setup available"
+              subtitle="Use Integrations to manage channel connections until a guided setup appears here."
+            />
           </Panel>
         ) : props.definitionLoading ? (
           <CardSkeleton lines={8} />
         ) : !props.definition ? (
-          <Panel title={props.selectedCatalog.label} subtitle="Guided setup is not available for this channel yet.">
+          <Panel title={props.selectedCatalog.label} subtitle="Guided definition unavailable.">
             <GCEmptyState
-              title="Manual path only for now"
-              subtitle={
-                props.definitionError ?? "This channel will move into the new wizard framework in a later phase."
-              }
-              action={
-                <span className="token-chip">
-                  Guided coverage: {props.guidedChannelLabels || "Current rollout set only"}
-                </span>
-              }
+              title="Couldn't load this guided channel"
+              subtitle={props.definitionError ?? "Refresh the page or use Integrations to manage this connection."}
             />
           </Panel>
         ) : (
@@ -868,7 +909,12 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
                 <li key={step.id}>
                   <button
                     type="button"
-                    className={["gc-button", (`channel-setup-step-button${step.id === props.currentStepId ? " active" : ""}${getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete" ? " complete" : ""}`)].filter(Boolean).join(" ")}
+                    className={[
+                      "gc-button",
+                      `channel-setup-step-button${step.id === props.currentStepId ? " active" : ""}${getStepCompletionState(step, props.draft, props.validation, props.testResult) === "complete" ? " complete" : ""}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                     onClick={() => props.setCurrentStepId(step.id)}
                   >
                     <span>
@@ -894,7 +940,13 @@ function WizardShell(props: Parameters<typeof ChannelSetupContent>[0]) {
             <ol className="channel-setup-step-list">
               {props.visibleSteps.map((step, index) => (
                 <li key={step.id}>
-                  <button type="button" className={["gc-button", (`channel-setup-step-button${index === 0 ? " active" : ""}`)].filter(Boolean).join(" ")} disabled>
+                  <button
+                    type="button"
+                    className={["gc-button", `channel-setup-step-button${index === 0 ? " active" : ""}`]
+                      .filter(Boolean)
+                      .join(" ")}
+                    disabled
+                  >
                     <span>{index + 1}</span>
                     <div>
                       <strong>{step.title}</strong>

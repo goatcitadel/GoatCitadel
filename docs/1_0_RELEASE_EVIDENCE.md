@@ -32,6 +32,13 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 - Mission Control now labels external-bound sessions as non-resumable in [apps/mission-control/src/pages/ChatPage.tsx](../apps/mission-control/src/pages/ChatPage.tsx), and replay still skips integration sessions in [apps/gateway/src/services/gateway-service.ts](../apps/gateway/src/services/gateway-service.ts).
 - Stack-backed recovery proof lives in `pnpm verify:operator:proof` and `pnpm verify:durable:recovery`.
 
+## Approval Governance Proof
+
+- Operator-only approval control routes live in [apps/gateway/src/routes/approvals.ts](../apps/gateway/src/routes/approvals.ts).
+- Route-level auth proof for operator access, device/companion denial, and signed companion mutation denial lives in [apps/gateway/src/routes/privileged-auth.test.ts](../apps/gateway/src/routes/privileged-auth.test.ts).
+- The capability-token remote resolution path remains separate from the operator-only control routes in [apps/gateway/src/routes/approvals.test.ts](../apps/gateway/src/routes/approvals.test.ts).
+- Stack-backed operator-proof denial coverage for device and companion principals now includes the approval control plane in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs).
+
 ## Ecosystem Proof Map
 
 ### Providers
@@ -42,6 +49,8 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 ### Channels
 
 - Visible built-in channel setup and guided-copy truth live in [apps/gateway/src/services/channel-setup-definitions.ts](../apps/gateway/src/services/channel-setup-definitions.ts) and [docs/COMMUNICATION_CHANNEL_SETUP_GUIDE.md](./COMMUNICATION_CHANNEL_SETUP_GUIDE.md).
+- Mission Control now renders Channel Setup as a guided-only rollout surface in [apps/mission-control/src/pages/ChannelSetupPage.tsx](../apps/mission-control/src/pages/ChannelSetupPage.tsx).
+- UI proof that non-guided built-ins stay out of the visible Channel Setup surface and that future/parity-deficit copy is absent lives in [apps/mission-control/src/pages/ChannelSetupPage.test.tsx](../apps/mission-control/src/pages/ChannelSetupPage.test.tsx).
 - Unit proof for guided validation, live-auth/live-send levels, and removal of the stale planned-parity wording lives in [apps/gateway/src/services/channel-setup-definitions.test.ts](../apps/gateway/src/services/channel-setup-definitions.test.ts).
 - Runtime probe coverage for the live-auth channel lanes lives in [apps/gateway/src/services/channel-bot-live-probes.test.ts](../apps/gateway/src/services/channel-bot-live-probes.test.ts).
 - `verify:catalog:parity` remains the release lane for visible non-channel runtime-backed catalog actions; channel proof is currently split across guided setup tests and live probe coverage rather than one monolithic parity certifier.

@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { AuthConfig } from "../config.js";
 import { authPlugin } from "../plugins/auth.js";
 import { adminRoutes } from "./admin.js";
+import { approvalsRoutes } from "./approvals.js";
 import { authRoutes } from "./auth.js";
 import { durableRoutes } from "./durable.js";
 
@@ -13,6 +14,7 @@ vi.mock("node:sqlite", () => ({
 
 const DEVICE_GRANT_ID = "ef7d2d5a-f19c-4aa0-b5cf-1a501928ea3f";
 const COMPANION_SESSION_ID = "4b229ee9-bf83-4012-86c8-620f6e5306e0";
+const APPROVAL_ID = "11111111-1111-4111-8111-111111111111";
 
 function baseAuthConfig(mode: AuthConfig["mode"]): AuthConfig {
   return {
@@ -103,6 +105,50 @@ function createGatewayMocks() {
     status: "running",
     actorId,
   }));
+  const listApprovals = vi.fn(() => []);
+  const resolveApprovalsBulk = vi.fn(async () => ({
+    decision: "approve",
+    status: "pending",
+    resolvedCount: 1,
+    skippedCount: 0,
+    failedCount: 0,
+    results: [],
+  }));
+  const resolveApproval = vi.fn(async (approvalId: string) => ({
+    approval: {
+      approvalId,
+      kind: "tool.invoke",
+      status: "approved",
+      riskLevel: "danger",
+      payload: {},
+      preview: {},
+      createdAt: "2026-04-11T00:00:00.000Z",
+    },
+  }));
+  const createApprovalRemoteActionToken = vi.fn(() => ({
+    approvalId: APPROVAL_ID,
+    connectorId: "mission-control",
+    tokenId: "rat_123",
+    token: "grat_token",
+    actionType: "approval.resolve",
+    mutation: { approvalId: APPROVAL_ID },
+    createdAt: "2026-04-11T00:00:00.000Z",
+    expiresAt: "2026-04-11T01:00:00.000Z",
+    state: "pending",
+  }));
+  const getApprovalReplay = vi.fn(() => ({
+    approval: {
+      approvalId: APPROVAL_ID,
+      kind: "tool.invoke",
+      status: "pending",
+      riskLevel: "danger",
+      payload: {},
+      preview: {},
+      createdAt: "2026-04-11T00:00:00.000Z",
+    },
+    events: [],
+    durableRunId: "durable-run-42",
+  }));
 
   return {
     gateway: {
@@ -129,6 +175,11 @@ function createGatewayMocks() {
       createBackup,
       getDurableDiagnostics,
       resumeDurableRun,
+      listApprovals,
+      resolveApprovalsBulk,
+      resolveApproval,
+      createApprovalRemoteActionToken,
+      getApprovalReplay,
       validateDeviceAccessToken: (token: string) =>
         token === "device-bearer"
           ? {
@@ -157,6 +208,11 @@ function createGatewayMocks() {
       createBackup,
       getDurableDiagnostics,
       resumeDurableRun,
+      listApprovals,
+      resolveApprovalsBulk,
+      resolveApproval,
+      createApprovalRemoteActionToken,
+      getApprovalReplay,
     },
   };
 }
@@ -173,6 +229,7 @@ async function buildApp(mode: AuthConfig["mode"]) {
   await app.register(authPlugin);
   await app.register(authRoutes);
   await app.register(adminRoutes);
+  await app.register(approvalsRoutes);
   await app.register(durableRoutes);
   return { app, spies };
 }
@@ -214,6 +271,41 @@ describe("privileged auth boundary", () => {
         headers: { Authorization: "Bearer test-token" },
       }),
       app.inject({
+        method: "GET",
+        url: "/api/v1/approvals?status=pending&limit=20",
+        headers: { Authorization: "Bearer test-token" },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/approvals/${APPROVAL_ID}/replay`,
+        headers: { Authorization: "Bearer test-token" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
+        headers: { Authorization: "Bearer test-token" },
+        payload: {
+          decision: "approve",
+          resolvedBy: "operator:test",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/bulk-resolve",
+        headers: { Authorization: "Bearer test-token" },
+        payload: {
+          decision: "approve",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${APPROVAL_ID}/remote-token`,
+        headers: { Authorization: "Bearer test-token" },
+        payload: {
+          connectorId: "mission-control",
+        },
+      }),
+      app.inject({
         method: "POST",
         url: "/api/v1/auth/install-token",
         headers: { Authorization: "Bearer test-token" },
@@ -228,6 +320,11 @@ describe("privileged auth boundary", () => {
     expect(built.spies.getDurableDiagnostics).toHaveBeenCalledTimes(1);
     expect(built.spies.listDeviceAccessGrants).toHaveBeenCalledTimes(1);
     expect(built.spies.listCompanionSessions).toHaveBeenCalledTimes(1);
+    expect(built.spies.listApprovals).toHaveBeenCalledTimes(1);
+    expect(built.spies.getApprovalReplay).toHaveBeenCalledTimes(1);
+    expect(built.spies.resolveApproval).toHaveBeenCalledTimes(1);
+    expect(built.spies.resolveApprovalsBulk).toHaveBeenCalledTimes(1);
+    expect(built.spies.createApprovalRemoteActionToken).toHaveBeenCalledTimes(1);
     expect(built.spies.resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
   });
 
@@ -260,21 +357,46 @@ describe("privileged auth boundary", () => {
     const built = await buildApp("token");
     app = built.app;
 
-    const getResponse = await app.inject({
-      method: "GET",
-      url: "/api/v1/admin/retention",
-      headers: { Authorization: "Bearer device-bearer" },
-    });
-    const postResponse = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/install-token",
-      headers: { Authorization: "Bearer device-bearer" },
-      payload: { generateWhenMissing: true },
-    });
+    const responses = await Promise.all([
+      app.inject({
+        method: "GET",
+        url: "/api/v1/admin/retention",
+        headers: { Authorization: "Bearer device-bearer" },
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/approvals?status=pending&limit=20",
+        headers: { Authorization: "Bearer device-bearer" },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/approvals/${APPROVAL_ID}/replay`,
+        headers: { Authorization: "Bearer device-bearer" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
+        headers: { Authorization: "Bearer device-bearer" },
+        payload: {
+          decision: "approve",
+          resolvedBy: "device:test",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/auth/install-token",
+        headers: { Authorization: "Bearer device-bearer" },
+        payload: { generateWhenMissing: true },
+      }),
+    ]);
 
-    expect(getResponse.statusCode).toBe(403);
-    expect(postResponse.statusCode).toBe(403);
+    for (const response of responses) {
+      expect(response.statusCode).toBe(403);
+    }
     expect(built.spies.getRetentionPolicy).not.toHaveBeenCalled();
+    expect(built.spies.listApprovals).not.toHaveBeenCalled();
+    expect(built.spies.getApprovalReplay).not.toHaveBeenCalled();
+    expect(built.spies.resolveApproval).not.toHaveBeenCalled();
     expect(built.spies.resolveGatewayInstallToken).not.toHaveBeenCalled();
   });
 
@@ -298,6 +420,16 @@ describe("privileged auth boundary", () => {
         url: "/api/v1/auth/devices?view=all",
         headers: { Authorization: "Bearer companion-bearer" },
       }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/approvals?status=pending&limit=20",
+        headers: { Authorization: "Bearer companion-bearer" },
+      }),
+      app.inject({
+        method: "GET",
+        url: `/api/v1/approvals/${APPROVAL_ID}/replay`,
+        headers: { Authorization: "Bearer companion-bearer" },
+      }),
     ]);
 
     for (const response of responses) {
@@ -312,25 +444,59 @@ describe("privileged auth boundary", () => {
     const built = await buildApp("token");
     app = built.app;
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/install-token",
-      headers: {
-        Authorization: "Bearer companion-bearer",
-        "x-goatcitadel-companion-timestamp": "2026-04-11T00:00:00.000Z",
-        "x-goatcitadel-companion-nonce": "nonce-1",
-        "x-goatcitadel-companion-signature": "signature-1",
-      },
-      payload: {
-        generateWhenMissing: true,
-      },
-    });
+    const headers = {
+      Authorization: "Bearer companion-bearer",
+      "x-goatcitadel-companion-timestamp": "2026-04-11T00:00:00.000Z",
+      "x-goatcitadel-companion-nonce": "nonce-1",
+      "x-goatcitadel-companion-signature": "signature-1",
+    };
 
-    expect(response.statusCode).toBe(403);
-    expect(response.json()).toMatchObject({
-      error: "Operator authentication is required for this control-plane route.",
-    });
-    expect(built.spies.verifyCompanionRequestSignature).toHaveBeenCalledTimes(1);
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/api/v1/auth/install-token",
+        headers,
+        payload: {
+          generateWhenMissing: true,
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/bulk-resolve",
+        headers,
+        payload: {
+          decision: "approve",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${APPROVAL_ID}/resolve`,
+        headers,
+        payload: {
+          decision: "approve",
+          resolvedBy: "companion:test",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/approvals/${APPROVAL_ID}/remote-token`,
+        headers,
+        payload: {
+          connectorId: "mission-control",
+        },
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({
+        error: "Operator authentication is required for this control-plane route.",
+      });
+    }
+    expect(built.spies.verifyCompanionRequestSignature).toHaveBeenCalledTimes(responses.length);
+    expect(built.spies.resolveApprovalsBulk).not.toHaveBeenCalled();
+    expect(built.spies.resolveApproval).not.toHaveBeenCalled();
+    expect(built.spies.createApprovalRemoteActionToken).not.toHaveBeenCalled();
     expect(built.spies.resolveGatewayInstallToken).not.toHaveBeenCalled();
   });
 });

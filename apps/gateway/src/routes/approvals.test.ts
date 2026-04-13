@@ -2,6 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { approvalsRoutes } from "./approvals.js";
 
+function buildApp(gateway: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
+  const app = Fastify();
+  app.decorate("gateway", gateway as never);
+  app.decorate("requireOperatorAuth", requireOperatorAuth as never);
+  return {
+    app,
+    requireOperatorAuth,
+  };
+}
+
 describe("approvals routes", () => {
   let app: FastifyInstance | null = null;
 
@@ -15,10 +25,10 @@ describe("approvals routes", () => {
   });
 
   it("blocks approval creation for non-loopback callers", async () => {
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       createApproval: vi.fn(),
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -49,10 +59,10 @@ describe("approvals routes", () => {
       preview: {},
       createdAt: new Date().toISOString(),
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       createApproval,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -85,10 +95,10 @@ describe("approvals routes", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       state: "pending",
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       createApprovalRemoteActionToken,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -121,10 +131,10 @@ describe("approvals routes", () => {
         createdAt: new Date().toISOString(),
       },
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       resolveApprovalWithRemoteToken,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -141,6 +151,7 @@ describe("approvals routes", () => {
       token: "grat_token",
       decision: "approve",
     });
+    expect(built.requireOperatorAuth).not.toHaveBeenCalled();
   });
 
   it("bulk resolves pending approvals through the gateway", async () => {
@@ -152,10 +163,10 @@ describe("approvals routes", () => {
       failedCount: 0,
       results: [],
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       resolveApprovalsBulk,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -192,10 +203,10 @@ describe("approvals routes", () => {
       failedCount: 0,
       results: [],
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       resolveApprovalsBulk,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -226,10 +237,10 @@ describe("approvals routes", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       state: "pending",
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       createApprovalRemoteActionToken,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -265,10 +276,10 @@ describe("approvals routes", () => {
       events: [],
       durableRunId: "durable-run-42",
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       getApprovalReplay,
-    } as never);
+    });
+    app = built.app;
     await app.register(approvalsRoutes);
 
     const response = await app.inject({
@@ -281,5 +292,6 @@ describe("approvals routes", () => {
     expect(response.json()).toMatchObject({
       durableRunId: "durable-run-42",
     });
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
   });
 });

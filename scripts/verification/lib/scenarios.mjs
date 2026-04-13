@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -1147,6 +1147,76 @@ export async function runOperatorProofLane(context, options = {}) {
             }),
           },
           {
+            actor: "device",
+            route: "/api/v1/approvals?status=pending&limit=20",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20", {
+              headers: {
+                Authorization: `Bearer ${deviceToken}`,
+              },
+            }),
+          },
+          {
+            actor: "device",
+            route: `/api/v1/approvals/${encodeURIComponent(approvalId)}/replay`,
+            response: await requestJson(
+              authStack.gatewayUrl,
+              `/api/v1/approvals/${encodeURIComponent(approvalId)}/replay`,
+              {
+                headers: {
+                  Authorization: `Bearer ${deviceToken}`,
+                },
+              },
+            ),
+          },
+          {
+            actor: "device",
+            route: `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+            response: await requestJson(
+              authStack.gatewayUrl,
+              `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${deviceToken}`,
+                },
+                body: {
+                  decision: "approve",
+                  resolvedBy: "verification-device",
+                },
+              },
+            ),
+          },
+          {
+            actor: "device",
+            route: "/api/v1/approvals/bulk-resolve",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/approvals/bulk-resolve", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${deviceToken}`,
+              },
+              body: {
+                decision: "reject",
+              },
+            }),
+          },
+          {
+            actor: "device",
+            route: `/api/v1/approvals/${encodeURIComponent(approvalId)}/remote-token`,
+            response: await requestJson(
+              authStack.gatewayUrl,
+              `/api/v1/approvals/${encodeURIComponent(approvalId)}/remote-token`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${deviceToken}`,
+                },
+                body: {
+                  connectorId: "verification-companion",
+                },
+              },
+            ),
+          },
+          {
             actor: "companion",
             route: "/api/v1/admin/retention",
             response: await requestJson(authStack.gatewayUrl, "/api/v1/admin/retention", {
@@ -1163,6 +1233,95 @@ export async function runOperatorProofLane(context, options = {}) {
                 Authorization: `Bearer ${companionToken}`,
               },
             }),
+          },
+          {
+            actor: "companion",
+            route: "/api/v1/approvals?status=pending&limit=20",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20", {
+              headers: {
+                Authorization: `Bearer ${companionToken}`,
+              },
+            }),
+          },
+          {
+            actor: "companion",
+            route: `/api/v1/approvals/${encodeURIComponent(approvalId)}/replay`,
+            response: await requestJson(
+              authStack.gatewayUrl,
+              `/api/v1/approvals/${encodeURIComponent(approvalId)}/replay`,
+              {
+                headers: {
+                  Authorization: `Bearer ${companionToken}`,
+                },
+              },
+            ),
+          },
+          {
+            actor: "companion",
+            route: "/api/v1/approvals/bulk-resolve",
+            response: await requestJson(authStack.gatewayUrl, "/api/v1/approvals/bulk-resolve", {
+              method: "POST",
+              headers: buildCompanionSignedHeaders({
+                token: companionToken,
+                privateKey: companionKeys.privateKey,
+                path: "/api/v1/approvals/bulk-resolve",
+                nonce: "approval-bulk-resolve",
+                body: {
+                  decision: "reject",
+                },
+              }),
+              body: {
+                decision: "reject",
+              },
+            }),
+          },
+          {
+            actor: "companion",
+            route: `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+            response: await requestJson(
+              authStack.gatewayUrl,
+              `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+              {
+                method: "POST",
+                headers: buildCompanionSignedHeaders({
+                  token: companionToken,
+                  privateKey: companionKeys.privateKey,
+                  path: `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+                  nonce: "approval-resolve",
+                  body: {
+                    decision: "approve",
+                    resolvedBy: "verification-companion",
+                  },
+                }),
+                body: {
+                  decision: "approve",
+                  resolvedBy: "verification-companion",
+                },
+              },
+            ),
+          },
+          {
+            actor: "companion",
+            route: `/api/v1/approvals/${encodeURIComponent(approvalId)}/remote-token`,
+            response: await requestJson(
+              authStack.gatewayUrl,
+              `/api/v1/approvals/${encodeURIComponent(approvalId)}/remote-token`,
+              {
+                method: "POST",
+                headers: buildCompanionSignedHeaders({
+                  token: companionToken,
+                  privateKey: companionKeys.privateKey,
+                  path: `/api/v1/approvals/${encodeURIComponent(approvalId)}/remote-token`,
+                  nonce: "approval-remote-token",
+                  body: {
+                    connectorId: "verification-companion",
+                  },
+                }),
+                body: {
+                  connectorId: "verification-companion",
+                },
+              },
+            ),
           },
         ];
 
@@ -2616,6 +2775,51 @@ async function ensureOnboardingComplete(gatewayUrl, completedBy, headers = {}) {
     );
   }
   return onboardingStateResponse.body;
+}
+
+function buildCompanionSignedHeaders({ token, privateKey, path, nonce, body, timestamp = new Date().toISOString() }) {
+  const payload = buildCompanionVerificationPayload({
+    method: "POST",
+    path,
+    timestamp,
+    nonce,
+    body,
+  });
+  const signature = sign(null, Buffer.from(payload, "utf8"), privateKey).toString("base64url");
+  return {
+    Authorization: `Bearer ${token}`,
+    "x-goatcitadel-companion-timestamp": timestamp,
+    "x-goatcitadel-companion-nonce": nonce,
+    "x-goatcitadel-companion-signature": signature,
+  };
+}
+
+function buildCompanionVerificationPayload({ method, path, timestamp, nonce, body }) {
+  const canonicalBody = canonicalizeCompanionVerificationBody(body);
+  const bodyHash = createHash("sha256").update(canonicalBody, "utf8").digest("hex");
+  return `${method.trim().toUpperCase()}\n${path}\n${timestamp.trim()}\n${nonce}\n${bodyHash}`;
+}
+
+function canonicalizeCompanionVerificationBody(value) {
+  if (value === undefined) {
+    return "";
+  }
+  return JSON.stringify(sortCompanionVerificationValue(value));
+}
+
+function sortCompanionVerificationValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortCompanionVerificationValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .reduce((acc, key) => {
+        acc[key] = sortCompanionVerificationValue(value[key]);
+        return acc;
+      }, {});
+  }
+  return value;
 }
 
 async function waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, requestSecret, attempts = 20) {

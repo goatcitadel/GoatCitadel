@@ -25,7 +25,12 @@ const bulkResolveSchema = z.object({
 
 const remoteTokenSchema = z.object({
   connectorId: z.string().min(1),
-  expiresInMs: z.number().int().positive().max(24 * 60 * 60 * 1000).optional(),
+  expiresInMs: z
+    .number()
+    .int()
+    .positive()
+    .max(24 * 60 * 60 * 1000)
+    .optional(),
 });
 
 const remoteResolveSchema = z.object({
@@ -43,6 +48,9 @@ const listQuerySchema = z.object({
 export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+  const operatorOnly = {
+    preHandler: fastify.requireOperatorAuth,
+  };
 
   fastify.post("/api/v1/approvals", async (request, reply) => {
     const allowRemoteCreate = isTruthy(process.env.GOATCITADEL_ALLOW_REMOTE_APPROVAL_CREATE);
@@ -61,7 +69,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.code(201).send(approval);
   });
 
-  fastify.get("/api/v1/approvals", async (request, reply) => {
+  fastify.get("/api/v1/approvals", operatorOnly, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -71,7 +79,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items: approvals });
   });
 
-  fastify.post("/api/v1/approvals/bulk-resolve", async (request, reply) => {
+  fastify.post("/api/v1/approvals/bulk-resolve", operatorOnly, async (request, reply) => {
     const parsed = bulkResolveSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -88,7 +96,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/approvals/:approvalId/resolve", async (request, reply) => {
+  fastify.post("/api/v1/approvals/:approvalId/resolve", operatorOnly, async (request, reply) => {
     const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });
@@ -107,7 +115,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/approvals/:approvalId/remote-token", async (request, reply) => {
+  fastify.post("/api/v1/approvals/:approvalId/remote-token", operatorOnly, async (request, reply) => {
     const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });
@@ -143,7 +151,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/approvals/:approvalId/replay", async (request, reply) => {
+  fastify.get("/api/v1/approvals/:approvalId/replay", operatorOnly, async (request, reply) => {
     const params = z.object({ approvalId: z.string().uuid() }).safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: "Invalid approval ID format." });

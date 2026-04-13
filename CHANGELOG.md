@@ -17,6 +17,13 @@ All notable changes to GoatCitadel are documented in this file.
 
 - `SECURITY.md` now reflects the shipped `1.x` support posture instead of the pre-1.0 beta line.
 - Release workflow is expanded from raw installer publishing to a signed proof-package handoff.
+- Approval control routes are now explicitly operator-fenced, while remote approval token resolution remains on its separate capability-token path.
+- Mission Control Channel Setup now shows only shipped guided channels instead of mixing visible built-ins with manual/later-state copy.
+
+### Verification
+
+- Approval auth-boundary proof now covers approval list, replay, resolve, bulk-resolve, and remote-token control routes.
+- Channel Setup proof now asserts a guided-only visible surface with no manual/later/parity-deficit copy.
 
 ## [1.0.0] - 2026-04-11
 
