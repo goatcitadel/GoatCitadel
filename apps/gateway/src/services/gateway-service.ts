@@ -8647,6 +8647,29 @@ export class GatewayService {
     return this.llamaCppRuntime.listModels();
   }
 
+  public async detectLlamaCppInstall() {
+    return this.llamaCppRuntime.detectLocalInstall();
+  }
+
+  public async startLlamaCppHuggingFaceDownload(input: {
+    repo: string;
+    filename: string;
+    alias?: string;
+    mmprojFilename?: string;
+    sha256?: string;
+    mmprojSha256?: string;
+  }) {
+    return this.llamaCppRuntime.startHuggingFaceDownload(input);
+  }
+
+  public getLlamaCppHuggingFaceDownload(jobId: string) {
+    return this.llamaCppRuntime.getHuggingFaceDownloadStatus(jobId);
+  }
+
+  public cancelLlamaCppHuggingFaceDownload(jobId: string) {
+    return this.llamaCppRuntime.cancelHuggingFaceDownload(jobId);
+  }
+
   public async adviseLlamaCppRuntime(input: LlamaCppAdvisorRequest = {}): Promise<LlamaCppAdvisorRecommendation> {
     return this.llamaCppRuntime.advise(input);
   }

@@ -15,6 +15,7 @@ import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
+import { DEFAULT_LLAMACPP_ALIAS } from "./services/llama-cpp-runtime-service.js";
 
 export interface AssistantConfig {
   environment: string;
@@ -860,14 +861,14 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       },
       launch: {
         modelPath: llamaCppLaunch.modelPath,
-        alias: llamaCppLaunch.alias ?? "gemma-4",
-        ctxSize: clampOptionalInt(llamaCppLaunch.ctxSize, 4096, 256, 262_144),
+        alias: llamaCppLaunch.alias ?? DEFAULT_LLAMACPP_ALIAS,
+        ctxSize: clampOptionalInt(llamaCppLaunch.ctxSize, 40_960, 256, 262_144),
         threads: clampOptionalInt(llamaCppLaunch.threads, undefined, 1, 512),
         gpuLayers: clampOptionalInt(llamaCppLaunch.gpuLayers, undefined, 0, 512),
-        parallel: clampOptionalInt(llamaCppLaunch.parallel, undefined, 1, 128),
-        batchSize: clampOptionalInt(llamaCppLaunch.batchSize, undefined, 1, 262_144),
-        ubatchSize: clampOptionalInt(llamaCppLaunch.ubatchSize, undefined, 1, 262_144),
-        flashAttention: llamaCppLaunch.flashAttention,
+        parallel: clampOptionalInt(llamaCppLaunch.parallel, 1, 1, 128),
+        batchSize: clampOptionalInt(llamaCppLaunch.batchSize, 1024, 1, 262_144),
+        ubatchSize: clampOptionalInt(llamaCppLaunch.ubatchSize, 512, 1, 262_144),
+        flashAttention: llamaCppLaunch.flashAttention ?? true,
       },
     },
     database: {

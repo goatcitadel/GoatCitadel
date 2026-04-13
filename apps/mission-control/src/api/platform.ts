@@ -41,6 +41,51 @@ export interface ProviderSecretStatus {
   source: "none" | "keychain" | "env" | "inline";
 }
 
+export interface LlamaCppInstallDetection {
+  found: boolean;
+  command?: string;
+  source: "configured" | "standard-windows" | "path" | "path-with-exe" | "missing";
+  version?: string;
+  recommendedBaseUrl: string;
+}
+
+export interface LlamaCppHuggingFaceDownloadRequest {
+  repo: string;
+  filename: string;
+  alias?: string;
+  mmprojFilename?: string;
+  sha256?: string;
+  mmprojSha256?: string;
+}
+
+export interface LlamaCppHuggingFaceDownloadStatus {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: "model" | "mmproj" | "done";
+  repo: string;
+  alias: string;
+  filename: string;
+  mmprojFilename?: string;
+  sourceUrl: string;
+  mmprojSourceUrl?: string;
+  expectedSha256?: string;
+  expectedMmprojSha256?: string;
+  bytesDownloaded: number;
+  totalBytes?: number;
+  mmprojBytesDownloaded?: number;
+  mmprojTotalBytes?: number;
+  modelBytes?: number;
+  mmprojBytes?: number;
+  actualSha256?: string;
+  actualMmprojSha256?: string;
+  modelPath?: string;
+  mmprojPath?: string;
+  error?: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
 export async function fetchAddonsCatalog(): Promise<{ items: AddonCatalogEntry[] }> {
   return request<{ items: AddonCatalogEntry[] }>("/api/v1/addons/catalog");
 }
@@ -244,6 +289,39 @@ export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
 
 export async function fetchLlamaCppModels(): Promise<{ items: LlamaCppModelManifest[] }> {
   return request<{ items: LlamaCppModelManifest[] }>("/api/v1/llamacpp/models");
+}
+
+export async function detectLlamaCppInstall(): Promise<LlamaCppInstallDetection> {
+  return request<LlamaCppInstallDetection>("/api/v1/llamacpp/install");
+}
+
+export async function startLlamaCppHuggingFaceDownload(
+  input: LlamaCppHuggingFaceDownloadRequest,
+): Promise<LlamaCppHuggingFaceDownloadStatus> {
+  return request<LlamaCppHuggingFaceDownloadStatus>("/api/v1/llamacpp/huggingface/download", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchLlamaCppHuggingFaceDownload(
+  jobId: string,
+): Promise<LlamaCppHuggingFaceDownloadStatus> {
+  return request<LlamaCppHuggingFaceDownloadStatus>(
+    `/api/v1/llamacpp/huggingface/downloads/${encodeURIComponent(jobId)}`,
+  );
+}
+
+export async function cancelLlamaCppHuggingFaceDownload(
+  jobId: string,
+): Promise<LlamaCppHuggingFaceDownloadStatus> {
+  return request<LlamaCppHuggingFaceDownloadStatus>(
+    `/api/v1/llamacpp/huggingface/downloads/${encodeURIComponent(jobId)}/cancel`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export async function startLlamaCppRuntime(): Promise<LlamaCppRuntimeStatus> {

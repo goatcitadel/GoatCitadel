@@ -187,7 +187,13 @@ import { computeReconnectDelay, issueSseBridgeToken } from "./sse-bridge.js";
 
 export type { GuidanceDocumentRecord };
 export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
-export type { LlmRuntimeConfigResponse, ProviderSecretStatus } from "./platform.js";
+export type {
+  LlamaCppHuggingFaceDownloadRequest,
+  LlamaCppHuggingFaceDownloadStatus,
+  LlamaCppInstallDetection,
+  LlmRuntimeConfigResponse,
+  ProviderSecretStatus,
+} from "./platform.js";
 export type { FileTemplate } from "./operators-agents-files.js";
 export type { WorkspacesResponse } from "./workspaces.js";
 export type { RuntimeLifecycleResponse, SessionSummary, SessionTimelineItem } from "./sessions.js";
@@ -569,6 +575,7 @@ export {
   createAssemblyRun,
   deleteProviderSecret,
   evaluateUiChangeRisk,
+  cancelLlamaCppHuggingFaceDownload,
   fetchAddonStatus,
   fetchAddonsCatalog,
   fetchAssemblyReputations,
@@ -585,6 +592,8 @@ export {
   fetchMeshSessionOwners,
   fetchMeshStatus,
   fetchLlamaCppAdvisor,
+  detectLlamaCppInstall,
+  fetchLlamaCppHuggingFaceDownload,
   fetchLlamaCppModels,
   fetchLlamaCppStatus,
   fetchNpuModels,
@@ -598,6 +607,7 @@ export {
   refreshNpuRuntime,
   restartDaemon,
   saveProviderSecret,
+  startLlamaCppHuggingFaceDownload,
   startLlamaCppRuntime,
   startDaemon,
   startNpuRuntime,

@@ -35,7 +35,7 @@ function createConfig(overrides?: {
       ...overrides?.server,
     },
     launch: {
-      alias: "gemma-4",
+      alias: "gemma-4-local",
       ...overrides?.launch,
     },
   };
@@ -71,7 +71,7 @@ describe("llama.cpp runtime helpers", () => {
       },
       launch: {
         modelPath: "models/gemma-4-q4.gguf",
-        alias: "gemma-4",
+        alias: "gemma-4-local",
         ctxSize: 8192,
         threads: 12,
         gpuLayers: 40,
@@ -90,7 +90,7 @@ describe("llama.cpp runtime helpers", () => {
       "--port",
       "18080",
       "--alias",
-      "gemma-4",
+      "gemma-4-local",
       "-c",
       "8192",
       "-t",
@@ -105,6 +105,8 @@ describe("llama.cpp runtime helpers", () => {
       "512",
       "--flash-attn",
       "on",
+      "--reasoning",
+      "off",
       "--mlock",
       "--no-warmup",
     ]);

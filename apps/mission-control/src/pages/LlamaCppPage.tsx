@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  cancelLlamaCppHuggingFaceDownload,
   createLlmChatCompletion,
+  detectLlamaCppInstall,
   evaluateUiChangeRisk,
+  fetchLlamaCppHuggingFaceDownload,
   fetchLlamaCppAdvisor,
   fetchLlamaCppModels,
   fetchLlamaCppStatus,
   fetchSettings,
   patchSettings,
   refreshLlamaCppRuntime,
+  startLlamaCppHuggingFaceDownload,
   startLlamaCppRuntime,
   stopLlamaCppRuntime,
+  type LlamaCppHuggingFaceDownloadStatus,
+  type LlamaCppInstallDetection,
   type RuntimeSettingsResponse,
 } from "../api/client";
 import { ActionButton } from "../components/ActionButton";
@@ -30,6 +36,12 @@ type LlamaCppStatusRecord = Awaited<ReturnType<typeof fetchLlamaCppStatus>>;
 type LlamaCppModelRecord = Awaited<ReturnType<typeof fetchLlamaCppModels>>["items"][number];
 type LlamaCppAdvisorRecord = Awaited<ReturnType<typeof fetchLlamaCppAdvisor>>;
 
+const DEFAULT_LLAMACPP_ALIAS = "gemma-4-local";
+const DEFAULT_LLAMACPP_REASONING_LINES = ["--reasoning", "off"].join("\n");
+const DEFAULT_TEXT_PROFILE = "text-default";
+const LLAMACPP_PROFILE_STORAGE_KEY = "goatcitadel.llamacpp.saved-profiles.v1";
+const LLAMACPP_DOWNLOAD_HISTORY_STORAGE_KEY = "goatcitadel.llamacpp.download-history.v1";
+
 type DraftBaseline = {
   enabled: boolean;
   autoStart: boolean;
@@ -37,6 +49,38 @@ type DraftBaseline = {
   command: string;
   modelPath: string;
   alias: string;
+};
+
+type LlamaCppProfilePresetId = "text-default" | "text-long" | "multimodal";
+
+type SavedLlamaCppProfile = {
+  savedAt: string;
+  enabled: boolean;
+  autoStart: boolean;
+  baseUrl: string;
+  command: string;
+  modelPath: string;
+  alias: string;
+  extraArgsText: string;
+  ctxSize: string;
+  threads: string;
+  gpuLayers: string;
+  parallel: string;
+  batchSize: string;
+  ubatchSize: string;
+  flashAttentionMode: "auto" | "on" | "off";
+};
+
+type LlamaCppSettingsPatch = NonNullable<Parameters<typeof patchSettings>[0]["llamaCpp"]>;
+
+type RecentLlamaCppDownload = {
+  repo: string;
+  alias: string;
+  modelPath: string;
+  mmprojPath?: string;
+  modelBytes?: number;
+  mmprojBytes?: number;
+  completedAt: string;
 };
 
 function isAbortError(error: unknown): boolean {
@@ -53,7 +97,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
   const [baseUrl, setBaseUrl] = useState(settings?.llamaCpp.baseUrl ?? "http://127.0.0.1:8080/v1");
   const [command, setCommand] = useState(settings?.llamaCpp.command ?? "llama-server");
   const [modelPath, setModelPath] = useState(settings?.llamaCpp.modelPath ?? "");
-  const [alias, setAlias] = useState(settings?.llamaCpp.alias ?? "gemma-4");
+  const [alias, setAlias] = useState(settings?.llamaCpp.alias ?? DEFAULT_LLAMACPP_ALIAS);
   const [extraArgsText, setExtraArgsText] = useState((settings?.llamaCpp.extraArgs ?? []).join("\n"));
   const [ctxSize, setCtxSize] = useState(toOptionalString(settings?.llamaCpp.ctxSize));
   const [threads, setThreads] = useState(toOptionalString(settings?.llamaCpp.threads));
@@ -78,6 +122,17 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [setupMode, setSetupMode] = useState<"beginner" | "advanced">("beginner");
+  const [profilePreset, setProfilePreset] = useState<LlamaCppProfilePresetId>(DEFAULT_TEXT_PROFILE);
+  const [savedProfiles, setSavedProfiles] = useState<Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>>({});
+  const [recentDownloads, setRecentDownloads] = useState<RecentLlamaCppDownload[]>([]);
+  const [installDetection, setInstallDetection] = useState<LlamaCppInstallDetection | null>(null);
+  const [hfRepo, setHfRepo] = useState("");
+  const [hfFilename, setHfFilename] = useState("");
+  const [hfMmprojFilename, setHfMmprojFilename] = useState("");
+  const [hfSha256, setHfSha256] = useState("");
+  const [hfMmprojSha256, setHfMmprojSha256] = useState("");
+  const [hfDownloadStatus, setHfDownloadStatus] = useState<LlamaCppHuggingFaceDownloadStatus | null>(null);
   const riskDebounceRef = useRef<number | null>(null);
   const riskAbortRef = useRef<AbortController | null>(null);
 
@@ -162,6 +217,11 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     void load({ background: false });
   }, [load]);
 
+  useEffect(() => {
+    setSavedProfiles(readSavedLlamaCppProfiles());
+    setRecentDownloads(readRecentLlamaCppDownloads());
+  }, []);
+
   useRefreshSubscription(
     "llamaCpp",
     async () => {
@@ -174,6 +234,57 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
       pollIntervalMs: 15_000,
     },
   );
+
+  useEffect(() => {
+    if (!hfDownloadStatus?.jobId) {
+      return;
+    }
+    if (hfDownloadStatus.status !== "queued" && hfDownloadStatus.status !== "running") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void fetchLlamaCppHuggingFaceDownload(hfDownloadStatus.jobId)
+        .then((next) => {
+          setHfDownloadStatus(next);
+          if (next.status === "completed") {
+            if (next.modelPath) {
+              setModelPath(next.modelPath);
+            }
+            setAlias(next.alias);
+            if (next.mmprojPath) {
+              setExtraArgsText((current) =>
+                formatExtraArgs(upsertFlagValue(parseExtraArgs(current), "--mmproj", next.mmprojPath!)),
+              );
+            }
+            if (next.modelPath) {
+              const updatedHistory = upsertRecentLlamaCppDownload(readRecentLlamaCppDownloads(), {
+                repo: next.repo,
+                alias: next.alias,
+                modelPath: next.modelPath,
+                mmprojPath: next.mmprojPath,
+                modelBytes: next.modelBytes,
+                mmprojBytes: next.mmprojBytes,
+                completedAt: next.completedAt ?? next.updatedAt,
+              });
+              writeRecentLlamaCppDownloads(updatedHistory);
+              setRecentDownloads(updatedHistory);
+            }
+          }
+          if (next.status === "failed") {
+            setError(next.error ?? "llama.cpp download failed.");
+          }
+          if (next.status === "cancelled") {
+            setError(null);
+          }
+        })
+        .catch((err) => {
+          setError((err as Error).message);
+        });
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [hfDownloadStatus?.jobId, hfDownloadStatus?.status]);
 
   useEffect(() => {
     if (!baseline) {
@@ -245,7 +356,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
       "--port",
       baseUrlToPort(baseUrl),
       "--alias",
-      alias || "gemma-4",
+      alias || DEFAULT_LLAMACPP_ALIAS,
       ...appendOptionalFlag("-c", ctxSize),
       ...appendOptionalFlag("-t", threads),
       ...appendOptionalFlag("-ngl", gpuLayers),
@@ -253,7 +364,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
       ...appendOptionalFlag("-b", batchSize),
       ...appendOptionalFlag("-ub", ubatchSize),
       ...appendOptionalFlashAttention(flashAttentionMode),
-      ...parseExtraArgs(extraArgsText),
+      ...ensureReasoningDefault(parseExtraArgs(extraArgsText)),
     ];
     return [command || "llama-server", ...args].map(quoteSegment).join(" ");
   }, [
@@ -313,6 +424,50 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     }
   };
 
+  const persistLlamaCppConfig = async (patch: LlamaCppSettingsPatch): Promise<void> => {
+    const next = await patchSettings({
+      llamaCpp: patch,
+    });
+    hydrateSettings(next);
+    const refreshed = await fetchLlamaCppStatus();
+    setStatus(refreshed);
+    await loadModels(refreshed);
+  };
+
+  const buildCurrentLlamaCppPatch = (): LlamaCppSettingsPatch => ({
+    enabled,
+    autoStart,
+    baseUrl: baseUrl.trim(),
+    command: command.trim(),
+    extraArgs: parseExtraArgs(extraArgsText),
+    modelPath: modelPath.trim(),
+    alias: alias.trim(),
+    ctxSize: parseOptionalNumberForPatch(ctxSize),
+    threads: parseOptionalNumberForPatch(threads),
+    gpuLayers: parseOptionalNumberForPatch(gpuLayers),
+    parallel: parseOptionalNumberForPatch(parallel),
+    batchSize: parseOptionalNumberForPatch(batchSize),
+    ubatchSize: parseOptionalNumberForPatch(ubatchSize),
+    flashAttention: flashAttentionMode === "auto" ? null : flashAttentionMode === "on",
+  });
+
+  const applySavedProfileToState = (saved: SavedLlamaCppProfile) => {
+    setEnabled(saved.enabled);
+    setAutoStart(saved.autoStart);
+    setBaseUrl(saved.baseUrl);
+    setCommand(saved.command);
+    setModelPath(saved.modelPath);
+    setAlias(saved.alias);
+    setExtraArgsText(saved.extraArgsText);
+    setCtxSize(saved.ctxSize);
+    setThreads(saved.threads);
+    setGpuLayers(saved.gpuLayers);
+    setParallel(saved.parallel);
+    setBatchSize(saved.batchSize);
+    setUbatchSize(saved.ubatchSize);
+    setFlashAttentionMode(saved.flashAttentionMode);
+  };
+
   const onSaveConfig = async () => {
     if (changeReview.overall === "critical" && !criticalConfirmed) {
       setError("Confirm critical changes before saving llama.cpp configuration.");
@@ -321,28 +476,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     setBusy(true);
     setError(null);
     try {
-      const next = await patchSettings({
-        llamaCpp: {
-          enabled,
-          autoStart,
-          baseUrl: baseUrl.trim(),
-          command: command.trim(),
-          extraArgs: parseExtraArgs(extraArgsText),
-          modelPath: modelPath.trim(),
-          alias: alias.trim(),
-          ctxSize: parseOptionalNumberForPatch(ctxSize),
-          threads: parseOptionalNumberForPatch(threads),
-          gpuLayers: parseOptionalNumberForPatch(gpuLayers),
-          parallel: parseOptionalNumberForPatch(parallel),
-          batchSize: parseOptionalNumberForPatch(batchSize),
-          ubatchSize: parseOptionalNumberForPatch(ubatchSize),
-          flashAttention: flashAttentionMode === "auto" ? null : flashAttentionMode === "on",
-        },
-      });
-      hydrateSettings(next);
-      const refreshed = await fetchLlamaCppStatus();
-      setStatus(refreshed);
-      await loadModels(refreshed);
+      await persistLlamaCppConfig(buildCurrentLlamaCppPatch());
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -385,13 +519,159 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     );
   };
 
+  const onApplyRecommendedProfile = () => {
+    setEnabled(true);
+    setBaseUrl("http://127.0.0.1:8080/v1");
+    setCommand((current) => current.trim() || "llama-server");
+    setAlias(DEFAULT_LLAMACPP_ALIAS);
+    setParallel("1");
+    if (profilePreset === "multimodal") {
+      setCtxSize("8192");
+      setBatchSize("512");
+      setUbatchSize("256");
+    } else if (profilePreset === "text-long") {
+      setCtxSize("49152");
+      setBatchSize("1024");
+      setUbatchSize("512");
+    } else {
+      setCtxSize("40960");
+      setBatchSize("1024");
+      setUbatchSize("512");
+    }
+    setFlashAttentionMode("on");
+    setExtraArgsText(DEFAULT_LLAMACPP_REASONING_LINES);
+    setInstallDetection(null);
+  };
+
+  const onSaveCurrentPreset = () => {
+    const nextProfiles = {
+      ...savedProfiles,
+      [profilePreset]: {
+        savedAt: new Date().toISOString(),
+        enabled,
+        autoStart,
+        baseUrl,
+        command,
+        modelPath,
+        alias,
+        extraArgsText,
+        ctxSize,
+        threads,
+        gpuLayers,
+        parallel,
+        batchSize,
+        ubatchSize,
+        flashAttentionMode,
+      },
+    } satisfies Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>;
+    setSavedProfiles(nextProfiles);
+    writeSavedLlamaCppProfiles(nextProfiles);
+  };
+
+  const onLoadSavedPreset = () => {
+    const saved = savedProfiles[profilePreset];
+    if (!saved) {
+      return;
+    }
+    applySavedProfileToState(saved);
+  };
+
+  const onLoadSavedPresetAndSave = async () => {
+    const saved = savedProfiles[profilePreset];
+    if (!saved) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      applySavedProfileToState(saved);
+      await persistLlamaCppConfig({
+        enabled: saved.enabled,
+        autoStart: saved.autoStart,
+        baseUrl: saved.baseUrl.trim(),
+        command: saved.command.trim(),
+        extraArgs: parseExtraArgs(saved.extraArgsText),
+        modelPath: saved.modelPath.trim(),
+        alias: saved.alias.trim(),
+        ctxSize: parseOptionalNumberForPatch(saved.ctxSize),
+        threads: parseOptionalNumberForPatch(saved.threads),
+        gpuLayers: parseOptionalNumberForPatch(saved.gpuLayers),
+        parallel: parseOptionalNumberForPatch(saved.parallel),
+        batchSize: parseOptionalNumberForPatch(saved.batchSize),
+        ubatchSize: parseOptionalNumberForPatch(saved.ubatchSize),
+        flashAttention: saved.flashAttentionMode === "auto" ? null : saved.flashAttentionMode === "on",
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDetectInstall = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await detectLlamaCppInstall();
+      setInstallDetection(next);
+      if (next.command) {
+        setCommand(next.command);
+      }
+      setBaseUrl(next.recommendedBaseUrl);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDownloadModel = async () => {
+    setError(null);
+    try {
+      const next = await startLlamaCppHuggingFaceDownload({
+        repo: hfRepo.trim(),
+        filename: hfFilename.trim(),
+        alias: alias.trim() || undefined,
+        mmprojFilename: hfMmprojFilename.trim() || undefined,
+        sha256: hfSha256.trim() || undefined,
+        mmprojSha256: hfMmprojSha256.trim() || undefined,
+      });
+      setHfDownloadStatus(next);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const onCancelDownload = async () => {
+    if (!hfDownloadStatus?.jobId) {
+      return;
+    }
+    setError(null);
+    try {
+      const next = await cancelLlamaCppHuggingFaceDownload(hfDownloadStatus.jobId);
+      setHfDownloadStatus(next);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const onUseRecentDownload = (item: RecentLlamaCppDownload, includeMmproj = false) => {
+    setModelPath(item.modelPath);
+    setAlias(item.alias);
+    if (includeMmproj && item.mmprojPath) {
+      setExtraArgsText((current) =>
+        formatExtraArgs(upsertFlagValue(parseExtraArgs(current), "--mmproj", item.mmprojPath!)),
+      );
+    }
+  };
+
   const onRunTest = async () => {
     setBusy(true);
     setError(null);
     try {
       const response = await createLlmChatCompletion({
         providerId: "llamacpp",
-        model: (status?.activeModelId ?? alias.trim()) || "gemma-4",
+        model: (status?.activeModelId ?? alias.trim()) || DEFAULT_LLAMACPP_ALIAS,
         messages: [{ role: "user", content: "Say hello from GoatCitadel's llama.cpp runtime." }],
         max_tokens: 80,
       });
@@ -434,7 +714,10 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
           "Use the discovered model list before running prompt packs so the exact model id is pinned.",
         ]}
         terms={[
-          { term: "Alias", meaning: "Stable model id exposed by llama-server through /v1/models, such as gemma-4." },
+          {
+            term: "Alias",
+            meaning: "Stable model id exposed by llama-server through /v1/models, such as gemma-4-local.",
+          },
           {
             term: "GPU layers",
             meaning: "Number of layers offloaded to VRAM. Leave blank for llama.cpp auto-fit or set 0 for CPU-only.",
@@ -465,6 +748,86 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         onCriticalConfirmChange={setCriticalConfirmed}
       />
 
+      <Panel
+        title="Quick Setup"
+        subtitle="Start with a stable single-model profile, then opt into the deeper knobs only when you actually need them."
+      >
+        <div className="controls-row">
+          <label htmlFor="llamaCppSetupMode">Mission Control Mode</label>
+          <GCSelect
+            id="llamaCppSetupMode"
+            value={setupMode}
+            onChange={(value) => setSetupMode(value as "beginner" | "advanced")}
+            options={[
+              { value: "beginner", label: "Beginner" },
+              { value: "advanced", label: "Advanced" },
+            ]}
+          />
+        </div>
+        <div className="controls-row">
+          <label htmlFor="llamaCppProfilePreset">Profile Preset</label>
+          <GCSelect
+            id="llamaCppProfilePreset"
+            value={profilePreset}
+            onChange={(value) => setProfilePreset(value as "text-default" | "text-long" | "multimodal")}
+            options={[
+              { value: "text-default", label: "Text Default" },
+              { value: "text-long", label: "Text Long Context" },
+              { value: "multimodal", label: "Multimodal" },
+            ]}
+          />
+        </div>
+        <div className="row-actions">
+          <ActionButton label="Apply Recommended Profile" onClick={onApplyRecommendedProfile} disabled={busy} />
+          <ActionButton label="Load Saved Preset" onClick={onLoadSavedPreset} disabled={!savedProfiles[profilePreset]} />
+          <ActionButton
+            label="Apply Preset + Save"
+            onClick={() => void onLoadSavedPresetAndSave()}
+            disabled={!savedProfiles[profilePreset] || busy}
+          />
+          <ActionButton label="Save Current to Preset" onClick={onSaveCurrentPreset} disabled={busy} />
+          <ActionButton label="Detect Local Install" onClick={() => void onDetectInstall()} disabled={busy} />
+        </div>
+        <FieldHelp>
+          {profilePreset === "multimodal" ? (
+            <>
+              Multimodal preset keeps loopback defaults but drops to a lower context window for safer image/mmproj
+              work. Treat it as a separate runtime profile from your normal text server.
+            </>
+          ) : profilePreset === "text-long" ? (
+            <>
+              Long-context text preset keeps the same single-slot policy but moves to <code>49152</code> context for
+              manual escalation on this machine.
+            </>
+          ) : (
+            <>
+              Recommended first profile: loopback only, alias <code>{DEFAULT_LLAMACPP_ALIAS}</code>, ctx{" "}
+              <code>40960</code>, <code>parallel=1</code>, <code>batch=1024</code>, <code>ubatch=512</code>, flash
+              attention on, and <code>--reasoning off</code>.
+            </>
+          )}
+        </FieldHelp>
+        {savedProfiles[profilePreset] ? (
+          <p className="field-help">
+            Saved preset available for <code>{profilePreset}</code>. Last updated{" "}
+            {new Date(savedProfiles[profilePreset]!.savedAt).toLocaleString()}.
+          </p>
+        ) : (
+          <p className="field-help">
+            No saved preset yet for <code>{profilePreset}</code>. Save the current form once you have a text or
+            multimodal setup you want to revisit quickly.
+          </p>
+        )}
+        {installDetection ? (
+          <p className="field-help">
+            {installDetection.found
+              ? `Detected ${installDetection.command ?? "llama-server"} from ${installDetection.source}.`
+              : "No local llama-server install was detected automatically."}
+            {installDetection.version ? ` Version: ${installDetection.version}.` : ""}
+          </p>
+        ) : null}
+      </Panel>
+
       <Panel title="Configuration" subtitle="Loopback runtime settings and launch defaults for llama-server.">
         <div className="controls-row">
           <GCSwitch id="llamaCppEnabled" checked={enabled} onCheckedChange={setEnabled} label="Enabled" />
@@ -488,13 +851,162 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         </label>
         <FieldHelp>
           Keep the base URL on loopback unless you intentionally expose llama.cpp somewhere else. Use an alias like{" "}
-          <code>gemma-4</code> so Prompt Lab and chat runs stay stable.
+          <code>{DEFAULT_LLAMACPP_ALIAS}</code> so Prompt Lab and chat runs stay stable.
         </FieldHelp>
         <ActionButton
           label="Save llama.cpp Config"
           onClick={() => void onSaveConfig()}
           disabled={busy || blockConfigSave}
         />
+      </Panel>
+
+      <Panel
+        title="Hugging Face Model Pull"
+        subtitle="Download a specific GGUF into GoatCitadel's managed llama.cpp model folder and fill the local config from the result."
+      >
+        <label className="field" htmlFor="llamaCppHfRepo">
+          Hugging Face Repo
+          <input id="llamaCppHfRepo" value={hfRepo} onChange={(event) => setHfRepo(event.target.value)} />
+        </label>
+        <label className="field" htmlFor="llamaCppHfFilename">
+          GGUF Filename
+          <input id="llamaCppHfFilename" value={hfFilename} onChange={(event) => setHfFilename(event.target.value)} />
+        </label>
+        <label className="field" htmlFor="llamaCppHfMmprojFilename">
+          Optional mmproj Filename
+          <input
+            id="llamaCppHfMmprojFilename"
+            value={hfMmprojFilename}
+            onChange={(event) => setHfMmprojFilename(event.target.value)}
+          />
+        </label>
+        {setupMode === "advanced" ? (
+          <>
+            <label className="field" htmlFor="llamaCppHfSha256">
+              Optional GGUF SHA256
+              <input id="llamaCppHfSha256" value={hfSha256} onChange={(event) => setHfSha256(event.target.value)} />
+            </label>
+            <label className="field" htmlFor="llamaCppHfMmprojSha256">
+              Optional mmproj SHA256
+              <input
+                id="llamaCppHfMmprojSha256"
+                value={hfMmprojSha256}
+                onChange={(event) => setHfMmprojSha256(event.target.value)}
+              />
+            </label>
+          </>
+        ) : null}
+        <div className="row-actions">
+          <ActionButton
+            label="Download GGUF"
+            onClick={() => void onDownloadModel()}
+            disabled={
+              busy ||
+              !hfRepo.trim() ||
+              !hfFilename.trim() ||
+              hfDownloadStatus?.status === "queued" ||
+              hfDownloadStatus?.status === "running"
+            }
+          />
+          <ActionButton
+            label="Cancel Download"
+            onClick={() => void onCancelDownload()}
+            disabled={hfDownloadStatus?.status !== "queued" && hfDownloadStatus?.status !== "running"}
+          />
+        </div>
+        <FieldHelp>
+          This workflow pulls <code>https://huggingface.co/owner/name/resolve/main/file.gguf</code> into{" "}
+          <code>models/llamacpp</code>. If you provide SHA256 values, GoatCitadel verifies them and deletes the partial
+          file on mismatch.
+        </FieldHelp>
+        {hfDownloadStatus ? (
+          <div className="stack-sm">
+            <p>
+              Download job <code>{hfDownloadStatus.jobId}</code>: {hfDownloadStatus.status} ({hfDownloadStatus.stage})
+            </p>
+            <div className="llamacpp-progress-stack">
+              <label className="field-help" htmlFor="llamaCppModelDownloadProgress">
+                Model progress
+              </label>
+              <progress
+                id="llamaCppModelDownloadProgress"
+                className="llamacpp-progress"
+                value={hfDownloadStatus.totalBytes ? hfDownloadStatus.bytesDownloaded : undefined}
+                max={hfDownloadStatus.totalBytes ?? undefined}
+              />
+            </div>
+            <p>
+              Model progress: {formatProgress(hfDownloadStatus.bytesDownloaded, hfDownloadStatus.totalBytes)}
+              {hfDownloadStatus.expectedSha256 ? " with checksum verification." : "."}
+            </p>
+            {hfDownloadStatus.mmprojFilename ? (
+              <>
+                <div className="llamacpp-progress-stack">
+                  <label className="field-help" htmlFor="llamaCppMmprojDownloadProgress">
+                    mmproj progress
+                  </label>
+                  <progress
+                    id="llamaCppMmprojDownloadProgress"
+                    className="llamacpp-progress"
+                    value={
+                      hfDownloadStatus.mmprojTotalBytes ? (hfDownloadStatus.mmprojBytesDownloaded ?? 0) : undefined
+                    }
+                    max={hfDownloadStatus.mmprojTotalBytes ?? undefined}
+                  />
+                </div>
+                <p>
+                  mmproj progress:{" "}
+                  {formatProgress(hfDownloadStatus.mmprojBytesDownloaded ?? 0, hfDownloadStatus.mmprojTotalBytes)}
+                </p>
+              </>
+            ) : null}
+            {hfDownloadStatus.modelPath && hfDownloadStatus.modelBytes ? (
+              <p>
+                Model ready at <code>{hfDownloadStatus.modelPath}</code> ({formatGiB(hfDownloadStatus.modelBytes)} GiB).
+              </p>
+            ) : null}
+            {hfDownloadStatus.mmprojPath && hfDownloadStatus.mmprojBytes ? (
+              <p>
+                mmproj ready at <code>{hfDownloadStatus.mmprojPath}</code> ({formatGiB(hfDownloadStatus.mmprojBytes)} GiB).
+              </p>
+            ) : null}
+            {hfDownloadStatus.error ? <p className="error">{hfDownloadStatus.error}</p> : null}
+          </div>
+        ) : null}
+        {recentDownloads.length > 0 ? (
+          <div className="stack-sm">
+            <p className="field-help">Recent imports</p>
+            <table className="gc-data-table">
+              <thead>
+                <tr>
+                  <th>Repo</th>
+                  <th>Alias</th>
+                  <th>Completed</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentDownloads.map((item) => (
+                  <tr key={`${item.modelPath}:${item.completedAt}`}>
+                    <td>{item.repo}</td>
+                    <td>{item.alias}</td>
+                    <td>{new Date(item.completedAt).toLocaleString()}</td>
+                    <td className="actions">
+                      <div className="row-actions">
+                        <ActionButton label="Use Model" onClick={() => onUseRecentDownload(item, false)} />
+                        <ActionButton
+                          label="Use With mmproj"
+                          onClick={() => onUseRecentDownload(item, true)}
+                          disabled={!item.mmprojPath}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </Panel>
 
       <Panel title="Runtime Control" subtitle="Start, stop, refresh, and smoke-test the current llama.cpp target.">
@@ -545,117 +1057,130 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         </Panel>
       ) : null}
 
-      <Panel
-        title="Advanced Launch"
-        subtitle="Optional tuning flags. Leave fields blank when you want llama.cpp auto-fit behavior."
-      >
-        <div className="controls-row">
-          <label className="field" htmlFor="llamaCppCtxSize">
-            Context Size
-            <input id="llamaCppCtxSize" value={ctxSize} onChange={(event) => setCtxSize(event.target.value)} />
-          </label>
-          <label className="field" htmlFor="llamaCppThreads">
-            Threads
-            <input id="llamaCppThreads" value={threads} onChange={(event) => setThreads(event.target.value)} />
-          </label>
-          <label className="field" htmlFor="llamaCppGpuLayers">
-            GPU Layers
-            <input id="llamaCppGpuLayers" value={gpuLayers} onChange={(event) => setGpuLayers(event.target.value)} />
-          </label>
-        </div>
-        <div className="controls-row">
-          <label className="field" htmlFor="llamaCppParallel">
-            Parallel Slots
-            <input id="llamaCppParallel" value={parallel} onChange={(event) => setParallel(event.target.value)} />
-          </label>
-          <label className="field" htmlFor="llamaCppBatchSize">
-            Batch Size
-            <input id="llamaCppBatchSize" value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
-          </label>
-          <label className="field" htmlFor="llamaCppUbatchSize">
-            Ubatch Size
-            <input id="llamaCppUbatchSize" value={ubatchSize} onChange={(event) => setUbatchSize(event.target.value)} />
-          </label>
-        </div>
-        <div className="controls-row">
-          <label htmlFor="llamaCppFlashAttention">Flash Attention</label>
-          <GCSelect
-            id="llamaCppFlashAttention"
-            value={flashAttentionMode}
-            onChange={(value) => setFlashAttentionMode(value as "auto" | "on" | "off")}
-            options={[
-              { value: "auto", label: "Auto" },
-              { value: "on", label: "On" },
-              { value: "off", label: "Off" },
-            ]}
-          />
-        </div>
-        <label className="field" htmlFor="llamaCppExtraArgs">
-          Extra Args
-          <textarea
-            id="llamaCppExtraArgs"
-            value={extraArgsText}
-            onChange={(event) => setExtraArgsText(event.target.value)}
-            rows={5}
-          />
-        </label>
-        <FieldHelp>
-          Enter one extra argument per line. Use this only when the structured fields above are not enough.
-        </FieldHelp>
-      </Panel>
+      {setupMode === "advanced" ? (
+        <>
+          <Panel
+            title="Advanced Launch"
+            subtitle="Optional tuning flags. Leave fields blank when you want llama.cpp auto-fit behavior."
+          >
+            <div className="controls-row">
+              <label className="field" htmlFor="llamaCppCtxSize">
+                Context Size
+                <input id="llamaCppCtxSize" value={ctxSize} onChange={(event) => setCtxSize(event.target.value)} />
+              </label>
+              <label className="field" htmlFor="llamaCppThreads">
+                Threads
+                <input id="llamaCppThreads" value={threads} onChange={(event) => setThreads(event.target.value)} />
+              </label>
+              <label className="field" htmlFor="llamaCppGpuLayers">
+                GPU Layers
+                <input
+                  id="llamaCppGpuLayers"
+                  value={gpuLayers}
+                  onChange={(event) => setGpuLayers(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="controls-row">
+              <label className="field" htmlFor="llamaCppParallel">
+                Parallel Slots
+                <input id="llamaCppParallel" value={parallel} onChange={(event) => setParallel(event.target.value)} />
+              </label>
+              <label className="field" htmlFor="llamaCppBatchSize">
+                Batch Size
+                <input id="llamaCppBatchSize" value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
+              </label>
+              <label className="field" htmlFor="llamaCppUbatchSize">
+                Ubatch Size
+                <input
+                  id="llamaCppUbatchSize"
+                  value={ubatchSize}
+                  onChange={(event) => setUbatchSize(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="controls-row">
+              <label htmlFor="llamaCppFlashAttention">Flash Attention</label>
+              <GCSelect
+                id="llamaCppFlashAttention"
+                value={flashAttentionMode}
+                onChange={(value) => setFlashAttentionMode(value as "auto" | "on" | "off")}
+                options={[
+                  { value: "auto", label: "Auto" },
+                  { value: "on", label: "On" },
+                  { value: "off", label: "Off" },
+                ]}
+              />
+            </div>
+            <label className="field" htmlFor="llamaCppExtraArgs">
+              Extra Args
+              <textarea
+                id="llamaCppExtraArgs"
+                value={extraArgsText}
+                onChange={(event) => setExtraArgsText(event.target.value)}
+                rows={5}
+              />
+            </label>
+            <FieldHelp>
+              Enter one extra argument per line. Use this only when the structured fields above are not enough.
+            </FieldHelp>
+          </Panel>
 
-      <Panel
-        title="Hardware Advisor"
-        subtitle="Read machine telemetry and get a conservative starting point for this model."
-      >
-        <div className="row-actions">
-          <ActionButton label="Run Advisor" onClick={() => void onAdvisor()} disabled={busy} />
-          <ActionButton label="Apply Recommendation" onClick={onApplyAdvisor} disabled={!advisor} />
-        </div>
-        {advisor ? (
-          <div className="stack-sm">
-            <p>
-              Host: {advisor.profile.platform}/{advisor.profile.arch} · logical CPUs {advisor.profile.cpuCoresLogical} ·
-              RAM {(advisor.profile.systemRamBytes / 1024 ** 3).toFixed(1)} GiB
-            </p>
-            <p>
-              GPUs:{" "}
-              {advisor.profile.gpus.length > 0
-                ? advisor.profile.gpus
-                    .map(
-                      (gpu) => `${gpu.name}${gpu.vramBytes ? ` (${(gpu.vramBytes / 1024 ** 3).toFixed(1)} GiB)` : ""}`,
-                    )
-                    .join(", ")
-                : "none detected"}
-            </p>
-            <p>
-              Recommended: ctx {advisor.recommended.ctxSize ?? "auto"} · threads {advisor.recommended.threads ?? "auto"}{" "}
-              · gpu layers {advisor.recommended.gpuLayers ?? "auto"} · parallel {advisor.recommended.parallel ?? "auto"}{" "}
-              · batch {advisor.recommended.batchSize ?? "auto"} · ubatch {advisor.recommended.ubatchSize ?? "auto"} ·
-              flash attn{" "}
-              {advisor.recommended.flashAttention === true
-                ? "on"
-                : advisor.recommended.flashAttention === false
-                  ? "off"
-                  : "auto"}
-            </p>
-            {advisor.observedModelBytes ? (
-              <p>Observed model size: {(advisor.observedModelBytes / 1024 ** 3).toFixed(2)} GiB</p>
-            ) : null}
-            {advisor.warnings.length > 0 ? (
-              <ul>
-                {advisor.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : (
-          <p className="field-help">
-            Run the advisor after setting a model path if you want model-size-aware guidance.
-          </p>
-        )}
-      </Panel>
+          <Panel
+            title="Hardware Advisor"
+            subtitle="Read machine telemetry and get a conservative starting point for this model."
+          >
+            <div className="row-actions">
+              <ActionButton label="Run Advisor" onClick={() => void onAdvisor()} disabled={busy} />
+              <ActionButton label="Apply Recommendation" onClick={onApplyAdvisor} disabled={!advisor} />
+            </div>
+            {advisor ? (
+              <div className="stack-sm">
+                <p>
+                  Host: {advisor.profile.platform}/{advisor.profile.arch} · logical CPUs{" "}
+                  {advisor.profile.cpuCoresLogical} · RAM {(advisor.profile.systemRamBytes / 1024 ** 3).toFixed(1)} GiB
+                </p>
+                <p>
+                  GPUs:{" "}
+                  {advisor.profile.gpus.length > 0
+                    ? advisor.profile.gpus
+                        .map(
+                          (gpu) =>
+                            `${gpu.name}${gpu.vramBytes ? ` (${(gpu.vramBytes / 1024 ** 3).toFixed(1)} GiB)` : ""}`,
+                        )
+                        .join(", ")
+                    : "none detected"}
+                </p>
+                <p>
+                  Recommended: ctx {advisor.recommended.ctxSize ?? "auto"} · threads{" "}
+                  {advisor.recommended.threads ?? "auto"} · gpu layers {advisor.recommended.gpuLayers ?? "auto"} ·
+                  parallel {advisor.recommended.parallel ?? "auto"} · batch {advisor.recommended.batchSize ?? "auto"} ·
+                  ubatch {advisor.recommended.ubatchSize ?? "auto"} · flash attn{" "}
+                  {advisor.recommended.flashAttention === true
+                    ? "on"
+                    : advisor.recommended.flashAttention === false
+                      ? "off"
+                      : "auto"}
+                </p>
+                {advisor.observedModelBytes ? (
+                  <p>Observed model size: {(advisor.observedModelBytes / 1024 ** 3).toFixed(2)} GiB</p>
+                ) : null}
+                {advisor.warnings.length > 0 ? (
+                  <ul>
+                    {advisor.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : (
+              <p className="field-help">
+                Run the advisor after setting a model path if you want model-size-aware guidance.
+              </p>
+            )}
+          </Panel>
+        </>
+      ) : null}
 
       <Panel title="Models" subtitle="Discovered model ids from the current llama.cpp server.">
         <table className="gc-data-table">
@@ -721,6 +1246,31 @@ function parseExtraArgs(value: string): string[] {
     .filter(Boolean);
 }
 
+function formatExtraArgs(args: string[]): string {
+  return args.join("\n");
+}
+
+function hasReasoningOverride(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--reasoning" || arg === "-rea");
+}
+
+function ensureReasoningDefault(args: string[]): string[] {
+  return hasReasoningOverride(args) ? args : [...args, "--reasoning", "off"];
+}
+
+function upsertFlagValue(args: string[], flag: string, value: string): string[] {
+  const next: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === flag) {
+      index += 1;
+      continue;
+    }
+    next.push(args[index] ?? "");
+  }
+  next.push(flag, value);
+  return next.filter(Boolean);
+}
+
 function appendOptionalFlag(flag: string, value: string): string[] {
   const trimmed = value.trim();
   return trimmed ? [flag, trimmed] : [];
@@ -760,5 +1310,73 @@ function createEmptyStatus(baseUrl: string): LlamaCppStatusRecord {
     healthy: false,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function formatGiB(bytes: number): string {
+  return (bytes / 1024 ** 3).toFixed(2);
+}
+
+function formatProgress(downloadedBytes: number, totalBytes?: number): string {
+  if (!totalBytes || totalBytes <= 0) {
+    return `${formatGiB(downloadedBytes)} GiB downloaded`;
+  }
+  const percent = Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
+  return `${percent}% (${formatGiB(downloadedBytes)} / ${formatGiB(totalBytes)} GiB)`;
+}
+
+function readSavedLlamaCppProfiles(): Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>> {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(LLAMACPP_PROFILE_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>;
+    return parsed ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSavedLlamaCppProfiles(profiles: Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>): void {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  window.localStorage.setItem(LLAMACPP_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+}
+
+function readRecentLlamaCppDownloads(): RecentLlamaCppDownload[] {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(LLAMACPP_DOWNLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as RecentLlamaCppDownload[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeRecentLlamaCppDownloads(items: RecentLlamaCppDownload[]): void {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return;
+  }
+  window.localStorage.setItem(LLAMACPP_DOWNLOAD_HISTORY_STORAGE_KEY, JSON.stringify(items));
+}
+
+function upsertRecentLlamaCppDownload(
+  existing: RecentLlamaCppDownload[],
+  nextItem: RecentLlamaCppDownload,
+): RecentLlamaCppDownload[] {
+  const remaining = existing.filter(
+    (item) => !(item.modelPath === nextItem.modelPath && item.mmprojPath === nextItem.mmprojPath),
+  );
+  return [nextItem, ...remaining].slice(0, 6);
 }
 

@@ -7,27 +7,35 @@ const refreshState = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
+  cancelLlamaCppHuggingFaceDownload: vi.fn(),
   createLlmChatCompletion: vi.fn(),
+  detectLlamaCppInstall: vi.fn(),
   evaluateUiChangeRisk: vi.fn(),
   fetchLlamaCppAdvisor: vi.fn(),
+  fetchLlamaCppHuggingFaceDownload: vi.fn(),
   fetchLlamaCppModels: vi.fn(),
   fetchLlamaCppStatus: vi.fn(),
   fetchSettings: vi.fn(),
   patchSettings: vi.fn(),
   refreshLlamaCppRuntime: vi.fn(),
+  startLlamaCppHuggingFaceDownload: vi.fn(),
   startLlamaCppRuntime: vi.fn(),
   stopLlamaCppRuntime: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
+  cancelLlamaCppHuggingFaceDownload: apiMocks.cancelLlamaCppHuggingFaceDownload,
   createLlmChatCompletion: apiMocks.createLlmChatCompletion,
+  detectLlamaCppInstall: apiMocks.detectLlamaCppInstall,
   evaluateUiChangeRisk: apiMocks.evaluateUiChangeRisk,
   fetchLlamaCppAdvisor: apiMocks.fetchLlamaCppAdvisor,
+  fetchLlamaCppHuggingFaceDownload: apiMocks.fetchLlamaCppHuggingFaceDownload,
   fetchLlamaCppModels: apiMocks.fetchLlamaCppModels,
   fetchLlamaCppStatus: apiMocks.fetchLlamaCppStatus,
   fetchSettings: apiMocks.fetchSettings,
   patchSettings: apiMocks.patchSettings,
   refreshLlamaCppRuntime: apiMocks.refreshLlamaCppRuntime,
+  startLlamaCppHuggingFaceDownload: apiMocks.startLlamaCppHuggingFaceDownload,
   startLlamaCppRuntime: apiMocks.startLlamaCppRuntime,
   stopLlamaCppRuntime: apiMocks.stopLlamaCppRuntime,
 }));
@@ -118,7 +126,7 @@ function makeStatus(overrides?: Partial<Awaited<ReturnType<typeof apiMocks.fetch
     baseUrl: "http://127.0.0.1:8080/v1",
     pid: null,
     healthy: false,
-    activeModelId: "gemma-4",
+    activeModelId: "gemma-4-local",
     command: "llama-server",
     commandSource: "missing",
     modelPath: null,
@@ -156,7 +164,7 @@ describe("LlamaCppPage refresh discipline", () => {
         command: "llama-server",
         extraArgs: [],
         modelPath: "",
-        alias: "gemma-4",
+        alias: "gemma-4-local",
       },
     });
     apiMocks.fetchLlamaCppModels.mockResolvedValue({ items: [] });
@@ -245,6 +253,29 @@ describe("LlamaCppPage refresh discipline", () => {
       await flush();
 
       expect(apiMocks.evaluateUiChangeRisk).toHaveBeenCalledTimes(1);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("applies the recommended single-model profile from Mission Control", async () => {
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<LlamaCppPage />);
+      });
+      await flush();
+
+      const buttons = renderer.root.findAllByType("button");
+      const recommended = buttons.find((button) => button.props.children === "Apply Recommended Profile");
+      expect(recommended).toBeDefined();
+
+      await act(async () => {
+        recommended?.props.onClick();
+      });
+
+      expect(renderer.root.findByProps({ id: "llamaCppBaseUrl" }).props.value).toBe("http://127.0.0.1:8080/v1");
+      expect(renderer.root.findByProps({ id: "llamaCppAlias" }).props.value).toBe("gemma-4-local");
     } finally {
       renderer.unmount();
     }

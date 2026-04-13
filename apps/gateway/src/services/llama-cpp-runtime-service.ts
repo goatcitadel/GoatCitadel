@@ -3,6 +3,8 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess, execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { promisify } from "node:util";
 import type {
   LlamaCppAdvisorRecommendation,
@@ -16,6 +18,53 @@ import type {
 import type { LlamaCppConfig } from "../config.js";
 
 const execFileAsync = promisify(execFile);
+const DEFAULT_LLAMACPP_ALIAS = "gemma-4-local";
+const DEFAULT_LLAMACPP_REASONING_ARGS = ["--reasoning", "off"] as const;
+
+export interface LlamaCppInstallDetection {
+  found: boolean;
+  command?: string;
+  source: "configured" | "standard-windows" | "path" | "path-with-exe" | "missing";
+  version?: string;
+  recommendedBaseUrl: string;
+}
+
+export interface LlamaCppHuggingFaceDownloadRequest {
+  repo: string;
+  filename: string;
+  alias?: string;
+  mmprojFilename?: string;
+  sha256?: string;
+  mmprojSha256?: string;
+}
+
+export interface LlamaCppHuggingFaceDownloadJobStatus {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: "model" | "mmproj" | "done";
+  repo: string;
+  alias: string;
+  filename: string;
+  mmprojFilename?: string;
+  sourceUrl: string;
+  mmprojSourceUrl?: string;
+  expectedSha256?: string;
+  expectedMmprojSha256?: string;
+  bytesDownloaded: number;
+  totalBytes?: number;
+  mmprojBytesDownloaded?: number;
+  mmprojTotalBytes?: number;
+  modelBytes?: number;
+  mmprojBytes?: number;
+  actualSha256?: string;
+  actualMmprojSha256?: string;
+  modelPath?: string;
+  mmprojPath?: string;
+  error?: string;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
 
 export interface LlamaCppRuntimeServiceOptions {
   rootDir: string;
@@ -25,7 +74,7 @@ export interface LlamaCppRuntimeServiceOptions {
 
 interface CommandResolution {
   command?: string;
-  source: LlamaCppRuntimeStatus["commandSource"];
+  source: NonNullable<LlamaCppRuntimeStatus["commandSource"]>;
 }
 
 export class LlamaCppRuntimeService {
@@ -41,6 +90,8 @@ export class LlamaCppRuntimeService {
   private restartTimer: NodeJS.Timeout | undefined;
   private lastCommand?: string;
   private lastCommandSource: LlamaCppRuntimeStatus["commandSource"] = "missing";
+  private hfDownloadJobs = new Map<string, LlamaCppHuggingFaceDownloadJobStatus>();
+  private hfDownloadControllers = new Map<string, AbortController>();
 
   private readonly stateCachePath: string;
 
@@ -299,6 +350,246 @@ export class LlamaCppRuntimeService {
               : undefined,
       }))
       .filter((item) => item.modelId.length > 0);
+  }
+
+  public async detectLocalInstall(): Promise<LlamaCppInstallDetection> {
+    const configured = normalizeOptionalText(this.options.config.server.command);
+    if (configured) {
+      const resolvedConfigured = await resolveExecutable(configured);
+      if (resolvedConfigured) {
+        return {
+          found: true,
+          command: resolvedConfigured,
+          source: "configured",
+          version: await inspectLlamaCppVersion(resolvedConfigured),
+          recommendedBaseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
+        };
+      }
+    }
+
+    if (process.platform === "win32") {
+      const standardWindowsPath = "C:\\llama\\llama-server.exe";
+      if (fsSync.existsSync(standardWindowsPath)) {
+        return {
+          found: true,
+          command: standardWindowsPath,
+          source: "standard-windows",
+          version: await inspectLlamaCppVersion(standardWindowsPath),
+          recommendedBaseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
+        };
+      }
+    }
+
+    const resolved = await resolveLlamaCppCommand(this.options.config.server.command);
+    if (resolved.command && resolved.source !== "missing") {
+      return {
+        found: true,
+        command: resolved.command,
+        source: resolved.source === "explicit" ? "configured" : resolved.source,
+        version: await inspectLlamaCppVersion(resolved.command),
+        recommendedBaseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
+      };
+    }
+
+    return {
+      found: false,
+      source: "missing",
+      recommendedBaseUrl: normalizeLlamaCppProviderBaseUrl(this.options.config.server.baseUrl),
+    };
+  }
+
+  public async startHuggingFaceDownload(
+    input: LlamaCppHuggingFaceDownloadRequest,
+  ): Promise<LlamaCppHuggingFaceDownloadJobStatus> {
+    const running = [...this.hfDownloadJobs.values()].find((job) => job.status === "queued" || job.status === "running");
+    if (running) {
+      throw new Error(`A llama.cpp Hugging Face download is already in progress (${running.jobId}).`);
+    }
+
+    const repo = normalizeHuggingFaceRepo(input.repo);
+    const filename = normalizeHuggingFacePath(input.filename);
+    const mmprojFilenameInput = normalizeOptionalText(input.mmprojFilename);
+    const mmprojFilename = mmprojFilenameInput ? normalizeHuggingFacePath(mmprojFilenameInput) : undefined;
+    const alias =
+      normalizeOptionalText(input.alias) ??
+      normalizeOptionalText(this.options.config.launch.alias) ??
+      DEFAULT_LLAMACPP_ALIAS;
+    const expectedSha256 = normalizeSha256(input.sha256);
+    const expectedMmprojSha256 = normalizeSha256(input.mmprojSha256);
+
+    const sourceUrl = buildHuggingFaceResolveUrl(repo, filename);
+    const mmprojSourceUrl = mmprojFilename ? buildHuggingFaceResolveUrl(repo, mmprojFilename) : undefined;
+    const startedAt = new Date().toISOString();
+    const jobId = randomUUID();
+    const job: LlamaCppHuggingFaceDownloadJobStatus = {
+      jobId,
+      status: "queued",
+      stage: "model",
+      repo,
+      alias,
+      filename,
+      mmprojFilename,
+      sourceUrl,
+      mmprojSourceUrl,
+      expectedSha256,
+      expectedMmprojSha256,
+      bytesDownloaded: 0,
+      startedAt,
+      updatedAt: startedAt,
+    };
+
+    this.hfDownloadJobs.set(jobId, job);
+    this.hfDownloadControllers.set(jobId, new AbortController());
+    void this.runHuggingFaceDownload(jobId, input);
+    return { ...job };
+  }
+
+  public getHuggingFaceDownloadStatus(jobId: string): LlamaCppHuggingFaceDownloadJobStatus {
+    const job = this.hfDownloadJobs.get(jobId);
+    if (!job) {
+      throw new Error(`Unknown llama.cpp download job: ${jobId}`);
+    }
+    return { ...job };
+  }
+
+  public cancelHuggingFaceDownload(jobId: string): LlamaCppHuggingFaceDownloadJobStatus {
+    const job = this.hfDownloadJobs.get(jobId);
+    if (!job) {
+      throw new Error(`Unknown llama.cpp download job: ${jobId}`);
+    }
+    if (job.status !== "queued" && job.status !== "running") {
+      return { ...job };
+    }
+    this.hfDownloadControllers.get(jobId)?.abort();
+    const cancelledAt = new Date().toISOString();
+    this.updateHuggingFaceDownloadJob(jobId, {
+      status: "cancelled",
+      stage: "done",
+      error: "Cancelled by user.",
+      updatedAt: cancelledAt,
+      completedAt: cancelledAt,
+    });
+    return { ...this.hfDownloadJobs.get(jobId)! };
+  }
+
+  private async runHuggingFaceDownload(jobId: string, input: LlamaCppHuggingFaceDownloadRequest): Promise<void> {
+    const current = this.hfDownloadJobs.get(jobId);
+    if (!current) {
+      return;
+    }
+
+    try {
+      const repo = normalizeHuggingFaceRepo(input.repo);
+      const filename = normalizeHuggingFacePath(input.filename);
+      const mmprojFilenameInput = normalizeOptionalText(input.mmprojFilename);
+      const mmprojFilename = mmprojFilenameInput ? normalizeHuggingFacePath(mmprojFilenameInput) : undefined;
+      const expectedSha256 = normalizeSha256(input.sha256);
+      const expectedMmprojSha256 = normalizeSha256(input.mmprojSha256);
+      const targetDir = path.resolve(this.options.rootDir, "models", "llamacpp", sanitizeHuggingFaceRepo(repo));
+      const modelPath = path.join(targetDir, ...filename.split("/"));
+      const sourceUrl = buildHuggingFaceResolveUrl(repo, filename);
+      const controller = this.hfDownloadControllers.get(jobId);
+
+      this.updateHuggingFaceDownloadJob(jobId, {
+        status: "running",
+        stage: "model",
+        updatedAt: new Date().toISOString(),
+      });
+
+      const modelResult = await downloadUrlToFile({
+        url: sourceUrl,
+        destinationPath: modelPath,
+        expectedSha256,
+        signal: controller?.signal,
+        onProgress: ({ bytesDownloaded, totalBytes }) => {
+          this.updateHuggingFaceDownloadJob(jobId, {
+            bytesDownloaded,
+            totalBytes,
+            updatedAt: new Date().toISOString(),
+          });
+        },
+      });
+
+      this.updateHuggingFaceDownloadJob(jobId, {
+        modelPath,
+        modelBytes: modelResult.sizeBytes,
+        actualSha256: modelResult.sha256,
+        bytesDownloaded: modelResult.sizeBytes,
+        totalBytes: modelResult.sizeBytes,
+        updatedAt: new Date().toISOString(),
+      });
+
+      if (mmprojFilename) {
+        const mmprojPath = path.join(targetDir, ...mmprojFilename.split("/"));
+        const mmprojSourceUrl = buildHuggingFaceResolveUrl(repo, mmprojFilename);
+        this.updateHuggingFaceDownloadJob(jobId, {
+          stage: "mmproj",
+          mmprojPath,
+          mmprojSourceUrl,
+          mmprojBytesDownloaded: 0,
+          updatedAt: new Date().toISOString(),
+        });
+
+        const mmprojResult = await downloadUrlToFile({
+          url: mmprojSourceUrl,
+          destinationPath: mmprojPath,
+          expectedSha256: expectedMmprojSha256,
+          signal: controller?.signal,
+          onProgress: ({ bytesDownloaded, totalBytes }) => {
+            this.updateHuggingFaceDownloadJob(jobId, {
+              mmprojBytesDownloaded: bytesDownloaded,
+              mmprojTotalBytes: totalBytes,
+              updatedAt: new Date().toISOString(),
+            });
+          },
+        });
+
+        this.updateHuggingFaceDownloadJob(jobId, {
+          mmprojPath,
+          mmprojBytes: mmprojResult.sizeBytes,
+          actualMmprojSha256: mmprojResult.sha256,
+          mmprojBytesDownloaded: mmprojResult.sizeBytes,
+          mmprojTotalBytes: mmprojResult.sizeBytes,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      const completedAt = new Date().toISOString();
+      this.updateHuggingFaceDownloadJob(jobId, {
+        status: "completed",
+        stage: "done",
+        updatedAt: completedAt,
+        completedAt,
+      });
+    } catch (error) {
+      const currentJob = this.hfDownloadJobs.get(jobId);
+      if (currentJob?.status === "cancelled") {
+        return;
+      }
+      const failedAt = new Date().toISOString();
+      this.updateHuggingFaceDownloadJob(jobId, {
+        status: "failed",
+        error: (error as Error).message,
+        updatedAt: failedAt,
+        completedAt: failedAt,
+      });
+    } finally {
+      this.hfDownloadControllers.delete(jobId);
+    }
+  }
+
+  private updateHuggingFaceDownloadJob(
+    jobId: string,
+    patch: Partial<LlamaCppHuggingFaceDownloadJobStatus>,
+  ): void {
+    const current = this.hfDownloadJobs.get(jobId);
+    if (!current) {
+      return;
+    }
+    this.hfDownloadJobs.set(jobId, {
+      ...current,
+      ...patch,
+    });
   }
 
   public async advise(input: LlamaCppAdvisorRequest = {}): Promise<LlamaCppAdvisorRecommendation> {
@@ -688,6 +979,23 @@ async function runOptionalCommand(command: string, args: string[]): Promise<stri
   }
 }
 
+async function inspectLlamaCppVersion(command: string): Promise<string | undefined> {
+  try {
+    const result = await execFileAsync(command, ["--version"], {
+      timeout: 5000,
+      windowsHide: true,
+      maxBuffer: 256 * 1024,
+    });
+    const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    return combined?.slice(0, 200);
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveLlamaCppCommand(configuredCommand: string): Promise<CommandResolution> {
   const explicit = normalizeOptionalText(configuredCommand);
   if (explicit) {
@@ -793,6 +1101,123 @@ async function resolveExecutable(command: string): Promise<string | undefined> {
     .find(Boolean);
 }
 
+function normalizeHuggingFaceRepo(repo: string): string {
+  const trimmed = repo.trim();
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(trimmed)) {
+    throw new Error("Hugging Face repo must look like owner/name.");
+  }
+  return trimmed;
+}
+
+function normalizeHuggingFacePath(value: string): string {
+  const normalized = value.trim().replaceAll("\\", "/");
+  if (!normalized) {
+    throw new Error("Hugging Face filename is required.");
+  }
+  if (normalized.startsWith("/") || normalized.includes("://")) {
+    throw new Error("Hugging Face filename must be a repo-relative path.");
+  }
+  const parts = normalized.split("/");
+  if (
+    parts.some((part) => {
+      return !part || part === "." || part === "..";
+    })
+  ) {
+    throw new Error("Hugging Face filename contains an invalid path segment.");
+  }
+  if (!normalized.toLowerCase().endsWith(".gguf")) {
+    throw new Error("Only GGUF artifacts are supported in this workflow.");
+  }
+  return normalized;
+}
+
+function sanitizeHuggingFaceRepo(repo: string): string {
+  return repo.replace(/[^\w.-]+/g, "_");
+}
+
+function buildHuggingFaceResolveUrl(repo: string, filename: string): string {
+  const encodedPath = filename
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `https://huggingface.co/${repo}/resolve/main/${encodedPath}`;
+}
+
+function normalizeSha256(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!/^[a-f0-9]{64}$/.test(trimmed)) {
+    throw new Error("SHA256 must be a 64-character hex string.");
+  }
+  return trimmed;
+}
+
+async function downloadUrlToFile(input: {
+  url: string;
+  destinationPath: string;
+  expectedSha256?: string;
+  signal?: AbortSignal;
+  onProgress?: (progress: { bytesDownloaded: number; totalBytes?: number }) => void;
+}): Promise<{ sizeBytes: number; sha256: string }> {
+  const { url, destinationPath, expectedSha256, signal, onProgress } = input;
+  await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+  const tempPath = `${destinationPath}.part`;
+  const response = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Download failed (${response.status}) for ${url}`);
+  }
+
+  try {
+    const totalBytesHeader = response.headers.get("content-length");
+    const totalBytes = totalBytesHeader ? Number.parseInt(totalBytesHeader, 10) : undefined;
+    const reader = response.body.getReader();
+    const hash = createHash("sha256");
+    const writer = fsSync.createWriteStream(tempPath);
+    let bytesDownloaded = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        const chunk = Buffer.from(value);
+        bytesDownloaded += chunk.length;
+        hash.update(chunk);
+        if (!writer.write(chunk)) {
+          await once(writer, "drain");
+        }
+        onProgress?.({ bytesDownloaded, totalBytes });
+      }
+      writer.end();
+      await once(writer, "finish");
+    } catch (error) {
+      writer.destroy();
+      throw error;
+    }
+
+    const sha256 = hash.digest("hex");
+    if (expectedSha256 && sha256 !== expectedSha256) {
+      throw new Error(`SHA256 mismatch for ${path.basename(destinationPath)}.`);
+    }
+    await fs.rename(tempPath, destinationPath);
+    return {
+      sizeBytes: bytesDownloaded,
+      sha256,
+    };
+  } catch (error) {
+    await fs.rm(tempPath, { force: true });
+    await fs.rm(destinationPath, { force: true });
+    throw error;
+  }
+}
+
 export function buildLlamaCppLaunchArgs(rootDir: string, config: LlamaCppConfig): string[] {
   const modelPath = resolveConfiguredPath(rootDir, config.launch.modelPath);
   const rootUrl = new URL(normalizeLlamaCppServerRoot(config.server.baseUrl));
@@ -826,6 +1251,9 @@ export function buildLlamaCppLaunchArgs(rootDir: string, config: LlamaCppConfig)
     args.push("--flash-attn", config.launch.flashAttention ? "on" : "off");
   }
 
+  if (!hasReasoningOverride(config.server.extraArgs)) {
+    args.push(...DEFAULT_LLAMACPP_REASONING_ARGS);
+  }
   args.push(...config.server.extraArgs);
   return args;
 }
@@ -882,6 +1310,10 @@ function normalizeOptionalText(value: string | undefined | null): string | undef
   return trimmed ? trimmed : undefined;
 }
 
+function hasReasoningOverride(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--reasoning" || arg === "-rea");
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -917,6 +1349,8 @@ function confidenceRank(value: LlamaCppGpuInfo["confidence"]): number {
       return 1;
   }
 }
+
+export { DEFAULT_LLAMACPP_ALIAS };
 
 function parseHumanMemoryString(value: string | undefined): number | undefined {
   if (!value) {

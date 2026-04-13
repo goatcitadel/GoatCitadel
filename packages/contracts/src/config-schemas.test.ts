@@ -287,7 +287,7 @@ describe("AssistantConfigInputSchema", () => {
       llamaCpp: {
         enabled: true,
         server: { baseUrl: "http://127.0.0.1:8080/v1" },
-        launch: { alias: "gemma-4" },
+        launch: { alias: "gemma-4-local" },
       },
       web: { firecrawl: { enabled: true, baseUrl: "http://127.0.0.1:3002", defaultReadBackend: "firecrawl" } },
       features: { computerUseGuardrailsV1Enabled: true },
@@ -295,7 +295,7 @@ describe("AssistantConfigInputSchema", () => {
     const result = AssistantConfigInputSchema.parse(input);
     expect(result.environment).toBe("local");
     expect(result.deploymentProfile).toBe("trusted_local");
-    expect(result.llamaCpp?.launch?.alias).toBe("gemma-4");
+    expect(result.llamaCpp?.launch?.alias).toBe("gemma-4-local");
     expect(result.web?.firecrawl?.defaultReadBackend).toBe("firecrawl");
   });
 

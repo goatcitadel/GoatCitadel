@@ -81,9 +81,9 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     providerId: "llamacpp",
     label: "llama.cpp",
     baseUrl: "http://127.0.0.1:8080/v1",
-    defaultModel: "gemma-4",
+    defaultModel: "gemma-4-local",
     apiStyle: "openai-chat-completions",
-    knownModels: ["gemma-4", "gemma-4-it"],
+    knownModels: ["gemma-4-local", "gemma-4", "gemma-4-it"],
   },
   {
     providerId: "localai",

@@ -212,7 +212,7 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
           },
         },
         launch: {
-          alias: "gemma-4",
+          alias: "gemma-4-local",
         },
       },
       mesh: {

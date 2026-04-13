@@ -6,9 +6,30 @@ const advisorRequestSchema = z.object({
   modelId: z.string().optional(),
 });
 
+const huggingFaceDownloadSchema = z.object({
+  repo: z.string().min(3),
+  filename: z.string().min(1),
+  alias: z.string().min(1).optional(),
+  mmprojFilename: z.string().min(1).optional(),
+  sha256: z.string().min(64).max(64).optional(),
+  mmprojSha256: z.string().min(64).max(64).optional(),
+});
+
+const downloadJobParamsSchema = z.object({
+  jobId: z.string().min(1),
+});
+
 export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llamacpp/status", async (_request, reply) => {
     return reply.send(fastify.gateway.getLlamaCppStatus());
+  });
+
+  fastify.get("/api/v1/llamacpp/install", async (_request, reply) => {
+    try {
+      return reply.send(await fastify.gateway.detectLlamaCppInstall());
+    } catch (error) {
+      return reply.code(500).send({ error: (error as Error).message });
+    }
   });
 
   fastify.get("/api/v1/llamacpp/models", async (_request, reply) => {
@@ -53,6 +74,42 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send(await fastify.gateway.adviseLlamaCppRuntime(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llamacpp/huggingface/download", async (request, reply) => {
+    const parsed = huggingFaceDownloadSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "Invalid Hugging Face request" });
+    }
+    try {
+      return reply.code(202).send(await fastify.gateway.startLlamaCppHuggingFaceDownload(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/llamacpp/huggingface/downloads/:jobId", async (request, reply) => {
+    const params = downloadJobParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.issues[0]?.message ?? "Invalid download job id" });
+    }
+    try {
+      return reply.send(fastify.gateway.getLlamaCppHuggingFaceDownload(params.data.jobId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llamacpp/huggingface/downloads/:jobId/cancel", async (request, reply) => {
+    const params = downloadJobParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.issues[0]?.message ?? "Invalid download job id" });
+    }
+    try {
+      return reply.send(fastify.gateway.cancelLlamaCppHuggingFaceDownload(params.data.jobId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
     }
   });
 };

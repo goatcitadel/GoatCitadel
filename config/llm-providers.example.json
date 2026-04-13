@@ -103,7 +103,7 @@
       "label": "llama.cpp",
       "baseUrl": "http://127.0.0.1:8080/v1",
       "apiStyle": "openai-chat-completions",
-      "defaultModel": "gemma-4"
+      "defaultModel": "gemma-4-local"
     },
     {
       "providerId": "localai",

@@ -156,11 +156,11 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
           </p>
           <p className="office-subtitle">
             <strong>llama.cpp:</strong> start <code>llama-server</code> with your GGUF model and an alias such as{" "}
-            <code>--alias gemma-4</code>.
+            <code>--alias gemma-4-local</code>.
           </p>
           <p className="office-subtitle">
-            Base URL: <code>http://127.0.0.1:8080/v1</code> | model id: <code>gemma-4</code> or the alias returned by{" "}
-            <code>/v1/models</code>.
+            Base URL: <code>http://127.0.0.1:8080/v1</code> | model id: <code>gemma-4-local</code> or the alias
+            returned by <code>/v1/models</code>.
           </p>
           <p className="office-subtitle">
             If GoatCitadel is remote, replace <code>127.0.0.1</code> with the host IP/tailnet name and include that host

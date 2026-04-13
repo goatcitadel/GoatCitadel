@@ -96,7 +96,10 @@
     "server": {
       "baseUrl": "http://127.0.0.1:8080/v1",
       "command": "llama-server",
-      "extraArgs": [],
+      "extraArgs": [
+        "--reasoning",
+        "off"
+      ],
       "healthPath": "/health",
       "modelsPath": "/v1/models",
       "startTimeoutMs": 20000,
@@ -108,7 +111,12 @@
       }
     },
     "launch": {
-      "alias": "gemma-4"
+      "alias": "gemma-4-local",
+      "ctxSize": 40960,
+      "parallel": 1,
+      "batchSize": 1024,
+      "ubatchSize": 512,
+      "flashAttention": true
     }
   },
   "database": {
