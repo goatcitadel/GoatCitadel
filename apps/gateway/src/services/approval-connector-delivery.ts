@@ -19,7 +19,10 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
   }
   switch (input.connector.connectorType) {
     case "browser":
-      if (!hasEnabledCapability(input.connector, "approvals") || !hasEnabledCapability(input.connector, "interactive_actions")) {
+      if (
+        !hasEnabledCapability(input.connector, "approvals") ||
+        !hasEnabledCapability(input.connector, "interactive_actions")
+      ) {
         return undefined;
       }
       return {
@@ -36,7 +39,10 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
       };
 
     case "integration_connection": {
-      if (!hasEnabledCapability(input.connector, "approvals") || !hasEnabledCapability(input.connector, "outbound_messages")) {
+      if (
+        !hasEnabledCapability(input.connector, "approvals") ||
+        !hasEnabledCapability(input.connector, "outbound_messages")
+      ) {
         return undefined;
       }
       const target = readMetadataString(input.connector, "approvalDeliveryTarget");
@@ -57,7 +63,10 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
     }
 
     case "mcp_server": {
-      if (!hasEnabledCapability(input.connector, "approvals") || !hasEnabledCapability(input.connector, "interactive_actions")) {
+      if (
+        !hasEnabledCapability(input.connector, "approvals") ||
+        !hasEnabledCapability(input.connector, "interactive_actions")
+      ) {
         return undefined;
       }
       return {
@@ -123,7 +132,7 @@ function buildIntegrationApprovalDeliveryMessage(input: {
     `Action token ID: ${input.tokenId}`,
     `Action token: ${input.token}`,
     `Expires at: ${input.expiresAt}`,
-    "Resolve via POST /api/v1/approvals/remote-resolve with { token, decision }.",
+    "Resolve from an authenticated GoatCitadel session via POST /api/v1/approvals/remote-resolve with { token, decision }.",
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");
 }

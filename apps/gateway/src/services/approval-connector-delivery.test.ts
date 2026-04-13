@@ -35,14 +35,9 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
   it("builds integration channel delivery payloads when a default target is available", () => {
     const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
       approval: createApproval(),
-      connector: createConnector(
-        "integration_connection",
-        "active",
-        ["approvals", "outbound_messages"],
-        {
-          approvalDeliveryTarget: "#ops-approvals",
-        },
-      ),
+      connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
+        approvalDeliveryTarget: "#ops-approvals",
+      }),
       token: "grat_token",
       tokenId: "rat_123",
       expiresAt: "2026-03-20T12:00:00.000Z",
@@ -60,7 +55,9 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     });
     expect(payload?.payload?.message).toContain("GoatCitadel approval action requested.");
     expect(payload?.payload?.message).toContain("Action token: grat_token");
-    expect(payload?.payload?.message).toContain("Resolve via POST /api/v1/approvals/remote-resolve");
+    expect(payload?.payload?.message).toContain(
+      "Resolve from an authenticated GoatCitadel session via POST /api/v1/approvals/remote-resolve",
+    );
   });
 
   it("builds MCP invoke payloads for approval-capable MCP connectors", () => {
@@ -92,37 +89,45 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
   });
 
   it("skips connectors without the required delivery capabilities or metadata", () => {
-    expect(buildApprovalRemoteTokenConnectorDeliveryPayload({
-      approval: createApproval(),
-      connector: createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
-      token: "grat_token",
-      tokenId: "rat_123",
-      expiresAt: "2026-03-20T12:00:00.000Z",
-    })).toBeDefined();
+    expect(
+      buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector: createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
+        token: "grat_token",
+        tokenId: "rat_123",
+        expiresAt: "2026-03-20T12:00:00.000Z",
+      }),
+    ).toBeDefined();
 
-    expect(buildApprovalRemoteTokenConnectorDeliveryPayload({
-      approval: createApproval(),
-      connector: createConnector("browser", "active", ["approvals"]),
-      token: "grat_token",
-      tokenId: "rat_123",
-      expiresAt: "2026-03-20T12:00:00.000Z",
-    })).toBeUndefined();
+    expect(
+      buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector: createConnector("browser", "active", ["approvals"]),
+        token: "grat_token",
+        tokenId: "rat_123",
+        expiresAt: "2026-03-20T12:00:00.000Z",
+      }),
+    ).toBeUndefined();
 
-    expect(buildApprovalRemoteTokenConnectorDeliveryPayload({
-      approval: createApproval(),
-      connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"]),
-      token: "grat_token",
-      tokenId: "rat_123",
-      expiresAt: "2026-03-20T12:00:00.000Z",
-    })).toBeUndefined();
+    expect(
+      buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"]),
+        token: "grat_token",
+        tokenId: "rat_123",
+        expiresAt: "2026-03-20T12:00:00.000Z",
+      }),
+    ).toBeUndefined();
 
-    expect(buildApprovalRemoteTokenConnectorDeliveryPayload({
-      approval: createApproval(),
-      connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
-      token: "grat_token",
-      tokenId: "rat_123",
-      expiresAt: "2026-03-20T12:00:00.000Z",
-    })).toBeUndefined();
+    expect(
+      buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector: createConnector("browser", "degraded", ["approvals", "interactive_actions"]),
+        token: "grat_token",
+        tokenId: "rat_123",
+        expiresAt: "2026-03-20T12:00:00.000Z",
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -146,18 +151,16 @@ function createConnector(
   metadata: Record<string, unknown> = {},
 ): ConnectorRecord {
   return {
-    connectorId: connectorType === "browser"
-      ? "browser:mission-control"
-      : connectorType === "mcp_server"
-        ? "mcp:server-1"
-        : "integration:channel-1",
+    connectorId:
+      connectorType === "browser"
+        ? "browser:mission-control"
+        : connectorType === "mcp_server"
+          ? "mcp:server-1"
+          : "integration:channel-1",
     connectorType,
     label: "Connector",
-    sourceId: connectorType === "browser"
-      ? "mission-control-web"
-      : connectorType === "mcp_server"
-        ? "server-1"
-        : "channel-1",
+    sourceId:
+      connectorType === "browser" ? "mission-control-web" : connectorType === "mcp_server" ? "server-1" : "channel-1",
     status,
     capabilities: capabilityIds.map((id) => ({
       id,
