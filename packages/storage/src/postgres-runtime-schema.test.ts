@@ -11,10 +11,7 @@ describe("Postgres runtime schema generation", () => {
       sql,
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_message_id_unique ON chat_messages\(message_id\);/,
     );
-    assert.match(
-      sql,
-      /CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key_unique ON sessions\(session_key\);/,
-    );
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key_unique ON sessions\(session_key\);/);
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
   });
 
@@ -26,5 +23,12 @@ describe("Postgres runtime schema generation", () => {
       repairMigration?.sql ?? "",
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_message_id_unique ON chat_messages\(message_id\);/,
     );
+  });
+
+  it("replays the current canonical schema as a repair migration for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 7);
+
+    assert.equal(repairMigration?.name, "canonical_runtime_schema_repairs");
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS approval_effects \(/);
   });
 });

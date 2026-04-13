@@ -121,10 +121,14 @@ class PrettyGatewayLogger implements FastifyBaseLogger {
   }
 
   public child(bindings: LoggerBindings): FastifyBaseLogger {
-    return new PrettyGatewayLogger(this.verbose, {
-      ...this.bindings,
-      ...sanitizeObject(bindings as Record<string, unknown>),
-    }, this.level);
+    return new PrettyGatewayLogger(
+      this.verbose,
+      {
+        ...this.bindings,
+        ...sanitizeObject(bindings as Record<string, unknown>),
+      },
+      this.level,
+    );
   }
 
   public trace = (...args: unknown[]) => {
@@ -194,12 +198,14 @@ function emitTerminalLine(
     return;
   }
 
-  const timestamp = chalk.dim(new Date().toLocaleTimeString("en-US", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }));
+  const timestamp = chalk.dim(
+    new Date().toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }),
+  );
   const scopeLabel = chalk.cyan(scope);
   const levelLabel = formatLevelLabel(level, variant);
   const bindingLabel = formatBindingLabel(bindings);
@@ -210,13 +216,16 @@ function emitTerminalLine(
   const output = detail ? `${line}\n${detail}` : line;
 
   if (level === "warn") {
+    // eslint-disable-next-line no-console -- terminal reporter is the sink for gateway runtime logs.
     console.warn(output);
     return;
   }
   if (level === "error" || level === "fatal") {
+    // eslint-disable-next-line no-console -- terminal reporter is the sink for gateway runtime logs.
     console.error(output);
     return;
   }
+  // eslint-disable-next-line no-console -- terminal reporter is the sink for gateway runtime logs.
   console.log(output);
 }
 
@@ -301,28 +310,37 @@ function compactMeta(value: unknown): unknown {
     }
     if (key === "req" && entry && typeof entry === "object") {
       const req = entry as Record<string, unknown>;
-      Object.assign(result, compactMeta({
-        reqId: req.id,
-        method: req.method,
-        url: req.url,
-      }) as Record<string, unknown>);
+      Object.assign(
+        result,
+        compactMeta({
+          reqId: req.id,
+          method: req.method,
+          url: req.url,
+        }) as Record<string, unknown>,
+      );
       continue;
     }
     if (key === "res" && entry && typeof entry === "object") {
       const res = entry as Record<string, unknown>;
-      Object.assign(result, compactMeta({
-        statusCode: res.statusCode,
-      }) as Record<string, unknown>);
+      Object.assign(
+        result,
+        compactMeta({
+          statusCode: res.statusCode,
+        }) as Record<string, unknown>,
+      );
       continue;
     }
     if (key === "context" && entry && typeof entry === "object") {
       const context = entry as Record<string, unknown>;
-      Object.assign(result, compactMeta({
-        error: context.error,
-        reason: context.reason,
-        retryIndex: context.retryIndex,
-        fallbackUsed: context.fallbackUsed,
-      }) as Record<string, unknown>);
+      Object.assign(
+        result,
+        compactMeta({
+          error: context.error,
+          reason: context.reason,
+          retryIndex: context.retryIndex,
+          fallbackUsed: context.fallbackUsed,
+        }) as Record<string, unknown>,
+      );
       continue;
     }
     if (key === "responseTime") {
@@ -399,7 +417,7 @@ function fallbackMessageForLevel(level: TerminalLevel): string {
   return level === "info" ? "runtime event" : `${level} event`;
 }
 
-function sanitizeUnknown(value: unknown, verbose: boolean): unknown {
+function sanitizeUnknown(value: unknown, verbose: boolean, seen = new WeakSet<object>()): unknown {
   if (value instanceof Error) {
     return {
       error: value.message,
@@ -408,21 +426,32 @@ function sanitizeUnknown(value: unknown, verbose: boolean): unknown {
     };
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeUnknown(entry, verbose));
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const normalized = value.map((entry) => sanitizeUnknown(entry, verbose, seen));
+    seen.delete(value);
+    return normalized;
   }
   if (!value || typeof value !== "object") {
     return value;
   }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
   const result: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (typeof entry === "function") {
       continue;
     }
-    const normalized = sanitizeUnknown(entry, verbose);
+    const normalized = sanitizeUnknown(entry, verbose, seen);
     if (normalized !== undefined) {
       result[key] = normalized;
     }
   }
+  seen.delete(value);
   return result;
 }
 

@@ -331,4 +331,87 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_sessions_access_token_hash_unique ON companion_sessions(access_token_hash);
     `,
   },
+  {
+    version: 7,
+    name: "canonical_runtime_schema_repairs",
+    sql: `
+      CREATE TABLE IF NOT EXISTS approval_effects (
+        effect_id TEXT PRIMARY KEY,
+        approval_id TEXT NOT NULL,
+        effect_kind TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        outcome TEXT,
+        detail TEXT,
+        attempt_count BIGINT NOT NULL DEFAULT 0,
+        details_json TEXT NOT NULL DEFAULT '{}',
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        result_json TEXT NOT NULL DEFAULT '{}',
+        last_error TEXT,
+        claimed_by TEXT,
+        claimed_at TEXT,
+        lease_expires_at TEXT,
+        version BIGINT NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY(approval_id) REFERENCES approvals(approval_id) ON DELETE CASCADE
+      );
+
+      ALTER TABLE durable_runs
+        ADD COLUMN IF NOT EXISTS lease_owner_id TEXT,
+        ADD COLUMN IF NOT EXISTS lease_expires_at TEXT,
+        ADD COLUMN IF NOT EXISTS lease_heartbeat_at TEXT,
+        ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+      CREATE INDEX IF NOT EXISTS idx_durable_runs_status_lease_updated
+        ON durable_runs(status, lease_expires_at, updated_at DESC);
+
+      ALTER TABLE approval_effects
+        ADD COLUMN IF NOT EXISTS target_kind TEXT,
+        ADD COLUMN IF NOT EXISTS idempotency_key TEXT,
+        ADD COLUMN IF NOT EXISTS payload_json TEXT NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS result_json TEXT NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS claimed_by TEXT,
+        ADD COLUMN IF NOT EXISTS claimed_at TEXT,
+        ADD COLUMN IF NOT EXISTS lease_expires_at TEXT,
+        ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
+
+      UPDATE approval_effects
+      SET effect_kind = 'approval_wait_wake'
+      WHERE effect_kind = 'wake_durable_run';
+
+      UPDATE approval_effects
+      SET target_kind = COALESCE(NULLIF(target_kind, ''), 'durable_run');
+
+      UPDATE approval_effects
+      SET idempotency_key = approval_id || ':' || effect_kind || ':' || COALESCE(target_kind, 'durable_run') || ':' || target_id
+      WHERE idempotency_key IS NULL OR BTRIM(idempotency_key) = '';
+
+      UPDATE approval_effects
+      SET payload_json = COALESCE(NULLIF(payload_json, ''), '{}')
+      WHERE payload_json IS NULL OR BTRIM(payload_json) = '';
+
+      UPDATE approval_effects
+      SET result_json = COALESCE(NULLIF(result_json, ''), COALESCE(NULLIF(details_json, ''), '{}'))
+      WHERE result_json IS NULL OR BTRIM(result_json) = '';
+
+      UPDATE approval_effects
+      SET version = 1
+      WHERE version IS NULL OR version < 1;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_effects_idempotency
+        ON approval_effects(idempotency_key);
+      CREATE INDEX IF NOT EXISTS idx_approval_effects_lookup
+        ON approval_effects(approval_id, effect_kind, target_kind, target_id);
+      CREATE INDEX IF NOT EXISTS idx_approval_effects_approval_created
+        ON approval_effects(approval_id, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_approval_effects_status_lease_updated
+        ON approval_effects(status, lease_expires_at, updated_at DESC);
+
+      ${buildPostgresRuntimeSchemaSql()}
+    `,
+  },
 ];

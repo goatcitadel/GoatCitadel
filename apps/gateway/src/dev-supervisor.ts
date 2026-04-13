@@ -30,6 +30,7 @@ setGoatcitadelTerminalTitle(process.env.GOATCITADEL_TERMINAL_TASK?.trim() || "Ga
 const gatewayHost = process.env.GATEWAY_HOST ?? "127.0.0.1";
 const gatewayHealthHost = resolveGatewayHealthHost(gatewayHost);
 const gatewayPort = Number(process.env.GATEWAY_PORT ?? 8787);
+const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 30_000);
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
 const pollMs = Number(process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS ?? 1200);
 const restartWindowMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_WINDOW_MS ?? 60_000);
@@ -74,18 +75,22 @@ async function main(): Promise<void> {
       runtimeRoot,
       watchRoots,
       pollMs,
+      gatewayHealthTimeoutMs,
     });
   } else {
     log.info(formatVerboseFlagHint());
   }
   assertGatewayBindIsSafeForDev(gatewayHost);
-  log.info(`restart budget ${restartMaxFailures} failures / ${restartWindowMs}ms`, verboseRequested
-    ? {
-        restartBaseBackoffMs,
-        restartMaxBackoffMs,
-        restartCircuitOpenMs,
-      }
-    : undefined);
+  log.info(
+    `restart budget ${restartMaxFailures} failures / ${restartWindowMs}ms`,
+    verboseRequested
+      ? {
+          restartBaseBackoffMs,
+          restartMaxBackoffMs,
+          restartCircuitOpenMs,
+        }
+      : undefined,
+  );
   if (warnUnauthNonLoopback && shouldWarnUnauthNonLoopbackBind(gatewayHost, readSupervisorAuthConfig())) {
     log.warn("non-loopback bind without explicit auth env detected", {
       host: gatewayHost,
@@ -200,14 +205,14 @@ async function startChild(): Promise<void> {
     }
   });
 
-  const healthy = await waitForGatewayHealth(15_000);
+  const healthy = await waitForGatewayHealth(gatewayHealthTimeoutMs);
   if (healthy) {
     resetFailureBudget();
     log.success("gateway online", { pid: currentPid });
     return;
   }
 
-  log.warn("gateway did not become healthy in time");
+  log.warn("gateway did not become healthy in time", { timeoutMs: gatewayHealthTimeoutMs });
   const delay = registerFailureAndGetDelay("health_timeout");
   if (delay !== null) {
     scheduleRestartAfter(delay, "health timeout");
@@ -334,6 +339,14 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function readPositiveInt(value: string | undefined, fallback: number): number {
+  if (!value?.trim()) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 async function computeSignature(): Promise<string> {
   const entries: string[] = [];
   for (const watchRoot of watchRoots) {
@@ -389,7 +402,7 @@ function registerFailureAndGetDelay(reason: string): number | null {
   const failures = failureTimestamps.length;
   const computedDelay = Math.min(
     restartMaxBackoffMs,
-    Math.round(restartBaseBackoffMs * (2 ** Math.max(0, failures - 1))),
+    Math.round(restartBaseBackoffMs * 2 ** Math.max(0, failures - 1)),
   );
 
   if (failures > restartMaxFailures) {
@@ -428,7 +441,7 @@ function clearRestartTimer(): void {
 }
 
 function pruneFailures(now = Date.now()): void {
-  while (failureTimestamps.length > 0 && (now - (failureTimestamps[0] ?? now)) > restartWindowMs) {
+  while (failureTimestamps.length > 0 && now - (failureTimestamps[0] ?? now) > restartWindowMs) {
     failureTimestamps.shift();
   }
 }
@@ -452,16 +465,16 @@ function resolveGatewayHealthHost(host: string): string {
 
 function assertGatewayBindIsSafeForDev(host: string): void {
   if (
-    isLoopbackHost(host)
-    || resolveAllowUnauthNetwork()
-    || !shouldWarnUnauthNonLoopbackBind(host, readSupervisorAuthConfig())
+    isLoopbackHost(host) ||
+    resolveAllowUnauthNetwork() ||
+    !shouldWarnUnauthNonLoopbackBind(host, readSupervisorAuthConfig())
   ) {
     return;
   }
   throw new Error(
-    `Unsafe gateway bind blocked for local dev: GATEWAY_HOST=${host}. `
-    + "Set GATEWAY_HOST=127.0.0.1 for local-only access, configure GOATCITADEL_AUTH_MODE with credentials, "
-    + "or explicitly set GOATCITADEL_ALLOW_UNAUTH_NETWORK=1 to override.",
+    `Unsafe gateway bind blocked for local dev: GATEWAY_HOST=${host}. ` +
+      "Set GATEWAY_HOST=127.0.0.1 for local-only access, configure GOATCITADEL_AUTH_MODE with credentials, " +
+      "or explicitly set GOATCITADEL_ALLOW_UNAUTH_NETWORK=1 to override.",
   );
 }
 
