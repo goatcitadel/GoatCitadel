@@ -1,4 +1,5 @@
 import React from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ChatSurfaceLayout } from "./ChatSurfaceLayout";
@@ -48,5 +49,12 @@ describe("ChatSurfaceLayout", () => {
     expect(markup).toContain('data-dominant-artifact="workbench"');
     expect(markup).toContain('data-desktop-density="code"');
     expect(markup).not.toContain("Context dock");
+  });
+
+  it("keeps the code support lane left of the workbench on desktop", () => {
+    const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
+
+    expect(css).toContain(".chat-v11-main-grid.surface-grid-code.with-dock-collapsed");
+    expect(css).toContain('grid-template-areas: "primary secondary";');
   });
 });

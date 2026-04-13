@@ -86,25 +86,6 @@ export function RuntimeHubPage() {
     <TuneHubLayout
       title="Runtime"
       subtitle="Gateway controls, local runtimes, acceleration targets, and backup safety need to read like one operator cockpit."
-      summaries={[
-        {
-          label: "Runtime posture",
-          value: latestBackup ? "Protected" : "Needs backup",
-          note: backupSummary,
-          tone: latestBackup ? "success" : "warning",
-        },
-        {
-          label: "Current decision",
-          value: "Gateway + backup safety",
-          note: "Use Runtime when a change can affect serving posture or recoverability",
-          tone: "accent",
-        },
-        {
-          label: "Restore model",
-          value: "Offline only",
-          note: "Filesystem restore stays explicit so the gateway does not overwrite live files",
-        },
-      ]}
       guideTitle="What this controls"
       guideBody="Use Runtime for changes that can interrupt serving, alter local acceleration posture, or affect recovery guarantees."
     >

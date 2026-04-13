@@ -45,12 +45,38 @@
 
 .chat-v11-workspace-summary {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .chat-v11-workspace-copy {
   display: grid;
+  gap: 4px;
+}
+
+.chat-v11-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chat-v11-left-head {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-v11-left-actions,
+.chat-v11-filter-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-v11-filter-row-compact {
   gap: 6px;
+}
+
+.chat-v11-filter-row .gc-button {
+  min-width: 0;
 }
 
 .chat-v11-workspace-kicker,
@@ -542,36 +568,34 @@
   display: grid;
   gap: 18px;
   min-height: min(68vh, 680px);
-  align-content: center;
-  justify-items: center;
+  align-content: start;
+  justify-items: stretch;
   padding: clamp(24px, 4vw, 48px);
-  text-align: center;
+  text-align: left;
   border-radius: 24px;
 }
 
 .mission-empty-shell-copy {
   display: grid;
   gap: 10px;
-  max-width: 760px;
 }
 
 .mission-empty-shell-actions {
   display: grid;
   gap: 12px;
-  justify-items: center;
+  justify-items: start;
 }
 
 .mission-empty-shell-stats {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .mission-empty-shell-context {
   display: grid;
   gap: 10px;
-  justify-items: center;
 }
 
 .mission-empty-shell-context-copy {
@@ -588,7 +612,7 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .mission-empty-shell-jump {
@@ -599,8 +623,7 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  justify-content: center;
-  max-width: 920px;
+  justify-content: flex-start;
 }
 
 .mission-empty-shell-prompt {

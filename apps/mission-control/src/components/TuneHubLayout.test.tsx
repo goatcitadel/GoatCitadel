@@ -24,4 +24,22 @@ describe("TuneHubLayout", () => {
     expect(markup).toContain("page-chrome-density-compact");
     expect(markup).toContain("Main content");
   });
+
+  it("skips the summary strip when no summaries are provided and exposes a detail trigger instead of an inline guide panel", () => {
+    const markup = renderToStaticMarkup(
+      <TuneHubLayout
+        title="Runtime"
+        subtitle="Runtime controls"
+        guideTitle="What this controls"
+        guideBody="Only open when you need extra posture help."
+      >
+        <div>Main content</div>
+      </TuneHubLayout>,
+    );
+
+    expect(markup).not.toContain("operator-summary-strip");
+    expect(markup).toContain("Open details");
+    expect(markup).not.toContain("tune-hub-guide");
+    expect(markup).toContain("Main content");
+  });
 });

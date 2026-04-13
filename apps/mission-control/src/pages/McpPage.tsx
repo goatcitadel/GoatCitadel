@@ -25,7 +25,6 @@ import { DataToolbar } from "../components/DataToolbar";
 import { HelpHint } from "../components/HelpHint";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { StatusChip } from "../components/StatusChip";
 import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
@@ -524,24 +523,13 @@ export function McpPage() {
         hint="MCP adapters should stay explicit, policy-bound, and easy to inspect before first live use."
         actions={mcpHeaderActions}
       />
-      <PageGuideCard
-        pageId="mcp"
-        what={pageCopy.mcp.guide?.what ?? ""}
-        when={pageCopy.mcp.guide?.when ?? ""}
-        mostCommonAction={pageCopy.mcp.guide?.mostCommonAction}
-        actions={pageCopy.mcp.guide?.actions ?? []}
-        terms={pageCopy.mcp.guide?.terms}
-      />
-
-      <div className="workflow-status-stack">
-        {error ? <p className="error">{error}</p> : null}
-        {isRefreshing ? <p className="status-banner">Refreshing MCP servers...</p> : null}
-      </div>
 
       <Panel
         title="MCP basics"
         subtitle="Start with one disabled template, connect it, then validate trust and policy before first live use."
       >
+        {error ? <p className="error">{error}</p> : null}
+        {isRefreshing ? <p className="status-banner">Refreshing MCP servers...</p> : null}
         <p className="office-subtitle">
           MCP servers are adapters that let GoatCitadel use outside tools safely. Start disabled, test one server, then
           expand.

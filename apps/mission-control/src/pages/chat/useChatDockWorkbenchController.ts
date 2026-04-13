@@ -6,6 +6,10 @@ import { defaultDockOpenForMode } from "./surface-config";
 import { useChatWorkbench } from "./useChatWorkbench";
 import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
 
+function getViewportWidth(): number | undefined {
+  return typeof window === "undefined" ? undefined : window.innerWidth;
+}
+
 export function useChatDockWorkbenchController(input: {
   messageMode: ChatMode;
   selectedSessionId: string | null;
@@ -16,7 +20,9 @@ export function useChatDockWorkbenchController(input: {
   localNotices: ChatThreadNotice[];
   dockSectionOrder: MissionControlDockSectionId[];
 }) {
-  const [dockOpen, setDockOpen] = useState<boolean>(() => defaultDockOpenForMode(input.messageMode));
+  const [dockOpen, setDockOpen] = useState<boolean>(() =>
+    defaultDockOpenForMode(input.messageMode, getViewportWidth()),
+  );
 
   const {
     workbenchState,
@@ -36,7 +42,7 @@ export function useChatDockWorkbenchController(input: {
   });
 
   useEffect(() => {
-    setDockOpen(defaultDockOpenForMode(input.messageMode));
+    setDockOpen(defaultDockOpenForMode(input.messageMode, getViewportWidth()));
   }, [input.messageMode]);
 
   const latestOrchestration = useMemo(

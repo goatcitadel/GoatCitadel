@@ -28,7 +28,6 @@ import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { StatusChip } from "../components/StatusChip";
@@ -532,18 +531,6 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
           </div>
         }
       />
-      <PageGuideCard
-        pageId="tasks"
-        what={pageCopy.tasks.guide?.what ?? ""}
-        when={pageCopy.tasks.guide?.when ?? ""}
-        actions={pageCopy.tasks.guide?.actions ?? []}
-        terms={pageCopy.tasks.guide?.terms}
-        defaultExpanded={false}
-      />
-      <div className="workflow-status-stack">
-        {error ? <p className="error">{error}</p> : null}
-        {info ? <p className="office-subtitle">{info}</p> : null}
-      </div>
 
       <DataToolbar
         primary={
@@ -569,9 +556,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
           </>
         }
         secondary={
-          <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
-            Create Task
-          </button>
+          <div className="stack-sm">
+            {error ? <p className="error">{error}</p> : null}
+            {info ? <p className="office-subtitle">{info}</p> : null}
+            <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
+              Create Task
+            </button>
+          </div>
         }
       />
 

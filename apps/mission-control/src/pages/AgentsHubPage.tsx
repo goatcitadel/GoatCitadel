@@ -19,29 +19,10 @@ const ITEMS: Array<{ id: AgentsTab; label: string }> = [
 ];
 
 export function AgentsHubPage({ activeTab, onTabChange }: AgentsHubPageProps) {
-  const activeLabel = ITEMS.find((item) => item.id === activeTab)?.label ?? "Overview";
-  const operatorFocus =
-    activeTab === "herd-live"
-      ? "Watch live herd posture and intervene while work is running."
-      : activeTab === "herd-lab"
-        ? "Use the lab when you need a controlled room for structured experimentation."
-        : activeTab === "skills"
-          ? "Tighten reusable behavior before you add more agents."
-          : "Keep the roster, rooms, and skill system aligned.";
-
   return (
     <TuneHubLayout
       title="Agents"
       subtitle="Roster posture, special herd rooms, and reusable skills should feel like one control surface instead of separate products."
-      summaries={[
-        { label: "Current lane", value: activeLabel, note: "The active agent-control surface", tone: "accent" },
-        {
-          label: "Special rooms",
-          value: "Contained",
-          note: "Herd Live and Herd Lab stay memorable without becoming the default chrome",
-        },
-        { label: "Operator focus", value: "Herd + skills", note: operatorFocus },
-      ]}
       guideTitle="What this controls"
       guideBody="Use Agents to decide who is available, which room you are operating in, and how reusable behavior is shaped before work starts."
       tabItems={ITEMS}

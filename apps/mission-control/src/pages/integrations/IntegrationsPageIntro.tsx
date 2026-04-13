@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
-import { PageGuideCard } from "../../components/PageGuideCard";
 import { PageHeader } from "../../components/PageHeader";
 import { Panel } from "../../components/Panel";
-import { pageCopy } from "../../content/copy";
 
 type IntegrationsPageIntroProps = {
   isChannelsView: boolean;
@@ -41,28 +39,14 @@ export function IntegrationsPageIntro({
         density="compact"
         actions={headerActions}
       />
-      {!isChannelsView ? (
-        <PageGuideCard
-          pageId="integrations"
-          what={pageCopy.integrations.guide?.what ?? ""}
-          when={pageCopy.integrations.guide?.when ?? ""}
-          mostCommonAction={pageCopy.integrations.guide?.mostCommonAction}
-          actions={pageCopy.integrations.guide?.actions ?? []}
-          terms={pageCopy.integrations.guide?.terms}
-        />
-      ) : null}
-
-      <div className="workflow-status-stack">
-        {error ? <p className="error">{error}</p> : null}
-        {isRefreshing ? <p className="status-banner">Refreshing integrations...</p> : null}
-      </div>
-
       <Panel
         title="How Connections Work"
         subtitle="Catalog entries define the shape. Connections hold config and activate only when a page or workflow needs them."
         collapsible
         defaultExpanded={false}
       >
+        {error ? <p className="error">{error}</p> : null}
+        {isRefreshing ? <p className="status-banner">Refreshing integrations...</p> : null}
         <ol>
           <li>
             {isChannelsView

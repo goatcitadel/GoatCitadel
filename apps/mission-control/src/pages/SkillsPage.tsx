@@ -34,7 +34,6 @@ import {
 import { DataToolbar } from "../components/DataToolbar";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { StatusChip } from "../components/StatusChip";
 import { HelpHint } from "../components/HelpHint";
 import { GCSelect, GCSwitch } from "../components/ui";
@@ -449,21 +448,6 @@ export function SkillsPage() {
           </>
         }
       />
-      <PageGuideCard
-        pageId="skills"
-        what={pageCopy.skills.guide?.what ?? ""}
-        when={pageCopy.skills.guide?.when ?? ""}
-        actions={pageCopy.skills.guide?.actions ?? []}
-        terms={pageCopy.skills.guide?.terms}
-        defaultExpanded={false}
-      />
-
-      <div className="workflow-status-stack">
-        {error ? <p className="error">{error}</p> : null}
-        {status ? <p className="status-banner">{status}</p> : null}
-        {isRefreshing ? <p className="status-banner">Refreshing skills and activation policy...</p> : null}
-      </div>
-
       <Panel
         title="What are skills?"
         subtitle="Reusable instruction packs for specific jobs and workflows."
@@ -499,6 +483,9 @@ export function SkillsPage() {
         subtitle="Browse curated sources first, validate before install, and keep imported skills disabled until you explicitly enable them."
         className="skills-source-panel"
       >
+        {error ? <p className="error">{error}</p> : null}
+        {status ? <p className="status-banner">{status}</p> : null}
+        {isRefreshing ? <p className="status-banner">Refreshing skills and activation policy...</p> : null}
         <DataToolbar
           primary={
             <div className="controls-row skills-source-query">
