@@ -40,33 +40,54 @@ export function PromptLabReportPanel(props: PromptLabReportPanelProps) {
   const hasLegacyOnlyRows = report.latestAssessments.some(
     (assessment) => assessment.legacyScore && !assessment.autoScore,
   );
+  const metrics = [
+    { label: "Total tests", value: report.summary.totalTests },
+    { label: "Executed runs", value: report.summary.completedRuns },
+    { label: "Passing tests", value: testOutcomeSummary.passingCount },
+    { label: "Review queue", value: testOutcomeSummary.reviewCount },
+    { label: "Run failures", value: testOutcomeSummary.runFailureCount },
+    { label: "Needs score", value: testOutcomeSummary.needsScoreCount },
+    { label: "Auto-scored runs", value: report.summary.autoScoredRuns },
+    { label: "Human review", value: report.summary.humanReviewedRuns },
+    { label: "Judge fallbacks", value: report.summary.judgeFallbackCount },
+    { label: "Judge errors", value: report.summary.judgeErrorCount },
+    { label: "Average weighted", value: `${report.summary.averageWeightedScore.toFixed(1)}/100` },
+    {
+      label: "Effective pass rate",
+      value: `${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
+      detail: `threshold ${passThreshold}/100`,
+    },
+  ];
 
   return (
     <article className="card prompt-lab-surface prompt-lab-summary">
-      <h3>Report</h3>
-      <p>Total tests: {report.summary.totalTests}</p>
-      <p>Executed runs: {report.summary.completedRuns}</p>
-      <p>Failed runs: {report.summary.failedRuns}</p>
-      <p>Invalid latest runs: {report.summary.invalidLatestRuns}</p>
-      <p>Auto-scored runs: {report.summary.autoScoredRuns}</p>
-      <p>Human-reviewed runs: {report.summary.humanReviewedRuns}</p>
-      <p>Degraded auto scores: {report.summary.degradedScoreCount}</p>
-      <p>Run failures (execution/runtime): {testOutcomeSummary.runFailureCount}</p>
-      <p>Fail verdicts: {testOutcomeSummary.scoreFailureCount}</p>
-      <p>Review verdicts: {testOutcomeSummary.reviewCount}</p>
-      <p>Runs waiting for score: {testOutcomeSummary.needsScoreCount}</p>
-      <p>Judge fallbacks: {report.summary.judgeFallbackCount}</p>
-      <p>Judge errors: {report.summary.judgeErrorCount}</p>
-      <p>Durable-backed latest runs: {report.summary.durableRuns ?? 0}</p>
-      <p>Approval-paused latest runs: {report.summary.approvalPausedRuns ?? 0}</p>
-      <p>Backgrounded latest runs: {report.summary.backgroundedRuns ?? 0}</p>
-      <p>Passing tests: {testOutcomeSummary.passingCount}</p>
-      <p>Average weighted score: {report.summary.averageWeightedScore.toFixed(1)}/100</p>
-      <p>
-        Effective pass rate: {(report.summary.effectivePassRate * 100).toFixed(1)}% (threshold {passThreshold}/100)
-      </p>
-      <p>Review rate: {(report.summary.reviewRate * 100).toFixed(1)}%</p>
-      <p>Failing tests: {report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}</p>
+      <div className="prompt-lab-section-heading">
+        <h3>Report</h3>
+        <span className="office-subtitle">Current pack health</span>
+      </div>
+
+      <div className="prompt-lab-report-metrics">
+        {metrics.map((metric) => (
+          <div key={metric.label} className="prompt-lab-report-metric">
+            <span className="prompt-lab-overview-label">{metric.label}</span>
+            <strong>{metric.value}</strong>
+            {metric.detail ? <p className="office-subtitle">{metric.detail}</p> : null}
+          </div>
+        ))}
+      </div>
+
+      <div className="prompt-lab-report-notes">
+        <p>Failed runs: {report.summary.failedRuns}</p>
+        <p>Invalid latest runs: {report.summary.invalidLatestRuns}</p>
+        <p>Degraded auto scores: {report.summary.degradedScoreCount}</p>
+        <p>Fail verdicts: {testOutcomeSummary.scoreFailureCount}</p>
+        <p>Review rate: {(report.summary.reviewRate * 100).toFixed(1)}%</p>
+        <p>Durable-backed latest runs: {report.summary.durableRuns ?? 0}</p>
+        <p>Approval-paused latest runs: {report.summary.approvalPausedRuns ?? 0}</p>
+        <p>Backgrounded latest runs: {report.summary.backgroundedRuns ?? 0}</p>
+        <p>Failing tests: {report.summary.failingCodes.length > 0 ? report.summary.failingCodes.join(", ") : "none"}</p>
+      </div>
+
       <p className="office-subtitle">
         Comparison score and release verdict are now separate. Review means the run can still be useful for regression
         comparison while staying out of the automatic ship lane.

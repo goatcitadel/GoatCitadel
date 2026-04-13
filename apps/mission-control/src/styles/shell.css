@@ -12,6 +12,7 @@
 .app-shell.layout-shell {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto 1fr;
+  min-height: 100vh;
 }
 
 .app-shell.layout-shell > .shell-bar,
@@ -134,6 +135,9 @@
   padding: calc(var(--space-2) * var(--density-scale)) 0 calc(var(--space-5) * var(--density-scale));
   display: grid;
   gap: calc(var(--space-3) * var(--density-scale));
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 .space-page {

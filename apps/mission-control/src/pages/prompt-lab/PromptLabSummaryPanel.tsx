@@ -94,12 +94,8 @@ export function PromptLabSummaryPanel({
       <header className="prompt-lab-hero">
         <div className="prompt-lab-hero-copy">
           <p className="prompt-lab-kicker">Evaluation Console</p>
-          <h2>{title}</h2>
+          <h3 className="prompt-lab-hero-title">{title}</h3>
           <p className="prompt-lab-intro">{subtitle}</p>
-          <p className="office-subtitle">
-            Re-running a test creates a fresh run. Historical scores stay attached to older runs until you review the
-            new output.
-          </p>
         </div>
 
         <div className="prompt-lab-hero-actions">

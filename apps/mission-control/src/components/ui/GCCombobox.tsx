@@ -65,6 +65,11 @@ export function GCCombobox({
     });
   }, [filtered, open, value]);
 
+  const highlightedOption =
+    highlightedIndex >= 0 && highlightedIndex < filtered.length
+      ? filtered[highlightedIndex]
+      : undefined;
+
   const commitSelection = (nextValue: string) => {
     onChange(nextValue);
     setOpen(false);
@@ -112,9 +117,9 @@ export function GCCombobox({
       return;
     }
     if (event.key === "Enter") {
-      if (highlightedIndex >= 0 && highlightedIndex < filtered.length) {
+      if (highlightedOption) {
         event.preventDefault();
-        commitSelection(filtered[highlightedIndex]!.value);
+        commitSelection(highlightedOption.value);
       }
       return;
     }
@@ -161,7 +166,7 @@ export function GCCombobox({
             aria-autocomplete="list"
             aria-expanded={open}
             aria-controls={listboxId}
-            aria-activedescendant={highlightedIndex >= 0 ? `${listboxId}-option-${filtered[highlightedIndex]!.value}` : undefined}
+            aria-activedescendant={highlightedOption ? `${listboxId}-option-${highlightedOption.value}` : undefined}
           />
           <ul className="gc-combobox-list" id={listboxId} role="listbox" aria-label="Options">
             {filtered.length === 0 ? (

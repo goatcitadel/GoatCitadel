@@ -104,6 +104,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     sizeBytes: number;
     updatedAt?: string;
   } | null>(null);
+  const [sidebarView, setSidebarView] = useState<"setup" | "report">("setup");
   const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
   const running = activeRun !== null;
   const benchmarkActive = Boolean(
@@ -235,6 +236,12 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
     void loadPack(selectedPackId).catch((err: Error) => setError(err.message));
   }, [loadPack, selectedPackId]);
+
+  useEffect(() => {
+    if (!report && sidebarView === "report") {
+      setSidebarView("setup");
+    }
+  }, [report, sidebarView]);
 
   const latestRunByTest = useMemo(() => {
     const map = new Map<string, PromptPackRunRecord>();
@@ -900,89 +907,135 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
         onResetPack={() => void resetPack()}
       />
 
-      <PromptLabSetupPanel
-        importText={importText}
-        importing={importing}
-        packs={packs}
-        selectedPackId={selectedPackId}
-        providerOptions={providerOptions}
-        selectedProviderId={selectedProviderId}
-        selectedModel={selectedModel}
-        reuseLastModel={reuseLastModel}
-        autoScoreOnRun={autoScoreOnRun}
-        lastSuccessfulModel={lastSuccessfulModel ?? null}
-        selectedRunModel={selectedRunModel ?? null}
-        benchmarkTestCodes={benchmarkTestCodes}
-        benchmarkProvidersInput={benchmarkProvidersInput}
-        benchmarkPending={benchmarkPending}
-        benchmarkRunId={benchmarkRunId}
-        regressionPending={regressionPending}
-        regressionRunId={regressionRunId}
-        regressionStatus={regressionStatus}
-        running={running}
-        onImportTextChange={setImportText}
-        onImport={() => void handleImport()}
-        onSelectedPackIdChange={setSelectedPackId}
-        onSelectedProviderIdChange={(providerId) => {
-          setReuseLastModel(false);
-          setSelectedProviderId(providerId);
-          const provider = providerOptions.find((item) => item.providerId === providerId);
-          setSelectedModel(provider?.models[0] ?? "");
-        }}
-        onSelectedModelChange={(model) => {
-          setReuseLastModel(false);
-          setSelectedModel(model);
-        }}
-        onReuseLastModelChange={setReuseLastModel}
-        onAutoScoreOnRunChange={setAutoScoreOnRun}
-        onBenchmarkTestCodesChange={setBenchmarkTestCodes}
-        onBenchmarkProvidersInputChange={setBenchmarkProvidersInput}
-        onRunBenchmark={() => void runBenchmark()}
-        onRefreshBenchmark={refreshBenchmark}
-        onRunRegression={() => void runRegression()}
-        onRefreshRegression={refreshRegression}
-      />
+      <div className="prompt-lab-console">
+        <aside className="prompt-lab-sidebar">
+          <div className="card prompt-lab-sidebar-header">
+            <div>
+              <p className="prompt-lab-overview-label">Control Panel</p>
+              <h3 className="prompt-lab-sidebar-title">Quality setup</h3>
+            </div>
+            <div className="prompt-lab-sidebar-tabs" role="tablist" aria-label="Quality side panels">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarView === "setup"}
+                className={[
+                  "gc-button",
+                  "prompt-lab-sidebar-tab",
+                  sidebarView === "setup" ? "prompt-lab-sidebar-tab-active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => setSidebarView("setup")}
+              >
+                Setup
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarView === "report"}
+                className={[
+                  "gc-button",
+                  "prompt-lab-sidebar-tab",
+                  sidebarView === "report" ? "prompt-lab-sidebar-tab-active" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onClick={() => setSidebarView("report")}
+                disabled={!report}
+              >
+                Report
+              </button>
+            </div>
+          </div>
 
-      <PromptLabWorkspace
-        v2UiEnabled={v2UiEnabled}
-        tests={tests}
-        filteredTests={filteredTests}
-        testResultFilter={testResultFilter}
-        onTestResultFilterChange={setTestResultFilter}
-        testOutcomeSummary={testOutcomeSummary}
-        latestRunByTest={latestRunByTest}
-        latestAssessmentByTest={latestAssessmentByTest}
-        selectedTestId={selectedTestId}
-        onSelectedTestIdChange={setSelectedTestId}
-        activeRun={activeRun}
-        running={running}
-        runOne={runOne}
-        selectedTest={selectedTest}
-        selectedPlaceholders={selectedPlaceholders}
-        placeholderValues={placeholderValues}
-        onPlaceholderValuesChange={setPlaceholderValues}
-        selectedMissingPlaceholders={selectedMissingPlaceholders}
-        selectedRun={selectedRun}
-        selectedRunModelUsage={selectedRunModelUsage}
-        selectedAssessment={selectedAssessment}
-        scoreDraft={scoreDraft}
-        onScoreDraftChange={setScoreDraft}
-        savingScore={savingScore}
-        submitScore={submitScore}
-        autoScoring={autoScoring}
-        autoScoreSelected={autoScoreSelected}
-      />
+          <div className="prompt-lab-sidebar-panel">
+            {sidebarView === "report" && report ? (
+              <PromptLabReportPanel
+                report={report}
+                testOutcomeSummary={testOutcomeSummary}
+                passThreshold={passThreshold}
+                benchmarkStatus={benchmarkStatus}
+                regressionStatus={regressionStatus}
+                trendSeries={trendSeries}
+              />
+            ) : (
+              <PromptLabSetupPanel
+                importText={importText}
+                importing={importing}
+                packs={packs}
+                selectedPackId={selectedPackId}
+                providerOptions={providerOptions}
+                selectedProviderId={selectedProviderId}
+                selectedModel={selectedModel}
+                reuseLastModel={reuseLastModel}
+                autoScoreOnRun={autoScoreOnRun}
+                lastSuccessfulModel={lastSuccessfulModel ?? null}
+                selectedRunModel={selectedRunModel ?? null}
+                benchmarkTestCodes={benchmarkTestCodes}
+                benchmarkProvidersInput={benchmarkProvidersInput}
+                benchmarkPending={benchmarkPending}
+                benchmarkRunId={benchmarkRunId}
+                regressionPending={regressionPending}
+                regressionRunId={regressionRunId}
+                regressionStatus={regressionStatus}
+                running={running}
+                onImportTextChange={setImportText}
+                onImport={() => void handleImport()}
+                onSelectedPackIdChange={setSelectedPackId}
+                onSelectedProviderIdChange={(providerId) => {
+                  setReuseLastModel(false);
+                  setSelectedProviderId(providerId);
+                  const provider = providerOptions.find((item) => item.providerId === providerId);
+                  setSelectedModel(provider?.models[0] ?? "");
+                }}
+                onSelectedModelChange={(model) => {
+                  setReuseLastModel(false);
+                  setSelectedModel(model);
+                }}
+                onReuseLastModelChange={setReuseLastModel}
+                onAutoScoreOnRunChange={setAutoScoreOnRun}
+                onBenchmarkTestCodesChange={setBenchmarkTestCodes}
+                onBenchmarkProvidersInputChange={setBenchmarkProvidersInput}
+                onRunBenchmark={() => void runBenchmark()}
+                onRefreshBenchmark={refreshBenchmark}
+                onRunRegression={() => void runRegression()}
+                onRefreshRegression={refreshRegression}
+              />
+            )}
+          </div>
+        </aside>
 
-      {report ? (
-        <PromptLabReportPanel
-          report={report}
+        <PromptLabWorkspace
+          v2UiEnabled={v2UiEnabled}
+          tests={tests}
+          filteredTests={filteredTests}
+          testResultFilter={testResultFilter}
+          onTestResultFilterChange={setTestResultFilter}
           testOutcomeSummary={testOutcomeSummary}
-          passThreshold={passThreshold}
-          benchmarkStatus={benchmarkStatus}
-          regressionStatus={regressionStatus}
-          trendSeries={trendSeries}
+          latestRunByTest={latestRunByTest}
+          latestAssessmentByTest={latestAssessmentByTest}
+          selectedTestId={selectedTestId}
+          onSelectedTestIdChange={setSelectedTestId}
+          activeRun={activeRun}
+          running={running}
+          runOne={runOne}
+          selectedTest={selectedTest}
+          selectedPlaceholders={selectedPlaceholders}
+          placeholderValues={placeholderValues}
+          onPlaceholderValuesChange={setPlaceholderValues}
+          selectedMissingPlaceholders={selectedMissingPlaceholders}
+          selectedRun={selectedRun}
+          selectedRunModelUsage={selectedRunModelUsage}
+          selectedAssessment={selectedAssessment}
+          scoreDraft={scoreDraft}
+          onScoreDraftChange={setScoreDraft}
+          savingScore={savingScore}
+          submitScore={submitScore}
+          autoScoring={autoScoring}
+          autoScoreSelected={autoScoreSelected}
         />
-      ) : null}
+      </div>
       <ConfirmModal
         open={confirmResetOpen}
         title="Reset Prompt Pack"

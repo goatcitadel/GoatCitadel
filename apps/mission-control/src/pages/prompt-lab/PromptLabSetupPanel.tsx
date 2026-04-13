@@ -97,7 +97,7 @@ export function PromptLabSetupPanel({
           Paste prompt-pack markdown to load a new evaluation set into the live workspace.
         </p>
         <textarea
-          rows={10}
+          rows={8}
           placeholder="Paste prompt-pack markdown here..."
           value={importText}
           onChange={(event) => onImportTextChange(event.target.value)}
