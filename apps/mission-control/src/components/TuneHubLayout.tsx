@@ -39,9 +39,9 @@ export function TuneHubLayout<TTab extends string>({
   children,
 }: TuneHubLayoutProps<TTab>) {
   return (
-    <section className="space-page stack-lg">
-      <SectionTitle title={title} subtitle={subtitle} />
-      <div className="office-kpi-grid operator-summary-strip">
+    <section className="space-page stack-lg tune-hub-layout">
+      <SectionTitle title={title} subtitle={subtitle} density="compact" />
+      <div className="tune-hub-summary-strip operator-summary-strip">
         {summaries.map((item) => (
           <StatCard
             key={`${title}-${item.label}`}
@@ -50,15 +50,10 @@ export function TuneHubLayout<TTab extends string>({
             note={item.note}
             tone={item.tone}
             compact
-            className="operator-summary-card"
+            className="operator-summary-card tune-hub-summary-card"
           />
         ))}
       </div>
-      {guideTitle || guideBody ? (
-        <Panel title={guideTitle} subtitle={guideBody} tone="soft" rank="muted" padding="compact">
-          <></>
-        </Panel>
-      ) : null}
       {tabItems && activeTab && onTabChange ? (
         <PageTabs
           items={tabItems}
@@ -69,6 +64,20 @@ export function TuneHubLayout<TTab extends string>({
         />
       ) : null}
       {children}
+      {guideTitle || guideBody ? (
+        <Panel
+          title={guideTitle}
+          subtitle={guideBody}
+          tone="soft"
+          rank="muted"
+          padding="compact"
+          collapsible
+          defaultExpanded={false}
+          className="tune-hub-guide"
+        >
+          <></>
+        </Panel>
+      ) : null}
     </section>
   );
 }

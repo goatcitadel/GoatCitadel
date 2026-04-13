@@ -906,6 +906,21 @@
   color: var(--gc-text-primary);
 }
 
+.theme-citadel-light .stat-card-value-compact .stat-card-value {
+  font-size: clamp(1.08rem, 0.98rem + 0.32vw, 1.3rem);
+  line-height: 1.04;
+}
+
+.theme-citadel-light .stat-card-value-dense .stat-card-value,
+.theme-citadel-light .operator-summary-card.stat-card-compact .stat-card-value {
+  font-size: clamp(0.94rem, 0.88rem + 0.2vw, 1.04rem);
+  line-height: 1.08;
+}
+
+.theme-citadel-light .stat-card-value-mono .stat-card-value {
+  font-size: clamp(0.92rem, 0.86rem + 0.18vw, 1rem);
+}
+
 .theme-citadel-light .gc-action-button {
   min-height: 44px;
   padding: 0 14px;
@@ -2956,7 +2971,8 @@
 }
 
 .theme-citadel-light .shell-main {
-  width: min(1700px, calc(100% - calc(var(--space-4) * 2)));
+  width: auto;
+  max-width: none;
 }
 
 .theme-citadel-light .status-strip .stat-card {

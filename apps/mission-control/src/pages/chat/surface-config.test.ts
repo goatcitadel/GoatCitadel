@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { defaultDockOpenForMode, getMissionControlSurfaceConfig } from "./surface-config";
 
 describe("mission control surface config", () => {
-  it("keeps chat dock collapsed by default and opens specialized docks by default", () => {
+  it("keeps specialized docks drawer-first by default", () => {
     expect(defaultDockOpenForMode("chat")).toBe(false);
-    expect(defaultDockOpenForMode("cowork")).toBe(true);
-    expect(defaultDockOpenForMode("code")).toBe(true);
+    expect(defaultDockOpenForMode("cowork")).toBe(false);
+    expect(defaultDockOpenForMode("code")).toBe(false);
   });
 
   it("returns distinct empty-state copy per mode", () => {
@@ -17,9 +17,13 @@ describe("mission control surface config", () => {
     expect(code.dockTitle).toBe("Code context");
     expect(cowork.layout.mainGridClassName).toBe("surface-grid-cowork");
     expect(chat.layout.dominantArtifact).toBe("conversation");
+    expect(chat.layout.dockBehavior).toBe("collapsible");
     expect(cowork.layout.threadPlacement).toBe("support");
     expect(cowork.layout.threadPanelRank).toBe("muted");
+    expect(cowork.layout.supportThreadBehavior).toBe("stacked");
     expect(code.layout.workflowPlacement).toBe("primary");
     expect(code.layout.threadPanelRank).toBe("inset");
+    expect(code.layout.dockBehavior).toBe("drawer");
+    expect(code.layout.desktopDensity).toBe("code");
   });
 });

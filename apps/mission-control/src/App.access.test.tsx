@@ -490,6 +490,30 @@ describe("App gateway access gate", () => {
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
   }, 15_000);
 
+  it("keeps direct Work surface entry active when onboarding is incomplete", async () => {
+    const { App } = await import("./App");
+    window.location.search = "?space=operate&page=surface&surface=code";
+    window.location.href = "http://localhost:5173/?space=operate&page=surface&surface=code";
+    preflightGatewayAccessMock.mockResolvedValue({
+      ...createReadyPreflightResult(),
+      onboardingState: {
+        ...createReadyPreflightResult().onboardingState,
+        completed: false,
+      },
+    });
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = mount(<App />);
+    });
+    await flush();
+
+    const text = await waitForTreeText(renderer!, "chat-ready:code:locked");
+    expect(text).toContain("chat-ready:code:locked");
+    expect(text).toContain("Onboarding still needs attention.");
+    expect(text).not.toContain("Launch Wizard");
+  }, 15_000);
+
   it("shows startup copy before the first preflight resolves and then transitions into the shell", async () => {
     const { App } = await import("./App");
     let resolvePreflight: ((value: ReturnType<typeof createReadyPreflightResult>) => void) | undefined;

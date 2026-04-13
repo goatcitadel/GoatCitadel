@@ -155,14 +155,23 @@
 }
 
 .shell-main {
-  width: min(1680px, calc(100% - calc(var(--space-5) * 2)));
-  margin: 0 auto;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  margin-inline: calc(var(--space-5) * 1);
   padding: calc(var(--space-2) * var(--density-scale)) 0 calc(var(--space-5) * var(--density-scale));
   display: grid;
   gap: calc(var(--space-2) * var(--density-scale));
   min-height: 0;
   overflow-x: hidden;
   overflow-y: visible;
+}
+
+@media (max-width: 960px) {
+  .shell-main {
+    width: auto;
+    margin-inline: calc(var(--space-4) * 1);
+  }
 }
 
 .shell-attached-status-panel {
@@ -389,7 +398,7 @@
   }
 
   .shell-main {
-    width: calc(100% - calc(var(--space-4) * 2));
+    width: auto;
   }
 
   .surface-nav,

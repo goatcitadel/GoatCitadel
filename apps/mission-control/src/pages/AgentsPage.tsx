@@ -18,6 +18,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { StatusChip } from "../components/StatusChip";
+import { StatCard } from "../components/StatCard";
 import { GCSelect } from "../components/ui";
 import { buildAgentDirectory, BUILTIN_AGENT_ROSTER } from "../data/agent-roster";
 import { useAction } from "../hooks/useAction";
@@ -369,6 +370,7 @@ export function AgentsPage() {
         title={pageCopy.agents.title}
         subtitle={pageCopy.agents.subtitle}
         hint="Use Herd HQ to manage built-in and custom goat profiles, adjust role posture, and keep assignment-ready agents easy to inspect."
+        density="compact"
         actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="live">
@@ -394,30 +396,34 @@ export function AgentsPage() {
       </div>
 
       <div className="office-kpi-grid">
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Active roles</p>
-          <p className="office-kpi-value">
-            {agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length}
-          </p>
-          <p className="office-kpi-note">Ready for assignments</p>
-        </article>
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Archived roles</p>
-          <p className="office-kpi-value">
-            {agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length}
-          </p>
-          <p className="office-kpi-note">Disabled but recoverable</p>
-        </article>
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Built-ins</p>
-          <p className="office-kpi-value">{agentsResponse.items.filter((item) => item.isBuiltin).length}</p>
-          <p className="office-kpi-note">Core roster</p>
-        </article>
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Custom</p>
-          <p className="office-kpi-value">{agentsResponse.items.filter((item) => !item.isBuiltin).length}</p>
-          <p className="office-kpi-note">User-defined roles</p>
-        </article>
+        <StatCard
+          label="Active roles"
+          value={agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length}
+          note="Ready for assignments"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Archived roles"
+          value={agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length}
+          note="Disabled but recoverable"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Built-ins"
+          value={agentsResponse.items.filter((item) => item.isBuiltin).length}
+          note="Core roster"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Custom"
+          value={agentsResponse.items.filter((item) => !item.isBuiltin).length}
+          note="User-defined roles"
+          compact
+          className="operator-summary-card"
+        />
       </div>
 
       <DataToolbar
@@ -627,14 +633,19 @@ export function AgentsPage() {
                   onClick={() => void onSave()}
                   disabled={saving || Boolean(createDisabledReason)}
                   title={createDisabledReason ?? undefined}
-                 className="gc-button">
+                  className="gc-button"
+                >
                   {saving ? "Saving..." : creating ? "Create Agent" : "Save Changes"}
                 </button>
                 {creating && createDisabledReason ? (
                   <span className="office-subtitle">{createDisabledReason}</span>
                 ) : null}
                 {!creating && selected && selected.lifecycleStatus === "active" ? (
-                  <button type="button" onClick={() => setConfirmAction({ type: "archive", name: selected.name })} className="gc-button">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAction({ type: "archive", name: selected.name })}
+                    className="gc-button"
+                  >
                     {globalCopy.common.archive}
                   </button>
                 ) : null}
@@ -766,4 +777,3 @@ function buildFormChanges(
   }
   return changes;
 }
-

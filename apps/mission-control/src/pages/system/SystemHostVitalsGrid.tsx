@@ -10,7 +10,7 @@ export function SystemHostVitalsGrid({ vitals }: SystemHostVitalsGridProps) {
   return (
     <div className="metric-grid">
       <Panel title="Host Vitals" subtitle="Local machine and process health at a glance." className="stat-card">
-        <p className="stat-card-value">{Math.round(vitals.uptimeSeconds)}s</p>
+        <p className="stat-card-value system-vitals-value">{formatUptime(vitals.uptimeSeconds)}</p>
         <p className="stat-card-note">Uptime</p>
         <p className="stat-card-note">
           Hostname {vitals.hostname} · {vitals.cpuCount} cores
@@ -27,4 +27,22 @@ export function SystemHostVitalsGrid({ vitals }: SystemHostVitalsGridProps) {
       </Panel>
     </div>
   );
+}
+
+function formatUptime(totalSeconds: number): string {
+  const roundedSeconds = Math.max(0, Math.round(totalSeconds));
+  const days = Math.floor(roundedSeconds / 86400);
+  const hours = Math.floor((roundedSeconds % 86400) / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+  return `${roundedSeconds}s`;
 }

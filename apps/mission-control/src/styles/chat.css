@@ -1270,8 +1270,7 @@
 
 .theme-signal-noir .chat-v11 {
   position: relative;
-  margin-left: 18px;
-  margin-right: 18px;
+  margin: 0;
 }
 
 .theme-signal-noir .chat-v11::before {
@@ -1296,9 +1295,10 @@
 
 .theme-signal-noir .chat-v11-shell {
   display: grid;
-  grid-template-columns: 286px minmax(0, 1fr);
   gap: 24px;
   align-items: start;
+  width: 100%;
+  min-width: 0;
 }
 
 .theme-signal-noir .chat-v11-left {
@@ -1348,9 +1348,11 @@
 
 .theme-signal-noir .chat-v11-conversation-shell {
   display: grid;
-  grid-template-columns: minmax(760px, 1fr) 344px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   align-items: start;
+  width: 100%;
+  min-width: 0;
 }
 
 .theme-signal-noir .chat-v11-thread,

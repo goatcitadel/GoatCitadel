@@ -161,9 +161,9 @@ export function ToolsPage() {
         ? "Pick a session from the dropdown (scoped to one conversation)."
         : scope === "workspace"
           ? `Workspace grants apply across ${activeWorkspaceId} until you revoke them.`
-        : scope === "agent"
-          ? "Pick an agent from the dropdown."
-          : "Task ID example: task_abc123... (most specific scope).";
+          : scope === "agent"
+            ? "Pick an agent from the dropdown."
+            : "Task ID example: task_abc123... (most specific scope).";
   const recommendedScope: GrantScope = "session";
   const isRecommendedScope = scope === recommendedScope;
   const grantSummary = `${decision.toUpperCase()} ${toolPattern}${scope === "global" ? " globally" : ` for ${scope} ${scopeRef || "(missing scope ref)"}`}`;
@@ -555,6 +555,7 @@ export function ToolsPage() {
         title={pageCopy.tools.title}
         subtitle={pageCopy.tools.subtitle}
         hint="Use profiles, scoped grants, and dry-runs to widen tool access deliberately instead of all at once."
+        density="compact"
         actions={toolsHeaderActions}
       />
 
@@ -589,13 +590,25 @@ export function ToolsPage() {
           subtitle="Use this wizard for most cases. Turn on advanced settings only when you need wildcard patterns or custom duration."
         >
           <div className="tools-wizard-steps">
-            <button type="button" className={["gc-button", (grantWizardStep === 1 ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onWizardJump(1)}>
+            <button
+              type="button"
+              className={["gc-button", grantWizardStep === 1 ? "active" : ""].filter(Boolean).join(" ")}
+              onClick={() => onWizardJump(1)}
+            >
               1. Who
             </button>
-            <button type="button" className={["gc-button", (grantWizardStep === 2 ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onWizardJump(2)}>
+            <button
+              type="button"
+              className={["gc-button", grantWizardStep === 2 ? "active" : ""].filter(Boolean).join(" ")}
+              onClick={() => onWizardJump(2)}
+            >
               2. What
             </button>
-            <button type="button" className={["gc-button", (grantWizardStep === 3 ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onWizardJump(3)}>
+            <button
+              type="button"
+              className={["gc-button", grantWizardStep === 3 ? "active" : ""].filter(Boolean).join(" ")}
+              onClick={() => onWizardJump(3)}
+            >
               3. How Long
             </button>
           </div>
@@ -686,21 +699,28 @@ export function ToolsPage() {
           {grantWizardStep === 2 ? (
             <div className="advanced-block">
               <div className="actions">
-                <button type="button" disabled={workingPreset !== null} onClick={() => void onApplyQuickPreset("web")} className="gc-button">
+                <button
+                  type="button"
+                  disabled={workingPreset !== null}
+                  onClick={() => void onApplyQuickPreset("web")}
+                  className="gc-button"
+                >
                   {workingPreset === "web" ? "Applying..." : "Quick: Web Assistant"}
                 </button>
                 <button
                   type="button"
                   disabled={workingPreset !== null}
                   onClick={() => void onApplyQuickPreset("files-read")}
-                 className="gc-button">
+                  className="gc-button"
+                >
                   {workingPreset === "files-read" ? "Applying..." : "Quick: File Read"}
                 </button>
                 <button
                   type="button"
                   disabled={workingPreset !== null}
                   onClick={() => void onApplyQuickPreset("devops")}
-                 className="gc-button">
+                  className="gc-button"
+                >
                   {workingPreset === "devops" ? "Applying..." : "Quick: DevOps Read"}
                 </button>
               </div>
@@ -817,7 +837,12 @@ export function ToolsPage() {
                 Next
               </button>
             ) : (
-              <button type="button" disabled={creatingGrant || !canCreateGrant} onClick={() => void onCreateGrant()} className="gc-button">
+              <button
+                type="button"
+                disabled={creatingGrant || !canCreateGrant}
+                onClick={() => void onCreateGrant()}
+                className="gc-button"
+              >
                 {creatingGrant ? "Creating..." : "Create Grant"}
               </button>
             )}
@@ -902,6 +927,10 @@ export function ToolsPage() {
         <Panel
           title="Dry-Run Tool"
           subtitle="Simulate a tool call and inspect the response safely before live execution."
+          collapsible
+          defaultExpanded={false}
+          rank="muted"
+          padding="compact"
         >
           <div className="controls-row">
             <label>

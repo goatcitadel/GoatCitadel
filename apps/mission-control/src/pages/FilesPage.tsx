@@ -32,19 +32,7 @@ interface TrailFileDownload {
   content: string;
 }
 
-const IMAGE_EXTENSIONS = new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "bmp",
-  "svg",
-  "ico",
-  "avif",
-  "tif",
-  "tiff",
-]);
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "avif", "tif", "tiff"]);
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
@@ -80,53 +68,56 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
     [workspaceId],
   );
 
-  const toWorkspacePath = useCallback((value: string) => {
-    const normalized = value.trim().replaceAll("\\", "/").replace(/^\/+/, "");
-    if (!workspacePrefix) {
-      return normalized;
-    }
-    if (!normalized) {
-      return workspacePrefix;
-    }
-    if (normalized.startsWith(workspacePrefix)) {
-      return normalized;
-    }
-    return `${workspacePrefix}${normalized}`;
-  }, [workspacePrefix]);
+  const toWorkspacePath = useCallback(
+    (value: string) => {
+      const normalized = value.trim().replaceAll("\\", "/").replace(/^\/+/, "");
+      if (!workspacePrefix) {
+        return normalized;
+      }
+      if (!normalized) {
+        return workspacePrefix;
+      }
+      if (normalized.startsWith(workspacePrefix)) {
+        return normalized;
+      }
+      return `${workspacePrefix}${normalized}`;
+    },
+    [workspacePrefix],
+  );
 
   useEffect(() => {
     setUploadPath((current) => toWorkspacePath(current || "notes/example.txt"));
   }, [toWorkspacePath]);
 
-  const load = useCallback(async (options?: { background?: boolean }) => {
-    const background = options?.background ?? false;
-    if (background) {
-      setIsRefreshing(true);
-    } else {
-      setIsInitialLoading(true);
-    }
-    try {
-      const [filesRes, templatesRes] = await Promise.all([
-        fetchFilesList(".", 500),
-        fetchFileTemplates(),
-      ]);
-      const scopedFiles = workspacePrefix
-        ? filesRes.items.filter((item) => item.relativePath.startsWith(workspacePrefix))
-        : filesRes.items;
-      setFiles(scopedFiles);
-      setTemplates(templatesRes.items);
-      setSelectedPath((current) => current || scopedFiles[0]?.relativePath || "");
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
+  const load = useCallback(
+    async (options?: { background?: boolean }) => {
+      const background = options?.background ?? false;
       if (background) {
-        setIsRefreshing(false);
+        setIsRefreshing(true);
       } else {
-        setIsInitialLoading(false);
+        setIsInitialLoading(true);
       }
-    }
-  }, [workspacePrefix]);
+      try {
+        const [filesRes, templatesRes] = await Promise.all([fetchFilesList(".", 500), fetchFileTemplates()]);
+        const scopedFiles = workspacePrefix
+          ? filesRes.items.filter((item) => item.relativePath.startsWith(workspacePrefix))
+          : filesRes.items;
+        setFiles(scopedFiles);
+        setTemplates(templatesRes.items);
+        setSelectedPath((current) => current || scopedFiles[0]?.relativePath || "");
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        if (background) {
+          setIsRefreshing(false);
+        } else {
+          setIsInitialLoading(false);
+        }
+      }
+    },
+    [workspacePrefix],
+  );
 
   useEffect(() => {
     void load({ background: false });
@@ -168,16 +159,19 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
       riskAbortRef.current?.abort();
       const controller = new AbortController();
       riskAbortRef.current = controller;
-      void evaluateUiChangeRisk({
-        pageId: "files",
-        changes: [
-          {
-            field: "uploadPath",
-            from,
-            to: uploadPath,
-          },
-        ],
-      }, { signal: controller.signal })
+      void evaluateUiChangeRisk(
+        {
+          pageId: "files",
+          changes: [
+            {
+              field: "uploadPath",
+              from,
+              to: uploadPath,
+            },
+          ],
+        },
+        { signal: controller.signal },
+      )
         .then((res) => {
           setPathRisk({
             overall: res.overall,
@@ -194,11 +188,13 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
           }
           setPathRisk({
             overall: "warning",
-            items: [{
-              field: "uploadPath",
-              level: "warning",
-              hint: "Risk preflight unavailable; local validation only.",
-            }],
+            items: [
+              {
+                field: "uploadPath",
+                level: "warning",
+                hint: "Risk preflight unavailable; local validation only.",
+              },
+            ],
           });
         });
     }, 400);
@@ -219,10 +215,7 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
     return files.filter((file) => file.relativePath.toLowerCase().includes(query));
   }, [files, search]);
 
-  const selectedMeta = useMemo(
-    () => files.find((file) => file.relativePath === selectedPath),
-    [files, selectedPath],
-  );
+  const selectedMeta = useMemo(() => files.find((file) => file.relativePath === selectedPath), [files, selectedPath]);
 
   const searchOptions = useMemo(() => {
     const dynamic = files
@@ -307,14 +300,15 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
         title={pageCopy.files.title}
         subtitle={pageCopy.files.subtitle}
         hint="Trail files keep reports, notes, generated artifacts, and uploaded workspace content in one inspectable surface."
-        actions={(
+        density="compact"
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="live">{filteredFiles.length} visible files</StatusChip>
             <StatusChip>{templates.length} templates</StatusChip>
             {isRefreshing ? <StatusChip tone="warning">Refreshing</StatusChip> : null}
             {isFallbackRefreshing ? <StatusChip tone="warning">Polling fallback</StatusChip> : null}
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="files"
@@ -336,26 +330,46 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
         title="How To Use Trail Files"
         subtitle="Use the directory, preview, and save path helpers together so you write into the right workspace location without guessing."
         tone="soft"
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
       >
         <ol className="files-howto-list">
-          <li>Find the file in <strong>Workspace Trails</strong> or filter by folder/path text.</li>
+          <li>
+            Find the file in <strong>Workspace Trails</strong> or filter by folder/path text.
+          </li>
           <li>Click a file once to preview it. Image files render as images, not text.</li>
-          <li>Use <strong>Use Selected Path</strong> to safely prefill the save path.</li>
-          <li>Use <strong>Edit Selected File</strong> for text files, then update content and save.</li>
+          <li>
+            Use <strong>Use Selected Path</strong> to safely prefill the save path.
+          </li>
+          <li>
+            Use <strong>Edit Selected File</strong> for text files, then update content and save.
+          </li>
           <li>Review the path risk badge and change-review panel before writing.</li>
         </ol>
         <p className="office-subtitle">
-          Tip: keep reports in <code>artifacts/</code>, notes in <code>notes/</code>, and avoid saving outside approved workspace paths.
+          Tip: keep reports in <code>artifacts/</code>, notes in <code>notes/</code>, and avoid saving outside approved
+          workspace paths.
         </p>
       </Panel>
 
       <Panel
         title="Create Example Artifact"
         subtitle="Start with a template when you want a known-good file structure before you edit or upload content."
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
       >
         <div className="actions">
           {templates.map((template) => (
-            <button type="button" key={template.templateId} onClick={() => void onCreateTemplate(template.templateId)} className="gc-button">
+            <button
+              type="button"
+              key={template.templateId}
+              onClick={() => void onCreateTemplate(template.templateId)}
+              className="gc-button"
+            >
               {template.title}
             </button>
           ))}
@@ -363,7 +377,7 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
       </Panel>
 
       <DataToolbar
-        primary={(
+        primary={
           <SelectOrCustom
             value={search}
             onChange={setSearch}
@@ -371,7 +385,7 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
             customPlaceholder="Filter files by path text"
             customLabel="File filter"
           />
-        )}
+        }
       />
       <div className="split-grid">
         <Panel
@@ -383,8 +397,11 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
               data={filteredFiles}
               itemContent={(_index, file) => (
                 <div className="virtual-list-item files-list-item" key={file.relativePath}>
-                  <button type="button"
-                    className={["gc-button", (selectedPath === file.relativePath ? "active" : "")].filter(Boolean).join(" ")}
+                  <button
+                    type="button"
+                    className={["gc-button", selectedPath === file.relativePath ? "active" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
                     onClick={() => setSelectedPath(file.relativePath)}
                   >
                     <span className="files-path">{file.relativePath}</span>
@@ -408,18 +425,23 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
             </p>
           ) : null}
           <div className="actions">
-            <button type="button" onClick={onUseSelectedPath} disabled={!selectedPath} className="gc-button">Use Selected Path</button>
-            <button type="button" onClick={onEditSelectedFile} disabled={!selectedPath || !selectedCanEdit} className="gc-button">Edit Selected File</button>
+            <button type="button" onClick={onUseSelectedPath} disabled={!selectedPath} className="gc-button">
+              Use Selected Path
+            </button>
+            <button
+              type="button"
+              onClick={onEditSelectedFile}
+              disabled={!selectedPath || !selectedCanEdit}
+              className="gc-button"
+            >
+              Edit Selected File
+            </button>
           </div>
           {selectedFile ? (
             selectedIsImage ? (
               selectedImageSrc ? (
                 <figure className="file-image-preview-shell">
-                  <img
-                    className="file-image-preview"
-                    src={selectedImageSrc}
-                    alt={`Preview of ${selectedPath}`}
-                  />
+                  <img className="file-image-preview" src={selectedImageSrc} alt={`Preview of ${selectedPath}`} />
                   <figcaption className="office-subtitle">
                     Image preview ({selectedFile.contentType || "image"}).
                   </figcaption>
@@ -458,9 +480,14 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
           placeholder="Custom workspace path"
           helpText="Pick a suggested path or use custom mode for advanced locations."
         />
-        <FieldHelp>Trail writing stays safest when you start from an existing file, a template, or a known workspace directory such as notes, docs, memory, or artifacts.</FieldHelp>
+        <FieldHelp>
+          Trail writing stays safest when you start from an existing file, a template, or a known workspace directory
+          such as notes, docs, memory, or artifacts.
+        </FieldHelp>
         <div className="actions">
-          <button type="button" onClick={() => void onSaveFile()} className="gc-button">Save File</button>
+          <button type="button" onClick={() => void onSaveFile()} className="gc-button">
+            Save File
+          </button>
         </div>
         <div className="controls-row">
           <ChangeBadge level={pathRisk.overall} />
@@ -481,11 +508,7 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
           className="full-textarea"
           placeholder="File content"
         />
-        <ChangeReviewPanel
-          title="Path Change Review"
-          overall={pathRisk.overall}
-          items={pathRisk.items}
-        />
+        <ChangeReviewPanel title="Path Change Review" overall={pathRisk.overall} items={pathRisk.items} />
       </Panel>
     </section>
   );
@@ -515,4 +538,3 @@ function formatFileSize(bytes: number): string {
   }
   return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
-

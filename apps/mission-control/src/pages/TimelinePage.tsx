@@ -51,6 +51,7 @@ export function TimelinePage({ activeTab, onTabChange }: TimelinePageProps) {
       <SectionTitle
         title="Timeline"
         subtitle="Keep one runtime story in focus while adjacent lanes stay collapsed until they matter."
+        density="compact"
       />
       <div className="workflow-summary-strip operator-summary-strip">
         <StatCard
@@ -92,7 +93,20 @@ export function TimelinePage({ activeTab, onTabChange }: TimelinePageProps) {
         ariaLabel="Timeline focus"
         onSelect={(value) => onTabChange(value as TimelineTab)}
       />
-      {error ? <p className="error">{error}</p> : null}
+      {error ? (
+        <Panel
+          title="Timeline data needs attention"
+          subtitle={describeTimelineError(error)}
+          tone="warning"
+          rank="elevated"
+          padding="compact"
+        >
+          <details className="advanced-panel">
+            <summary>Technical detail</summary>
+            <pre>{error}</pre>
+          </details>
+        </Panel>
+      ) : null}
       <EmbeddedPageChromeProvider>
         <div className="stack-lg">
           <Panel
@@ -147,6 +161,14 @@ export function TimelinePage({ activeTab, onTabChange }: TimelinePageProps) {
       </EmbeddedPageChromeProvider>
     </section>
   );
+}
+
+function describeTimelineError(error: string): string {
+  const match = error.match(/"message":"([^"]+)"/);
+  if (match?.[1]) {
+    return match[1];
+  }
+  return "Retained timeline data could not be loaded. Review the technical detail before treating the lane as healthy.";
 }
 
 function renderTimelineSection(

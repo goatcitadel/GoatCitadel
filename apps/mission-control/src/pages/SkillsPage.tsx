@@ -430,12 +430,13 @@ export function SkillsPage() {
   }
 
   return (
-    <section className="workflow-page">
+    <section className="workflow-page skills-page">
       <PageHeader
         eyebrow="Operate"
         title={pageCopy.skills.title}
         subtitle={pageCopy.skills.subtitle}
         hint="Discover, validate, install, and govern reusable playbook skills without leaving the operator workflow."
+        density="compact"
         actions={
           <>
             <StatusChip tone="muted">{filteredSkills.length} visible</StatusChip>
@@ -454,6 +455,7 @@ export function SkillsPage() {
         when={pageCopy.skills.guide?.when ?? ""}
         actions={pageCopy.skills.guide?.actions ?? []}
         terms={pageCopy.skills.guide?.terms}
+        defaultExpanded={false}
       />
 
       <div className="workflow-status-stack">
@@ -462,7 +464,14 @@ export function SkillsPage() {
         {isRefreshing ? <p className="status-banner">Refreshing skills and activation policy...</p> : null}
       </div>
 
-      <Panel title="What are skills?" subtitle="Reusable instruction packs for specific jobs and workflows.">
+      <Panel
+        title="What are skills?"
+        subtitle="Reusable instruction packs for specific jobs and workflows."
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
+      >
         <p className="table-subtext">
           Skills teach GoatCitadel how to do repeatable jobs. Keep them off, guarded, or fully enabled.
         </p>
@@ -488,10 +497,11 @@ export function SkillsPage() {
       <Panel
         title="Skill Sources & Import"
         subtitle="Browse curated sources first, validate before install, and keep imported skills disabled until you explicitly enable them."
+        className="skills-source-panel"
       >
         <DataToolbar
           primary={
-            <div className="controls-row">
+            <div className="controls-row skills-source-query">
               <label htmlFor="skillSourceQuery">
                 Search sources
                 <HelpHint
@@ -517,11 +527,11 @@ export function SkillsPage() {
           }
           secondary={
             sourceProviders.length > 0 ? (
-              <div className="token-row">
+              <div className="token-row skills-source-provider-list">
                 {sourceProviders.map((provider) => (
                   <span
                     key={provider.provider}
-                    className={`token-chip ${provider.available ? "token-chip-active" : ""}`}
+                    className={`token-chip skills-source-provider-chip ${provider.available ? "token-chip-active" : ""}`}
                     title={provider.error || ""}
                   >
                     {provider.providerLabel}: {provider.status}
@@ -747,6 +757,10 @@ export function SkillsPage() {
       <Panel
         title="Where to Get More Skills"
         subtitle="Discovery is separate from installation. Use these directories to find candidates, then validate and import deliberately."
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
       >
         <div className="stack-md">
           {[

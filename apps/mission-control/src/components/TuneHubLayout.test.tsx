@@ -21,6 +21,7 @@ describe("TuneHubLayout", () => {
     expect(markup).toContain("operator-summary-strip");
     expect(markup).toContain("operator-summary-card");
     expect(markup).toContain("stat-card-compact");
+    expect(markup).toContain("page-chrome-density-compact");
     expect(markup).toContain("Main content");
   });
 });

@@ -877,8 +877,7 @@
 .theme-signal-noir .dashboard-page,
 .theme-signal-noir .workflow-page {
   position: relative;
-  margin-left: 18px;
-  margin-right: 18px;
+  margin: 0;
 }
 
 .theme-signal-noir .dashboard-page::before,
@@ -912,6 +911,21 @@
 .theme-signal-noir .stat-card-value {
   font-size: clamp(2rem, 1.5rem + 1vw, 2.7rem);
   color: #f5fbff;
+}
+
+.theme-signal-noir .stat-card-value-compact .stat-card-value {
+  font-size: clamp(1.16rem, 1rem + 0.42vw, 1.42rem);
+  line-height: 1.04;
+}
+
+.theme-signal-noir .stat-card-value-dense .stat-card-value,
+.theme-signal-noir .operator-summary-card.stat-card-compact .stat-card-value {
+  font-size: clamp(0.96rem, 0.9rem + 0.24vw, 1.08rem);
+  line-height: 1.08;
+}
+
+.theme-signal-noir .stat-card-value-mono .stat-card-value {
+  font-size: clamp(0.95rem, 0.88rem + 0.24vw, 1.05rem);
 }
 
 .theme-signal-noir .stat-card-note {
@@ -1314,7 +1328,8 @@
 }
 
 .theme-signal-noir .shell-main {
-  width: min(1640px, calc(100% - calc(var(--space-5) * 2)));
+  width: auto;
+  max-width: none;
   padding-top: calc(var(--space-2) * var(--density-scale));
 }
 

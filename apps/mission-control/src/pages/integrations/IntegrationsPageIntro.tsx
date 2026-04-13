@@ -38,6 +38,7 @@ export function IntegrationsPageIntro({
         title={headerTitle}
         subtitle={headerSubtitle}
         hint={headerHint}
+        density="compact"
         actions={headerActions}
       />
       {!isChannelsView ? (
@@ -59,6 +60,8 @@ export function IntegrationsPageIntro({
       <Panel
         title="How Connections Work"
         subtitle="Catalog entries define the shape. Connections hold config and activate only when a page or workflow needs them."
+        collapsible
+        defaultExpanded={false}
       >
         <ol>
           <li>

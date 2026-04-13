@@ -28,6 +28,9 @@ export function ChatSurfaceLayout({
       data-dominant-artifact={layout.dominantArtifact}
       data-thread-placement={layout.threadPlacement}
       data-session-rail-visibility={layout.sessionRailVisibility}
+      data-support-thread-behavior={layout.supportThreadBehavior}
+      data-dock-behavior={layout.dockBehavior}
+      data-desktop-density={layout.desktopDensity}
     >
       <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
       <div className="chat-v11-main">

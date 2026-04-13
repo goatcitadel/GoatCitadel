@@ -12,10 +12,8 @@ interface ShellPageFrameProps {
 export function ShellPageFrame({ title, subtitle, actions, children }: ShellPageFrameProps) {
   return (
     <section className="space-page stack-lg">
-      <SectionTitle title={title} subtitle={subtitle} actions={actions} />
-      <EmbeddedPageChromeProvider>
-        {children}
-      </EmbeddedPageChromeProvider>
+      <SectionTitle title={title} subtitle={subtitle} actions={actions} density="compact" />
+      <EmbeddedPageChromeProvider>{children}</EmbeddedPageChromeProvider>
     </section>
   );
 }

@@ -106,6 +106,29 @@
 .stat-card-value {
   font: 700 28px/0.95 var(--font-display);
   color: var(--text-primary);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.stat-card-value-default .stat-card-value {
+  font-size: 28px;
+  line-height: 0.95;
+}
+
+.stat-card-value-compact .stat-card-value {
+  font-size: clamp(1.12rem, 1rem + 0.35vw, 1.4rem);
+  line-height: 1.02;
+}
+
+.stat-card-value-dense .stat-card-value {
+  font-size: clamp(0.94rem, 0.88rem + 0.28vw, 1.08rem);
+  line-height: 1.08;
+}
+
+.stat-card-value-mono .stat-card-value {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: clamp(0.95rem, 0.88rem + 0.3vw, 1.08rem);
+  line-height: 1.1;
 }
 
 .stat-card-note {
@@ -145,6 +168,7 @@
   grid-column: 2 / 3;
   grid-row: 1 / span 2;
   align-self: center;
+  text-align: right;
 }
 
 .action-bar,
@@ -189,9 +213,132 @@
   color: var(--text-secondary);
 }
 
+.operator-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.operator-summary-card {
+  flex: 1 1 220px;
+  min-width: min(100%, 220px);
+}
+
+.tune-hub-layout {
+  align-content: start;
+}
+
+.tune-hub-summary-strip {
+  margin-top: calc(var(--space-1) * var(--density-scale));
+}
+
+.tune-hub-summary-card {
+  --mc-surface-pad-compact: calc(var(--space-2) * var(--density-scale));
+  min-height: 0;
+}
+
+.tune-hub-summary-card.stat-card-compact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: calc(var(--space-1) * var(--density-scale));
+}
+
+.tune-hub-summary-card.stat-card-compact .stat-card-label,
+.tune-hub-summary-card.stat-card-compact .stat-card-note,
+.tune-hub-summary-card.stat-card-compact .stat-card-value {
+  grid-column: 1 / -1;
+}
+
+.tune-hub-summary-card.stat-card-compact .stat-card-value {
+  grid-row: auto;
+  text-align: left;
+}
+
+.tune-hub-summary-card .stat-card-value {
+  text-wrap: pretty;
+}
+
+.tune-hub-guide {
+  margin-top: calc(var(--space-1) * var(--density-scale));
+}
+
+.memory-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: calc(var(--space-2) * var(--density-scale));
+  align-items: stretch;
+}
+
+.memory-summary-grid .stat-card-compact {
+  min-height: 0;
+}
+
+.memory-summary-grid .stat-card-compact .stat-card-value {
+  font-size: clamp(1rem, 0.94rem + 0.28vw, 1.16rem);
+}
+
+.tasks-page .page-guide-card,
+.memory-v2 .page-guide-card,
+.skills-page .page-guide-card {
+  margin-top: 0;
+}
+
+.skills-source-query {
+  width: 100%;
+  margin-bottom: 0;
+  justify-content: space-between;
+}
+
+.skills-source-query .gc-input,
+.skills-source-query input[type="search"],
+.skills-source-query input[type="text"] {
+  min-width: min(100%, 420px);
+  flex: 1 1 320px;
+}
+
+.skills-source-provider-list {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-bottom: 0;
+  gap: calc(var(--space-2) * var(--density-scale));
+  align-items: flex-start;
+}
+
+.skills-source-provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--space-1) * var(--density-scale));
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.skills-page .data-toolbar-primary {
+  flex: 1 1 420px;
+  min-width: min(100%, 420px);
+}
+
+.skills-page .data-toolbar-secondary {
+  flex: 1 1 520px;
+  justify-content: flex-start;
+  min-width: min(100%, 320px);
+}
+
+.system-vitals-value {
+  font-size: clamp(1.3rem, 1.12rem + 0.46vw, 1.7rem);
+  line-height: 1.04;
+}
+
+@media (max-width: 960px) {
+  .operator-summary-card {
+    flex-basis: min(100%, 100%);
+  }
+}
+
 .table-subtext {
   margin-top: 3px;
-  font-size: 0.75rem;
+  font-size: 0.79rem;
   line-height: 1.4;
   color: var(--text-secondary);
 }
@@ -331,8 +478,9 @@
 }
 
 .operator-summary-card.stat-card-compact .stat-card-value {
-  font-size: clamp(1rem, 1.1vw, 1.22rem);
-  line-height: 1.05;
+  font-size: clamp(0.94rem, 0.88rem + 0.28vw, 1.08rem);
+  line-height: 1.08;
+  max-inline-size: 18ch;
 }
 
 .operator-summary-card.stat-card-compact .stat-card-note {
@@ -662,6 +810,44 @@
 .page-chrome-section .page-chrome-title {
   font-size: 1.45rem;
   line-height: 1.04;
+}
+
+.page-chrome-density-compact,
+.page-chrome-density-compact.page-header {
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.page-chrome-density-compact .page-chrome-copy,
+.page-chrome-density-compact .page-header-main {
+  gap: var(--space-1);
+}
+
+.page-chrome-density-compact .page-chrome-meta,
+.page-chrome-density-compact .page-header-meta {
+  gap: var(--space-1);
+}
+
+.page-chrome-density-compact .page-chrome-title,
+.page-chrome-density-compact .page-header-title {
+  font-size: 1.15rem;
+  line-height: 1.05;
+}
+
+.page-chrome-density-compact.page-chrome-section .page-chrome-title {
+  font-size: 1.1rem;
+}
+
+.page-chrome-density-compact .page-chrome-subtitle,
+.page-chrome-density-compact .page-header-subtitle {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.page-chrome-density-compact .page-chrome-hint,
+.page-chrome-density-compact .page-header-hint {
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .section-header {

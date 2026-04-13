@@ -30,6 +30,7 @@ import { Panel } from "../components/Panel";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { HelpHint } from "../components/HelpHint";
 import { StatusChip } from "../components/StatusChip";
+import { StatCard } from "../components/StatCard";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
@@ -726,6 +727,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         title={pageCopy.memory.title}
         subtitle={pageCopy.memory.subtitle}
         hint="Review what GoatCitadel stores, where it lives, and which learned items can still influence future turns."
+        density="compact"
         actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="muted">{files.length} files</StatusChip>
@@ -744,6 +746,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         mostCommonAction={pageCopy.memory.guide?.mostCommonAction}
         actions={pageCopy.memory.guide?.actions ?? []}
         terms={pageCopy.memory.guide?.terms}
+        defaultExpanded={false}
       />
       <div className="workflow-status-stack">
         {isInitialLoading ? <p>Loading memory workspace...</p> : null}
@@ -758,65 +761,55 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         </FieldHelp>
       </div>
 
-      <div className="office-kpi-grid">
-        <Panel className="stat-card" title="Workspace files" subtitle="Tracked across all indexed areas.">
-          <p className="stat-card-value">{files.length}</p>
-          <p className="stat-card-note">Tracked across all areas</p>
-        </Panel>
-        <Panel className="stat-card" title="Workspace size" subtitle="Total indexed file footprint.">
-          <p className="stat-card-value">{formatBytes(totalBytes)}</p>
-          <p className="stat-card-note">Total bytes in indexed files</p>
-        </Panel>
-        <Panel className="stat-card" title="Memory namespace" subtitle="Files currently under memory/.">
-          <p className="stat-card-value">{memoryFilesCount}</p>
-          <p className="stat-card-note">Files under memory/</p>
-        </Panel>
-        <Panel className="stat-card" title="Hottest area" subtitle="Largest top-level area by bytes.">
-          <p className="stat-card-value">{hottestArea?.area ?? "-"}</p>
-          <p className="stat-card-note">
-            {hottestArea ? `${formatBytes(hottestArea.totalBytes)} total` : "No files indexed"}
-          </p>
-        </Panel>
-        <Panel
-          className="stat-card stat-card-accent"
-          title="QMD Runs (24h)"
-          subtitle={
-            <>
-              How many query-time memory distillation runs happened in the last 24 hours.
-              <HelpHint
-                label="QMD runs help"
-                text="Generated means GoatCitadel built fresh context; cache hits means it reused a recent pack."
-              />
-            </>
+      <div className="office-kpi-grid memory-summary-grid">
+        <StatCard
+          label="Workspace files"
+          value={files.length}
+          note="Tracked across all indexed areas"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Workspace size"
+          value={formatBytes(totalBytes)}
+          note="Total indexed file footprint"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Memory namespace"
+          value={memoryFilesCount}
+          note="Files currently under memory/"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="Hottest area"
+          value={hottestArea?.area ?? "-"}
+          note={hottestArea ? `${formatBytes(hottestArea.totalBytes)} total` : "No files indexed"}
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="QMD activity"
+          value={qmdStats?.totalRuns ?? 0}
+          note={`Generated ${qmdStats?.generatedRuns ?? 0} / cache hits ${qmdStats?.cacheHitRuns ?? 0}`}
+          tone="accent"
+          compact
+          className="operator-summary-card"
+        />
+        <StatCard
+          label="QMD impact"
+          value={qmdStats ? describeQmdImpact(qmdStats) : "-"}
+          note={
+            qmdStats
+              ? `From ${qmdStats.originalTokenEstimate} to ${qmdStats.distilledTokenEstimate} tokens (${formatTokenDelta(qmdStats.netTokenDelta)}).`
+              : "No QMD samples yet"
           }
-        >
-          <p className="office-kpi-label">QMD activity</p>
-          <p className="stat-card-value">{qmdStats?.totalRuns ?? 0}</p>
-          <p className="stat-card-note">
-            Generated {qmdStats?.generatedRuns ?? 0} / cache hits {qmdStats?.cacheHitRuns ?? 0}
-          </p>
-        </Panel>
-        <Panel
-          className="stat-card stat-card-warning"
-          title="QMD Context Impact"
-          subtitle={
-            <>
-              Whether distilled context reduced or expanded token usage.
-              <HelpHint
-                label="QMD context impact help"
-                text="Negative savings means the distilled result grew instead of shrinking."
-              />
-            </>
-          }
-        >
-          <p className="office-kpi-label">QMD impact</p>
-          <p className="stat-card-value">{qmdStats ? describeQmdImpact(qmdStats) : "-"}</p>
-          <p className="stat-card-note">
-            {qmdStats
-              ? `Went from ${qmdStats.originalTokenEstimate} tokens to ${qmdStats.distilledTokenEstimate} (${formatTokenDelta(qmdStats.netTokenDelta)}).`
-              : "No QMD samples yet"}
-          </p>
-        </Panel>
+          tone="warning"
+          compact
+          className="operator-summary-card"
+        />
       </div>
 
       <Panel
@@ -856,7 +849,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
               <li key={area.area}>
                 <button
                   type="button"
-                  className={["gc-button", (selectedArea === area.area ? "active" : "")].filter(Boolean).join(" ")}
+                  className={["gc-button", selectedArea === area.area ? "active" : ""].filter(Boolean).join(" ")}
                   onClick={() => setSelectedArea(area.area)}
                 >
                   <strong>{area.area}</strong>
@@ -898,7 +891,14 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         </Panel>
       </div>
 
-      <Panel title="memory/ Breakdown" subtitle="Subspaces discovered under memory/ and their relative footprint.">
+      <Panel
+        title="memory/ Breakdown"
+        subtitle="Subspaces discovered under memory/ and their relative footprint."
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
+      >
         <table className="gc-data-table">
           <thead>
             <tr>
@@ -927,7 +927,14 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         </table>
       </Panel>
 
-      <Panel title="Recent Distilled Context Packs" subtitle="Recent QMD outputs and their current quality status.">
+      <Panel
+        title="Recent Distilled Context Packs"
+        subtitle="Recent QMD outputs and their current quality status."
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
+      >
         <table className="gc-data-table">
           <thead>
             <tr>
@@ -1030,4 +1037,3 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
     </section>
   );
 }
-

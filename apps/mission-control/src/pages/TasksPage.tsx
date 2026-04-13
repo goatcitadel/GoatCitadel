@@ -517,12 +517,13 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   }, [agentProfiles, subagents]);
 
   return (
-    <section className="workflow-page">
+    <section className="workflow-page tasks-page">
       <PageHeader
         eyebrow="Execution"
         title={pageCopy.tasks.title}
         subtitle={pageCopy.tasks.subtitle}
         hint="Manage queue state, recovery, deliverables, and delegated sessions from one task surface."
+        density="compact"
         actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="live">{tasks.length} visible tasks</StatusChip>
@@ -537,6 +538,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         when={pageCopy.tasks.guide?.when ?? ""}
         actions={pageCopy.tasks.guide?.actions ?? []}
         terms={pageCopy.tasks.guide?.terms}
+        defaultExpanded={false}
       />
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}

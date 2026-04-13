@@ -14,7 +14,14 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
   const { grantFilter, setGrantFilter, visibleGrants, onRevoke } = props;
 
   return (
-    <Panel title="Active Grants" subtitle="Review, filter, and revoke scoped permissions.">
+    <Panel
+      title="Active Grants"
+      subtitle="Review, filter, and revoke scoped permissions."
+      collapsible
+      defaultExpanded={false}
+      rank="muted"
+      padding="compact"
+    >
       <DataToolbar
         primary={
           <div className="controls-row">
@@ -70,4 +77,3 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
     </Panel>
   );
 }
-

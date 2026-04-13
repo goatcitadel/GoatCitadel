@@ -22,6 +22,8 @@ describe("ChatSurfaceLayout", () => {
     expect(markup).toContain("surface-grid-cowork");
     expect(markup).toContain('data-dominant-artifact="workflow"');
     expect(markup).toContain('data-thread-placement="support"');
+    expect(markup).toContain('data-support-thread-behavior="stacked"');
+    expect(markup).toContain('data-dock-behavior="drawer"');
     expect(markup).toContain("Workflow column");
     expect(markup).toContain("Context dock");
     expect(markup.indexOf("Workflow column")).toBeLessThan(markup.indexOf("Primary column"));
@@ -44,6 +46,7 @@ describe("ChatSurfaceLayout", () => {
     expect(markup).toContain("surface-layout-code");
     expect(markup).toContain("surface-grid-code");
     expect(markup).toContain('data-dominant-artifact="workbench"');
+    expect(markup).toContain('data-desktop-density="code"');
     expect(markup).not.toContain("Context dock");
   });
 });

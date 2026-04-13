@@ -37,10 +37,7 @@ const WORKSPACE_GUIDANCE_DOC_TYPES: Array<{ value: GuidanceDocType; label: strin
   { value: "vision", label: "VISION.md" },
 ];
 
-export function WorkspacesPage(props: {
-  activeWorkspaceId: string;
-  onWorkspaceChange: (workspaceId: string) => void;
-}) {
+export function WorkspacesPage(props: { activeWorkspaceId: string; onWorkspaceChange: (workspaceId: string) => void }) {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFallbackRefreshing, setIsFallbackRefreshing] = useState(false);
@@ -59,38 +56,41 @@ export function WorkspacesPage(props: {
   const [globalGuidance, setGlobalGuidance] = useState<GuidanceDocumentRecord[]>([]);
   const [workspaceGuidance, setWorkspaceGuidance] = useState<GuidanceDocumentRecord[]>([]);
 
-  const load = useCallback(async (options?: { background?: boolean; includeGuidance?: boolean }) => {
-    const background = options?.background ?? false;
-    const includeGuidance = options?.includeGuidance ?? !background;
-    if (background) {
-      setIsRefreshing(true);
-    } else {
-      setIsInitialLoading(true);
-    }
-    try {
-      const [workspaceResponse, globalResponse, scopedGuidance] = await Promise.all([
-        fetchWorkspaces("all", 300),
-        includeGuidance ? fetchGlobalGuidance() : Promise.resolve(null),
-        includeGuidance ? fetchWorkspaceGuidance(props.activeWorkspaceId) : Promise.resolve(null),
-      ]);
-      setWorkspaces(workspaceResponse.items);
-      if (globalResponse) {
-        setGlobalGuidance(globalResponse.items);
-      }
-      if (scopedGuidance) {
-        setWorkspaceGuidance(scopedGuidance.workspace);
-      }
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
+  const load = useCallback(
+    async (options?: { background?: boolean; includeGuidance?: boolean }) => {
+      const background = options?.background ?? false;
+      const includeGuidance = options?.includeGuidance ?? !background;
       if (background) {
-        setIsRefreshing(false);
+        setIsRefreshing(true);
       } else {
-        setIsInitialLoading(false);
+        setIsInitialLoading(true);
       }
-    }
-  }, [props.activeWorkspaceId]);
+      try {
+        const [workspaceResponse, globalResponse, scopedGuidance] = await Promise.all([
+          fetchWorkspaces("all", 300),
+          includeGuidance ? fetchGlobalGuidance() : Promise.resolve(null),
+          includeGuidance ? fetchWorkspaceGuidance(props.activeWorkspaceId) : Promise.resolve(null),
+        ]);
+        setWorkspaces(workspaceResponse.items);
+        if (globalResponse) {
+          setGlobalGuidance(globalResponse.items);
+        }
+        if (scopedGuidance) {
+          setWorkspaceGuidance(scopedGuidance.workspace);
+        }
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        if (background) {
+          setIsRefreshing(false);
+        } else {
+          setIsInitialLoading(false);
+        }
+      }
+    },
+    [props.activeWorkspaceId],
+  );
 
   useEffect(() => {
     void load({ background: false, includeGuidance: true });
@@ -160,32 +160,38 @@ export function WorkspacesPage(props: {
     }
   }, [load, props, workspaceDescription, workspaceName, workspaceSlug]);
 
-  const handleArchiveWorkspace = useCallback(async (workspaceId: string) => {
-    setError(null);
-    setSuccess(null);
-    try {
-      const archived = await archiveWorkspace(workspaceId);
-      setSuccess(`Workspace ${archived.name} archived.`);
-      if (archived.workspaceId === props.activeWorkspaceId) {
-        props.onWorkspaceChange("default");
+  const handleArchiveWorkspace = useCallback(
+    async (workspaceId: string) => {
+      setError(null);
+      setSuccess(null);
+      try {
+        const archived = await archiveWorkspace(workspaceId);
+        setSuccess(`Workspace ${archived.name} archived.`);
+        if (archived.workspaceId === props.activeWorkspaceId) {
+          props.onWorkspaceChange("default");
+        }
+        await load({ background: true, includeGuidance: false });
+      } catch (err) {
+        setError((err as Error).message);
       }
-      await load({ background: true, includeGuidance: false });
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [load, props]);
+    },
+    [load, props],
+  );
 
-  const handleRestoreWorkspace = useCallback(async (workspaceId: string) => {
-    setError(null);
-    setSuccess(null);
-    try {
-      const restored = await restoreWorkspace(workspaceId);
-      setSuccess(`Workspace ${restored.name} restored.`);
-      await load({ background: true, includeGuidance: false });
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [load]);
+  const handleRestoreWorkspace = useCallback(
+    async (workspaceId: string) => {
+      setError(null);
+      setSuccess(null);
+      try {
+        const restored = await restoreWorkspace(workspaceId);
+        setSuccess(`Workspace ${restored.name} restored.`);
+        await load({ background: true, includeGuidance: false });
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [load],
+  );
 
   const handleSaveGuidance = useCallback(async () => {
     setIsSaving(true);
@@ -214,7 +220,8 @@ export function WorkspacesPage(props: {
         title={pageCopy.workspaces.title}
         subtitle={pageCopy.workspaces.subtitle}
         hint="Switch operational context, create workspace overrides, and edit workspace-scoped guidance without losing the current shell state."
-        actions={(
+        density="compact"
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="success">{activeWorkspace?.name ?? props.activeWorkspaceId}</StatusChip>
             <StatusChip tone="muted">{workspaces.length} workspaces</StatusChip>
@@ -222,7 +229,7 @@ export function WorkspacesPage(props: {
               {docScope === "workspace" ? "Workspace override" : "Global default"}
             </StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="workspaces"
@@ -236,14 +243,13 @@ export function WorkspacesPage(props: {
         {isInitialLoading ? <p>Loading workspaces...</p> : null}
         {isRefreshing ? <p className="status-banner">Refreshing workspace data...</p> : null}
         {isFallbackRefreshing ? (
-          <p className="status-banner warning">
-            Live updates degraded, checking workspace data periodically.
-          </p>
+          <p className="status-banner warning">Live updates degraded, checking workspace data periodically.</p>
         ) : null}
         {error ? <p className="status-banner warning">{error}</p> : null}
         {success ? <p className="status-banner success">{success}</p> : null}
         <FieldHelp>
-          Use workspaces to separate guidance and operational context. Most users only need a few stable workspaces rather than many narrowly scoped ones.
+          Use workspaces to separate guidance and operational context. Most users only need a few stable workspaces
+          rather than many narrowly scoped ones.
         </FieldHelp>
       </div>
 
@@ -255,10 +261,15 @@ export function WorkspacesPage(props: {
         <div className="split-grid">
           <ul className="compact-list">
             {workspaces.map((workspace) => (
-              <li key={workspace.workspaceId} className={workspace.workspaceId === props.activeWorkspaceId ? "active-item" : ""}>
+              <li
+                key={workspace.workspaceId}
+                className={workspace.workspaceId === props.activeWorkspaceId ? "active-item" : ""}
+              >
                 <div>
                   <strong>{workspace.name}</strong>
-                  <p className="office-subtitle">{workspace.slug} • {workspace.lifecycleStatus}</p>
+                  <p className="office-subtitle">
+                    {workspace.slug} • {workspace.lifecycleStatus}
+                  </p>
                 </div>
                 <div className="row-actions">
                   <ActionButton
@@ -267,7 +278,11 @@ export function WorkspacesPage(props: {
                     onClick={() => props.onWorkspaceChange(workspace.workspaceId)}
                   />
                   {workspace.lifecycleStatus === "active" && workspace.workspaceId !== "default" ? (
-                    <ActionButton label="Archive" danger onClick={() => void handleArchiveWorkspace(workspace.workspaceId)} />
+                    <ActionButton
+                      label="Archive"
+                      danger
+                      onClick={() => void handleArchiveWorkspace(workspace.workspaceId)}
+                    />
                   ) : null}
                   {workspace.lifecycleStatus === "archived" ? (
                     <ActionButton label="Restore" onClick={() => void handleRestoreWorkspace(workspace.workspaceId)} />
@@ -280,15 +295,27 @@ export function WorkspacesPage(props: {
             <h4>Create Workspace</h4>
             <label className="field">
               Name
-              <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Personal" />
+              <input
+                value={workspaceName}
+                onChange={(event) => setWorkspaceName(event.target.value)}
+                placeholder="Personal"
+              />
             </label>
             <label className="field">
               Slug (optional)
-              <input value={workspaceSlug} onChange={(event) => setWorkspaceSlug(event.target.value)} placeholder="personal" />
+              <input
+                value={workspaceSlug}
+                onChange={(event) => setWorkspaceSlug(event.target.value)}
+                placeholder="personal"
+              />
             </label>
             <label className="field">
               Description (optional)
-              <textarea value={workspaceDescription} onChange={(event) => setWorkspaceDescription(event.target.value)} rows={4} />
+              <textarea
+                value={workspaceDescription}
+                onChange={(event) => setWorkspaceDescription(event.target.value)}
+                rows={4}
+              />
             </label>
             <ActionButton
               label={isCreating ? "Creating..." : "Create workspace"}
@@ -302,6 +329,10 @@ export function WorkspacesPage(props: {
       <Panel
         title="Guidance Editor"
         subtitle={docScope === "workspace" ? `Workspace override (${props.activeWorkspaceId})` : "Global default"}
+        rank="muted"
+        padding="compact"
+        collapsible
+        defaultExpanded={false}
       >
         <div className="row-actions">
           <label className="field compact">
@@ -323,7 +354,11 @@ export function WorkspacesPage(props: {
               options={visibleDocTypes.map((item) => ({ value: item.value, label: item.label }))}
             />
           </label>
-          <ActionButton label={isSaving ? "Saving..." : "Save guidance"} disabled={isSaving || !dirty} onClick={() => void handleSaveGuidance()} />
+          <ActionButton
+            label={isSaving ? "Saving..." : "Save guidance"}
+            disabled={isSaving || !dirty}
+            onClick={() => void handleSaveGuidance()}
+          />
         </div>
         <FieldHelp>
           File: <code>{selectedDocument?.absolutePath ?? "not created yet"}</code>

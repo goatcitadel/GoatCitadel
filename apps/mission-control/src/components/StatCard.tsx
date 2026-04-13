@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 type StatTone = "default" | "accent" | "warning" | "success";
+type StatValueSize = "default" | "compact" | "dense" | "mono";
 
 interface StatCardProps {
   label: string;
@@ -9,6 +10,7 @@ interface StatCardProps {
   tone?: StatTone;
   className?: string;
   compact?: boolean;
+  valueSize?: StatValueSize;
   interactive?: boolean;
   onClick?: () => void;
 }
@@ -20,14 +22,16 @@ export function StatCard({
   tone = "default",
   className,
   compact = false,
+  valueSize,
   interactive = false,
   onClick,
 }: StatCardProps) {
   const Element = interactive ? "button" : "article";
+  const resolvedValueSize = valueSize ?? (compact ? "dense" : "default");
   return (
     <Element
       type={interactive ? "button" : undefined}
-      className={`stat-card stat-card-${tone}${compact ? " stat-card-compact" : ""}${interactive ? " stat-card-interactive" : ""}${className ? ` ${className}` : ""}`}
+      className={`stat-card stat-card-${tone}${compact ? " stat-card-compact" : ""} stat-card-value-${resolvedValueSize}${interactive ? " stat-card-interactive" : ""}${className ? ` ${className}` : ""}`}
       onClick={interactive ? onClick : undefined}
     >
       <p className="stat-card-label">{label}</p>

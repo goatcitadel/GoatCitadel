@@ -24,6 +24,10 @@ export function ToolCatalogPanel(props: ToolCatalogPanelProps) {
       title="Tool Catalog"
       subtitle="Inspect the full tool surface by pack, category, risk, and approval posture."
       className={showTechnicalDetails ? "" : "expert-only"}
+      collapsible
+      defaultExpanded={false}
+      rank="muted"
+      padding="compact"
     >
       <DataToolbar
         primary={
@@ -73,4 +77,3 @@ export function ToolCatalogPanel(props: ToolCatalogPanelProps) {
     </Panel>
   );
 }
-

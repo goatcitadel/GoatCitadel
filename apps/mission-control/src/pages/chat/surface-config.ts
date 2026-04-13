@@ -16,8 +16,11 @@ export interface MissionControlSurfaceConfig {
     sessionRailVisibility: "secondary" | "tertiary";
     threadPlacement: "primary" | "support";
     threadPanelRank: "primary" | "muted" | "inset";
+    supportThreadBehavior: "persistent" | "collapsible" | "stacked";
     workflowPlacement: "none" | "primary";
     dockPlacement: "support";
+    dockBehavior: "persistent" | "collapsible" | "drawer";
+    desktopDensity: "chat" | "cowork" | "code";
     defaultColumnWidths: string;
     shellClassName: string;
     sessionRailClassName: string;
@@ -49,8 +52,11 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       sessionRailVisibility: "secondary",
       threadPlacement: "primary",
       threadPanelRank: "primary",
+      supportThreadBehavior: "persistent",
       workflowPlacement: "none",
       dockPlacement: "support",
+      dockBehavior: "collapsible",
+      desktopDensity: "chat",
       defaultColumnWidths: "thread | dock",
       shellClassName: "surface-layout-chat",
       sessionRailClassName: "surface-rail-chat",
@@ -80,8 +86,11 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       sessionRailVisibility: "tertiary",
       threadPlacement: "support",
       threadPanelRank: "muted",
+      supportThreadBehavior: "stacked",
       workflowPlacement: "primary",
       dockPlacement: "support",
+      dockBehavior: "drawer",
+      desktopDensity: "cowork",
       defaultColumnWidths: "workflow | thread | dock",
       shellClassName: "surface-layout-cowork",
       sessionRailClassName: "surface-rail-cowork",
@@ -112,8 +121,11 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       sessionRailVisibility: "tertiary",
       threadPlacement: "support",
       threadPanelRank: "inset",
+      supportThreadBehavior: "stacked",
       workflowPlacement: "primary",
       dockPlacement: "support",
+      dockBehavior: "drawer",
+      desktopDensity: "code",
       defaultColumnWidths: "workbench | thread | dock",
       shellClassName: "surface-layout-code",
       sessionRailClassName: "surface-rail-code",
@@ -143,6 +155,6 @@ export function getMissionControlSurfaceConfig(mode: ChatMode): MissionControlSu
   };
 }
 
-export function defaultDockOpenForMode(mode: ChatMode): boolean {
-  return mode !== "chat";
+export function defaultDockOpenForMode(_mode: ChatMode): boolean {
+  return false;
 }

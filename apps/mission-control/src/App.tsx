@@ -318,7 +318,7 @@ export function App() {
   } = useUiPreferences();
   const [route, setRoute] = useState<ResolvedRoute>(() => readRouteFromLocation());
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
-  const [, setOnboardingComplete] = useState<boolean | null>(null);
+  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -568,14 +568,6 @@ export function App() {
           return;
         }
         setOnboardingComplete(result.onboardingState?.completed ?? null);
-        if (!result.onboardingState?.completed) {
-          setRoute((current) => {
-            if (current.space === "operate" && current.page === "surface") {
-              return normalizeResolvedRoute({ space: "configure", page: "settings", tab: "onboarding" });
-            }
-            return current;
-          });
-        }
       })
       .catch((error) => {
         if (cancelled) {
@@ -1333,6 +1325,19 @@ export function App() {
         {shellGatewayState.status === "degraded-live-updates" ? (
           <div className="status-banner warning">
             {shellGatewayState.summary} {shellGatewayState.nextStep}
+          </div>
+        ) : null}
+        {route.space === "operate" && route.page === "surface" && onboardingComplete === false ? (
+          <div className="status-banner warning">
+            Onboarding still needs attention. Work surfaces stay available, but finish the setup checklist before
+            trusting provider, access, or runtime defaults.
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => navigate({ space: "configure", page: "settings", tab: "onboarding" })}
+            >
+              Open onboarding
+            </button>
           </div>
         ) : null}
         <PageErrorBoundary

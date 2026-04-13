@@ -9,6 +9,7 @@ interface PageChromeProps {
   hint?: ReactNode;
   className?: string;
   variant?: "hero" | "section";
+  density?: "standard" | "compact";
   hideWhenEmbedded?: boolean;
 }
 
@@ -20,6 +21,7 @@ export function PageChrome({
   hint,
   className,
   variant = "hero",
+  density = "standard",
   hideWhenEmbedded = false,
 }: PageChromeProps) {
   const embedded = useEmbeddedPageChrome();
@@ -33,7 +35,7 @@ export function PageChrome({
 
   return (
     <header
-      className={`page-chrome page-chrome-${variant} page-header${
+      className={`page-chrome page-chrome-${variant} page-chrome-density-${density} page-header${
         hasActions ? " page-header-has-actions" : ""
       }${hasHint ? " page-header-has-hint" : ""}${className ? ` ${className}` : ""}`}
     >

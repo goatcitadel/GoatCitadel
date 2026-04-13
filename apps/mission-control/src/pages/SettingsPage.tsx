@@ -869,6 +869,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         subtitle={pageCopy.settings.subtitle}
         hint="Tune providers, access, and runtime defaults without leaving Mission Control."
         className="page-header-command settings-header"
+        density="compact"
       />
       <PageGuideCard
         pageId="settings"
@@ -876,6 +877,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         when={pageCopy.settings.guide?.when ?? ""}
         actions={pageCopy.settings.guide?.actions ?? []}
         terms={pageCopy.settings.guide?.terms}
+        defaultExpanded={false}
       />
       {error ? <p className="error">{error}</p> : null}
       <ChangeReviewPanel

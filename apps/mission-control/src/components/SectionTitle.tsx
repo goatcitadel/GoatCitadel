@@ -6,9 +6,10 @@ interface SectionTitleProps {
   subtitle?: ReactNode;
   actions?: ReactNode;
   eyebrow?: string;
+  density?: "standard" | "compact";
 }
 
-export function SectionTitle({ title, subtitle, actions, eyebrow }: SectionTitleProps) {
+export function SectionTitle({ title, subtitle, actions, eyebrow, density = "standard" }: SectionTitleProps) {
   return (
     <PageChrome
       title={title}
@@ -17,6 +18,7 @@ export function SectionTitle({ title, subtitle, actions, eyebrow }: SectionTitle
       eyebrow={eyebrow}
       className="section-title"
       variant="section"
+      density={density}
     />
   );
 }

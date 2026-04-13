@@ -149,6 +149,9 @@ export function ChatPage({
   const lastLocalPrefMutationAtRef = useRef(0);
   const prefMutationSequenceRef = useRef(0);
   const lastShellSurfaceSyncKeyRef = useRef<string | null>(null);
+  const lastPublishedWorkTrustSummaryRef = useRef<string | null>(null);
+  const lastCapabilitySuggestionSyncKeyRef = useRef<string | null>(null);
+  const lastSpecialistSuggestionSyncKeyRef = useRef<string | null>(null);
   const executeOutboundItemRef = useRef<(item: OutboundQueueItem) => Promise<void>>(async () => undefined);
   const tryBeginOutboundExecutionRef = useRef<() => boolean>(() => false);
   const queuedOutboundSetterRef = useRef<React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>>(() => []);
@@ -371,11 +374,29 @@ export function ChatPage({
 
   useEffect(() => {
     if (!lockSurface) {
-      return undefined;
+      if (lastPublishedWorkTrustSummaryRef.current !== null) {
+        lastPublishedWorkTrustSummaryRef.current = null;
+        onWorkTrustSummaryChange?.(null);
+      }
+      return;
     }
-    onWorkTrustSummaryChange?.(formatWorkProviderModelSummary(selectedProviderLabel, selectedModelLabel));
-    return () => onWorkTrustSummaryChange?.(null);
+    const nextSummary = formatWorkProviderModelSummary(selectedProviderLabel, selectedModelLabel);
+    if (lastPublishedWorkTrustSummaryRef.current === nextSummary) {
+      return;
+    }
+    lastPublishedWorkTrustSummaryRef.current = nextSummary;
+    onWorkTrustSummaryChange?.(nextSummary);
   }, [lockSurface, onWorkTrustSummaryChange, selectedModelLabel, selectedProviderLabel]);
+
+  useEffect(
+    () => () => {
+      if (lastPublishedWorkTrustSummaryRef.current !== null) {
+        lastPublishedWorkTrustSummaryRef.current = null;
+        onWorkTrustSummaryChange?.(null);
+      }
+    },
+    [onWorkTrustSummaryChange],
+  );
 
   const handleCommandExecution = useCallback(
     async (sessionId: string, commandText: string) => {
@@ -629,8 +650,20 @@ export function ChatPage({
   });
 
   useEffect(() => {
-    setCapabilitySuggestions(selectedTurn?.trace.capabilityUpgradeSuggestions ?? []);
-    setSpecialistSuggestions(selectedTurn?.trace.specialistCandidateSuggestions ?? []);
+    const capabilitySuggestions = selectedTurn?.trace.capabilityUpgradeSuggestions ?? [];
+    const specialistSuggestions = selectedTurn?.trace.specialistCandidateSuggestions ?? [];
+    const capabilitySyncKey = `${selectedTurn?.turnId ?? "none"}:${JSON.stringify(capabilitySuggestions)}`;
+    const specialistSyncKey = `${selectedTurn?.turnId ?? "none"}:${JSON.stringify(specialistSuggestions)}`;
+
+    if (lastCapabilitySuggestionSyncKeyRef.current !== capabilitySyncKey) {
+      lastCapabilitySuggestionSyncKeyRef.current = capabilitySyncKey;
+      setCapabilitySuggestions(capabilitySuggestions);
+    }
+
+    if (lastSpecialistSuggestionSyncKeyRef.current !== specialistSyncKey) {
+      lastSpecialistSuggestionSyncKeyRef.current = specialistSyncKey;
+      setSpecialistSuggestions(specialistSuggestions);
+    }
   }, [selectedTurn, setCapabilitySuggestions, setSpecialistSuggestions]);
   const {
     dockOpen,

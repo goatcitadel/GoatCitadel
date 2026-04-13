@@ -65,6 +65,7 @@ export function HealthPage({ activeTab, onTabChange }: HealthPageProps) {
       <SectionTitle
         title="Health"
         subtitle="Keep one health narrative in focus while the other lane stays compressed until you need it."
+        density="compact"
       />
       <div className="office-kpi-grid operator-summary-strip">
         <StatCard
@@ -106,7 +107,20 @@ export function HealthPage({ activeTab, onTabChange }: HealthPageProps) {
         ariaLabel="Health focus"
         onSelect={(value) => onTabChange(value as HealthTab)}
       />
-      {error ? <p className="error">{error}</p> : null}
+      {error ? (
+        <Panel
+          title="Health data needs attention"
+          subtitle="Part of the runtime health lane could not be refreshed. Review the technical detail before acting."
+          tone="warning"
+          rank="elevated"
+          padding="compact"
+        >
+          <details className="advanced-panel">
+            <summary>Technical detail</summary>
+            <pre>{error}</pre>
+          </details>
+        </Panel>
+      ) : null}
       <EmbeddedPageChromeProvider>
         <div className="stack-lg">
           <Panel
