@@ -27,6 +27,7 @@ export function ChatThreadShell(props: {
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onRefresh: () => void;
@@ -50,6 +51,7 @@ export function ChatThreadShell(props: {
     onSwitchBranch,
     onRetryTurn,
     onEditTurn,
+    onOpenRunDetails,
     onApprovePending,
     onDenyPending,
     onRefresh,
@@ -76,6 +78,7 @@ export function ChatThreadShell(props: {
           onSwitchBranch={onSwitchBranch}
           onRetryTurn={onRetryTurn}
           onEditTurn={onEditTurn}
+          onOpenRunDetails={onOpenRunDetails}
         />
       </div>
 

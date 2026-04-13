@@ -45,7 +45,6 @@ import {
   shouldApplyFetchedMessagesAfterStream,
   shouldExecuteLocalChatCommand,
 } from "./chat/chat-page-pure-helpers";
-import { defaultDockOpenForMode } from "./chat/surface-config";
 import { useChatApprovalController } from "./chat/useChatApprovalController";
 import { useChatContextActions } from "./chat/useChatContextActions";
 import { useChatComposerInteractions } from "./chat/useChatComposerInteractions";
@@ -693,9 +692,6 @@ export function ChatPage({
     localNotices,
     dockSectionOrder,
   });
-  useEffect(() => {
-    setDockOpen(defaultDockOpenForMode(messageMode));
-  }, [messageMode, setDockOpen]);
   const canSend =
     Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
     !sending &&
@@ -792,15 +788,12 @@ export function ChatPage({
   );
 
   const handleRevealSelectedTurnDetails = useCallback(() => {
-    if (typeof document === "undefined") {
+    if (!selectedTurn) {
       return;
     }
-    const details = document.querySelector(".chat-v11-turn-card.selected .chat-v11-turn-details");
-    if (details instanceof HTMLDetailsElement) {
-      details.open = true;
-      details.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, []);
+    setSelectedTurnId(selectedTurn.turnId);
+    setDockOpen(true);
+  }, [selectedTurn, setDockOpen]);
 
   const handleSelectBranchTurnAndSync = useCallback(
     async (turnId: string) => {
@@ -1001,10 +994,16 @@ export function ChatPage({
             approvalPending={approvalPending}
             eventStreamStatus={eventStreamStatus}
             onBottomStateChange={setFollowThreadOutput}
-            onSelectTurn={setSelectedTurnId}
+            onSelectTurn={(turnId) => {
+              setSelectedTurnId(turnId);
+            }}
             onSwitchBranch={(turnId) => void handleSelectBranchTurnAndSync(turnId)}
             onRetryTurn={(turnId) => void handleRetryTurn(turnId)}
             onEditTurn={handleBeginEditTurn}
+            onOpenRunDetails={(turnId) => {
+              setSelectedTurnId(turnId);
+              setDockOpen(true);
+            }}
             onApprovePending={(allowScope) => void handleApprovePending(allowScope)}
             onDenyPending={() => void handleDenyPending()}
             onRefreshThread={() => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true })}

@@ -193,4 +193,18 @@ describe("ChatContextDockPanels", () => {
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain("External connection binding");
   });
+
+  it("keeps the run trace visible for code surface detail requests", () => {
+    const renderer = create(
+      <ChatContextDockPanels
+        {...buildProps({
+          mode: "code",
+          isChatSurface: false,
+          isCodeSurface: true,
+        })}
+      />,
+    );
+
+    expect(JSON.stringify(renderer.toJSON())).toContain("Run trace");
+  });
 });

@@ -27,12 +27,16 @@ import {
 import { fetchDashboardState, type DashboardStateResponse } from "./api/client";
 import { DeviceAccessApprovalModal, type DeviceAccessApprovalPrompt } from "./components/DeviceAccessApprovalModal";
 import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
-import { GCSelect } from "./components/ui";
+import { GCSelect, GCSegmentedControl } from "./components/ui";
 import { GatewayAccessGate } from "./components/GatewayAccessGate";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
 import { PageErrorBoundary } from "./components/PageErrorBoundary";
 import { RemoteApprovalActionModal, type RemoteApprovalActionPrompt } from "./components/RemoteApprovalActionModal";
 import { ShellPageFrame } from "./components/ShellPageFrame";
+import { ShellDetailPanelProvider, type ShellDetailPanelEntry } from "./components/ShellDetailPanelContext";
+import { ShellNavRail, cycleShellNavMode } from "./components/ShellNavRail";
+import { SideInspectorDrawer } from "./components/SideInspectorDrawer";
+import { SignalLoader } from "./components/SignalLoader";
 import { StatusChip } from "./components/StatusChip";
 import { StatusStrip } from "./components/StatusStrip";
 import { appCopy } from "./content/copy";
@@ -49,6 +53,7 @@ import {
   type AgentsTab,
   type ArtifactsTab,
   type IntegrationsTab,
+  type OperatePage,
   type ResolvedRoute,
   type Space,
   type VisiblePage,
@@ -161,6 +166,7 @@ function PageLoadingFallback({ label }: { label: string }) {
       <div className="shell-page-loading-card">
         <p className="shell-page-loading-kicker">Loading module</p>
         <h3>{label}</h3>
+        <SignalLoader label="Resolving view..." />
       </div>
     </section>
   );
@@ -179,6 +185,18 @@ function resolveShellThemeClass(): "theme-signal-noir" | "theme-citadel-light" {
     return "theme-citadel-light";
   }
   return "theme-signal-noir";
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
 }
 
 function deriveTimelineTab(route: ResolvedRoute): TimelineTab {
@@ -311,8 +329,12 @@ export function App() {
     setDensity,
     effectsMode,
     setEffectsMode,
+    navMode,
+    setNavMode,
     showTechnicalDetails,
     setShowTechnicalDetails,
+    detailPanelPinned,
+    setDetailPanelPinned,
     activeWorkspaceId,
     setActiveWorkspaceId,
   } = useUiPreferences();
@@ -334,12 +356,20 @@ export function App() {
     deriveOperateStatusStripExpanded(),
   );
   const [operateProviderModelSummary, setOperateProviderModelSummary] = useState<string | null>(null);
+  const [desktopShellRail, setDesktopShellRail] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return true;
+    }
+    return window.matchMedia("(min-width: 1100px)").matches;
+  });
   const [compactShellNav, setCompactShellNav] = useState(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return false;
     }
     return window.matchMedia("(max-width: 767px)").matches;
   });
+  const [detailPanelOpen, setDetailPanelOpen] = useState(false);
+  const [detailPanelEntry, setDetailPanelEntry] = useState<ShellDetailPanelEntry | null>(null);
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
     message: "Verifying gateway reachability and access policy.",
@@ -427,6 +457,17 @@ export function App() {
     [navigate, route],
   );
 
+  const handleSelectOperatePage = useCallback(
+    (page: OperatePage) => {
+      navigate(
+        page === "surface"
+          ? { space: "operate", page: "surface", surface: route.surface ?? "chat" }
+          : { space: "operate", page },
+      );
+    },
+    [navigate, route.surface],
+  );
+
   const handleOnboardingCompleted = useCallback(() => {
     setOnboardingComplete(true);
     navigate(DEFAULT_ROUTE);
@@ -439,18 +480,46 @@ export function App() {
     }
 
     const media = window.matchMedia("(max-width: 767px)");
+    const desktopMedia = window.matchMedia("(min-width: 1100px)");
     const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
       setCompactShellNav(event.matches);
     };
+    const handleDesktopChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      setDesktopShellRail(event.matches);
+    };
 
     handleChange(media);
+    handleDesktopChange(desktopMedia);
     if (typeof media.addEventListener === "function") {
       media.addEventListener("change", handleChange);
-      return () => media.removeEventListener("change", handleChange);
+      desktopMedia.addEventListener("change", handleDesktopChange);
+      return () => {
+        media.removeEventListener("change", handleChange);
+        desktopMedia.removeEventListener("change", handleDesktopChange);
+      };
     }
     media.addListener(handleChange);
-    return () => media.removeListener(handleChange);
+    desktopMedia.addListener(handleDesktopChange);
+    return () => {
+      media.removeListener(handleChange);
+      desktopMedia.removeListener(handleDesktopChange);
+    };
   }, []);
+
+  useEffect(() => {
+    if (detailPanelPinned) {
+      setDetailPanelOpen(true);
+    }
+  }, [detailPanelPinned]);
+
+  useEffect(() => {
+    if (detailPanelEntry) {
+      return;
+    }
+    if (!detailPanelPinned) {
+      setDetailPanelOpen(false);
+    }
+  }, [detailPanelEntry, detailPanelPinned]);
 
   const retryGatewayAccess = useCallback(() => {
     setGatewayAccessRunId((current) => current + 1);
@@ -917,6 +986,20 @@ export function App() {
 
   const visiblePage = getVisiblePage(route);
   const currentPageLabel = getVisiblePageLabel(route);
+  const currentPageDescription = SPACE_META[route.space].description;
+  const detailPanelVisible = Boolean(detailPanelEntry) && (detailPanelPinned || detailPanelOpen);
+  const handleToggleDetailPanel = useCallback(() => {
+    setDetailPanelOpen((current) => !current);
+  }, []);
+  const handleTogglePinnedDetailPanel = useCallback(() => {
+    setDetailPanelPinned(!detailPanelPinned);
+    if (!detailPanelPinned) {
+      setDetailPanelOpen(true);
+    }
+  }, [detailPanelPinned, setDetailPanelPinned]);
+  const handleCycleNavMode = useCallback(() => {
+    setNavMode(cycleShellNavMode(navMode));
+  }, [navMode, setNavMode]);
   const operateApprovalsCount = deriveShellApprovalCount(operateStatus, localApprovalPromptCount);
   const operateActiveAgentsCount = operateStatus?.activeSubagents ?? 0;
   const operateDailyCostUsd = operateStatus?.dailyCostUsd ?? 0;
@@ -940,6 +1023,56 @@ export function App() {
     route.space === "observe" && route.page === "artifacts" ? ((route.tab ?? "memory") as ArtifactsTab) : "memory";
   const generalTab = deriveGeneralTab(route);
   const workspacesTab = deriveWorkspacesTab(route);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+      if (paletteOpen || diagnosticsOpen || activeDeviceAccessPrompt || activeRemoteApprovalPrompt) {
+        return;
+      }
+      if (event.key === "[") {
+        event.preventDefault();
+        handleCycleNavMode();
+        return;
+      }
+      if (event.key === "]") {
+        event.preventDefault();
+        handleToggleDetailPanel();
+        return;
+      }
+      if ((event.key === "\\" && event.shiftKey) || event.key === "|") {
+        event.preventDefault();
+        handleTogglePinnedDetailPanel();
+        return;
+      }
+      if (route.space === "operate" && (event.key === "1" || event.key === "2" || event.key === "3")) {
+        event.preventDefault();
+        navigate({
+          space: "operate",
+          page: "surface",
+          surface: event.key === "1" ? "chat" : event.key === "2" ? "cowork" : "code",
+        });
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    activeDeviceAccessPrompt,
+    activeRemoteApprovalPrompt,
+    diagnosticsOpen,
+    handleCycleNavMode,
+    handleToggleDetailPanel,
+    handleTogglePinnedDetailPanel,
+    navigate,
+    paletteOpen,
+    route.space,
+  ]);
 
   const configureIntegrationsTab =
     route.space === "configure" && route.page === "integrations"
@@ -1179,211 +1312,289 @@ export function App() {
   const shellThemeClass = resolveShellThemeClass();
 
   return (
-    <div
-      className={`app-shell layout-shell ${shellThemeClass} ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
-      data-density={density}
-      data-effects-mode={effectsMode}
-      data-effective-effects-mode={effectiveEffectsMode}
+    <ShellDetailPanelProvider
+      isOpen={detailPanelPinned || detailPanelOpen}
+      onOpenPanel={() => setDetailPanelOpen(true)}
+      onClosePanel={() => setDetailPanelOpen(false)}
+      onActiveEntryChange={setDetailPanelEntry}
     >
-      <header className="shell-bar">
-        <div className="shell-bar-brand">
-          <div className="shell-bar-brand-copy">
-            <p className="shell-bar-kicker">GoatCitadel Mission Control</p>
-            <h1 className="shell-bar-title">{SPACE_META[route.space].label}</h1>
+      <div
+        className={`app-shell layout-shell ${shellThemeClass} ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
+        data-density={density}
+        data-effects-mode={effectsMode}
+        data-effective-effects-mode={effectiveEffectsMode}
+      >
+        <header className="shell-bar">
+          <div className="shell-bar-brand">
+            <div className="shell-bar-brand-copy">
+              <p className="shell-bar-kicker">GoatCitadel Mission Control</p>
+              <h1 className="shell-bar-title">{SPACE_META[route.space].label}</h1>
+            </div>
           </div>
-        </div>
-        <nav className="space-nav" aria-label="Mission Control spaces">
-          {(Object.keys(SPACE_META) as Space[]).map((space) => (
-            <button
-              key={space}
-              type="button"
-              className={`space-nav-item gc-nav-button gc-nav-tier-space${route.space === space ? " active" : ""}`}
-              onClick={() => handleSelectSpace(space)}
-            >
-              {SPACE_META[space].label}
-            </button>
-          ))}
-        </nav>
-        <div className="shell-bar-actions">
-          <div className="shell-bar-utility">
-            <GlobalFreshnessPill streamState={streamState} variant="compact" />
-            <button
-              type="button"
-              className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip"
-              onClick={() => setPaletteOpen(true)}
-            >
-              {appCopy.quickActionsButton}
-            </button>
+          <div className="shell-bar-context">
+            {!desktopShellRail ? (
+              <nav className="space-nav" aria-label="Mission Control spaces">
+                {(Object.keys(SPACE_META) as Space[]).map((space) => (
+                  <button
+                    key={space}
+                    type="button"
+                    className={`space-nav-item gc-nav-button gc-nav-tier-space${route.space === space ? " active" : ""}`}
+                    onClick={() => handleSelectSpace(space)}
+                  >
+                    {SPACE_META[space].label}
+                  </button>
+                ))}
+              </nav>
+            ) : null}
+            <p className="shell-bar-page-label">{currentPageLabel}</p>
+            <p className="shell-bar-page-note">{currentPageDescription}</p>
           </div>
-          <label className="shell-workspace-picker">
-            <span className="shell-action-label">Workspace</span>
-            <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
-          </label>
-        </div>
-      </header>
-
-      <div className={`shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
-        <div className="shell-secondary-nav-primary">
-          {compactShellNav ? (
-            <label className="shell-context-picker">
-              <span className="shell-action-label">Current area</span>
-              <GCSelect
-                value={compactShellNavValue}
-                onChange={(value) => handleSelectVisiblePage(value as VisiblePage)}
-                options={compactShellNavOptions}
-                aria-label={`${SPACE_META[route.space].label} pages`}
-              />
+          <div className="shell-bar-actions">
+            <div className="shell-bar-utility">
+              <GlobalFreshnessPill streamState={streamState} variant="compact" />
+              <button
+                type="button"
+                className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip"
+                onClick={() => setPaletteOpen(true)}
+              >
+                {appCopy.quickActionsButton}
+              </button>
+            </div>
+            <label className="shell-workspace-picker">
+              <span className="shell-action-label">Workspace</span>
+              <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
             </label>
-          ) : (
-            <nav
-              className={route.space === "operate" ? "surface-nav" : "secondary-page-nav"}
-              aria-label={`${SPACE_META[route.space].label} pages`}
-            >
-              {VISIBLE_SPACE_PAGES[route.space].map((item) => (
-                <button
-                  key={item.page}
-                  type="button"
-                  className={`${route.space === "operate" ? "surface-nav-item" : "secondary-page-nav-item"} gc-nav-button gc-nav-tier-page${visiblePage === item.page ? " active" : ""}`}
-                  onClick={() => handleSelectVisiblePage(item.page)}
+          </div>
+        </header>
+
+        <div className={`shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
+          <div className="shell-secondary-nav-primary">
+            {!desktopShellRail ? (
+              compactShellNav ? (
+                <label className="shell-context-picker">
+                  <span className="shell-action-label">Current area</span>
+                  <GCSelect
+                    value={compactShellNavValue}
+                    onChange={(value) => handleSelectVisiblePage(value as VisiblePage)}
+                    options={compactShellNavOptions}
+                    aria-label={`${SPACE_META[route.space].label} pages`}
+                  />
+                </label>
+              ) : (
+                <nav
+                  className={route.space === "operate" ? "surface-nav" : "secondary-page-nav"}
+                  aria-label={`${SPACE_META[route.space].label} pages`}
                 >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
-          )}
+                  {VISIBLE_SPACE_PAGES[route.space].map((item) => (
+                    <button
+                      key={item.page}
+                      type="button"
+                      className={`${route.space === "operate" ? "surface-nav-item" : "secondary-page-nav-item"} gc-nav-button gc-nav-tier-page${visiblePage === item.page ? " active" : ""}`}
+                      onClick={() => handleSelectVisiblePage(item.page)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </nav>
+              )
+            ) : route.space === "operate" && route.page === "surface" ? (
+              <GCSegmentedControl
+                ariaLabel="Work surface"
+                value={operateSurfaceTab}
+                onChange={(surface) => navigate({ space: "operate", page: "surface", surface })}
+                options={[
+                  { value: "chat", label: "Chat" },
+                  { value: "cowork", label: "Cowork" },
+                  { value: "code", label: "Code" },
+                ]}
+              />
+            ) : (
+              <div className="shell-context-summary">
+                <p className="shell-action-label">{SPACE_META[route.space].label}</p>
+                <p className="shell-bar-page-note">
+                  {currentPageLabel} stays in the left rail so the workspace keeps its width.
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="shell-trust-hud" aria-label="Shell trust context">
+            {route.space === "operate" ? (
+              <StatusChip tone="muted">{workTrustDescriptor.workspaceLabel}</StatusChip>
+            ) : null}
+            <StatusChip tone={workTrustDescriptor.gatewayTone}>{workTrustDescriptor.gatewayLabel}</StatusChip>
+            {route.space === "operate" && route.page === "surface" ? (
+              <StatusChip tone="muted" className="shell-trust-provider">
+                {workTrustDescriptor.activeModeLabel} · {workTrustDescriptor.providerModelSummary}
+              </StatusChip>
+            ) : route.space === "operate" ? (
+              <StatusChip tone="muted">{workTrustDescriptor.activeModeLabel}</StatusChip>
+            ) : null}
+            {detailPanelEntry ? (
+              <button
+                type="button"
+                className={`shell-detail-toggle gc-nav-button gc-nav-tier-chip${detailPanelVisible ? " active" : ""}`}
+                aria-expanded={detailPanelVisible}
+                onClick={handleToggleDetailPanel}
+              >
+                {detailPanelVisible ? "Hide details" : "Open details"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`shell-trust-action gc-nav-button gc-nav-tier-chip${operateApprovalsCount > 0 ? " active" : ""}`}
+              onClick={() => navigate({ space: "operate", page: "approvals" })}
+            >
+              {workTrustDescriptor.approvalsSummary}
+            </button>
+            {route.space === "operate" ? (
+              <StatusChip tone={operateActiveAgentsCount > 0 ? "live" : "muted"}>
+                {workTrustDescriptor.runtimeSummary}
+              </StatusChip>
+            ) : null}
+            {route.space === "operate" ? (
+              <button
+                type="button"
+                className={`shell-workload-toggle gc-nav-button gc-nav-tier-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
+                aria-expanded={operateStatusVariant === "expanded"}
+                onClick={() => setOperateStatusStripExpanded((current) => !current)}
+              >
+                {workloadSummary.label}
+              </button>
+            ) : null}
+          </div>
         </div>
-        <div className="shell-trust-hud" aria-label="Shell trust context">
-          {route.space === "operate" ? (
-            <StatusChip tone="muted">{workTrustDescriptor.workspaceLabel}</StatusChip>
+
+        <main className="shell-main">
+          {notifications.length > 0 ? (
+            <div className="shell-notification-region">
+              <NotificationStack
+                items={notifications}
+                onDismiss={(id) => setNotifications((current) => current.filter((item) => item.id !== id))}
+              />
+            </div>
           ) : null}
-          <StatusChip tone={workTrustDescriptor.gatewayTone}>{workTrustDescriptor.gatewayLabel}</StatusChip>
-          {route.space === "operate" && route.page === "surface" ? (
-            <StatusChip tone="muted" className="shell-trust-provider">
-              {workTrustDescriptor.activeModeLabel} · {workTrustDescriptor.providerModelSummary}
-            </StatusChip>
-          ) : route.space === "operate" ? (
-            <StatusChip tone="muted">{workTrustDescriptor.activeModeLabel}</StatusChip>
-          ) : null}
-          <button
-            type="button"
-            className={`shell-trust-action gc-nav-button gc-nav-tier-chip${operateApprovalsCount > 0 ? " active" : ""}`}
-            onClick={() => navigate({ space: "operate", page: "approvals" })}
+          <div
+            className={`shell-main-layout${desktopShellRail ? " with-rail" : ""}${detailPanelVisible ? " with-detail-panel" : ""}`}
           >
-            {workTrustDescriptor.approvalsSummary}
-          </button>
-          {route.space === "operate" ? (
-            <StatusChip tone={operateActiveAgentsCount > 0 ? "live" : "muted"}>
-              {workTrustDescriptor.runtimeSummary}
-            </StatusChip>
-          ) : null}
-          {route.space === "operate" ? (
-            <button
-              type="button"
-              className={`shell-workload-toggle gc-nav-button gc-nav-tier-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
-              aria-expanded={operateStatusVariant === "expanded"}
-              onClick={() => setOperateStatusStripExpanded((current) => !current)}
-            >
-              {workloadSummary.label}
-            </button>
-          ) : null}
-        </div>
+            {desktopShellRail ? (
+              <ShellNavRail
+                route={route}
+                visiblePage={visiblePage}
+                navMode={navMode}
+                onSelectSpace={handleSelectSpace}
+                onSelectOperatePage={handleSelectOperatePage}
+                onSelectVisiblePage={handleSelectVisiblePage}
+                onCycleNavMode={handleCycleNavMode}
+                detailAvailable={Boolean(detailPanelEntry)}
+                detailOpen={detailPanelVisible}
+                onToggleDetail={handleToggleDetailPanel}
+              />
+            ) : null}
+            <div className="shell-workspace">
+              {route.space === "operate" && operateStatusVariant === "expanded" ? (
+                <div className="shell-attached-status-panel">
+                  <StatusStrip
+                    approvalsCount={operateApprovalsCount}
+                    approvalsLabel="Pending decisions"
+                    approvalsNote={
+                      operateStatusFreshness.state === "stale"
+                        ? `${operateStatusFreshness.note} Review the Approvals page before trusting these counts.`
+                        : "Backend approvals plus local Mission Control prompts."
+                    }
+                    activeAgentsCount={operateActiveAgentsCount}
+                    dailyCostUsd={operateDailyCostUsd}
+                    openTasksCount={operateOpenTasksCount}
+                    variant="expanded"
+                    context="work"
+                    placement="attached"
+                    onToggleVariant={(next) => setOperateStatusStripExpanded(next === "expanded")}
+                    onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
+                    onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "herd-live" })}
+                    onOpenCosts={() => handleSelectVisiblePage("health")}
+                    onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
+                  />
+                </div>
+              ) : null}
+              {shellGatewayState.status === "degraded-live-updates" ? (
+                <div className="status-banner warning">
+                  {shellGatewayState.summary} {shellGatewayState.nextStep}
+                </div>
+              ) : null}
+              {route.space === "operate" && route.page === "surface" && onboardingComplete === false ? (
+                <div className="status-banner warning">
+                  Onboarding still needs attention. Work surfaces stay available, but finish the setup checklist before
+                  trusting provider, access, or runtime defaults.
+                  <button
+                    type="button"
+                    className="gc-button"
+                    onClick={() => navigate({ space: "configure", page: "settings", tab: "onboarding" })}
+                  >
+                    Open onboarding
+                  </button>
+                </div>
+              ) : null}
+              <PageErrorBoundary
+                resetKey={`${route.space}:${route.page}:${route.surface ?? ""}:${route.tab ?? ""}`}
+                pageLabel={currentPageLabel}
+                onReturnToChat={() => navigate(DEFAULT_ROUTE)}
+              >
+                <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>{content}</Suspense>
+              </PageErrorBoundary>
+            </div>
+            {detailPanelEntry ? (
+              <SideInspectorDrawer
+                kicker={detailPanelEntry.kicker}
+                title={detailPanelEntry.title}
+                subtitle={detailPanelEntry.subtitle}
+                open={detailPanelVisible}
+                pinned={detailPanelPinned}
+                onClose={() => setDetailPanelOpen(false)}
+                onTogglePinned={handleTogglePinnedDetailPanel}
+                actions={detailPanelEntry.actions}
+                className="shell-detail-panel"
+              >
+                {detailPanelEntry.body}
+              </SideInspectorDrawer>
+            ) : null}
+          </div>
+        </main>
+
+        {paletteOpen ? (
+          <Suspense fallback={null}>
+            <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
+          </Suspense>
+        ) : null}
+        {diagnosticsOpen && isDevDiagnosticsEnabled() ? (
+          <Suspense fallback={null}>
+            <DevDiagnosticsPanel open={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
+          </Suspense>
+        ) : null}
+        <DeviceAccessApprovalModal
+          open={Boolean(activeDeviceAccessPrompt)}
+          prompt={activeDeviceAccessPrompt}
+          busy={deviceAccessResolveBusy}
+          onApprove={() => void handleResolveDeviceAccessPrompt("approve")}
+          onReject={() => void handleResolveDeviceAccessPrompt("reject")}
+          onDismiss={() => {
+            if (activeDeviceAccessPrompt) {
+              dismissDeviceAccessPrompt(activeDeviceAccessPrompt.approvalId);
+            }
+          }}
+        />
+        <RemoteApprovalActionModal
+          open={Boolean(activeRemoteApprovalPrompt)}
+          prompt={activeRemoteApprovalPrompt}
+          busy={remoteApprovalResolveBusy}
+          onApprove={() => void handleResolveRemoteApprovalPrompt("approve")}
+          onReject={() => void handleResolveRemoteApprovalPrompt("reject")}
+          onDismiss={() => {
+            if (activeRemoteApprovalPrompt) {
+              dismissRemoteApprovalPrompt(activeRemoteApprovalPrompt.approvalId);
+            }
+          }}
+        />
       </div>
-
-      <main className="shell-main">
-        {route.space === "operate" && operateStatusVariant === "expanded" ? (
-          <div className="shell-attached-status-panel">
-            <StatusStrip
-              approvalsCount={operateApprovalsCount}
-              approvalsLabel="Pending decisions"
-              approvalsNote={
-                operateStatusFreshness.state === "stale"
-                  ? `${operateStatusFreshness.note} Review the Approvals page before trusting these counts.`
-                  : "Backend approvals plus local Mission Control prompts."
-              }
-              activeAgentsCount={operateActiveAgentsCount}
-              dailyCostUsd={operateDailyCostUsd}
-              openTasksCount={operateOpenTasksCount}
-              variant="expanded"
-              context="work"
-              placement="attached"
-              onToggleVariant={(next) => setOperateStatusStripExpanded(next === "expanded")}
-              onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
-              onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "herd-live" })}
-              onOpenCosts={() => handleSelectVisiblePage("health")}
-              onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
-            />
-          </div>
-        ) : null}
-        {notifications.length > 0 ? (
-          <div className="shell-notification-region">
-            <NotificationStack
-              items={notifications}
-              onDismiss={(id) => setNotifications((current) => current.filter((item) => item.id !== id))}
-            />
-          </div>
-        ) : null}
-        {shellGatewayState.status === "degraded-live-updates" ? (
-          <div className="status-banner warning">
-            {shellGatewayState.summary} {shellGatewayState.nextStep}
-          </div>
-        ) : null}
-        {route.space === "operate" && route.page === "surface" && onboardingComplete === false ? (
-          <div className="status-banner warning">
-            Onboarding still needs attention. Work surfaces stay available, but finish the setup checklist before
-            trusting provider, access, or runtime defaults.
-            <button
-              type="button"
-              className="gc-button"
-              onClick={() => navigate({ space: "configure", page: "settings", tab: "onboarding" })}
-            >
-              Open onboarding
-            </button>
-          </div>
-        ) : null}
-        <PageErrorBoundary
-          resetKey={`${route.space}:${route.page}:${route.surface ?? ""}:${route.tab ?? ""}`}
-          pageLabel={currentPageLabel}
-          onReturnToChat={() => navigate(DEFAULT_ROUTE)}
-        >
-          <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>{content}</Suspense>
-        </PageErrorBoundary>
-      </main>
-
-      {paletteOpen ? (
-        <Suspense fallback={null}>
-          <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
-        </Suspense>
-      ) : null}
-      {diagnosticsOpen && isDevDiagnosticsEnabled() ? (
-        <Suspense fallback={null}>
-          <DevDiagnosticsPanel open={diagnosticsOpen} onClose={() => setDiagnosticsOpen(false)} />
-        </Suspense>
-      ) : null}
-      <DeviceAccessApprovalModal
-        open={Boolean(activeDeviceAccessPrompt)}
-        prompt={activeDeviceAccessPrompt}
-        busy={deviceAccessResolveBusy}
-        onApprove={() => void handleResolveDeviceAccessPrompt("approve")}
-        onReject={() => void handleResolveDeviceAccessPrompt("reject")}
-        onDismiss={() => {
-          if (activeDeviceAccessPrompt) {
-            dismissDeviceAccessPrompt(activeDeviceAccessPrompt.approvalId);
-          }
-        }}
-      />
-      <RemoteApprovalActionModal
-        open={Boolean(activeRemoteApprovalPrompt)}
-        prompt={activeRemoteApprovalPrompt}
-        busy={remoteApprovalResolveBusy}
-        onApprove={() => void handleResolveRemoteApprovalPrompt("approve")}
-        onReject={() => void handleResolveRemoteApprovalPrompt("reject")}
-        onDismiss={() => {
-          if (activeRemoteApprovalPrompt) {
-            dismissRemoteApprovalPrompt(activeRemoteApprovalPrompt.approvalId);
-          }
-        }}
-      />
-    </div>
+    </ShellDetailPanelProvider>
   );
 }
 

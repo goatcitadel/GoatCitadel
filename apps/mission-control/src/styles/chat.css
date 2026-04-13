@@ -593,6 +593,11 @@
   overflow: hidden;
 }
 
+.chat-v11-turn-cluster {
+  display: grid;
+  gap: 0;
+}
+
 .chat-v11-turn-strip {
   display: flex;
   flex-wrap: wrap;
@@ -603,33 +608,29 @@
   font-size: 0.82rem;
 }
 
-.chat-v11-turn-details {
+.chat-v11-execution-strip {
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid transparent;
+}
+
+.chat-v11-turn-actions {
+  display: grid;
+  gap: 10px;
   padding: 0 14px 14px;
 }
 
-.chat-v11-turn-details summary {
-  font-family: var(--font-reading);
-  cursor: pointer;
-  padding: 12px 0;
-}
-
-.chat-v11-turn-section {
-  display: grid;
+.chat-v11-row-actions {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
 }
 
-.chat-v11-turn-section h5 {
+.chat-v11-turn-action-note {
   margin: 0;
-  font-size: 0.74rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.chat-v11-turn-section p {
-  margin: 0;
-  line-height: 1.68;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .chat-v11-turn-list {
@@ -656,6 +657,20 @@
   font-size: 0.72rem;
   color: var(--text-muted);
   background: rgba(84, 221, 255, 0.08);
+}
+
+.chat-v11-execution-open {
+  min-height: 30px;
+  padding-inline: 12px;
+}
+
+.chat-v11-turn-strip span:not(.status-chip) {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
 }
 
 .chat-tool-artifact-inspector {
@@ -1459,19 +1474,17 @@
   color: var(--snr-text-muted);
 }
 
+.theme-signal-noir .chat-v11-execution-strip {
+  border-top-color: rgba(92, 198, 223, 0.1);
+}
+
 .theme-signal-noir .chat-v11-turn-strip span:not(.status-chip) {
-  padding: 4px 9px;
-  border-radius: 999px;
   border: 1px solid rgba(92, 198, 223, 0.1);
   background: rgba(36, 42, 52, 0.76);
 }
 
-.theme-signal-noir .chat-v11-turn-details {
-  border-top: 1px solid rgba(92, 198, 223, 0.1);
-}
-
-.theme-signal-noir .chat-v11-turn-details summary {
-  color: color-mix(in srgb, var(--snr-cyan) 64%, white 36%);
+.theme-signal-noir .chat-v11-turn-action-note {
+  color: var(--snr-text-muted);
 }
 
 .theme-signal-noir .chat-v11-turn-list li,

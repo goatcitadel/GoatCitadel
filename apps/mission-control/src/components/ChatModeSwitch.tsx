@@ -1,4 +1,5 @@
 import type { ChatMode } from "@goatcitadel/contracts";
+import { GCSegmentedControl } from "./ui";
 
 export function ChatModeSwitch({
   value,
@@ -10,20 +11,16 @@ export function ChatModeSwitch({
   onChange: (mode: ChatMode) => void;
 }) {
   return (
-    <div className="chat-mode-switch" role="tablist" aria-label="Chat mode">
-      {(["chat", "cowork", "code"] as const).map((mode) => (
-        <button
-          key={mode}
-          type="button"
-          role="tab"
-          aria-selected={value === mode}
-          className={["gc-button", (value === mode ? "active" : "")].filter(Boolean).join(" ")}
-          disabled={disabled}
-          onClick={() => onChange(mode)}
-        >
-          {mode === "chat" ? "Chat" : mode === "cowork" ? "Cowork" : "Code"}
-        </button>
-      ))}
-    </div>
+    <GCSegmentedControl
+      value={value}
+      ariaLabel="Chat mode"
+      className="chat-mode-switch"
+      onChange={onChange}
+      options={[
+        { value: "chat", label: "Chat", disabled },
+        { value: "cowork", label: "Cowork", disabled },
+        { value: "code", label: "Code", disabled },
+      ]}
+    />
   );
 }

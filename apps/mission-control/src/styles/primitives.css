@@ -462,6 +462,29 @@
   --gc-nav-border: var(--border-default);
 }
 
+.gc-segmented-control {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
+}
+
+.gc-segmented-control-option {
+  min-height: 34px;
+  padding-inline: calc(var(--space-3) * var(--density-scale));
+  border-radius: 8px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.gc-segmented-control-option.active {
+  background: var(--surface-1);
+}
+
 .operator-summary-strip {
   align-items: stretch;
 }
@@ -599,6 +622,60 @@
   border-color: var(--gc-control-active-border, var(--border-emphasis));
   background: var(--gc-control-active-bg, var(--surface-2));
   color: var(--gc-control-active-text, var(--text-primary));
+}
+
+.signal-loader {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font: 600 12px/1 var(--font-body);
+  color: var(--text-secondary);
+}
+
+.signal-loader.compact {
+  gap: 8px;
+}
+
+.signal-loader-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 12px;
+}
+
+.signal-loader-bars span {
+  width: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-primary) 72%, white 28%);
+  animation: signal-loader-pulse 1s ease-in-out infinite;
+}
+
+.signal-loader-bars span:nth-child(1) {
+  height: 8px;
+  animation-delay: 0s;
+}
+
+.signal-loader-bars span:nth-child(2) {
+  height: 12px;
+  animation-delay: 120ms;
+}
+
+.signal-loader-bars span:nth-child(3) {
+  height: 6px;
+  animation-delay: 240ms;
+}
+
+@keyframes signal-loader-pulse {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleY(0.72);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 
 .gc-select-shell {

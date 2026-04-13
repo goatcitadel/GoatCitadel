@@ -1,6 +1,7 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+import { defaultDockOpenForMode } from "./surface-config";
 import { useChatDockWorkbenchController } from "./useChatDockWorkbenchController";
 
 vi.mock("./useChatWorkbench", () => ({
@@ -53,6 +54,6 @@ describe("useChatDockWorkbenchController", () => {
     await act(async () => {
       renderer.update(<Harness mode="code" />);
     });
-    expect(latest?.dockOpen).toBe(true);
+    expect(latest?.dockOpen).toBe(defaultDockOpenForMode("code", undefined));
   });
 });

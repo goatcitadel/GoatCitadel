@@ -45,8 +45,10 @@ describe("IntegrationsHubPage", () => {
       expect(integrationsPageMock).not.toHaveBeenCalled();
       expect(channelSetupPageMock).toHaveBeenCalled();
       expect(rendererText(renderer)).toContain("ChannelSetupPage");
-      expect(rendererText(renderer)).toContain("Current lane");
-      expect(rendererText(renderer)).toContain("What this controls");
+      expect(rendererText(renderer)).toContain("Open details");
+      expect(rendererText(renderer)).toContain(
+        "Connections, transport hooks, and MCP reach stay framed as operator decisions instead of a connector catalog.",
+      );
     } finally {
       renderer.unmount();
     }
@@ -61,7 +63,7 @@ describe("IntegrationsHubPage", () => {
 
       expect(integrationsPageMock).not.toHaveBeenCalled();
       expect(rendererText(renderer)).toContain("McpPage");
-      expect(rendererText(renderer)).toContain("Tool connectors and MCP reach define what agents can touch.");
+      expect(rendererText(renderer)).toContain("Open details");
     } finally {
       renderer.unmount();
     }

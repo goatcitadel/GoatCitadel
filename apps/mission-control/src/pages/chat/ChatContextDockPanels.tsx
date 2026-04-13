@@ -24,7 +24,7 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
         <ChatDockSurfaceSection {...props} />
       </div>
 
-      {!isCodeSurface && showTracePanel && selectedTurn ? (
+      {showTracePanel && selectedTurn ? (
         <div className="mission-dock-section" style={dockSectionStyle("trace")}>
           <ChatDockRunTraceSection isChatSurface={props.isChatSurface} selectedTurn={selectedTurn} />
         </div>

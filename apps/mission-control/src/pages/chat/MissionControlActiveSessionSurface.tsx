@@ -32,6 +32,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onRefreshThread: () => void;
@@ -100,6 +101,7 @@ export function MissionControlActiveSessionSurface({
   onSwitchBranch,
   onRetryTurn,
   onEditTurn,
+  onOpenRunDetails,
   onApprovePending,
   onDenyPending,
   onRefreshThread,
@@ -178,6 +180,7 @@ export function MissionControlActiveSessionSurface({
           onSwitchBranch={onSwitchBranch}
           onRetryTurn={onRetryTurn}
           onEditTurn={onEditTurn}
+          onOpenRunDetails={onOpenRunDetails}
           onApprovePending={onApprovePending}
           onDenyPending={onDenyPending}
           onRefresh={onRefreshThread}

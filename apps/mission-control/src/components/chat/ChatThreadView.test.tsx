@@ -70,6 +70,7 @@ describe("ChatThreadView", () => {
         onSwitchBranch={vi.fn()}
         onRetryTurn={vi.fn()}
         onEditTurn={vi.fn()}
+        onOpenRunDetails={vi.fn()}
       />,
     );
 
@@ -90,40 +91,46 @@ describe("ChatThreadView", () => {
         onSwitchBranch={vi.fn()}
         onRetryTurn={vi.fn()}
         onEditTurn={vi.fn()}
+        onOpenRunDetails={vi.fn()}
       />,
     );
 
     const buttons = renderer.root.findAllByType("button");
-    expect(buttons.map((button) => button.props["aria-label"])).toEqual(expect.arrayContaining([
-      "Show previous variant for turn turn-1",
-      "Show next variant for turn turn-1",
-      "Retry assistant answer for turn turn-1",
-      "Edit and resend turn turn-1",
-    ]));
+    expect(buttons.map((button) => button.props["aria-label"])).toEqual(
+      expect.arrayContaining([
+        "Open execution detail for turn turn-1",
+        "Show previous variant for turn turn-1",
+        "Show next variant for turn turn-1",
+        "Retry assistant answer for turn turn-1",
+        "Edit and resend turn turn-1",
+      ]),
+    );
 
     const selectableTurn = renderer.root.findAll((node) => node.props["aria-label"] === "Select turn turn-1");
     expect(selectableTurn).toHaveLength(1);
   });
 
-  it("surfaces artifact-backed tool output badges in turn details", () => {
+  it("shows compact execution metadata and exposes the detail action", () => {
     const thread = createThread("plain content");
-    (thread.turns[0] as any).toolRuns = [{
-      toolRunId: "tool-1",
-      turnId: "turn-1",
-      sessionId: "sess-1",
-      toolName: "browser.extract",
-      status: "completed",
-      startedAt: "2026-04-04T00:00:01.000Z",
-      finishedAt: "2026-04-04T00:00:02.000Z",
-      result: {
-        storedAsArtifact: true,
-        virtualized: true,
-        artifactId: "artifact-1",
-        artifactPath: "tool-artifacts/aa/artifact-1.json",
-        artifactSummary: "Stored extraction output as an artifact to keep live context compact.",
-        originalByteLength: 18944,
+    (thread.turns[0] as any).toolRuns = [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        sessionId: "sess-1",
+        toolName: "browser.extract",
+        status: "completed",
+        startedAt: "2026-04-04T00:00:01.000Z",
+        finishedAt: "2026-04-04T00:00:02.000Z",
+        result: {
+          storedAsArtifact: true,
+          virtualized: true,
+          artifactId: "artifact-1",
+          artifactPath: "tool-artifacts/aa/artifact-1.json",
+          artifactSummary: "Stored extraction output as an artifact to keep live context compact.",
+          originalByteLength: 18944,
+        },
       },
-    }];
+    ];
 
     const renderer = TestRenderer.create(
       <ChatThreadView
@@ -137,12 +144,13 @@ describe("ChatThreadView", () => {
         onSwitchBranch={vi.fn()}
         onRetryTurn={vi.fn()}
         onEditTurn={vi.fn()}
+        onOpenRunDetails={vi.fn()}
       />,
     );
 
-    expect(renderer.root.findAll((node) =>
-      typeof node.props.className === "string" && node.props.className.includes("chat-tool-artifact-badge"),
-    )).toHaveLength(2);
-    expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Inspect raw artifact")).toBe(true);
+    expect(
+      renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("") === "1 tool"),
+    ).toHaveLength(1);
+    expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Details")).toBe(true);
   });
 });

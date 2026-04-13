@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import type { UiEffectsMode } from "./effects-mode";
+import type { ShellNavMode } from "../components/ShellNavRail";
 
 export type UiExperienceMode = "simple" | "advanced";
 export type UiDensity = "comfortable" | "default" | "compact";
@@ -11,8 +12,12 @@ interface UiPreferencesValue {
   setDensity: (density: UiDensity) => void;
   effectsMode: UiEffectsMode;
   setEffectsMode: (mode: UiEffectsMode) => void;
+  navMode: ShellNavMode;
+  setNavMode: (mode: ShellNavMode) => void;
   showTechnicalDetails: boolean;
   setShowTechnicalDetails: (enabled: boolean) => void;
+  detailPanelPinned: boolean;
+  setDetailPanelPinned: (enabled: boolean) => void;
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
 }
@@ -20,7 +25,9 @@ interface UiPreferencesValue {
 const MODE_KEY = "goatcitadel.ui.mode.v1";
 const DENSITY_KEY = "goatcitadel.ui.density.v1";
 const EFFECTS_MODE_KEY = "goatcitadel.ui.effects_mode.v1";
+const NAV_MODE_KEY = "goatcitadel.ui.nav_mode.v1";
 const DETAILS_KEY = "goatcitadel.ui.technical_details.v1";
+const DETAIL_PANEL_PINNED_KEY = "goatcitadel.ui.detail_panel_pinned.v1";
 const WORKSPACE_KEY = "goatcitadel.ui.workspace_id.v1";
 
 const UiPreferencesContext = createContext<UiPreferencesValue>({
@@ -30,8 +37,12 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setDensity: () => {},
   effectsMode: "auto",
   setEffectsMode: () => {},
+  navMode: "expanded",
+  setNavMode: () => {},
   showTechnicalDetails: false,
   setShowTechnicalDetails: () => {},
+  detailPanelPinned: false,
+  setDetailPanelPinned: () => {},
   activeWorkspaceId: "default",
   setActiveWorkspaceId: () => {},
 });
@@ -40,7 +51,9 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   const [mode, setModeState] = useState<UiExperienceMode>(() => readModeFromStorage());
   const [density, setDensityState] = useState<UiDensity>(() => readDensityFromStorage());
   const [effectsMode, setEffectsModeState] = useState<UiEffectsMode>(() => readEffectsModeFromStorage());
+  const [navMode, setNavModeState] = useState<ShellNavMode>(() => readNavModeFromStorage());
   const [showTechnicalDetails, setShowTechnicalDetailsState] = useState<boolean>(() => readDetailsFromStorage());
+  const [detailPanelPinned, setDetailPanelPinnedState] = useState<boolean>(() => readDetailPanelPinnedFromStorage());
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string>(() => readWorkspaceIdFromStorage());
 
   const value = useMemo<UiPreferencesValue>(
@@ -63,10 +76,20 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         setEffectsModeState(nextEffectsMode);
         writeStorage(EFFECTS_MODE_KEY, nextEffectsMode);
       },
+      navMode,
+      setNavMode: (nextNavMode) => {
+        setNavModeState(nextNavMode);
+        writeStorage(NAV_MODE_KEY, nextNavMode);
+      },
       showTechnicalDetails,
       setShowTechnicalDetails: (enabled) => {
         setShowTechnicalDetailsState(enabled);
         writeStorage(DETAILS_KEY, String(enabled));
+      },
+      detailPanelPinned,
+      setDetailPanelPinned: (enabled) => {
+        setDetailPanelPinnedState(enabled);
+        writeStorage(DETAIL_PANEL_PINNED_KEY, String(enabled));
       },
       activeWorkspaceId,
       setActiveWorkspaceId: (workspaceId) => {
@@ -75,14 +98,10 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         writeStorage(WORKSPACE_KEY, normalized);
       },
     }),
-    [mode, density, effectsMode, showTechnicalDetails, activeWorkspaceId],
+    [mode, density, effectsMode, navMode, showTechnicalDetails, detailPanelPinned, activeWorkspaceId],
   );
 
-  return (
-    <UiPreferencesContext.Provider value={value}>
-      {props.children}
-    </UiPreferencesContext.Provider>
-  );
+  return <UiPreferencesContext.Provider value={value}>{props.children}</UiPreferencesContext.Provider>;
 }
 
 export function useUiPreferences(): UiPreferencesValue {
@@ -132,6 +151,24 @@ function readEffectsModeFromStorage(): UiEffectsMode {
     return raw;
   }
   return "auto";
+}
+
+function readNavModeFromStorage(): ShellNavMode {
+  if (typeof window === "undefined") {
+    return "expanded";
+  }
+  const raw = window.localStorage.getItem(NAV_MODE_KEY);
+  if (raw === "compact" || raw === "icon") {
+    return raw;
+  }
+  return "expanded";
+}
+
+function readDetailPanelPinnedFromStorage(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(DETAIL_PANEL_PINNED_KEY) === "true";
 }
 
 function writeStorage(key: string, value: string): void {

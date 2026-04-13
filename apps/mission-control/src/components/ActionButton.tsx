@@ -1,4 +1,4 @@
-import { GoatLoader } from "./GoatLoader";
+import { SignalLoader } from "./SignalLoader";
 
 interface ActionButtonProps {
   label: string;
@@ -27,11 +27,16 @@ export function ActionButton({
   return (
     <button
       type={type}
-      className={["gc-button", (`gc-action-button gc-action-${resolvedVariant}${resolvedVariant === "danger" ? " danger" : ""}${className ? ` ${className}` : ""}`)].filter(Boolean).join(" ")}
+      className={[
+        "gc-button",
+        `gc-action-button gc-action-${resolvedVariant}${resolvedVariant === "danger" ? " danger" : ""}${className ? ` ${className}` : ""}`,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       disabled={disabled || pending}
       onClick={() => void onClick()}
     >
-      {pending ? <GoatLoader compact label={pendingLabel ?? "Applying..."} /> : label}
+      {pending ? <SignalLoader compact label={pendingLabel ?? "Applying..."} /> : label}
     </button>
   );
 }

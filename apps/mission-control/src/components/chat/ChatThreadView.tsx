@@ -2,11 +2,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Virtuoso } from "react-virtuoso";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  getChatTurnRecoveryActionLabel,
-  getChatTurnRecoveryActionSummary,
-  isChatTurnActiveStatus,
-} from "@goatcitadel/contracts";
+import { getChatTurnRecoveryActionLabel, isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatThreadResponse,
@@ -15,9 +11,6 @@ import type {
 } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
-import { ChatToolArtifactInspector } from "./ChatToolArtifactInspector";
-import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
-import { ChatExecutionPlanSummary } from "./ChatExecutionPlanSummary";
 
 export interface ChatThreadNotice {
   id: string;
@@ -80,7 +73,10 @@ function renderSuggestionSummary(suggestions: ChatCapabilityUpgradeSuggestion[] 
   if (!suggestions || suggestions.length === 0) {
     return null;
   }
-  return suggestions.slice(0, 2).map((item) => item.title).join(" · ");
+  return suggestions
+    .slice(0, 2)
+    .map((item) => item.title)
+    .join(" · ");
 }
 
 function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
@@ -134,21 +130,14 @@ function ChatMarkdown({ content }: { content: string }) {
   );
 }
 
-function ChatBranchSwitcher({
-  turn,
-  onSwitch,
-}: {
-  turn: ChatThreadTurnRecord;
-  onSwitch: (turnId: string) => void;
-}) {
+function ChatBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; onSwitch: (turnId: string) => void }) {
   if (turn.branch.siblingCount <= 1) {
     return null;
   }
   const currentIndex = turn.branch.activeSiblingIndex;
   const previousTurnId = currentIndex > 0 ? turn.branch.siblingTurnIds[currentIndex - 1] : undefined;
-  const nextTurnId = currentIndex < turn.branch.siblingTurnIds.length - 1
-    ? turn.branch.siblingTurnIds[currentIndex + 1]
-    : undefined;
+  const nextTurnId =
+    currentIndex < turn.branch.siblingTurnIds.length - 1 ? turn.branch.siblingTurnIds[currentIndex + 1] : undefined;
   return (
     <div className="chat-v11-branch-switcher">
       <button
@@ -156,16 +145,20 @@ function ChatBranchSwitcher({
         aria-label={`Show previous variant for turn ${turn.turnId}`}
         disabled={!previousTurnId}
         onClick={() => previousTurnId && onSwitch(previousTurnId)}
-       className="gc-button">
+        className="gc-button"
+      >
         Previous variant
       </button>
-      <span>{currentIndex + 1} / {turn.branch.siblingCount}</span>
+      <span>
+        {currentIndex + 1} / {turn.branch.siblingCount}
+      </span>
       <button
         type="button"
         aria-label={`Show next variant for turn ${turn.turnId}`}
         disabled={!nextTurnId}
         onClick={() => nextTurnId && onSwitch(nextTurnId)}
-       className="gc-button">
+        className="gc-button"
+      >
         Next variant
       </button>
     </div>
@@ -177,42 +170,68 @@ function ChatTurnRunStrip({ turn }: { turn: ChatThreadTurnRecord }) {
   const recoveryLabel = getRecoveryStripLabel(turn);
   return (
     <div className="chat-v11-turn-strip">
-      <StatusChip tone={getTraceTone(turn.trace)}>
-        {turn.trace.status}
-      </StatusChip>
-      {recoveryLabel ? <span>{recoveryLabel}</span> : turn.trace.failure ? <span>{turn.trace.failure.failureClass}</span> : null}
-      {routing.map((item) => <span key={item}>{item}</span>)}
-      {turn.toolRuns.length > 0 ? <span>{turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}</span> : null}
-      {turn.citations.length > 0 ? <span>{turn.citations.length} citation{turn.citations.length === 1 ? "" : "s"}</span> : null}
+      <StatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</StatusChip>
+      {recoveryLabel ? (
+        <span>{recoveryLabel}</span>
+      ) : turn.trace.failure ? (
+        <span>{turn.trace.failure.failureClass}</span>
+      ) : null}
+      {routing.map((item) => (
+        <span key={item}>{item}</span>
+      ))}
+      {turn.toolRuns.length > 0 ? (
+        <span>
+          {turn.toolRuns.length} tool{turn.toolRuns.length === 1 ? "" : "s"}
+        </span>
+      ) : null}
+      {turn.citations.length > 0 ? (
+        <span>
+          {turn.citations.length} citation{turn.citations.length === 1 ? "" : "s"}
+        </span>
+      ) : null}
       {turn.trace.orchestration ? <span>orchestrated</span> : null}
       {turn.trace.routing.fallbackUsed ? <span>fallback used</span> : null}
     </div>
   );
 }
 
-function ChatTurnDetails({
+function ChatTurnActions({
   turn,
+  selected,
   onSwitchBranch,
   onRetryTurn,
   onEditTurn,
+  onOpenRunDetails,
 }: {
   turn: ChatThreadTurnRecord;
+  selected: boolean;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
 }) {
   const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
+  if (!selected && !suggestionSummary) {
+    return null;
+  }
   return (
-    <details className="chat-v11-turn-details">
-      <summary>Review run details</summary>
-      <ChatBranchSwitcher turn={turn} onSwitch={onSwitchBranch} />
+    <div className="chat-v11-turn-actions">
       <div className="chat-v11-row-actions">
+        <button
+          type="button"
+          aria-label={`Open execution detail for turn ${turn.turnId}`}
+          onClick={() => onOpenRunDetails(turn.turnId)}
+          className="gc-button"
+        >
+          Open details
+        </button>
         {turn.assistantMessage ? (
           <button
             type="button"
             aria-label={`Retry assistant answer for turn ${turn.turnId}`}
             onClick={() => onRetryTurn(turn.turnId)}
-           className="gc-button">
+            className="gc-button"
+          >
             Retry answer
           </button>
         ) : null}
@@ -220,126 +239,14 @@ function ChatTurnDetails({
           type="button"
           aria-label={`Edit and resend turn ${turn.turnId}`}
           onClick={() => onEditTurn(turn.turnId)}
-         className="gc-button">
+          className="gc-button"
+        >
           Edit and resend
         </button>
       </div>
-      {turn.toolRuns.length > 0 ? (
-        <div className="chat-v11-turn-section">
-          <h5>Tools</h5>
-          <ul className="chat-v11-turn-list">
-            {turn.toolRuns.map((run) => {
-              const diagnostics = getChatToolRunDiagnostics(run);
-              return (
-                <li key={run.toolRunId}>
-                  <strong>{run.toolName}</strong>
-                  {" · "}
-                  {run.status}
-                  {diagnostics.browserFailureClass ? ` · ${diagnostics.browserFailureClass}` : ""}
-                  {diagnostics.outputVirtualized || diagnostics.storedAsArtifact ? (
-                    <p className="chat-tool-artifact-row">
-                      {diagnostics.outputVirtualized ? (
-                        <span className="chat-tool-artifact-badge">Output summarized</span>
-                      ) : null}
-                      {diagnostics.storedAsArtifact ? (
-                        <span className="chat-tool-artifact-badge">Stored as artifact</span>
-                      ) : null}
-                    </p>
-                  ) : null}
-                  {diagnostics.engineLabel ? <p>Engine: {diagnostics.engineLabel}{diagnostics.engineTier ? ` (${diagnostics.engineTier})` : ""}</p> : null}
-                  {diagnostics.url ? <p>URL: {diagnostics.url}</p> : null}
-                  {diagnostics.finalUrl && diagnostics.finalUrl !== diagnostics.url ? <p>Final URL: {diagnostics.finalUrl}</p> : null}
-                  {diagnostics.httpStatus !== undefined ? <p>HTTP status: {diagnostics.httpStatus}</p> : null}
-                  {diagnostics.summary ? <p>{diagnostics.summary}</p> : null}
-                  {diagnostics.artifactId ? (
-                    <ChatToolArtifactInspector
-                      artifactId={diagnostics.artifactId}
-                      artifactPath={diagnostics.artifactPath}
-                      originalByteLength={diagnostics.originalByteLength}
-                    />
-                  ) : null}
-                  {run.error ? <p>Error: {run.error}</p> : null}
-                  {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
-      {turn.citations.length > 0 ? (
-        <div className="chat-v11-turn-section">
-          <h5>Citations</h5>
-          <ul className="chat-v11-turn-list">
-            {turn.citations.map((citation, index) => (
-              <li key={`${citation.url}-${index}`}>
-                <a href={citation.url} target="_blank" rel="noreferrer">{citation.title ?? citation.url}</a>
-                {citation.snippet ? <p>{citation.snippet}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <div className="chat-v11-turn-section">
-        <h5>Routing</h5>
-        <p>{summarizeRouting(turn).join(" · ") || "No routing metadata yet."}</p>
-        <p>Live data intent: {turn.trace.routing.liveDataIntent ? "yes" : "no"}</p>
-        {turn.trace.routing.effectiveApiStyle ? <p>Upstream API: {turn.trace.routing.effectiveApiStyle}</p> : null}
-        {turn.trace.routing.fallbackReason ? <p>Fallback reason: {turn.trace.routing.fallbackReason}</p> : null}
-      </div>
-      {turn.trace.failure ? (
-        <div className="chat-v11-turn-section">
-          <h5>Recovery state</h5>
-          {turn.trace.failure.recommendedAction ? (
-            <>
-              <p>Next step: {getChatTurnRecoveryActionLabel(turn.trace.failure.recommendedAction)}</p>
-              <p>{getChatTurnRecoveryActionSummary(turn.trace.failure.recommendedAction)}</p>
-            </>
-          ) : null}
-          <p>Failure class: {turn.trace.failure.failureClass}</p>
-          <p>{turn.trace.failure.message}</p>
-          <p>Retryable: {turn.trace.failure.retryable === false ? "no" : "yes"}</p>
-        </div>
-      ) : null}
-      {turn.trace.executionPlan ? (
-        <div className="chat-v11-turn-section">
-          <h5>Execution plan</h5>
-          <ChatExecutionPlanSummary plan={turn.trace.executionPlan} />
-        </div>
-      ) : null}
-      {turn.trace.orchestration ? (
-        <div className="chat-v11-turn-section">
-          <h5>Orchestration</h5>
-          <p>
-            {turn.trace.orchestration.workflowTemplate}
-            {" · "}
-            {turn.trace.orchestration.visibility}
-            {" · "}
-            {turn.trace.orchestration.status}
-          </p>
-          <p>{turn.trace.orchestration.routeDecision.selectedRoles.join(" -> ")}</p>
-          {turn.trace.orchestration.routeDecision.specialistCandidates?.length ? (
-            <p>
-              Specialists: {turn.trace.orchestration.routeDecision.specialistCandidates
-                .map((item) => `${item.title} (${item.baseRole})`)
-                .join(" · ")}
-            </p>
-          ) : null}
-          {turn.trace.orchestration.finalSummary ? <p>{turn.trace.orchestration.finalSummary}</p> : null}
-        </div>
-      ) : null}
-      {suggestionSummary ? (
-        <div className="chat-v11-turn-section">
-          <h5>Capability suggestions</h5>
-          <p>{suggestionSummary}</p>
-        </div>
-      ) : null}
-      {turn.trace.specialistCandidateSuggestions?.length ? (
-        <div className="chat-v11-turn-section">
-          <h5>Specialist suggestions</h5>
-          <p>{turn.trace.specialistCandidateSuggestions.slice(0, 2).map((item) => item.title).join(" · ")}</p>
-        </div>
-      ) : null}
-    </details>
+      <ChatBranchSwitcher turn={turn} onSwitch={onSwitchBranch} />
+      {suggestionSummary ? <p className="chat-v11-turn-action-note">Suggested next move: {suggestionSummary}</p> : null}
+    </div>
   );
 }
 
@@ -350,6 +257,7 @@ function ChatTurnCard({
   onSwitchBranch,
   onRetryTurn,
   onEditTurn,
+  onOpenRunDetails,
 }: {
   turn: ChatThreadTurnRecord;
   selected: boolean;
@@ -357,6 +265,7 @@ function ChatTurnCard({
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
 }) {
   function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) {
@@ -369,7 +278,7 @@ function ChatTurnCard({
   }
 
   return (
-    <article className={`chat-v11-turn-card${selected ? " selected" : ""}`}>
+    <article className={`chat-v11-turn-card chat-v11-turn-cluster${selected ? " selected" : ""}`}>
       <div
         aria-pressed={selected}
         aria-label={`Select turn ${turn.turnId}`}
@@ -380,30 +289,46 @@ function ChatTurnCard({
         tabIndex={0}
       >
         <div className="chat-v11-turn-bubble user">
-          <p className="chat-v11-message-meta"><strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}</p>
+          <p className="chat-v11-message-meta">
+            <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
+          </p>
           <p>{turn.userMessage.content}</p>
         </div>
         <div className="chat-v11-turn-bubble assistant">
-          <p className="chat-v11-message-meta"><strong>GoatCitadel</strong> · {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}</p>
+          <p className="chat-v11-message-meta">
+            <strong>GoatCitadel</strong> ·{" "}
+            {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
+          </p>
           {turn.assistantMessage ? (
             <ChatMarkdown content={turn.assistantMessage.content} />
           ) : (
-            <p>{
-              isChatTurnActiveStatus(turn.trace.status)
-                || turn.trace.status === "cancelled"
-                || turn.trace.status === "failed"
+            <p>
+              {isChatTurnActiveStatus(turn.trace.status) ||
+              turn.trace.status === "cancelled" ||
+              turn.trace.status === "failed"
                 ? getTurnPendingLabel(turn.trace)
-                : "No assistant output yet."
-            }</p>
+                : "No assistant output yet."}
+            </p>
           )}
         </div>
       </div>
-      <ChatTurnRunStrip turn={turn} />
-      <ChatTurnDetails
+      <div className="chat-v11-turn-strip chat-v11-execution-strip">
+        <ChatTurnRunStrip turn={turn} />
+        <button
+          type="button"
+          className="gc-button chat-v11-execution-open"
+          onClick={() => onOpenRunDetails(turn.turnId)}
+        >
+          Details
+        </button>
+      </div>
+      <ChatTurnActions
         turn={turn}
+        selected={selected}
         onSwitchBranch={onSwitchBranch}
         onRetryTurn={onRetryTurn}
         onEditTurn={onEditTurn}
+        onOpenRunDetails={onOpenRunDetails}
       />
     </article>
   );
@@ -417,7 +342,9 @@ function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) {
     <ul className="chat-v11-thread-notices">
       {notices.map((notice) => (
         <li key={notice.id} className={`tone-${formatTone(notice.tone)}`}>
-          <p className="chat-v11-message-meta"><strong>Notice</strong> · {formatActorTimestamp(notice.timestamp)}</p>
+          <p className="chat-v11-message-meta">
+            <strong>Notice</strong> · {formatActorTimestamp(notice.timestamp)}
+          </p>
           <p>{notice.content}</p>
         </li>
       ))}
@@ -439,6 +366,7 @@ export function ChatThreadView({
   onSwitchBranch,
   onRetryTurn,
   onEditTurn,
+  onOpenRunDetails,
 }: {
   loading: boolean;
   thread: ChatThreadResponse | null;
@@ -453,6 +381,7 @@ export function ChatThreadView({
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
 }) {
   if (loading) {
     return <div className="chat-v11-thread-loading">Loading thread…</div>;
@@ -461,8 +390,12 @@ export function ChatThreadView({
   if (!thread || thread.turns.length === 0) {
     return (
       <div className="chat-v11-thread-empty">
-        <p className="chat-v11-message-meta"><strong>GoatCitadel</strong></p>
-        <p>Start with a plain request, or type <code>/help</code> to see commands.</p>
+        <p className="chat-v11-message-meta">
+          <strong>GoatCitadel</strong>
+        </p>
+        <p>
+          Start with a plain request, or type <code>/help</code> to see commands.
+        </p>
       </div>
     );
   }
@@ -481,6 +414,7 @@ export function ChatThreadView({
               onSwitchBranch={onSwitchBranch}
               onRetryTurn={onRetryTurn}
               onEditTurn={onEditTurn}
+              onOpenRunDetails={onOpenRunDetails}
             />
           ))}
           <ChatThreadNotices notices={notices} />
@@ -500,12 +434,11 @@ export function ChatThreadView({
               onSwitchBranch={onSwitchBranch}
               onRetryTurn={onRetryTurn}
               onEditTurn={onEditTurn}
+              onOpenRunDetails={onOpenRunDetails}
             />
           )}
           components={{
-            Footer: notices.length > 0
-              ? () => <ChatThreadNotices notices={notices} />
-              : undefined,
+            Footer: notices.length > 0 ? () => <ChatThreadNotices notices={notices} /> : undefined,
           }}
         />
       )}
