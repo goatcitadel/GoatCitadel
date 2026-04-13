@@ -345,6 +345,92 @@
   color: var(--gc-control-active-text, var(--text-primary));
 }
 
+.gc-select-shell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.gc-select-trigger,
+.gc-combobox-trigger {
+  width: 100%;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  text-align: left;
+  font: 600 0.95rem/1.2 var(--font-body);
+  cursor: pointer;
+}
+
+.gc-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gc-select-content,
+.gc-combobox-content {
+  width: min(26rem, calc(100vw - 1rem));
+  padding: 0.35rem;
+  overflow: hidden;
+  z-index: 80;
+}
+
+.gc-select-content {
+  min-width: max(12rem, var(--radix-select-trigger-width, 12rem));
+  max-height: min(22rem, var(--radix-select-content-available-height, 22rem));
+}
+
+.gc-combobox-content {
+  min-width: max(14rem, var(--radix-popover-trigger-width, 14rem));
+  max-height: min(22rem, var(--radix-popover-content-available-height, 22rem));
+}
+
+.gc-select-list,
+.gc-combobox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.gc-select-list {
+  max-height: min(18rem, var(--radix-select-content-available-height, 18rem));
+}
+
+.gc-combobox-list {
+  max-height: min(17rem, var(--radix-popover-content-available-height, 17rem));
+}
+
+.gc-combobox-input {
+  margin-bottom: 0.35rem;
+}
+
+.gc-select-option,
+.gc-combobox-option {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  text-align: left;
+}
+
+.gc-combobox-empty {
+  padding: calc(var(--space-3) * var(--density-scale));
+  color: var(--text-secondary);
+}
+
 .gc-button.danger {
   border-color: var(--gc-control-danger-border, var(--accent-danger));
   color: var(--gc-control-danger-text, var(--accent-danger));

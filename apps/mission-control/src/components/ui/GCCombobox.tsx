@@ -41,9 +41,7 @@ export function GCCombobox({
     if (!q) {
       return options.slice(0, 100);
     }
-    return options
-      .filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(q))
-      .slice(0, 100);
+    return options.filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(q)).slice(0, 100);
   }, [options, query]);
 
   useEffect(() => {
@@ -66,9 +64,7 @@ export function GCCombobox({
   }, [filtered, open, value]);
 
   const highlightedOption =
-    highlightedIndex >= 0 && highlightedIndex < filtered.length
-      ? filtered[highlightedIndex]
-      : undefined;
+    highlightedIndex >= 0 && highlightedIndex < filtered.length ? filtered[highlightedIndex] : undefined;
 
   const commitSelection = (nextValue: string) => {
     onChange(nextValue);
@@ -148,8 +144,10 @@ export function GCCombobox({
       <Popover.Portal>
         <Popover.Content
           className="gc-combobox-content"
+          side="bottom"
           sideOffset={6}
           align="start"
+          collisionPadding={12}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             inputRef.current?.focus();
@@ -157,7 +155,7 @@ export function GCCombobox({
         >
           <input
             ref={inputRef}
-            className="gc-combobox-input"
+            className="gc-combobox-input gc-input"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleInputKeyDown}
@@ -171,24 +169,31 @@ export function GCCombobox({
           <ul className="gc-combobox-list" id={listboxId} role="listbox" aria-label="Options">
             {filtered.length === 0 ? (
               <li className="gc-combobox-empty">No matches.</li>
-            ) : filtered.map((option, index) => (
-              <li key={option.value}>
-                <button
-                  type="button"
-                  id={`${listboxId}-option-${option.value}`}
-                  role="option"
-                  aria-selected={option.value === value}
-                  className={["gc-button", (`gc-combobox-option${highlightedIndex === index || option.value === value ? " active" : ""}`)].filter(Boolean).join(" ")}
-                  tabIndex={-1}
-                  onMouseEnter={() => setHighlightedIndex(index)}
-                  onClick={() => {
-                    commitSelection(option.value);
-                  }}
-                >
-                  {option.label}
-                </button>
-              </li>
-            ))}
+            ) : (
+              filtered.map((option, index) => (
+                <li key={option.value}>
+                  <button
+                    type="button"
+                    id={`${listboxId}-option-${option.value}`}
+                    role="option"
+                    aria-selected={option.value === value}
+                    className={[
+                      "gc-button",
+                      `gc-combobox-option${highlightedIndex === index || option.value === value ? " active" : ""}`,
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    tabIndex={-1}
+                    onMouseEnter={() => setHighlightedIndex(index)}
+                    onClick={() => {
+                      commitSelection(option.value);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                </li>
+              ))
+            )}
           </ul>
         </Popover.Content>
       </Popover.Portal>
