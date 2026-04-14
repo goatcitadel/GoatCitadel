@@ -29,8 +29,8 @@ export function ChatComposerShell(props: {
   canSend: boolean;
   hasActiveStream: boolean;
   activeStreamTurnAssigned: boolean;
-  composerRef: RefObject<HTMLTextAreaElement>;
-  fileInputRef: RefObject<HTMLInputElement>;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
   onDragEnter: (event: DragEvent<HTMLDivElement>) => void;
   onDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeave: (event: DragEvent<HTMLDivElement>) => void;
@@ -98,16 +98,18 @@ export function ChatComposerShell(props: {
     onSend,
   } = props;
   const surfaceConfig = getMissionControlSurfaceConfig(mode);
-  const placeholder = mode === "code"
-    ? "Describe the implementation task, constraints, or review goal..."
-    : mode === "cowork"
-      ? "Describe the work to coordinate, research, or move forward..."
-      : "Ask GoatCitadel anything... Try /help";
-  const helperCopy = mode === "code"
-    ? "Paste larger prompts, drag files, and keep heavier implementation context in one place."
-    : mode === "cowork"
-      ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
-      : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
+  const placeholder =
+    mode === "code"
+      ? "Describe the implementation task, constraints, or review goal..."
+      : mode === "cowork"
+        ? "Describe the work to coordinate, research, or move forward..."
+        : "Ask GoatCitadel anything... Try /help";
+  const helperCopy =
+    mode === "code"
+      ? "Paste larger prompts, drag files, and keep heavier implementation context in one place."
+      : mode === "cowork"
+        ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
+        : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
 
   return (
     <div
@@ -122,7 +124,9 @@ export function ChatComposerShell(props: {
       {editingTurnId ? (
         <div className="chat-v11-composer-banner">
           Editing branch from turn {editingTurnId.slice(-6)}.
-          <button type="button" onClick={onCancelEdit} className="gc-button">Cancel edit</button>
+          <button type="button" onClick={onCancelEdit} className="gc-button">
+            Cancel edit
+          </button>
         </div>
       ) : null}
       {planningMode === "advisory" ? (
@@ -134,7 +138,9 @@ export function ChatComposerShell(props: {
       {error ? (
         <div className="chat-v11-composer-banner error" role="alert">
           {error}
-          <button type="button" onClick={onDismissError} className="gc-button">Dismiss</button>
+          <button type="button" onClick={onDismissError} className="gc-button">
+            Dismiss
+          </button>
         </div>
       ) : null}
       {selectedTurnRecovery && selectedTurn && selectedTurn.trace.status !== "waiting_for_approval" ? (
@@ -150,12 +156,22 @@ export function ChatComposerShell(props: {
           </div>
           <div className="chat-v11-recovery-actions">
             {selectedTurnRecovery.action === "retry" || selectedTurnRecovery.action === "retry_narrower" ? (
-              <button type="button" disabled={sending} onClick={() => onRetryTurn(selectedTurn.turnId)} className="gc-button">
+              <button
+                type="button"
+                disabled={sending}
+                onClick={() => onRetryTurn(selectedTurn.turnId)}
+                className="gc-button"
+              >
                 Retry turn
               </button>
             ) : null}
             {selectedTurnRecovery.action === "switch_to_deep_mode" && currentWebMode !== "deep" ? (
-              <button type="button" disabled={!selectedSessionId || sending} onClick={onSetDeepMode} className="gc-button">
+              <button
+                type="button"
+                disabled={!selectedSessionId || sending}
+                onClick={onSetDeepMode}
+                className="gc-button"
+              >
                 Set Deep mode
               </button>
             ) : null}
@@ -183,7 +199,12 @@ export function ChatComposerShell(props: {
       {commandSuggestions.length > 0 ? (
         <div className="chat-v11-command-popover" role="listbox" aria-label="Slash command suggestions">
           {commandSuggestions.map((item, index) => (
-            <button key={item.key} type="button" className={["gc-button", (index === commandIndex ? "active" : "")].filter(Boolean).join(" ")} onClick={() => onApplyDraftCommand(item.applyValue)}>
+            <button
+              key={item.key}
+              type="button"
+              className={["gc-button", index === commandIndex ? "active" : ""].filter(Boolean).join(" ")}
+              onClick={() => onApplyDraftCommand(item.applyValue)}
+            >
               <strong>{item.command}</strong>
               <span>{item.description}</span>
             </button>
@@ -193,14 +214,23 @@ export function ChatComposerShell(props: {
       {pendingAttachments.length > 0 ? (
         <div className="chat-v11-pending-attachments">
           {pendingAttachments.map((item) => (
-            <button key={item.attachmentId} type="button" className="gc-button chat-attachment-chip" onClick={() => onRemoveAttachment(item.attachmentId)}>
+            <button
+              key={item.attachmentId}
+              type="button"
+              className="gc-button chat-attachment-chip"
+              onClick={() => onRemoveAttachment(item.attachmentId)}
+            >
               {item.fileName} ×
             </button>
           ))}
         </div>
       ) : null}
       <div className="chat-v11-composer-actions">
-        <ChatComposerPlusMenu disabled={sending} onAttachFiles={onAttachFiles} onRunQuickResearch={onRunQuickResearch} />
+        <ChatComposerPlusMenu
+          disabled={sending}
+          onAttachFiles={onAttachFiles}
+          onRunQuickResearch={onRunQuickResearch}
+        />
         <input
           ref={fileInputRef}
           type="file"

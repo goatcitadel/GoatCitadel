@@ -410,6 +410,11 @@
   gap: 6px;
 }
 
+.chat-v11-session-virtuoso {
+  overflow-y: auto;
+  min-height: 0;
+}
+
 .chat-v11-session-row button {
   display: grid;
   gap: 6px;

@@ -1,4 +1,6 @@
 import { useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { cn } from "@/lib/utils";
+import { Button } from "./button";
 
 interface GCSegmentedControlOption<TValue extends string> {
   value: TValue;
@@ -84,9 +86,13 @@ export function GCSegmentedControl<TValue extends string>({
   };
 
   return (
-    <div className={`gc-segmented-control${className ? ` ${className}` : ""}`} role="radiogroup" aria-label={ariaLabel}>
+    <div
+      className={cn("gc-segmented-control mc-gc-segmented-control", className)}
+      role="radiogroup"
+      aria-label={ariaLabel}
+    >
       {options.map((option, optionIndex) => (
-        <button
+        <Button
           key={option.value}
           type="button"
           ref={(element) => {
@@ -96,12 +102,16 @@ export function GCSegmentedControl<TValue extends string>({
           aria-checked={value === option.value}
           disabled={option.disabled}
           tabIndex={value === option.value ? 0 : -1}
-          className={`gc-button gc-segmented-control-option${value === option.value ? " active" : ""}`}
+          variant={value === option.value ? "default" : "ghost"}
+          className={cn(
+            "gc-button gc-segmented-control-option mc-gc-segmented-control-option",
+            value === option.value && "active",
+          )}
           onClick={() => onChange(option.value)}
           onKeyDown={(event) => handleOptionKeyDown(event, optionIndex)}
         >
           {option.label}
-        </button>
+        </Button>
       ))}
     </div>
   );

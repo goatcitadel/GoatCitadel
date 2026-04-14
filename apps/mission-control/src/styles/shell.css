@@ -184,6 +184,8 @@
   min-width: 0;
   display: grid;
   gap: calc(var(--space-2) * var(--density-scale));
+  align-content: start;
+  min-height: clamp(440px, calc(100vh - 240px), 1200px);
 }
 
 @media (max-width: 960px) {
@@ -264,8 +266,12 @@
   width: 100%;
   justify-content: flex-start;
   min-height: 44px;
+  height: auto;
   border-radius: var(--radius-sm);
   padding-inline: calc(var(--space-2) * var(--density-scale));
+  align-items: flex-start;
+  text-align: left;
+  white-space: normal;
 }
 
 .shell-nav-rail-icon .shell-nav-rail-item {
@@ -276,6 +282,7 @@
 .shell-nav-rail-badge {
   width: 28px;
   height: 28px;
+  flex-shrink: 0;
   border-radius: 8px;
   display: inline-flex;
   align-items: center;
@@ -289,12 +296,20 @@
 
 .shell-nav-rail-item-label {
   font: 700 12px/1.2 var(--font-body);
+  display: block;
+  overflow-wrap: anywhere;
 }
 
 .shell-nav-rail-item-note {
   font-size: 0.76rem;
   line-height: 1.45;
   color: var(--text-secondary);
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.shell-nav-rail-item-copy {
+  min-width: 0;
 }
 
 .shell-nav-rail-section-secondary {
@@ -527,6 +542,22 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-secondary);
+}
+
+@supports (view-transition-name: mission-control-workspace) {
+  .ui-effects-full .shell-workspace {
+    view-transition-name: mission-control-workspace;
+  }
+
+  .ui-effects-reduced .shell-workspace {
+    view-transition-name: none;
+  }
+
+  ::view-transition-old(mission-control-workspace),
+  ::view-transition-new(mission-control-workspace) {
+    animation-duration: 160ms;
+    animation-timing-function: ease;
+  }
 }
 
 @media (max-width: 1199px) {

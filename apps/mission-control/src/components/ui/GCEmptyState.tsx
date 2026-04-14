@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./card";
 
 interface GCEmptyStateProps {
   title: string;
@@ -8,11 +9,12 @@ interface GCEmptyStateProps {
 
 export function GCEmptyState({ title, subtitle, action }: GCEmptyStateProps) {
   return (
-    <div className="gc-empty-state">
-      <p className="gc-empty-title">{title}</p>
-      {subtitle ? <p className="gc-empty-subtitle">{subtitle}</p> : null}
-      {action ? <div className="gc-empty-action">{action}</div> : null}
-    </div>
+    <Card className="gc-empty-state mc-gc-empty-state border-dashed bg-card/70">
+      <CardHeader className="items-start gap-2">
+        <CardTitle className="gc-empty-title text-sm">{title}</CardTitle>
+        {subtitle ? <CardDescription className="gc-empty-subtitle">{subtitle}</CardDescription> : null}
+      </CardHeader>
+      {action ? <CardContent className="gc-empty-action pt-0">{action}</CardContent> : null}
+    </Card>
   );
 }
-

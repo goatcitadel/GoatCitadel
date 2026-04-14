@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { cn } from "@/lib/utils";
 import { GCSelect } from "./ui/GCSelect";
+import { Button } from "./ui/button";
 
 interface PageTabItem {
   id: string;
@@ -70,19 +72,31 @@ export function PageTabs({ items, activeId, onSelect, tier, vertical = false, cl
 
   return (
     <nav
-      className={`page-tabs page-tabs-tier-${tier}${vertical ? " page-tabs-vertical" : ""}${className ? ` ${className}` : ""}`}
       aria-label={navLabel}
+      className={cn("page-tabs mc-page-tabs", `page-tabs-tier-${tier}`, vertical && "page-tabs-vertical", className)}
     >
-      {items.map((item) => (
-        <button
-          type="button"
-          key={item.id}
-          className={`page-tab gc-nav-button gc-nav-tier-${tier}${item.id === activeId ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          {item.label}
-        </button>
-      ))}
+      <div
+        role="tablist"
+        className={cn("mc-page-tabs-list", vertical ? "flex-col items-stretch" : "flex-wrap justify-start")}
+      >
+        {items.map((item) => (
+          <Button
+            key={item.id}
+            type="button"
+            role="tab"
+            variant={item.id === activeId ? "default" : "ghost"}
+            aria-selected={item.id === activeId}
+            className={cn(
+              "page-tab gc-nav-button mc-page-tab",
+              `gc-nav-tier-${tier}`,
+              item.id === activeId && "active",
+            )}
+            onClick={() => onSelect(item.id)}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
     </nav>
   );
 }

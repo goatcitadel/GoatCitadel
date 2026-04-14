@@ -1,5 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import * as Popover from "@radix-ui/react-popover";
+import { CheckIcon, ChevronsUpDownIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "./button";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "./command";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 
 export interface GCComboboxOption {
   value: string;
@@ -126,11 +130,12 @@ export function GCCombobox({
   };
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
           type="button"
-          className={`gc-combobox-trigger${className ? ` ${className}` : ""}`}
+          variant="outline"
+          className={cn("gc-combobox-trigger mc-gc-combobox-trigger justify-between", className)}
           disabled={disabled}
           aria-haspopup="dialog"
           aria-expanded={open}
@@ -138,26 +143,26 @@ export function GCCombobox({
           {...rest}
         >
           <span>{selectedLabel || placeholder}</span>
-          <span aria-hidden>▾</span>
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="gc-combobox-content"
-          side="bottom"
-          sideOffset={6}
-          align="start"
-          collisionPadding={12}
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            inputRef.current?.focus();
-          }}
-        >
-          <input
+          <ChevronsUpDownIcon className="size-4 opacity-60" aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="gc-combobox-content mc-gc-combobox-content w-[min(24rem,var(--radix-popover-trigger-width,24rem))] p-0"
+        side="bottom"
+        sideOffset={6}
+        align="start"
+        collisionPadding={12}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
+      >
+        <Command className="rounded-lg border-0 bg-transparent p-0">
+          <CommandInput
             ref={inputRef}
-            className="gc-combobox-input gc-input"
+            className="gc-combobox-input"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onValueChange={setQuery}
             onKeyDown={handleInputKeyDown}
             placeholder={placeholder}
             role="combobox"
@@ -166,37 +171,34 @@ export function GCCombobox({
             aria-controls={listboxId}
             aria-activedescendant={highlightedOption ? `${listboxId}-option-${highlightedOption.value}` : undefined}
           />
-          <ul className="gc-combobox-list" id={listboxId} role="listbox" aria-label="Options">
-            {filtered.length === 0 ? (
-              <li className="gc-combobox-empty">No matches.</li>
-            ) : (
-              filtered.map((option, index) => (
-                <li key={option.value}>
-                  <button
-                    type="button"
-                    id={`${listboxId}-option-${option.value}`}
-                    role="option"
-                    aria-selected={option.value === value}
-                    className={[
-                      "gc-button",
-                      `gc-combobox-option${highlightedIndex === index || option.value === value ? " active" : ""}`,
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    tabIndex={-1}
-                    onMouseEnter={() => setHighlightedIndex(index)}
-                    onClick={() => {
-                      commitSelection(option.value);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+          <CommandList className="max-h-72" id={listboxId} role="listbox" aria-label="Options">
+            <CommandEmpty className="gc-combobox-empty">No matches.</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((option, index) => (
+                <CommandItem
+                  key={option.value}
+                  id={`${listboxId}-option-${option.value}`}
+                  value={`${option.label} ${option.value}`}
+                  role="option"
+                  aria-selected={option.value === value}
+                  data-checked={option.value === value}
+                  className={cn(
+                    "gc-combobox-option mc-gc-combobox-option",
+                    (highlightedIndex === index || option.value === value) && "active",
+                  )}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                  onSelect={() => {
+                    commitSelection(option.value);
+                  }}
+                >
+                  <span className="truncate">{option.label}</span>
+                  <CheckIcon className={cn("ml-auto size-4", option.value === value ? "opacity-100" : "opacity-0")} />
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

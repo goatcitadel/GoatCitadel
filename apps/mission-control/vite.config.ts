@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
 const configDir = path.dirname(fileURLToPath(import.meta.url));
@@ -28,11 +29,15 @@ export default defineConfig(({ mode }) => {
 
   return {
     envDir: repoRoot,
-    plugins: [react()],
+    plugins: [tailwindcss(), react()],
     resolve: {
       // Fresh installer-based copies may not have workspace package dist output yet.
       // Resolve contracts from source so Mission Control stays bootable in dev mode.
       alias: [
+        {
+          find: "@",
+          replacement: path.resolve(configDir, "./src"),
+        },
         {
           find: "@goatcitadel/contracts",
           replacement: path.resolve(configDir, "../../packages/contracts/src/index.ts"),
@@ -90,6 +95,10 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
+    },
+    test: {
+      setupFiles: "./src/test/setup.ts",
+      testTimeout: 20000,
     },
   };
 });

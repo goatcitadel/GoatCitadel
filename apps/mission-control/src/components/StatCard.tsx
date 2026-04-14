@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 
 type StatTone = "default" | "accent" | "warning" | "success";
 type StatValueSize = "default" | "compact" | "dense" | "mono";
@@ -31,7 +32,14 @@ export function StatCard({
   return (
     <Element
       type={interactive ? "button" : undefined}
-      className={`stat-card stat-card-${tone}${compact ? " stat-card-compact" : ""} stat-card-value-${resolvedValueSize}${interactive ? " stat-card-interactive" : ""}${className ? ` ${className}` : ""}`}
+      className={cn(
+        "stat-card mc-stat-card",
+        `stat-card-${tone}`,
+        compact && "stat-card-compact",
+        `stat-card-value-${resolvedValueSize}`,
+        interactive && "stat-card-interactive",
+        className,
+      )}
       onClick={interactive ? onClick : undefined}
     >
       <p className="stat-card-label">{label}</p>

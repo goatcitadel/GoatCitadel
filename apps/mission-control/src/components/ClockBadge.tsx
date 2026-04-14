@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useState, type JSX } from "react";
 
 function nowLabel(): string {
   return new Date().toLocaleTimeString([], {

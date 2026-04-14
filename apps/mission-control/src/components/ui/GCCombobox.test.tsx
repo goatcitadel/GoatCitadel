@@ -35,9 +35,9 @@ describe("GCCombobox", () => {
       );
     });
 
-    const trigger = renderer.root.findAllByType("button").find((button) =>
-      String(button.props.className ?? "").includes("gc-combobox-trigger"),
-    );
+    const trigger = renderer.root
+      .findAllByType("button")
+      .find((button) => String(button.props.className ?? "").includes("gc-combobox-trigger"));
     expect(trigger).toBeDefined();
     await act(async () => {
       trigger?.props.onKeyDown({
@@ -51,7 +51,14 @@ describe("GCCombobox", () => {
       renderer.update(<GCCombobox value="" onChange={onChange} options={[]} />);
     });
 
-    const input = renderer.root.findByType("input");
-    expect(input.props["aria-activedescendant"]).toBeUndefined();
+    const activeOptions = renderer.root.findAll(
+      (node) => node.props.role === "option" && String(node.props.className ?? "").includes("active"),
+    );
+    expect(activeOptions).toHaveLength(0);
+    expect(
+      renderer.root
+        .findAllByType("button")
+        .some((button) => String(button.props.className ?? "").includes("gc-combobox-trigger")),
+    ).toBe(true);
   });
 });

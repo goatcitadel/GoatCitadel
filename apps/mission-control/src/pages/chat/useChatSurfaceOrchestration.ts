@@ -38,7 +38,7 @@ export function useChatSurfaceOrchestration(input: {
   selectedSessionId: string | null;
   thread: ChatThreadResponse | null;
   sending: boolean;
-  composerRef: RefObject<HTMLTextAreaElement>;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
   activeStreamRef: RefObject<{
     sessionId: string;
     streamToken: string;
@@ -49,16 +49,22 @@ export function useChatSurfaceOrchestration(input: {
   executeOutboundItemRef: RefObject<(item: OutboundQueueItem) => Promise<void>>;
   pushLocalNoticeRef: RefObject<(message: string, tone?: ChatThreadNotice["tone"]) => void>;
   setDraft: (value: string) => void;
-  setPendingAttachments: (value: ChatAttachmentRecord[] | ((current: ChatAttachmentRecord[]) => ChatAttachmentRecord[])) => void;
+  setPendingAttachments: (
+    value: ChatAttachmentRecord[] | ((current: ChatAttachmentRecord[]) => ChatAttachmentRecord[]),
+  ) => void;
   setPendingApproval: (value: null) => void;
   setError: (value: string | null) => void;
-  loadSessionCoreStateRef: RefObject<(sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>>;
-  abortActiveChatStream: (stream: {
-    sessionId: string;
-    streamToken: string;
-    turnId?: string;
-    controller: AbortController;
-  } | null) => void;
+  loadSessionCoreStateRef: RefObject<
+    (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
+  >;
+  abortActiveChatStream: (
+    stream: {
+      sessionId: string;
+      streamToken: string;
+      turnId?: string;
+      controller: AbortController;
+    } | null,
+  ) => void;
 }) {
   const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
@@ -83,29 +89,34 @@ export function useChatSurfaceOrchestration(input: {
     input.setPendingApproval(null);
     if (!input.tryBeginOutboundExecutionRef.current?.()) {
       setQueuedOutbound((current) => [...current, nextItem]);
-      input.pushLocalNoticeRef.current?.(`${editingTurnId ? "Edit" : "Message"} queued while the current turn finishes.`);
+      input.pushLocalNoticeRef.current?.(
+        `${editingTurnId ? "Edit" : "Message"} queued while the current turn finishes.`,
+      );
       return;
     }
     await input.executeOutboundItemRef.current?.(nextItem);
   }, [editingTurnId, input]);
 
-  const handleRetryTurn = useCallback(async (turnId: string) => {
-    const nextItem: OutboundQueueItem = {
-      id: `queue-${Date.now()}`,
-      action: "retry",
-      sessionId: input.selectedSessionId ?? undefined,
-      targetTurnId: turnId,
-      content: "",
-      attachments: [],
-      createdAt: new Date().toISOString(),
-    };
-    if (!input.tryBeginOutboundExecutionRef.current?.()) {
-      setQueuedOutbound((current) => [...current, nextItem]);
-      input.pushLocalNoticeRef.current?.("Retry queued while the current turn finishes.");
-      return;
-    }
-    await input.executeOutboundItemRef.current?.(nextItem);
-  }, [input]);
+  const handleRetryTurn = useCallback(
+    async (turnId: string) => {
+      const nextItem: OutboundQueueItem = {
+        id: `queue-${Date.now()}`,
+        action: "retry",
+        sessionId: input.selectedSessionId ?? undefined,
+        targetTurnId: turnId,
+        content: "",
+        attachments: [],
+        createdAt: new Date().toISOString(),
+      };
+      if (!input.tryBeginOutboundExecutionRef.current?.()) {
+        setQueuedOutbound((current) => [...current, nextItem]);
+        input.pushLocalNoticeRef.current?.("Retry queued while the current turn finishes.");
+        return;
+      }
+      await input.executeOutboundItemRef.current?.(nextItem);
+    },
+    [input],
+  );
 
   const handleStopActiveTurn = useCallback(async () => {
     if (!input.selectedSessionId) {
@@ -136,15 +147,18 @@ export function useChatSurfaceOrchestration(input: {
     }
   }, [input]);
 
-  const handleBeginEditTurn = useCallback((turnId: string) => {
-    const turn = input.thread?.turns.find((item) => item.turnId === turnId);
-    if (!turn) {
-      return;
-    }
-    setEditingTurnId(turnId);
-    input.setDraft(turn.userMessage.content);
-    input.composerRef.current?.focus();
-  }, [input]);
+  const handleBeginEditTurn = useCallback(
+    (turnId: string) => {
+      const turn = input.thread?.turns.find((item) => item.turnId === turnId);
+      if (!turn) {
+        return;
+      }
+      setEditingTurnId(turnId);
+      input.setDraft(turn.userMessage.content);
+      input.composerRef.current?.focus();
+    },
+    [input],
+  );
 
   const handleResumeQueue = useCallback(() => {
     recordClientDiagnostic({
@@ -160,17 +174,20 @@ export function useChatSurfaceOrchestration(input: {
     setQueuedOutbound((current) => current.map((item) => ({ ...item, paused: false })));
   }, [input.selectedSessionId, input.pushLocalNoticeRef, queuedOutbound.length]);
 
-  const handleRemoveQueuedItem = useCallback((id: string) => {
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "queue.remove",
-      message: "Removed queued outbound chat item",
-      sessionId: input.selectedSessionId ?? undefined,
-      context: { id },
-    });
-    setQueuedOutbound((current) => current.filter((item) => item.id !== id));
-  }, [input.selectedSessionId]);
+  const handleRemoveQueuedItem = useCallback(
+    (id: string) => {
+      recordClientDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "queue.remove",
+        message: "Removed queued outbound chat item",
+        sessionId: input.selectedSessionId ?? undefined,
+        context: { id },
+      });
+      setQueuedOutbound((current) => current.filter((item) => item.id !== id));
+    },
+    [input.selectedSessionId],
+  );
 
   useEffect(() => {
     const nextItem = queuedOutbound.find((item) => !item.paused);

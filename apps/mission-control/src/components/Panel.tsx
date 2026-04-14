@@ -1,5 +1,8 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { SectionHeader } from "./SectionHeader";
+import { Card, CardContent } from "./ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 
 type PanelTone = "default" | "soft" | "accent" | "warning" | "critical";
 type PanelPadding = "default" | "compact" | "spacious";
@@ -31,35 +34,57 @@ export function Panel({
   defaultExpanded = true,
 }: PanelProps) {
   const hasHeader = Boolean(title || subtitle || actions);
+  const [open, setOpen] = useState(defaultExpanded);
+
   if (collapsible) {
     return (
-      <details
-        className={`panel panel-${tone} panel-${rank} panel-pad-${padding}${hasHeader ? " panel-has-header" : ""} panel-collapsible${className ? ` ${className}` : ""}`}
-        data-tone={tone}
-        data-rank={rank}
-        data-padding={padding}
-        open={defaultExpanded}
-      >
-        <summary className="panel-summary">
-          {hasHeader ? (
-            <SectionHeader title={title ?? ""} subtitle={subtitle} actions={actions} />
-          ) : (
-            <span className="panel-summary-label">Details</span>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <Card
+          className={cn(
+            "panel mc-panel",
+            `panel-${tone}`,
+            `panel-${rank}`,
+            `panel-pad-${padding}`,
+            hasHeader && "panel-has-header",
+            "panel-collapsible",
+            className,
           )}
-        </summary>
-        <div className="panel-body">{children}</div>
-      </details>
+          data-tone={tone}
+          data-rank={rank}
+          data-padding={padding}
+        >
+          <CollapsibleTrigger asChild>
+            <button type="button" className="panel-summary mc-panel-summary">
+              {hasHeader ? (
+                <SectionHeader title={title ?? ""} subtitle={subtitle} actions={actions} />
+              ) : (
+                <span className="panel-summary-label">Details</span>
+              )}
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent data-open={open}>
+            <CardContent className="panel-body mc-panel-body">{children}</CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
     );
   }
   return (
-    <article
-      className={`panel panel-${tone} panel-${rank} panel-pad-${padding}${hasHeader ? " panel-has-header" : ""}${className ? ` ${className}` : ""}`}
+    <Card
+      className={cn(
+        "panel mc-panel",
+        `panel-${tone}`,
+        `panel-${rank}`,
+        `panel-pad-${padding}`,
+        hasHeader && "panel-has-header",
+        className,
+      )}
       data-tone={tone}
       data-rank={rank}
       data-padding={padding}
     >
       {hasHeader ? <SectionHeader title={title ?? ""} subtitle={subtitle} actions={actions} /> : null}
-      <div className="panel-body">{children}</div>
-    </article>
+      <CardContent className="panel-body mc-panel-body">{children}</CardContent>
+    </Card>
   );
 }

@@ -1,4 +1,5 @@
-import * as Switch from "@radix-ui/react-switch";
+import { cn } from "@/lib/utils";
+import { Switch } from "./switch";
 
 interface GCSwitchProps {
   checked: boolean;
@@ -10,18 +11,15 @@ interface GCSwitchProps {
 
 export function GCSwitch({ checked, onCheckedChange, label, disabled = false, id }: GCSwitchProps) {
   return (
-    <label className="gc-switch-row" htmlFor={id}>
-      <Switch.Root
+    <label className={cn("gc-switch-row mc-gc-switch-row", disabled && "opacity-70")} htmlFor={id}>
+      <Switch
         id={id}
-        className="gc-switch-root"
+        className="gc-switch-root mc-gc-switch-root"
         checked={checked}
         disabled={disabled}
         onCheckedChange={onCheckedChange}
-      >
-        <Switch.Thumb className="gc-switch-thumb" />
-      </Switch.Root>
-      {label ? <span>{label}</span> : null}
+      />
+      {label ? <span className="mc-gc-switch-label">{label}</span> : null}
     </label>
   );
 }
-

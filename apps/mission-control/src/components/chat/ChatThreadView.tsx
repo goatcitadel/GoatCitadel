@@ -1,7 +1,4 @@
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Virtuoso } from "react-virtuoso";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getChatTurnRecoveryActionLabel, isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
@@ -11,6 +8,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
+import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
 
 export interface ChatThreadNotice {
   id: string;
@@ -18,8 +16,6 @@ export interface ChatThreadNotice {
   content: string;
   timestamp: string;
 }
-
-const VIRTUALIZED_THREAD_THRESHOLD = 48;
 
 function formatTone(tone: ChatThreadNotice["tone"]): "neutral" | "warning" | "critical" | "success" {
   return tone;
@@ -85,49 +81,6 @@ function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
     return null;
   }
   return getChatTurnRecoveryActionLabel(action);
-}
-
-function ChatMarkdown({ content }: { content: string }) {
-  return (
-    <div className="chat-v11-markdown">
-      <ReactMarkdown
-        skipHtml
-        remarkPlugins={[remarkGfm]}
-        allowedElements={[
-          "a",
-          "blockquote",
-          "br",
-          "code",
-          "em",
-          "h1",
-          "h2",
-          "h3",
-          "hr",
-          "li",
-          "ol",
-          "p",
-          "pre",
-          "strong",
-          "ul",
-        ]}
-        components={{
-          a: ({ node: _node, onClick, ...props }) => (
-            <a
-              {...props}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(event) => {
-                event.stopPropagation();
-                onClick?.(event);
-              }}
-            />
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
 }
 
 function ChatBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; onSwitch: (turnId: string) => void }) {
@@ -292,7 +245,7 @@ function ChatTurnCard({
           <p className="chat-v11-message-meta">
             <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
           </p>
-          <p>{turn.userMessage.content}</p>
+          <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
         </div>
         <div className="chat-v11-turn-bubble assistant">
           <p className="chat-v11-message-meta">
@@ -300,7 +253,7 @@ function ChatTurnCard({
             {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
           </p>
           {turn.assistantMessage ? (
-            <ChatMarkdown content={turn.assistantMessage.content} />
+            <AssistantMessageRenderer role="assistant" content={turn.assistantMessage.content} />
           ) : (
             <p>
               {isChatTurnActiveStatus(turn.trace.status) ||
@@ -383,6 +336,19 @@ export function ChatThreadView({
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
 }) {
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!followOutput) {
+      return;
+    }
+    threadEndRef.current?.scrollIntoView({ block: "end" });
+  }, [followOutput, notices.length, queuedCount, selectedTurnId, streamError, streamStatus, thread]);
+
+  useEffect(() => {
+    onBottomStateChange(true);
+  }, [onBottomStateChange, notices.length, queuedCount, streamStatus, thread]);
+
   if (loading) {
     return <div className="chat-v11-thread-loading">Loading thread…</div>;
   }
@@ -403,45 +369,22 @@ export function ChatThreadView({
   return (
     <div className="chat-v11-thread-view">
       <ChatStreamStatusBar status={streamStatus} queuedCount={queuedCount} error={streamError} />
-      {thread.turns.length < VIRTUALIZED_THREAD_THRESHOLD ? (
-        <div className="chat-v11-thread-list">
-          {thread.turns.map((turn) => (
-            <ChatTurnCard
-              key={turn.turnId}
-              turn={turn}
-              selected={selectedTurnId === turn.turnId}
-              onSelect={onSelectTurn}
-              onSwitchBranch={onSwitchBranch}
-              onRetryTurn={onRetryTurn}
-              onEditTurn={onEditTurn}
-              onOpenRunDetails={onOpenRunDetails}
-            />
-          ))}
-          <ChatThreadNotices notices={notices} />
-        </div>
-      ) : (
-        <Virtuoso
-          className="chat-v11-thread-virtuoso"
-          data={thread.turns}
-          computeItemKey={(_index, turn) => turn.turnId}
-          followOutput={followOutput ? "auto" : false}
-          atBottomStateChange={onBottomStateChange}
-          itemContent={(_index, turn) => (
-            <ChatTurnCard
-              turn={turn}
-              selected={selectedTurnId === turn.turnId}
-              onSelect={onSelectTurn}
-              onSwitchBranch={onSwitchBranch}
-              onRetryTurn={onRetryTurn}
-              onEditTurn={onEditTurn}
-              onOpenRunDetails={onOpenRunDetails}
-            />
-          )}
-          components={{
-            Footer: notices.length > 0 ? () => <ChatThreadNotices notices={notices} /> : undefined,
-          }}
-        />
-      )}
+      <div className="chat-v11-thread-list chat-v11-thread-virtuoso">
+        {thread.turns.map((turn) => (
+          <ChatTurnCard
+            key={turn.turnId}
+            turn={turn}
+            selected={selectedTurnId === turn.turnId}
+            onSelect={onSelectTurn}
+            onSwitchBranch={onSwitchBranch}
+            onRetryTurn={onRetryTurn}
+            onEditTurn={onEditTurn}
+            onOpenRunDetails={onOpenRunDetails}
+          />
+        ))}
+        <ChatThreadNotices notices={notices} />
+        <div ref={threadEndRef} aria-hidden="true" />
+      </div>
     </div>
   );
 }

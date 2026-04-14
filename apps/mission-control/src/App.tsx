@@ -2,6 +2,7 @@
 import {
   Suspense,
   lazy,
+  startTransition,
   useCallback,
   useEffect,
   useMemo,
@@ -101,21 +102,54 @@ function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof
   }) as LazyPageComponent<TModule, TExport>;
 }
 
-const AgentsHubPage = lazyPage(() => import("./pages/AgentsHubPage"), "AgentsHubPage");
-const ApprovalsPage = lazyPage(() => import("./pages/ApprovalsPage"), "ApprovalsPage");
-const ArtifactsPage = lazyPage(() => import("./pages/ArtifactsPage"), "ArtifactsPage");
-const ChatPage = lazyPage(() => import("./pages/ChatPage"), "ChatPage");
-const CommandPalette = lazyPage(() => import("./components/CommandPalette"), "CommandPalette");
-const DevDiagnosticsPanel = lazyPage(() => import("./components/DevDiagnosticsPanel"), "DevDiagnosticsPanel");
-const GeneralHubPage = lazyPage(() => import("./pages/GeneralHubPage"), "GeneralHubPage");
-const HealthPage = lazyPage(() => import("./pages/HealthPage"), "HealthPage");
-const IntegrationsHubPage = lazyPage(() => import("./pages/IntegrationsHubPage"), "IntegrationsHubPage");
-const PromptLabPage = lazyPage(() => import("./pages/PromptLabPage"), "PromptLabPage");
-const RuntimeHubPage = lazyPage(() => import("./pages/RuntimeHubPage"), "RuntimeHubPage");
-const TasksPage = lazyPage(() => import("./pages/TasksPage"), "TasksPage");
-const TimelinePage = lazyPage(() => import("./pages/TimelinePage"), "TimelinePage");
-const ToolsPage = lazyPage(() => import("./pages/ToolsPage"), "ToolsPage");
-const WorkspacesHubPage = lazyPage(() => import("./pages/WorkspacesHubPage"), "WorkspacesHubPage");
+const loadAgentsHubPage = () => import("./pages/AgentsHubPage");
+const loadApprovalsPage = () => import("./pages/ApprovalsPage");
+const loadArtifactsPage = () => import("./pages/ArtifactsPage");
+const loadChatPage = () => import("./pages/ChatPage");
+const loadCommandPalette = () => import("./components/CommandPalette");
+const loadDevDiagnosticsPanel = () => import("./components/DevDiagnosticsPanel");
+const loadGeneralHubPage = () => import("./pages/GeneralHubPage");
+const loadHealthPage = () => import("./pages/HealthPage");
+const loadIntegrationsHubPage = () => import("./pages/IntegrationsHubPage");
+const loadPromptLabPage = () => import("./pages/PromptLabPage");
+const loadRuntimeHubPage = () => import("./pages/RuntimeHubPage");
+const loadTasksPage = () => import("./pages/TasksPage");
+const loadTimelinePage = () => import("./pages/TimelinePage");
+const loadToolsPage = () => import("./pages/ToolsPage");
+const loadWorkspacesHubPage = () => import("./pages/WorkspacesHubPage");
+
+const AgentsHubPage = lazyPage(loadAgentsHubPage, "AgentsHubPage");
+const ApprovalsPage = lazyPage(loadApprovalsPage, "ApprovalsPage");
+const ArtifactsPage = lazyPage(loadArtifactsPage, "ArtifactsPage");
+const ChatPage = lazyPage(loadChatPage, "ChatPage");
+const CommandPalette = lazyPage(loadCommandPalette, "CommandPalette");
+const DevDiagnosticsPanel = lazyPage(loadDevDiagnosticsPanel, "DevDiagnosticsPanel");
+const GeneralHubPage = lazyPage(loadGeneralHubPage, "GeneralHubPage");
+const HealthPage = lazyPage(loadHealthPage, "HealthPage");
+const IntegrationsHubPage = lazyPage(loadIntegrationsHubPage, "IntegrationsHubPage");
+const PromptLabPage = lazyPage(loadPromptLabPage, "PromptLabPage");
+const RuntimeHubPage = lazyPage(loadRuntimeHubPage, "RuntimeHubPage");
+const TasksPage = lazyPage(loadTasksPage, "TasksPage");
+const TimelinePage = lazyPage(loadTimelinePage, "TimelinePage");
+const ToolsPage = lazyPage(loadToolsPage, "ToolsPage");
+const WorkspacesHubPage = lazyPage(loadWorkspacesHubPage, "WorkspacesHubPage");
+const PRELOAD_ROUTE_MODULES = [
+  loadAgentsHubPage,
+  loadApprovalsPage,
+  loadArtifactsPage,
+  loadChatPage,
+  loadCommandPalette,
+  loadDevDiagnosticsPanel,
+  loadGeneralHubPage,
+  loadHealthPage,
+  loadIntegrationsHubPage,
+  loadPromptLabPage,
+  loadRuntimeHubPage,
+  loadTasksPage,
+  loadTimelinePage,
+  loadToolsPage,
+  loadWorkspacesHubPage,
+] as const;
 const GATEWAY_ACCESS_AUTO_RETRY_MS = 300;
 const OPERATE_STATUS_STALE_AFTER_MS = 45_000;
 
@@ -171,6 +205,15 @@ function PageLoadingFallback({ label }: { label: string }) {
     </section>
   );
 }
+
+type IdleCallbackHandle = number;
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => IdleCallbackHandle;
+  cancelIdleCallback?: (handle: IdleCallbackHandle) => void;
+};
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (updateCallback: () => void) => { finished: Promise<void> };
+};
 
 function deriveOperateStatusStripExpanded(): boolean {
   return false;
@@ -433,9 +476,65 @@ export function App() {
   const activeRemoteApprovalPrompt = remoteApprovalPrompts[0];
   const localApprovalPromptCount = deviceAccessPrompts.length + remoteApprovalPrompts.length;
 
-  const navigate = useCallback((nextRoute: ResolvedRoute) => {
-    setRoute(normalizeResolvedRoute(nextRoute));
-  }, []);
+  const navigate = useCallback(
+    (nextRoute: ResolvedRoute) => {
+      const normalizedRoute = normalizeResolvedRoute(nextRoute);
+      const updateRoute = () => {
+        startTransition(() => {
+          setRoute(normalizedRoute);
+        });
+      };
+
+      if (effectiveEffectsMode === "full" && typeof document !== "undefined") {
+        const transitionDocument = document as ViewTransitionDocument;
+        if (typeof transitionDocument.startViewTransition === "function") {
+          void transitionDocument
+            .startViewTransition(() => {
+              updateRoute();
+            })
+            .finished.catch(() => undefined);
+          return;
+        }
+      }
+
+      updateRoute();
+    },
+    [effectiveEffectsMode],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || gatewayAccess.status !== "ready") {
+      return undefined;
+    }
+
+    const idleWindow = window as IdleWindow;
+    let cancelled = false;
+    const preload = () => {
+      if (cancelled) {
+        return;
+      }
+      void Promise.allSettled(PRELOAD_ROUTE_MODULES.map((loader) => loader()));
+    };
+
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      const handle = idleWindow.requestIdleCallback(
+        () => {
+          preload();
+        },
+        { timeout: 2_000 },
+      );
+      return () => {
+        cancelled = true;
+        idleWindow.cancelIdleCallback?.(handle);
+      };
+    }
+
+    const handle = window.setTimeout(preload, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [gatewayAccess.status]);
 
   const handleSelectSpace = useCallback(
     (space: Space) => {
@@ -1310,6 +1409,7 @@ export function App() {
   }));
   const compactShellNavValue = visiblePage;
   const shellThemeClass = resolveShellThemeClass();
+  const pageErrorResetKey = `${route.space}:${route.page}:${route.tab ?? ""}`;
 
   return (
     <ShellDetailPanelProvider
@@ -1319,26 +1419,26 @@ export function App() {
       onActiveEntryChange={setDetailPanelEntry}
     >
       <div
-        className={`app-shell layout-shell ${shellThemeClass} ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
+        className={`app-shell layout-shell mc-app-shell ${shellThemeClass} ui-mode-${uiMode} ui-density-${density} ui-effects-${effectiveEffectsMode}${showTechnicalDetails ? "" : " ui-hide-technical"}`}
         data-density={density}
         data-effects-mode={effectsMode}
         data-effective-effects-mode={effectiveEffectsMode}
       >
-        <header className="shell-bar">
+        <header className="shell-bar mc-shell-bar">
           <div className="shell-bar-brand">
             <div className="shell-bar-brand-copy">
               <p className="shell-bar-kicker">GoatCitadel Mission Control</p>
               <h1 className="shell-bar-title">{SPACE_META[route.space].label}</h1>
             </div>
           </div>
-          <div className="shell-bar-context">
+          <div className="shell-bar-context mc-shell-bar-context">
             {!desktopShellRail ? (
               <nav className="space-nav" aria-label="Mission Control spaces">
                 {(Object.keys(SPACE_META) as Space[]).map((space) => (
                   <button
                     key={space}
                     type="button"
-                    className={`space-nav-item gc-nav-button gc-nav-tier-space${route.space === space ? " active" : ""}`}
+                    className={`space-nav-item gc-nav-button gc-nav-tier-space mc-shell-chip${route.space === space ? " active" : ""}`}
                     onClick={() => handleSelectSpace(space)}
                   >
                     {SPACE_META[space].label}
@@ -1349,12 +1449,12 @@ export function App() {
             <p className="shell-bar-page-label">{currentPageLabel}</p>
             <p className="shell-bar-page-note">{currentPageDescription}</p>
           </div>
-          <div className="shell-bar-actions">
-            <div className="shell-bar-utility">
+          <div className="shell-bar-actions mc-shell-bar-actions">
+            <div className="shell-bar-utility mc-shell-bar-utility">
               <GlobalFreshnessPill streamState={streamState} variant="compact" />
               <button
                 type="button"
-                className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip"
+                className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip mc-shell-chip"
                 onClick={() => setPaletteOpen(true)}
               >
                 {appCopy.quickActionsButton}
@@ -1367,8 +1467,8 @@ export function App() {
           </div>
         </header>
 
-        <div className={`shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
-          <div className="shell-secondary-nav-primary">
+        <div className={`shell-secondary-nav mc-shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
+          <div className="shell-secondary-nav-primary mc-shell-secondary-nav-primary">
             {!desktopShellRail ? (
               compactShellNav ? (
                 <label className="shell-context-picker">
@@ -1389,7 +1489,7 @@ export function App() {
                     <button
                       key={item.page}
                       type="button"
-                      className={`${route.space === "operate" ? "surface-nav-item" : "secondary-page-nav-item"} gc-nav-button gc-nav-tier-page${visiblePage === item.page ? " active" : ""}`}
+                      className={`${route.space === "operate" ? "surface-nav-item" : "secondary-page-nav-item"} gc-nav-button gc-nav-tier-page mc-shell-chip${visiblePage === item.page ? " active" : ""}`}
                       onClick={() => handleSelectVisiblePage(item.page)}
                     >
                       {item.label}
@@ -1417,7 +1517,7 @@ export function App() {
               </div>
             )}
           </div>
-          <div className="shell-trust-hud" aria-label="Shell trust context">
+          <div className="shell-trust-hud mc-shell-trust-hud" aria-label="Shell trust context">
             {route.space === "operate" ? (
               <StatusChip tone="muted">{workTrustDescriptor.workspaceLabel}</StatusChip>
             ) : null}
@@ -1432,7 +1532,7 @@ export function App() {
             {detailPanelEntry ? (
               <button
                 type="button"
-                className={`shell-detail-toggle gc-nav-button gc-nav-tier-chip${detailPanelVisible ? " active" : ""}`}
+                className={`shell-detail-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${detailPanelVisible ? " active" : ""}`}
                 aria-expanded={detailPanelVisible}
                 onClick={handleToggleDetailPanel}
               >
@@ -1441,7 +1541,7 @@ export function App() {
             ) : null}
             <button
               type="button"
-              className={`shell-trust-action gc-nav-button gc-nav-tier-chip${operateApprovalsCount > 0 ? " active" : ""}`}
+              className={`shell-trust-action gc-nav-button gc-nav-tier-chip mc-shell-chip${operateApprovalsCount > 0 ? " active" : ""}`}
               onClick={() => navigate({ space: "operate", page: "approvals" })}
             >
               {workTrustDescriptor.approvalsSummary}
@@ -1454,7 +1554,7 @@ export function App() {
             {route.space === "operate" ? (
               <button
                 type="button"
-                className={`shell-workload-toggle gc-nav-button gc-nav-tier-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
+                className={`shell-workload-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
                 aria-expanded={operateStatusVariant === "expanded"}
                 onClick={() => setOperateStatusStripExpanded((current) => !current)}
               >
@@ -1464,7 +1564,7 @@ export function App() {
           </div>
         </div>
 
-        <main className="shell-main">
+        <main className="shell-main mc-shell-main">
           {notifications.length > 0 ? (
             <div className="shell-notification-region">
               <NotificationStack
@@ -1474,7 +1574,7 @@ export function App() {
             </div>
           ) : null}
           <div
-            className={`shell-main-layout${desktopShellRail ? " with-rail" : ""}${detailPanelVisible ? " with-detail-panel" : ""}`}
+            className={`shell-main-layout mc-shell-main-layout${desktopShellRail ? " with-rail" : ""}${detailPanelVisible ? " with-detail-panel" : ""}`}
           >
             {desktopShellRail ? (
               <ShellNavRail
@@ -1534,7 +1634,7 @@ export function App() {
                 </div>
               ) : null}
               <PageErrorBoundary
-                resetKey={`${route.space}:${route.page}:${route.surface ?? ""}:${route.tab ?? ""}`}
+                resetKey={pageErrorResetKey}
                 pageLabel={currentPageLabel}
                 onReturnToChat={() => navigate(DEFAULT_ROUTE)}
               >

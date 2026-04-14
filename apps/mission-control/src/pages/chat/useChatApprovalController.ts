@@ -1,17 +1,26 @@
-import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
+import type {
+  ChatAttachmentRecord,
+  ChatCapabilityUpgradeSuggestion,
+  ChatDelegationSuggestionRecord,
+  ChatSpecialistCandidateSuggestionRecord,
+} from "@goatcitadel/contracts";
 import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
-import { abortActiveChatStream, type ActiveChatStreamState } from "./useChatOutboundExecution";
+import {
+  abortActiveChatStream,
+  type ActiveChatStreamState,
+  type PendingApprovalState,
+} from "./useChatOutboundExecution";
 
 export function useChatApprovalController(input: {
   selectedSessionId: string | null;
   activeStreamRef: MutableRefObject<ActiveChatStreamState | null>;
   setPendingAttachments: Dispatch<SetStateAction<ChatAttachmentRecord[]>>;
   setEditingTurnId: (value: string | null) => void;
-  setPendingApproval: (value: null) => void;
-  setDelegationSuggestion: (value: null) => void;
-  setCapabilitySuggestions: (value: []) => void;
-  setSpecialistSuggestions: (value: []) => void;
+  setPendingApproval: (value: PendingApprovalState | null) => void;
+  setDelegationSuggestion: (value: ChatDelegationSuggestionRecord | null) => void;
+  setCapabilitySuggestions: (value: ChatCapabilityUpgradeSuggestion[]) => void;
+  setSpecialistSuggestions: (value: ChatSpecialistCandidateSuggestionRecord[]) => void;
   setSelectedTurnId: Dispatch<SetStateAction<string | null>>;
   setLocalNotices: Dispatch<SetStateAction<ChatThreadNotice[]>>;
   pushLocalNotice: (content: string, tone?: ChatThreadNotice["tone"]) => void;

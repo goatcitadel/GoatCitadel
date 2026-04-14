@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { useEmbeddedPageChrome } from "./EmbeddedPageChrome";
 
 interface PageChromeProps {
@@ -35,9 +36,15 @@ export function PageChrome({
 
   return (
     <header
-      className={`page-chrome page-chrome-${variant} page-chrome-density-${density} page-header${
-        hasActions ? " page-header-has-actions" : ""
-      }${hasHint ? " page-header-has-hint" : ""}${className ? ` ${className}` : ""}`}
+      className={cn(
+        "page-chrome mc-page-chrome",
+        `page-chrome-${variant}`,
+        `page-chrome-density-${density}`,
+        "page-header",
+        hasActions && "page-header-has-actions",
+        hasHint && "page-header-has-hint",
+        className,
+      )}
     >
       <div className="page-chrome-copy page-header-main">
         {eyebrow ? <p className="page-chrome-eyebrow page-header-eyebrow">{eyebrow}</p> : null}

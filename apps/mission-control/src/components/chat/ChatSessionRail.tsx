@@ -1,4 +1,3 @@
-import { Virtuoso } from "react-virtuoso";
 import { StatusChip } from "../StatusChip";
 
 interface ChatSessionRailRow {
@@ -48,7 +47,9 @@ function describeMissionSessionMeta(
     return session.projectName ? `${session.projectName} · ${relativeTime}` : `Task lane ready · ${relativeTime}`;
   }
   if (mode === "code") {
-    return session.projectName ? `Bound to ${session.projectName} · ${relativeTime}` : `No project binding · ${relativeTime}`;
+    return session.projectName
+      ? `Bound to ${session.projectName} · ${relativeTime}`
+      : `No project binding · ${relativeTime}`;
   }
   return relativeTime;
 }
@@ -116,11 +117,13 @@ export function ChatSessionRail({
       pinned: session.pinned,
     })),
     ...(missionSessions.length === 0
-      ? [{
-        key: "mission-empty",
-        type: "empty" as const,
-        title: "No mission chats match this filter yet.",
-      }]
+      ? [
+          {
+            key: "mission-empty",
+            type: "empty" as const,
+            title: "No mission chats match this filter yet.",
+          },
+        ]
       : []),
     {
       key: "external-header",
@@ -139,24 +142,23 @@ export function ChatSessionRail({
       pinned: session.pinned,
     })),
     ...(externalSessions.length === 0
-      ? [{
-        key: "external-empty",
-        type: "empty" as const,
-        title: "No external chats are connected right now.",
-      }]
+      ? [
+          {
+            key: "external-empty",
+            type: "empty" as const,
+            title: "No external chats are connected right now.",
+          },
+        ]
       : []),
   ];
 
   return (
     <div className="chat-v11-session-rail">
-      <Virtuoso
-        className="chat-v11-session-virtuoso"
-        data={rows}
-        computeItemKey={(_index, row) => row.key}
-        itemContent={(_index, row) => {
+      <div className="chat-v11-session-virtuoso">
+        {rows.map((row) => {
           if (row.type === "header") {
             return (
-              <div className="chat-v11-rail-section">
+              <div key={row.key} className="chat-v11-rail-section">
                 <div className="chat-v11-rail-title">
                   <h4>{row.title}</h4>
                   <StatusChip tone={row.tone ?? "muted"}>{row.count ?? 0}</StatusChip>
@@ -166,15 +168,19 @@ export function ChatSessionRail({
           }
 
           if (row.type === "empty") {
-            return <div className="chat-v11-empty-item">{row.title}</div>;
+            return (
+              <div key={row.key} className="chat-v11-empty-item">
+                {row.title}
+              </div>
+            );
           }
 
           const isSelected = selectedSessionId === row.sessionId;
           return (
-            <div className="chat-v11-session-row">
+            <div key={row.key} className="chat-v11-session-row">
               <button
                 type="button"
-                className={["gc-button", (isSelected ? "active" : "")].filter(Boolean).join(" ")}
+                className={["gc-button", isSelected ? "active" : ""].filter(Boolean).join(" ")}
                 onClick={() => row.sessionId && onSelectSession(row.sessionId)}
               >
                 <span className="chat-v11-session-row-title">
@@ -188,8 +194,8 @@ export function ChatSessionRail({
               </button>
             </div>
           );
-        }}
-      />
+        })}
+      </div>
     </div>
   );
 }

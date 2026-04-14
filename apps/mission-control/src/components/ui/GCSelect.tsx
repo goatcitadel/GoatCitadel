@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
-import * as Select from "@radix-ui/react-select";
+import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 
 export interface GCSelectOption {
   value: string;
@@ -42,11 +43,11 @@ export function GCSelect({
 
   if (!canUsePortalSelect) {
     return (
-      <span className={`gc-select-shell${className ? ` ${className}` : ""}`}>
-        {renderPrefix ? <span className="gc-select-prefix">{renderPrefix}</span> : null}
+      <span className={cn("gc-select-shell mc-gc-select-shell", className)}>
+        {renderPrefix ? <span className="gc-select-prefix mc-gc-select-prefix">{renderPrefix}</span> : null}
         <select
           {...rest}
-          className="gc-select"
+          className="gc-select mc-gc-select-native"
           disabled={disabled}
           value={selected?.value ?? ""}
           onChange={(event) => onChange(event.target.value)}
@@ -67,35 +68,28 @@ export function GCSelect({
   }
 
   return (
-    <Select.Root value={selected?.value ?? ""} onValueChange={onChange} disabled={disabled}>
-      <span className={`gc-select-shell${className ? ` ${className}` : ""}`}>
-        {renderPrefix ? <span className="gc-select-prefix">{renderPrefix}</span> : null}
-        <Select.Trigger {...rest} className="gc-select-trigger">
-          <Select.Value className="gc-select-value" placeholder={placeholderOption?.label ?? "Select a value"} />
-          <Select.Icon asChild>
-            <span className="gc-select-caret" aria-hidden>▾</span>
-          </Select.Icon>
-        </Select.Trigger>
+    <Select value={selected?.value ?? ""} onValueChange={onChange} disabled={disabled}>
+      <span className={cn("gc-select-shell mc-gc-select-shell", className)}>
+        {renderPrefix ? <span className="gc-select-prefix mc-gc-select-prefix">{renderPrefix}</span> : null}
+        <SelectTrigger
+          {...rest}
+          className="gc-select-trigger mc-gc-select-trigger min-w-[10rem] bg-background/70 text-left"
+        >
+          <SelectValue className="gc-select-value" placeholder={placeholderOption?.label ?? "Select a value"} />
+        </SelectTrigger>
       </span>
-      <Select.Portal>
-        <Select.Content className="gc-select-content" position="popper" sideOffset={6} align="start">
-          <Select.Viewport className="gc-select-list">
-            {selectableOptions.map((option) => (
-              <Select.Item
-                key={option.value}
-                value={option.value}
-                disabled={option.disabled}
-                className={`gc-select-option${option.value === selected?.value ? " active" : ""}`}
-              >
-                <Select.ItemText>{option.label}</Select.ItemText>
-                <Select.ItemIndicator asChild>
-                  <span className="gc-select-check" aria-hidden>●</span>
-                </Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
+      <SelectContent className="gc-select-content mc-gc-select-content" position="popper" sideOffset={6} align="start">
+        {selectableOptions.map((option) => (
+          <SelectItem
+            key={option.value}
+            value={option.value}
+            disabled={option.disabled}
+            className={cn("gc-select-option", option.value === selected?.value && "active")}
+          >
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

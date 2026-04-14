@@ -1312,6 +1312,70 @@
     0 14px 28px rgba(0, 0, 0, 0.18);
 }
 
+.theme-signal-noir .mc-shell-nav-rail {
+  background:
+    linear-gradient(180deg, rgba(8, 14, 22, 0.97), rgba(4, 8, 14, 0.99)),
+    radial-gradient(circle at top left, rgba(84, 221, 255, 0.08), transparent 34%);
+  border-color: rgba(84, 221, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 18px 38px rgba(0, 0, 0, 0.34);
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-title,
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-label {
+  color: rgba(154, 221, 237, 0.9);
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-item {
+  border-color: rgba(84, 221, 255, 0.1);
+  background: linear-gradient(180deg, rgba(10, 18, 27, 0.92), rgba(6, 11, 18, 0.98));
+  color: #eaf6ff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 0 0 1px rgba(84, 221, 255, 0.03);
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-item:hover {
+  border-color: rgba(84, 221, 255, 0.22);
+  background: linear-gradient(180deg, rgba(13, 24, 36, 0.96), rgba(7, 13, 21, 1));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 1px rgba(84, 221, 255, 0.08),
+    0 0 20px rgba(84, 221, 255, 0.06);
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-item.active {
+  border-color: rgba(84, 221, 255, 0.3);
+  background:
+    linear-gradient(180deg, rgba(12, 34, 46, 0.98), rgba(8, 16, 25, 1)),
+    radial-gradient(circle at left center, rgba(84, 221, 255, 0.12), transparent 48%);
+  color: #f7fbff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(84, 221, 255, 0.12),
+    0 0 24px rgba(84, 221, 255, 0.08);
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-badge {
+  background: linear-gradient(180deg, rgba(18, 33, 45, 0.92), rgba(8, 15, 23, 1));
+  border-color: rgba(84, 221, 255, 0.16);
+  color: #d8f6ff;
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-item.active .shell-nav-rail-badge {
+  background: linear-gradient(180deg, rgba(84, 221, 255, 0.24), rgba(26, 76, 96, 0.9));
+  color: #f5fcff;
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-item-label {
+  color: rgba(240, 247, 255, 0.96);
+}
+
+.theme-signal-noir .mc-shell-nav-rail .shell-nav-rail-item-note {
+  color: rgba(176, 198, 218, 0.92);
+}
+
 .theme-signal-noir .shell-bar .shell-status-link,
 .theme-signal-noir .shell-bar .shell-status-link:hover {
   min-height: auto;

@@ -1,0 +1,296 @@
+.layout-shell.theme-signal-noir {
+  color-scheme: dark;
+  --background: var(--surface-app);
+  --foreground: var(--text-primary);
+  --card: color-mix(in srgb, var(--surface-1) 94%, white 6%);
+  --card-foreground: var(--text-primary);
+  --popover: color-mix(in srgb, var(--surface-elevated) 96%, white 4%);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent-primary);
+  --primary-foreground: #04151b;
+  --secondary: color-mix(in srgb, var(--surface-2) 86%, var(--accent-primary) 14%);
+  --secondary-foreground: var(--text-primary);
+  --muted: color-mix(in srgb, var(--surface-2) 90%, black 10%);
+  --muted-foreground: var(--text-secondary);
+  --accent: color-mix(in srgb, var(--surface-2) 70%, var(--accent-primary) 30%);
+  --accent-foreground: var(--text-primary);
+  --border: color-mix(in srgb, var(--border-default) 88%, var(--accent-primary) 12%);
+  --input: color-mix(in srgb, var(--surface-inset) 92%, white 8%);
+  --ring: color-mix(in srgb, var(--accent-primary) 70%, white 30%);
+  --sidebar: color-mix(in srgb, var(--surface-shell) 92%, black 8%);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--accent-primary);
+  --sidebar-primary-foreground: #04151b;
+  --sidebar-accent: color-mix(in srgb, var(--surface-2) 74%, var(--accent-primary) 26%);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: color-mix(in srgb, var(--border-default) 82%, var(--accent-primary) 18%);
+  --sidebar-ring: var(--ring);
+}
+
+.layout-shell.theme-citadel-light {
+  color-scheme: light;
+  --background: var(--surface-app);
+  --foreground: var(--text-primary);
+  --card: color-mix(in srgb, white 86%, var(--surface-1) 14%);
+  --card-foreground: var(--text-primary);
+  --popover: color-mix(in srgb, white 92%, var(--surface-1) 8%);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent-primary);
+  --primary-foreground: white;
+  --secondary: color-mix(in srgb, white 80%, var(--accent-primary) 20%);
+  --secondary-foreground: var(--text-primary);
+  --muted: color-mix(in srgb, white 70%, var(--surface-2) 30%);
+  --muted-foreground: var(--text-secondary);
+  --accent: color-mix(in srgb, white 62%, var(--accent-primary) 38%);
+  --accent-foreground: var(--text-primary);
+  --border: color-mix(in srgb, var(--border-default) 88%, var(--accent-primary) 12%);
+  --input: color-mix(in srgb, white 88%, var(--surface-2) 12%);
+  --ring: color-mix(in srgb, var(--accent-primary) 72%, white 28%);
+  --sidebar: color-mix(in srgb, white 90%, var(--surface-shell) 10%);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--accent-primary);
+  --sidebar-primary-foreground: white;
+  --sidebar-accent: color-mix(in srgb, white 74%, var(--accent-primary) 26%);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: color-mix(in srgb, var(--border-default) 90%, var(--accent-primary) 10%);
+  --sidebar-ring: var(--ring);
+}
+
+.mc-app-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent-primary) 14%, transparent) 0%, transparent 34%),
+    linear-gradient(180deg, color-mix(in srgb, var(--background) 96%, white 4%) 0%, var(--background) 100%);
+}
+
+.mc-shell-bar,
+.mc-shell-secondary-nav,
+.mc-shell-nav-rail,
+.mc-panel,
+.mc-stat-card,
+.mc-gc-empty-state {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  box-shadow:
+    0 18px 44px rgba(2, 6, 23, 0.12),
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+}
+
+.mc-shell-bar,
+.mc-shell-secondary-nav {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.mc-shell-bar {
+  padding: 18px 20px;
+}
+
+.mc-shell-bar-context,
+.mc-shell-bar-actions,
+.mc-shell-bar-utility,
+.mc-shell-secondary-nav-primary,
+.mc-shell-trust-hud {
+  gap: 12px;
+}
+
+.mc-shell-main {
+  padding-bottom: 24px;
+}
+
+.mc-shell-main-layout {
+  gap: 18px;
+}
+
+.mc-shell-chip {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.mc-shell-nav-rail {
+  background: color-mix(in srgb, var(--sidebar) 92%, transparent);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.mc-shell-nav-rail-head {
+  margin-bottom: 10px;
+}
+
+.mc-shell-nav-rail-scroll {
+  max-height: calc(100vh - 15rem);
+  padding-right: 6px;
+}
+
+.mc-shell-nav-rail .shell-nav-rail-item {
+  width: 100%;
+  min-height: 44px;
+  justify-content: flex-start;
+  border-radius: 8px;
+}
+
+.mc-shell-nav-rail .shell-nav-rail-badge {
+  min-width: 2rem;
+  justify-content: center;
+  background: color-mix(in srgb, var(--background) 72%, transparent);
+}
+
+.mc-page-chrome,
+.mc-section-header {
+  gap: 14px;
+}
+
+.mc-page-chrome .page-chrome-title,
+.mc-section-header .section-header-title {
+  letter-spacing: 0;
+}
+
+.mc-page-tabs {
+  gap: 10px;
+}
+
+.mc-page-tabs-list {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 78%, transparent);
+  padding: 4px;
+}
+
+.mc-page-tab {
+  border-radius: 6px;
+}
+
+.mc-panel {
+  border-radius: 8px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 96%, white 4%) 0%,
+    color-mix(in srgb, var(--card) 88%, transparent) 100%
+  );
+}
+
+.mc-panel-summary {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  text-align: inherit;
+}
+
+.mc-panel-body {
+  display: grid;
+  gap: 14px;
+}
+
+.mc-stat-card {
+  border-radius: 8px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--card) 96%, transparent) 0%,
+    color-mix(in srgb, var(--muted) 28%, transparent) 100%
+  );
+}
+
+.mc-gc-select-shell,
+.mc-gc-combobox-trigger,
+.mc-gc-modal-content,
+.mc-gc-empty-state {
+  border-radius: 8px;
+}
+
+.mc-gc-select-trigger,
+.mc-gc-combobox-trigger {
+  min-height: 40px;
+  border-color: color-mix(in srgb, var(--border) 86%, transparent);
+  background: color-mix(in srgb, var(--background) 86%, transparent);
+}
+
+.mc-gc-combobox-content,
+.mc-gc-select-content {
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+  box-shadow: 0 16px 36px rgba(2, 6, 23, 0.16);
+}
+
+.mc-gc-combobox-option,
+.mc-gc-segmented-control-option {
+  border-radius: 6px;
+}
+
+.mc-gc-segmented-control {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.mc-gc-switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mc-assistant-renderer,
+.mc-assistant-renderer-viewport,
+.mc-assistant-renderer-message {
+  display: contents;
+}
+
+.mc-assistant-markdown {
+  display: grid;
+  gap: 0.6rem;
+  color: inherit;
+  line-height: 1.55;
+}
+
+.mc-assistant-markdown p,
+.mc-assistant-markdown ul,
+.mc-assistant-markdown ol,
+.mc-assistant-markdown pre,
+.mc-assistant-markdown blockquote {
+  margin: 0;
+}
+
+.mc-assistant-markdown ul,
+.mc-assistant-markdown ol {
+  padding-left: 1.25rem;
+}
+
+.mc-assistant-markdown pre {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--background) 78%, black 22%);
+  padding: 0.75rem;
+}
+
+.mc-assistant-markdown :not(pre) > code {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 84%, transparent);
+  padding: 0.14rem 0.42rem;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.mc-assistant-markdown a {
+  color: color-mix(in srgb, var(--accent-primary) 86%, white 14%);
+}
+
+.mc-assistant-markdown blockquote {
+  border-left: 2px solid color-mix(in srgb, var(--accent-primary) 54%, transparent);
+  padding-left: 0.85rem;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 960px) {
+  .mc-shell-bar,
+  .mc-shell-secondary-nav,
+  .mc-shell-nav-rail,
+  .mc-panel,
+  .mc-stat-card {
+    box-shadow:
+      0 10px 24px rgba(2, 6, 23, 0.08),
+      inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+  }
+}
