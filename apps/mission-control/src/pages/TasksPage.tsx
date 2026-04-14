@@ -33,6 +33,7 @@ import { ConfirmModal } from "../components/ConfirmModal";
 import { StatusChip } from "../components/StatusChip";
 import { TableSkeleton } from "../components/TableSkeleton";
 import { GCSelect } from "../components/ui";
+import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { BUILTIN_AGENT_ROSTER } from "../data/agent-roster";
 import { useAction } from "../hooks/useAction";
 import { pageCopy } from "../content/copy";
@@ -577,14 +578,30 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
           }
         >
           {tasks.length === 0 ? (
-            <div className="task-queue-empty">
-              <p>{viewFilter === "trash" ? "No trashed tasks right now." : "No tasks in this view yet."}</p>
-              <p>
-                {viewFilter === "trash"
+            <GCEmptyState
+              title={viewFilter === "trash" ? "No trashed tasks right now" : "No tasks in this view yet"}
+              subtitle={
+                viewFilter === "trash"
                   ? "Moved tasks will appear here for restore or permanent cleanup."
-                  : "Create a task to start tracking operator work, checkpoints, and delegated execution."}
-              </p>
-            </div>
+                  : "Create a task to start tracking operator work, checkpoints, and delegated execution."
+              }
+              action={
+                viewFilter === "trash" ? (
+                  <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
+                    Return to active tasks
+                  </button>
+                ) : (
+                  <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
+                    Create Task
+                  </button>
+                )
+              }
+              secondaryAction={
+                <button type="button" className="gc-button" onClick={loadTasks}>
+                  Refresh board
+                </button>
+              }
+            />
           ) : viewFilter === "trash" ? (
             <div className="task-trash-list" role="list" aria-label="Trashed tasks">
               {tasks.map((task) => (
@@ -658,7 +675,17 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         </Panel>
 
         <div className="task-detail-stack">
-          {!selectedTask ? <p>Select a task to inspect details.</p> : null}
+          {!selectedTask ? (
+            <GCEmptyState
+              title="Select a task to inspect details"
+              subtitle="Open a card from the board to review queue controls, deliverables, delegated sessions, and durable recovery."
+              action={
+                <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
+                  Focus the active board
+                </button>
+              }
+            />
+          ) : null}
           {selectedTask ? (
             <>
               <Panel

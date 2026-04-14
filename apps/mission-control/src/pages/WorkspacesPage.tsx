@@ -18,6 +18,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { GCSelect } from "../components/ui";
+import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
@@ -259,38 +260,58 @@ export function WorkspacesPage(props: { activeWorkspaceId: string; onWorkspaceCh
         actions={<StatusChip tone="success">Active: {activeWorkspace?.name ?? props.activeWorkspaceId}</StatusChip>}
       >
         <div className="split-grid">
-          <ul className="compact-list">
-            {workspaces.map((workspace) => (
-              <li
-                key={workspace.workspaceId}
-                className={workspace.workspaceId === props.activeWorkspaceId ? "active-item" : ""}
-              >
-                <div>
-                  <strong>{workspace.name}</strong>
-                  <p className="office-subtitle">
-                    {workspace.slug} • {workspace.lifecycleStatus}
-                  </p>
-                </div>
-                <div className="row-actions">
-                  <ActionButton
-                    label={workspace.workspaceId === props.activeWorkspaceId ? "Selected" : "Use"}
-                    disabled={workspace.workspaceId === props.activeWorkspaceId}
-                    onClick={() => props.onWorkspaceChange(workspace.workspaceId)}
-                  />
-                  {workspace.lifecycleStatus === "active" && workspace.workspaceId !== "default" ? (
+          {workspaces.length === 0 ? (
+            <GCEmptyState
+              title="No workspaces are available yet"
+              subtitle="Create a workspace to separate guidance and operational context without leaving the current shell."
+              action={
+                <button
+                  type="button"
+                  className="gc-button"
+                  onClick={() => void load({ background: true, includeGuidance: false })}
+                >
+                  Refresh workspaces
+                </button>
+              }
+              meta={<FieldHelp>The workspace creation form stays available beside this empty state.</FieldHelp>}
+            />
+          ) : (
+            <ul className="compact-list">
+              {workspaces.map((workspace) => (
+                <li
+                  key={workspace.workspaceId}
+                  className={workspace.workspaceId === props.activeWorkspaceId ? "active-item" : ""}
+                >
+                  <div>
+                    <strong>{workspace.name}</strong>
+                    <p className="office-subtitle">
+                      {workspace.slug} • {workspace.lifecycleStatus}
+                    </p>
+                  </div>
+                  <div className="row-actions">
                     <ActionButton
-                      label="Archive"
-                      danger
-                      onClick={() => void handleArchiveWorkspace(workspace.workspaceId)}
+                      label={workspace.workspaceId === props.activeWorkspaceId ? "Selected" : "Use"}
+                      disabled={workspace.workspaceId === props.activeWorkspaceId}
+                      onClick={() => props.onWorkspaceChange(workspace.workspaceId)}
                     />
-                  ) : null}
-                  {workspace.lifecycleStatus === "archived" ? (
-                    <ActionButton label="Restore" onClick={() => void handleRestoreWorkspace(workspace.workspaceId)} />
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
+                    {workspace.lifecycleStatus === "active" && workspace.workspaceId !== "default" ? (
+                      <ActionButton
+                        label="Archive"
+                        danger
+                        onClick={() => void handleArchiveWorkspace(workspace.workspaceId)}
+                      />
+                    ) : null}
+                    {workspace.lifecycleStatus === "archived" ? (
+                      <ActionButton
+                        label="Restore"
+                        onClick={() => void handleRestoreWorkspace(workspace.workspaceId)}
+                      />
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="stack-sm">
             <h4>Create Workspace</h4>
             <label className="field">

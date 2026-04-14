@@ -37,7 +37,7 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setDensity: () => {},
   effectsMode: "auto",
   setEffectsMode: () => {},
-  navMode: "expanded",
+  navMode: "compact",
   setNavMode: () => {},
   showTechnicalDetails: false,
   setShowTechnicalDetails: () => {},
@@ -155,13 +155,13 @@ function readEffectsModeFromStorage(): UiEffectsMode {
 
 function readNavModeFromStorage(): ShellNavMode {
   if (typeof window === "undefined") {
-    return "expanded";
+    return "compact";
   }
   const raw = window.localStorage.getItem(NAV_MODE_KEY);
-  if (raw === "compact" || raw === "icon") {
+  if (raw === "expanded" || raw === "compact" || raw === "icon") {
     return raw;
   }
-  return "expanded";
+  return "compact";
 }
 
 function readDetailPanelPinnedFromStorage(): boolean {

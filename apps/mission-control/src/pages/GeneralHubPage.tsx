@@ -45,6 +45,7 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
         },
         { label: "Operator focus", value: "Defaults before detail", note: decisionSummary },
       ]}
+      summaryMode={activeTab === "onboarding" ? "cards" : "posture"}
       guideTitle="What this controls"
       guideBody="Use General to lock the defaults that other surfaces inherit. Reach for this before you debug behavior downstream."
       tabItems={ITEMS}

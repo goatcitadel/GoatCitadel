@@ -25,7 +25,28 @@ describe("TuneHubLayout", () => {
     expect(markup).toContain("Main content");
   });
 
-  it("skips the summary strip when no summaries are provided and exposes a detail trigger instead of an inline guide panel", () => {
+  it("renders the posture bar mode without reintroducing summary cards", () => {
+    const markup = renderToStaticMarkup(
+      <TuneHubLayout
+        title="General"
+        subtitle="Core defaults"
+        summaryMode="posture"
+        summaries={[
+          { label: "Current decision", value: "Providers", note: "The active Tune lane", tone: "accent" },
+          { label: "Operator focus", value: "Defaults before detail", note: "Shared posture" },
+        ]}
+      >
+        <div>Main content</div>
+      </TuneHubLayout>,
+    );
+
+    expect(markup).toContain("tune-posture-bar");
+    expect(markup).toContain("tune-posture-item-accent");
+    expect(markup).not.toContain("operator-summary-card");
+    expect(markup).toContain("Main content");
+  });
+
+  it("skips the summary strip when no summaries are provided and keeps guide details out of the inline header", () => {
     const markup = renderToStaticMarkup(
       <TuneHubLayout
         title="Runtime"
@@ -38,7 +59,6 @@ describe("TuneHubLayout", () => {
     );
 
     expect(markup).not.toContain("operator-summary-strip");
-    expect(markup).toContain("Open details");
     expect(markup).not.toContain("tune-hub-guide");
     expect(markup).toContain("Main content");
   });

@@ -18,7 +18,6 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { HelpHint } from "../components/HelpHint";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
-import { StatusChip } from "../components/StatusChip";
 import { GCCombobox, GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
@@ -171,14 +170,6 @@ export function ToolsPage() {
   const canProceedStep2 = toolPattern.trim().length > 0;
   const requiresTtlExpiration = grantType === "ttl";
   const canCreateGrant = canProceedStep1 && canProceedStep2 && (!requiresTtlExpiration || expiresAt.trim().length > 0);
-  const toolsHeaderActions = (
-    <div className="workflow-summary-strip">
-      <StatusChip tone="live">{currentToolProfile}</StatusChip>
-      <StatusChip>{grants.length} grants</StatusChip>
-      <StatusChip>{catalog.length} tools</StatusChip>
-      {isRefreshing ? <StatusChip tone="warning">Refreshing</StatusChip> : null}
-    </div>
-  );
 
   useEffect(() => {
     if (grantAdvanced) {
@@ -556,7 +547,6 @@ export function ToolsPage() {
         subtitle={pageCopy.tools.subtitle}
         hint="Use profiles, scoped grants, and dry-runs to widen tool access deliberately instead of all at once."
         density="compact"
-        actions={toolsHeaderActions}
       />
 
       <PageGuideCard
@@ -572,355 +562,383 @@ export function ToolsPage() {
         {success ? <p className="status-banner">{success}</p> : null}
         {isRefreshing ? <p className="status-banner">Refreshing tool access data...</p> : null}
       </div>
+      <div className="tune-posture-bar tools-posture-bar" aria-label="Tools posture summary">
+        <div className="tune-posture-item tune-posture-item-accent">
+          <p className="tune-posture-label">Current profile</p>
+          <p className="tune-posture-value">{currentToolProfile}</p>
+          <p className="tune-posture-note">Global access posture for this workspace.</p>
+        </div>
+        <div className="tune-posture-item">
+          <p className="tune-posture-label">Scoped grants</p>
+          <p className="tune-posture-value">{grants.length}</p>
+          <p className="tune-posture-note">Review, revoke, or tighten them without leaving this page.</p>
+        </div>
+        <div className="tune-posture-item">
+          <p className="tune-posture-label">Catalog reach</p>
+          <p className="tune-posture-value">{catalog.length} tools</p>
+          <p className="tune-posture-note">The catalog stays visible, but secondary to the active grant flow.</p>
+        </div>
+        <div
+          className={`tune-posture-item ${isRefreshing ? "tune-posture-item-warning" : "tune-posture-item-success"}`}
+        >
+          <p className="tune-posture-label">Refresh state</p>
+          <p className="tune-posture-value">{isRefreshing ? "Refreshing" : "Live snapshot"}</p>
+          <p className="tune-posture-note">Operator checks stay close to the policy changes they affect.</p>
+        </div>
+      </div>
       {isInitialLoading ? <CardSkeleton lines={8} /> : null}
 
-      <ToolAccessModesPanel
-        currentToolProfile={currentToolProfile}
-        profileSwitchBusy={profileSwitchBusy}
-        presets={TOOL_PROFILE_PRESETS}
-        showTechnicalDetails={showTechnicalDetails}
-        setShowTechnicalDetails={setShowTechnicalDetails}
-        uiMode={uiMode}
-        onApplyToolProfile={onApplyToolProfile}
-      />
+      <div className="tools-command-center">
+        <div className="tools-command-main">
+          <ToolAccessModesPanel
+            currentToolProfile={currentToolProfile}
+            profileSwitchBusy={profileSwitchBusy}
+            presets={TOOL_PROFILE_PRESETS}
+            showTechnicalDetails={showTechnicalDetails}
+            setShowTechnicalDetails={setShowTechnicalDetails}
+            uiMode={uiMode}
+            onApplyToolProfile={onApplyToolProfile}
+          />
 
-      <div className="split-grid">
-        <Panel
-          title="Create Grant"
-          subtitle="Use this wizard for most cases. Turn on advanced settings only when you need wildcard patterns or custom duration."
-        >
-          <div className="tools-wizard-steps">
-            <button
-              type="button"
-              className={["gc-button", grantWizardStep === 1 ? "active" : ""].filter(Boolean).join(" ")}
-              onClick={() => onWizardJump(1)}
-            >
-              1. Who
-            </button>
-            <button
-              type="button"
-              className={["gc-button", grantWizardStep === 2 ? "active" : ""].filter(Boolean).join(" ")}
-              onClick={() => onWizardJump(2)}
-            >
-              2. What
-            </button>
-            <button
-              type="button"
-              className={["gc-button", grantWizardStep === 3 ? "active" : ""].filter(Boolean).join(" ")}
-              onClick={() => onWizardJump(3)}
-            >
-              3. How Long
-            </button>
-          </div>
-
-          {showTechnicalDetails ? (
-            <label className="tools-advanced-toggle">
-              <input
-                type="checkbox"
-                checked={grantAdvanced}
-                onChange={(event) => setGrantAdvanced(event.target.checked)}
-              />
-              Advanced settings
-            </label>
-          ) : (
-            <p className="tools-helper">
-              Advanced settings are hidden. Turn on technical controls above to customize more.
-            </p>
-          )}
-
-          {grantWizardStep === 1 ? (
-            <div className="advanced-block">
-              <div className="controls-row">
-                <label>
-                  Scope
-                  <HelpHint
-                    label="Scope help"
-                    text="More specific scopes win. Order is task > agent > session > workspace > global."
-                  />
-                </label>
-                <GCSelect
-                  value={scope}
-                  onChange={(value) => onScopeChange(value as GrantScope)}
-                  options={[
-                    { value: "global", label: "Global" },
-                    { value: "session", label: "Session" },
-                    { value: "workspace", label: "Workspace" },
-                    { value: "agent", label: "Agent" },
-                    { value: "task", label: "Task" },
-                  ]}
-                />
-              </div>
-              <div className={`tools-recommend ${isRecommendedScope ? "ok" : "warn"}`}>
-                <p>
-                  Recommended for most new grants: <strong>Session</strong> scope. It limits access to one conversation
-                  while you test safely.
-                </p>
-                {!isRecommendedScope ? (
-                  <button type="button" onClick={onApplyRecommendedScope} className="gc-button">
-                    Use recommended scope
-                  </button>
-                ) : (
-                  <span className="token-chip">Using recommended scope</span>
-                )}
-              </div>
-              <div className="controls-row">
-                <label>
-                  Scope ref
-                  <HelpHint
-                    label="Scope reference help"
-                    text="Choose exactly where this grant applies. Session, workspace, and agent options are loaded for you."
-                  />
-                </label>
-                {scope === "session" || scope === "workspace" || scope === "agent" ? (
-                  <GCCombobox
-                    value={scopeRef}
-                    onChange={setScopeRef}
-                    disabled={selectedScopeRefOptions.length === 0}
-                    options={
-                      selectedScopeRefOptions.length === 0
-                        ? [{ value: "", label: `No ${scope} options found` }]
-                        : selectedScopeRefOptions
-                    }
-                    placeholder={`Choose ${scope}`}
-                  />
-                ) : (
-                  <input
-                    value={scopeRef}
-                    onChange={(event) => setScopeRef(event.target.value)}
-                    placeholder={scope === "global" ? "Not required for global" : "task id"}
-                    disabled={scope === "global"}
-                  />
-                )}
-              </div>
-              <p className="tools-helper">{scopeRefHint}</p>
+          <Panel
+            title="Create Grant"
+            subtitle="Use this wizard for most cases. Turn on advanced settings only when you need wildcard patterns or custom duration."
+          >
+            <div className="tools-wizard-steps">
+              <button
+                type="button"
+                className={["gc-button", grantWizardStep === 1 ? "active" : ""].filter(Boolean).join(" ")}
+                onClick={() => onWizardJump(1)}
+              >
+                1. Who
+              </button>
+              <button
+                type="button"
+                className={["gc-button", grantWizardStep === 2 ? "active" : ""].filter(Boolean).join(" ")}
+                onClick={() => onWizardJump(2)}
+              >
+                2. What
+              </button>
+              <button
+                type="button"
+                className={["gc-button", grantWizardStep === 3 ? "active" : ""].filter(Boolean).join(" ")}
+                onClick={() => onWizardJump(3)}
+              >
+                3. How Long
+              </button>
             </div>
-          ) : null}
 
-          {grantWizardStep === 2 ? (
-            <div className="advanced-block">
-              <div className="actions">
-                <button
-                  type="button"
-                  disabled={workingPreset !== null}
-                  onClick={() => void onApplyQuickPreset("web")}
-                  className="gc-button"
-                >
-                  {workingPreset === "web" ? "Applying..." : "Quick: Web Assistant"}
-                </button>
-                <button
-                  type="button"
-                  disabled={workingPreset !== null}
-                  onClick={() => void onApplyQuickPreset("files-read")}
-                  className="gc-button"
-                >
-                  {workingPreset === "files-read" ? "Applying..." : "Quick: File Read"}
-                </button>
-                <button
-                  type="button"
-                  disabled={workingPreset !== null}
-                  onClick={() => void onApplyQuickPreset("devops")}
-                  className="gc-button"
-                >
-                  {workingPreset === "devops" ? "Applying..." : "Quick: DevOps Read"}
-                </button>
-              </div>
-              <div className="controls-row">
-                <label>
-                  Tool
-                  <HelpHint
-                    label="Tool help"
-                    text="Pick the exact tool to allow or deny. Use * only for advanced wildcard rules."
-                  />
-                </label>
-                <GCCombobox
-                  value={toolPattern}
-                  onChange={setToolPattern}
-                  placeholder="Pick tool"
-                  options={[
-                    ...catalog.map((entry) => ({
-                      value: entry.toolName,
-                      label: `${entry.toolName} (${entry.riskLevel})`,
-                    })),
-                    ...(grantAdvanced ? [{ value: "*", label: "*" }] : []),
-                  ]}
+            {showTechnicalDetails ? (
+              <label className="tools-advanced-toggle">
+                <input
+                  type="checkbox"
+                  checked={grantAdvanced}
+                  onChange={(event) => setGrantAdvanced(event.target.checked)}
                 />
-              </div>
-              {selectedTool ? (
-                <p className="tools-helper">
-                  Risk: <strong>{selectedTool.riskLevel}</strong> | Category: {selectedTool.category} |{" "}
-                  {selectedTool.description}
-                </p>
-              ) : null}
-              {grantAdvanced ? (
+                Advanced settings
+              </label>
+            ) : (
+              <p className="tools-helper">
+                Advanced settings are hidden. Turn on technical controls above to customize more.
+              </p>
+            )}
+
+            {grantWizardStep === 1 ? (
+              <div className="advanced-block">
                 <div className="controls-row">
                   <label>
-                    Decision
+                    Scope
                     <HelpHint
-                      label="Decision help"
-                      text="Allow lets the tool run in this scope. Deny blocks it, even if broader scopes allow it."
+                      label="Scope help"
+                      text="More specific scopes win. Order is task > agent > session > workspace > global."
                     />
                   </label>
                   <GCSelect
-                    value={decision}
-                    onChange={(value) => setDecision(value as GrantDecision)}
+                    value={scope}
+                    onChange={(value) => onScopeChange(value as GrantScope)}
                     options={[
-                      { value: "allow", label: "Allow" },
-                      { value: "deny", label: "Deny" },
+                      { value: "global", label: "Global" },
+                      { value: "session", label: "Session" },
+                      { value: "workspace", label: "Workspace" },
+                      { value: "agent", label: "Agent" },
+                      { value: "task", label: "Task" },
                     ]}
                   />
                 </div>
-              ) : (
-                <p className="tools-helper">
-                  Decision: <strong>Allow</strong> (basic mode)
-                </p>
-              )}
-            </div>
-          ) : null}
-
-          {grantWizardStep === 3 ? (
-            <div className="advanced-block">
-              <div className="controls-row">
-                <label>
-                  Duration
-                  <HelpHint
-                    label="Grant type help"
-                    text="One-time expires after one use. Persistent remains until revoked. TTL is available in advanced settings."
-                  />
-                </label>
-                <GCSelect
-                  value={grantType}
-                  onChange={(value) => setGrantType(value as GrantType)}
-                  options={[
-                    { value: "one_time", label: "One-time" },
-                    { value: "persistent", label: "Persistent" },
-                    ...(grantAdvanced ? [{ value: "ttl", label: "Expires at time (TTL)" }] : []),
-                  ]}
-                />
-              </div>
-              {grantType === "ttl" ? (
-                <div className="controls-row">
-                  <label>
-                    Expires at (UTC)
-                    <HelpHint label="Expiration help" text="Required for TTL grants. Pick a time after now." />
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={toDatetimeLocalValue(expiresAt)}
-                    onChange={(event) =>
-                      setExpiresAt(event.target.value ? new Date(event.target.value).toISOString() : "")
-                    }
-                  />
+                <div className={`tools-recommend ${isRecommendedScope ? "ok" : "warn"}`}>
+                  <p>
+                    Recommended for most new grants: <strong>Session</strong> scope. It limits access to one
+                    conversation while you test safely.
+                  </p>
+                  {!isRecommendedScope ? (
+                    <button type="button" onClick={onApplyRecommendedScope} className="gc-button">
+                      Use recommended scope
+                    </button>
+                  ) : (
+                    <span className="token-chip">Using recommended scope</span>
+                  )}
                 </div>
-              ) : null}
-              {grantAdvanced ? (
                 <div className="controls-row">
                   <label>
-                    Created by
+                    Scope ref
                     <HelpHint
-                      label="Created by help"
-                      text="Audit label for who made the grant. Use your operator name."
+                      label="Scope reference help"
+                      text="Choose exactly where this grant applies. Session, workspace, and agent options are loaded for you."
                     />
                   </label>
-                  <input value={createdBy} onChange={(event) => setCreatedBy(event.target.value)} />
+                  {scope === "session" || scope === "workspace" || scope === "agent" ? (
+                    <GCCombobox
+                      value={scopeRef}
+                      onChange={setScopeRef}
+                      disabled={selectedScopeRefOptions.length === 0}
+                      options={
+                        selectedScopeRefOptions.length === 0
+                          ? [{ value: "", label: `No ${scope} options found` }]
+                          : selectedScopeRefOptions
+                      }
+                      placeholder={`Choose ${scope}`}
+                    />
+                  ) : (
+                    <input
+                      value={scopeRef}
+                      onChange={(event) => setScopeRef(event.target.value)}
+                      placeholder={scope === "global" ? "Not required for global" : "task id"}
+                      disabled={scope === "global"}
+                    />
+                  )}
                 </div>
-              ) : null}
-              <p className="tools-summary">Summary: {grantSummary}</p>
+                <p className="tools-helper">{scopeRefHint}</p>
+              </div>
+            ) : null}
+
+            {grantWizardStep === 2 ? (
+              <div className="advanced-block">
+                <div className="actions">
+                  <button
+                    type="button"
+                    disabled={workingPreset !== null}
+                    onClick={() => void onApplyQuickPreset("web")}
+                    className="gc-button"
+                  >
+                    {workingPreset === "web" ? "Applying..." : "Quick: Web Assistant"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={workingPreset !== null}
+                    onClick={() => void onApplyQuickPreset("files-read")}
+                    className="gc-button"
+                  >
+                    {workingPreset === "files-read" ? "Applying..." : "Quick: File Read"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={workingPreset !== null}
+                    onClick={() => void onApplyQuickPreset("devops")}
+                    className="gc-button"
+                  >
+                    {workingPreset === "devops" ? "Applying..." : "Quick: DevOps Read"}
+                  </button>
+                </div>
+                <div className="controls-row">
+                  <label>
+                    Tool
+                    <HelpHint
+                      label="Tool help"
+                      text="Pick the exact tool to allow or deny. Use * only for advanced wildcard rules."
+                    />
+                  </label>
+                  <GCCombobox
+                    value={toolPattern}
+                    onChange={setToolPattern}
+                    placeholder="Pick tool"
+                    options={[
+                      ...catalog.map((entry) => ({
+                        value: entry.toolName,
+                        label: `${entry.toolName} (${entry.riskLevel})`,
+                      })),
+                      ...(grantAdvanced ? [{ value: "*", label: "*" }] : []),
+                    ]}
+                  />
+                </div>
+                {selectedTool ? (
+                  <p className="tools-helper">
+                    Risk: <strong>{selectedTool.riskLevel}</strong> | Category: {selectedTool.category} |{" "}
+                    {selectedTool.description}
+                  </p>
+                ) : null}
+                {grantAdvanced ? (
+                  <div className="controls-row">
+                    <label>
+                      Decision
+                      <HelpHint
+                        label="Decision help"
+                        text="Allow lets the tool run in this scope. Deny blocks it, even if broader scopes allow it."
+                      />
+                    </label>
+                    <GCSelect
+                      value={decision}
+                      onChange={(value) => setDecision(value as GrantDecision)}
+                      options={[
+                        { value: "allow", label: "Allow" },
+                        { value: "deny", label: "Deny" },
+                      ]}
+                    />
+                  </div>
+                ) : (
+                  <p className="tools-helper">
+                    Decision: <strong>Allow</strong> (basic mode)
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            {grantWizardStep === 3 ? (
+              <div className="advanced-block">
+                <div className="controls-row">
+                  <label>
+                    Duration
+                    <HelpHint
+                      label="Grant type help"
+                      text="One-time expires after one use. Persistent remains until revoked. TTL is available in advanced settings."
+                    />
+                  </label>
+                  <GCSelect
+                    value={grantType}
+                    onChange={(value) => setGrantType(value as GrantType)}
+                    options={[
+                      { value: "one_time", label: "One-time" },
+                      { value: "persistent", label: "Persistent" },
+                      ...(grantAdvanced ? [{ value: "ttl", label: "Expires at time (TTL)" }] : []),
+                    ]}
+                  />
+                </div>
+                {grantType === "ttl" ? (
+                  <div className="controls-row">
+                    <label>
+                      Expires at (UTC)
+                      <HelpHint label="Expiration help" text="Required for TTL grants. Pick a time after now." />
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={toDatetimeLocalValue(expiresAt)}
+                      onChange={(event) =>
+                        setExpiresAt(event.target.value ? new Date(event.target.value).toISOString() : "")
+                      }
+                    />
+                  </div>
+                ) : null}
+                {grantAdvanced ? (
+                  <div className="controls-row">
+                    <label>
+                      Created by
+                      <HelpHint
+                        label="Created by help"
+                        text="Audit label for who made the grant. Use your operator name."
+                      />
+                    </label>
+                    <input value={createdBy} onChange={(event) => setCreatedBy(event.target.value)} />
+                  </div>
+                ) : null}
+                <p className="tools-summary">Summary: {grantSummary}</p>
+              </div>
+            ) : null}
+
+            <div className="actions tools-wizard-actions">
+              <button type="button" onClick={onWizardBack} disabled={grantWizardStep === 1} className="gc-button">
+                Back
+              </button>
+              {grantWizardStep < 3 ? (
+                <button type="button" onClick={onWizardNext} className="gc-button">
+                  Next
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={creatingGrant || !canCreateGrant}
+                  onClick={() => void onCreateGrant()}
+                  className="gc-button"
+                >
+                  {creatingGrant ? "Creating..." : "Create Grant"}
+                </button>
+              )}
             </div>
-          ) : null}
+          </Panel>
+        </div>
 
-          <div className="actions tools-wizard-actions">
-            <button type="button" onClick={onWizardBack} disabled={grantWizardStep === 1} className="gc-button">
-              Back
-            </button>
-            {grantWizardStep < 3 ? (
-              <button type="button" onClick={onWizardNext} className="gc-button">
-                Next
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={creatingGrant || !canCreateGrant}
-                onClick={() => void onCreateGrant()}
-                className="gc-button"
-              >
-                {creatingGrant ? "Creating..." : "Create Grant"}
-              </button>
-            )}
-          </div>
-        </Panel>
-
-        <Panel title="Check Access" subtitle="Confirm whether a tool call would be allowed before you run it.">
-          <div className="controls-row">
-            <label>
-              Tool
-              <HelpHint
-                label="Evaluate tool help"
-                text="Choose the tool you want to test against current policy and grants."
-              />
-            </label>
-            <GCSelect
-              value={evaluateForm.toolName}
-              onChange={(value) => setEvaluateForm((current) => ({ ...current, toolName: value }))}
-              options={catalog.map((entry) => ({ value: entry.toolName, label: entry.toolName }))}
-            />
-          </div>
-          <div className="controls-row">
-            <label>Agent ID</label>
-            <GCCombobox
-              value={evaluateForm.agentId}
-              onChange={(value) => setEvaluateForm((current) => ({ ...current, agentId: value }))}
-              options={
-                evaluateAgentOptions.length === 0 ? [{ value: "", label: "No agents found" }] : evaluateAgentOptions
-              }
-              placeholder="Pick agent"
-            />
-          </div>
-          <div className="controls-row">
-            <label>Session ID</label>
-            <GCCombobox
-              value={evaluateForm.sessionId}
-              onChange={(value) => setEvaluateForm((current) => ({ ...current, sessionId: value }))}
-              options={
-                evaluateSessionOptions.length === 0
-                  ? [{ value: "", label: "No sessions found" }]
-                  : evaluateSessionOptions
-              }
-              placeholder="Pick session"
-            />
-          </div>
-          <details className="advanced-panel">
-            <summary>Advanced fields</summary>
+        <div className="tools-command-side">
+          <Panel title="Check Access" subtitle="Confirm whether a tool call would be allowed before you run it.">
             <div className="controls-row">
-              <label>Task ID</label>
-              <input
-                value={evaluateForm.taskId}
-                onChange={(event) => setEvaluateForm((current) => ({ ...current, taskId: event.target.value }))}
+              <label>
+                Tool
+                <HelpHint
+                  label="Evaluate tool help"
+                  text="Choose the tool you want to test against current policy and grants."
+                />
+              </label>
+              <GCSelect
+                value={evaluateForm.toolName}
+                onChange={(value) => setEvaluateForm((current) => ({ ...current, toolName: value }))}
+                options={catalog.map((entry) => ({ value: entry.toolName, label: entry.toolName }))}
               />
             </div>
-          </details>
-          <div className="actions">
-            <button type="button" onClick={() => void onEvaluate()} className="gc-button">
-              Check Access
-            </button>
-          </div>
-          {evaluateResult ? (
-            <div className="replay-box">
-              <p className="tools-summary">
-                Result: <strong>{evaluateResult.allowed ? "Allowed" : "Blocked"}</strong>
-                {" | "}
-                Risk: <strong>{evaluateResult.riskLevel}</strong>
-                {" | "}
-                Approval required: <strong>{evaluateResult.requiresApproval ? "Yes" : "No"}</strong>
-              </p>
-              {showTechnicalDetails ? (
-                <details>
-                  <summary>Raw response</summary>
-                  <pre>{JSON.stringify(evaluateResult, null, 2)}</pre>
-                </details>
-              ) : null}
+            <div className="controls-row">
+              <label>Agent ID</label>
+              <GCCombobox
+                value={evaluateForm.agentId}
+                onChange={(value) => setEvaluateForm((current) => ({ ...current, agentId: value }))}
+                options={
+                  evaluateAgentOptions.length === 0 ? [{ value: "", label: "No agents found" }] : evaluateAgentOptions
+                }
+                placeholder="Pick agent"
+              />
             </div>
-          ) : null}
-        </Panel>
+            <div className="controls-row">
+              <label>Session ID</label>
+              <GCCombobox
+                value={evaluateForm.sessionId}
+                onChange={(value) => setEvaluateForm((current) => ({ ...current, sessionId: value }))}
+                options={
+                  evaluateSessionOptions.length === 0
+                    ? [{ value: "", label: "No sessions found" }]
+                    : evaluateSessionOptions
+                }
+                placeholder="Pick session"
+              />
+            </div>
+            <details className="advanced-panel">
+              <summary>Advanced fields</summary>
+              <div className="controls-row">
+                <label>Task ID</label>
+                <input
+                  value={evaluateForm.taskId}
+                  onChange={(event) => setEvaluateForm((current) => ({ ...current, taskId: event.target.value }))}
+                />
+              </div>
+            </details>
+            <div className="actions">
+              <button type="button" onClick={() => void onEvaluate()} className="gc-button">
+                Check Access
+              </button>
+            </div>
+            {evaluateResult ? (
+              <div className="replay-box">
+                <p className="tools-summary">
+                  Result: <strong>{evaluateResult.allowed ? "Allowed" : "Blocked"}</strong>
+                  {" | "}
+                  Risk: <strong>{evaluateResult.riskLevel}</strong>
+                  {" | "}
+                  Approval required: <strong>{evaluateResult.requiresApproval ? "Yes" : "No"}</strong>
+                </p>
+                {showTechnicalDetails ? (
+                  <details>
+                    <summary>Raw response</summary>
+                    <pre>{JSON.stringify(evaluateResult, null, 2)}</pre>
+                  </details>
+                ) : null}
+              </div>
+            ) : null}
+          </Panel>
+        </div>
       </div>
 
       <div className="split-grid">

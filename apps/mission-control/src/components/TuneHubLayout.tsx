@@ -5,6 +5,7 @@ import { StatCard } from "./StatCard";
 import { useShellDetailPanel } from "./ShellDetailPanelContext";
 
 type SummaryTone = "default" | "accent" | "warning" | "success";
+type TuneHubSummaryMode = "cards" | "posture";
 
 interface TuneHubSummaryItem {
   label: string;
@@ -17,6 +18,7 @@ interface TuneHubLayoutProps<TTab extends string> {
   title: string;
   subtitle: ReactNode;
   summaries?: TuneHubSummaryItem[];
+  summaryMode?: TuneHubSummaryMode;
   guideTitle?: ReactNode;
   guideBody?: ReactNode;
   tabItems?: Array<{ id: TTab; label: string }>;
@@ -30,6 +32,7 @@ export function TuneHubLayout<TTab extends string>({
   title,
   subtitle,
   summaries,
+  summaryMode = "cards",
   guideTitle,
   guideBody,
   tabItems,
@@ -38,7 +41,7 @@ export function TuneHubLayout<TTab extends string>({
   tabAriaLabel,
   children,
 }: TuneHubLayoutProps<TTab>) {
-  const { registerEntry, openPanel, closePanel, isOpen } = useShellDetailPanel();
+  const { registerEntry } = useShellDetailPanel();
   const visibleSummaries = summaries?.filter((item) => item.value !== null && item.value !== undefined) ?? [];
   const detailBody = useMemo(() => <div className="tune-hub-guide-body">{guideBody}</div>, [guideBody]);
 
@@ -58,42 +61,36 @@ export function TuneHubLayout<TTab extends string>({
 
   return (
     <section className="space-page stack-lg tune-hub-layout">
-      <SectionTitle
-        title={title}
-        subtitle={subtitle}
-        density="compact"
-        actions={
-          guideTitle || guideBody ? (
-            <button
-              type="button"
-              className="gc-button"
-              onClick={() => {
-                if (isOpen) {
-                  closePanel();
-                  return;
-                }
-                openPanel();
-              }}
-            >
-              {isOpen ? "Hide details" : "Open details"}
-            </button>
-          ) : undefined
-        }
-      />
+      <SectionTitle title={title} subtitle={subtitle} density="compact" />
       {visibleSummaries.length > 0 ? (
-        <div className="tune-hub-summary-strip operator-summary-strip">
-          {visibleSummaries.map((item) => (
-            <StatCard
-              key={`${title}-${item.label}`}
-              label={item.label}
-              value={item.value}
-              note={item.note}
-              tone={item.tone}
-              compact
-              className="operator-summary-card tune-hub-summary-card"
-            />
-          ))}
-        </div>
+        summaryMode === "posture" ? (
+          <div className="tune-posture-bar" aria-label={`${title} posture summary`}>
+            {visibleSummaries.map((item) => (
+              <div
+                key={`${title}-${item.label}`}
+                className={`tune-posture-item tune-posture-item-${item.tone ?? "default"}`}
+              >
+                <p className="tune-posture-label">{item.label}</p>
+                <p className="tune-posture-value">{item.value}</p>
+                {item.note ? <p className="tune-posture-note">{item.note}</p> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="tune-hub-summary-strip operator-summary-strip">
+            {visibleSummaries.map((item) => (
+              <StatCard
+                key={`${title}-${item.label}`}
+                label={item.label}
+                value={item.value}
+                note={item.note}
+                tone={item.tone}
+                compact
+                className="operator-summary-card tune-hub-summary-card"
+              />
+            ))}
+          </div>
+        )
       ) : null}
       {tabItems && activeTab && onTabChange ? (
         <PageTabs

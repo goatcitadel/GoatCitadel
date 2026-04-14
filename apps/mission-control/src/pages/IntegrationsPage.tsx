@@ -338,7 +338,9 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
   const selectedCatalogIsRunnable = selectedCatalog
     ? selectedCatalog.runtimeAvailability
       ? selectedCatalog.runtimeAvailability === "runnable"
-      : selectedCatalog.maturity === "native" || selectedCatalog.maturity === "beta" || selectedCatalog.maturity === "plugin"
+      : selectedCatalog.maturity === "native" ||
+        selectedCatalog.maturity === "beta" ||
+        selectedCatalog.maturity === "plugin"
     : false;
   const selectedCatalogSetupPath = selectedCatalog
     ? resolveChannelSetupPath(selectedCatalog, guidedChannelCatalogIds)
@@ -686,86 +688,94 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         />
       ) : null}
 
-      <IntegrationsCatalogPicker<IntegrationKind>
-        isChannelsView={isChannelsView}
-        catalog={catalog}
-        selectedCatalogId={selectedCatalogId}
-        onSelectCatalogId={setSelectedCatalogId}
-        guidedChannelCatalogIds={guidedChannelCatalogIds}
-        channelCatalogTruthSummary={channelCatalogTruthSummary}
-        isInitialLoading={isInitialLoading}
-        kindFilter={kindFilter}
-        onKindFilterChange={(value) => {
-          setKindFilter(value);
-          setSelectedCatalogId("");
-          setFormSchema(undefined);
-        }}
-        kindOptions={KIND_OPTIONS}
-        scopeSubtitle={kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]}
-      />
+      <div className="integrations-operator-grid">
+        <div className="integrations-operator-main">
+          <IntegrationsCatalogPicker<IntegrationKind>
+            isChannelsView={isChannelsView}
+            catalog={catalog}
+            selectedCatalogId={selectedCatalogId}
+            onSelectCatalogId={setSelectedCatalogId}
+            guidedChannelCatalogIds={guidedChannelCatalogIds}
+            channelCatalogTruthSummary={channelCatalogTruthSummary}
+            isInitialLoading={isInitialLoading}
+            kindFilter={kindFilter}
+            onKindFilterChange={(value) => {
+              setKindFilter(value);
+              setSelectedCatalogId("");
+              setFormSchema(undefined);
+            }}
+            kindOptions={KIND_OPTIONS}
+            scopeSubtitle={
+              kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]
+            }
+          />
 
-      <ChangeReviewPanel
-        title="Pre-Save Safety Check"
-        overall={changeReview.overall}
-        items={changeReview.items}
-        requireCriticalConfirm
-        criticalConfirmed={criticalConfirmed}
-        onCriticalConfirmChange={setCriticalConfirmed}
-      />
+          <ChangeReviewPanel
+            title="Pre-Save Safety Check"
+            overall={changeReview.overall}
+            items={changeReview.items}
+            requireCriticalConfirm
+            criticalConfirmed={criticalConfirmed}
+            onCriticalConfirmChange={setCriticalConfirmed}
+          />
 
-      <IntegrationsCreateConnectionPanel
-        createConnectionTitle={createConnectionTitle}
-        createConnectionSubtitle={createConnectionSubtitle}
-        isInitialLoading={isInitialLoading}
-        selectedCatalogId={selectedCatalogId}
-        onSelectedCatalogIdChange={setSelectedCatalogId}
-        catalogOptions={catalogOptions}
-        label={label}
-        onLabelChange={setLabel}
-        selectedCatalog={selectedCatalog}
-        selectedCatalogSetupPath={selectedCatalogSetupPath}
-        selectedCatalogIsRunnable={selectedCatalogIsRunnable}
-        status={status}
-        onStatusChange={setStatus}
-        statusOptions={STATUS_OPTIONS}
-        enabled={enabled}
-        onEnabledChange={setEnabled}
-        showAdvancedJson={showAdvancedJson}
-        onShowAdvancedJsonChange={setShowAdvancedJson}
-        simpleFormLabel={simpleFormLabel}
-        simpleFormSelectionLabel={simpleFormSelectionLabel}
-        guidedModeSummary={guidedModeSummary}
-        advancedModeSummary={advancedModeSummary}
-        selectedModeCallout={selectedModeCallout}
-        isFormSchemaLoading={isFormSchemaLoading}
-        formSchema={formSchema}
-        guidedConfig={guidedConfig}
-        onGuidedConfigChange={setGuidedConfig}
-        configJson={configJson}
-        onConfigJsonChange={setConfigJson}
-        blockCreate={blockCreate}
-        createPending={createAction.pending}
-        onCreate={() => void onCreate()}
-      />
+          <IntegrationsCreateConnectionPanel
+            createConnectionTitle={createConnectionTitle}
+            createConnectionSubtitle={createConnectionSubtitle}
+            isInitialLoading={isInitialLoading}
+            selectedCatalogId={selectedCatalogId}
+            onSelectedCatalogIdChange={setSelectedCatalogId}
+            catalogOptions={catalogOptions}
+            label={label}
+            onLabelChange={setLabel}
+            selectedCatalog={selectedCatalog}
+            selectedCatalogSetupPath={selectedCatalogSetupPath}
+            selectedCatalogIsRunnable={selectedCatalogIsRunnable}
+            status={status}
+            onStatusChange={setStatus}
+            statusOptions={STATUS_OPTIONS}
+            enabled={enabled}
+            onEnabledChange={setEnabled}
+            showAdvancedJson={showAdvancedJson}
+            onShowAdvancedJsonChange={setShowAdvancedJson}
+            simpleFormLabel={simpleFormLabel}
+            simpleFormSelectionLabel={simpleFormSelectionLabel}
+            guidedModeSummary={guidedModeSummary}
+            advancedModeSummary={advancedModeSummary}
+            selectedModeCallout={selectedModeCallout}
+            isFormSchemaLoading={isFormSchemaLoading}
+            formSchema={formSchema}
+            guidedConfig={guidedConfig}
+            onGuidedConfigChange={setGuidedConfig}
+            configJson={configJson}
+            onConfigJsonChange={setConfigJson}
+            blockCreate={blockCreate}
+            createPending={createAction.pending}
+            onCreate={() => void onCreate()}
+          />
+        </div>
 
-      <IntegrationsConnectionsTable
-        connectionsTitle={connectionsTitle}
-        connectionsSubtitle={connectionsSubtitle}
-        connectionSearch={connectionSearch}
-        onConnectionSearchChange={setConnectionSearch}
-        connections={connections}
-        filteredConnections={filteredConnections}
-        catalogLabelById={catalogLabelById}
-        connectorBySourceId={connectorBySourceId}
-        connectorDiagnosticsEnabled={connectorDiagnosticsEnabled}
-        pluginBusyId={pluginBusyId}
-        deleteActionPending={deleteAction.pending}
-        onToggle={(connection) => void onToggle(connection)}
-        onRunDiagnostics={(connectionId) => void onRunDiagnostics(connectionId)}
-        onSetDeleteTarget={setDeleteTarget}
-        selectedDiagnosticConnectionId={selectedDiagnosticConnectionId}
-        selectedDiagnostics={selectedDiagnostics}
-      />
+        <div className="integrations-operator-side">
+          <IntegrationsConnectionsTable
+            connectionsTitle={connectionsTitle}
+            connectionsSubtitle={connectionsSubtitle}
+            connectionSearch={connectionSearch}
+            onConnectionSearchChange={setConnectionSearch}
+            connections={connections}
+            filteredConnections={filteredConnections}
+            catalogLabelById={catalogLabelById}
+            connectorBySourceId={connectorBySourceId}
+            connectorDiagnosticsEnabled={connectorDiagnosticsEnabled}
+            pluginBusyId={pluginBusyId}
+            deleteActionPending={deleteAction.pending}
+            onToggle={(connection) => void onToggle(connection)}
+            onRunDiagnostics={(connectionId) => void onRunDiagnostics(connectionId)}
+            onSetDeleteTarget={setDeleteTarget}
+            selectedDiagnosticConnectionId={selectedDiagnosticConnectionId}
+            selectedDiagnostics={selectedDiagnostics}
+          />
+        </div>
+      </div>
 
       {!isChannelsView ? (
         <IntegrationsOperatorActionsPanel

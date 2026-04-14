@@ -1585,9 +1585,6 @@ export function App() {
                 onSelectOperatePage={handleSelectOperatePage}
                 onSelectVisiblePage={handleSelectVisiblePage}
                 onCycleNavMode={handleCycleNavMode}
-                detailAvailable={Boolean(detailPanelEntry)}
-                detailOpen={detailPanelVisible}
-                onToggleDetail={handleToggleDetailPanel}
               />
             ) : null}
             <div className="shell-workspace">

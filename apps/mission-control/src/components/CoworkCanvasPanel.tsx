@@ -39,7 +39,7 @@ export function CoworkCanvasPanel({
   const waitingForApproval = selectedTurn?.trace?.status === "waiting_for_approval";
 
   return (
-    <aside className="chat-cowork-panel mission-dock-panel">
+    <section className="chat-cowork-panel chat-workspace-panel mission-dock-panel">
       <header className="mission-dock-panel-head">
         <h4>Execution Board</h4>
         <p>
@@ -49,18 +49,34 @@ export function CoworkCanvasPanel({
         </p>
       </header>
 
-      <div className="chat-cowork-stage-strip" aria-label="Cowork run summary">
-        <div className="chat-cowork-stage-card">
-          <span>Running</span>
-          <strong>{runningSteps}</strong>
+      <div className="chat-cowork-posture-row" aria-label="Cowork run summary">
+        <div className="chat-cowork-stage-strip">
+          <div className="chat-cowork-stage-card">
+            <span>Running</span>
+            <strong>{runningSteps}</strong>
+          </div>
+          <div className="chat-cowork-stage-card">
+            <span>Completed</span>
+            <strong>{completedSteps}</strong>
+          </div>
+          <div className="chat-cowork-stage-card">
+            <span>Queued</span>
+            <strong>{queuedSteps}</strong>
+          </div>
         </div>
-        <div className="chat-cowork-stage-card">
-          <span>Completed</span>
-          <strong>{completedSteps}</strong>
-        </div>
-        <div className="chat-cowork-stage-card">
-          <span>Queued</span>
-          <strong>{queuedSteps}</strong>
+        <div className="chat-cowork-stage-strip chat-cowork-stage-strip-ops">
+          <div className="chat-cowork-stage-card">
+            <span>Tools used</span>
+            <strong>{toolRuns}</strong>
+          </div>
+          <div className="chat-cowork-stage-card">
+            <span>Approvals</span>
+            <strong>{waitingForApproval ? "1" : "0"}</strong>
+          </div>
+          <div className="chat-cowork-stage-card">
+            <span>Worktree</span>
+            <strong>{workbenchState?.worktreeStatus ?? "off"}</strong>
+          </div>
         </div>
       </div>
 
@@ -88,81 +104,70 @@ export function CoworkCanvasPanel({
       ) : null}
 
       <div className="chat-cowork-execution-grid">
-        <section className="chat-cowork-section">
-          <p className="chat-cowork-section-label">Planned steps</p>
-          {activePlanSteps.length === 0 ? (
-            <p className="chat-cowork-section-copy">No execution plan is attached to the selected turn yet.</p>
-          ) : (
-            <ol className="chat-cowork-plan-list">
-              {activePlanSteps.map((step) => (
-                <li key={step.stepId}>
-                  <div className="chat-cowork-step-head">
-                    <strong>{step.objective}</strong>
-                    <span>{step.status}</span>
-                  </div>
-                  {step.delegatedRole ? <p>Assigned role: {step.delegatedRole}</p> : null}
-                  {step.successCriteria ? <p>Success: {step.successCriteria}</p> : null}
-                  {step.summary ? <p>{step.summary}</p> : null}
-                  {step.error ? <p>{step.error}</p> : null}
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
+        <div className="chat-cowork-execution-main">
+          <section className="chat-cowork-section chat-cowork-section-primary">
+            <p className="chat-cowork-section-label">Planned steps</p>
+            {activePlanSteps.length === 0 ? (
+              <p className="chat-cowork-section-copy">No execution plan is attached to the selected turn yet.</p>
+            ) : (
+              <ol className="chat-cowork-plan-list">
+                {activePlanSteps.map((step) => (
+                  <li key={step.stepId}>
+                    <div className="chat-cowork-step-head">
+                      <strong>{step.objective}</strong>
+                      <span>{step.status}</span>
+                    </div>
+                    {step.delegatedRole ? <p>Assigned role: {step.delegatedRole}</p> : null}
+                    {step.successCriteria ? <p>Success: {step.successCriteria}</p> : null}
+                    {step.summary ? <p>{step.summary}</p> : null}
+                    {step.error ? <p>{step.error}</p> : null}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </div>
 
-        <section className="chat-cowork-section">
-          <p className="chat-cowork-section-label">Role execution</p>
-          {orchestration?.steps.length ? (
-            <ul className="chat-cowork-orchestration-steps">
-              {orchestration.steps.map((step) => (
-                <li key={step.stepId}>
-                  <div className="chat-cowork-step-head">
-                    <strong>{step.role}</strong>
-                    <span>{step.status}</span>
-                  </div>
-                  <p>
-                    {step.providerId ?? "provider auto"}
-                    {step.model ? ` · ${step.model}` : ""}
-                  </p>
-                  {step.summary ? <p>{step.summary}</p> : null}
-                  {step.error ? <p>{step.error}</p> : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="chat-cowork-section-copy">No delegated role activity is available yet.</p>
-          )}
-        </section>
+        <aside className="chat-cowork-execution-side">
+          <section className="chat-cowork-section">
+            <p className="chat-cowork-section-label">Role execution</p>
+            {orchestration?.steps.length ? (
+              <ul className="chat-cowork-orchestration-steps">
+                {orchestration.steps.map((step) => (
+                  <li key={step.stepId}>
+                    <div className="chat-cowork-step-head">
+                      <strong>{step.role}</strong>
+                      <span>{step.status}</span>
+                    </div>
+                    <p>
+                      {step.providerId ?? "provider auto"}
+                      {step.model ? ` · ${step.model}` : ""}
+                    </p>
+                    {step.summary ? <p>{step.summary}</p> : null}
+                    {step.error ? <p>{step.error}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="chat-cowork-section-copy">No delegated role activity is available yet.</p>
+            )}
+          </section>
+
+          {items.length > 0 ? (
+            <section className="chat-cowork-section chat-cowork-section-secondary">
+              <p className="chat-cowork-section-label">Operator queue</p>
+              <ul>
+                {items.map((item) => (
+                  <li key={item.id}>
+                    <strong>{item.title}</strong>
+                    {item.note ? <p>{item.note}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+        </aside>
       </div>
-
-      <div className="chat-cowork-stage-strip chat-cowork-stage-strip-ops">
-        <div className="chat-cowork-stage-card">
-          <span>Tools used</span>
-          <strong>{toolRuns}</strong>
-        </div>
-        <div className="chat-cowork-stage-card">
-          <span>Approvals</span>
-          <strong>{waitingForApproval ? "1" : "0"}</strong>
-        </div>
-        <div className="chat-cowork-stage-card">
-          <span>Worktree</span>
-          <strong>{workbenchState?.worktreeStatus ?? "off"}</strong>
-        </div>
-      </div>
-
-      {items.length > 0 ? (
-        <div className="chat-cowork-section">
-          <p className="chat-cowork-section-label">Operator queue</p>
-          <ul>
-            {items.map((item) => (
-              <li key={item.id}>
-                <strong>{item.title}</strong>
-                {item.note ? <p>{item.note}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </aside>
+    </section>
   );
 }

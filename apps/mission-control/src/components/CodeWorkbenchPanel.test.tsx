@@ -95,7 +95,7 @@ describe("CodeWorkbenchPanel", () => {
     expect(markup).toContain("Repo-first implementation surface for Atlas.");
     expect(markup).toContain("Project ready");
     expect(markup).toContain("Repo files");
-    expect(markup).toContain("Review rail");
+    expect(markup).toContain("Support rail");
     expect(markup).toContain("Draft snippets");
     expect(markup).toContain("Active file: src/index.ts");
   });

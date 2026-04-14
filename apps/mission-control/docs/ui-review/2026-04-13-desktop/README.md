@@ -1,6 +1,6 @@
 # Mission Control Route Screenshots
 
-Generated from `http://127.0.0.1:5180` on 2026-04-14T03:00:11.400Z.
+Generated from `http://127.0.0.1:5173` on 2026-04-14T04:50:36.965Z.
 
 ## Captured Routes
 

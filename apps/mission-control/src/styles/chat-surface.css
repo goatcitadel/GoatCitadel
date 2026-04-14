@@ -18,11 +18,11 @@
 }
 
 .chat-v11-shell.surface-layout-cowork {
-  grid-template-columns: minmax(228px, 280px) minmax(0, 1fr);
+  grid-template-columns: minmax(196px, 244px) minmax(0, 1fr);
 }
 
 .chat-v11-shell.surface-layout-code {
-  grid-template-columns: minmax(224px, 272px) minmax(0, 1fr);
+  grid-template-columns: minmax(188px, 236px) minmax(0, 1fr);
 }
 
 .chat-v11-left {
@@ -180,23 +180,23 @@
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed {
-  grid-template-columns: minmax(0, 1fr) clamp(360px, 22vw, 460px);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
   grid-template-areas: "secondary primary";
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-open {
-  grid-template-columns: minmax(0, 1fr) clamp(340px, 21vw, 430px) clamp(280px, 16vw, 360px);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px) clamp(264px, 15vw, 336px);
   grid-template-areas: "secondary primary dock";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
-  grid-template-columns: clamp(360px, 21vw, 440px) minmax(0, 1fr);
-  grid-template-areas: "primary secondary";
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
+  grid-template-areas: "secondary primary";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-open {
-  grid-template-columns: clamp(340px, 20vw, 420px) minmax(0, 1fr) clamp(272px, 15vw, 352px);
-  grid-template-areas: "primary secondary dock";
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px) clamp(264px, 15vw, 336px);
+  grid-template-areas: "secondary primary dock";
 }
 
 .chat-v11-thread {
@@ -218,11 +218,11 @@
 }
 
 .chat-v11.mode-chat .chat-v11-thread-shell {
-  gap: 12px;
+  gap: 10px;
 }
 
 .chat-v11.mode-chat .chat-v11-composer {
-  padding: 14px;
+  padding: 11px;
 }
 
 .chat-v11.mode-cowork .chat-v11-thread {
@@ -642,7 +642,7 @@
 @media (max-width: 1760px) {
   .chat-v11-main-grid.surface-grid-cowork.with-dock-open,
   .chat-v11-main-grid.surface-grid-code.with-dock-open {
-    grid-template-columns: minmax(0, 1fr) clamp(300px, 28vw, 380px);
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 26vw, 360px);
     grid-template-areas:
       "secondary primary"
       "dock dock";
@@ -651,13 +651,6 @@
   .chat-v11-main-grid.surface-grid-cowork.with-dock-open .chat-v11-dock-column,
   .chat-v11-main-grid.surface-grid-code.with-dock-open .chat-v11-dock-column {
     max-width: none;
-  }
-
-  .chat-v11-main-grid.surface-grid-code.with-dock-open {
-    grid-template-columns: clamp(300px, 28vw, 380px) minmax(0, 1fr);
-    grid-template-areas:
-      "primary secondary"
-      "dock dock";
   }
 }
 
@@ -686,14 +679,14 @@
   .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "primary"
-      "secondary";
+      "secondary"
+      "primary";
   }
 
   .chat-v11-main-grid.surface-grid-code.with-dock-open {
     grid-template-areas:
-      "primary"
       "secondary"
+      "primary"
       "dock";
   }
 
@@ -713,13 +706,17 @@
       "dock";
   }
 
-  .chat-v11-main-grid.surface-grid-cowork.with-dock-open,
   .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed,
-  .chat-v11-main-grid.surface-grid-code.with-dock-open,
   .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "secondary";
+  }
+
+  .chat-v11-main-grid.surface-grid-cowork.with-dock-open,
+  .chat-v11-main-grid.surface-grid-code.with-dock-open {
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "primary"
+      "secondary"
       "dock";
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { globalCopy } from "../content/copy";
 import { useUiPreferences } from "../state/ui-preferences";
 import { useEmbeddedPageChrome } from "./EmbeddedPageChrome";
@@ -19,10 +19,8 @@ interface PageGuideCardProps {
 export function PageGuideCard(props: PageGuideCardProps) {
   const embedded = useEmbeddedPageChrome();
   const { mode } = useUiPreferences();
-  const { registerEntry, openPanel, closePanel, isOpen } = useShellDetailPanel();
+  const { registerEntry } = useShellDetailPanel();
   const compact = props.compact ?? true;
-  const storageKey = props.pageId ? `goatcitadel.page_guide.${props.pageId}.${props.preferenceVersion ?? "v2"}` : null;
-  const [expanded, setExpanded] = useState(() => readExpandedPreference(storageKey, mode, props.defaultExpanded));
 
   const detailBody = useMemo(
     () => (
@@ -63,18 +61,6 @@ export function PageGuideCard(props: PageGuideCardProps) {
   );
 
   useEffect(() => {
-    setExpanded(readExpandedPreference(storageKey, mode, props.defaultExpanded));
-  }, [mode, props.defaultExpanded, storageKey]);
-
-  useEffect(() => {
-    const storage = getWindowStorage();
-    if (!storageKey || !storage) {
-      return;
-    }
-    storage.setItem(storageKey, expanded ? "expanded" : "collapsed");
-  }, [expanded, storageKey]);
-
-  useEffect(() => {
     const entryId = `page-guide:${props.pageId ?? props.what}`;
     return registerEntry({
       id: entryId,
@@ -106,27 +92,13 @@ export function PageGuideCard(props: PageGuideCardProps) {
             <strong>{globalCopy.guideCard.what}:</strong> {props.what}
           </p>
         </div>
-        <button
-          type="button"
-          className="gc-button page-guide-toggle"
-          onClick={() => {
-            setExpanded((value) => !value);
-            if (isOpen) {
-              closePanel();
-              return;
-            }
-            openPanel();
-          }}
-        >
-          {isOpen ? "Hide details" : "Open details"}
-        </button>
       </header>
       <p className="field-help page-guide-mode-note">
         {mode === "simple"
           ? "Guidance lives in the detail panel so the working surface stays clear."
           : "Advanced mode keeps rationale off-canvas until you ask for it."}
       </p>
-      {!compact || expanded ? (
+      {!compact ? (
         <div className="page-guide-inline-summary">
           <p className="page-guide-detail">
             <strong>{globalCopy.guideCard.when}:</strong> {props.when}
@@ -140,35 +112,4 @@ export function PageGuideCard(props: PageGuideCardProps) {
       ) : null}
     </article>
   );
-}
-
-function readExpandedPreference(
-  storageKey: string | null,
-  mode: "simple" | "advanced",
-  defaultExpanded?: boolean,
-): boolean {
-  const storage = getWindowStorage();
-  if (!storage) {
-    return defaultExpanded ?? mode === "simple";
-  }
-  if (storageKey) {
-    const raw = storage.getItem(storageKey);
-    if (raw === "expanded") {
-      return true;
-    }
-    if (raw === "collapsed") {
-      return false;
-    }
-  }
-  if (typeof defaultExpanded === "boolean") {
-    return defaultExpanded;
-  }
-  return mode === "simple";
-}
-
-function getWindowStorage(): Storage | null {
-  if (typeof window === "undefined" || !window.localStorage) {
-    return null;
-  }
-  return window.localStorage;
 }

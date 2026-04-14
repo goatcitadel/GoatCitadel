@@ -1,4 +1,5 @@
 import { createElement, type ReactNode } from "react";
+import type { ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, vi } from "vitest";
 
 // React 19 expects the test environment to explicitly opt into act-aware updates.
@@ -78,9 +79,7 @@ vi.mock("react-test-renderer", async () => {
   const actual = await vi.importActual<typeof import("react-test-renderer")>("react-test-renderer");
   const actualWithDefault = actual as typeof actual & { default?: Record<string, unknown> };
 
-  const wrapRenderer = <TRenderer extends { update: (...args: unknown[]) => unknown; unmount: () => unknown }>(
-    renderer: TRenderer,
-  ) => {
+  const wrapRenderer = (renderer: ReactTestRenderer): ReactTestRenderer => {
     const originalUpdate = renderer.update.bind(renderer);
     renderer.update = ((...args: Parameters<typeof originalUpdate>) => {
       let result: ReturnType<typeof originalUpdate>;

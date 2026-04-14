@@ -86,6 +86,30 @@ export function RuntimeHubPage() {
     <TuneHubLayout
       title="Runtime"
       subtitle="Gateway controls, local runtimes, acceleration targets, and backup safety need to read like one operator cockpit."
+      summaries={[
+        {
+          label: "Current posture",
+          value: latestBackup ? "Recoverable" : "Needs first backup",
+          note: latestBackup
+            ? "Backups and local runtime posture are loaded."
+            : "Create and verify a backup before runtime changes get riskier.",
+          tone: latestBackup ? "success" : "warning",
+        },
+        {
+          label: "Latest backup",
+          value: latestBackup ? latestBackup.backupId : "None yet",
+          note: latestBackup
+            ? new Date(latestBackup.createdAt).toLocaleString()
+            : "No backup manifest has been created.",
+        },
+        {
+          label: "Operator focus",
+          value: "Serving, backups, local runtimes",
+          note: "Keep serving posture visible while mesh and local hosts stay secondary.",
+          tone: "accent",
+        },
+      ]}
+      summaryMode="posture"
       guideTitle="What this controls"
       guideBody="Use Runtime for changes that can interrupt serving, alter local acceleration posture, or affect recovery guarantees."
     >

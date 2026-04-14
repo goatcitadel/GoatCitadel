@@ -51,10 +51,19 @@ describe("ChatSurfaceLayout", () => {
     expect(markup).not.toContain("Context dock");
   });
 
-  it("keeps the code support lane left of the workbench on desktop", () => {
+  it("keeps the code workbench dominant with the support lane on the right on desktop", () => {
     const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
 
     expect(css).toContain(".chat-v11-main-grid.surface-grid-code.with-dock-collapsed");
-    expect(css).toContain('grid-template-areas: "primary secondary";');
+    expect(css).toContain('grid-template-areas: "secondary primary";');
+  });
+
+  it("keeps the code workbench ahead of the dock as the layout collapses", () => {
+    const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
+
+    expect(css).toContain("@media (max-width: 1440px)");
+    expect(css).toContain('"secondary"\n      "primary"\n      "dock";');
+    expect(css).toContain("@media (max-width: 1200px)");
+    expect(css).toContain('grid-template-areas:\n      "secondary"\n      "dock";');
   });
 });

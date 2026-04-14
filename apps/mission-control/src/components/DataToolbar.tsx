@@ -3,18 +3,23 @@ import { useEmbeddedPageChrome } from "./EmbeddedPageChrome";
 
 interface DataToolbarProps {
   primary?: ReactNode;
+  center?: ReactNode;
   secondary?: ReactNode;
   className?: string;
 }
 
-export function DataToolbar({ primary, secondary, className }: DataToolbarProps) {
+export function DataToolbar({ primary, center, secondary, className }: DataToolbarProps) {
   const embedded = useEmbeddedPageChrome();
+  const rootClassName = embedded ? "action-bar" : "data-toolbar";
   return (
     <div
-      className={`${embedded ? "action-bar" : "data-toolbar"}${primary ? ` ${embedded ? "action-bar-has-primary" : "data-toolbar-has-primary"}` : ""}${secondary ? ` ${embedded ? "action-bar-has-secondary" : "data-toolbar-has-secondary"}` : ""}${className ? ` ${className}` : ""}`}
+      className={`${rootClassName}${primary ? ` ${rootClassName}-has-primary` : ""}${center ? ` ${rootClassName}-has-center` : ""}${secondary ? ` ${rootClassName}-has-secondary` : ""}${className ? ` ${className}` : ""}`}
     >
-      <div className={embedded ? "action-bar-primary" : "data-toolbar-primary"}>{primary}</div>
-      <div className={embedded ? "action-bar-secondary" : "data-toolbar-secondary"}>{secondary}</div>
+      {primary ? <div className={embedded ? "action-bar-primary" : "data-toolbar-primary"}>{primary}</div> : null}
+      {center ? <div className={embedded ? "action-bar-center" : "data-toolbar-center"}>{center}</div> : null}
+      {secondary ? (
+        <div className={embedded ? "action-bar-secondary" : "data-toolbar-secondary"}>{secondary}</div>
+      ) : null}
     </div>
   );
 }

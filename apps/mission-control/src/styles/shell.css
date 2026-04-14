@@ -220,15 +220,15 @@
 }
 
 .shell-nav-rail-expanded {
-  width: 280px;
+  width: 256px;
 }
 
 .shell-nav-rail-compact {
-  width: 196px;
+  width: 168px;
 }
 
 .shell-nav-rail-icon {
-  width: 92px;
+  width: 84px;
   justify-items: stretch;
 }
 
@@ -301,19 +301,15 @@
 }
 
 .shell-nav-rail-item-note {
-  font-size: 0.76rem;
+  font-size: 0.81rem;
   line-height: 1.45;
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--text-secondary) 82%, var(--text-primary) 18%);
   display: block;
   overflow-wrap: anywhere;
 }
 
 .shell-nav-rail-item-copy {
   min-width: 0;
-}
-
-.shell-nav-rail-section-secondary {
-  margin-top: auto;
 }
 
 .side-inspector-drawer {

@@ -33,9 +33,6 @@ export function ShellNavRail({
   onSelectOperatePage,
   onSelectVisiblePage,
   onCycleNavMode,
-  detailAvailable,
-  detailOpen,
-  onToggleDetail,
 }: {
   route: ResolvedRoute;
   visiblePage: VisiblePage;
@@ -44,9 +41,6 @@ export function ShellNavRail({
   onSelectOperatePage: (page: OperatePage) => void;
   onSelectVisiblePage: (page: VisiblePage) => void;
   onCycleNavMode: () => void;
-  detailAvailable: boolean;
-  detailOpen: boolean;
-  onToggleDetail: () => void;
 }) {
   const showLabels = navMode !== "icon";
   const showDescriptions = navMode === "expanded";
@@ -56,9 +50,7 @@ export function ShellNavRail({
           page,
           label: PAGE_META[page].label,
           note:
-            page === "surface"
-              ? "Chat, Cowork, and Code stay in the segmented mode control."
-              : PAGE_META[page].description,
+            page === "surface" ? "Chat, Cowork, and Code stay in the mode switch above." : PAGE_META[page].description,
           active: route.page === page,
         }))
       : [];
@@ -148,7 +140,9 @@ export function ShellNavRail({
                     {showLabels ? (
                       <span className="shell-nav-rail-item-copy">
                         <span className="shell-nav-rail-item-label">{item.label}</span>
-                        {showDescriptions ? <span className="shell-nav-rail-item-note">{item.note}</span> : null}
+                        {showDescriptions && item.active ? (
+                          <span className="shell-nav-rail-item-note">{item.note}</span>
+                        ) : null}
                       </span>
                     ) : null}
                   </Button>
@@ -179,34 +173,6 @@ export function ShellNavRail({
                 ))}
           </div>
         </div>
-
-        {detailAvailable ? (
-          <div className="shell-nav-rail-section shell-nav-rail-section-secondary">
-            <Button
-              type="button"
-              variant="ghost"
-              className={cn(
-                "gc-nav-button shell-nav-rail-item shell-nav-rail-detail justify-start whitespace-normal text-left",
-                detailOpen && "active",
-              )}
-              onClick={onToggleDetail}
-              aria-expanded={detailOpen}
-              title={detailOpen ? "Hide details" : "Show details"}
-            >
-              <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
-                ?
-              </Badge>
-              {showLabels ? (
-                <span className="shell-nav-rail-item-copy">
-                  <span className="shell-nav-rail-item-label">{detailOpen ? "Hide details" : "Show details"}</span>
-                  {showDescriptions ? (
-                    <span className="shell-nav-rail-item-note">Guide, glossary, trace, and page rationale.</span>
-                  ) : null}
-                </span>
-              ) : null}
-            </Button>
-          </div>
-        ) : null}
       </ScrollArea>
     </aside>
   );

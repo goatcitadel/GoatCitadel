@@ -45,7 +45,6 @@ describe("IntegrationsHubPage", () => {
       expect(integrationsPageMock).not.toHaveBeenCalled();
       expect(channelSetupPageMock).toHaveBeenCalled();
       expect(rendererText(renderer)).toContain("ChannelSetupPage");
-      expect(rendererText(renderer)).toContain("Open details");
       expect(rendererText(renderer)).toContain(
         "Connections, transport hooks, and MCP reach stay framed as operator decisions instead of a connector catalog.",
       );
@@ -63,7 +62,6 @@ describe("IntegrationsHubPage", () => {
 
       expect(integrationsPageMock).not.toHaveBeenCalled();
       expect(rendererText(renderer)).toContain("McpPage");
-      expect(rendererText(renderer)).toContain("Open details");
     } finally {
       renderer.unmount();
     }

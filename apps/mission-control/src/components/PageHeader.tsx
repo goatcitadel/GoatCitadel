@@ -19,7 +19,7 @@ export function PageHeader({
   hint,
   actions,
   className,
-  density = "standard",
+  density = "compact",
   forceVisible = false,
 }: PageHeaderProps) {
   return (

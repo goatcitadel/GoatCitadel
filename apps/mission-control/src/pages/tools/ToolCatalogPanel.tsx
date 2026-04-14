@@ -40,6 +40,7 @@ export function ToolCatalogPanel(props: ToolCatalogPanelProps) {
             />
           </div>
         }
+        center={<span className="table-subtext">Use the catalog as evidence, not the page headline.</span>}
         secondary={<StatusChip>{catalogCount} total</StatusChip>}
       />
       {(["core", "devops", "knowledge", "comms"] as const).map((pack) => (

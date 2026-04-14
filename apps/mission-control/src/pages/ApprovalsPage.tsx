@@ -24,6 +24,7 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { StatusChip } from "../components/StatusChip";
 import { DataToolbar } from "../components/DataToolbar";
 import { useEmbeddedPageChrome } from "../components/EmbeddedPageChrome";
+import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { useAction } from "../hooks/useAction";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
@@ -430,13 +431,13 @@ export function ApprovalsPage() {
         </p>
       </div>
       {visibleItems.length === 0 ? (
-        <Panel
+        <GCEmptyState
           title={
             view === "pending"
-              ? "No Pending Approvals"
+              ? "No pending approvals"
               : view === "history"
-                ? "No Approval History Yet"
-                : "No Recovery Records Yet"
+                ? "No approval history yet"
+                : "No recovery records yet"
           }
           subtitle={
             view === "pending"
@@ -445,18 +446,31 @@ export function ApprovalsPage() {
                 ? "Resolved, rejected, and expired approval records will appear here."
                 : "Recovery items appear when approvals are linked to durable runs or checkpoints."
           }
-          tone="soft"
-          padding="compact"
+          action={
+            <button type="button" className="gc-button" onClick={() => void load()}>
+              Refresh approvals
+            </button>
+          }
+          secondaryAction={
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => setView(view === "pending" ? "history" : "pending")}
+            >
+              {view === "pending" ? "Review history" : "Check pending queue"}
+            </button>
+          }
+          meta={
+            <p className="office-subtitle">
+              {view === "pending"
+                ? "New risky actions still surface inline first when a human decision is needed."
+                : view === "history"
+                  ? "Use this view to audit what happened after the inline decision."
+                  : "Use Recovery to resume or inspect persisted pauses without hunting through chat threads."}
+            </p>
+          }
           className="approval-empty-panel"
-        >
-          <p className="office-subtitle">
-            {view === "pending"
-              ? "New risky actions still surface inline first when a human decision is needed."
-              : view === "history"
-                ? "Use this view to audit what happened after the inline decision."
-                : "Use Recovery to resume or inspect persisted pauses without hunting through chat threads."}
-          </p>
-        </Panel>
+        />
       ) : null}
       {visibleItems.map((approval) => {
         const replay = replayById[approval.approvalId];

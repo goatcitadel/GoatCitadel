@@ -156,7 +156,7 @@ describe("ApprovalsPage", () => {
       await flush();
 
       const text = rendererText(renderer);
-      expect(text).toContain("No Pending Approvals");
+      expect(text).toContain("No pending approvals");
       expect(text).toContain("The approvals queue is clear right now.");
       expect(text).not.toContain("Reject all pending");
       expect(text).not.toContain("0 replay trails loaded");

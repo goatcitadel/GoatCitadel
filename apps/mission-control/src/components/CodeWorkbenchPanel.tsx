@@ -115,7 +115,7 @@ export function CodeWorkbenchPanel({
   const fileList = workbenchTree?.items.filter((item) => item.kind === "file") ?? [];
 
   return (
-    <aside className="chat-code-workbench mission-dock-panel">
+    <section className="chat-code-workbench chat-workspace-panel mission-dock-panel">
       <header className="chat-code-workbench-head">
         <div>
           <h4>Code Workbench</h4>
@@ -148,24 +148,26 @@ export function CodeWorkbenchPanel({
         </div>
       </header>
 
-      <div className="chat-code-workbench-toolbar">
+      <div className="chat-code-workbench-posture-row">
         <div className="chat-code-workbench-meta">
           <span>Base ref: {workbenchState?.baseRef ?? "repo default"}</span>
           <span>Worktree: {workbenchState?.worktreePath ?? "not created"}</span>
           {primaryPath ? <span>Active file: {primaryPath}</span> : null}
         </div>
-        <div className="chat-code-workbench-actions">
-          <button type="button" className="gc-button" onClick={onRefresh} disabled={loading || busy}>
-            Refresh
-          </button>
-          <button
-            type="button"
-            className="gc-button"
-            onClick={onCreateWorktree}
-            disabled={needsProjectBinding || readyForRepoOps || busy}
-          >
-            Create worktree
-          </button>
+        <div className="chat-code-workbench-toolbar">
+          <div className="chat-code-workbench-actions">
+            <button type="button" className="gc-button" onClick={onRefresh} disabled={loading || busy}>
+              Refresh
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={onCreateWorktree}
+              disabled={needsProjectBinding || readyForRepoOps || busy}
+            >
+              Create worktree
+            </button>
+          </div>
         </div>
       </div>
 
@@ -331,7 +333,7 @@ export function CodeWorkbenchPanel({
           {activePane === "snippets" ? (
             <div className="chat-code-workbench-pane">
               <div className="chat-code-workbench-section-head">
-                <strong>Secondary helper sandbox</strong>
+                <strong>Draft snippets</strong>
                 <span>
                   {codeBlocks.length > 0
                     ? `${codeBlocks.length} extracted draft${codeBlocks.length === 1 ? "" : "s"}`
@@ -396,7 +398,7 @@ export function CodeWorkbenchPanel({
 
         <aside className="chat-code-workbench-rail">
           <div className="chat-code-workbench-section-head">
-            <strong>Review rail</strong>
+            <strong>Support rail</strong>
             <span>{selectedTurn?.trace?.status ?? "idle"}</span>
           </div>
           <ul className="chat-code-workbench-run-list">
@@ -432,6 +434,6 @@ export function CodeWorkbenchPanel({
           </ul>
         </aside>
       </div>
-    </aside>
+    </section>
   );
 }

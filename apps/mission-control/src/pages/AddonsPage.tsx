@@ -15,6 +15,7 @@ import { ActionButton } from "../components/ActionButton";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { HelpHint } from "../components/HelpHint";
 import { PageGuideCard } from "../components/PageGuideCard";
+import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { pageCopy } from "../content/copy";
 
 export function AddonsPage() {
@@ -30,10 +31,7 @@ export function AddonsPage() {
   const [confirmUninstallAddon, setConfirmUninstallAddon] = useState<AddonCatalogEntry | null>(null);
 
   const load = useCallback(async () => {
-    const [catalogResponse, installedResponse] = await Promise.all([
-      fetchAddonsCatalog(),
-      fetchInstalledAddons(),
-    ]);
+    const [catalogResponse, installedResponse] = await Promise.all([fetchAddonsCatalog(), fetchInstalledAddons()]);
     setCatalog(catalogResponse.items);
     setInstalled(Object.fromEntries(installedResponse.items.map((item) => [item.addonId, item])));
     const statuses = await Promise.allSettled(
@@ -79,76 +77,94 @@ export function AddonsPage() {
     [catalog],
   );
 
-  const reloadAfterAction = useCallback(async (message: string) => {
-    await load();
-    setInfo(message);
-    setError(null);
-  }, [load]);
+  const reloadAfterAction = useCallback(
+    async (message: string) => {
+      await load();
+      setInfo(message);
+      setError(null);
+    },
+    [load],
+  );
 
-  const onInstall = useCallback(async (addon: AddonCatalogEntry) => {
-    setBusyAddonId(addon.addonId);
-    try {
-      await installAddon(addon.addonId, {
-        confirmRepoDownload: true,
-        actorId: "operator",
-      });
-      await reloadAfterAction(`${addon.label} installed.`);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyAddonId(null);
-      setConfirmInstallAddon(null);
-    }
-  }, [reloadAfterAction]);
+  const onInstall = useCallback(
+    async (addon: AddonCatalogEntry) => {
+      setBusyAddonId(addon.addonId);
+      try {
+        await installAddon(addon.addonId, {
+          confirmRepoDownload: true,
+          actorId: "operator",
+        });
+        await reloadAfterAction(`${addon.label} installed.`);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyAddonId(null);
+        setConfirmInstallAddon(null);
+      }
+    },
+    [reloadAfterAction],
+  );
 
-  const onUpdate = useCallback(async (addonId: string) => {
-    setBusyAddonId(addonId);
-    try {
-      await updateAddon(addonId);
-      await reloadAfterAction("Add-on updated.");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyAddonId(null);
-    }
-  }, [reloadAfterAction]);
+  const onUpdate = useCallback(
+    async (addonId: string) => {
+      setBusyAddonId(addonId);
+      try {
+        await updateAddon(addonId);
+        await reloadAfterAction("Add-on updated.");
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyAddonId(null);
+      }
+    },
+    [reloadAfterAction],
+  );
 
-  const onLaunch = useCallback(async (addonId: string) => {
-    setBusyAddonId(addonId);
-    try {
-      await launchAddon(addonId);
-      await reloadAfterAction("Add-on runtime started.");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyAddonId(null);
-    }
-  }, [reloadAfterAction]);
+  const onLaunch = useCallback(
+    async (addonId: string) => {
+      setBusyAddonId(addonId);
+      try {
+        await launchAddon(addonId);
+        await reloadAfterAction("Add-on runtime started.");
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyAddonId(null);
+      }
+    },
+    [reloadAfterAction],
+  );
 
-  const onStop = useCallback(async (addonId: string) => {
-    setBusyAddonId(addonId);
-    try {
-      await stopAddon(addonId);
-      await reloadAfterAction("Add-on runtime stopped.");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyAddonId(null);
-    }
-  }, [reloadAfterAction]);
+  const onStop = useCallback(
+    async (addonId: string) => {
+      setBusyAddonId(addonId);
+      try {
+        await stopAddon(addonId);
+        await reloadAfterAction("Add-on runtime stopped.");
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyAddonId(null);
+      }
+    },
+    [reloadAfterAction],
+  );
 
-  const onUninstall = useCallback(async (addon: AddonCatalogEntry) => {
-    setBusyAddonId(addon.addonId);
-    try {
-      await uninstallAddon(addon.addonId);
-      await reloadAfterAction(`${addon.label} uninstalled.`);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyAddonId(null);
-      setConfirmUninstallAddon(null);
-    }
-  }, [reloadAfterAction]);
+  const onUninstall = useCallback(
+    async (addon: AddonCatalogEntry) => {
+      setBusyAddonId(addon.addonId);
+      try {
+        await uninstallAddon(addon.addonId);
+        await reloadAfterAction(`${addon.label} uninstalled.`);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyAddonId(null);
+        setConfirmUninstallAddon(null);
+      }
+    },
+    [reloadAfterAction],
+  );
 
   const openExternalAddon = useCallback((launchUrl: string) => {
     window.open(launchUrl, "_blank", "noopener,noreferrer");
@@ -168,10 +184,27 @@ export function AddonsPage() {
       ) : null}
       {statusWarning ? <p className="status-banner warning">{statusWarning}</p> : null}
       <div className="stack-list">
+        {sortedCatalog.length === 0 ? (
+          <GCEmptyState
+            title="No add-ons are available right now"
+            subtitle="Refresh the catalog to pull the latest installable operator extensions."
+            action={
+              <button type="button" className="gc-button" onClick={() => void refresh()} disabled={isLoading}>
+                {isLoading ? "Refreshing..." : "Refresh catalog"}
+              </button>
+            }
+            meta={
+              <p className="office-subtitle">
+                Installed add-ons will return here with runtime controls and launch links.
+              </p>
+            }
+          />
+        ) : null}
         {sortedCatalog.map((addon) => {
           const addonStatus = statusByAddonId[addon.addonId];
           const installedRecord = installed[addon.addonId];
-          const effectiveStatus = addonStatus?.status ?? (installedRecord ? installedRecord.runtimeStatus : "not_installed");
+          const effectiveStatus =
+            addonStatus?.status ?? (installedRecord ? installedRecord.runtimeStatus : "not_installed");
           const effectiveLaunchUrl = addonStatus?.installed?.launchUrl ?? installedRecord?.launchUrl ?? addon.launchUrl;
           const busy = busyAddonId === addon.addonId;
           const canOpenExternally = effectiveStatus === "running" && Boolean(effectiveLaunchUrl);
@@ -195,15 +228,19 @@ export function AddonsPage() {
                     {addon.repoUrl}
                     <HelpHint
                       label={`${addon.label} provenance`}
-                      text={addon.sameOwnerAsGoatCitadel
-                        ? "This add-on is configured as being owned by the same publisher as GoatCitadel, but it still downloads code from a separate repository."
-                        : "This add-on comes from a separate repository and should be reviewed before install."}
+                      text={
+                        addon.sameOwnerAsGoatCitadel
+                          ? "This add-on is configured as being owned by the same publisher as GoatCitadel, but it still downloads code from a separate repository."
+                          : "This add-on comes from a separate repository and should be reviewed before install."
+                      }
                     />
                   </p>
                 </div>
                 <div>
                   <strong>Install location</strong>
-                  <p className="office-subtitle">{installedRecord?.installedPath ?? "~/.GoatCitadel/addons/<addonId>"}</p>
+                  <p className="office-subtitle">
+                    {installedRecord?.installedPath ?? "~/.GoatCitadel/addons/<addonId>"}
+                  </p>
                 </div>
                 <div>
                   <strong>Runtime type</strong>
@@ -242,7 +279,9 @@ export function AddonsPage() {
                       disabled={busy}
                     />
                     <ActionButton
-                      label={effectiveStatus === "running" ? (busy ? "Stopping..." : "Stop") : (busy ? "Starting..." : "Start")}
+                      label={
+                        effectiveStatus === "running" ? (busy ? "Stopping..." : "Stop") : busy ? "Starting..." : "Start"
+                      }
                       onClick={() => {
                         if (effectiveStatus === "running") {
                           void onStop(addon.addonId);
@@ -274,7 +313,8 @@ export function AddonsPage() {
                 <ul className="resource-link-list">
                   {(addonStatus?.healthChecks ?? addon.healthChecks).map((check) => (
                     <li key={`${addon.addonId}-${check.key}`}>
-                      <strong>{check.key}</strong>: {check.message} <span className={`chip chip-${check.status}`}>{check.status}</span>
+                      <strong>{check.key}</strong>: {check.message}{" "}
+                      <span className={`chip chip-${check.status}`}>{check.status}</span>
                     </li>
                   ))}
                 </ul>
@@ -287,9 +327,11 @@ export function AddonsPage() {
       <ConfirmModal
         open={Boolean(confirmInstallAddon)}
         title={`Install ${confirmInstallAddon?.label ?? "add-on"}`}
-        message={confirmInstallAddon
-          ? `You are about to download code from another repository.\nRepository: ${confirmInstallAddon.repoUrl}\nOwner: ${confirmInstallAddon.owner}${confirmInstallAddon.sameOwnerAsGoatCitadel ? " (same owner as GoatCitadel)" : ""}\nThis add-on is optional and installs under ~/.GoatCitadel/addons/${confirmInstallAddon.addonId}.`
-          : ""}
+        message={
+          confirmInstallAddon
+            ? `You are about to download code from another repository.\nRepository: ${confirmInstallAddon.repoUrl}\nOwner: ${confirmInstallAddon.owner}${confirmInstallAddon.sameOwnerAsGoatCitadel ? " (same owner as GoatCitadel)" : ""}\nThis add-on is optional and installs under ~/.GoatCitadel/addons/${confirmInstallAddon.addonId}.`
+            : ""
+        }
         confirmLabel="Download and install"
         cancelLabel="Cancel"
         onConfirm={() => {
@@ -303,9 +345,11 @@ export function AddonsPage() {
       <ConfirmModal
         open={Boolean(confirmUninstallAddon)}
         title={`Uninstall ${confirmUninstallAddon?.label ?? "add-on"}`}
-        message={confirmUninstallAddon
-          ? `This removes the installed add-on code from ~/.GoatCitadel/addons/${confirmUninstallAddon.addonId}. GoatCitadel core code is not touched.`
-          : ""}
+        message={
+          confirmUninstallAddon
+            ? `This removes the installed add-on code from ~/.GoatCitadel/addons/${confirmUninstallAddon.addonId}. GoatCitadel core code is not touched.`
+            : ""
+        }
         confirmLabel="Uninstall"
         cancelLabel="Cancel"
         danger

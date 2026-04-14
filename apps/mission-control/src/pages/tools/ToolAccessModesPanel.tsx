@@ -1,4 +1,3 @@
-import { StatusChip } from "../../components/StatusChip";
 import { Panel } from "../../components/Panel";
 
 interface ToolProfilePreset {
@@ -43,7 +42,9 @@ export function ToolAccessModesPanel(props: ToolAccessModesPanelProps) {
           <button
             type="button"
             key={preset.id}
-            className={["gc-button", (`tool-profile-card ${currentToolProfile === preset.id ? "active" : ""}`)].filter(Boolean).join(" ")}
+            className={["gc-button", `tool-profile-card ${currentToolProfile === preset.id ? "active" : ""}`]
+              .filter(Boolean)
+              .join(" ")}
             onClick={() => void onApplyToolProfile(preset.id)}
             disabled={profileSwitchBusy !== null}
           >
@@ -67,9 +68,6 @@ export function ToolAccessModesPanel(props: ToolAccessModesPanelProps) {
           Beginner mode is active. You can still grant access safely with the wizard below.
         </p>
       ) : null}
-      <div className="workflow-summary-strip" style={{ marginTop: 12 }}>
-        <StatusChip tone="live">{currentToolProfile}</StatusChip>
-      </div>
     </Panel>
   );
 }

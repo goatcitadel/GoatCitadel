@@ -182,12 +182,35 @@
 
 .action-bar-primary,
 .data-toolbar-primary,
+.action-bar-center,
+.data-toolbar-center,
 .action-bar-secondary,
 .data-toolbar-secondary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+.action-bar-primary,
+.data-toolbar-primary,
+.action-bar-secondary,
+.data-toolbar-secondary {
+  flex: 1 1 280px;
+  min-width: min(100%, 220px);
+}
+
+.action-bar-center,
+.data-toolbar-center {
+  flex: 0 1 auto;
+  justify-content: center;
+  color: color-mix(in srgb, var(--text-secondary) 82%, var(--text-primary) 18%);
+  text-align: center;
+}
+
+.action-bar-secondary,
+.data-toolbar-secondary {
+  justify-content: flex-end;
 }
 
 .actions {
@@ -258,8 +281,63 @@
   text-wrap: pretty;
 }
 
-.tune-hub-guide {
-  margin-top: calc(var(--space-1) * var(--density-scale));
+.tune-posture-bar {
+  position: sticky;
+  top: calc(76px + calc(var(--space-2) * var(--density-scale)));
+  z-index: 8;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: calc(var(--space-2) * var(--density-scale));
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 7%, transparent), transparent 56%),
+    color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  box-shadow: var(--shadow-1);
+  backdrop-filter: blur(14px);
+}
+
+.tune-posture-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tune-posture-label,
+.tune-posture-value,
+.tune-posture-note {
+  margin: 0;
+}
+
+.tune-posture-label {
+  font: 700 11px/1.2 var(--font-body);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.tune-posture-value {
+  font: 700 15px/1.18 var(--font-body);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.tune-posture-note {
+  font: 500 12px/1.4 var(--font-body);
+  color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary) 16%);
+}
+
+.tune-posture-item-accent .tune-posture-value {
+  color: var(--accent-primary);
+}
+
+.tune-posture-item-warning .tune-posture-value {
+  color: var(--accent-warning);
+}
+
+.tune-posture-item-success .tune-posture-value {
+  color: var(--accent-success);
 }
 
 .memory-summary-grid {
@@ -330,9 +408,119 @@
   line-height: 1.04;
 }
 
+.config-form-builder {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+}
+
+.config-form-builder-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(var(--space-3) * var(--density-scale));
+}
+
+.config-form-builder-copy {
+  display: grid;
+  gap: calc(var(--space-1) * var(--density-scale));
+  min-width: 0;
+}
+
+.config-form-builder-copy h4 {
+  margin: 0;
+}
+
+.config-form-builder-grid {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+}
+
+.config-form-field {
+  display: grid;
+  gap: calc(var(--space-2) * var(--density-scale));
+  padding: calc(var(--space-3) * var(--density-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 68%, transparent);
+}
+
+.config-form-field.is-advanced {
+  border-style: dashed;
+}
+
+.config-form-field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.config-form-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  font: 700 11px/1.25 var(--font-body);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.config-form-required {
+  color: var(--accent-warning);
+}
+
+.config-form-field-help {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary) 16%);
+  font: 500 12px/1.5 var(--font-body);
+}
+
+.tools-posture-bar,
+.tools-command-center,
+.tools-command-main,
+.tools-command-side,
+.integrations-operator-grid,
+.integrations-operator-main,
+.integrations-operator-side {
+  min-width: 0;
+}
+
+.tools-command-center,
+.integrations-operator-grid {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+}
+
+.tools-command-center {
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.8fr);
+  align-items: start;
+}
+
+.tools-command-main,
+.tools-command-side,
+.integrations-operator-main,
+.integrations-operator-side {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+  align-content: start;
+}
+
+.integrations-operator-grid {
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
+  align-items: start;
+}
+
 @media (max-width: 960px) {
   .operator-summary-card {
     flex-basis: min(100%, 100%);
+  }
+
+  .tools-command-center,
+  .integrations-operator-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -862,7 +1050,7 @@
 .page-chrome-subtitle,
 .page-header-subtitle {
   max-width: 82ch;
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--text-secondary) 82%, var(--text-primary) 18%);
   font: 400 14px/1.55 var(--font-body);
 }
 
@@ -947,8 +1135,36 @@
 }
 
 .section-header-subtitle {
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary) 16%);
   font: 400 13px/1.45 var(--font-body);
+}
+
+.gc-empty-state-compact .gc-empty-title {
+  font-size: 0.96rem;
+  line-height: 1.2;
+}
+
+.gc-empty-state-compact .gc-empty-subtitle {
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.gc-empty-action {
+  display: grid;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.gc-empty-primary-action,
+.gc-empty-secondary-action,
+.gc-empty-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.gc-empty-meta {
+  color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary) 16%);
 }
 
 .gc-data-table {
@@ -1116,6 +1332,17 @@
 }
 
 @media (max-width: 767px) {
+  .action-bar-primary,
+  .data-toolbar-primary,
+  .action-bar-center,
+  .data-toolbar-center,
+  .action-bar-secondary,
+  .data-toolbar-secondary {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
   .page-header,
   .section-header,
   .gateway-access-header {

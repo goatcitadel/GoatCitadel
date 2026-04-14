@@ -33,6 +33,7 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
             />
           </div>
         }
+        center={<span className="table-subtext">Scoped grants stay visible and reversible.</span>}
         secondary={<StatusChip>{visibleGrants.length} visible</StatusChip>}
       />
       <table className="gc-data-table">
