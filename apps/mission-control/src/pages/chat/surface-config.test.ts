@@ -26,9 +26,15 @@ describe("mission control surface config", () => {
     expect(cowork.layout.threadPlacement).toBe("support");
     expect(cowork.layout.threadPanelRank).toBe("muted");
     expect(cowork.layout.supportThreadBehavior).toBe("stacked");
+    expect(cowork.layout.idleSupportVisibility).toBe("hidden");
+    expect(cowork.layout.idleMinHeight).toBe("compact-workflow");
     expect(code.layout.workflowPlacement).toBe("primary");
     expect(code.layout.threadPanelRank).toBe("inset");
     expect(code.layout.dockBehavior).toBe("drawer");
     expect(code.layout.desktopDensity).toBe("code");
+    expect(code.layout.idleSupportVisibility).toBe("hidden");
+    expect(code.layout.idleDockOpen).toBe(false);
+    expect(code.layout.idleMinHeight).toBe("compact-workbench");
+    expect(chat.layout.idleSupportVisibility).toBe("visible");
   });
 });

@@ -24,6 +24,7 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { StatusChip } from "../components/StatusChip";
 import { DataToolbar } from "../components/DataToolbar";
 import { useEmbeddedPageChrome } from "../components/EmbeddedPageChrome";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { useAction } from "../hooks/useAction";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
@@ -61,6 +62,7 @@ export function ApprovalsPage() {
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [view, setView] = useState<ApprovalView>("pending");
+  const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const resolveAction = useAction();
   const bulkResolveAction = useAction();
 
@@ -344,10 +346,6 @@ export function ApprovalsPage() {
     window.dispatchEvent(routeEvent);
   }, []);
 
-  if (!data) {
-    return <CardSkeleton lines={7} />;
-  }
-
   const focusedApprovalId =
     typeof window !== "undefined" && typeof window.location?.search === "string"
       ? new URLSearchParams(window.location.search).get("approvalId")
@@ -355,6 +353,32 @@ export function ApprovalsPage() {
   const visibleItems = view === "pending" ? pendingItems : view === "history" ? historyItems : recoveryItems;
   const hasPendingApprovals = pendingItems.length > 0;
   const replayCount = Object.keys(replayById).length;
+  const selectedApproval =
+    visibleItems.find((approval) => approval.approvalId === selectedApprovalId) ??
+    visibleItems.find((approval) => approval.approvalId === focusedApprovalId) ??
+    visibleItems[0] ??
+    null;
+
+  useEffect(() => {
+    if (visibleItems.length === 0) {
+      if (selectedApprovalId !== null) {
+        setSelectedApprovalId(null);
+      }
+      return;
+    }
+    const preferredId =
+      visibleItems.find((approval) => approval.approvalId === selectedApprovalId)?.approvalId ??
+      visibleItems.find((approval) => approval.approvalId === focusedApprovalId)?.approvalId ??
+      visibleItems[0]?.approvalId ??
+      null;
+    if (preferredId !== selectedApprovalId) {
+      setSelectedApprovalId(preferredId);
+    }
+  }, [focusedApprovalId, selectedApprovalId, visibleItems]);
+
+  if (!data) {
+    return <CardSkeleton lines={7} />;
+  }
 
   const approvalsHeaderActions = (
     <div className="workflow-summary-strip">
@@ -371,16 +395,6 @@ export function ApprovalsPage() {
         <StatusChip tone="critical">{pendingRiskCounts.nuclear} nuclear</StatusChip>
       ) : null}
       {replayCount > 0 ? <StatusChip tone="muted">{replayCount} replay trails loaded</StatusChip> : null}
-      {hasPendingApprovals ? (
-        <button
-          type="button"
-          className="gc-button danger"
-          disabled={bulkResolveAction.pending}
-          onClick={() => setBulkRejectOpen(true)}
-        >
-          {bulkResolveAction.pending ? "Rejecting..." : "Reject all pending"}
-        </button>
-      ) : null}
     </div>
   );
 
@@ -401,27 +415,42 @@ export function ApprovalsPage() {
         actions={pageCopy.approvals.guide?.actions ?? []}
         terms={pageCopy.approvals.guide?.terms}
       />
-      {embedded && approvalsHeaderActions ? (
-        <DataToolbar primary={approvalsHeaderActions} className="approvals-toolbar" />
-      ) : null}
-      <div className="workflow-summary-strip">
-        {(
-          [
-            { key: "pending", label: `Pending (${pendingItems.length})` },
-            { key: "history", label: `History (${historyItems.length})` },
-            { key: "recovery", label: `Recovery (${recoveryItems.length})` },
-          ] as Array<{ key: ApprovalView; label: string }>
-        ).map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className={["gc-button", view === item.key ? "active" : ""].filter(Boolean).join(" ")}
-            onClick={() => setView(item.key)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
+      <DataToolbar
+        primary={
+          <div className="workflow-summary-strip">
+            {(
+              [
+                { key: "pending", label: `Pending (${pendingItems.length})` },
+                { key: "history", label: `History (${historyItems.length})` },
+                { key: "recovery", label: `Recovery (${recoveryItems.length})` },
+              ] as Array<{ key: ApprovalView; label: string }>
+            ).map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={["gc-button", view === item.key ? "active" : ""].filter(Boolean).join(" ")}
+                onClick={() => setView(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        }
+        center={approvalsHeaderActions}
+        secondary={
+          hasPendingApprovals ? (
+            <button
+              type="button"
+              className="gc-button danger"
+              disabled={bulkResolveAction.pending}
+              onClick={() => setBulkRejectOpen(true)}
+            >
+              {bulkResolveAction.pending ? "Rejecting..." : "Reject all pending"}
+            </button>
+          ) : undefined
+        }
+        className={embedded ? "approvals-toolbar" : undefined}
+      />
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
         {summary ? <p className="office-subtitle">{summary}</p> : null}
@@ -472,373 +501,102 @@ export function ApprovalsPage() {
           className="approval-empty-panel"
         />
       ) : null}
-      {visibleItems.map((approval) => {
-        const replay = replayById[approval.approvalId];
-        const lifecycle = lifecycleByApprovalId[approval.approvalId];
-        const durable = durableByApprovalId[approval.approvalId];
-        const durableBusy = Boolean(durableBusyByApprovalId[approval.approvalId]);
-        const tracePreview = tracePreviewByApprovalId[approval.approvalId];
-        const liveLaneHref = buildLiveLaneHref(approval) ?? undefined;
-        const expired = isExpiredApproval(approval);
-        const effectiveStatus = expired ? "expired" : approval.status;
-        const evidence = buildApprovalEvidenceModel(approval.preview, replay?.pendingAction?.request);
-        const explanationSummary =
-          approval.explanation?.summary ?? `Review the ${approval.kind} request before GoatCitadel continues.`;
-        const consequenceSummary = approval.explanation?.saferAlternative
-          ? `Approve to continue this action now. Reject to stop it here. Safer alternative: ${approval.explanation.saferAlternative}`
-          : "Approve to continue this action now. Reject to keep the system paused at this checkpoint.";
-        const explanationTimestamp = approval.explanation
-          ? `Generated ${new Date(approval.explanation.generatedAt).toLocaleString()}`
-          : null;
-        const traceMetadata =
-          approval.linkage?.correlationId || approval.linkage?.traceId
-            ? {
-                correlationId: approval.linkage?.correlationId,
-                traceId: approval.linkage?.traceId,
-              }
-            : replay?.approval.linkage?.correlationId || replay?.approval.linkage?.traceId
-              ? {
-                  correlationId: replay.approval.linkage?.correlationId,
-                  traceId: replay.approval.linkage?.traceId,
-                }
-              : (findTraceMetadata(replay?.pendingAction?.request) ??
-                findTraceMetadata(approval.payload) ??
-                findTraceMetadata(approval.preview));
-        const explanationLabel =
-          approval.explanationStatus === "pending"
-            ? "Pending explanation"
-            : approval.explanationStatus === "completed"
-              ? "Explained"
-              : approval.explanationStatus === "failed"
-                ? "Explanation failed"
-                : "Not requested";
-
-        return (
-          <Panel
-            key={approval.approvalId}
-            title={approval.kind}
-            className={`approval-card approval-card-${approval.riskLevel}${focusedApprovalId === approval.approvalId ? " approval-card-focused" : ""}`}
-            subtitle={
-              <div className="workflow-summary-strip">
-                <StatusChip
-                  tone={
-                    approval.riskLevel === "nuclear"
-                      ? "critical"
-                      : approval.riskLevel === "danger"
-                        ? "warning"
-                        : "muted"
-                  }
-                >
-                  {approval.riskLevel} risk
-                </StatusChip>
-                <StatusChip
-                  tone={
-                    effectiveStatus === "pending"
-                      ? "warning"
-                      : effectiveStatus === "approved"
-                        ? "success"
-                        : effectiveStatus === "expired"
-                          ? "warning"
-                          : "muted"
-                  }
-                >
-                  {effectiveStatus}
-                </StatusChip>
-                <StatusChip
-                  className="approvals-explanation-chip"
-                  tone={
-                    approval.explanationStatus === "pending"
-                      ? "warning"
-                      : approval.explanationStatus === "completed"
-                        ? "success"
-                        : approval.explanationStatus === "failed"
-                          ? "critical"
-                          : "muted"
-                  }
-                >
-                  {explanationLabel}
-                </StatusChip>
-              </div>
-            }
-          >
-            <section className="approval-decision-shell" aria-label={`Decision framing for ${approval.kind}`}>
-              <div className="approval-decision-copy">
-                <p className="approval-decision-kicker">Human decision required</p>
-                <h3>{explanationSummary}</h3>
-                {approval.explanation?.riskExplanation ? (
-                  <p className="approval-decision-risk">{approval.explanation.riskExplanation}</p>
-                ) : null}
-              </div>
-              <div className="approval-consequence-box">
-                <p className="approval-consequence-title">If approved</p>
-                <p>{consequenceSummary}</p>
-                {explanationTimestamp ? (
-                  <small>
-                    {explanationTimestamp}
-                    {approval.explanation?.providerId ? ` via ${approval.explanation.providerId}` : ""}
-                    {approval.explanation?.model ? ` (${approval.explanation.model})` : ""}
-                  </small>
-                ) : null}
-              </div>
-              <div className="approval-action-row">
-                {approval.status === "pending" && !expired ? (
-                  <>
+      {visibleItems.length > 0 ? (
+        <OperatorSplitLayout
+          primary={
+            <Panel
+              title={view === "pending" ? "Approval Queue" : view === "history" ? "Approval History" : "Recovery Queue"}
+              subtitle="Select a persisted approval to inspect evidence, replay trail, and recovery state without leaving the queue."
+              padding="compact"
+            >
+              <div className="stack-list">
+                {visibleItems.map((approval) => {
+                  const expired = isExpiredApproval(approval);
+                  const effectiveStatus = expired ? "expired" : approval.status;
+                  const selected = approval.approvalId === selectedApproval?.approvalId;
+                  const liveLaneHref = buildLiveLaneHref(approval);
+                  return (
                     <button
+                      key={approval.approvalId}
                       type="button"
-                      className="gc-button approval-action-primary"
-                      onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "approve" })}
+                      className={`stack-card stack-card-selectable${selected ? " active" : ""}`}
+                      onClick={() => setSelectedApprovalId(approval.approvalId)}
                     >
-                      Approve now
+                      <div className="stack-card-header">
+                        <div>
+                          <strong>{approval.kind}</strong>
+                          <p className="office-subtitle">
+                            {approval.approvalId}
+                            {" | "}
+                            {new Date(approval.createdAt).toLocaleString()}
+                          </p>
+                        </div>
+                        <div className="stack-card-chips">
+                          <StatusChip
+                            tone={
+                              approval.riskLevel === "nuclear"
+                                ? "critical"
+                                : approval.riskLevel === "danger"
+                                  ? "warning"
+                                  : "muted"
+                            }
+                          >
+                            {approval.riskLevel}
+                          </StatusChip>
+                          <StatusChip
+                            tone={
+                              effectiveStatus === "pending"
+                                ? "warning"
+                                : effectiveStatus === "approved"
+                                  ? "success"
+                                  : effectiveStatus === "expired"
+                                    ? "warning"
+                                    : "muted"
+                            }
+                          >
+                            {effectiveStatus}
+                          </StatusChip>
+                          {liveLaneHref ? <StatusChip tone="default">live lane</StatusChip> : null}
+                        </div>
+                      </div>
+                      <p className="office-subtitle">
+                        {approval.explanation?.summary ??
+                          `Review the ${approval.kind} request before GoatCitadel continues.`}
+                      </p>
                     </button>
-                    <button
-                      type="button"
-                      className="gc-button danger approval-action-secondary"
-                      onClick={() => setPendingDecision({ approvalId: approval.approvalId, decision: "reject" })}
-                    >
-                      Reject
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  className="gc-button approval-action-tertiary"
-                  onClick={() => onReplay(approval.approvalId)}
-                >
-                  Load replay trail
-                </button>
-                {liveLaneHref ? (
-                  <a
-                    className="approval-action-tertiary"
-                    href={liveLaneHref.href}
-                    onClick={(event) => openLiveLane(event, liveLaneHref.route)}
-                  >
-                    Open live lane
-                  </a>
-                ) : null}
+                  );
+                })}
               </div>
-            </section>
-
-            {approval.explanationError ? <p className="error">Explainer error: {approval.explanationError}</p> : null}
-
-            <div className="approval-evidence-grid">
-              {evidence ? (
-                <div className="replay-box approval-support-box">
-                  <h4>Operator evidence</h4>
-                  {evidence.targets.length > 0 ? (
-                    <ul className="compact-list">
-                      {evidence.targets.map((line) => (
-                        <li key={`${approval.approvalId}-${line}`}>{line}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {evidence.commands.length > 0 ? (
-                    <div className="approval-evidence-section">
-                      <p className="approval-evidence-label">Commands</p>
-                      <ul className="compact-list">
-                        {evidence.commands.map((line) => (
-                          <li key={`${approval.approvalId}-command-${line}`}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {evidence.supporting.length > 0 ? (
-                    <div className="approval-evidence-section">
-                      <p className="approval-evidence-label">Supporting context</p>
-                      <ul className="compact-list">
-                        {evidence.supporting.map((line) => (
-                          <li key={`${approval.approvalId}-support-${line}`}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {evidence.changes.map((block) => (
-                    <details key={`${approval.approvalId}-${block.label}`} className="approval-technical-details">
-                      <summary>{block.label}</summary>
-                      <pre>{block.content}</pre>
-                    </details>
-                  ))}
-                </div>
-              ) : null}
-              {traceMetadata?.traceId || traceMetadata?.correlationId ? (
-                <div className="replay-box approval-support-box">
-                  <h4>System trace</h4>
-                  {traceMetadata?.traceId ? <p>trace: {traceMetadata.traceId}</p> : null}
-                  {traceMetadata?.correlationId ? <p>correlation: {traceMetadata.correlationId}</p> : null}
-                  {traceMetadata?.correlationId ? (
-                    <div className="actions">
-                      <button
-                        type="button"
-                        onClick={() => void loadTracePreview(approval.approvalId, traceMetadata.correlationId)}
-                        className="gc-button"
-                      >
-                        {tracePreview ? "Refresh trace detail" : "Load trace detail"}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <div className="replay-box approval-support-box">
-                <h4>Checkpoint resume</h4>
-                <p>
-                  Load durable status to inspect the current checkpoint. Resume continues from the last checkpoint
-                  instead of restarting.
-                </p>
-                <div className="actions">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void loadDurableStatus(approval.approvalId);
-                    }}
-                    disabled={durableBusy}
-                    className="gc-button"
-                  >
-                    {durableBusy ? "Loading..." : "Load durable status"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingResumeApprovalId(approval.approvalId)}
-                    disabled={durableBusy || (durable != null && durable.status !== "paused")}
-                    className="gc-button"
-                  >
-                    Resume paused run
-                  </button>
-                </div>
-                {durable ? (
-                  <p className="office-subtitle">
-                    Run: {durable.runId} | Status: {durable.status}
-                    {durable.blockedStep ? ` | Blocked step: ${durable.blockedStep}` : ""}
-                    {durable.blockedReason ? ` | Reason: ${durable.blockedReason}` : ""}
-                    {" | "}
-                    Updated: {new Date(durable.updatedAt).toLocaleString()}
-                  </p>
-                ) : (
-                  <p className="office-subtitle">No checkpoint details loaded yet.</p>
-                )}
-              </div>
-            </div>
-            {tracePreview?.length ? (
-              <div className="replay-box">
-                <h4>Trace detail</h4>
-                <ul className="compact-list">
-                  {tracePreview.map((item) => (
-                    <li key={`${approval.approvalId}-${item}`}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {lifecycle ? (
-              <div className="replay-box">
-                <h4>Runtime linkage</h4>
-                <p className="office-subtitle">
-                  Canonical session: {lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId ?? "absent"}
-                  {" | "}
-                  Canonical task: {lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId ?? "absent"}
-                  {" | "}
-                  Canonical run: {getCanonicalDurableRunId(lifecycle) ?? "absent"}
-                </p>
-                <p className="office-subtitle">
-                  Inferred sessions:{" "}
-                  {formatInferredIds(
-                    lifecycle.linked.sessionIds,
-                    lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId,
-                  )}
-                  {" | "}
-                  Inferred tasks:{" "}
-                  {formatInferredIds(
-                    lifecycle.linked.taskIds,
-                    lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId,
-                  )}
-                  {" | "}
-                  Inferred runs: {formatInferredIds(lifecycle.linked.runIds, getCanonicalDurableRunId(lifecycle))}
-                </p>
-                {lifecycle.resolution ? (
-                  <p className="office-subtitle">
-                    Provenance: session {lifecycle.resolution.sessionIdSource ?? "absent"}
-                    {" | "}
-                    turn {lifecycle.resolution.turnIdSource ?? "absent"}
-                    {" | "}
-                    run {lifecycle.resolution.runIdSource ?? "absent"}
-                    {" | "}
-                    task {lifecycle.resolution.taskIdSource ?? "absent"}
-                  </p>
-                ) : null}
-                {approval.linkage?.proactiveRunId || lifecycle.proactiveRuns?.length ? (
-                  <p className="office-subtitle">
-                    Proactive run: {approval.linkage?.proactiveRunId ?? lifecycle.proactiveRuns?.[0]?.runId ?? "none"}
-                    {" | "}
-                    Surface:{" "}
-                    {approval.linkage?.originSurface ?? lifecycle.proactiveRuns?.[0]?.originSurface ?? "unknown"}
-                  </p>
-                ) : null}
-                {approval.linkage?.externalReferenceRoots?.length ? (
-                  <p className="office-subtitle">
-                    Reference roots:{" "}
-                    {approval.linkage.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
-                  </p>
-                ) : null}
-                {lifecycle.proactiveRuns?.length ? (
-                  <ul className="compact-list">
-                    {lifecycle.proactiveRuns.slice(0, 3).map((run) => (
-                      <li key={run.runId}>
-                        <strong>{run.status}</strong>
-                        {" | "}
-                        {run.runId}
-                        {run.linkedDurableRunId ? ` | durable ${run.linkedDurableRunId}` : ""}
-                        {run.nextWakeAt ? ` | wake ${new Date(run.nextWakeAt).toLocaleString()}` : ""}
-                        {run.stopReason ? ` | stop ${run.stopReason}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-            {(lifecycle?.approvalEffects?.length ?? 0) > 0 || (replay?.effects?.length ?? 0) > 0 ? (
-              <div className="replay-box">
-                <h4>Approval effects</h4>
-                <ul className="compact-list">
-                  {(lifecycle?.approvalEffects ?? replay?.effects ?? []).map((effect) => (
-                    <li key={effect.effectId}>
-                      <strong>{effect.effectKind}</strong>
-                      {" | "}
-                      {effect.status}
-                      {" | "}
-                      {effect.targetKind}:{effect.targetId}
-                      {effect.attemptCount > 0 ? ` | attempts ${effect.attemptCount}` : ""}
-                      {effect.lastError ? ` | error ${effect.lastError}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {replay ? (
-              <details className="approval-technical-details">
-                <summary>Replay trail and pending action</summary>
-                <div className="replay-box">
-                  <h4>Replay trail</h4>
-                  <ul>
-                    {replay.events.map((event) => (
-                      <li key={event.eventId}>
-                        <strong>{event.eventType}</strong> by {event.actorId} at{" "}
-                        {new Date(event.timestamp).toLocaleString()}
-                      </li>
-                    ))}
-                  </ul>
-                  {replay.pendingAction ? <pre>{JSON.stringify(replay.pendingAction, null, 2)}</pre> : null}
-                </div>
-              </details>
-            ) : null}
-            <details className="approval-technical-details">
-              <summary>Raw request and preview payload</summary>
-              <div className="replay-box">
-                <h4>Raw request payload</h4>
-                <pre>{JSON.stringify(approval.payload, null, 2)}</pre>
-                <h4>Preview payload</h4>
-                <pre>{JSON.stringify(approval.preview, null, 2)}</pre>
-              </div>
-            </details>
-          </Panel>
-        );
-      })}
+            </Panel>
+          }
+          inspector={
+            selectedApproval ? (
+              <ApprovalInspector
+                approval={selectedApproval}
+                replay={replayById[selectedApproval.approvalId]}
+                lifecycle={lifecycleByApprovalId[selectedApproval.approvalId]}
+                durable={durableByApprovalId[selectedApproval.approvalId]}
+                durableBusy={Boolean(durableBusyByApprovalId[selectedApproval.approvalId])}
+                tracePreview={tracePreviewByApprovalId[selectedApproval.approvalId]}
+                focused={focusedApprovalId === selectedApproval.approvalId}
+                openLiveLane={openLiveLane}
+                onResolveDecision={setPendingDecision}
+                onReplay={onReplay}
+                onLoadTracePreview={loadTracePreview}
+                onLoadDurableStatus={loadDurableStatus}
+                onResumeCheckpoint={setPendingResumeApprovalId}
+              />
+            ) : null
+          }
+          emptyInspector={
+            <GCEmptyState
+              title="Select an approval"
+              subtitle="Choose a queue item to inspect its evidence, replay trail, and recovery posture."
+              className="approval-empty-panel"
+            />
+          }
+        />
+      ) : null}
       <ConfirmModal
         open={Boolean(pendingDecision)}
         title={pendingDecision?.decision === "approve" ? "Approve Action" : "Reject Approval"}
@@ -899,6 +657,387 @@ export function ApprovalsPage() {
         }}
       />
     </section>
+  );
+}
+
+function ApprovalInspector(props: {
+  approval: ApprovalsResponse["items"][number];
+  replay?: ApprovalReplayResponse;
+  lifecycle?: RuntimeLifecycleResponse;
+  durable?: ApprovalDurableStatus | null;
+  durableBusy: boolean;
+  tracePreview?: string[];
+  focused: boolean;
+  openLiveLane: (event: MouseEvent<HTMLAnchorElement>, route: ResolvedRoute) => void;
+  onResolveDecision: (decision: { approvalId: string; decision: "approve" | "reject" }) => void;
+  onReplay: (approvalId: string) => void;
+  onLoadTracePreview: (approvalId: string, correlationId?: string) => void;
+  onLoadDurableStatus: (approvalId: string) => void;
+  onResumeCheckpoint: (approvalId: string) => void;
+}) {
+  const {
+    approval,
+    replay,
+    lifecycle,
+    durable,
+    durableBusy,
+    tracePreview,
+    focused,
+    openLiveLane,
+    onResolveDecision,
+    onReplay,
+    onLoadTracePreview,
+    onLoadDurableStatus,
+    onResumeCheckpoint,
+  } = props;
+  const liveLaneHref = buildLiveLaneHref(approval) ?? undefined;
+  const expired = isExpiredApproval(approval);
+  const effectiveStatus = expired ? "expired" : approval.status;
+  const evidence = buildApprovalEvidenceModel(approval.preview, replay?.pendingAction?.request);
+  const explanationSummary =
+    approval.explanation?.summary ?? `Review the ${approval.kind} request before GoatCitadel continues.`;
+  const consequenceSummary = approval.explanation?.saferAlternative
+    ? `Approve to continue this action now. Reject to stop it here. Safer alternative: ${approval.explanation.saferAlternative}`
+    : "Approve to continue this action now. Reject to keep the system paused at this checkpoint.";
+  const explanationTimestamp = approval.explanation
+    ? `Generated ${new Date(approval.explanation.generatedAt).toLocaleString()}`
+    : null;
+  const traceMetadata =
+    approval.linkage?.correlationId || approval.linkage?.traceId
+      ? {
+          correlationId: approval.linkage?.correlationId,
+          traceId: approval.linkage?.traceId,
+        }
+      : replay?.approval.linkage?.correlationId || replay?.approval.linkage?.traceId
+        ? {
+            correlationId: replay.approval.linkage?.correlationId,
+            traceId: replay.approval.linkage?.traceId,
+          }
+        : (findTraceMetadata(replay?.pendingAction?.request) ??
+          findTraceMetadata(approval.payload) ??
+          findTraceMetadata(approval.preview));
+  const explanationLabel =
+    approval.explanationStatus === "pending"
+      ? "Pending explanation"
+      : approval.explanationStatus === "completed"
+        ? "Explained"
+        : approval.explanationStatus === "failed"
+          ? "Explanation failed"
+          : "Not requested";
+
+  return (
+    <Panel
+      title={approval.kind}
+      className={`approval-card approval-card-${approval.riskLevel}${focused ? " approval-card-focused" : ""}`}
+      subtitle={
+        <div className="workflow-summary-strip">
+          <StatusChip
+            tone={
+              approval.riskLevel === "nuclear"
+                ? "critical"
+                : approval.riskLevel === "danger"
+                  ? "warning"
+                  : "muted"
+            }
+          >
+            {approval.riskLevel} risk
+          </StatusChip>
+          <StatusChip
+            tone={
+              effectiveStatus === "pending"
+                ? "warning"
+                : effectiveStatus === "approved"
+                  ? "success"
+                  : effectiveStatus === "expired"
+                    ? "warning"
+                    : "muted"
+            }
+          >
+            {effectiveStatus}
+          </StatusChip>
+          <StatusChip
+            className="approvals-explanation-chip"
+            tone={
+              approval.explanationStatus === "pending"
+                ? "warning"
+                : approval.explanationStatus === "completed"
+                  ? "success"
+                  : approval.explanationStatus === "failed"
+                    ? "critical"
+                    : "muted"
+            }
+          >
+            {explanationLabel}
+          </StatusChip>
+        </div>
+      }
+    >
+      <section className="approval-decision-shell" aria-label={`Decision framing for ${approval.kind}`}>
+        <div className="approval-decision-copy">
+          <p className="approval-decision-kicker">Human decision required</p>
+          <h3>{explanationSummary}</h3>
+          {approval.explanation?.riskExplanation ? (
+            <p className="approval-decision-risk">{approval.explanation.riskExplanation}</p>
+          ) : null}
+        </div>
+        <div className="approval-consequence-box">
+          <p className="approval-consequence-title">If approved</p>
+          <p>{consequenceSummary}</p>
+          {explanationTimestamp ? (
+            <small>
+              {explanationTimestamp}
+              {approval.explanation?.providerId ? ` via ${approval.explanation.providerId}` : ""}
+              {approval.explanation?.model ? ` (${approval.explanation.model})` : ""}
+            </small>
+          ) : null}
+        </div>
+        <div className="approval-action-row">
+          {approval.status === "pending" && !expired ? (
+            <>
+              <button
+                type="button"
+                className="gc-button approval-action-primary"
+                onClick={() => onResolveDecision({ approvalId: approval.approvalId, decision: "approve" })}
+              >
+                Approve now
+              </button>
+              <button
+                type="button"
+                className="gc-button danger approval-action-secondary"
+                onClick={() => onResolveDecision({ approvalId: approval.approvalId, decision: "reject" })}
+              >
+                Reject
+              </button>
+            </>
+          ) : null}
+          <button type="button" className="gc-button approval-action-tertiary" onClick={() => onReplay(approval.approvalId)}>
+            Load replay trail
+          </button>
+          {liveLaneHref ? (
+            <a className="approval-action-tertiary" href={liveLaneHref.href} onClick={(event) => openLiveLane(event, liveLaneHref.route)}>
+              Open live lane
+            </a>
+          ) : null}
+        </div>
+      </section>
+
+      {approval.explanationError ? <p className="error">Explainer error: {approval.explanationError}</p> : null}
+
+      <div className="approval-evidence-grid">
+        {evidence ? <ApprovalEvidence approvalId={approval.approvalId} evidence={evidence} /> : null}
+        {traceMetadata?.traceId || traceMetadata?.correlationId ? (
+          <div className="replay-box approval-support-box">
+            <h4>System trace</h4>
+            {traceMetadata?.traceId ? <p>trace: {traceMetadata.traceId}</p> : null}
+            {traceMetadata?.correlationId ? <p>correlation: {traceMetadata.correlationId}</p> : null}
+            {traceMetadata?.correlationId ? (
+              <div className="actions">
+                <button
+                  type="button"
+                  onClick={() => onLoadTracePreview(approval.approvalId, traceMetadata.correlationId)}
+                  className="gc-button"
+                >
+                  {tracePreview ? "Refresh trace detail" : "Load trace detail"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="replay-box approval-support-box">
+          <h4>Checkpoint resume</h4>
+          <p>
+            Load durable status to inspect the current checkpoint. Resume continues from the last checkpoint instead of
+            restarting.
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              onClick={() => onLoadDurableStatus(approval.approvalId)}
+              disabled={durableBusy}
+              className="gc-button"
+            >
+              {durableBusy ? "Loading..." : "Load durable status"}
+            </button>
+            <button
+              type="button"
+              onClick={() => onResumeCheckpoint(approval.approvalId)}
+              disabled={durableBusy || (durable != null && durable.status !== "paused")}
+              className="gc-button"
+            >
+              Resume paused run
+            </button>
+          </div>
+          {durable ? (
+            <p className="office-subtitle">
+              Run: {durable.runId} | Status: {durable.status}
+              {durable.blockedStep ? ` | Blocked step: ${durable.blockedStep}` : ""}
+              {durable.blockedReason ? ` | Reason: ${durable.blockedReason}` : ""}
+              {" | "}
+              Updated: {new Date(durable.updatedAt).toLocaleString()}
+            </p>
+          ) : (
+            <p className="office-subtitle">No checkpoint details loaded yet.</p>
+          )}
+        </div>
+      </div>
+      {tracePreview?.length ? (
+        <div className="replay-box">
+          <h4>Trace detail</h4>
+          <ul className="compact-list">
+            {tracePreview.map((item) => (
+              <li key={`${approval.approvalId}-${item}`}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {lifecycle ? (
+        <div className="replay-box">
+          <h4>Runtime linkage</h4>
+          <p className="office-subtitle">
+            Canonical session: {lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId ?? "absent"}
+            {" | "}
+            Canonical task: {lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId ?? "absent"}
+            {" | "}
+            Canonical run: {getCanonicalDurableRunId(lifecycle) ?? "absent"}
+          </p>
+          <p className="office-subtitle">
+            Inferred sessions:{" "}
+            {formatInferredIds(
+              lifecycle.linked.sessionIds,
+              lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId,
+            )}
+            {" | "}
+            Inferred tasks:{" "}
+            {formatInferredIds(lifecycle.linked.taskIds, lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId)}
+            {" | "}
+            Inferred runs: {formatInferredIds(lifecycle.linked.runIds, getCanonicalDurableRunId(lifecycle))}
+          </p>
+          {lifecycle.resolution ? (
+            <p className="office-subtitle">
+              Provenance: session {lifecycle.resolution.sessionIdSource ?? "absent"}
+              {" | "}
+              turn {lifecycle.resolution.turnIdSource ?? "absent"}
+              {" | "}
+              run {lifecycle.resolution.runIdSource ?? "absent"}
+              {" | "}
+              task {lifecycle.resolution.taskIdSource ?? "absent"}
+            </p>
+          ) : null}
+          {approval.linkage?.proactiveRunId || lifecycle.proactiveRuns?.length ? (
+            <p className="office-subtitle">
+              Proactive run: {approval.linkage?.proactiveRunId ?? lifecycle.proactiveRuns?.[0]?.runId ?? "none"}
+              {" | "}
+              Surface: {approval.linkage?.originSurface ?? lifecycle.proactiveRuns?.[0]?.originSurface ?? "unknown"}
+            </p>
+          ) : null}
+          {approval.linkage?.externalReferenceRoots?.length ? (
+            <p className="office-subtitle">
+              Reference roots:{" "}
+              {approval.linkage.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
+            </p>
+          ) : null}
+          {lifecycle.proactiveRuns?.length ? (
+            <ul className="compact-list">
+              {lifecycle.proactiveRuns.slice(0, 3).map((run) => (
+                <li key={run.runId}>
+                  <strong>{run.status}</strong>
+                  {" | "}
+                  {run.runId}
+                  {run.linkedDurableRunId ? ` | durable ${run.linkedDurableRunId}` : ""}
+                  {run.nextWakeAt ? ` | wake ${new Date(run.nextWakeAt).toLocaleString()}` : ""}
+                  {run.stopReason ? ` | stop ${run.stopReason}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+      {(lifecycle?.approvalEffects?.length ?? 0) > 0 || (replay?.effects?.length ?? 0) > 0 ? (
+        <div className="replay-box">
+          <h4>Approval effects</h4>
+          <ul className="compact-list">
+            {(lifecycle?.approvalEffects ?? replay?.effects ?? []).map((effect) => (
+              <li key={effect.effectId}>
+                <strong>{effect.effectKind}</strong>
+                {" | "}
+                {effect.status}
+                {" | "}
+                {effect.targetKind}:{effect.targetId}
+                {effect.attemptCount > 0 ? ` | attempts ${effect.attemptCount}` : ""}
+                {effect.lastError ? ` | error ${effect.lastError}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {replay ? (
+        <details className="approval-technical-details">
+          <summary>Replay trail and pending action</summary>
+          <div className="replay-box">
+            <h4>Replay trail</h4>
+            <ul>
+              {replay.events.map((event) => (
+                <li key={event.eventId}>
+                  <strong>{event.eventType}</strong> by {event.actorId} at {new Date(event.timestamp).toLocaleString()}
+                </li>
+              ))}
+            </ul>
+            {replay.pendingAction ? <pre>{JSON.stringify(replay.pendingAction, null, 2)}</pre> : null}
+          </div>
+        </details>
+      ) : null}
+      <details className="approval-technical-details">
+        <summary>Raw request and preview payload</summary>
+        <div className="replay-box">
+          <h4>Raw request payload</h4>
+          <pre>{JSON.stringify(approval.payload, null, 2)}</pre>
+          <h4>Preview payload</h4>
+          <pre>{JSON.stringify(approval.preview, null, 2)}</pre>
+        </div>
+      </details>
+    </Panel>
+  );
+}
+
+function ApprovalEvidence(props: { approvalId: string; evidence: ApprovalEvidenceModel }) {
+  const { approvalId, evidence } = props;
+  return (
+    <div className="replay-box approval-support-box">
+      <h4>Operator evidence</h4>
+      {evidence.targets.length > 0 ? (
+        <ul className="compact-list">
+          {evidence.targets.map((line) => (
+            <li key={`${approvalId}-${line}`}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+      {evidence.commands.length > 0 ? (
+        <div className="approval-evidence-section">
+          <p className="approval-evidence-label">Commands</p>
+          <ul className="compact-list">
+            {evidence.commands.map((line) => (
+              <li key={`${approvalId}-command-${line}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {evidence.supporting.length > 0 ? (
+        <div className="approval-evidence-section">
+          <p className="approval-evidence-label">Supporting context</p>
+          <ul className="compact-list">
+            {evidence.supporting.map((line) => (
+              <li key={`${approvalId}-support-${line}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {evidence.changes.map((block) => (
+        <details key={`${approvalId}-${block.label}`} className="approval-technical-details">
+          <summary>{block.label}</summary>
+          <pre>{block.content}</pre>
+        </details>
+      ))}
+    </div>
   );
 }
 

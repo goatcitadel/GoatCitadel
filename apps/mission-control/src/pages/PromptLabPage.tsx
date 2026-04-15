@@ -477,16 +477,24 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       try {
         const run = await runPromptPackTest(selectedPackId, test.testId, input);
         let autoScoreSummary = "";
+        let autoScoreError: string | null = null;
         if (autoScoreOnRun && run.status === "completed") {
-          const auto = await autoScorePromptPackTest(selectedPackId, test.testId, {
-            runId: run.runId,
-          });
-          autoScoreSummary = ` Auto-scored ${formatWeightedScore(auto.score.weightedScore)} (${auto.score.autoVerdict}).`;
+          try {
+            const auto = await autoScorePromptPackTest(selectedPackId, test.testId, {
+              runId: run.runId,
+            });
+            autoScoreSummary = ` Auto-scored ${formatWeightedScore(auto.score.weightedScore)} (${auto.score.autoVerdict}).`;
+          } catch (err) {
+            autoScoreError = (err as Error).message;
+          }
         }
         await loadPack(selectedPackId);
         setSelectedTestId(test.testId);
         if (run.status === "failed") {
           setError(`Ran ${test.code}, but it failed: ${run.error ?? "Unknown error"}`);
+        } else if (autoScoreError) {
+          setSuccess(`Ran ${test.code}.`);
+          setError(`Ran ${test.code}, but auto-score failed: ${autoScoreError}`);
         } else {
           setSuccess(`Ran ${test.code}.${autoScoreSummary}`);
         }
@@ -510,7 +518,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       let completed = 0;
       let failed = 0;
       let autoScored = 0;
+      let scoreFailed = 0;
       let skipped = 0;
+      const issues: string[] = [];
       for (const test of tests) {
         setActiveRun({ mode: "all", testId: test.testId, testCode: test.code });
         const { input, missingPlaceholders } = buildRunInput(test);
@@ -518,23 +528,41 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
           skipped += 1;
           continue;
         }
-        const run = await runPromptPackTest(selectedPackId, test.testId, input);
+        let run: PromptPackRunRecord;
+        try {
+          run = await runPromptPackTest(selectedPackId, test.testId, input);
+        } catch (err) {
+          failed += 1;
+          issues.push(`${test.code}: ${(err as Error).message}`);
+          continue;
+        }
         if (run.status === "failed") {
           failed += 1;
+          issues.push(`${test.code}: ${run.error ?? "Unknown run failure"}`);
         } else if (run.status === "completed") {
           completed += 1;
           if (autoScoreOnRun) {
-            await autoScorePromptPackTest(selectedPackId, test.testId, {
-              runId: run.runId,
-            });
-            autoScored += 1;
+            try {
+              await autoScorePromptPackTest(selectedPackId, test.testId, {
+                runId: run.runId,
+              });
+              autoScored += 1;
+            } catch (err) {
+              scoreFailed += 1;
+              issues.push(`${test.code} auto-score: ${(err as Error).message}`);
+            }
           }
         }
       }
       await loadPack(selectedPackId);
       setSuccess(
-        `Run all finished: ${completed} completed, ${failed} failed, ${skipped} skipped for missing placeholders.${autoScoreOnRun ? ` auto-scored ${autoScored}.` : ""}`,
+        `Run all finished: ${completed} completed, ${failed} failed, ${skipped} skipped for missing placeholders.${autoScoreOnRun ? ` auto-scored ${autoScored}${scoreFailed > 0 ? `, ${scoreFailed} score failed` : ""}.` : ""}`,
       );
+      if (issues.length > 0) {
+        const sample = issues.slice(0, 3).join(" | ");
+        const remainder = issues.length > 3 ? ` (+${issues.length - 3} more)` : "";
+        setError(`Some runs need attention: ${sample}${remainder}`);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {

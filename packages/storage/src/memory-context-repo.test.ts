@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { MemoryContextRepository } from "./memory-context-repo.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
 
 const createdFiles: string[] = [];
 
@@ -29,6 +30,36 @@ function createRepo(): MemoryContextRepository {
 }
 
 describe("MemoryContextRepository", () => {
+  it("uses postgres-safe null comparisons for fresh cache lookups", () => {
+    const preparedSql: string[] = [];
+    const statement: DbStatement = {
+      run: () => ({ changes: 0 }),
+      get: () => undefined,
+      all: () => [],
+    };
+    const db: DatabaseClient = {
+      dialect: "postgres",
+      prepare(sql: string) {
+        preparedSql.push(sql);
+        return statement;
+      },
+      exec() {},
+      close() {},
+      transaction(_mode, callback) {
+        return callback();
+      },
+    };
+
+    new MemoryContextRepository(db);
+
+    const lookupSql = preparedSql.find((sql) => sql.includes("WHERE cache_key = @cacheKey"));
+    assert.ok(lookupSql);
+    assert.match(lookupSql, /session_id IS NOT DISTINCT FROM @sessionId/);
+    assert.match(lookupSql, /task_id IS NOT DISTINCT FROM @taskId/);
+    assert.match(lookupSql, /run_id IS NOT DISTINCT FROM @runId/);
+    assert.match(lookupSql, /phase_id IS NOT DISTINCT FROM @phaseId/);
+  });
+
   it("upserts and retrieves fresh cache entries", () => {
     const repo = createRepo();
     const inserted = repo.upsert({

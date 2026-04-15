@@ -3,7 +3,6 @@ import { fetchCostSummary, fetchMemoryQmdStats, runCheaper, type CostSummaryResp
 import { ActionButton } from "../components/ActionButton";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
@@ -144,13 +143,6 @@ export function CostConsolePage() {
           </div>
         )}
       />
-      <PageGuideCard
-        pageId="costs"
-        what={pageCopy.costs.guide?.what ?? ""}
-        when={pageCopy.costs.guide?.when ?? ""}
-        mostCommonAction={pageCopy.costs.guide?.mostCommonAction}
-        actions={pageCopy.costs.guide?.actions ?? []}
-      />
       <div className="workflow-status-stack">
         {isRefreshing ? <p className="status-banner">Refreshing costs...</p> : null}
         {isFallbackRefreshing ? (
@@ -164,51 +156,52 @@ export function CostConsolePage() {
           </p>
         ) : null}
       </div>
-      <Panel
-        title="Window Totals"
-        subtitle="Recorded spend and token activity for the selected scope and time window."
-        padding="compact"
-      >
-        <div className="workflow-summary-strip">
-          <StatusChip tone={showsMissingRecordedSpend ? "warning" : "success"}>
-            Recorded spend {formatUsd(totalCostUsd)}
-          </StatusChip>
-          <StatusChip tone="muted">Input {totalInputTokens.toLocaleString()} tokens</StatusChip>
-          <StatusChip tone="muted">Output {totalOutputTokens.toLocaleString()} tokens</StatusChip>
-          <StatusChip tone="muted">Total {totalTokens.toLocaleString()} tokens</StatusChip>
-        </div>
+      <DataToolbar
+        primary={
+          <label className="chat-v11-select" htmlFor="scope">
+            Scope
+            <GCSelect
+              id="scope"
+              value={scope}
+              onChange={(value) => setScope(value as CostScope)}
+              options={[
+                { value: "day", label: "day" },
+                { value: "session", label: "session" },
+                { value: "agent", label: "agent" },
+                { value: "task", label: "task" },
+              ]}
+            />
+          </label>
+        }
+        center={
+          <div className="workflow-summary-strip">
+            <StatusChip tone={showsMissingRecordedSpend ? "warning" : "success"}>
+              Recorded spend {formatUsd(totalCostUsd)}
+            </StatusChip>
+            <StatusChip tone="muted">Input {totalInputTokens.toLocaleString()}</StatusChip>
+            <StatusChip tone="muted">Output {totalOutputTokens.toLocaleString()}</StatusChip>
+            <StatusChip tone="muted">Total {totalTokens.toLocaleString()}</StatusChip>
+          </div>
+        }
+        secondary={<ActionButton label="Run Leaner" onClick={() => void onRunCheaper()} />}
+      />
+      <Panel title="Window Totals" subtitle="Recorded spend, token flow, and QMD posture for the selected scope." padding="compact">
         <p className="office-subtitle">
           {showsMissingRecordedSpend
             ? "The page can account for token volume here, but not actual USD charges yet."
             : "Recorded spend reflects only the runs that reported a USD amount through the gateway."}
         </p>
-      </Panel>
-      <Panel
-        title="Cost Controls"
-        subtitle="Switch scope and run a leaner-cost recommendation without leaving the current console."
-        padding="compact"
-      >
-        <DataToolbar
-          primary={(
-            <label className="chat-v11-select" htmlFor="scope">Scope
-              <GCSelect
-                id="scope"
-                value={scope}
-                onChange={(value) => setScope(value as CostScope)}
-                options={[
-                  { value: "day", label: "day" },
-                  { value: "session", label: "session" },
-                  { value: "agent", label: "agent" },
-                  { value: "task", label: "task" },
-                ]}
-              />
-            </label>
-          )}
-          secondary={<ActionButton label="Run Leaner" onClick={() => void onRunCheaper()} />}
-        />
         <FieldHelp>
           Scope changes what the summary rows group by. “Run Leaner” asks GoatCitadel for concrete lower-cost actions without changing current provider defaults.
         </FieldHelp>
+        {qmdSavings ? (
+          <p className="office-subtitle">
+            QMD impact: {describeQmdImpact(qmdSavings)} Went from {qmdSavings.originalTokenEstimate} tokens to{" "}
+            {qmdSavings.distilledTokenEstimate} ({formatTokenDelta(qmdSavings.netTokenDelta)}).
+          </p>
+        ) : (
+          <p className="office-subtitle">No QMD metrics yet.</p>
+        )}
       </Panel>
       {recommendation ? (
         <Panel title="Leaner Recommendations" subtitle="Current cost-reduction suggestions from the optimization helper." tone="soft">
@@ -219,22 +212,6 @@ export function CostConsolePage() {
           </ul>
         </Panel>
       ) : null}
-
-      <Panel title="QMD Impact (24h)" subtitle="How query-time memory distillation changed the context footprint in the last 24 hours.">
-        {qmdSavings ? (
-          <>
-            <p>
-              {qmdSavings.totalRuns} runs. {describeQmdImpact(qmdSavings)}
-            </p>
-            <p className="office-subtitle">
-              Went from {qmdSavings.originalTokenEstimate} tokens to {qmdSavings.distilledTokenEstimate}
-              {" "}({formatTokenDelta(qmdSavings.netTokenDelta)}).
-            </p>
-          </>
-        ) : (
-          <p>No QMD metrics yet.</p>
-        )}
-      </Panel>
 
       {data.usageAvailability ? (
         <Panel title="Usage Coverage" subtitle="How much of the recent agent activity reported provider usage metadata.">

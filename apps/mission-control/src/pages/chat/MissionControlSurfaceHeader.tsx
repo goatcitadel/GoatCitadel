@@ -25,7 +25,7 @@ export function MissionControlSurfaceHeader({
       <div className="mission-surface-header-copy">
         <p className="mission-surface-header-kicker">{config.label}</p>
         <h2>{sessionTitle}</h2>
-        <p>{summary}</p>
+        <p className="mission-surface-header-posture">{summary}</p>
       </div>
       <div className="mission-surface-header-actions">
         <StatusChip tone={mode === "chat" ? "live" : mode === "cowork" ? "warning" : "critical"}>

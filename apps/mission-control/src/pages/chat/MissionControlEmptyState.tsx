@@ -27,6 +27,22 @@ export function MissionControlEmptyState({
   onOpenApprovals: () => void;
 }) {
   const config = getMissionControlSurfaceConfig(mode);
+  const secondaryActions =
+    mode === "chat"
+      ? [
+          { label: "Open Cowork", onClick: onOpenCowork },
+          { label: "Open Code", onClick: onOpenCode },
+        ]
+      : mode === "cowork"
+        ? [
+            { label: "Open Tasks", onClick: onOpenTasks },
+            { label: "Review Approvals", onClick: onOpenApprovals },
+          ]
+        : [
+            { label: "Open Tasks", onClick: onOpenTasks },
+            { label: "Open Cowork", onClick: onOpenCowork },
+          ];
+  const visiblePrompts = mode === "chat" ? config.emptyPrompts.slice(0, 2) : [];
 
   return (
     <article className={`card chat-v11-empty-shell mission-empty-shell mode-${mode}`}>
@@ -55,42 +71,26 @@ export function MissionControlEmptyState({
         </div>
       </div>
       <div className="mission-empty-shell-jump-grid">
-        <button
-          type="button"
-          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
-          onClick={onOpenCowork}
-        >
-          Open Cowork
-        </button>
-        <button
-          type="button"
-          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
-          onClick={onOpenCode}
-        >
-          Open Code
-        </button>
-        <button
-          type="button"
-          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
-          onClick={onOpenTasks}
-        >
-          Open Tasks
-        </button>
-        <button
-          type="button"
-          className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
-          onClick={onOpenApprovals}
-        >
-          Review Approvals
-        </button>
-      </div>
-      <div className="mission-empty-shell-prompts">
-        {config.emptyPrompts.map((prompt) => (
-          <div key={prompt} className="mission-empty-shell-prompt">
-            {prompt}
-          </div>
+        {secondaryActions.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            className="gc-nav-button gc-nav-tier-section mission-empty-shell-jump"
+            onClick={action.onClick}
+          >
+            {action.label}
+          </button>
         ))}
       </div>
+      {visiblePrompts.length > 0 ? (
+        <div className="mission-empty-shell-prompts">
+          {visiblePrompts.map((prompt) => (
+            <div key={prompt} className="mission-empty-shell-prompt">
+              {prompt}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </article>
   );
 }

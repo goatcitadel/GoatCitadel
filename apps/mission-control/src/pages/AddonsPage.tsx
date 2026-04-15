@@ -14,7 +14,10 @@ import {
 import { ActionButton } from "../components/ActionButton";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { HelpHint } from "../components/HelpHint";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageGuideCard } from "../components/PageGuideCard";
+import { PageHeader } from "../components/PageHeader";
+import { StatusChip } from "../components/StatusChip";
 import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { pageCopy } from "../content/copy";
 
@@ -24,6 +27,7 @@ export function AddonsPage() {
   const [statusByAddonId, setStatusByAddonId] = useState<Record<string, AddonStatusRecord>>({});
   const [busyAddonId, setBusyAddonId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedAddonId, setSelectedAddonId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [statusWarning, setStatusWarning] = useState<string | null>(null);
@@ -76,6 +80,19 @@ export function AddonsPage() {
     () => [...catalog].sort((left, right) => left.label.localeCompare(right.label)),
     [catalog],
   );
+  const selectedAddon = useMemo(
+    () => sortedCatalog.find((addon) => addon.addonId === selectedAddonId) ?? sortedCatalog[0] ?? null,
+    [selectedAddonId, sortedCatalog],
+  );
+
+  useEffect(() => {
+    setSelectedAddonId((current) => {
+      if (current && sortedCatalog.some((addon) => addon.addonId === current)) {
+        return current;
+      }
+      return sortedCatalog[0]?.addonId ?? null;
+    });
+  }, [sortedCatalog]);
 
   const reloadAfterAction = useCallback(
     async (message: string) => {
@@ -171,7 +188,21 @@ export function AddonsPage() {
   }, []);
 
   return (
-    <section className="card stack-page">
+    <section className="workflow-page">
+      <PageHeader
+        eyebrow="Extensions"
+        title={pageCopy.addons.title}
+        subtitle={pageCopy.addons.subtitle}
+        hint="Review provenance, runtime state, and launch posture before you install or open anything outside the core app."
+        density="compact"
+        actions={
+          <div className="workflow-summary-strip">
+            <StatusChip tone="muted">{sortedCatalog.length} add-ons</StatusChip>
+            <StatusChip tone="warning">{Object.keys(installed).length} installed</StatusChip>
+            {isLoading ? <StatusChip tone="warning">Refreshing</StatusChip> : null}
+          </div>
+        }
+      />
       {pageCopy.addons.guide ? <PageGuideCard {...pageCopy.addons.guide} /> : null}
       {info ? <p className="status-banner ok">{info}</p> : null}
       {error ? (
@@ -183,146 +214,196 @@ export function AddonsPage() {
         </div>
       ) : null}
       {statusWarning ? <p className="status-banner warning">{statusWarning}</p> : null}
-      <div className="stack-list">
-        {sortedCatalog.length === 0 ? (
+      <OperatorSplitLayout
+        className="addons-operator-layout"
+        primary={
+          sortedCatalog.length === 0 ? (
+            <GCEmptyState
+              title="No add-ons are available right now"
+              subtitle="Refresh the catalog to pull the latest installable operator extensions."
+              action={
+                <button type="button" className="gc-button" onClick={() => void refresh()} disabled={isLoading}>
+                  {isLoading ? "Refreshing..." : "Refresh catalog"}
+                </button>
+              }
+              meta={
+                <p className="office-subtitle">
+                  Installed add-ons will return here with runtime controls and launch links.
+                </p>
+              }
+            />
+          ) : (
+            <div className="stack-list">
+              {sortedCatalog.map((addon) => {
+                const addonStatus = statusByAddonId[addon.addonId];
+                const installedRecord = installed[addon.addonId];
+                const effectiveStatus =
+                  addonStatus?.status ?? (installedRecord ? installedRecord.runtimeStatus : "not_installed");
+                return (
+                  <button
+                    key={addon.addonId}
+                    type="button"
+                    className={`stack-card stack-card-selectable${selectedAddon?.addonId === addon.addonId ? " active" : ""}`}
+                    onClick={() => setSelectedAddonId(addon.addonId)}
+                  >
+                    <div className="stack-card-header">
+                      <div>
+                        <h3>{addon.label}</h3>
+                        <p className="office-subtitle">{addon.description}</p>
+                      </div>
+                      <div className="stack-card-chips">
+                        <span className="chip">{addon.category.replaceAll("_", " ")}</span>
+                        <span className={`chip chip-${addon.trustTier}`}>{addon.trustTier}</span>
+                        <span className={`chip chip-${effectiveStatus}`}>{effectiveStatus.replaceAll("_", " ")}</span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )
+        }
+        emptyInspector={
           <GCEmptyState
-            title="No add-ons are available right now"
-            subtitle="Refresh the catalog to pull the latest installable operator extensions."
-            action={
-              <button type="button" className="gc-button" onClick={() => void refresh()} disabled={isLoading}>
-                {isLoading ? "Refreshing..." : "Refresh catalog"}
-              </button>
-            }
-            meta={
-              <p className="office-subtitle">
-                Installed add-ons will return here with runtime controls and launch links.
-              </p>
-            }
+            title="Select an add-on"
+            subtitle="Pick an add-on to inspect trust, runtime status, launch posture, and controls."
           />
-        ) : null}
-        {sortedCatalog.map((addon) => {
-          const addonStatus = statusByAddonId[addon.addonId];
-          const installedRecord = installed[addon.addonId];
-          const effectiveStatus =
-            addonStatus?.status ?? (installedRecord ? installedRecord.runtimeStatus : "not_installed");
-          const effectiveLaunchUrl = addonStatus?.installed?.launchUrl ?? installedRecord?.launchUrl ?? addon.launchUrl;
-          const busy = busyAddonId === addon.addonId;
-          const canOpenExternally = effectiveStatus === "running" && Boolean(effectiveLaunchUrl);
-          return (
-            <article key={addon.addonId} className="stack-card">
-              <div className="stack-card-header">
-                <div>
-                  <h3>{addon.label}</h3>
-                  <p className="office-subtitle">{addon.description}</p>
-                </div>
-                <div className="stack-card-chips">
-                  <span className="chip">{addon.category.replaceAll("_", " ")}</span>
-                  <span className={`chip chip-${addon.trustTier}`}>{addon.trustTier}</span>
-                  <span className={`chip chip-${effectiveStatus}`}>{effectiveStatus.replaceAll("_", " ")}</span>
-                </div>
-              </div>
-              <div className="field-grid">
-                <div>
-                  <strong>Repository</strong>
-                  <p className="office-subtitle">
-                    {addon.repoUrl}
-                    <HelpHint
-                      label={`${addon.label} provenance`}
-                      text={
-                        addon.sameOwnerAsGoatCitadel
-                          ? "This add-on is configured as being owned by the same publisher as GoatCitadel, but it still downloads code from a separate repository."
-                          : "This add-on comes from a separate repository and should be reviewed before install."
-                      }
-                    />
-                  </p>
-                </div>
-                <div>
-                  <strong>Install location</strong>
-                  <p className="office-subtitle">
-                    {installedRecord?.installedPath ?? "~/.GoatCitadel/addons/<addonId>"}
-                  </p>
-                </div>
-                <div>
-                  <strong>Runtime type</strong>
-                  <p className="office-subtitle">{addon.runtimeType.replaceAll("_", " ")}</p>
-                </div>
-                <div>
-                  <strong>Display mode</strong>
-                  <p className="office-subtitle">
-                    {addon.webEntryMode === "external_local_url"
-                      ? "Display-ready through a separate local browser tab once the add-on is running."
-                      : addon.webEntryMode === "embedded_proxy"
-                        ? "Display-ready through a GoatCitadel-managed embedded proxy surface."
-                        : "Runtime-only add-on with no stable web entry."}
-                  </p>
-                </div>
-                {effectiveLaunchUrl ? (
-                  <div>
-                    <strong>Launch URL</strong>
-                    <p className="office-subtitle">{effectiveLaunchUrl}</p>
+        }
+        inspector={
+          selectedAddon ? (
+            (() => {
+              const addon = selectedAddon;
+              const addonStatus = statusByAddonId[addon.addonId];
+              const installedRecord = installed[addon.addonId];
+              const effectiveStatus =
+                addonStatus?.status ?? (installedRecord ? installedRecord.runtimeStatus : "not_installed");
+              const effectiveLaunchUrl =
+                addonStatus?.installed?.launchUrl ?? installedRecord?.launchUrl ?? addon.launchUrl;
+              const busy = busyAddonId === addon.addonId;
+              const canOpenExternally = effectiveStatus === "running" && Boolean(effectiveLaunchUrl);
+              return (
+                <article className="stack-card">
+                  <div className="stack-card-header">
+                    <div>
+                      <h3>{addon.label}</h3>
+                      <p className="office-subtitle">{addon.description}</p>
+                    </div>
+                    <div className="stack-card-chips">
+                      <span className="chip">{addon.category.replaceAll("_", " ")}</span>
+                      <span className={`chip chip-${addon.trustTier}`}>{addon.trustTier}</span>
+                      <span className={`chip chip-${effectiveStatus}`}>{effectiveStatus.replaceAll("_", " ")}</span>
+                    </div>
                   </div>
-                ) : null}
-              </div>
+                  <div className="field-grid">
+                    <div>
+                      <strong>Repository</strong>
+                      <p className="office-subtitle">
+                        {addon.repoUrl}
+                        <HelpHint
+                          label={`${addon.label} provenance`}
+                          text={
+                            addon.sameOwnerAsGoatCitadel
+                              ? "This add-on is configured as being owned by the same publisher as GoatCitadel, but it still downloads code from a separate repository."
+                              : "This add-on comes from a separate repository and should be reviewed before install."
+                          }
+                        />
+                      </p>
+                    </div>
+                    <div>
+                      <strong>Install location</strong>
+                      <p className="office-subtitle">
+                        {installedRecord?.installedPath ?? "~/.GoatCitadel/addons/<addonId>"}
+                      </p>
+                    </div>
+                    <div>
+                      <strong>Runtime type</strong>
+                      <p className="office-subtitle">{addon.runtimeType.replaceAll("_", " ")}</p>
+                    </div>
+                    <div>
+                      <strong>Display mode</strong>
+                      <p className="office-subtitle">
+                        {addon.webEntryMode === "external_local_url"
+                          ? "Display-ready through a separate local browser tab once the add-on is running."
+                          : addon.webEntryMode === "embedded_proxy"
+                            ? "Display-ready through a GoatCitadel-managed embedded proxy surface."
+                            : "Runtime-only add-on with no stable web entry."}
+                      </p>
+                    </div>
+                    {effectiveLaunchUrl ? (
+                      <div>
+                        <strong>Launch URL</strong>
+                        <p className="office-subtitle">{effectiveLaunchUrl}</p>
+                      </div>
+                    ) : null}
+                  </div>
 
-              <div className="action-row">
-                {!installedRecord ? (
-                  <ActionButton
-                    label={busy ? "Installing..." : "Install"}
-                    onClick={() => setConfirmInstallAddon(addon)}
-                    disabled={busy}
-                  />
-                ) : (
-                  <>
-                    <ActionButton
-                      label={busy ? "Updating..." : "Update"}
-                      onClick={() => void onUpdate(addon.addonId)}
-                      disabled={busy}
-                    />
-                    <ActionButton
-                      label={
-                        effectiveStatus === "running" ? (busy ? "Stopping..." : "Stop") : busy ? "Starting..." : "Start"
-                      }
-                      onClick={() => {
-                        if (effectiveStatus === "running") {
-                          void onStop(addon.addonId);
-                        } else {
-                          void onLaunch(addon.addonId);
-                        }
-                      }}
-                      disabled={busy}
-                    />
-                    {canOpenExternally && effectiveLaunchUrl ? (
+                  <div className="action-row">
+                    {!installedRecord ? (
                       <ActionButton
-                        label={`Open ${addon.label}`}
-                        onClick={() => openExternalAddon(effectiveLaunchUrl)}
+                        label={busy ? "Installing..." : "Install"}
+                        onClick={() => setConfirmInstallAddon(addon)}
                         disabled={busy}
                       />
-                    ) : null}
-                    <ActionButton
-                      label="Uninstall"
-                      onClick={() => setConfirmUninstallAddon(addon)}
-                      disabled={busy}
-                      danger
-                    />
-                  </>
-                )}
-              </div>
+                    ) : (
+                      <>
+                        <ActionButton
+                          label={busy ? "Updating..." : "Update"}
+                          onClick={() => void onUpdate(addon.addonId)}
+                          disabled={busy}
+                        />
+                        <ActionButton
+                          label={
+                            effectiveStatus === "running"
+                              ? busy
+                                ? "Stopping..."
+                                : "Stop"
+                              : busy
+                                ? "Starting..."
+                                : "Start"
+                          }
+                          onClick={() => {
+                            if (effectiveStatus === "running") {
+                              void onStop(addon.addonId);
+                            } else {
+                              void onLaunch(addon.addonId);
+                            }
+                          }}
+                          disabled={busy}
+                        />
+                        {canOpenExternally && effectiveLaunchUrl ? (
+                          <ActionButton
+                            label={`Open ${addon.label}`}
+                            onClick={() => openExternalAddon(effectiveLaunchUrl)}
+                            disabled={busy}
+                          />
+                        ) : null}
+                        <ActionButton
+                          label="Uninstall"
+                          onClick={() => setConfirmUninstallAddon(addon)}
+                          disabled={busy}
+                          danger
+                        />
+                      </>
+                    )}
+                  </div>
 
-              <details className="inline-panel" open>
-                <summary>Readiness checks</summary>
-                <ul className="resource-link-list">
-                  {(addonStatus?.healthChecks ?? addon.healthChecks).map((check) => (
-                    <li key={`${addon.addonId}-${check.key}`}>
-                      <strong>{check.key}</strong>: {check.message}{" "}
-                      <span className={`chip chip-${check.status}`}>{check.status}</span>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            </article>
-          );
-        })}
-      </div>
+                  <details className="inline-panel" open>
+                    <summary>Readiness checks</summary>
+                    <ul className="resource-link-list">
+                      {(addonStatus?.healthChecks ?? addon.healthChecks).map((check) => (
+                        <li key={`${addon.addonId}-${check.key}`}>
+                          <strong>{check.key}</strong>: {check.message}{" "}
+                          <span className={`chip chip-${check.status}`}>{check.status}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </article>
+              );
+            })()
+          ) : null
+        }
+      />
 
       <ConfirmModal
         open={Boolean(confirmInstallAddon)}

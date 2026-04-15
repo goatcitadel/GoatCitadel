@@ -368,6 +368,7 @@ export const AssistantConfigInputSchema = z
           .optional(),
         launch: z
           .object({
+            modelsRootPath: z.string().optional(),
             modelPath: z.string().optional(),
             alias: z.string().optional(),
             ctxSize: z.number().optional(),

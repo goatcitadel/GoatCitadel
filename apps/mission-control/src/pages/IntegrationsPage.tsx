@@ -33,6 +33,7 @@ import type {
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { ConfigFormBuilder } from "../components/ConfigFormBuilder";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -688,8 +689,10 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         />
       ) : null}
 
-      <div className="integrations-operator-grid">
-        <div className="integrations-operator-main">
+      <OperatorSplitLayout
+        className="integrations-operator-layout"
+        primary={
+          <div className="integrations-operator-main">
           <IntegrationsCatalogPicker<IntegrationKind>
             isChannelsView={isChannelsView}
             catalog={catalog}
@@ -753,29 +756,32 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
             createPending={createAction.pending}
             onCreate={() => void onCreate()}
           />
-        </div>
+          </div>
+        }
 
-        <div className="integrations-operator-side">
-          <IntegrationsConnectionsTable
-            connectionsTitle={connectionsTitle}
-            connectionsSubtitle={connectionsSubtitle}
-            connectionSearch={connectionSearch}
-            onConnectionSearchChange={setConnectionSearch}
-            connections={connections}
-            filteredConnections={filteredConnections}
-            catalogLabelById={catalogLabelById}
-            connectorBySourceId={connectorBySourceId}
-            connectorDiagnosticsEnabled={connectorDiagnosticsEnabled}
-            pluginBusyId={pluginBusyId}
-            deleteActionPending={deleteAction.pending}
-            onToggle={(connection) => void onToggle(connection)}
-            onRunDiagnostics={(connectionId) => void onRunDiagnostics(connectionId)}
-            onSetDeleteTarget={setDeleteTarget}
-            selectedDiagnosticConnectionId={selectedDiagnosticConnectionId}
-            selectedDiagnostics={selectedDiagnostics}
-          />
-        </div>
-      </div>
+        inspector={
+          <div className="integrations-operator-side">
+            <IntegrationsConnectionsTable
+              connectionsTitle={connectionsTitle}
+              connectionsSubtitle={connectionsSubtitle}
+              connectionSearch={connectionSearch}
+              onConnectionSearchChange={setConnectionSearch}
+              connections={connections}
+              filteredConnections={filteredConnections}
+              catalogLabelById={catalogLabelById}
+              connectorBySourceId={connectorBySourceId}
+              connectorDiagnosticsEnabled={connectorDiagnosticsEnabled}
+              pluginBusyId={pluginBusyId}
+              deleteActionPending={deleteAction.pending}
+              onToggle={(connection) => void onToggle(connection)}
+              onRunDiagnostics={(connectionId) => void onRunDiagnostics(connectionId)}
+              onSetDeleteTarget={setDeleteTarget}
+              selectedDiagnosticConnectionId={selectedDiagnosticConnectionId}
+              selectedDiagnostics={selectedDiagnostics}
+            />
+          </div>
+        }
+      />
 
       {!isChannelsView ? (
         <IntegrationsOperatorActionsPanel

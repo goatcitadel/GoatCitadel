@@ -23,6 +23,7 @@ import { CardSkeleton } from "../components/CardSkeleton";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { DataToolbar } from "../components/DataToolbar";
 import { HelpHint } from "../components/HelpHint";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
@@ -730,11 +731,13 @@ export function McpPage() {
         )}
       </Panel>
 
-      <div className="split-grid">
-        <Panel
-          title="Register MCP Server"
-          subtitle="Use this for adapters that are not already covered by the template library."
-        >
+      <OperatorSplitLayout
+        className="mcp-operator-layout"
+        primary={
+          <Panel
+            title="Register MCP Server"
+            subtitle="Use this for adapters that are not already covered by the template library."
+          >
           <p className="office-subtitle">
             Manual registration stays on local stdio for the visible `1.0` path. The built-in Approval Inbox still ships
             through its template.
@@ -838,133 +841,135 @@ export function McpPage() {
               />
             </div>
           )}
-          <ActionButton label="Add Server" pending={busy} onClick={handleCreateServer} />
-        </Panel>
-
-        <Panel title="Servers" subtitle="Select a server to connect it, run health checks, and tune first-use policy.">
-          <div className="virtual-list-shell">
-            <Virtuoso
-              data={servers}
-              itemContent={(_index, server) => (
-                <div className="virtual-list-item chat-list-item" key={server.serverId}>
-                  <button
-                    type="button"
-                    className={["gc-button", `chat-list-button${selectedServerId === server.serverId ? " active" : ""}`]
-                      .filter(Boolean)
-                      .join(" ")}
-                    onClick={() => setSelectedServerId(server.serverId)}
-                  >
-                    {server.label}
-                  </button>
-                  <p className="chat-item-meta">
-                    {server.transport} | {server.status} | {server.trustTier} | {server.costTier}
-                  </p>
-                </div>
-              )}
-            />
-          </div>
-          <McpSelectedServerPanel
-            selected={selected}
-            selectedConnector={selectedConnector}
-            selectedDiagnostic={selectedDiagnostic}
-            busy={busy}
-            policyRequireFirst={policyRequireFirst}
-            setPolicyRequireFirst={setPolicyRequireFirst}
-            policyRedaction={policyRedaction}
-            setPolicyRedaction={setPolicyRedaction}
-            policyAllowed={policyAllowed}
-            setPolicyAllowed={setPolicyAllowed}
-            policyBlocked={policyBlocked}
-            setPolicyBlocked={setPolicyBlocked}
-            policyNotes={policyNotes}
-            setPolicyNotes={setPolicyNotes}
-            setPolicyDirty={setPolicyDirty}
-            policyDirty={policyDirty}
-            onToggleConnection={async () => {
-              if (!selected) return;
-              setBusy(true);
-              try {
-                if (selected.status === "connected") {
-                  await disconnectMcpServer(selected.serverId);
-                } else {
-                  await connectMcpServer(selected.serverId);
+            <ActionButton label="Add Server" pending={busy} onClick={handleCreateServer} />
+          </Panel>
+        }
+        inspector={
+          <Panel title="Servers" subtitle="Select a server to connect it, run health checks, and tune first-use policy.">
+            <div className="virtual-list-shell">
+              <Virtuoso
+                data={servers}
+                itemContent={(_index, server) => (
+                  <div className="virtual-list-item chat-list-item" key={server.serverId}>
+                    <button
+                      type="button"
+                      className={["gc-button", `chat-list-button${selectedServerId === server.serverId ? " active" : ""}`]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onClick={() => setSelectedServerId(server.serverId)}
+                    >
+                      {server.label}
+                    </button>
+                    <p className="chat-item-meta">
+                      {server.transport} | {server.status} | {server.trustTier} | {server.costTier}
+                    </p>
+                  </div>
+                )}
+              />
+            </div>
+            <McpSelectedServerPanel
+              selected={selected}
+              selectedConnector={selectedConnector}
+              selectedDiagnostic={selectedDiagnostic}
+              busy={busy}
+              policyRequireFirst={policyRequireFirst}
+              setPolicyRequireFirst={setPolicyRequireFirst}
+              policyRedaction={policyRedaction}
+              setPolicyRedaction={setPolicyRedaction}
+              policyAllowed={policyAllowed}
+              setPolicyAllowed={setPolicyAllowed}
+              policyBlocked={policyBlocked}
+              setPolicyBlocked={setPolicyBlocked}
+              policyNotes={policyNotes}
+              setPolicyNotes={setPolicyNotes}
+              setPolicyDirty={setPolicyDirty}
+              policyDirty={policyDirty}
+              onToggleConnection={async () => {
+                if (!selected) return;
+                setBusy(true);
+                try {
+                  if (selected.status === "connected") {
+                    await disconnectMcpServer(selected.serverId);
+                  } else {
+                    await connectMcpServer(selected.serverId);
+                  }
+                  await loadServers();
+                  if (selectedServerId) {
+                    await loadTools(selectedServerId);
+                  }
+                  setError(null);
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setBusy(false);
                 }
-                await loadServers();
-                if (selectedServerId) {
-                  await loadTools(selectedServerId);
+              }}
+              onStartOAuth={async () => {
+                if (!selected) return;
+                setBusy(true);
+                try {
+                  const oauth = await startMcpOAuth(selected.serverId);
+                  setResult(`Open OAuth URL: ${oauth.authorizeUrl}`);
+                  setError(null);
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setBusy(false);
                 }
-                setError(null);
-              } catch (err) {
-                setError((err as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onStartOAuth={async () => {
-              if (!selected) return;
-              setBusy(true);
-              try {
-                const oauth = await startMcpOAuth(selected.serverId);
-                setResult(`Open OAuth URL: ${oauth.authorizeUrl}`);
-                setError(null);
-              } catch (err) {
-                setError((err as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onDelete={() => {
-              if (!selected) return;
-              setConfirmDeleteServer({
-                serverId: selected.serverId,
-                label: selected.label,
-              });
-            }}
-            onHealthCheck={async () => {
-              if (!selected) return;
-              setBusy(true);
-              try {
-                const diagnostic = await runMcpServerHealthCheck(selected.serverId);
-                setDiagnosticByServerId((current) => ({
-                  ...current,
-                  [selected.serverId]: diagnostic,
-                }));
-                setError(null);
-              } catch (err) {
-                setError((err as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onSavePolicy={async () => {
-              if (!selected) return;
-              setBusy(true);
-              try {
-                await updateMcpServerPolicy(selected.serverId, {
-                  requireFirstToolApproval: policyRequireFirst,
-                  redactionMode: policyRedaction,
-                  allowedToolPatterns: policyAllowed
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                  blockedToolPatterns: policyBlocked
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                  notes: policyNotes.trim() || undefined,
+              }}
+              onDelete={() => {
+                if (!selected) return;
+                setConfirmDeleteServer({
+                  serverId: selected.serverId,
+                  label: selected.label,
                 });
-                setPolicyDirty(false);
-                await loadServers();
-                setError(null);
-              } catch (err) {
-                setError((err as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          />
-        </Panel>
-      </div>
+              }}
+              onHealthCheck={async () => {
+                if (!selected) return;
+                setBusy(true);
+                try {
+                  const diagnostic = await runMcpServerHealthCheck(selected.serverId);
+                  setDiagnosticByServerId((current) => ({
+                    ...current,
+                    [selected.serverId]: diagnostic,
+                  }));
+                  setError(null);
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              onSavePolicy={async () => {
+                if (!selected) return;
+                setBusy(true);
+                try {
+                  await updateMcpServerPolicy(selected.serverId, {
+                    requireFirstToolApproval: policyRequireFirst,
+                    redactionMode: policyRedaction,
+                    allowedToolPatterns: policyAllowed
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                    blockedToolPatterns: policyBlocked
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                    notes: policyNotes.trim() || undefined,
+                  });
+                  setPolicyDirty(false);
+                  await loadServers();
+                  setError(null);
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+          </Panel>
+        }
+      />
 
       <Panel
         title="Tool Catalog"

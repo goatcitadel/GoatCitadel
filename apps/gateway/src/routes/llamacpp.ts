@@ -21,7 +21,7 @@ const downloadJobParamsSchema = z.object({
 
 export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llamacpp/status", async (_request, reply) => {
-    return reply.send(fastify.gateway.getLlamaCppStatus());
+    return reply.send(await fastify.gateway.refreshLlamaCppRuntime());
   });
 
   fastify.get("/api/v1/llamacpp/install", async (_request, reply) => {

@@ -26,6 +26,7 @@ import {
 } from "../api/client";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { SelectOrCustom } from "../components/SelectOrCustom";
@@ -568,8 +569,10 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
       />
 
       {loadingTasks ? <TableSkeleton rows={6} cols={5} /> : null}
-      <div className="split-grid">
-        <Panel
+      <OperatorSplitLayout
+        className="tasks-operator-layout"
+        primary={
+          <Panel
           title={viewFilter === "trash" ? "Task Trash" : "Task Board"}
           subtitle={
             viewFilter === "trash"
@@ -672,9 +675,9 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               ))}
             </div>
           )}
-        </Panel>
-
-        <div className="task-detail-stack">
+          </Panel>
+        }
+        inspector={<div className="task-detail-stack">
           {!selectedTask ? (
             <GCEmptyState
               title="Select a task to inspect details"
@@ -1046,8 +1049,8 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
               </Panel>
             </>
           ) : null}
-        </div>
-      </div>
+        </div>}
+      />
       <ConfirmModal
         open={Boolean(confirmDelete)}
         title={confirmDelete?.mode === "soft" ? "Move Task To Trash" : "Delete Task Permanently"}

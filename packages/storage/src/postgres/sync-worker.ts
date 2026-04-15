@@ -2,6 +2,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { Pool, types, type PoolClient } from "pg";
 import type { PostgresConnectionOptions } from "./client.js";
 import type { PostgresWorkerRequest, PostgresWorkerResponse } from "./protocol.js";
+import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
 
 types.setTypeParser(20, (value) => Number(value));
 types.setTypeParser(21, (value) => Number(value));
@@ -11,6 +12,7 @@ types.setTypeParser(701, (value) => Number(value));
 
 const pool = new Pool(buildPoolConfig(workerData as PostgresConnectionOptions));
 const transactions = new Map<string, PoolClient>();
+let serverEncodingPromise: Promise<string | undefined> | undefined;
 
 parentPort?.on("message", async (message: {
   request: PostgresWorkerRequest;
@@ -43,7 +45,10 @@ async function handleRequest(request: PostgresWorkerRequest): Promise<unknown> {
   switch (request.kind) {
     case "query": {
       const executor = request.txId ? getTransactionClient(request.txId) : pool;
-      const result = await executor.query(request.sql, request.params);
+      const result = await executor.query(
+        request.sql,
+        sanitizeParamsForServerEncoding(request.params, await getServerEncoding()),
+      );
       if (request.mode === "run") {
         return {
           changes: result.rowCount ?? 0,
@@ -116,6 +121,7 @@ function buildPoolConfig(options: PostgresConnectionOptions) {
   if (options.connectionString?.trim()) {
     return {
       connectionString: options.connectionString.trim(),
+      options: "-c client_encoding=UTF8",
       max: options.pool?.max ?? 10,
       min: options.pool?.min ?? 0,
       idleTimeoutMillis: options.pool?.idleTimeoutMs ?? 30_000,
@@ -131,6 +137,7 @@ function buildPoolConfig(options: PostgresConnectionOptions) {
     database: options.database,
     user: options.user,
     password: options.password,
+    options: "-c client_encoding=UTF8",
     max: options.pool?.max ?? 10,
     min: options.pool?.min ?? 0,
     idleTimeoutMillis: options.pool?.idleTimeoutMs ?? 30_000,
@@ -138,6 +145,16 @@ function buildPoolConfig(options: PostgresConnectionOptions) {
     application_name: options.applicationName ?? "goatcitadel-sync-worker",
     ssl: options.sslMode === "require" ? { rejectUnauthorized: false } : undefined,
   };
+}
+
+async function getServerEncoding(): Promise<string | undefined> {
+  if (!serverEncodingPromise) {
+    serverEncodingPromise = pool
+      .query<{ server_encoding: string }>("SELECT current_setting('server_encoding') AS server_encoding")
+      .then((result) => result.rows[0]?.server_encoding)
+      .catch(() => undefined);
+  }
+  return serverEncodingPromise;
 }
 
 function serializeError(error: unknown, sql?: string) {

@@ -439,6 +439,27 @@ describe("prompt-pack helpers", () => {
       orchestrationEnabled: false,
       orchestrationParallelism: "sequential",
     });
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        resolvePromptPackExecutionProfile({
+          test: {
+            testId: "test-chat-repo-inspect",
+            packId: "pack-1",
+            code: "TEST-04A",
+            title: "Chat Repo Inspect",
+            prompt: "Inspect the repo if needed and explain the current guidance-loading chain.",
+            orderIndex: 0,
+            mode: "chat",
+            toolTier: "implicit-tools",
+            createdAt: "2026-03-14T00:00:00.000Z",
+          },
+        }),
+        "Inspect the repo if needed and explain the current guidance-loading chain.",
+      ),
+    ).toMatchObject({
+      webMode: "off",
+      memoryMode: "off",
+    });
 
     const noToolsCodeProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -809,6 +830,27 @@ describe("prompt-pack helpers", () => {
     expect(explicitToolsInput.prompt).toContain(
       "If local file paths are listed, inspect those paths before answering.",
     );
+
+    const implicitRepoChatProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-chat-repo-contract",
+        packId: "pack-1",
+        code: "TEST-CONTRACT-03B",
+        title: "Repo Chat Contract",
+        prompt: "Inspect the repo if needed and explain what is currently loaded today.",
+        orderIndex: 3,
+        mode: "chat",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    const implicitRepoChatInput = buildPromptPackPromptInput(
+      "Inspect the repo if needed and explain what is currently loaded today.",
+      implicitRepoChatProfile,
+    );
+    expect(implicitRepoChatInput.prompt).toContain("This is a repo-grounded chat evaluation.");
+    expect(implicitRepoChatInput.prompt).toContain("Repo inspection assist: enabled.");
+    expect(implicitRepoChatInput.prompt).toContain("separate Observed, Inferred, and Unverified claims");
 
     const explicitCodeProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -1820,6 +1862,28 @@ describe("prompt-pack helpers", () => {
     expect(integrity.validationStatus).toBe("invalid");
     expect(integrity.signals).toContain("mid_sequence_start");
     expect(integrity.signals).toContain("cut_off_ending");
+  });
+
+  it("does not mark normal sentence openings as fragmentary starts", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Answer directly.",
+      responseText: "The effective precedence is workspace guidance, then repo guidance, then memory.",
+      trace: createTrace("sess-integrity-normal-start"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("fragmentary_start");
+  });
+
+  it("still marks lowercase continuation starts as fragmentary", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Answer directly.",
+      responseText: "and then surface the conflict before taking action.",
+      trace: createTrace("sess-integrity-fragmentary-start"),
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.signals).toContain("fragmentary_start");
   });
 
   it("marks strict prompt-format violations invalid", () => {

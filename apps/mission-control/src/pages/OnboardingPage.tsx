@@ -19,7 +19,9 @@ import {
   requestConfigFromDraft,
 } from "../components/LlmTransportFields";
 import { PageGuideCard } from "../components/PageGuideCard";
+import { PageHeader } from "../components/PageHeader";
 import { SelectOrCustom, type SelectOption } from "../components/SelectOrCustom";
+import { StatusChip } from "../components/StatusChip";
 import { pageCopy } from "../content/copy";
 import { previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
@@ -28,6 +30,7 @@ import { OnboardingQuickstartProfilesPanel } from "./onboarding/OnboardingQuicks
 import { OnboardingReadinessPanel } from "./onboarding/OnboardingReadinessPanel";
 import { OnboardingReviewApplyPanel } from "./onboarding/OnboardingReviewApplyPanel";
 import { OnboardingStepNav } from "./onboarding/OnboardingStepNav";
+import { OnboardingWizardLayout } from "./onboarding/OnboardingWizardLayout";
 
 const TOOL_PROFILE_OPTIONS: SelectOption[] = [
   { value: "minimal", label: "minimal (safest)" },
@@ -817,48 +820,58 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   }
 
   return (
-    <section>
-      <h2>{pageCopy.onboarding.title}</h2>
-      <p className="office-subtitle">{pageCopy.onboarding.subtitle}</p>
+    <section className="workflow-page onboarding-wizard-page">
+      <PageHeader
+        eyebrow="Launch"
+        title={pageCopy.onboarding.title}
+        subtitle={pageCopy.onboarding.subtitle}
+        hint="Use the wizard to land gateway access, provider setup, runtime defaults, mesh posture, and apply in one operator flow."
+        density="compact"
+        actions={
+          <div className="workflow-summary-strip">
+            <StatusChip tone={daemonReady ? "success" : "warning"}>
+              Gateway {daemonReady ? "ready" : "needs attention"}
+            </StatusChip>
+            <StatusChip tone={state?.completed === true ? "success" : "muted"}>
+              Checklist {completedChecklistItems}/{totalChecklistItems}
+            </StatusChip>
+            <StatusChip tone="muted">Step {step + 1}/5</StatusChip>
+          </div>
+        }
+      />
       <PageGuideCard
         what={pageCopy.onboarding.guide?.what ?? ""}
         when={pageCopy.onboarding.guide?.when ?? ""}
         actions={pageCopy.onboarding.guide?.actions ?? []}
         terms={pageCopy.onboarding.guide?.terms}
       />
-      {error ? <p className="error">{error}</p> : null}
-      {applyMessage ? <p className="office-subtitle">{applyMessage}</p> : null}
+      <div className="workflow-status-stack">
+        {error ? <p className="error">{error}</p> : null}
+        {applyMessage ? <p className="office-subtitle">{applyMessage}</p> : null}
+      </div>
 
-      <OnboardingReadinessPanel
-        daemonReady={daemonReady}
-        completedChecklistItems={completedChecklistItems}
-        totalChecklistItems={totalChecklistItems}
-        wizardCompleted={state?.completed === true}
-        daemonStatus={daemonStatus}
-        daemonBusy={daemonBusy}
-        daemonControlSupported={daemonControlSupported}
-        onDaemonAction={handleDaemonAction}
-        onRefresh={async () => {
-          await load();
-        }}
-      />
-
-      <OnboardingQuickstartProfilesPanel
-        presets={QUICKSTART_PRESETS}
-        onApplyQuickstartPreset={(presetId) =>
-          applyQuickstartPreset(presetId as (typeof QUICKSTART_PRESETS)[number]["id"])
+      <OnboardingWizardLayout
+        leftRail={
+          <div className="stack-md">
+            <OnboardingStepNav
+              step={step}
+              applying={applying}
+              steps={STEP_TITLES}
+              onSelectStep={(nextStep) => setStep(nextStep as StepId)}
+              onBack={() => setStep((current) => Math.max(0, current - 1) as StepId)}
+              onNext={() => setStep((current) => Math.min(4, current + 1) as StepId)}
+            />
+            <OnboardingQuickstartProfilesPanel
+              presets={QUICKSTART_PRESETS}
+              onApplyQuickstartPreset={(presetId) =>
+                applyQuickstartPreset(presetId as (typeof QUICKSTART_PRESETS)[number]["id"])
+              }
+            />
+          </div>
         }
-      />
-
-      <OnboardingProgressPanel
-        stepTitle={STEP_TITLES[step]}
-        checklist={state?.checklist ?? []}
-        onRefresh={async () => {
-          await load();
-        }}
-      />
-
-      {step === 0 ? (
+        main={
+          <>
+            {step === 0 ? (
         <article className="card">
           <h3>Step 1: Gateway Access</h3>
           <p className="office-subtitle">
@@ -957,7 +970,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         </article>
       ) : null}
 
-      {step === 1 ? (
+            {step === 1 ? (
         <article className="card">
           <h3>Step 2: LLM Provider</h3>
           <p className="office-subtitle">
@@ -1106,7 +1119,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         </article>
       ) : null}
 
-      {step === 2 ? (
+            {step === 2 ? (
         <article className="card">
           <h3>Step 3: Runtime Defaults</h3>
           <p className="office-subtitle">
@@ -1172,7 +1185,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         </article>
       ) : null}
 
-      {step === 3 ? (
+            {step === 3 ? (
         <article className="card">
           <h3>Step 4: Mesh (Optional)</h3>
           <p className="office-subtitle">
@@ -1276,40 +1289,60 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         </article>
       ) : null}
 
-      {step === 4 ? (
-        <OnboardingReviewApplyPanel
-          changeReview={changeReview}
-          criticalConfirmed={criticalConfirmed}
-          setCriticalConfirmed={setCriticalConfirmed}
-          markComplete={markComplete}
-          setMarkComplete={setMarkComplete}
-          summary={{
-            authMode,
-            activeProviderId,
-            activeModel,
-            defaultToolProfile,
-            budgetMode,
-            networkAllowlist: parseMultiline(networkAllowlistText),
-            mesh: {
-              enabled: meshEnabled,
-              mode: meshMode,
-              nodeId: meshNodeId,
-              mdns: meshMdns,
-              staticPeers: parseMultiline(meshStaticPeers),
-              requireMtls: meshRequireMtls,
-              tailnetEnabled: meshTailnetEnabled,
-            },
-          }}
-          applying={applying}
-          onSubmit={submit}
-        />
-      ) : null}
-
-      <OnboardingStepNav
-        step={step}
-        applying={applying}
-        onBack={() => setStep((current) => Math.max(0, current - 1) as StepId)}
-        onNext={() => setStep((current) => Math.min(4, current + 1) as StepId)}
+            {step === 4 ? (
+              <OnboardingReviewApplyPanel
+                changeReview={changeReview}
+                criticalConfirmed={criticalConfirmed}
+                setCriticalConfirmed={setCriticalConfirmed}
+                markComplete={markComplete}
+                setMarkComplete={setMarkComplete}
+                summary={{
+                  authMode,
+                  activeProviderId,
+                  activeModel,
+                  defaultToolProfile,
+                  budgetMode,
+                  networkAllowlist: parseMultiline(networkAllowlistText),
+                  mesh: {
+                    enabled: meshEnabled,
+                    mode: meshMode,
+                    nodeId: meshNodeId,
+                    mdns: meshMdns,
+                    staticPeers: parseMultiline(meshStaticPeers),
+                    requireMtls: meshRequireMtls,
+                    tailnetEnabled: meshTailnetEnabled,
+                  },
+                }}
+                applying={applying}
+                onSubmit={submit}
+              />
+            ) : null}
+          </>
+        }
+        rightRail={
+          <div className="stack-md">
+            <OnboardingReadinessPanel
+              daemonReady={daemonReady}
+              completedChecklistItems={completedChecklistItems}
+              totalChecklistItems={totalChecklistItems}
+              wizardCompleted={state?.completed === true}
+              daemonStatus={daemonStatus}
+              daemonBusy={daemonBusy}
+              daemonControlSupported={daemonControlSupported}
+              onDaemonAction={handleDaemonAction}
+              onRefresh={async () => {
+                await load();
+              }}
+            />
+            <OnboardingProgressPanel
+              stepTitle={STEP_TITLES[step]}
+              checklist={state?.checklist ?? []}
+              onRefresh={async () => {
+                await load();
+              }}
+            />
+          </div>
+        }
       />
     </section>
   );

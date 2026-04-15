@@ -8,7 +8,6 @@ import {
   type RealtimeEvent,
 } from "../api/client";
 import { CardSkeleton } from "../components/CardSkeleton";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { PixelOfficeCanvas, type PixelOfficeCanvasCommand } from "../components/PixelOfficeCanvas";
@@ -251,13 +250,6 @@ export function OfficeLabPage({ onOpenImmersive }: OfficeLabPageProps) {
             <button type="button" className="gc-button office-lab-button" onClick={() => void refresh()}>Reload office</button>
           </div>
         )}
-      />
-      <PageGuideCard
-        pageId="officeLab"
-        what={pageCopy.officeLab.guide?.what ?? ""}
-        when={pageCopy.officeLab.guide?.when ?? ""}
-        actions={pageCopy.officeLab.guide?.actions ?? []}
-        terms={pageCopy.officeLab.guide?.terms}
       />
       <div className="workflow-status-stack">{error ? <p className="error">{error}</p> : null}</div>
       <div className="office-lab-layout">

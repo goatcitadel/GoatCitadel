@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   archiveAgentProfile,
   createAgentProfile,
@@ -12,14 +12,15 @@ import {
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { Panel } from "../components/Panel";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { StatusChip } from "../components/StatusChip";
-import { StatCard } from "../components/StatCard";
 import { GCSelect } from "../components/ui";
+import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { buildAgentDirectory, BUILTIN_AGENT_ROSTER } from "../data/agent-roster";
 import { useAction } from "../hooks/useAction";
 import { globalCopy, pageCopy } from "../content/copy";
@@ -79,12 +80,21 @@ export function AgentsPage() {
   const riskDebounceRef = useRef<number | null>(null);
   const riskAbortRef = useRef<AbortController | null>(null);
 
-  const selected = useMemo(
-    () => agentsResponse.items.find((agent) => agent.agentId === selectedAgentId),
-    [agentsResponse.items, selectedAgentId],
+  const filteredAgents = useMemo(
+    () =>
+      agentsResponse.items.filter((item) => {
+        if (view === "all") {
+          return true;
+        }
+        return view === "active" ? item.lifecycleStatus === "active" : item.lifecycleStatus === "archived";
+      }),
+    [agentsResponse.items, view],
   );
-
-  const directory = useMemo(() => buildAgentDirectory(agentsResponse.items), [agentsResponse.items]);
+  const directory = useMemo(() => buildAgentDirectory(filteredAgents), [filteredAgents]);
+  const selected = useMemo(
+    () => (creating ? agentsResponse.items : filteredAgents).find((agent) => agent.agentId === selectedAgentId),
+    [creating, agentsResponse.items, filteredAgents, selectedAgentId],
+  );
 
   const roleOptions = useMemo(() => {
     const dynamic = agentsResponse.items.map((agent) => ({
@@ -180,6 +190,18 @@ export function AgentsPage() {
       setCriticalConfirmed(false);
     }
   }, [creating, selected]);
+
+  useEffect(() => {
+    if (creating) {
+      return;
+    }
+    setSelectedAgentId((current) => {
+      if (current && filteredAgents.some((agent) => agent.agentId === current)) {
+        return current;
+      }
+      return filteredAgents[0]?.agentId ?? null;
+    });
+  }, [creating, filteredAgents]);
 
   useEffect(() => {
     const baseline = creating ? emptyForm() : selected ? formFromAgent(selected) : emptyForm();
@@ -363,6 +385,15 @@ export function AgentsPage() {
     }
   };
 
+  const handleDirectoryRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, agentId: string) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    setCreating(false);
+    setSelectedAgentId(agentId);
+  };
+
   return (
     <section className="workflow-page agents-v2">
       <PageHeader
@@ -395,37 +426,6 @@ export function AgentsPage() {
         {info ? <p className="office-subtitle">{info}</p> : null}
       </div>
 
-      <div className="office-kpi-grid">
-        <StatCard
-          label="Active roles"
-          value={agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length}
-          note="Ready for assignments"
-          compact
-          className="operator-summary-card"
-        />
-        <StatCard
-          label="Archived roles"
-          value={agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length}
-          note="Disabled but recoverable"
-          compact
-          className="operator-summary-card"
-        />
-        <StatCard
-          label="Built-ins"
-          value={agentsResponse.items.filter((item) => item.isBuiltin).length}
-          note="Core roster"
-          compact
-          className="operator-summary-card"
-        />
-        <StatCard
-          label="Custom"
-          value={agentsResponse.items.filter((item) => !item.isBuiltin).length}
-          note="User-defined roles"
-          compact
-          className="operator-summary-card"
-        />
-      </div>
-
       <DataToolbar
         primary={
           <>
@@ -441,6 +441,19 @@ export function AgentsPage() {
             />
           </>
         }
+        center={
+          <div className="workflow-summary-strip">
+            <StatusChip tone="live">
+              {agentsResponse.items.filter((item) => item.lifecycleStatus === "active").length} active
+            </StatusChip>
+            <StatusChip tone="muted">
+              {agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length} archived
+            </StatusChip>
+            <StatusChip tone="muted">
+              {agentsResponse.items.filter((item) => !item.isBuiltin).length} custom
+            </StatusChip>
+          </div>
+        }
         secondary={
           <>
             <button type="button" onClick={onNew} className="gc-button">
@@ -455,62 +468,62 @@ export function AgentsPage() {
         }
       />
 
-      <div className="split-grid">
-        <Panel
-          title="Role Directory"
-          subtitle="Pick an agent profile from the directory to inspect lifecycle, runtime posture, and active session load."
-        >
-          <table className="gc-data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Role ID</th>
-                <th>Lifecycle</th>
-                <th>Runtime</th>
-                <th>Sessions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {directory
-                .filter((item) => {
-                  if (view === "all") {
-                    return true;
-                  }
-                  return view === "active" ? item.lifecycleStatus === "active" : item.lifecycleStatus === "archived";
-                })
-                .map((agent) => (
-                  <tr
-                    key={agent.agentId}
-                    className={agent.agentId === selectedAgentId && !creating ? "row-selected" : ""}
-                    onClick={() => {
-                      setCreating(false);
-                      setSelectedAgentId(agent.agentId);
-                    }}
-                  >
-                    <td>{agent.name}</td>
-                    <td>
-                      {agent.roleId}
-                      {agent.isBuiltin ? <span className="token-chip">built-in</span> : null}
-                    </td>
-                    <td>{agent.lifecycleStatus}</td>
-                    <td>{agent.status}</td>
-                    <td>
-                      {agent.activeSessions}/{agent.sessionCount}
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </Panel>
-
-        <Panel
-          title={creating ? "Create Custom Agent" : selected ? `Edit ${selected.name}` : "Select an agent"}
-          subtitle={
-            creating
-              ? "Custom roles let you tailor GoatCitadel’s roster without changing built-in defaults."
-              : "Use the editor to adjust titles, summaries, specialties, and lifecycle posture."
-          }
-        >
+      <OperatorSplitLayout
+        className="agents-operator-layout"
+        primary={
+          <Panel
+            title="Role Directory"
+            subtitle="Pick an agent profile from the directory to inspect lifecycle, runtime posture, and active session load."
+          >
+            <table className="gc-data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Role ID</th>
+                  <th>Lifecycle</th>
+                  <th>Runtime</th>
+                  <th>Sessions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {directory.map((agent) => (
+                    <tr
+                      key={agent.agentId}
+                      className={agent.agentId === selectedAgentId && !creating ? "row-selected" : ""}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={agent.agentId === selectedAgentId && !creating}
+                      onClick={() => {
+                        setCreating(false);
+                        setSelectedAgentId(agent.agentId);
+                      }}
+                      onKeyDown={(event) => handleDirectoryRowKeyDown(event, agent.agentId)}
+                    >
+                      <td>{agent.name}</td>
+                      <td>
+                        {agent.roleId}
+                        {agent.isBuiltin ? <span className="token-chip">built-in</span> : null}
+                      </td>
+                      <td>{agent.lifecycleStatus}</td>
+                      <td>{agent.status}</td>
+                      <td>
+                        {agent.activeSessions}/{agent.sessionCount}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </Panel>
+        }
+        inspector={
+          <Panel
+            title={creating ? "Create Custom Agent" : selected ? `Edit ${selected.name}` : "Select an agent"}
+            subtitle={
+              creating
+                ? "Custom roles let you tailor GoatCitadel’s roster without changing built-in defaults."
+                : "Use the editor to adjust titles, summaries, specialties, and lifecycle posture."
+            }
+          >
           {creating || selected ? (
             <>
               <FieldHelp>
@@ -666,10 +679,14 @@ export function AgentsPage() {
               </div>
             </>
           ) : (
-            <p>Select a goat profile from the table or create a new custom role.</p>
+            <GCEmptyState
+              title="Select an agent"
+              subtitle="Choose a role from the directory to inspect or edit its posture."
+            />
           )}
-        </Panel>
-      </div>
+          </Panel>
+        }
+      />
       <ConfirmModal
         open={Boolean(confirmAction)}
         title={confirmAction?.type === "archive" ? "Archive Agent" : "Delete Agent Permanently"}

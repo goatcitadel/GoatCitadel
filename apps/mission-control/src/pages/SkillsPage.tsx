@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines -- Skills remains a single operator surface while capability detail, proposal, and lifecycle controls settle. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type {
   CandidateSkillDetailRecord,
   CapabilityCatalogEntry,
@@ -32,11 +32,13 @@ import {
   patchSkillActivationPolicies,
 } from "../api/client";
 import { DataToolbar } from "../components/DataToolbar";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { HelpHint } from "../components/HelpHint";
 import { GCSelect, GCSwitch } from "../components/ui";
+import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { useUiPreferences } from "../state/ui-preferences";
@@ -86,6 +88,7 @@ export function SkillsPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busySkillId, setBusySkillId] = useState<string | null>(null);
   const [savingPolicy, setSavingPolicy] = useState(false);
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [stateDraftBySkill, setStateDraftBySkill] = useState<Record<string, SkillRuntimeState>>({});
   const [noteDraftBySkill, setNoteDraftBySkill] = useState<Record<string, string>>({});
   const [stateFilter, setStateFilter] = useState<"all" | SkillRuntimeState>("all");
@@ -190,6 +193,8 @@ export function SkillsPage() {
     () => skills.filter((skill) => (stateFilter === "all" ? true : skill.state === stateFilter)),
     [skills, stateFilter],
   );
+  const selectedSkill =
+    filteredSkills.find((skill) => skill.skillId === selectedSkillId) ?? filteredSkills[0] ?? null;
   const candidateEntries = useMemo(
     () => capabilityCatalog.filter((entry) => entry.kind === "candidate_skill"),
     [capabilityCatalog],
@@ -200,6 +205,20 @@ export function SkillsPage() {
   );
   const groupedSkills = useMemo(() => groupByCategory(filteredSkills, deriveSkillCategoryLabel), [filteredSkills]);
   const groupedSourceItems = useMemo(() => groupByCategory(sourceItems, deriveSourceCategoryLabel), [sourceItems]);
+
+  useEffect(() => {
+    if (filteredSkills.length === 0) {
+      if (selectedSkillId !== null) {
+        setSelectedSkillId(null);
+      }
+      return;
+    }
+    const nextSelectedId =
+      filteredSkills.find((skill) => skill.skillId === selectedSkillId)?.skillId ?? filteredSkills[0]?.skillId ?? null;
+    if (nextSelectedId !== selectedSkillId) {
+      setSelectedSkillId(nextSelectedId);
+    }
+  }, [filteredSkills, selectedSkillId]);
 
   const onReload = useCallback(async () => {
     try {
@@ -424,6 +443,14 @@ export function SkillsPage() {
     [load, proposalDetail?.proposal.proposalId],
   );
 
+  const handleSkillRowKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, skillId: string) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    setSelectedSkillId(skillId);
+  };
+
   if (isInitialLoading) {
     return <p>Loading Playbook skills...</p>;
   }
@@ -446,6 +473,182 @@ export function SkillsPage() {
             <StatusChip tone="default">{proposalEntries.length} proposals</StatusChip>
             {isRefreshing ? <StatusChip tone="live">Refreshing</StatusChip> : null}
           </>
+        }
+      />
+      <div className="workflow-status-stack">
+        {error ? <p className="error">{error}</p> : null}
+        {status ? <p className="status-banner">{status}</p> : null}
+        {isRefreshing ? <p className="status-banner">Refreshing skills and activation policy...</p> : null}
+      </div>
+      <OperatorSplitLayout
+        className="skills-operator-layout"
+        topbar={
+          <DataToolbar
+            primary={
+              <div className="controls-row">
+                <label htmlFor="skillsFilter">Filter</label>
+                <GCSelect
+                  id="skillsFilter"
+                  value={stateFilter}
+                  onChange={(value) => setStateFilter(value as "all" | SkillRuntimeState)}
+                  options={[
+                    { value: "all", label: "all" },
+                    { value: "enabled", label: "enabled" },
+                    { value: "sleep", label: "sleep" },
+                    { value: "disabled", label: "disabled" },
+                  ]}
+                />
+              </div>
+            }
+            center={
+              <div className="workflow-summary-strip">
+                <StatusChip tone="success">{skills.filter((skill) => skill.state === "enabled").length} enabled</StatusChip>
+                <StatusChip tone="warning">{skills.filter((skill) => skill.state === "sleep").length} sleeping</StatusChip>
+                <StatusChip tone="muted">{filteredSkills.length} visible</StatusChip>
+              </div>
+            }
+            secondary={
+              <button type="button" onClick={() => void onReload()} className="gc-button">
+                Reload Playbook
+              </button>
+            }
+          />
+        }
+        primary={
+          <Panel
+            title="Skills Catalog"
+            subtitle="Review installed skills, then inspect and adjust the selected skill without losing the table."
+          >
+            <div className="stack-md">
+              {groupedSkills.length === 0 ? <p className="table-subtext">No installed skills match the current filter.</p> : null}
+              {groupedSkills.map((section) => (
+                <div key={section.category} className="stack-sm">
+                  <p>
+                    <strong>{section.category}</strong> <span className="token-chip">{section.items.length}</span>
+                  </p>
+                  <table className="gc-data-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Source</th>
+                        <th>Tools</th>
+                        <th>Requires</th>
+                        <th>State</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {section.items.map((skill) => (
+                        <tr
+                          key={skill.skillId}
+                          className={skill.skillId === selectedSkill?.skillId ? "row-selected" : ""}
+                          role="button"
+                          tabIndex={0}
+                          aria-pressed={skill.skillId === selectedSkill?.skillId}
+                          onClick={() => setSelectedSkillId(skill.skillId)}
+                          onKeyDown={(event) => handleSkillRowKeyDown(event, skill.skillId)}
+                        >
+                          <td>
+                            {skill.name}
+                            <div className="table-subtext">{skill.skillId}</div>
+                            <div className="table-subtext">{(skill.tags ?? []).join(", ") || "no tags"}</div>
+                          </td>
+                          <td>
+                            {skill.source}
+                            <div className="table-subtext">
+                              {skill.capabilityCategory ?? "project_local"} · {skill.lifecycleState ?? "approved"}
+                            </div>
+                          </td>
+                          <td>{skill.declaredTools.join(", ") || "-"}</td>
+                          <td>{skill.requires.join(", ") || "-"}</td>
+                          <td>{stateDraftBySkill[skill.skillId] ?? skill.state}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        }
+        inspector={
+          selectedSkill ? (
+            <Panel
+              title={selectedSkill.name}
+              subtitle="Adjust runtime posture and notes for the selected skill."
+              padding="compact"
+            >
+              <div className="stack-sm">
+                <div className="workflow-summary-strip">
+                  <StatusChip tone="muted">{selectedSkill.skillId}</StatusChip>
+                  <StatusChip tone="muted">{selectedSkill.source}</StatusChip>
+                  <StatusChip tone="muted">{selectedSkill.trustLabel ?? "Unlabeled"}</StatusChip>
+                </div>
+                <p className="office-subtitle">
+                  {(selectedSkill.tags ?? []).join(", ") || "No tags"}
+                  {selectedSkill.reviewWarning ? ` · ${selectedSkill.reviewWarning}` : ""}
+                </p>
+                <div className="controls-row">
+                  <label htmlFor="selectedSkillState">State</label>
+                  <GCSelect
+                    id="selectedSkillState"
+                    value={stateDraftBySkill[selectedSkill.skillId] ?? selectedSkill.state}
+                    onChange={(value) => {
+                      const nextState = value as SkillRuntimeState;
+                      setStateDraftBySkill((current) => ({
+                        ...current,
+                        [selectedSkill.skillId]: nextState,
+                      }));
+                      if (nextState === selectedSkill.state) {
+                        dirtyStateDraftSkillIdsRef.current.delete(selectedSkill.skillId);
+                      } else {
+                        dirtyStateDraftSkillIdsRef.current.add(selectedSkill.skillId);
+                      }
+                    }}
+                    options={STATE_OPTIONS.map((option) => ({ value: option, label: option }))}
+                  />
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="selectedSkillNote">Operator note</label>
+                  <input
+                    id="selectedSkillNote"
+                    value={noteDraftBySkill[selectedSkill.skillId] ?? selectedSkill.note ?? ""}
+                    placeholder="Optional reason"
+                    onChange={(event) => {
+                      const nextNote = event.target.value;
+                      setNoteDraftBySkill((current) => ({
+                        ...current,
+                        [selectedSkill.skillId]: nextNote,
+                      }));
+                      if (nextNote === (selectedSkill.note ?? "")) {
+                        dirtyNoteDraftSkillIdsRef.current.delete(selectedSkill.skillId);
+                      } else {
+                        dirtyNoteDraftSkillIdsRef.current.add(selectedSkill.skillId);
+                      }
+                    }}
+                  />
+                </div>
+                <p className="office-subtitle">Tools: {selectedSkill.declaredTools.join(", ") || "-"}</p>
+                <p className="office-subtitle">Requires: {selectedSkill.requires.join(", ") || "-"}</p>
+                <button
+                  type="button"
+                  disabled={
+                    busySkillId === selectedSkill.skillId ||
+                    ((stateDraftBySkill[selectedSkill.skillId] ?? selectedSkill.state) === selectedSkill.state &&
+                      (noteDraftBySkill[selectedSkill.skillId] ?? selectedSkill.note ?? "") === (selectedSkill.note ?? ""))
+                  }
+                  onClick={() => void onSaveSkillState(selectedSkill)}
+                  className="gc-button"
+                >
+                  {busySkillId === selectedSkill.skillId ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </Panel>
+          ) : (
+            <GCEmptyState
+              title="Select a skill"
+              subtitle="Choose a skill from the catalog to inspect its posture and notes."
+            />
+          )
         }
       />
       <Panel
@@ -483,9 +686,6 @@ export function SkillsPage() {
         subtitle="Browse curated sources first, validate before install, and keep imported skills disabled until you explicitly enable them."
         className="skills-source-panel"
       >
-        {error ? <p className="error">{error}</p> : null}
-        {status ? <p className="status-banner">{status}</p> : null}
-        {isRefreshing ? <p className="status-banner">Refreshing skills and activation policy...</p> : null}
         <DataToolbar
           primary={
             <div className="controls-row skills-source-query">
@@ -1132,143 +1332,6 @@ export function SkillsPage() {
         </div>
       </Panel>
 
-      <Panel
-        title="Skills"
-        subtitle="Review installed skills, change runtime state, and attach operator notes without leaving the page."
-      >
-        <DataToolbar
-          primary={
-            <>
-              <button type="button" onClick={() => void onReload()} className="gc-button">
-                Reload Playbook
-              </button>
-            </>
-          }
-          secondary={
-            <div className="controls-row">
-              <label htmlFor="skillsFilter">Filter</label>
-              <GCSelect
-                id="skillsFilter"
-                value={stateFilter}
-                onChange={(value) => setStateFilter(value as "all" | SkillRuntimeState)}
-                options={[
-                  { value: "all", label: "all" },
-                  { value: "enabled", label: "enabled" },
-                  { value: "sleep", label: "sleep" },
-                  { value: "disabled", label: "disabled" },
-                ]}
-              />
-            </div>
-          }
-        />
-
-        <div className="stack-md">
-          {groupedSkills.length === 0 ? (
-            <p className="table-subtext">No installed skills match the current filter.</p>
-          ) : null}
-          {groupedSkills.map((section) => (
-            <div key={section.category} className="stack-sm">
-              <p>
-                <strong>{section.category}</strong> <span className="token-chip">{section.items.length}</span>
-              </p>
-              <table className="gc-data-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Source</th>
-                    <th>Tools</th>
-                    <th>Requires</th>
-                    <th>
-                      State
-                      <HelpHint
-                        label="Skill state help"
-                        text="Enabled means the skill can activate automatically. Sleep means it only auto-activates when confidence is high enough. Disabled means it will not activate at all."
-                      />
-                    </th>
-                    <th>Note</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {section.items.map((skill) => {
-                    const draftState = stateDraftBySkill[skill.skillId] ?? skill.state;
-                    const draftNote = noteDraftBySkill[skill.skillId] ?? "";
-                    const changed = draftState !== skill.state || draftNote !== (skill.note ?? "");
-                    return (
-                      <tr key={skill.skillId}>
-                        <td>
-                          {skill.name}
-                          <div className="table-subtext">{skill.skillId}</div>
-                          <div className="table-subtext">{(skill.tags ?? []).join(", ") || "no tags"}</div>
-                        </td>
-                        <td>
-                          {skill.source}
-                          <div className="table-subtext">
-                            {skill.capabilityCategory ?? "project_local"} · {skill.lifecycleState ?? "approved"}
-                          </div>
-                          <div className="table-subtext">
-                            {skill.trustLabel ?? "Unlabeled"}
-                            {skill.callable === false ? " · inspect only" : ""}
-                          </div>
-                          {skill.reviewWarning ? <div className="table-subtext">{skill.reviewWarning}</div> : null}
-                        </td>
-                        <td>{skill.declaredTools.join(", ") || "-"}</td>
-                        <td>{skill.requires.join(", ") || "-"}</td>
-                        <td>
-                          <GCSelect
-                            value={draftState}
-                            onChange={(value) => {
-                              const nextState = value as SkillRuntimeState;
-                              setStateDraftBySkill((current) => ({
-                                ...current,
-                                [skill.skillId]: nextState,
-                              }));
-                              if (nextState === skill.state) {
-                                dirtyStateDraftSkillIdsRef.current.delete(skill.skillId);
-                              } else {
-                                dirtyStateDraftSkillIdsRef.current.add(skill.skillId);
-                              }
-                            }}
-                            options={STATE_OPTIONS.map((option) => ({ value: option, label: option }))}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            value={draftNote}
-                            placeholder="Optional reason"
-                            onChange={(event) => {
-                              const nextNote = event.target.value;
-                              setNoteDraftBySkill((current) => ({
-                                ...current,
-                                [skill.skillId]: nextNote,
-                              }));
-                              if (nextNote === (skill.note ?? "")) {
-                                dirtyNoteDraftSkillIdsRef.current.delete(skill.skillId);
-                              } else {
-                                dirtyNoteDraftSkillIdsRef.current.add(skill.skillId);
-                              }
-                            }}
-                          />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            disabled={!changed || busySkillId === skill.skillId}
-                            onClick={() => void onSaveSkillState(skill)}
-                            className="gc-button"
-                          >
-                            {busySkillId === skill.skillId ? "Saving..." : "Save"}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ))}
-        </div>
-      </Panel>
     </section>
   );
 }

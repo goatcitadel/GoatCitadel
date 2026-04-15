@@ -29,6 +29,7 @@ import {
   setDevDiagnosticsLatestTraceSummary,
 } from "../state/dev-diagnostics-store";
 import { ChatContextDockPanels } from "./chat/ChatContextDockPanels";
+import { ChatSurfaceLayout } from "./chat/ChatSurfaceLayout";
 import { ChatSessionSidebar } from "./chat/ChatSessionSidebar";
 import { MissionControlActiveSessionSurface } from "./chat/MissionControlActiveSessionSurface";
 import { MissionControlEmptyState } from "./chat/MissionControlEmptyState";
@@ -1226,6 +1227,7 @@ function renderWorkSurface(input: {
     primaryColumn: input.primaryColumn,
     contextDock: input.contextDock,
     dockOpen: input.selectedSession ? input.dockOpen : false,
+    hasActiveSession: Boolean(input.selectedSession),
   };
 
   if (input.selectedSession && input.isCoworkSurface) {
@@ -1271,6 +1273,20 @@ function renderWorkSurface(input: {
           onRefresh: () => void input.refreshWorkbench(),
           onRunHelperSnippet: (language, source) => void input.handleRunCodeHelper(language, source),
         }}
+      />
+    );
+  }
+
+  if (input.isCoworkSurface || input.isCodeSurface) {
+    return (
+      <ChatSurfaceLayout
+        mode={input.messageMode}
+        sessionRail={input.sessionRail}
+        primaryColumn={null}
+        workflowColumn={input.primaryColumn}
+        contextDock={input.contextDock}
+        dockOpen={false}
+        hasActiveSession={false}
       />
     );
   }

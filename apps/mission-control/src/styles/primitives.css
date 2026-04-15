@@ -340,6 +340,117 @@
   color: var(--accent-success);
 }
 
+.operator-split-layout {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+  min-width: 0;
+}
+
+.operator-split-topbar {
+  min-width: 0;
+}
+
+.operator-split-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
+  gap: calc(var(--space-3) * var(--density-scale));
+  align-items: start;
+  min-width: 0;
+}
+
+.operator-split-primary,
+.operator-split-inspector {
+  min-width: 0;
+}
+
+.operator-split-inspector-sticky {
+  position: sticky;
+  top: calc(84px + calc(var(--space-2) * var(--density-scale)));
+}
+
+.onboarding-wizard-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.78fr) minmax(0, 1.5fr) minmax(260px, 0.92fr);
+  gap: calc(var(--space-3) * var(--density-scale));
+  align-items: start;
+}
+
+.onboarding-wizard-rail {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+  min-width: 0;
+}
+
+.onboarding-wizard-main {
+  min-width: 0;
+}
+
+.onboarding-wizard-rail-left,
+.onboarding-wizard-rail-right {
+  position: sticky;
+  top: calc(84px + calc(var(--space-2) * var(--density-scale)));
+}
+
+.stack-list {
+  display: grid;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.stack-card {
+  display: grid;
+  gap: calc(var(--space-2) * var(--density-scale));
+  padding: calc(var(--space-3) * var(--density-scale));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-1);
+}
+
+.stack-card-selectable {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.stack-card-selectable:hover,
+.stack-card-selectable.active {
+  border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-default));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
+
+.stack-card-header,
+.stack-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space-2) * var(--density-scale));
+  align-items: start;
+  justify-content: space-between;
+}
+
+@media (max-width: 1279px) {
+  .operator-split-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .operator-split-inspector-sticky {
+    position: static;
+  }
+
+  .onboarding-wizard-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onboarding-wizard-rail-left,
+  .onboarding-wizard-rail-right {
+    position: static;
+  }
+}
+
 .memory-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

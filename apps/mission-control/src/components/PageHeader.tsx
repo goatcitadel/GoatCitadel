@@ -8,6 +8,7 @@ interface PageHeaderProps {
   hint?: ReactNode;
   actions?: ReactNode;
   className?: string;
+  variant?: "hero" | "section";
   density?: "standard" | "compact";
   forceVisible?: boolean;
 }
@@ -19,6 +20,7 @@ export function PageHeader({
   hint,
   actions,
   className,
+  variant = "section",
   density = "compact",
   forceVisible = false,
 }: PageHeaderProps) {
@@ -32,7 +34,7 @@ export function PageHeader({
       className={className}
       density={density}
       hideWhenEmbedded={!forceVisible}
-      variant="hero"
+      variant={variant}
     />
   );
 }

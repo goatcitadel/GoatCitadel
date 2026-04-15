@@ -255,7 +255,11 @@ describe("OnboardingPage refresh discipline", () => {
       const flattened = JSON.stringify(text);
       expect(flattened).not.toContain("Loading Launch Wizard");
       expect(flattened).toContain("Launch Readiness");
+      expect(flattened).toContain("Setup Steps");
+      expect(flattened).toContain("Gateway Access");
       expect(flattened).toContain("Daemon status is unavailable right now.");
+      const quickstartDetails = renderer.root.findAll((node) => node.type === "details")[0];
+      expect(quickstartDetails?.props.open).toBeUndefined();
     } finally {
       renderer.unmount();
     }

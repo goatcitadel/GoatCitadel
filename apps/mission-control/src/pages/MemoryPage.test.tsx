@@ -81,6 +81,17 @@ vi.mock("../components/PageGuideCard", () => ({
     </section>
   ),
 }));
+vi.mock("../components/OperatorSplitLayout", () => ({
+  OperatorSplitLayout: ({
+    primary,
+    inspector,
+    emptyInspector,
+  }: {
+    primary?: React.ReactNode;
+    inspector?: React.ReactNode;
+    emptyInspector?: React.ReactNode;
+  }) => <div>{primary}{inspector ?? emptyInspector}</div>,
+}));
 vi.mock("../components/Panel", () => ({
   Panel: ({ title, subtitle, actions, children, className }: {
     title?: React.ReactNode;
@@ -107,6 +118,15 @@ vi.mock("../components/HelpHint", () => ({
 }));
 vi.mock("../components/StatusChip", () => ({
   StatusChip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+}));
+vi.mock("../components/StatCard", () => ({
+  StatCard: ({ label, value, note }: { label?: React.ReactNode; value?: React.ReactNode; note?: React.ReactNode }) => (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {note}
+    </div>
+  ),
 }));
 vi.mock("../components/SelectOrCustom", () => ({
   SelectOrCustom: ({ value, customLabel }: { value?: string; customLabel?: string }) => <div>{customLabel}{value}</div>,

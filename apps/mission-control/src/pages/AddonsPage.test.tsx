@@ -25,6 +25,63 @@ vi.mock("../api/client", () => ({
   uninstallAddon: apiMocks.uninstallAddon,
   isApiRequestError: (error: unknown) => Boolean(error && typeof error === "object" && "__apiRequestError" in error),
 }));
+vi.mock("../components/PageHeader", () => ({
+  PageHeader: ({ title, subtitle, actions }: { title?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode }) => (
+    <header>
+      <h1>{title}</h1>
+      <p>{subtitle}</p>
+      {actions}
+    </header>
+  ),
+}));
+vi.mock("../components/PageGuideCard", () => ({
+  PageGuideCard: ({ what, when }: { what?: string; when?: string }) => (
+    <section>
+      <div>{what}</div>
+      <div>{when}</div>
+    </section>
+  ),
+}));
+vi.mock("../components/ActionButton", () => ({
+  ActionButton: ({ label, onClick, disabled }: { label: string; onClick?: () => void; disabled?: boolean }) => (
+    <button type="button" disabled={disabled} onClick={onClick}>{label}</button>
+  ),
+}));
+vi.mock("../components/ConfirmModal", () => ({
+  ConfirmModal: ({ open, title, message }: { open?: boolean; title?: string; message?: string }) => (
+    open ? <div>{title}{message}</div> : null
+  ),
+}));
+vi.mock("../components/HelpHint", () => ({
+  HelpHint: ({ label, text }: { label?: string; text?: string }) => <span>{label}{text}</span>,
+}));
+vi.mock("../components/StatusChip", () => ({
+  StatusChip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+}));
+vi.mock("../components/OperatorSplitLayout", () => ({
+  OperatorSplitLayout: ({
+    primary,
+    inspector,
+    emptyInspector,
+  }: {
+    primary?: React.ReactNode;
+    inspector?: React.ReactNode;
+    emptyInspector?: React.ReactNode;
+  }) => <div>{primary}{inspector ?? emptyInspector}</div>,
+}));
+vi.mock("../components/ui/GCEmptyState", () => ({
+  GCEmptyState: ({
+    title,
+    subtitle,
+    action,
+    meta,
+  }: {
+    title?: React.ReactNode;
+    subtitle?: React.ReactNode;
+    action?: React.ReactNode;
+    meta?: React.ReactNode;
+  }) => <div>{title}{subtitle}{action}{meta}</div>,
+}));
 
 import { AddonsPage } from "./AddonsPage";
 

@@ -81,6 +81,10 @@ export interface SettingsPageProps {
   focusSectionId?: SettingsSectionId;
 }
 
+export function shouldRenderSettingsPageChrome(activeTab?: SettingsTab): boolean {
+  return !activeTab;
+}
+
 export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = {}) {
   const [settings, setSettings] = useState<NormalizedRuntimeSettingsResponse | null>(null);
   const [deploymentProfile, setDeploymentProfile] = useState<"local_dev" | "trusted_local" | "remote_hardened">(
@@ -205,6 +209,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const visibleSectionIds = useMemo(() => {
     return activeTab ? new Set(resolveSettingsTabSections(activeTab)) : null;
   }, [activeTab]);
+  const showPageChrome = shouldRenderSettingsPageChrome(activeTab);
   const showSectionRail = !activeTab;
   const shouldRenderSection = (sectionId: SettingsSectionId) => !visibleSectionIds || visibleSectionIds.has(sectionId);
   const {
@@ -863,31 +868,37 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
 
   return (
     <section>
-      <PageHeader
-        eyebrow="Configuration"
-        title={pageCopy.settings.title}
-        subtitle={pageCopy.settings.subtitle}
-        hint="Tune providers, access, and runtime defaults without leaving Mission Control."
-        className="page-header-command settings-header"
-        density="compact"
-      />
-      <PageGuideCard
-        pageId="settings"
-        what={pageCopy.settings.guide?.what ?? ""}
-        when={pageCopy.settings.guide?.when ?? ""}
-        actions={pageCopy.settings.guide?.actions ?? []}
-        terms={pageCopy.settings.guide?.terms}
-        defaultExpanded={false}
-      />
+      {showPageChrome ? (
+        <>
+          <PageHeader
+            eyebrow="Configuration"
+            title={pageCopy.settings.title}
+            subtitle={pageCopy.settings.subtitle}
+            hint="Tune providers, access, and runtime defaults without leaving Mission Control."
+            className="page-header-command settings-header"
+            density="compact"
+          />
+          <PageGuideCard
+            pageId="settings"
+            what={pageCopy.settings.guide?.what ?? ""}
+            when={pageCopy.settings.guide?.when ?? ""}
+            actions={pageCopy.settings.guide?.actions ?? []}
+            terms={pageCopy.settings.guide?.terms}
+            defaultExpanded={false}
+          />
+        </>
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
-      <ChangeReviewPanel
-        title="Pending Configuration Risk"
-        overall={changeReview.overall}
-        items={changeReview.items}
-        requireCriticalConfirm
-        criticalConfirmed={criticalConfirmed}
-        onCriticalConfirmChange={setCriticalConfirmed}
-      />
+      {showPageChrome || changeReview.items.length > 0 || changeReview.overall === "critical" ? (
+        <ChangeReviewPanel
+          title="Pending Configuration Risk"
+          overall={changeReview.overall}
+          items={changeReview.items}
+          requireCriticalConfirm
+          criticalConfirmed={criticalConfirmed}
+          onCriticalConfirmChange={setCriticalConfirmed}
+        />
+      ) : null}
 
       <div className={`settings-v2-layout${showSectionRail ? "" : " settings-v2-layout-single"}`}>
         {showSectionRail ? (

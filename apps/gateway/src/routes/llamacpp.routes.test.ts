@@ -14,7 +14,7 @@ describe("llama.cpp runtime routes", () => {
   });
 
   it("returns runtime status and forwards advisor requests", async () => {
-    const getLlamaCppStatus = vi.fn(() => ({
+    const refreshLlamaCppRuntime = vi.fn(async () => ({
       enabled: true,
       desiredState: "running",
       processState: "running",
@@ -95,7 +95,7 @@ describe("llama.cpp runtime routes", () => {
 
     app = Fastify();
     app.decorate("gateway", {
-      getLlamaCppStatus,
+      refreshLlamaCppRuntime,
       adviseLlamaCppRuntime,
       detectLlamaCppInstall,
       startLlamaCppHuggingFaceDownload,
@@ -113,6 +113,7 @@ describe("llama.cpp runtime routes", () => {
       healthy: true,
       activeModelId: "gemma-4-local",
     });
+    expect(refreshLlamaCppRuntime).toHaveBeenCalledTimes(1);
 
     const advisorResponse = await app.inject({
       method: "POST",

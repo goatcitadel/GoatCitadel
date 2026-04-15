@@ -93,12 +93,12 @@ export function PageGuideCard(props: PageGuideCardProps) {
           </p>
         </div>
       </header>
-      <p className="field-help page-guide-mode-note">
-        {mode === "simple"
-          ? "Guidance lives in the detail panel so the working surface stays clear."
-          : "Advanced mode keeps rationale off-canvas until you ask for it."}
-      </p>
-      {!compact ? (
+      {mode === "simple" ? (
+        <p className="field-help page-guide-mode-note">
+          Guidance stays in the detail panel so the workspace can lead.
+        </p>
+      ) : null}
+      {!compact && mode === "simple" ? (
         <div className="page-guide-inline-summary">
           <p className="page-guide-detail">
             <strong>{globalCopy.guideCard.when}:</strong> {props.when}

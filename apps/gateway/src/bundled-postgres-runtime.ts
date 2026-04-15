@@ -77,6 +77,8 @@ async function tryStartNativeBundledPostgres(
       "postgres",
       "-A",
       "trust",
+      "--encoding",
+      "UTF8",
     ], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],

@@ -51,6 +51,26 @@ describe("ChatSurfaceLayout", () => {
     expect(markup).not.toContain("Context dock");
   });
 
+  it("hides the support lane and keeps the dock closed when cowork is idle", () => {
+    const markup = renderToStaticMarkup(
+      <ChatSurfaceLayout
+        mode="cowork"
+        dockOpen
+        hasActiveSession={false}
+        sessionRail={<div>Session rail</div>}
+        workflowColumn={<div>Workflow column</div>}
+        primaryColumn={<div>Primary column</div>}
+        contextDock={<div>Context dock</div>}
+      />,
+    );
+
+    expect(markup).toContain('data-session-state="idle"');
+    expect(markup).toContain('data-idle-min-height="compact-workflow"');
+    expect(markup).toContain("Workflow column");
+    expect(markup).not.toContain("Primary column");
+    expect(markup).not.toContain("Context dock");
+  });
+
   it("keeps the code workbench dominant with the support lane on the right on desktop", () => {
     const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
 
@@ -62,8 +82,8 @@ describe("ChatSurfaceLayout", () => {
     const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
 
     expect(css).toContain("@media (max-width: 1440px)");
-    expect(css).toContain('"secondary"\n      "primary"\n      "dock";');
+    expect(css).toMatch(/grid-template-areas:\s*"secondary"\s*"primary"\s*"dock";/);
     expect(css).toContain("@media (max-width: 1200px)");
-    expect(css).toContain('grid-template-areas:\n      "secondary"\n      "dock";');
+    expect(css).toMatch(/grid-template-areas:\s*"secondary"\s*"dock";/);
   });
 });

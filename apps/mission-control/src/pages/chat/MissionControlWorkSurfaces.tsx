@@ -7,8 +7,10 @@ interface BaseWorkSurfaceProps {
   mode: ChatMode;
   sessionRail: React.ReactNode;
   primaryColumn: React.ReactNode;
+  workflowColumn?: React.ReactNode;
   contextDock: React.ReactNode;
   dockOpen: boolean;
+  hasActiveSession?: boolean;
 }
 
 export function ChatWorkSurface(props: BaseWorkSurfaceProps) {
@@ -17,8 +19,10 @@ export function ChatWorkSurface(props: BaseWorkSurfaceProps) {
       mode={props.mode}
       sessionRail={props.sessionRail}
       primaryColumn={props.primaryColumn}
+      workflowColumn={props.workflowColumn}
       contextDock={props.contextDock}
       dockOpen={props.dockOpen}
+      hasActiveSession={props.hasActiveSession}
     />
   );
 }
@@ -33,9 +37,10 @@ export function CoworkWorkSurface(
       mode={props.mode}
       sessionRail={props.sessionRail}
       primaryColumn={props.primaryColumn}
-      workflowColumn={<CoworkCanvasPanel {...props.coworkPanel} />}
+      workflowColumn={props.workflowColumn ?? <CoworkCanvasPanel {...props.coworkPanel} />}
       contextDock={props.contextDock}
       dockOpen={props.dockOpen}
+      hasActiveSession={props.hasActiveSession}
     />
   );
 }
@@ -50,9 +55,10 @@ export function CodeWorkSurface(
       mode={props.mode}
       sessionRail={props.sessionRail}
       primaryColumn={props.primaryColumn}
-      workflowColumn={<CodeWorkbenchPanel {...props.codePanel} />}
+      workflowColumn={props.workflowColumn ?? <CodeWorkbenchPanel {...props.codePanel} />}
       contextDock={props.contextDock}
       dockOpen={props.dockOpen}
+      hasActiveSession={props.hasActiveSession}
     />
   );
 }

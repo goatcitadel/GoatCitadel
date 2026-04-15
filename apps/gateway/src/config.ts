@@ -195,6 +195,7 @@ export interface LlamaCppConfig {
     };
   };
   launch: {
+    modelsRootPath?: string;
     modelPath?: string;
     alias: string;
     ctxSize?: number;
@@ -445,6 +446,11 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   const llamaCppModelPath = process.env.GOATCITADEL_LLAMACPP_MODEL_PATH;
   if (llamaCppModelPath?.trim()) {
     assistant.llamaCpp.launch.modelPath = llamaCppModelPath.trim();
+  }
+
+  const llamaCppModelsRoot = process.env.GOATCITADEL_LLAMACPP_MODELS_ROOT;
+  if (llamaCppModelsRoot?.trim()) {
+    assistant.llamaCpp.launch.modelsRootPath = llamaCppModelsRoot.trim();
   }
 
   const memoryEnabled = process.env.GOATCITADEL_MEMORY_ENABLED;
@@ -860,6 +866,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
         },
       },
       launch: {
+        modelsRootPath: llamaCppLaunch.modelsRootPath,
         modelPath: llamaCppLaunch.modelPath,
         alias: llamaCppLaunch.alias ?? DEFAULT_LLAMACPP_ALIAS,
         ctxSize: clampOptionalInt(llamaCppLaunch.ctxSize, 40_960, 256, 262_144),

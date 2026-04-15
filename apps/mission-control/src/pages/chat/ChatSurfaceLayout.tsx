@@ -9,6 +9,7 @@ export function ChatSurfaceLayout({
   workflowColumn,
   contextDock,
   dockOpen,
+  hasActiveSession = true,
 }: {
   mode: ChatMode;
   sessionRail: ReactNode;
@@ -16,11 +17,16 @@ export function ChatSurfaceLayout({
   workflowColumn?: ReactNode;
   contextDock: ReactNode;
   dockOpen: boolean;
+  hasActiveSession?: boolean;
 }) {
   const layout = getMissionControlSurfaceConfig(mode).layout;
   const workflowIsPrimary = layout.workflowPlacement === "primary" && workflowColumn;
   const artifactColumn = workflowIsPrimary ? workflowColumn : primaryColumn;
-  const supportThreadColumn = layout.threadPlacement === "support" ? primaryColumn : null;
+  const supportThreadColumn =
+    layout.threadPlacement === "support" && (hasActiveSession || layout.idleSupportVisibility === "visible")
+      ? primaryColumn
+      : null;
+  const effectiveDockOpen = hasActiveSession ? dockOpen : layout.idleDockOpen;
 
   return (
     <div
@@ -31,12 +37,14 @@ export function ChatSurfaceLayout({
       data-support-thread-behavior={layout.supportThreadBehavior}
       data-dock-behavior={layout.dockBehavior}
       data-desktop-density={layout.desktopDensity}
+      data-session-state={hasActiveSession ? "active" : "idle"}
+      data-idle-min-height={layout.idleMinHeight}
     >
       <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
       <div className="chat-v11-main">
         <div className={`chat-v11-conversation-shell surface-${mode}`}>
           <div
-            className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${dockOpen ? " with-dock-open" : " with-dock-collapsed"}`}
+            className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"}`}
           >
             <div
               className={`chat-v11-artifact-column ${workflowIsPrimary ? `chat-v11-secondary-column chat-v11-secondary-column-${mode} ${layout.workflowColumnClassName ?? ""}` : `chat-v11-primary-column ${layout.primaryColumnClassName}`}`.trim()}
@@ -52,7 +60,7 @@ export function ChatSurfaceLayout({
                 {supportThreadColumn}
               </div>
             ) : null}
-            {dockOpen ? (
+            {effectiveDockOpen ? (
               <div className={`chat-v11-dock-column ${layout.dockClassName}`} data-surface-slot="dock">
                 {contextDock}
               </div>

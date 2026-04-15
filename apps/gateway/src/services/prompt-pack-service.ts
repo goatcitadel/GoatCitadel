@@ -171,6 +171,8 @@ interface PromptPackJudgeEvaluationV2 {
   fallbackUsed: boolean;
   repairedSchema: boolean;
   judgeStatus: PromptPackJudgeStatusV2;
+  judgeProviderId?: string;
+  judgeModel?: string;
 }
 
 // ── callbacks / deps the service cannot own directly ─────────────────
@@ -1502,15 +1504,9 @@ export class PromptPackService {
     attemptCount: number;
     fallbackUsed: boolean;
     repairedSchema: boolean;
+    judgeProviderId?: string;
+    judgeModel?: string;
   }> {
-    if (!input.run.responseText?.trim()) {
-      return {
-        error: "No assistant output available for model judging.",
-        attemptCount: 0,
-        fallbackUsed: false,
-        repairedSchema: false,
-      };
-    }
     const defaults = this.deps.getPromptJudgeModelDefaults();
     const judgeTarget = resolvePromptPackJudgeTarget({
       inputProviderId: input.providerId,
@@ -1522,6 +1518,16 @@ export class PromptPackService {
     });
     const providerId = judgeTarget.providerId;
     const model = judgeTarget.model;
+    if (!input.run.responseText?.trim()) {
+      return {
+        error: "No assistant output available for model judging.",
+        attemptCount: 0,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeProviderId: providerId,
+        judgeModel: model,
+      };
+    }
     const useJsonResponseFormat = shouldUsePromptPackJudgeJsonMode(providerId, model);
 
     const trace = input.run.trace;
@@ -1721,6 +1727,8 @@ export class PromptPackService {
         attemptCount,
         fallbackUsed,
         repairedSchema,
+        judgeProviderId: providerId,
+        judgeModel: model,
       };
     } catch (error) {
       return {
@@ -1728,6 +1736,8 @@ export class PromptPackService {
         attemptCount,
         fallbackUsed,
         repairedSchema,
+        judgeProviderId: providerId,
+        judgeModel: model,
       };
     }
   }
@@ -2058,6 +2068,9 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
       lines.push(`- Effective verdict: \`${assessment?.effectiveVerdict ?? score.autoVerdict}\``);
       lines.push(`- Score state: \`${assessment?.scoreState ?? score.scoreState}\``);
       lines.push(`- Judge status: \`${score.judgeStatus}\``);
+      if (score.judgeProviderId || score.judgeModel) {
+        lines.push(`- Judge target: \`${score.judgeProviderId ?? "-"} / ${score.judgeModel ?? "-"}\``);
+      }
       lines.push(`- Protocol: ${score.protocol.protocolPass ? "pass" : "fail"}`);
       if (score.hardFailReasons.length > 0) {
         lines.push(`- Hard-fail reasons: ${score.hardFailReasons.join(", ")}`);
@@ -2801,7 +2814,7 @@ function looksLikePromptPackFragmentaryStart(responseText: string): boolean {
   if (/^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|```|\||\{|\[|>)/.test(firstLine)) {
     return false;
   }
-  return /^(?:and|or|but|so|because|then|are|is|was|were|the|a|an|to|of|for|with|from|if|when|while)\b/i.test(
+  return /^(?:and|or|but|so|because|then|are|is|was|were|the|a|an|to|of|for|with|from|if|when|while)\b/.test(
     firstLine,
   );
 }
@@ -3161,23 +3174,28 @@ export function buildPromptPackSessionPrefsOverride(
   prompt = "",
 ): ChatSessionPrefsPatch {
   const directives = detectPromptPackToolDirectives(prompt);
+  const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
   void shouldDisablePromptPackModeOrchestration(profile, prompt);
   const webMode =
-    profile.toolTier === "explicit-tools" &&
-    (directives.namedTools.length > 0 ||
-      directives.prefersFileTools ||
-      directives.prefersWebTools ||
-      directives.prefersMemoryTools) &&
-    !directives.prefersWebTools
+    repoGroundedChatAssist
+      ? "off"
+      : profile.toolTier === "explicit-tools" &&
+          (directives.namedTools.length > 0 ||
+            directives.prefersFileTools ||
+            directives.prefersWebTools ||
+            directives.prefersMemoryTools) &&
+          !directives.prefersWebTools
       ? "off"
       : profile.webMode;
   const memoryMode =
-    profile.toolTier === "explicit-tools" &&
-    (directives.namedTools.length > 0 ||
-      directives.prefersFileTools ||
-      directives.prefersWebTools ||
-      directives.prefersMemoryTools) &&
-    !directives.prefersMemoryTools
+    repoGroundedChatAssist
+      ? "off"
+      : profile.toolTier === "explicit-tools" &&
+          (directives.namedTools.length > 0 ||
+            directives.prefersFileTools ||
+            directives.prefersWebTools ||
+            directives.prefersMemoryTools) &&
+          !directives.prefersMemoryTools
       ? "off"
       : profile.memoryMode;
 
@@ -3431,7 +3449,8 @@ export function buildPromptPackPromptInput(
   const perspectiveLabels = extractPromptPackPerspectiveLabels(prompt);
   const controllerOwnedDelivery = promptRequiresControllerOwnedDelivery(prompt);
   const pathHints = extractPromptPackPathHints(prompt);
-  const shouldWrapPrompt = profile.mode !== "chat" || profile.toolTier === "explicit-tools";
+  const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
+  const shouldWrapPrompt = profile.mode !== "chat" || profile.toolTier === "explicit-tools" || repoGroundedChatAssist;
   if (!shouldWrapPrompt) {
     return { prompt, directives };
   }
@@ -3536,6 +3555,17 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- If exact line numbers are requested, provide them only when tool output directly supports them.",
     );
+  }
+
+  if (repoGroundedChatAssist) {
+    harnessLines.push(
+      "- This is a repo-grounded chat evaluation. Inspect the repository before answering whenever current repo state matters.",
+    );
+    harnessLines.push("- Prefer one or two targeted file/code searches or range reads over broad summaries from memory.");
+    harnessLines.push("- Name the exact file paths or tool outputs behind any repo-grounded claim.");
+    harnessLines.push("- If inspection stays incomplete, separate Observed, Inferred, and Unverified claims instead of blending them.");
+    harnessLines.push("- Do not invent hidden files, hidden state, or precedence rules that were not observed.");
+    harnessLines.push("- Repo inspection assist: enabled.");
   }
 
   if (profile.toolTier === "explicit-tools") {
@@ -4216,6 +4246,8 @@ function mergePromptPackAutoScoresV2(input: {
     degradedReasons: [...degradedReasons],
     mergeProvenance,
     judgeStatus,
+    judgeProviderId: input.judgeEvaluation.judgeProviderId,
+    judgeModel: input.judgeEvaluation.judgeModel,
     notes: [
       `Resolved profile: mode=${input.profile.mode}, toolTier=${input.profile.toolTier}, execution=${formatPromptPackExecutionProfile(input.profile)}.`,
       input.judgeEvaluation.rationale ? `Judge rationale: ${input.judgeEvaluation.rationale}` : undefined,
@@ -4620,6 +4652,25 @@ export function resolvePromptPackJudgeTarget(input: {
     providerId: input.defaultProviderId ?? input.runProviderId,
     model: input.defaultModel ?? input.runModel,
   };
+}
+
+function shouldApplyPromptPackRepoGroundedChatAssist(
+  prompt: string,
+  profile: Pick<PromptPackExecutionProfile, "mode" | "toolTier">,
+): boolean {
+  if (profile.mode !== "chat" || profile.toolTier !== "implicit-tools") {
+    return false;
+  }
+  const normalized = prompt.toLowerCase();
+  return (
+    /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
+    /\buse (?:file|code|file\/code) tools\b/.test(normalized) ||
+    /\bcite the exact files?\b/.test(normalized) ||
+    /\bexact evidence\b/.test(normalized) ||
+    /\bguidance-loading chain\b/.test(normalized) ||
+    /\bcurrent implementation\b/.test(normalized) ||
+    (/\bcurrent\b/.test(normalized) && /\b(repo|repository|workspace|codebase)\b/.test(normalized))
+  );
 }
 
 function shouldPreferPromptPackJudgeDefaults(providerId?: string, model?: string): boolean {

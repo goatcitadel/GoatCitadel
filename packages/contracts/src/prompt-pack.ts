@@ -162,6 +162,8 @@ export interface PromptPackScoreRecordV2 {
   degradedReasons: PromptPackReasonCode[];
   mergeProvenance: Partial<Record<PromptPackScoreDimensionV2, PromptPackMergeProvenanceEntryV2>>;
   judgeStatus: PromptPackJudgeStatusV2;
+  judgeProviderId?: string;
+  judgeModel?: string;
   notes?: string;
   createdAt: string;
 }

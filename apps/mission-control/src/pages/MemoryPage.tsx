@@ -23,6 +23,7 @@ import {
 } from "../api/client";
 import { ActionButton } from "../components/ActionButton";
 import { DataToolbar } from "../components/DataToolbar";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -738,60 +739,64 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         }
       />
 
-      <div className="split-grid memory-workspace-grid">
-        <Panel title="Workspace Areas" subtitle="Largest top-level file areas in this workspace.">
-          <ul className="compact-list workspace-area-list">
-            {areas.map((area) => (
-              <li key={area.area}>
-                <button
-                  type="button"
-                  className={["gc-button", selectedArea === area.area ? "active" : ""].filter(Boolean).join(" ")}
-                  onClick={() => setSelectedArea(area.area)}
-                >
-                  <strong>{area.area}</strong>
-                  <span>{area.files.length} files</span>
-                  <span>{formatBytes(area.totalBytes)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-
-        <Panel
-          title={`Files ${selectedArea !== "all" ? `(${selectedArea})` : "(all areas)"}`}
-          subtitle="Preview the indexed file inventory before drilling into memory-specific areas."
-        >
-          {isInitialLoading ? <p>Loading memory workspace...</p> : null}
-          {isRefreshing ? <p className="status-banner">Refreshing memory workspace...</p> : null}
-          {isFallbackRefreshing ? (
-            <p className="status-banner warning">Live updates degraded, checking periodically.</p>
-          ) : null}
-          {error ? <p className="error">{error}</p> : null}
-          <table className="gc-data-table">
-            <thead>
-              <tr>
-                <th>Path</th>
-                <th>Area</th>
-                <th>Size</th>
-                <th>Modified</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.slice(0, 300).map((file) => (
-                <tr key={file.relativePath}>
-                  <td>{file.relativePath}</td>
-                  <td>{topLevelArea(file.relativePath)}</td>
-                  <td>{formatBytes(file.size)}</td>
-                  <td>{new Date(file.modifiedAt).toLocaleString()}</td>
-                </tr>
+      <OperatorSplitLayout
+        className="memory-operator-layout"
+        primary={
+          <Panel title="Workspace Areas" subtitle="Largest top-level file areas in this workspace.">
+            <ul className="compact-list workspace-area-list">
+              {areas.map((area) => (
+                <li key={area.area}>
+                  <button
+                    type="button"
+                    className={["gc-button", selectedArea === area.area ? "active" : ""].filter(Boolean).join(" ")}
+                    onClick={() => setSelectedArea(area.area)}
+                  >
+                    <strong>{area.area}</strong>
+                    <span>{area.files.length} files</span>
+                    <span>{formatBytes(area.totalBytes)}</span>
+                  </button>
+                </li>
               ))}
-            </tbody>
-          </table>
-          {filtered.length > 300 ? (
-            <p className="office-subtitle">Showing first 300 rows of {filtered.length} matching files.</p>
-          ) : null}
-        </Panel>
-      </div>
+            </ul>
+          </Panel>
+        }
+        inspector={
+          <Panel
+            title={`Files ${selectedArea !== "all" ? `(${selectedArea})` : "(all areas)"}`}
+            subtitle="Preview the indexed file inventory before drilling into memory-specific areas."
+          >
+            {isInitialLoading ? <p>Loading memory workspace...</p> : null}
+            {isRefreshing ? <p className="status-banner">Refreshing memory workspace...</p> : null}
+            {isFallbackRefreshing ? (
+              <p className="status-banner warning">Live updates degraded, checking periodically.</p>
+            ) : null}
+            {error ? <p className="error">{error}</p> : null}
+            <table className="gc-data-table">
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Area</th>
+                  <th>Size</th>
+                  <th>Modified</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.slice(0, 300).map((file) => (
+                  <tr key={file.relativePath}>
+                    <td>{file.relativePath}</td>
+                    <td>{topLevelArea(file.relativePath)}</td>
+                    <td>{formatBytes(file.size)}</td>
+                    <td>{new Date(file.modifiedAt).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filtered.length > 300 ? (
+              <p className="office-subtitle">Showing first 300 rows of {filtered.length} matching files.</p>
+            ) : null}
+          </Panel>
+        }
+      />
 
       <Panel
         title="Workspace Filters"

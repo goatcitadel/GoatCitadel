@@ -180,22 +180,22 @@
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed {
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
+  grid-template-columns: minmax(0, 1.85fr) minmax(320px, 0.95fr);
   grid-template-areas: "secondary primary";
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-open {
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px) clamp(264px, 15vw, 336px);
+  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.92fr) clamp(320px, 18vw, 360px);
   grid-template-areas: "secondary primary dock";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px);
+  grid-template-columns: minmax(0, 1.85fr) minmax(320px, 0.95fr);
   grid-template-areas: "secondary primary";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-open {
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 380px) clamp(264px, 15vw, 336px);
+  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.92fr) clamp(320px, 18vw, 360px);
   grid-template-areas: "secondary primary dock";
 }
 
@@ -578,6 +578,14 @@
   padding: clamp(24px, 4vw, 48px);
   text-align: left;
   border-radius: 24px;
+}
+
+.chat-v11-shell[data-idle-min-height="compact-workbench"] .mission-empty-shell {
+  min-height: min(48vh, 440px);
+}
+
+.chat-v11-shell[data-idle-min-height="compact-workflow"] .mission-empty-shell {
+  min-height: min(44vh, 400px);
 }
 
 .mission-empty-shell-copy {

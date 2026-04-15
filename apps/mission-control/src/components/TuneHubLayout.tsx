@@ -19,6 +19,7 @@ interface TuneHubLayoutProps<TTab extends string> {
   subtitle: ReactNode;
   summaries?: TuneHubSummaryItem[];
   summaryMode?: TuneHubSummaryMode;
+  showSummaryNotes?: boolean;
   guideTitle?: ReactNode;
   guideBody?: ReactNode;
   tabItems?: Array<{ id: TTab; label: string }>;
@@ -33,6 +34,7 @@ export function TuneHubLayout<TTab extends string>({
   subtitle,
   summaries,
   summaryMode = "cards",
+  showSummaryNotes = false,
   guideTitle,
   guideBody,
   tabItems,
@@ -72,7 +74,7 @@ export function TuneHubLayout<TTab extends string>({
               >
                 <p className="tune-posture-label">{item.label}</p>
                 <p className="tune-posture-value">{item.value}</p>
-                {item.note ? <p className="tune-posture-note">{item.note}</p> : null}
+                {showSummaryNotes && item.note ? <p className="tune-posture-note">{item.note}</p> : null}
               </div>
             ))}
           </div>

@@ -3,6 +3,7 @@ import type { BackupManifestRecord } from "@goatcitadel/contracts";
 import { createBackup, listBackups, verifyBackup } from "../api/client";
 import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
 import { FieldHelp } from "../components/FieldHelp";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
 import { TuneHubLayout } from "../components/TuneHubLayout";
@@ -117,85 +118,90 @@ export function RuntimeHubPage() {
       {status ? <p className="status-banner">{status}</p> : null}
       <EmbeddedPageChromeProvider>
         <div className="stack-lg">
-          <Panel
-            title="Runtime posture"
-            subtitle="Serving defaults, shell runtime posture, and recovery-critical controls stay visible first."
-            tone="accent"
-            rank="primary"
-            padding="compact"
-          >
-            <SettingsPage activeTab="runtime" />
-          </Panel>
-          <Panel
-            title="Backups"
-            subtitle="Create, inspect, and verify runtime backups here. Filesystem restore stays offline-only for 1.0."
-            collapsible
-            defaultExpanded={false}
-            rank="muted"
-            padding="compact"
-          >
-            <div className="workflow-summary-strip">
-              <StatusChip tone={latestBackup ? "success" : "warning"}>
-                {latestBackup ? "Backup history loaded" : "No backup history"}
-              </StatusChip>
-              <StatusChip tone="muted">
-                {backups.length} recent manifest{backups.length === 1 ? "" : "s"}
-              </StatusChip>
-            </div>
-            <p className="office-subtitle">{backupSummary}</p>
-            <div className="stack-sm">
-              <label className="chat-v11-field">
-                <span>Backup path</span>
-                <input
-                  value={backupPath}
-                  onChange={(event) => setBackupPath(event.target.value)}
-                  placeholder="F:\\code\\personal-ai\\data\\backups\\..."
-                />
-              </label>
-              <FieldHelp>
-                Creating a backup fills this path automatically. Verification runs here. Restore remains an offline CLI
-                operation so the gateway cannot overwrite active runtime files while it is serving.
-              </FieldHelp>
-              <div className="actions">
-                <button
-                  type="button"
-                  className="gc-button"
-                  onClick={() => void handleCreateBackup()}
-                  disabled={busy !== null}
-                >
-                  {busy === "create" ? "Creating..." : "Create backup"}
-                </button>
-                <button
-                  type="button"
-                  className="gc-button"
-                  onClick={() => void handleVerifyBackup()}
-                  disabled={!canVerifyOrRestore || busy !== null}
-                >
-                  {busy === "verify" ? "Verifying..." : "Verify backup"}
-                </button>
-              </div>
-              <label className="chat-v11-field">
-                <span>Offline restore command</span>
-                <input value={restoreCommand} readOnly />
-              </label>
-              <FieldHelp>
-                Stop the gateway first, then run this command from the repo root to restore the selected backup safely.
-              </FieldHelp>
-              {backups.length > 0 ? (
-                <ul className="compact-list">
-                  {backups.slice(0, 6).map((backup) => (
-                    <li key={backup.backupId}>
-                      <strong>{backup.backupId}</strong>
-                      {" | "}
-                      {new Date(backup.createdAt).toLocaleString()}
-                      {" | "}
-                      {backup.files.length} files
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          </Panel>
+          <OperatorSplitLayout
+            primary={
+              <Panel
+                title="Runtime controls"
+                subtitle="Serving defaults, shell runtime posture, and recovery-critical controls stay visible first."
+                tone="accent"
+                rank="primary"
+                padding="compact"
+              >
+                <SettingsPage activeTab="runtime" />
+              </Panel>
+            }
+            inspector={
+              <Panel
+                title="Backup posture"
+                subtitle="Create, inspect, and verify backups beside runtime changes instead of ahead of them."
+                rank="muted"
+                padding="compact"
+              >
+                <div className="workflow-summary-strip">
+                  <StatusChip tone={latestBackup ? "success" : "warning"}>
+                    {latestBackup ? "Backup history loaded" : "No backup history"}
+                  </StatusChip>
+                  <StatusChip tone="muted">
+                    {backups.length} recent manifest{backups.length === 1 ? "" : "s"}
+                  </StatusChip>
+                </div>
+                <p className="office-subtitle">{backupSummary}</p>
+                <div className="stack-sm">
+                  <label className="chat-v11-field">
+                    <span>Backup path</span>
+                    <input
+                      value={backupPath}
+                      onChange={(event) => setBackupPath(event.target.value)}
+                      placeholder="F:\\code\\personal-ai\\data\\backups\\..."
+                    />
+                  </label>
+                  <FieldHelp>
+                    Creating a backup fills this path automatically. Verification runs here. Restore remains an
+                    offline CLI operation so the gateway cannot overwrite active runtime files while it is serving.
+                  </FieldHelp>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="gc-button"
+                      onClick={() => void handleCreateBackup()}
+                      disabled={busy !== null}
+                    >
+                      {busy === "create" ? "Creating..." : "Create backup"}
+                    </button>
+                    <button
+                      type="button"
+                      className="gc-button"
+                      onClick={() => void handleVerifyBackup()}
+                      disabled={!canVerifyOrRestore || busy !== null}
+                    >
+                      {busy === "verify" ? "Verifying..." : "Verify backup"}
+                    </button>
+                  </div>
+                  <label className="chat-v11-field">
+                    <span>Offline restore command</span>
+                    <input value={restoreCommand} readOnly />
+                  </label>
+                  <FieldHelp>
+                    Stop the gateway first, then run this command from the repo root to restore the selected backup
+                    safely.
+                  </FieldHelp>
+                  {backups.length > 0 ? (
+                    <ul className="compact-list">
+                      {backups.slice(0, 6).map((backup) => (
+                        <li key={backup.backupId}>
+                          <strong>{backup.backupId}</strong>
+                          {" | "}
+                          {new Date(backup.createdAt).toLocaleString()}
+                          {" | "}
+                          {backup.files.length} files
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              </Panel>
+            }
+          />
           <Panel
             title="Mesh"
             subtitle="Distributed runtime posture and remote execution routing."

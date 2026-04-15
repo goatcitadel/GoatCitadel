@@ -16,6 +16,7 @@ export interface LlamaCppServerConfig {
 }
 
 export interface LlamaCppLaunchConfig {
+  modelsRootPath?: string;
   modelPath?: string;
   alias: string;
   ctxSize?: number;

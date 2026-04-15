@@ -13,6 +13,7 @@ import { ChangeBadge, type UiRiskLevel } from "../components/ChangeBadge";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
 import { DataToolbar } from "../components/DataToolbar";
 import { FieldHelp } from "../components/FieldHelp";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
@@ -387,129 +388,136 @@ export function FilesPage({ workspaceId = "default" }: { workspaceId?: string })
           />
         }
       />
-      <div className="split-grid">
-        <Panel
-          title="Workspace Trails"
-          subtitle="Filter by path, then inspect the exact file before editing or reusing its location."
-        >
-          <div className="virtual-list-shell">
-            <Virtuoso
-              data={filteredFiles}
-              itemContent={(_index, file) => (
-                <div className="virtual-list-item files-list-item" key={file.relativePath}>
-                  <button
-                    type="button"
-                    className={["gc-button", selectedPath === file.relativePath ? "active" : ""]
-                      .filter(Boolean)
-                      .join(" ")}
-                    onClick={() => setSelectedPath(file.relativePath)}
-                  >
-                    <span className="files-path">{file.relativePath}</span>
-                    <span className="files-meta">
-                      {formatFileSize(file.size)} | modified {new Date(file.modifiedAt).toLocaleString()}
-                    </span>
-                  </button>
-                </div>
-              )}
-            />
-          </div>
-        </Panel>
-        <Panel
-          title="Trail Preview"
-          subtitle="Preview text and image files here, then prefill the save path or load editable content into the save editor."
-        >
-          <p>{selectedPath || "No file selected"}</p>
-          {selectedMeta ? (
-            <p className="office-subtitle">
-              {selectedMeta.size} bytes | modified {new Date(selectedMeta.modifiedAt).toLocaleString()}
-            </p>
-          ) : null}
-          <div className="actions">
-            <button type="button" onClick={onUseSelectedPath} disabled={!selectedPath} className="gc-button">
-              Use Selected Path
-            </button>
-            <button
-              type="button"
-              onClick={onEditSelectedFile}
-              disabled={!selectedPath || !selectedCanEdit}
-              className="gc-button"
+      <OperatorSplitLayout
+        className="files-operator-layout"
+        primary={
+          <Panel
+            title="Workspace Trails"
+            subtitle="Filter by path, then inspect the exact file before editing or reusing its location."
+          >
+            <div className="virtual-list-shell">
+              <Virtuoso
+                data={filteredFiles}
+                itemContent={(_index, file) => (
+                  <div className="virtual-list-item files-list-item" key={file.relativePath}>
+                    <button
+                      type="button"
+                      className={["gc-button", selectedPath === file.relativePath ? "active" : ""]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onClick={() => setSelectedPath(file.relativePath)}
+                    >
+                      <span className="files-path">{file.relativePath}</span>
+                      <span className="files-meta">
+                        {formatFileSize(file.size)} | modified {new Date(file.modifiedAt).toLocaleString()}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              />
+            </div>
+          </Panel>
+        }
+        inspector={
+          <div className="stack-md">
+            <Panel
+              title="Trail Preview"
+              subtitle="Preview text and image files here, then prefill the save path or load editable content into the save editor."
             >
-              Edit Selected File
-            </button>
-          </div>
-          {selectedFile ? (
-            selectedIsImage ? (
-              selectedImageSrc ? (
-                <figure className="file-image-preview-shell">
-                  <img className="file-image-preview" src={selectedImageSrc} alt={`Preview of ${selectedPath}`} />
-                  <figcaption className="office-subtitle">
-                    Image preview ({selectedFile.contentType || "image"}).
-                  </figcaption>
-                </figure>
-              ) : (
-                <div className="file-binary-preview">
-                  <p>Image file detected, but preview could not be generated.</p>
-                </div>
-              )
-            ) : selectedFile.encoding === "utf8" ? (
-              <pre className="file-preview">{selectedFile.content}</pre>
-            ) : (
-              <div className="file-binary-preview">
-                <p>Binary file detected.</p>
+              <p>{selectedPath || "No file selected"}</p>
+              {selectedMeta ? (
                 <p className="office-subtitle">
-                  Trail preview shows text and images. For other binary files, use the path tools and metadata.
+                  {selectedMeta.size} bytes | modified {new Date(selectedMeta.modifiedAt).toLocaleString()}
                 </p>
+              ) : null}
+              <div className="actions">
+                <button type="button" onClick={onUseSelectedPath} disabled={!selectedPath} className="gc-button">
+                  Use Selected Path
+                </button>
+                <button
+                  type="button"
+                  onClick={onEditSelectedFile}
+                  disabled={!selectedPath || !selectedCanEdit}
+                  className="gc-button"
+                >
+                  Edit Selected File
+                </button>
               </div>
-            )
-          ) : (
-            <p className="office-subtitle">Select a file to preview.</p>
-          )}
-        </Panel>
-      </div>
+              {selectedFile ? (
+                selectedIsImage ? (
+                  selectedImageSrc ? (
+                    <figure className="file-image-preview-shell">
+                      <img className="file-image-preview" src={selectedImageSrc} alt={`Preview of ${selectedPath}`} />
+                      <figcaption className="office-subtitle">
+                        Image preview ({selectedFile.contentType || "image"}).
+                      </figcaption>
+                    </figure>
+                  ) : (
+                    <div className="file-binary-preview">
+                      <p>Image file detected, but preview could not be generated.</p>
+                    </div>
+                  )
+                ) : selectedFile.encoding === "utf8" ? (
+                  <pre className="file-preview">{selectedFile.content}</pre>
+                ) : (
+                  <div className="file-binary-preview">
+                    <p>Binary file detected.</p>
+                    <p className="office-subtitle">
+                      Trail preview shows text and images. For other binary files, use the path tools and metadata.
+                    </p>
+                  </div>
+                )
+              ) : (
+                <p className="office-subtitle">Select a file to preview.</p>
+              )}
+            </Panel>
 
-      <Panel
-        title="Save / Upload File"
-        subtitle="Use the path helper and change review before writing. Known workspace paths should be preferred over ad hoc custom targets."
-      >
-        <SmartPathInput
-          label="Save path"
-          value={uploadPath}
-          onChange={setUploadPath}
-          root="."
-          riskLevel={pathRisk.overall}
-          placeholder="Custom workspace path"
-          helpText="Pick a suggested path or use custom mode for advanced locations."
-        />
-        <FieldHelp>
-          Trail writing stays safest when you start from an existing file, a template, or a known workspace directory
-          such as notes, docs, memory, or artifacts.
-        </FieldHelp>
-        <div className="actions">
-          <button type="button" onClick={() => void onSaveFile()} className="gc-button">
-            Save File
-          </button>
-        </div>
-        <div className="controls-row">
-          <ChangeBadge level={pathRisk.overall} />
-          {autoPathEdited ? <span className="office-subtitle">Path edited after auto-populate.</span> : null}
-        </div>
-        <button type="button" onClick={() => setShowAdvancedUpload((current) => !current)} className="gc-button">
-          {showAdvancedUpload ? "Hide advanced save details" : "Show advanced save details"}
-        </button>
-        {showAdvancedUpload ? (
-          <p className="office-subtitle">
-            Advanced mode allows arbitrary file paths inside write-jail roots. Stay in approved directories.
-          </p>
-        ) : null}
-        <textarea
-          value={uploadContent}
-          onChange={(event) => setUploadContent(event.target.value)}
-          rows={8}
-          className="full-textarea"
-          placeholder="File content"
-        />
-        <ChangeReviewPanel title="Path Change Review" overall={pathRisk.overall} items={pathRisk.items} />
-      </Panel>
+            <Panel
+              title="Save / Upload File"
+              subtitle="Use the path helper and change review before writing. Known workspace paths should be preferred over ad hoc custom targets."
+            >
+              <SmartPathInput
+                label="Save path"
+                value={uploadPath}
+                onChange={setUploadPath}
+                root="."
+                riskLevel={pathRisk.overall}
+                placeholder="Custom workspace path"
+                helpText="Pick a suggested path or use custom mode for advanced locations."
+              />
+              <FieldHelp>
+                Trail writing stays safest when you start from an existing file, a template, or a known workspace
+                directory such as notes, docs, memory, or artifacts.
+              </FieldHelp>
+              <div className="actions">
+                <button type="button" onClick={() => void onSaveFile()} className="gc-button">
+                  Save File
+                </button>
+              </div>
+              <div className="controls-row">
+                <ChangeBadge level={pathRisk.overall} />
+                {autoPathEdited ? <span className="office-subtitle">Path edited after auto-populate.</span> : null}
+              </div>
+              <button type="button" onClick={() => setShowAdvancedUpload((current) => !current)} className="gc-button">
+                {showAdvancedUpload ? "Hide advanced save details" : "Show advanced save details"}
+              </button>
+              {showAdvancedUpload ? (
+                <p className="office-subtitle">
+                  Advanced mode allows arbitrary file paths inside write-jail roots. Stay in approved directories.
+                </p>
+              ) : null}
+              <textarea
+                value={uploadContent}
+                onChange={(event) => setUploadContent(event.target.value)}
+                rows={8}
+                className="full-textarea"
+                placeholder="File content"
+              />
+              <ChangeReviewPanel title="Path Change Review" overall={pathRisk.overall} items={pathRisk.items} />
+            </Panel>
+          </div>
+        }
+      />
     </section>
   );
 }

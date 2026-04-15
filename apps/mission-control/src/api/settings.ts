@@ -122,6 +122,7 @@ export async function patchSettings(input: {
     baseUrl?: string;
     command?: string;
     extraArgs?: string[];
+    modelsRootPath?: string;
     modelPath?: string;
     alias?: string;
     ctxSize?: number | null;

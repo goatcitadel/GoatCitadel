@@ -7,6 +7,7 @@ import {
   resolveAuthStorageMode,
   resolveModelDraftHydration,
   resolveProviderModelSelection,
+  shouldRenderSettingsPageChrome,
 } from "./SettingsPage";
 
 describe("SettingsPage auth storage mode", () => {
@@ -80,6 +81,12 @@ describe("SettingsPage model selection helpers", () => {
     expect(resolveSettingsTabSections("access")).toEqual(["settings-access"]);
     expect(resolveSettingsTabSections("budget")).toEqual(["settings-runtime"]);
     expect(resolveSettingsTabSections("runtime")).toEqual(["settings-voice", "settings-runtime"]);
+  });
+
+  it("suppresses full-page chrome when a settings tab is embedded in another hub", () => {
+    expect(shouldRenderSettingsPageChrome()).toBe(true);
+    expect(shouldRenderSettingsPageChrome("runtime")).toBe(false);
+    expect(shouldRenderSettingsPageChrome("providers")).toBe(false);
   });
 });
 

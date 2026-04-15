@@ -27,6 +27,7 @@ describe("MissionControlEmptyState", () => {
     expect(markup).toContain("Primary Ops");
     expect(markup).toContain("2 approvals waiting");
     expect(markup).toContain("Open Cowork");
+    expect(markup).toContain("Open Code");
   });
 
   it("renders code-specific callouts and action labels", () => {
@@ -48,9 +49,9 @@ describe("MissionControlEmptyState", () => {
     expect(markup).toContain("Implementation lane");
     expect(markup).toContain("Anchor the implementation before you execute");
     expect(markup).toContain("Start code session");
-    expect(markup).toContain("Review this area for bugs and missing tests");
     expect(markup).toContain("4 projects");
     expect(markup).toContain("Repo Bound");
     expect(markup).toContain("Approvals clear");
+    expect(markup).toContain("Open Tasks");
   });
 });

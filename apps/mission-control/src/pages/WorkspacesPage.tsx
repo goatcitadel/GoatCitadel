@@ -13,6 +13,7 @@ import {
 } from "../api/client";
 import { ActionButton } from "../components/ActionButton";
 import { FieldHelp } from "../components/FieldHelp";
+import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
@@ -259,92 +260,97 @@ export function WorkspacesPage(props: { activeWorkspaceId: string; onWorkspaceCh
         subtitle="Select the active workspace or create a new one without leaving the current shell."
         actions={<StatusChip tone="success">Active: {activeWorkspace?.name ?? props.activeWorkspaceId}</StatusChip>}
       >
-        <div className="split-grid">
-          {workspaces.length === 0 ? (
-            <GCEmptyState
-              title="No workspaces are available yet"
-              subtitle="Create a workspace to separate guidance and operational context without leaving the current shell."
-              action={
-                <button
-                  type="button"
-                  className="gc-button"
-                  onClick={() => void load({ background: true, includeGuidance: false })}
-                >
-                  Refresh workspaces
-                </button>
-              }
-              meta={<FieldHelp>The workspace creation form stays available beside this empty state.</FieldHelp>}
-            />
-          ) : (
-            <ul className="compact-list">
-              {workspaces.map((workspace) => (
-                <li
-                  key={workspace.workspaceId}
-                  className={workspace.workspaceId === props.activeWorkspaceId ? "active-item" : ""}
-                >
-                  <div>
-                    <strong>{workspace.name}</strong>
-                    <p className="office-subtitle">
-                      {workspace.slug} • {workspace.lifecycleStatus}
-                    </p>
-                  </div>
-                  <div className="row-actions">
-                    <ActionButton
-                      label={workspace.workspaceId === props.activeWorkspaceId ? "Selected" : "Use"}
-                      disabled={workspace.workspaceId === props.activeWorkspaceId}
-                      onClick={() => props.onWorkspaceChange(workspace.workspaceId)}
-                    />
-                    {workspace.lifecycleStatus === "active" && workspace.workspaceId !== "default" ? (
+        <OperatorSplitLayout
+          className="workspaces-operator-layout"
+          primary={
+            workspaces.length === 0 ? (
+              <GCEmptyState
+                title="No workspaces are available yet"
+                subtitle="Create a workspace to separate guidance and operational context without leaving the current shell."
+                action={
+                  <button
+                    type="button"
+                    className="gc-button"
+                    onClick={() => void load({ background: true, includeGuidance: false })}
+                  >
+                    Refresh workspaces
+                  </button>
+                }
+                meta={<FieldHelp>The workspace creation form stays available in the inspector.</FieldHelp>}
+              />
+            ) : (
+              <ul className="compact-list">
+                {workspaces.map((workspace) => (
+                  <li
+                    key={workspace.workspaceId}
+                    className={workspace.workspaceId === props.activeWorkspaceId ? "active-item" : ""}
+                  >
+                    <div>
+                      <strong>{workspace.name}</strong>
+                      <p className="office-subtitle">
+                        {workspace.slug} • {workspace.lifecycleStatus}
+                      </p>
+                    </div>
+                    <div className="row-actions">
                       <ActionButton
-                        label="Archive"
-                        danger
-                        onClick={() => void handleArchiveWorkspace(workspace.workspaceId)}
+                        label={workspace.workspaceId === props.activeWorkspaceId ? "Selected" : "Use"}
+                        disabled={workspace.workspaceId === props.activeWorkspaceId}
+                        onClick={() => props.onWorkspaceChange(workspace.workspaceId)}
                       />
-                    ) : null}
-                    {workspace.lifecycleStatus === "archived" ? (
-                      <ActionButton
-                        label="Restore"
-                        onClick={() => void handleRestoreWorkspace(workspace.workspaceId)}
-                      />
-                    ) : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="stack-sm">
-            <h4>Create Workspace</h4>
-            <label className="field">
-              Name
-              <input
-                value={workspaceName}
-                onChange={(event) => setWorkspaceName(event.target.value)}
-                placeholder="Personal"
+                      {workspace.lifecycleStatus === "active" && workspace.workspaceId !== "default" ? (
+                        <ActionButton
+                          label="Archive"
+                          danger
+                          onClick={() => void handleArchiveWorkspace(workspace.workspaceId)}
+                        />
+                      ) : null}
+                      {workspace.lifecycleStatus === "archived" ? (
+                        <ActionButton
+                          label="Restore"
+                          onClick={() => void handleRestoreWorkspace(workspace.workspaceId)}
+                        />
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+          inspector={
+            <div className="stack-sm">
+              <h4>Create Workspace</h4>
+              <label className="field">
+                Name
+                <input
+                  value={workspaceName}
+                  onChange={(event) => setWorkspaceName(event.target.value)}
+                  placeholder="Personal"
+                />
+              </label>
+              <label className="field">
+                Slug (optional)
+                <input
+                  value={workspaceSlug}
+                  onChange={(event) => setWorkspaceSlug(event.target.value)}
+                  placeholder="personal"
+                />
+              </label>
+              <label className="field">
+                Description (optional)
+                <textarea
+                  value={workspaceDescription}
+                  onChange={(event) => setWorkspaceDescription(event.target.value)}
+                  rows={4}
+                />
+              </label>
+              <ActionButton
+                label={isCreating ? "Creating..." : "Create workspace"}
+                disabled={isCreating || !workspaceName.trim()}
+                onClick={() => void handleCreateWorkspace()}
               />
-            </label>
-            <label className="field">
-              Slug (optional)
-              <input
-                value={workspaceSlug}
-                onChange={(event) => setWorkspaceSlug(event.target.value)}
-                placeholder="personal"
-              />
-            </label>
-            <label className="field">
-              Description (optional)
-              <textarea
-                value={workspaceDescription}
-                onChange={(event) => setWorkspaceDescription(event.target.value)}
-                rows={4}
-              />
-            </label>
-            <ActionButton
-              label={isCreating ? "Creating..." : "Create workspace"}
-              disabled={isCreating || !workspaceName.trim()}
-              onClick={() => void handleCreateWorkspace()}
-            />
-          </div>
-        </div>
+            </div>
+          }
+        />
       </Panel>
 
       <Panel

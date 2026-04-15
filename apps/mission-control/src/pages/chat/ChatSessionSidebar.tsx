@@ -66,8 +66,9 @@ export function ChatSessionSidebar(props: {
     mode === "chat"
       ? "Projects are optional here. Stay lightweight unless the conversation needs a more durable workspace."
       : mode === "cowork"
-        ? "Projects help keep orchestration work grouped by objective, but you can still steer ad hoc runs from the queue."
-        : "Projects matter more in Code because binding execution to a workspace improves precision and artifact handling.";
+        ? "Projects help keep orchestration grouped by objective."
+        : "Project binding keeps code sessions precise and repo-aware.";
+  const visibleSummaryCards = mode === "chat" ? workspaceSummaryCards : workspaceSummaryCards.slice(0, 2);
 
   return (
     <aside className={`panel panel-soft panel-pad-default chat-v11-left mode-${mode}`}>
@@ -75,10 +76,10 @@ export function ChatSessionSidebar(props: {
         <div className="chat-v11-workspace-copy">
           <p className="chat-v11-workspace-kicker">{surfaceConfig.shellEyebrow}</p>
           <h3>{summaryTitle}</h3>
-          <p className="chat-v11-muted">{summaryCopy}</p>
+          {mode === "chat" ? <p className="chat-v11-muted">{summaryCopy}</p> : null}
         </div>
         <div className="chat-v11-summary-grid">
-          {workspaceSummaryCards.map((item) => (
+          {visibleSummaryCards.map((item) => (
             <div key={item.label} className="chat-v11-summary-card">
               <span>{item.label}</span>
               <strong>{item.value}</strong>
@@ -112,11 +113,9 @@ export function ChatSessionSidebar(props: {
         </div>
         <input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Find a chat..." />
       </div>
-      <FieldHelp>
-        {mode === "code"
-          ? "Code sessions stay local-first and become safer once a project binding is in place."
-          : "Mission chats stay local unless a bound integration is explicitly in play."}
-      </FieldHelp>
+      {mode === "chat" ? (
+        <FieldHelp>Mission chats stay local unless a bound integration is explicitly in play.</FieldHelp>
+      ) : null}
       <div className="chat-v11-filter-row chat-v11-filter-row-compact">
         <button
           type="button"

@@ -485,7 +485,7 @@ export class LlamaCppRuntimeService {
       const mmprojFilename = mmprojFilenameInput ? normalizeHuggingFacePath(mmprojFilenameInput) : undefined;
       const expectedSha256 = normalizeSha256(input.sha256);
       const expectedMmprojSha256 = normalizeSha256(input.mmprojSha256);
-      const targetDir = path.resolve(this.options.rootDir, "models", "llamacpp", sanitizeHuggingFaceRepo(repo));
+      const targetDir = path.join(resolveLlamaCppModelsRoot(this.options.rootDir, this.options.config), sanitizeHuggingFaceRepo(repo));
       const modelPath = path.join(targetDir, ...filename.split("/"));
       const sourceUrl = buildHuggingFaceResolveUrl(repo, filename);
       const controller = this.hfDownloadControllers.get(jobId);
@@ -1289,6 +1289,10 @@ function resolveConfiguredPath(rootDir: string, configuredPath: string | undefin
     return undefined;
   }
   return path.isAbsolute(trimmed) ? trimmed : path.resolve(rootDir, trimmed);
+}
+
+function resolveLlamaCppModelsRoot(rootDir: string, config: LlamaCppConfig | ContractLlamaCppConfig): string {
+  return resolveConfiguredPath(rootDir, config.launch.modelsRootPath) ?? path.resolve(rootDir, "models", "llamacpp");
 }
 
 function joinUrl(baseUrl: string, routePath: string): string {

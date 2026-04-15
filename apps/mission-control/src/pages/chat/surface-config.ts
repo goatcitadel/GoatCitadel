@@ -20,6 +20,9 @@ export interface MissionControlSurfaceConfig {
     workflowPlacement: "none" | "primary";
     dockPlacement: "support";
     dockBehavior: "persistent" | "collapsible" | "drawer";
+    idleSupportVisibility: "visible" | "hidden";
+    idleDockOpen: boolean;
+    idleMinHeight: "chat" | "compact-workbench" | "compact-workflow";
     desktopDensity: "chat" | "cowork" | "code";
     defaultColumnWidths: string;
     shellClassName: string;
@@ -56,6 +59,9 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       workflowPlacement: "none",
       dockPlacement: "support",
       dockBehavior: "collapsible",
+      idleSupportVisibility: "visible",
+      idleDockOpen: false,
+      idleMinHeight: "chat",
       desktopDensity: "chat",
       defaultColumnWidths: "thread | dock",
       shellClassName: "surface-layout-chat",
@@ -90,6 +96,9 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       workflowPlacement: "primary",
       dockPlacement: "support",
       dockBehavior: "drawer",
+      idleSupportVisibility: "hidden",
+      idleDockOpen: false,
+      idleMinHeight: "compact-workflow",
       desktopDensity: "cowork",
       defaultColumnWidths: "workflow | thread | dock",
       shellClassName: "surface-layout-cowork",
@@ -125,6 +134,9 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       workflowPlacement: "primary",
       dockPlacement: "support",
       dockBehavior: "drawer",
+      idleSupportVisibility: "hidden",
+      idleDockOpen: false,
+      idleMinHeight: "compact-workbench",
       desktopDensity: "code",
       defaultColumnWidths: "workbench | thread | dock",
       shellClassName: "surface-layout-code",

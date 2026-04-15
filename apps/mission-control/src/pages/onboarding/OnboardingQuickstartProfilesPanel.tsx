@@ -13,23 +13,25 @@ export function OnboardingQuickstartProfilesPanel(props: OnboardingQuickstartPro
   const { presets, onApplyQuickstartPreset } = props;
 
   return (
-    <article className="card">
-      <h3>Quickstart Profiles</h3>
-      <p className="office-subtitle">
-        Pick the closest operator posture, then refine provider and mesh details before apply.
-      </p>
-      <div className="compact-list">
-        {presets.map((preset) => (
-          <li key={preset.id}>
-            <strong>{preset.title}</strong> {preset.summary}
-            <div className="actions" style={{ marginTop: 8 }}>
-              <button type="button" onClick={() => onApplyQuickstartPreset(preset.id)} className="gc-button">
-                Load profile
-              </button>
-            </div>
-          </li>
-        ))}
+    <details className="advanced-panel">
+      <summary>Quickstart Profiles</summary>
+      <div className="stack-sm" style={{ marginTop: 12 }}>
+        <p className="office-subtitle">
+          Pick the closest operator posture, then refine provider and mesh details before apply.
+        </p>
+        <div className="compact-list">
+          {presets.map((preset) => (
+            <li key={preset.id}>
+              <strong>{preset.title}</strong> {preset.summary}
+              <div className="actions" style={{ marginTop: 8 }}>
+                <button type="button" onClick={() => onApplyQuickstartPreset(preset.id)} className="gc-button">
+                  Load profile
+                </button>
+              </div>
+            </li>
+          ))}
+        </div>
       </div>
-    </article>
+    </details>
   );
 }

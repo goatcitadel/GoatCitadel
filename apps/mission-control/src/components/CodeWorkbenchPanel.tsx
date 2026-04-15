@@ -75,7 +75,7 @@ export function CodeWorkbenchPanel({
   const boundProjectLabel = projectName ?? "bound project";
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
   const helperRuns = output?.helperRuns ?? [];
-  const [activePane, setActivePane] = useState<"file" | "diff" | "output" | "snippets">("file");
+  const [activePane, setActivePane] = useState<"file" | "diff" | "output" | "snippets">("diff");
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
   const [drafts, setDrafts] = useState<string[]>([]);
   const [helperLanguage, setHelperLanguage] = useState<"javascript" | "typescript">("typescript");
@@ -93,11 +93,7 @@ export function CodeWorkbenchPanel({
 
   useEffect(() => {
     if (needsProjectBinding) {
-      setActivePane("snippets");
-      return;
-    }
-    if (selectedFile) {
-      setActivePane("file");
+      setActivePane(codeBlocks.length > 0 ? "snippets" : "diff");
       return;
     }
     if (diff?.changedFiles.length) {
@@ -106,8 +102,27 @@ export function CodeWorkbenchPanel({
     }
     if (output?.helperRuns.length || output?.output) {
       setActivePane("output");
+      return;
     }
-  }, [diff?.changedFiles.length, needsProjectBinding, output?.helperRuns.length, output?.output, selectedFile]);
+    if (selectedFile) {
+      setActivePane("file");
+      return;
+    }
+    if (codeBlocks.length > 0) {
+      setActivePane("snippets");
+      return;
+    }
+    if (!needsProjectBinding) {
+      setActivePane("output");
+    }
+  }, [
+    codeBlocks.length,
+    diff?.changedFiles.length,
+    needsProjectBinding,
+    output?.helperRuns.length,
+    output?.output,
+    selectedFile,
+  ]);
 
   const activeDraft = drafts[activeBlockIndex] ?? "";
   const approvalBlocked = selectedTurn?.trace?.status === "waiting_for_approval";
@@ -223,9 +238,9 @@ export function CodeWorkbenchPanel({
         <section className="chat-code-workbench-main">
           <div className="chat-code-workbench-pane-tabs" role="tablist" aria-label="Workbench panes">
             {[
-              ["file", "File"],
               ["diff", "Diff"],
               ["output", "Output"],
+              ["file", "Files"],
               ["snippets", "Draft snippets"],
             ].map(([paneId, label]) => (
               <button

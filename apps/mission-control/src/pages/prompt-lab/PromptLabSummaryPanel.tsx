@@ -93,59 +93,49 @@ export function PromptLabSummaryPanel({
     <div className="prompt-lab-shell-card">
       <header className="prompt-lab-hero">
         <div className="prompt-lab-hero-copy">
-          <p className="prompt-lab-kicker">Evaluation Console</p>
           <h3 className="prompt-lab-hero-title">{title}</h3>
           <p className="prompt-lab-intro">{subtitle}</p>
         </div>
 
         <div className="prompt-lab-hero-actions">
-          <div className="prompt-lab-actions prompt-lab-action-cluster">
-            <span className="prompt-lab-action-label">Run lane</span>
-            <div className="prompt-lab-actions">
-              <ActionButton
-                label="Run next test"
-                pending={activeRun?.mode === "next"}
-                disabled={running && activeRun?.mode !== "next"}
-                onClick={onRunNext}
-              />
-              <ActionButton
-                label="Run all"
-                pending={activeRun?.mode === "all"}
-                disabled={running && activeRun?.mode !== "all"}
-                onClick={onRunAll}
-              />
-              <ActionButton
-                label="Run benchmark"
-                pending={benchmarkPending}
-                disabled={!hasSelectedPack || running || importing}
-                onClick={onRunBenchmark}
-              />
-              <ActionButton label="Refresh data" pending={isRefreshing} onClick={onRefreshData} />
-            </div>
-          </div>
-
-          <div className="prompt-lab-actions prompt-lab-action-cluster">
-            <span className="prompt-lab-action-label">Pack ops</span>
-            <div className="prompt-lab-actions">
-              <ActionButton
-                label="Auto score unscored"
-                pending={autoScoring}
-                disabled={!hasSelectedPack || unscoredCompletedCount === 0 || running}
-                onClick={onAutoScoreUnscored}
-              />
-              <ActionButton
-                label="Export now"
-                pending={exporting}
-                disabled={!hasSelectedPack || running || resetting}
-                onClick={onExportNow}
-              />
-              <ActionButton
-                label="Reset pack"
-                pending={resetting}
-                disabled={!hasSelectedPack || running || exporting || importing || autoScoring}
-                onClick={onResetPack}
-              />
-            </div>
+          <div className="prompt-lab-actions">
+            <ActionButton
+              label="Run next test"
+              pending={activeRun?.mode === "next"}
+              disabled={running && activeRun?.mode !== "next"}
+              onClick={onRunNext}
+            />
+            <ActionButton
+              label="Run all"
+              pending={activeRun?.mode === "all"}
+              disabled={running && activeRun?.mode !== "all"}
+              onClick={onRunAll}
+            />
+            <ActionButton
+              label="Run benchmark"
+              pending={benchmarkPending}
+              disabled={!hasSelectedPack || running || importing}
+              onClick={onRunBenchmark}
+            />
+            <ActionButton label="Refresh data" pending={isRefreshing} onClick={onRefreshData} />
+            <ActionButton
+              label="Auto score unscored"
+              pending={autoScoring}
+              disabled={!hasSelectedPack || unscoredCompletedCount === 0 || running}
+              onClick={onAutoScoreUnscored}
+            />
+            <ActionButton
+              label="Export now"
+              pending={exporting}
+              disabled={!hasSelectedPack || running || resetting}
+              onClick={onExportNow}
+            />
+            <ActionButton
+              label="Reset pack"
+              pending={resetting}
+              disabled={!hasSelectedPack || running || exporting || importing || autoScoring}
+              onClick={onResetPack}
+            />
           </div>
         </div>
       </header>

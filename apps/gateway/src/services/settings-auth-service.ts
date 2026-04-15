@@ -200,6 +200,7 @@ export function getSettings(host: SettingsRuntimeHost): RuntimeSettings {
       baseUrl: host.config.assistant.llamaCpp.server.baseUrl,
       command: host.config.assistant.llamaCpp.server.command,
       extraArgs: host.config.assistant.llamaCpp.server.extraArgs,
+      modelsRootPath: host.config.assistant.llamaCpp.launch.modelsRootPath,
       modelPath: host.config.assistant.llamaCpp.launch.modelPath,
       alias: host.config.assistant.llamaCpp.launch.alias,
       ctxSize: host.config.assistant.llamaCpp.launch.ctxSize,
@@ -279,6 +280,7 @@ export interface UpdateSettingsInput {
     baseUrl?: string;
     command?: string;
     extraArgs?: string[];
+    modelsRootPath?: string;
     modelPath?: string;
     alias?: string;
     ctxSize?: number | null;
@@ -299,6 +301,7 @@ export function updateSettings(host: SettingsRuntimeHost, input: UpdateSettingsI
   let persistAssistant = false;
   let persistToolPolicy = false;
   let persistBudgets = false;
+  let persistLlm = false;
 
   if (input.deploymentProfile) {
     host.config.assistant.deploymentProfile = input.deploymentProfile;
@@ -502,6 +505,10 @@ export function updateSettings(host: SettingsRuntimeHost, input: UpdateSettingsI
         .map((value) => value.trim())
         .filter(Boolean);
     }
+    if (input.llamaCpp.modelsRootPath !== undefined) {
+      const trimmed = input.llamaCpp.modelsRootPath.trim();
+      host.config.assistant.llamaCpp.launch.modelsRootPath = trimmed || undefined;
+    }
     if (input.llamaCpp.modelPath !== undefined) {
       const trimmed = input.llamaCpp.modelPath.trim();
       host.config.assistant.llamaCpp.launch.modelPath = trimmed || undefined;
@@ -542,6 +549,16 @@ export function updateSettings(host: SettingsRuntimeHost, input: UpdateSettingsI
     }
 
     host.llamaCppRuntime.updateConfig(host.config.assistant.llamaCpp);
+    host.llmService.updateRuntimeConfig({
+      upsertProvider: {
+        providerId: "llamacpp",
+        label: "llama.cpp",
+        baseUrl: host.config.assistant.llamaCpp.server.baseUrl,
+        apiStyle: "openai-chat-completions",
+        defaultModel: host.config.assistant.llamaCpp.launch.alias,
+      },
+    } satisfies LlmRuntimeUpdateInput);
+    persistLlm = true;
     if (!host.config.assistant.llamaCpp.enabled) {
       void host.llamaCppRuntime.stop("disabled").catch((error) => {
         settingsLog.warn("llama.cpp runtime stop failed after settings update", {
@@ -579,7 +596,7 @@ export function updateSettings(host: SettingsRuntimeHost, input: UpdateSettingsI
       llmInput.upsertProvider.apiKey = undefined;
     }
     host.llmService.updateRuntimeConfig(llmInput satisfies LlmRuntimeUpdateInput);
-    host.persistLlmConfig();
+    persistLlm = true;
   }
 
   if (persistToolPolicy) {
@@ -590,6 +607,9 @@ export function updateSettings(host: SettingsRuntimeHost, input: UpdateSettingsI
   }
   if (persistAssistant) {
     host.persistAssistantConfig();
+  }
+  if (persistLlm) {
+    host.persistLlmConfig();
   }
 
   return getSettings(host);

@@ -1,7 +1,5 @@
-import { PageGuideCard } from "../../components/PageGuideCard";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusChip } from "../../components/StatusChip";
-import { OfficeKpiGrid } from "./OfficeKpiGrid";
 
 interface OfficeGuideTerm {
   term: string;
@@ -43,12 +41,8 @@ export function OfficeOverviewPanel({
   blockedAgents,
   priorityAgents,
   watchAgents,
-  guide,
-  error,
-  activeAgents,
-  hotAgents,
-  readyAgents,
   eventFlow,
+  error,
 }: OfficeOverviewPanelProps) {
   return (
     <>
@@ -75,28 +69,19 @@ export function OfficeOverviewPanel({
               {pendingApprovalsCount} approvals
             </StatusChip>
             <StatusChip tone={blockedAgents > 0 ? "critical" : "success"}>{blockedAgents} blocked</StatusChip>
+            <StatusChip tone="muted">{`${eventFlow.toFixed(1)} /min`}</StatusChip>
             <StatusChip tone={priorityAgents > 0 ? "critical" : watchAgents > 0 ? "warning" : "success"}>
               {priorityAgents} priority · {watchAgents} watch
             </StatusChip>
           </div>
         }
       />
-      <PageGuideCard pageId="office" what={guide.what} when={guide.when} actions={guide.actions} terms={guide.terms} />
       {error ? (
         <div className="office-stream-banner">
           <strong>Command feed degraded.</strong>
           <span>The office shell stays interactive while GoatCitadel reconnects. {error}</span>
         </div>
       ) : null}
-
-      <OfficeKpiGrid
-        activeAgents={activeAgents}
-        hotAgents={hotAgents}
-        readyAgents={readyAgents}
-        eventFlow={eventFlow}
-        pendingApprovalsCount={pendingApprovalsCount}
-        streamHealthy={streamHealthy}
-      />
     </>
   );
 }

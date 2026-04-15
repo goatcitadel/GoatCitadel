@@ -6908,6 +6908,78 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools before answering.");
   });
 
+  it("prefetches repo search evidence for prompt-lab implicit repo-grounded chat inspections", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: implicit-tools",
+      "- This is a repo-grounded chat evaluation. Inspect the repository before answering whenever current repo state matters.",
+      "- Repo inspection assist: enabled.",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and explain how global guidance, workspace guidance, and repo docs are currently loaded.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gemma-4-local",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "The current loading chain is anchored in `apps/gateway/src/services/guidance-loader.ts`, with workspace-specific resolution in `apps/gateway/src/services/workspace-guidance.ts`, and repo docs discovered under `docs/`.",
+              "That gives operators an observed chain plus a clear place to test for remaining ambiguity.",
+            ].join(" "),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-repo-chat-prefetch-1",
+      result: {
+        matches: [
+          { path: "apps/gateway/src/services/guidance-loader.ts", name: "guidance-loader.ts" },
+          { path: "apps/gateway/src/services/workspace-guidance.ts", name: "workspace-guidance.ts" },
+          { path: "docs/GOATCITADEL_AGENTIC_CODING_WORKFLOW.md", name: "GOATCITADEL_AGENTIC_CODING_WORKFLOW.md" },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-repo-chat-prefetch-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-repo-chat-prefetch-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "llamacpp",
+      model: "gemma-4-local",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(invokeTool.mock.calls.length).toBeGreaterThan(0);
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "code.search_files",
+      args: expect.objectContaining({
+        path: ".",
+      }),
+    });
+    expect(result.assistantContent).toContain("apps/gateway/src/services/guidance-loader.ts");
+    expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools before answering.");
+  });
+
   it("passes non-Prompt-Lab prompts through without explicit-tools enforcement", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "glm-5",

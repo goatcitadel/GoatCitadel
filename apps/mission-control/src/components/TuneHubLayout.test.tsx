@@ -1,6 +1,38 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./PageTabs", () => ({
+  PageTabs: ({ items }: { items?: Array<{ label: string }> }) => <div>{items?.map((item) => item.label).join(" ")}</div>,
+}));
+vi.mock("./SectionTitle", () => ({
+  SectionTitle: ({ title, subtitle }: { title?: React.ReactNode; subtitle?: React.ReactNode }) => (
+    <header className="page-chrome-density-compact">
+      <h2>{title}</h2>
+      <p>{subtitle}</p>
+    </header>
+  ),
+}));
+vi.mock("./StatCard", () => ({
+  StatCard: ({ label, value, note, className }: {
+    label?: React.ReactNode;
+    value?: React.ReactNode;
+    note?: React.ReactNode;
+    className?: string;
+  }) => (
+    <div className={`stat-card-compact ${className ?? ""}`.trim()}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {note}
+    </div>
+  ),
+}));
+vi.mock("./ShellDetailPanelContext", () => ({
+  useShellDetailPanel: () => ({
+    registerEntry: () => () => undefined,
+  }),
+}));
+
 import { TuneHubLayout } from "./TuneHubLayout";
 
 describe("TuneHubLayout", () => {
@@ -43,6 +75,7 @@ describe("TuneHubLayout", () => {
     expect(markup).toContain("tune-posture-bar");
     expect(markup).toContain("tune-posture-item-accent");
     expect(markup).not.toContain("operator-summary-card");
+    expect(markup).not.toContain("The active Tune lane");
     expect(markup).toContain("Main content");
   });
 

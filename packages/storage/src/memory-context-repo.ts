@@ -63,6 +63,7 @@ export class MemoryContextRepository {
   private readonly pruneOlderThanStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const nullableMatch = (column: string, param: string) => buildNullableMatchSql(this.db.dialect, column, param);
     this.insertStmt = db.prepare(`
       INSERT INTO memory_context_packs (
         context_id, cache_key, scope, session_id, task_id, run_id, phase_id,
@@ -94,10 +95,10 @@ export class MemoryContextRepository {
       SELECT * FROM memory_context_packs
       WHERE cache_key = @cacheKey
         AND scope = @scope
-        AND session_id IS @sessionId
-        AND task_id IS @taskId
-        AND run_id IS @runId
-        AND phase_id IS @phaseId
+        AND ${nullableMatch("session_id", "@sessionId")}
+        AND ${nullableMatch("task_id", "@taskId")}
+        AND ${nullableMatch("run_id", "@runId")}
+        AND ${nullableMatch("phase_id", "@phaseId")}
         AND expires_at > @now
       LIMIT 1
     `);
@@ -270,6 +271,17 @@ function toScopedCacheKey(input: MemoryContextLookupInput): string {
     input.phaseId ?? "",
     input.cacheKey,
   ].join("|");
+}
+
+function buildNullableMatchSql(
+  dialect: DatabaseClient["dialect"],
+  column: string,
+  param: string,
+): string {
+  if (dialect === "postgres") {
+    return `${column} IS NOT DISTINCT FROM ${param}`;
+  }
+  return `${column} IS ${param}`;
 }
 
 

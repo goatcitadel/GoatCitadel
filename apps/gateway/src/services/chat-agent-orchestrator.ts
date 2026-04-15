@@ -347,6 +347,8 @@ export class ChatAgentOrchestrator {
       thinkingLevel: input.thinkingLevel,
       liveDataIntent: intents.webLookup,
       promptLabExplicitTools: promptLabContract.explicitTools,
+      providerId: input.providerId,
+      model: input.model,
     });
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
@@ -395,15 +397,17 @@ export class ChatAgentOrchestrator {
       !assistantContent &&
       !approvalPayload &&
       input.toolAutonomy !== "manual" &&
-      promptLabContract.explicitTools &&
+      (promptLabContract.explicitTools || promptLabContract.repoGroundedAssist) &&
       toolRunCount === 0
     ) {
-      const promptLabFilePaths = promptLabContractRequiresFileTools(promptLabContract)
+      const promptLabShouldInspectFiles =
+        promptLabContractRequiresFileTools(promptLabContract) || promptLabContract.repoGroundedAssist;
+      const promptLabFilePaths = promptLabShouldInspectFiles
         ? extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask)
         : [];
       const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(promptLabFilePaths.length);
       if (
-        promptLabContractRequiresFileTools(promptLabContract) &&
+        promptLabShouldInspectFiles &&
         promptLabFilePaths.length > 0 &&
         toolSchema.canonicalToModel.has("file.read_range")
       ) {
@@ -510,16 +514,20 @@ export class ChatAgentOrchestrator {
 
       if (
         !approvalPayload &&
-        promptLabContractRequiresFileTools(promptLabContract) &&
+        promptLabShouldInspectFiles &&
         promptLabFilePaths.length === 0 &&
         toolSchema.canonicalToModel.has("code.search_files") &&
         toolRunCount < executionBudget.maxToolRunsPerTurn &&
-        isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
+        (promptLabContract.repoGroundedAssist || isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns))
       ) {
         const promptLabSearchPath =
           inferLocalToolPathFromPrompt("code.search_files", promptLabContract.userTask) ?? ".";
         const promptLabSearchQueries = inferPromptLabLocalSearchQueries(promptLabContract.userTask);
-        for (const query of promptLabSearchQueries) {
+        const effectivePromptLabSearchQueries =
+          promptLabSearchQueries.length > 0
+            ? promptLabSearchQueries
+            : [inferLocalSearchQueryFromPrompt("code.search_files", promptLabContract.userTask) ?? "."];
+        for (const query of effectivePromptLabSearchQueries) {
           if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
             break;
           }
@@ -2849,11 +2857,20 @@ export class ChatAgentOrchestrator {
     turnBudgetDeadline?: number;
     allowOverBudget?: boolean;
   }): Promise<{ content: string; deterministic: boolean }> {
-    const deterministic = buildDeterministicToolSynthesisFallback(
-      input.input.content,
-      input.toolRuns,
-      input.circuitBreakerReason,
-    );
+    const constrainedLocalRepoRecovery =
+      shouldUseConstrainedLocalAgentProfile(input.input.providerId, input.input.model) &&
+      looksLikeRepoGroundedInspectionPrompt(input.input.content)
+        ? buildRecoveredRepoGroundedAnswer(input.input.content, input.toolRuns)
+        : undefined;
+    const deterministic =
+      constrainedLocalRepoRecovery ??
+      buildDeterministicToolSynthesisFallback(input.input.content, input.toolRuns, input.circuitBreakerReason);
+    if (constrainedLocalRepoRecovery) {
+      return {
+        content: constrainedLocalRepoRecovery,
+        deterministic: true,
+      };
+    }
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
     const synthesisTimeoutMs = input.allowOverBudget
       ? TESTING_CHAT_COMPLETION_TIMEOUT_MS
@@ -2925,6 +2942,16 @@ export class ChatAgentOrchestrator {
     toolRuns: ChatToolRunRecord[];
     turnBudgetDeadline?: number;
   }): Promise<{ content: string }> {
+    const constrainedLocalRepair = shouldUseConstrainedLocalAgentProfile(input.input.providerId, input.input.model);
+    const repoGroundedRepair = looksLikeRepoGroundedInspectionPrompt(input.input.content);
+    if (constrainedLocalRepair && repoGroundedRepair) {
+      const recovered = buildRecoveredRepoGroundedAnswer(input.input.content, input.toolRuns);
+      if (recovered) {
+        return {
+          content: recovered,
+        };
+      }
+    }
     const timeoutMs = input.turnBudgetDeadline
       ? Math.min(TESTING_CHAT_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
       : TESTING_CHAT_COMPLETION_TIMEOUT_MS;
@@ -2943,6 +2970,8 @@ export class ChatAgentOrchestrator {
           turnId: input.input.turnId,
           sessionId: input.input.sessionId,
         },
+        max_tokens: constrainedLocalRepair ? 520 : undefined,
+        temperature: constrainedLocalRepair ? 0 : undefined,
         messages: [
           {
             role: "system",
@@ -2954,6 +2983,12 @@ export class ChatAgentOrchestrator {
                 ? "The prior draft is only a runtime failure placeholder. Ignore it and answer the original request from scratch."
                 : "Finish cleanly. Do not restart from scratch unless the draft is unusable.",
               "Do not mention finish reasons, token limits, truncation, or internal runtime state.",
+              constrainedLocalRepair
+                ? "Keep the repaired answer compact, evidence-first, and under roughly 180 words unless the user explicitly asked for a long report."
+                : undefined,
+              constrainedLocalRepair && repoGroundedRepair
+                ? "Name exact file paths only when they already appear in the captured tool evidence, and separate observed facts from anything still unverified."
+                : undefined,
             ].join("\n"),
           },
           {
@@ -6365,6 +6400,7 @@ function extractPrimaryUserTaskContent(content: string): string {
 
 function parsePromptLabRunContract(content: string): {
   explicitTools: boolean;
+  repoGroundedAssist: boolean;
   requiredToolFamilies: string[];
   requiredNamedTools: string[];
   userTask: string;
@@ -6373,6 +6409,7 @@ function parsePromptLabRunContract(content: string): {
   if (!isPromptLabHarnessContent(content)) {
     return {
       explicitTools: false,
+      repoGroundedAssist: false,
       requiredToolFamilies: [],
       requiredNamedTools: [],
       userTask,
@@ -6382,6 +6419,7 @@ function parsePromptLabRunContract(content: string): {
     content.match(/(?:^|\n)##\s+Prompt Lab Run Contract\s*\n([\s\S]*?)(?:\n##\s+User Task\s*\n|$)/i)?.[1] ?? "";
   const explicitTools =
     /\btool tier:\s*explicit-tools\b/i.test(contractBody) || /\bexplicit-tools evaluation\b/i.test(contractBody);
+  const repoGroundedAssist = /\brepo inspection assist:\s*enabled\b/i.test(contractBody);
   const requiredToolFamilies = Array.from(
     new Set(
       contractBody
@@ -6403,6 +6441,7 @@ function parsePromptLabRunContract(content: string): {
   );
   return {
     explicitTools,
+    repoGroundedAssist,
     requiredToolFamilies,
     requiredNamedTools,
     userTask,
@@ -7108,11 +7147,14 @@ function resolveChatExecutionBudget(
   input: Pick<ChatAgentTurnInput, "webMode" | "thinkingLevel"> & {
     liveDataIntent?: boolean;
     promptLabExplicitTools?: boolean;
+    providerId?: string;
+    model?: string;
   },
 ): ChatExecutionBudget {
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
+  let budget: ChatExecutionBudget;
   if (input.webMode === "deep") {
-    return applyPromptLabExplicitToolBudget(
+    budget = applyPromptLabExplicitToolBudget(
       {
         turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
         completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
@@ -7125,9 +7167,8 @@ function resolveChatExecutionBudget(
       },
       input.promptLabExplicitTools,
     );
-  }
-  if (input.webMode === "quick") {
-    return applyPromptLabExplicitToolBudget(
+  } else if (input.webMode === "quick") {
+    budget = applyPromptLabExplicitToolBudget(
       {
         turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
         completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
@@ -7140,9 +7181,8 @@ function resolveChatExecutionBudget(
       },
       input.promptLabExplicitTools,
     );
-  }
-  if (input.webMode === "off") {
-    return applyPromptLabExplicitToolBudget(
+  } else if (input.webMode === "off") {
+    budget = applyPromptLabExplicitToolBudget(
       {
         turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
         completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
@@ -7155,9 +7195,8 @@ function resolveChatExecutionBudget(
       },
       input.promptLabExplicitTools,
     );
-  }
-  if (input.liveDataIntent) {
-    return applyPromptLabExplicitToolBudget(
+  } else if (input.liveDataIntent) {
+    budget = applyPromptLabExplicitToolBudget(
       {
         turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
         completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
@@ -7170,20 +7209,31 @@ function resolveChatExecutionBudget(
       },
       input.promptLabExplicitTools,
     );
+  } else {
+    budget = applyPromptLabExplicitToolBudget(
+      {
+        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        maxToolLoops: 4,
+        maxToolRunsPerTurn: 7,
+        searchMaxResults: 5,
+        maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
+        minSynthesisReserveMs: 10000,
+        expensiveToolMinimumRemainingMs: 20000,
+      },
+      input.promptLabExplicitTools,
+    );
   }
-  return applyPromptLabExplicitToolBudget(
-    {
-      turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-      completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-      maxToolLoops: 4,
-      maxToolRunsPerTurn: 7,
-      searchMaxResults: 5,
-      maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
-      minSynthesisReserveMs: 10000,
-      expensiveToolMinimumRemainingMs: 20000,
-    },
-    input.promptLabExplicitTools,
-  );
+  if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
+    return budget;
+  }
+  return {
+    ...budget,
+    maxToolLoops: Math.min(budget.maxToolLoops, input.promptLabExplicitTools ? 4 : 3),
+    maxToolRunsPerTurn: Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
+    maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
+    minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
+  };
 }
 
 function applyPromptLabExplicitToolBudget(
@@ -7198,6 +7248,12 @@ function applyPromptLabExplicitToolBudget(
     maxToolLoops: Math.max(budget.maxToolLoops, MAX_TOOL_LOOPS),
     maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, MAX_TOOL_RUNS_PER_TURN),
   };
+}
+
+function shouldUseConstrainedLocalAgentProfile(providerId?: string, model?: string): boolean {
+  const normalizedProviderId = (providerId ?? "").trim().toLowerCase();
+  const normalizedModel = (model ?? "").trim().toLowerCase();
+  return normalizedProviderId === "llamacpp" || normalizedModel.includes("gemma");
 }
 
 function minimumRemainingBudgetForToolStart(toolName: string, executionBudget: ChatExecutionBudget): number {
@@ -7818,6 +7874,24 @@ function buildRecoveredEvidenceAnswer(
   return lines.join("\n");
 }
 
+function buildRecoveredRepoGroundedAnswer(userPrompt: string, toolRuns: ChatToolRunRecord[]): string | undefined {
+  const evidencePaths = collectObservedToolEvidencePaths(toolRuns).slice(0, 4);
+  if (evidencePaths.length < 1) {
+    return undefined;
+  }
+  const points = collectRecoveredAnswerPoints(toolRuns, userPrompt, 4);
+  if (points.length < 1) {
+    return undefined;
+  }
+  return [
+    "Observed from the files I did inspect:",
+    ...points.map((point) => `- ${truncatePlainText(point, 220)}`),
+    "",
+    `Files: ${evidencePaths.map((path) => `\`${path}\``).join(", ")}`,
+    "Anything beyond those files is unverified from the current trace.",
+  ].join("\n");
+}
+
 function buildRecoveredEvidenceIntro(userPrompt: string): string {
   const normalized = userPrompt.toLowerCase();
   if (
@@ -7870,6 +7944,19 @@ function summarizeToolRunForSynthesis(run: ChatToolRunRecord, userPrompt?: strin
     return `${baseParts.join(" ")} result: ${truncateJson(run.result, 280)}`;
   }
   return baseParts.join(" ");
+}
+
+function looksLikeRepoGroundedInspectionPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return (
+    /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
+    /\buse (?:file|code|file\/code) tools\b/.test(normalized) ||
+    /\bexact files?\b/.test(normalized) ||
+    /\bexact evidence\b/.test(normalized) ||
+    /\bcurrent implementation\b/.test(normalized) ||
+    /\bguidance-loading chain\b/.test(normalized) ||
+    (/\bcurrent\b/.test(normalized) && /\b(repo|repository|workspace|codebase)\b/.test(normalized))
+  );
 }
 
 function summarizeFileReadToolRunForSynthesis(run: ChatToolRunRecord): string | undefined {

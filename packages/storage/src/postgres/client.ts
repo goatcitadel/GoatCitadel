@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type PoolConfig, type QueryResultRow } from "pg";
+import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
 
 export type PostgresSslMode = "disable" | "prefer" | "require";
 
@@ -30,6 +31,7 @@ export interface PostgresHealthCheck {
 export class PostgresDatabaseClient {
   private readonly pool: Pool;
   private readonly migrationsTable: string;
+  private serverEncodingPromise?: Promise<string | undefined>;
 
   public constructor(
     options: PostgresConnectionOptions,
@@ -46,7 +48,7 @@ export class PostgresDatabaseClient {
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<T[]> {
-    const result = await this.pool.query<T>(sql, [...params]);
+    const result = await this.pool.query<T>(sql, await this.sanitizeParams(params));
     return result.rows;
   }
 
@@ -131,11 +133,26 @@ export class PostgresDatabaseClient {
   public async close(): Promise<void> {
     await this.pool.end();
   }
+
+  private async sanitizeParams(params: readonly unknown[]): Promise<unknown[]> {
+    return sanitizeParamsForServerEncoding(params, await this.getServerEncoding());
+  }
+
+  private async getServerEncoding(): Promise<string | undefined> {
+    if (!this.serverEncodingPromise) {
+      this.serverEncodingPromise = this.pool
+        .query<{ server_encoding: string }>("SELECT current_setting('server_encoding') AS server_encoding")
+        .then((result) => result.rows[0]?.server_encoding)
+        .catch(() => undefined);
+    }
+    return this.serverEncodingPromise;
+  }
 }
 
 function buildPoolConfig(options: PostgresConnectionOptions): PoolConfig {
   const base: PoolConfig = {
     application_name: options.applicationName ?? "goatcitadel",
+    options: "-c client_encoding=UTF8",
     max: options.pool?.max ?? 10,
     min: options.pool?.min ?? 0,
     idleTimeoutMillis: options.pool?.idleTimeoutMs ?? 30_000,

@@ -47,6 +47,7 @@ type DraftBaseline = {
   autoStart: boolean;
   baseUrl: string;
   command: string;
+  modelsRootPath: string;
   modelPath: string;
   alias: string;
 };
@@ -59,6 +60,7 @@ type SavedLlamaCppProfile = {
   autoStart: boolean;
   baseUrl: string;
   command: string;
+  modelsRootPath: string;
   modelPath: string;
   alias: string;
   extraArgsText: string;
@@ -96,6 +98,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
   const [autoStart, setAutoStart] = useState(settings?.llamaCpp.autoStart ?? false);
   const [baseUrl, setBaseUrl] = useState(settings?.llamaCpp.baseUrl ?? "http://127.0.0.1:8080/v1");
   const [command, setCommand] = useState(settings?.llamaCpp.command ?? "llama-server");
+  const [modelsRootPath, setModelsRootPath] = useState(settings?.llamaCpp.modelsRootPath ?? "");
   const [modelPath, setModelPath] = useState(settings?.llamaCpp.modelPath ?? "");
   const [alias, setAlias] = useState(settings?.llamaCpp.alias ?? DEFAULT_LLAMACPP_ALIAS);
   const [extraArgsText, setExtraArgsText] = useState((settings?.llamaCpp.extraArgs ?? []).join("\n"));
@@ -157,6 +160,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     setAutoStart(settingsRes.llamaCpp.autoStart);
     setBaseUrl(settingsRes.llamaCpp.baseUrl);
     setCommand(settingsRes.llamaCpp.command);
+    setModelsRootPath(settingsRes.llamaCpp.modelsRootPath ?? "");
     setModelPath(settingsRes.llamaCpp.modelPath ?? "");
     setAlias(settingsRes.llamaCpp.alias);
     setExtraArgsText((settingsRes.llamaCpp.extraArgs ?? []).join("\n"));
@@ -178,6 +182,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
       autoStart: settingsRes.llamaCpp.autoStart,
       baseUrl: settingsRes.llamaCpp.baseUrl,
       command: settingsRes.llamaCpp.command,
+      modelsRootPath: settingsRes.llamaCpp.modelsRootPath ?? "",
       modelPath: settingsRes.llamaCpp.modelPath ?? "",
       alias: settingsRes.llamaCpp.alias,
     });
@@ -306,6 +311,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
             { field: "llamaCpp.autoStart", from: baseline.autoStart, to: autoStart },
             { field: "llamaCpp.baseUrl", from: baseline.baseUrl, to: baseUrl },
             { field: "llamaCpp.command", from: baseline.command, to: command },
+            { field: "llamaCpp.modelsRootPath", from: baseline.modelsRootPath, to: modelsRootPath },
             { field: "llamaCpp.modelPath", from: baseline.modelPath, to: modelPath },
             { field: "llamaCpp.alias", from: baseline.alias, to: alias },
           ],
@@ -345,7 +351,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
       }
       riskAbortRef.current?.abort();
     };
-  }, [alias, autoStart, baseUrl, baseline, command, enabled, modelPath]);
+  }, [alias, autoStart, baseUrl, baseline, command, enabled, modelPath, modelsRootPath]);
 
   const commandPreview = useMemo(() => {
     const args = [
@@ -440,6 +446,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     baseUrl: baseUrl.trim(),
     command: command.trim(),
     extraArgs: parseExtraArgs(extraArgsText),
+    modelsRootPath: modelsRootPath.trim(),
     modelPath: modelPath.trim(),
     alias: alias.trim(),
     ctxSize: parseOptionalNumberForPatch(ctxSize),
@@ -456,6 +463,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
     setAutoStart(saved.autoStart);
     setBaseUrl(saved.baseUrl);
     setCommand(saved.command);
+    setModelsRootPath(saved.modelsRootPath);
     setModelPath(saved.modelPath);
     setAlias(saved.alias);
     setExtraArgsText(saved.extraArgsText);
@@ -552,6 +560,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         autoStart,
         baseUrl,
         command,
+        modelsRootPath,
         modelPath,
         alias,
         extraArgsText,
@@ -592,6 +601,7 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         command: saved.command.trim(),
         extraArgs: parseExtraArgs(saved.extraArgsText),
         modelPath: saved.modelPath.trim(),
+        modelsRootPath: saved.modelsRootPath.trim(),
         alias: saved.alias.trim(),
         ctxSize: parseOptionalNumberForPatch(saved.ctxSize),
         threads: parseOptionalNumberForPatch(saved.threads),
@@ -841,6 +851,15 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
           Command
           <input id="llamaCppCommand" value={command} onChange={(event) => setCommand(event.target.value)} />
         </label>
+        <label className="field" htmlFor="llamaCppModelsRootPath">
+          Models Root Path
+          <input
+            id="llamaCppModelsRootPath"
+            value={modelsRootPath}
+            onChange={(event) => setModelsRootPath(event.target.value)}
+            placeholder="C:\\models"
+          />
+        </label>
         <label className="field" htmlFor="llamaCppModelPath">
           Model Path
           <input id="llamaCppModelPath" value={modelPath} onChange={(event) => setModelPath(event.target.value)} />
@@ -852,6 +871,10 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         <FieldHelp>
           Keep the base URL on loopback unless you intentionally expose llama.cpp somewhere else. Use an alias like{" "}
           <code>{DEFAULT_LLAMACPP_ALIAS}</code> so Prompt Lab and chat runs stay stable.
+        </FieldHelp>
+        <FieldHelp>
+          Models Root Path is the default folder GoatCitadel uses for managed llama.cpp downloads. Model Path still
+          points to the exact GGUF file you want to launch.
         </FieldHelp>
         <ActionButton
           label="Save llama.cpp Config"
@@ -915,9 +938,9 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
           />
         </div>
         <FieldHelp>
-          This workflow pulls <code>https://huggingface.co/owner/name/resolve/main/file.gguf</code> into{" "}
-          <code>models/llamacpp</code>. If you provide SHA256 values, GoatCitadel verifies them and deletes the partial
-          file on mismatch.
+          This workflow pulls <code>https://huggingface.co/owner/name/resolve/main/file.gguf</code> into your llama.cpp
+          models root, then nests the repo name underneath it. If you provide SHA256 values, GoatCitadel verifies them
+          and deletes the partial file on mismatch.
         </FieldHelp>
         {hfDownloadStatus ? (
           <div className="stack-sm">
@@ -1333,8 +1356,36 @@ function readSavedLlamaCppProfiles(): Partial<Record<LlamaCppProfilePresetId, Sa
     if (!raw) {
       return {};
     }
-    const parsed = JSON.parse(raw) as Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>;
-    return parsed ?? {};
+    const parsed = JSON.parse(raw) as Partial<Record<LlamaCppProfilePresetId, Partial<SavedLlamaCppProfile>>>;
+    if (!parsed) {
+      return {};
+    }
+    const normalized = Object.fromEntries(
+      Object.entries(parsed).map(([preset, profile]) => [
+        preset,
+        profile
+          ? ({
+              savedAt: profile.savedAt ?? new Date(0).toISOString(),
+              enabled: profile.enabled ?? false,
+              autoStart: profile.autoStart ?? false,
+              baseUrl: profile.baseUrl ?? "http://127.0.0.1:8080/v1",
+              command: profile.command ?? "llama-server",
+              modelsRootPath: profile.modelsRootPath ?? "",
+              modelPath: profile.modelPath ?? "",
+              alias: profile.alias ?? DEFAULT_LLAMACPP_ALIAS,
+              extraArgsText: profile.extraArgsText ?? "",
+              ctxSize: profile.ctxSize ?? "",
+              threads: profile.threads ?? "",
+              gpuLayers: profile.gpuLayers ?? "",
+              parallel: profile.parallel ?? "",
+              batchSize: profile.batchSize ?? "",
+              ubatchSize: profile.ubatchSize ?? "",
+              flashAttentionMode: profile.flashAttentionMode ?? "auto",
+            } satisfies SavedLlamaCppProfile)
+          : undefined,
+      ]),
+    ) as Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>;
+    return normalized;
   } catch {
     return {};
   }

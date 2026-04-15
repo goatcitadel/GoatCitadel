@@ -398,6 +398,7 @@ export interface RuntimeSettingsResponse {
     baseUrl: string;
     command: string;
     extraArgs: string[];
+    modelsRootPath?: string;
     modelPath?: string;
     alias: string;
     ctxSize?: number;
