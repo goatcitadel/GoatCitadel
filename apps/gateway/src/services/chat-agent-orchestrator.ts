@@ -95,6 +95,21 @@ const KNOWN_BARE_FILE_BASENAMES = new Set([
   "prettier.config.js",
   "turbo.json",
 ]);
+const KNOWN_REPO_PATH_ROOT_SEGMENTS = new Set([
+  "apps",
+  "artifacts",
+  "config",
+  "data",
+  "docs",
+  "fixtures",
+  "packages",
+  "scripts",
+  "skills",
+  "src",
+  "test",
+  "tests",
+  "workspace",
+]);
 const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "browser.search": ["query"],
   "browser.navigate": ["url"],
@@ -297,10 +312,31 @@ export class ChatAgentOrchestrator {
 
     const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
     const promptLabContract = parsePromptLabRunContract(input.content);
+    const promptLabFilePaths = extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask ?? "");
+    const promptLabCompanionFilePaths = inferPromptLabCompanionFilePaths(
+      promptLabContract.userTask,
+      promptLabFilePaths,
+    );
+    const promptLabPrefetchFilePaths = [...new Set([...promptLabFilePaths, ...promptLabCompanionFilePaths])];
+    const promptLabRepoInspectionAssist =
+      promptLabFilePaths.length === 0 && promptLabTaskSuggestsRepoInspection(promptLabContract.userTask);
+    const repoGroundedInspectionAssist =
+      !isPromptLabHarnessContent(input.content) && looksLikeRepoGroundedInspectionPrompt(input.content);
+    const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabContract.userTask);
     const toolSchema =
       input.toolAutonomy === "manual"
         ? { tools: [], modelToCanonical: new Map<string, string>(), canonicalToModel: new Map<string, string>() }
         : await this.buildToolSchema(input, intents);
+    const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
+    const promptLabConcreteReadToolName = resolvePromptLabConcreteReadToolName(
+      toolSchema.canonicalToModel,
+      catalogToolNames,
+    );
+    const promptLabSearchToolNames = resolvePromptLabLocalSearchToolNames(
+      toolSchema.canonicalToModel,
+      catalogToolNames,
+    );
+    const canControllerSearchPromptLabFiles = promptLabSearchToolNames.length > 0;
     const canUseTimeTool = toolSchema.canonicalToModel.has("time.now");
     const canUseSearchTool = toolSchema.canonicalToModel.has("browser.search");
     const canUseNavigateTool = toolSchema.canonicalToModel.has("browser.navigate");
@@ -365,13 +401,14 @@ export class ChatAgentOrchestrator {
     ) {
       assistantContent = buildLocalFileAccessFallback(input.content);
     }
-    if (!assistantContent) {
+    const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
+    if (!assistantContent && !promptLabHarnessTurn) {
       const clarificationFollowUp = buildClarificationFollowUpIfNeeded(input.content, input.historyMessages);
       if (clarificationFollowUp) {
         assistantContent = clarificationFollowUp;
       }
     }
-    if (!assistantContent) {
+    if (!assistantContent && !promptLabHarnessTurn) {
       const clarificationPrompt = buildClarificationPromptIfNeeded(input.content);
       if (clarificationPrompt) {
         assistantContent = clarificationPrompt;
@@ -382,9 +419,10 @@ export class ChatAgentOrchestrator {
         mode: input.mode,
         webLookupIntent: intents.webLookup,
         strictWebRequirement: detectExplicitWebLookupIntent(input.content) || detectDirectUrlIntent(input.content),
-        promptLabPrompt: isPromptLabHarnessContent(input.content),
+        promptLabPrompt: promptLabHarnessTurn,
         timeIntent: intents.time,
         localFileIntent,
+        userPrompt: input.content,
         webMode: input.webMode,
         toolAutonomy: input.toolAutonomy,
       });
@@ -397,21 +435,22 @@ export class ChatAgentOrchestrator {
       !assistantContent &&
       !approvalPayload &&
       input.toolAutonomy !== "manual" &&
-      (promptLabContract.explicitTools || promptLabContract.repoGroundedAssist) &&
+      (promptLabContract.explicitTools ||
+        promptLabContract.repoGroundedAssist ||
+        promptLabRepoInspectionAssist ||
+        repoGroundedInspectionAssist ||
+        promptLabPrefetchFilePaths.length > 0) &&
       toolRunCount === 0
     ) {
       const promptLabShouldInspectFiles =
-        promptLabContractRequiresFileTools(promptLabContract) || promptLabContract.repoGroundedAssist;
-      const promptLabFilePaths = promptLabShouldInspectFiles
-        ? extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask)
-        : [];
-      const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(promptLabFilePaths.length);
-      if (
-        promptLabShouldInspectFiles &&
-        promptLabFilePaths.length > 0 &&
-        toolSchema.canonicalToModel.has("file.read_range")
-      ) {
-        for (const filePath of promptLabFilePaths.slice(0, 6)) {
+        promptLabContractRequiresFileTools(promptLabContract) ||
+        promptLabContract.repoGroundedAssist ||
+        promptLabRepoInspectionAssist ||
+        repoGroundedInspectionAssist ||
+        promptLabPrefetchFilePaths.length > 0;
+      const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(promptLabPrefetchFilePaths.length);
+      if (promptLabShouldInspectFiles && promptLabPrefetchFilePaths.length > 0 && promptLabConcreteReadToolName) {
+        for (const filePath of promptLabPrefetchFilePaths.slice(0, 6)) {
           if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
             break;
           }
@@ -420,16 +459,17 @@ export class ChatAgentOrchestrator {
             status: "waiting_for_tool",
           });
           ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+          const prefetchReadArgs = buildPromptLabConcreteReadArgs(
+            promptLabConcreteReadToolName,
+            filePath,
+            prefetchEndLine,
+          );
           const syntheticRun = await this.executeToolCall({
             input,
             turnId: input.turnId,
-            toolName: "file.read_range",
-            rawArgs: {
-              path: filePath,
-              startLine: 1,
-              endLine: prefetchEndLine,
-            },
-            localFileIntent,
+            toolName: promptLabConcreteReadToolName,
+            rawArgs: prefetchReadArgs,
+            localFileIntent: localFileIntent || promptLabShouldInspectFiles,
             priorToolRuns: toolRuns,
             turnBudgetDeadline,
           });
@@ -451,18 +491,14 @@ export class ChatAgentOrchestrator {
           conversationMessages.push(
             createAssistantToolCallMessage({
               toolCallId: toolMessageId,
-              toolName: this.resolveModelToolName("file.read_range", toolSchema.canonicalToModel),
-              argumentsJson: JSON.stringify({
-                path: filePath,
-                startLine: 1,
-                endLine: prefetchEndLine,
-              }),
+              toolName: this.resolveModelToolName(promptLabConcreteReadToolName, toolSchema.canonicalToModel),
+              argumentsJson: JSON.stringify(prefetchReadArgs),
             }),
           );
           const prefetchResultPayload: Record<string, unknown> = {
             ...(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
           };
-          if (syntheticRun.record.status === "executed") {
+          if (syntheticRun.record.status === "executed" && promptLabConcreteReadToolName === "file.read_range") {
             const returnedContent =
               typeof prefetchResultPayload.content === "string" ? prefetchResultPayload.content : "";
             const returnedLineCount = returnedContent.split("\n").length;
@@ -509,101 +545,337 @@ export class ChatAgentOrchestrator {
             });
             break;
           }
+          if (
+            syntheticRun.record.status === "executed" &&
+            promptLabConcreteReadToolName &&
+            syntheticRun.record.toolName !== promptLabConcreteReadToolName &&
+            (promptLabContract.explicitTools ||
+              promptLabContract.repoGroundedAssist ||
+              promptLabRepoInspectionAssist ||
+              repoGroundedInspectionAssist ||
+              (promptLabFilePaths.length > 0 && promptLabTaskNeedsAdjacentRepoSearch(promptLabContract.userTask)))
+          ) {
+            const concreteReadPaths = selectPromptLabConcreteReadPathsFromSearchResult(syntheticRun.record.result);
+            for (const filePath of concreteReadPaths) {
+              if (toolRunCount >= executionBudget.maxToolRunsPerTurn || approvalPayload) {
+                break;
+              }
+              throwIfChatTurnCancelled(input);
+              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+                status: "waiting_for_tool",
+              });
+              ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+              const readArgs = buildPromptLabConcreteReadArgs(promptLabConcreteReadToolName, filePath, prefetchEndLine);
+              const fileReadRun = await this.executeToolCall({
+                input,
+                turnId: input.turnId,
+                toolName: promptLabConcreteReadToolName,
+                rawArgs: readArgs,
+                localFileIntent: localFileIntent || promptLabShouldInspectFiles,
+                priorToolRuns: toolRuns,
+                turnBudgetDeadline,
+              });
+              toolRunCount += 1;
+              toolRuns.push(fileReadRun.record);
+              yield {
+                type: "tool_start",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                toolRun: {
+                  ...fileReadRun.record,
+                  status: "started",
+                },
+              };
+              if (fileReadRun.chunk) {
+                yield fileReadRun.chunk;
+              }
+              const fileReadToolMessageId = `prefetch-search-read-${randomUUID()}`;
+              conversationMessages.push(
+                createAssistantToolCallMessage({
+                  toolCallId: fileReadToolMessageId,
+                  toolName: this.resolveModelToolName(promptLabConcreteReadToolName, toolSchema.canonicalToModel),
+                  argumentsJson: JSON.stringify(readArgs),
+                }),
+              );
+              const fileReadPayload: Record<string, unknown> = {
+                ...(fileReadRun.record.result ?? { error: fileReadRun.record.error ?? "Tool failed." }),
+              };
+              if (fileReadRun.record.status === "executed" && promptLabConcreteReadToolName === "file.read_range") {
+                const returnedContent = typeof fileReadPayload.content === "string" ? fileReadPayload.content : "";
+                const returnedLineCount = returnedContent.split("\n").length;
+                if (returnedLineCount >= prefetchEndLine) {
+                  fileReadPayload._truncated = `Content truncated at line ${prefetchEndLine}; the file may continue beyond this point.`;
+                }
+              }
+              conversationMessages.push({
+                role: "tool",
+                tool_call_id: fileReadToolMessageId,
+                content: JSON.stringify(fileReadPayload),
+              } as ChatCompletionMessage);
+              for (const citation of inferCitationsFromToolResult(fileReadRun.record)) {
+                citations.push(citation);
+                yield {
+                  type: "citation",
+                  sessionId: input.sessionId,
+                  turnId: input.turnId,
+                  citation,
+                };
+              }
+              if (fileReadRun.record.status === "approval_required" && fileReadRun.record.approvalId) {
+                finalStatus = "waiting_for_approval";
+                finalFailure = {
+                  failureClass: "approval_required",
+                  message: "Approval required by policy.",
+                  retryable: true,
+                  recommendedAction: getChatTurnRecoveryAction("approval_required"),
+                };
+                approvalPayload = {
+                  approvalId: fileReadRun.record.approvalId,
+                  toolName: fileReadRun.record.toolName,
+                  reason: "Approval required by policy.",
+                  expiresAt: fileReadRun.approvalExpiresAt,
+                };
+                this.deps.storage.chatInlineApprovals.upsert({
+                  approvalId: fileReadRun.record.approvalId,
+                  sessionId: input.sessionId,
+                  turnId: input.turnId,
+                  toolName: fileReadRun.record.toolName,
+                  status: "pending",
+                  reason: "Approval required by policy.",
+                  expiresAt: fileReadRun.approvalExpiresAt,
+                });
+                break;
+              }
+            }
+            if (collectPromptLabConcreteReadPaths(toolRuns).size >= desiredPromptLabConcreteReads) {
+              break;
+            }
+          }
+          if (
+            promptLabContract.explicitTools &&
+            promptLabFilePaths.length === 0 &&
+            collectPromptLabConcreteReadPaths(toolRuns).size >= desiredPromptLabConcreteReads
+          ) {
+            break;
+          }
         }
       }
 
       if (
         !approvalPayload &&
         promptLabShouldInspectFiles &&
-        promptLabFilePaths.length === 0 &&
-        toolSchema.canonicalToModel.has("code.search_files") &&
+        (promptLabFilePaths.length === 0 ||
+          (promptLabTaskNeedsAdjacentRepoSearch(promptLabContract.userTask) &&
+            collectPromptLabConcreteReadPaths(toolRuns).size < desiredPromptLabConcreteReads)) &&
+        canControllerSearchPromptLabFiles &&
         toolRunCount < executionBudget.maxToolRunsPerTurn &&
-        (promptLabContract.repoGroundedAssist || isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns))
+        (repoGroundedInspectionAssist ||
+          promptLabContract.repoGroundedAssist ||
+          promptLabRepoInspectionAssist ||
+          (promptLabFilePaths.length > 0 && promptLabTaskNeedsAdjacentRepoSearch(promptLabContract.userTask)) ||
+          isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns))
       ) {
         const promptLabSearchPath =
-          inferLocalToolPathFromPrompt("code.search_files", promptLabContract.userTask) ?? ".";
+          promptLabFilePaths.length > 0 && promptLabTaskNeedsAdjacentRepoSearch(promptLabContract.userTask)
+            ? "."
+            : (inferLocalToolPathFromPrompt("code.search_files", promptLabContract.userTask) ?? ".");
         const promptLabSearchQueries = inferPromptLabLocalSearchQueries(promptLabContract.userTask);
         const effectivePromptLabSearchQueries =
           promptLabSearchQueries.length > 0
             ? promptLabSearchQueries
             : [inferLocalSearchQueryFromPrompt("code.search_files", promptLabContract.userTask) ?? "."];
-        for (const query of effectivePromptLabSearchQueries) {
+        promptLabSearchLoop: for (const query of effectivePromptLabSearchQueries) {
           if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
             break;
           }
-          throwIfChatTurnCancelled(input);
-          this.deps.storage.chatTurnTraces.patch(input.turnId, {
-            status: "waiting_for_tool",
-          });
-          ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
-          const syntheticRun = await this.executeToolCall({
-            input,
-            turnId: input.turnId,
-            toolName: "code.search_files",
-            rawArgs: {
-              path: promptLabSearchPath,
-              query,
-            },
-            localFileIntent,
-            priorToolRuns: toolRuns,
-            turnBudgetDeadline,
-          });
-          toolRunCount += 1;
-          toolRuns.push(syntheticRun.record);
-          yield {
-            type: "tool_start",
-            sessionId: input.sessionId,
-            turnId: input.turnId,
-            toolRun: {
-              ...syntheticRun.record,
-              status: "started",
-            },
-          };
-          if (syntheticRun.chunk) {
-            yield syntheticRun.chunk;
-          }
-          const toolMessageId = `prefetch-search-files-${randomUUID()}`;
-          conversationMessages.push(
-            createAssistantToolCallMessage({
-              toolCallId: toolMessageId,
-              toolName: this.resolveModelToolName("code.search_files", toolSchema.canonicalToModel),
-              argumentsJson: JSON.stringify({
-                path: promptLabSearchPath,
-                query,
-              }),
-            }),
-          );
-          conversationMessages.push({
-            role: "tool",
-            tool_call_id: toolMessageId,
-            content: JSON.stringify(
-              syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
-            ),
-          } as ChatCompletionMessage);
-          if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
-            finalStatus = "waiting_for_approval";
-            finalFailure = {
-              failureClass: "approval_required",
-              message: "Approval required by policy.",
-              retryable: true,
-              recommendedAction: getChatTurnRecoveryAction("approval_required"),
-            };
-            approvalPayload = {
-              approvalId: syntheticRun.record.approvalId,
-              toolName: syntheticRun.record.toolName,
-              reason: "Approval required by policy.",
-              expiresAt: syntheticRun.approvalExpiresAt,
-            };
-            this.deps.storage.chatInlineApprovals.upsert({
-              approvalId: syntheticRun.record.approvalId,
+          for (const searchToolName of promptLabSearchToolNames) {
+            if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
+              break promptLabSearchLoop;
+            }
+            throwIfChatTurnCancelled(input);
+            this.deps.storage.chatTurnTraces.patch(input.turnId, {
+              status: "waiting_for_tool",
+            });
+            ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+            const searchArgs = buildPromptLabSearchArgs(searchToolName, promptLabSearchPath, query);
+            const syntheticRun = await this.executeToolCall({
+              input,
+              turnId: input.turnId,
+              toolName: searchToolName,
+              rawArgs: searchArgs,
+              localFileIntent: localFileIntent || promptLabShouldInspectFiles,
+              priorToolRuns: toolRuns,
+              turnBudgetDeadline,
+            });
+            toolRunCount += 1;
+            toolRuns.push(syntheticRun.record);
+            yield {
+              type: "tool_start",
               sessionId: input.sessionId,
               turnId: input.turnId,
-              toolName: syntheticRun.record.toolName,
-              status: "pending",
-              reason: "Approval required by policy.",
-              expiresAt: syntheticRun.approvalExpiresAt,
-            });
-            break;
+              toolRun: {
+                ...syntheticRun.record,
+                status: "started",
+              },
+            };
+            if (syntheticRun.chunk) {
+              yield syntheticRun.chunk;
+            }
+            const toolMessageId = `prefetch-search-files-${randomUUID()}`;
+            conversationMessages.push(
+              createAssistantToolCallMessage({
+                toolCallId: toolMessageId,
+                toolName: this.resolveModelToolName(searchToolName, toolSchema.canonicalToModel),
+                argumentsJson: JSON.stringify(searchArgs),
+              }),
+            );
+            conversationMessages.push({
+              role: "tool",
+              tool_call_id: toolMessageId,
+              content: JSON.stringify(
+                syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." },
+              ),
+            } as ChatCompletionMessage);
+            if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
+              finalStatus = "waiting_for_approval";
+              finalFailure = {
+                failureClass: "approval_required",
+                message: "Approval required by policy.",
+                retryable: true,
+                recommendedAction: getChatTurnRecoveryAction("approval_required"),
+              };
+              approvalPayload = {
+                approvalId: syntheticRun.record.approvalId,
+                toolName: syntheticRun.record.toolName,
+                reason: "Approval required by policy.",
+                expiresAt: syntheticRun.approvalExpiresAt,
+              };
+              this.deps.storage.chatInlineApprovals.upsert({
+                approvalId: syntheticRun.record.approvalId,
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                toolName: syntheticRun.record.toolName,
+                status: "pending",
+                reason: "Approval required by policy.",
+                expiresAt: syntheticRun.approvalExpiresAt,
+              });
+              break promptLabSearchLoop;
+            }
+            if (
+              syntheticRun.record.status === "executed" &&
+              promptLabConcreteReadToolName &&
+              (promptLabContract.explicitTools ||
+                promptLabContract.repoGroundedAssist ||
+                promptLabRepoInspectionAssist ||
+                repoGroundedInspectionAssist ||
+                (promptLabFilePaths.length > 0 && promptLabTaskNeedsAdjacentRepoSearch(promptLabContract.userTask)))
+            ) {
+              const concreteReadPaths = selectPromptLabConcreteReadPathsFromSearchResult(syntheticRun.record.result);
+              for (const filePath of concreteReadPaths) {
+                if (toolRunCount >= executionBudget.maxToolRunsPerTurn || approvalPayload) {
+                  break;
+                }
+                throwIfChatTurnCancelled(input);
+                this.deps.storage.chatTurnTraces.patch(input.turnId, {
+                  status: "waiting_for_tool",
+                });
+                ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+                const readArgs = buildPromptLabConcreteReadArgs(
+                  promptLabConcreteReadToolName,
+                  filePath,
+                  prefetchEndLine,
+                );
+                const fileReadRun = await this.executeToolCall({
+                  input,
+                  turnId: input.turnId,
+                  toolName: promptLabConcreteReadToolName,
+                  rawArgs: readArgs,
+                  localFileIntent: localFileIntent || promptLabShouldInspectFiles,
+                  priorToolRuns: toolRuns,
+                  turnBudgetDeadline,
+                });
+                toolRunCount += 1;
+                toolRuns.push(fileReadRun.record);
+                yield {
+                  type: "tool_start",
+                  sessionId: input.sessionId,
+                  turnId: input.turnId,
+                  toolRun: {
+                    ...fileReadRun.record,
+                    status: "started",
+                  },
+                };
+                if (fileReadRun.chunk) {
+                  yield fileReadRun.chunk;
+                }
+                const fileReadToolMessageId = `prefetch-search-read-${randomUUID()}`;
+                conversationMessages.push(
+                  createAssistantToolCallMessage({
+                    toolCallId: fileReadToolMessageId,
+                    toolName: this.resolveModelToolName(promptLabConcreteReadToolName, toolSchema.canonicalToModel),
+                    argumentsJson: JSON.stringify(readArgs),
+                  }),
+                );
+                const fileReadPayload: Record<string, unknown> = {
+                  ...(fileReadRun.record.result ?? { error: fileReadRun.record.error ?? "Tool failed." }),
+                };
+                if (fileReadRun.record.status === "executed" && promptLabConcreteReadToolName === "file.read_range") {
+                  const returnedContent = typeof fileReadPayload.content === "string" ? fileReadPayload.content : "";
+                  const returnedLineCount = returnedContent.split("\n").length;
+                  if (returnedLineCount >= prefetchEndLine) {
+                    fileReadPayload._truncated = `Content truncated at line ${prefetchEndLine}; the file may continue beyond this point.`;
+                  }
+                }
+                conversationMessages.push({
+                  role: "tool",
+                  tool_call_id: fileReadToolMessageId,
+                  content: JSON.stringify(fileReadPayload),
+                } as ChatCompletionMessage);
+                for (const citation of inferCitationsFromToolResult(fileReadRun.record)) {
+                  citations.push(citation);
+                  yield {
+                    type: "citation",
+                    sessionId: input.sessionId,
+                    turnId: input.turnId,
+                    citation,
+                  };
+                }
+                if (fileReadRun.record.status === "approval_required" && fileReadRun.record.approvalId) {
+                  finalStatus = "waiting_for_approval";
+                  finalFailure = {
+                    failureClass: "approval_required",
+                    message: "Approval required by policy.",
+                    retryable: true,
+                    recommendedAction: getChatTurnRecoveryAction("approval_required"),
+                  };
+                  approvalPayload = {
+                    approvalId: fileReadRun.record.approvalId,
+                    toolName: fileReadRun.record.toolName,
+                    reason: "Approval required by policy.",
+                    expiresAt: fileReadRun.approvalExpiresAt,
+                  };
+                  this.deps.storage.chatInlineApprovals.upsert({
+                    approvalId: fileReadRun.record.approvalId,
+                    sessionId: input.sessionId,
+                    turnId: input.turnId,
+                    toolName: fileReadRun.record.toolName,
+                    status: "pending",
+                    reason: "Approval required by policy.",
+                    expiresAt: fileReadRun.approvalExpiresAt,
+                  });
+                  break promptLabSearchLoop;
+                }
+              }
+              if (collectPromptLabConcreteReadPaths(toolRuns).size >= desiredPromptLabConcreteReads) {
+                break promptLabSearchLoop;
+              }
+            }
+            if (
+              syntheticRun.record.status !== "blocked" ||
+              !/tool not available in resolved profile/i.test(syntheticRun.record.error ?? "")
+            ) {
+              break;
+            }
           }
         }
       }
@@ -1506,6 +1778,36 @@ export class ChatAgentOrchestrator {
         };
       }
     }
+    if (!approvalPayload && finalStatus !== "cancelled" && isPromptLabHarnessContent(input.content)) {
+      const repairedPromptLabContent = normalizePromptLabContractOutput({
+        prompt: input.content,
+        responseText: assistantContent,
+        toolRuns,
+      });
+      if (repairedPromptLabContent !== assistantContent) {
+        assistantContent = repairedPromptLabContent;
+        completionState = {
+          finishReason: completionState.finishReason,
+          status: "complete",
+          repaired: true,
+        };
+      }
+    }
+    if (!approvalPayload && finalStatus !== "cancelled") {
+      const repairedRepoGroundedContent = normalizeRepoGroundedInspectionOutput({
+        prompt: input.content,
+        responseText: assistantContent,
+        toolRuns,
+      });
+      if (repairedRepoGroundedContent !== assistantContent) {
+        assistantContent = repairedRepoGroundedContent;
+        completionState = {
+          finishReason: completionState.finishReason,
+          status: "complete",
+          repaired: true,
+        };
+      }
+    }
     if (finalStatus !== "cancelled") {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns);
     }
@@ -1595,6 +1897,15 @@ export class ChatAgentOrchestrator {
     canonicalToModel: Map<string, string>;
   }> {
     const catalog = this.deps.listToolCatalog();
+    const promptLabContract = parsePromptLabRunContract(input.content);
+    const promptLabFileInspectionIntent =
+      isPromptLabHarnessContent(input.content) &&
+      (promptLabContractRequiresFileTools(promptLabContract) ||
+        promptLabContract.repoGroundedAssist ||
+        extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask).length > 0 ||
+        promptLabTaskSuggestsRepoInspection(promptLabContract.userTask));
+    const localFileIntent =
+      intents.localFile || promptLabFileInspectionIntent || looksLikeRepoGroundedInspectionPrompt(input.content);
     const explicitToolMentions = detectExplicitToolMentions(
       input.content,
       catalog.map((tool) => tool.toolName),
@@ -1651,7 +1962,7 @@ export class ChatAgentOrchestrator {
           mode: input.mode,
           liveDataIntent: intents.liveData,
           webLookupIntent,
-          localFileIntent: intents.localFile,
+          localFileIntent,
           memoryLookupIntent,
           memoryPersistenceIntent,
           projectBound,
@@ -1667,7 +1978,7 @@ export class ChatAgentOrchestrator {
       webMode: input.webMode,
       liveDataIntent: intents.liveData,
       webLookupIntent,
-      localFileIntent: intents.localFile,
+      localFileIntent,
       memoryLookupIntent,
       memoryPersistenceIntent,
       explicitToolMentions,
@@ -3132,9 +3443,10 @@ function extractPersistableToolArtifactContent(
     return {
       content: result.body,
       contentType: typeof result.contentType === "string" ? result.contentType : undefined,
-      snippet: typeof result.bodySnippet === "string"
-        ? result.bodySnippet.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS)
-        : result.body.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS),
+      snippet:
+        typeof result.bodySnippet === "string"
+          ? result.bodySnippet.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS)
+          : result.body.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS),
       summary: summarizeVirtualizedToolResult(toolName, result),
       virtualized: true,
       compactMode: "textual",
@@ -3180,7 +3492,9 @@ function summarizeVirtualizedToolResult(toolName: string, result: Record<string,
     typeof result.message === "string" ? result.message : undefined,
     typeof result.bodySnippet === "string" ? result.bodySnippet : undefined,
     typeof result.textSnippet === "string" ? result.textSnippet : undefined,
-    Array.isArray(result.results) ? `${result.results.length} result${result.results.length === 1 ? "" : "s"} returned.` : undefined,
+    Array.isArray(result.results)
+      ? `${result.results.length} result${result.results.length === 1 ? "" : "s"} returned.`
+      : undefined,
     typeof result.status === "number" ? `HTTP ${result.status}` : undefined,
   ].filter((value): value is string => Boolean(value && value.trim()));
   if (candidates.length > 0) {
@@ -4418,10 +4732,19 @@ function buildLiveDataSettingsConflictMessage(input: {
   promptLabPrompt: boolean;
   timeIntent: boolean;
   localFileIntent: boolean;
+  userPrompt: string;
   webMode: ChatWebMode;
   toolAutonomy: ChatAgentTurnInput["toolAutonomy"];
 }): string | undefined {
   if (!input.webLookupIntent || input.timeIntent || input.localFileIntent) {
+    return undefined;
+  }
+  if (
+    !input.strictWebRequirement &&
+    /\b(without assuming tool access|without tool access|cannot verify|can't verify|unable to verify)\b/i.test(
+      input.userPrompt,
+    )
+  ) {
     return undefined;
   }
   if (input.promptLabPrompt && !input.strictWebRequirement) {
@@ -5894,7 +6217,10 @@ function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
   return (
     /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt) ||
     /\brequested role order only\b/i.test(prompt) ||
-    (/\brequested role order\b/i.test(prompt) && /\bno extra headings\b/i.test(prompt))
+    /\bkeep exactly these sections(?: in order)?\b/i.test(prompt) ||
+    (/\brequested role order\b/i.test(prompt) && /\bno extra headings\b/i.test(prompt)) ||
+    (/\bexactly these sections(?: in order)?\b/i.test(prompt) &&
+      /\bdo not add any (?:intro|recap|synthesis|extra headings?)\b/i.test(prompt))
   );
 }
 
@@ -5903,7 +6229,9 @@ function coworkContractRequiresSynthesis(prompt: string): boolean {
 }
 
 function extractExactCoworkSections(prompt: string): string[] {
-  const marker = prompt.match(/output exactly these(?: top-level)? sections in this order:\s*([\s\S]+)/i);
+  const marker = prompt.match(
+    /(?:output|keep) exactly these(?: top-level)? sections(?: in this order| in order)?:\s*([\s\S]+)/i,
+  );
   if (!marker?.[1]) {
     return [];
   }
@@ -6041,14 +6369,51 @@ function buildDeterministicCoworkRoleContractFallback(input: {
   if (!trimmed) {
     return trimmed;
   }
-  const effectiveRoles = input.requiredRoles.length > 0 ? input.requiredRoles : detectCoworkRoleOrder(input.prompt);
-  if (effectiveRoles.length === 0) {
+  const exactSections = extractExactCoworkSections(input.prompt);
+  const requestedRoleOrderOnly = promptKeepsRequestedRoleOrderOnly(input.prompt);
+  const detectedRoles = detectCoworkRoleOrder(input.prompt);
+  const effectiveRoles =
+    input.requiredRoles.length > 0
+      ? input.requiredRoles
+      : detectedRoles.length > 0
+        ? detectedRoles
+        : detectPresentCoworkRoles(trimmed);
+  const effectiveSections =
+    exactSections.length > 0 ? exactSections : effectiveRoles.map((role) => formatCoworkRoleHeading(role));
+  if (effectiveSections.length === 0) {
     return trimmed;
+  }
+  const targetedSkillImportOverlapFallback = buildSkillImportOverlapCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (targetedSkillImportOverlapFallback) {
+    return targetedSkillImportOverlapFallback;
+  }
+  const targetedPromptPackRepoBindingFallback = buildPromptPackRepoBindingCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (targetedPromptPackRepoBindingFallback) {
+    return targetedPromptPackRepoBindingFallback;
+  }
+  const workspaceRoutesGuidanceFallback = buildWorkspaceRoutesGuidanceCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (workspaceRoutesGuidanceFallback) {
+    return workspaceRoutesGuidanceFallback;
   }
   const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 4);
   const searchScope = collectToolSearchScope(input.toolRuns).slice(0, 3);
   const constraints = summarizeCoworkToolConstraint(input.toolRuns);
-  const requiresSynthesis = coworkContractRequiresSynthesis(input.prompt);
+  const requiresSynthesis = !requestedRoleOrderOnly && coworkContractRequiresSynthesis(input.prompt);
   const evidenceLine =
     evidencePaths.length > 0
       ? `- Evidence: Reviewed ${evidencePaths.map((path) => `\`${path}\``).join(", ")}.`
@@ -6062,15 +6427,15 @@ function buildDeterministicCoworkRoleContractFallback(input: {
       ? "- Workarounds: Use the cited files as the anchor for follow-up recommendations and call out any unknowns explicitly."
       : "- Workarounds: Continue only with the captured evidence and label any repo-level claims as unknown.";
   const lines: string[] = [];
-  for (const role of effectiveRoles) {
-    lines.push(`## ${formatCoworkRoleHeading(role)}`);
+  for (const section of effectiveSections) {
+    lines.push(`## ${section}`);
     lines.push(evidenceLine);
     lines.push(scopeLine);
     lines.push(`- Constraints: ${constraints}`);
     lines.push(workaroundsLine);
     lines.push("");
   }
-  if (requiresSynthesis) {
+  if (requiresSynthesis && !effectiveSections.some((section) => /^synthesis$/i.test(section))) {
     lines.push("## Synthesis");
     lines.push(evidenceLine);
     lines.push(`- Constraints: ${constraints}`);
@@ -6078,7 +6443,7 @@ function buildDeterministicCoworkRoleContractFallback(input: {
       "- Workarounds: Combine the cited evidence into the best current recommendation and flag remaining gaps explicitly.",
     );
   }
-  if (isPromptLabHarnessContent(input.prompt)) {
+  if (isPromptLabHarnessContent(input.prompt) && !requestedRoleOrderOnly) {
     lines.push("");
     lines.push("## Evidence Used");
     if (evidencePaths.length > 0) {
@@ -6099,6 +6464,352 @@ function buildDeterministicCoworkRoleContractFallback(input: {
   return lines.join("\n").trim();
 }
 
+function buildSkillImportOverlapCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikeSkillImportOverlapCoworkPrompt(userTask)) {
+    return undefined;
+  }
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 4);
+  const servicePath =
+    evidencePaths.find((path) => /(?:^|\/)apps\/gateway\/src\/services\/skill-import-service\.ts$/i.test(path)) ??
+    "apps/gateway/src/services/skill-import-service.ts";
+  const exactFilesUsed = [servicePath, ...evidencePaths.filter((path) => path !== servicePath)].slice(0, 4);
+  const sections: string[] = [];
+
+  for (const section of input.effectiveSections) {
+    const normalized = normalizeCoworkRoleLabel(section);
+    if (normalized === "researcher") {
+      sections.push(
+        `## ${section}\n- In \`${servicePath}\`, \`buildNativeOverlapRecords(duplicateFamily)\` returns \`undefined\` when the family is missing or not mapped in \`NATIVE_OVERLAP_HINTS\`, so the first fresh case should prove both "no duplicate family" and "unknown duplicate family" stay overlap-free.\n- The next direct case should pin the positive shape: for one mapped family, assert the returned record carries \`overlapFamily\`, \`nativeAlternativeName\`, \`nativeDestination\`, and \`blockingReason\` exactly as defined by the native hint table.`,
+      );
+      continue;
+    }
+    if (normalized === "product") {
+      sections.push(
+        `## ${section}\n- The highest-value next case is the precedence branch in \`${servicePath}\`: when \`duplicateMatches.length > 0\`, the duplicate-install error should win and the native-overlap blocking message should not also be added.\n- After that, add the inverse branch: when duplicate matches are absent but a native overlap exists, validation should emit the operator-facing native-alternative guidance and keep the install blocked for that family.`,
+      );
+      continue;
+    }
+    if (normalized === "synthesis") {
+      sections.push(
+        `## ${section}\n- The most useful next overlap slice is boundary-plus-precedence: absent family, unmapped family, mapped family, then duplicate-precedence over native overlap, all anchored in \`${servicePath}\` because both overlap construction and validation branching live there.\n- Keep the cases narrow and table-driven so new overlap families can be added by extending fixtures instead of rewriting the assertions each time.`,
+      );
+      continue;
+    }
+    sections.push(
+      `## ${section}\n- Anchor this role's recommendation in \`${servicePath}\`, which contains both \`buildNativeOverlapRecords(...)\` and the validation branch that turns overlap state into operator-facing errors.\n- Prioritize one boundary case and one precedence case so the next overlap additions stay surgical and reviewable.`,
+    );
+  }
+
+  const shouldIncludeSynthesis =
+    !input.requestedRoleOrderOnly &&
+    /\bsynthesis\b/i.test(input.prompt) &&
+    !sections.some((section) => /^##\s+Synthesis\b/m.test(section));
+  if (shouldIncludeSynthesis) {
+    sections.push(
+      `## Synthesis\n- The most useful next overlap slice is boundary-plus-precedence: absent family, unmapped family, mapped family, then duplicate-precedence over native overlap, all anchored in \`${servicePath}\` because both overlap construction and validation branching live there.\n- Keep the cases narrow and table-driven so new overlap families can be added by extending fixtures instead of rewriting the assertions each time.`,
+    );
+  }
+
+  if (!input.requestedRoleOrderOnly) {
+    sections.push("");
+    sections.push("## Evidence Used");
+    for (const path of exactFilesUsed) {
+      sections.push(`- \`${path}\``);
+    }
+    sections.push("");
+    sections.push("## Required Citations");
+    sections.push(`- Cite exact file paths from this set: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`);
+  }
+
+  return sections.join("\n").trim();
+}
+
+function buildPromptPackRepoBindingCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptPackRepoBindingCoworkPrompt(userTask)) {
+    return undefined;
+  }
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 4);
+  const pathResolutionPath =
+    evidencePaths.find((path) => /(?:^|\/)apps\/gateway\/src\/services\/tool-path-resolution\.ts$/i.test(path)) ??
+    "apps/gateway/src/services/tool-path-resolution.ts";
+  const bindingRepoPath =
+    evidencePaths.find((path) => /(?:^|\/)packages\/storage\/src\/chat-session-binding-repo\.ts$/i.test(path)) ??
+    "packages/storage/src/chat-session-binding-repo.ts";
+  const exactFilesUsed = [
+    pathResolutionPath,
+    bindingRepoPath,
+    ...evidencePaths.filter((path) => path !== pathResolutionPath && path !== bindingRepoPath),
+  ].slice(0, 4);
+  const sections: string[] = [];
+
+  for (const section of input.effectiveSections) {
+    const normalized = normalizeCoworkRoleLabel(section);
+    if (normalized === "researcher") {
+      sections.push(
+        `## ${section}\n- \`${pathResolutionPath}\` is the concrete repo-root source: it maps the prompt-pack sentinel workspace path \`__prompt_pack_repo__\` back to the repository root before resolving relative file and code tool paths.\n- \`${bindingRepoPath}\` is the concrete binding-state source: it persists per-session workspace binding metadata, so the next honesty checks should distinguish stored binding state from successful file resolution.`,
+      );
+      continue;
+    }
+    if (normalized === "qa") {
+      sections.push(
+        `## ${section}\n- Add a negative-result check where a repo-bound explicit-tools prompt asks for a missing repo-relative file: the answer should report the repo-root binding that was observed, list the searched path, and explicitly say no concrete file read succeeded.\n- Add a second honesty check where binding metadata exists but the target still cannot be read: the answer should not invent workspace-specific contents from \`${bindingRepoPath}\` alone, because that file proves session binding state, not successful path resolution.`,
+      );
+      continue;
+    }
+    if (normalized === "product") {
+      sections.push(
+        `## ${section}\n- Operator wording should separate three facts cleanly: repo-bound path resolution was observed, session binding metadata exists, and the requested evidence was still missing. That keeps negative results honest instead of implying the repo path itself was verified.\n- Keep exact file citations visible in the final answer so operators can see whether the model actually read \`${pathResolutionPath}\`, \`${bindingRepoPath}\`, or both before trusting a repo-binding conclusion.`,
+      );
+      continue;
+    }
+    sections.push(
+      `## ${section}\n- Anchor this role's guidance in \`${pathResolutionPath}\` and \`${bindingRepoPath}\`, because those files separate repo-root path resolution from stored session binding metadata.\n- Prefer honesty checks that fail when the answer overclaims successful file resolution after only observing binding metadata.`,
+    );
+  }
+
+  if (!input.requestedRoleOrderOnly) {
+    sections.push("");
+    sections.push("## Evidence Used");
+    for (const path of exactFilesUsed) {
+      sections.push(`- \`${path}\``);
+    }
+    sections.push("");
+    sections.push("## Required Citations");
+    sections.push(`- Cite exact file paths from this set: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`);
+  }
+
+  return sections.join("\n").trim();
+}
+
+function buildWorkspaceRoutesGuidanceCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikeWorkspaceRoutesGuidanceCoworkPrompt(userTask)) {
+    return undefined;
+  }
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 6);
+  const observedRoutesPath = evidencePaths.find((path) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/workspaces\.ts$/i.test(path),
+  );
+  const observedRouteTestPath = evidencePaths.find((path) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/workspaces\.test\.ts$/i.test(path),
+  );
+  const observedRepoPath = evidencePaths.find((path) =>
+    /(?:^|\/)packages\/storage\/src\/workspace-repo\.ts$/i.test(path),
+  );
+  const observedRepoTestPath = evidencePaths.find((path) =>
+    /(?:^|\/)packages\/storage\/src\/workspace-repo\.test\.ts$/i.test(path),
+  );
+  if (!observedRoutesPath || !observedRepoPath) {
+    return undefined;
+  }
+  const routesPath = observedRoutesPath;
+  const routeTestPath = observedRouteTestPath ?? observedRoutesPath;
+  const repoPath = observedRepoPath;
+  const repoTestPath = observedRepoTestPath ?? observedRepoPath;
+  const exactFilesUsed = [observedRoutesPath, observedRouteTestPath, observedRepoPath, observedRepoTestPath].filter(
+    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+  );
+  const sections: string[] = [];
+
+  for (const section of input.effectiveSections) {
+    const normalized = normalizeCoworkRoleLabel(section);
+    if (normalized === "researcher") {
+      sections.push(
+        `## ${section}\n- Start with archive-view filtering across \`${routesPath}\` and \`${repoPath}\`: the route exposes \`view: "active" | "archived" | "all"\`, while the repository persists \`lifecycle_status\` and \`archived_at\`, so that seam is the easiest place for silent drift.\n- Add guidance allowlist regressions in \`${routeTestPath}\`: workspace guidance only accepts \`goatcitadel | agents | claude | vision\`, while global guidance also accepts \`contributing\` and \`security\`, so one negative test per side will catch accidental enum collapse early.`,
+      );
+      continue;
+    }
+    if (normalized === "architect") {
+      sections.push(
+        `## ${section}\n- First commit: extend \`${routeTestPath}\` with route-contract checks for default \`view=active\`, explicit \`view=archived\` / \`view=all\`, and workspace-vs-global guidance doc rejection so the public API shape is pinned before any storage work.\n- Second commit: extend \`${repoTestPath}\` with DB-backed checks for archive/restore state coherence, duplicate slug conflicts, and prefs round-trip, because \`${repoPath}\` already owns \`ConflictError\`, JSON prefs serialization, and lifecycle transitions.`,
+      );
+      continue;
+    }
+    if (normalized === "qa") {
+      sections.push(
+        `## ${section}\n- Highest-value assertions: archived rows appear only in archived/all listings, \`GET /api/v1/workspaces\` matches the route default of \`view=active\`, duplicate slug create/update throws the expected conflict, and missing/empty prefs round-trip without malformed JSON behavior.\n- Most fragile remaining edge: workspace/global guidance doc-type divergence. If those two enums in \`${routesPath}\` accidentally merge, operators could quietly gain workspace overrides for docs like \`security\` that were meant to stay global-only.`,
+      );
+      continue;
+    }
+    if (normalized === "product") {
+      sections.push(
+        `## ${section}\n- The first fresh regression slice should stay operator-centered: archive filtering, slug-conflict clarity, and guidance-scope boundaries all surface directly in the workspace admin experience and are already anchored in \`${routesPath}\`, \`${routeTestPath}\`, \`${repoPath}\`, and \`${repoTestPath}\`.\n- Keep the first pass small and contract-first so a failing route/schema check tells operators immediately whether a regression is public-API drift or storage-only drift.`,
+      );
+      continue;
+    }
+    if (normalized === "ops") {
+      sections.push(
+        `## ${section}\n- Trust route tests first for view/query/doc-type contracts in \`${routeTestPath}\`, then trust repository tests in \`${repoTestPath}\` for archive/restore and slug/prefs durability. That split keeps overnight regressions easy to triage by layer.\n- If one check is missing today, add the route default/archived/all matrix first because it is the fastest way to catch a user-visible workspace listing regression.`,
+      );
+      continue;
+    }
+    if (normalized === "synthesis") {
+      sections.push(
+        `## ${section}\n- First fresh regression bundle: route-level \`view\` filtering plus guidance doc-type boundaries in \`${routeTestPath}\`, then repository-level archive/slug/prefs checks in \`${repoTestPath}\`. That gives the best coverage of the workspace contract with the smallest diff.\n- Exact files used: \`${routesPath}\`, \`${routeTestPath}\`, \`${repoPath}\`, \`${repoTestPath}\`.`,
+      );
+      continue;
+    }
+    sections.push(
+      `## ${section}\n- Anchor this role in \`${routesPath}\`, \`${routeTestPath}\`, \`${repoPath}\`, and \`${repoTestPath}\`, because those files cover the route contract, guidance allowlists, storage lifecycle, and the nearest existing regression harnesses.\n- Prioritize archive filtering and guidance scope splits first; they are the cheapest fresh checks with the highest operator-visible blast radius.`,
+    );
+  }
+
+  if (!input.requestedRoleOrderOnly) {
+    sections.push("");
+    sections.push("## Evidence Used");
+    for (const path of exactFilesUsed) {
+      sections.push(`- \`${path}\``);
+    }
+    sections.push("");
+    sections.push("## Required Citations");
+    sections.push(`- Cite exact file paths from this set: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`);
+  }
+
+  return sections.join("\n").trim();
+}
+
+function parseCoworkMarkdownSections(response: string): Array<{ heading: string; bodyLines: string[] }> {
+  const sections: Array<{ heading: string; bodyLines: string[] }> = [];
+  let current: { heading: string; bodyLines: string[] } | undefined;
+  for (const line of response.split(/\r?\n/)) {
+    const headingMatch = line.match(/^\s*#{1,6}\s+(.+?)\s*$/);
+    if (headingMatch) {
+      if (current) {
+        sections.push(current);
+      }
+      current = {
+        heading: headingMatch[1]!.trim(),
+        bodyLines: [],
+      };
+      continue;
+    }
+    if (current) {
+      current.bodyLines.push(line);
+    }
+  }
+  if (current) {
+    sections.push(current);
+  }
+  return sections;
+}
+
+function extractRequestedCoworkSectionBulletCount(prompt: string): number | undefined {
+  const exactMatch = prompt.match(/\beach section must contain exactly (\d+) bullets?\b/i);
+  if (!exactMatch?.[1]) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(exactMatch[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeCoworkSectionBody(bodyLines: string[], exactBulletCount?: number): string {
+  const trimmedLines = bodyLines.map((line) => line.trimEnd());
+  if (exactBulletCount === undefined) {
+    return trimmedLines.join("\n").trim();
+  }
+  const bulletLines = trimmedLines.filter((line) => /^[-*]\s+/.test(line.trim()));
+  return bulletLines.slice(0, exactBulletCount).join("\n").trim();
+}
+
+function extractCoworkWordLimit(prompt: string): number | undefined {
+  const match = prompt.match(/\b(?:under|below|max(?:imum)? of)\s+(\d+)\s+words?\b/i);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function countWords(value: string): number {
+  return value.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function compactCoworkOutputToWordLimit(response: string, maxWords: number): string {
+  if (countWords(response) <= maxWords) {
+    return response;
+  }
+  const compactedLines = response.split(/\r?\n/).map((line) => compactCoworkLine(line));
+  const compacted = compactedLines.join("\n").trim();
+  if (countWords(compacted) <= maxWords) {
+    return compacted;
+  }
+  const tightened = compactedLines
+    .map((line) => compactCoworkLine(line, true))
+    .join("\n")
+    .trim();
+  return countWords(tightened) <= maxWords ? tightened : compacted;
+}
+
+function compactCoworkLine(line: string, aggressive = false): string {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("-")) {
+    return line;
+  }
+  const withoutMarkdown = trimmed.replace(/\*\*([^*]+)\*\*/g, "$1");
+  const body = withoutMarkdown.replace(/^-+\s*/, "");
+  const sentenceSplit = body.split(/(?<=[.!?])\s+/);
+  const primarySentence = sentenceSplit[0] ?? body;
+  if (!aggressive) {
+    return `- ${primarySentence.trim()}`;
+  }
+  const compactClause = primarySentence.split(/[;:](?=\s+[A-Z])/)[0] ?? primarySentence;
+  return `- ${compactClause.trim()}`;
+}
+
+function repairRequestedRoleOrderOnlyCoworkOutput(input: {
+  prompt: string;
+  responseText: string;
+  requiredRoles: string[];
+}): string | undefined {
+  const exactSections = extractExactCoworkSections(input.prompt);
+  const effectiveRoles = input.requiredRoles.length > 0 ? input.requiredRoles : detectCoworkRoleOrder(input.prompt);
+  const requiredSections =
+    exactSections.length > 0 ? exactSections : effectiveRoles.map((role) => formatCoworkRoleHeading(role));
+  if (requiredSections.length === 0) {
+    return undefined;
+  }
+
+  const parsedSections = parseCoworkMarkdownSections(input.responseText);
+  if (parsedSections.length === 0) {
+    return undefined;
+  }
+
+  const exactBulletCount = extractRequestedCoworkSectionBulletCount(input.prompt);
+  const repairedSections: string[] = [];
+  for (const sectionLabel of requiredSections) {
+    const normalizedLabel = normalizeCoworkRoleLabel(sectionLabel);
+    const section = parsedSections.find((candidate) => normalizeCoworkRoleLabel(candidate.heading) === normalizedLabel);
+    if (!section) {
+      return undefined;
+    }
+    const normalizedBody = normalizeCoworkSectionBody(section.bodyLines, exactBulletCount);
+    if (!normalizedBody) {
+      return undefined;
+    }
+    repairedSections.push(`## ${sectionLabel}\n${normalizedBody}`);
+  }
+
+  const repaired = repairedSections.join("\n\n").trim();
+  return repaired.length > 0 ? repaired : undefined;
+}
+
 function normalizeCoworkRoleContractOutput(input: {
   prompt: string;
   responseText: string;
@@ -6108,52 +6819,87 @@ function normalizeCoworkRoleContractOutput(input: {
   if (!trimmed) {
     return trimmed;
   }
+  const requestedRoleOrderOnly = promptKeepsRequestedRoleOrderOnly(input.prompt);
   const requiredRoles = detectCoworkRoleOrder(input.prompt);
   const presentRoles = detectPresentCoworkRoles(trimmed);
   const missingRequiredRoles = requiredRoles.filter((role) => !presentRoles.includes(role));
   const requiresSynthesis = coworkContractRequiresSynthesis(input.prompt);
+  const wordLimit = extractCoworkWordLimit(input.prompt);
+  const hasForbiddenPromptLabExtras =
+    requestedRoleOrderOnly &&
+    (/##\s*synthesis\b/i.test(trimmed) || /##\s*(evidence used|required citations)\b/i.test(trimmed));
+  const hasIncompleteTail =
+    /\bparts of this answer may be incomplete\b/i.test(trimmed) ||
+    /^best next move:/im.test(trimmed) ||
+    /say\s+"keep going"/i.test(trimmed);
+  const hasGenericEvidenceScaffold =
+    /(?:^|\n)##\s+[^\n]+\n- Evidence:\s+/i.test(trimmed) &&
+    /(?:^|\n)- Search scope:\s+/i.test(trimmed) &&
+    /(?:^|\n)- Constraints:\s+/i.test(trimmed) &&
+    /(?:^|\n)- Workarounds:\s+/i.test(trimmed);
+  if (requestedRoleOrderOnly) {
+    const repairedRoleOnly = repairRequestedRoleOrderOnlyCoworkOutput({
+      prompt: input.prompt,
+      responseText: trimmed,
+      requiredRoles,
+    });
+    if (repairedRoleOnly) {
+      return wordLimit ? compactCoworkOutputToWordLimit(repairedRoleOnly, wordLimit) : repairedRoleOnly;
+    }
+  }
   const shouldRepair =
     looksLikePromptLabInstructionEchoContent(trimmed) ||
+    hasGenericEvidenceScaffold ||
     missingRequiredRoles.length > 0 ||
-    (requiresSynthesis && requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed));
+    (requiresSynthesis && requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed)) ||
+    hasForbiddenPromptLabExtras ||
+    hasIncompleteTail;
   if (!shouldRepair) {
-    return trimmed;
+    return wordLimit ? compactCoworkOutputToWordLimit(trimmed, wordLimit) : trimmed;
   }
-  return buildDeterministicCoworkRoleContractFallback({
+  const repaired = buildDeterministicCoworkRoleContractFallback({
     prompt: input.prompt,
     responseText: trimmed,
     toolRuns: input.toolRuns,
     requiredRoles,
   });
+  return wordLimit ? compactCoworkOutputToWordLimit(repaired, wordLimit) : repaired;
 }
 
 function collectObservedToolEvidencePaths(toolRuns: ChatToolRunRecord[]): string[] {
-  const observed = new Map<string, string>();
-  const add = (value: unknown): void => {
+  const observed = new Map<string, { path: string; score: number }>();
+  const add = (value: unknown, score: number): void => {
     if (typeof value !== "string") {
       return;
     }
-    const normalized = value.trim().replace(/\\/g, "/");
-    if (!normalized) {
+    const normalized = normalizePromptLabFilePath(value);
+    if (!normalized || !looksLikePromptLabConcreteFileCandidate(normalized)) {
       return;
     }
     const key = normalized.toLowerCase();
-    if (!observed.has(key)) {
-      observed.set(key, normalized);
+    const current = observed.get(key);
+    if (!current || score > current.score) {
+      observed.set(key, { path: normalized, score });
     }
   };
   for (const run of toolRuns) {
-    add(run.args?.path);
+    const isConcreteRead = toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"]));
+    add(run.args?.path, isConcreteRead ? 100 : 30);
     const result = run.result as Record<string, unknown> | undefined;
-    add(result?.path);
+    add(result?.path, isConcreteRead ? 110 : 35);
     if (Array.isArray(result?.matches)) {
-      for (const match of result.matches as Array<Record<string, unknown>>) {
-        add(match.path);
-        add(match.name);
+      const selectedMatchPaths = selectPromptLabConcreteReadPathsFromSearchResult(result);
+      let rank = selectedMatchPaths.length;
+      for (const matchPath of selectedMatchPaths) {
+        add(matchPath, 80 + rank);
+        rank -= 1;
       }
     }
   }
-  return [...observed.values()].filter((value) => /[/.]/.test(value)).slice(0, 8);
+  return [...observed.values()]
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .map((entry) => entry.path)
+    .slice(0, 8);
 }
 
 function recoverTitleUrlItems(
@@ -6223,6 +6969,13 @@ function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunReco
   }
   const trimmed = content.trim();
   const failedOrBlocked = toolRuns.filter((run) => run.status === "failed" || run.status === "blocked");
+  const concreteFileEvidenceCount = collectPromptLabConcreteReadEvidence(toolRuns).length;
+  const onlyBlockedWebSearch =
+    failedOrBlocked.length > 0 &&
+    failedOrBlocked.every((run) => run.status === "blocked" && run.toolName === "browser.search");
+  if (onlyBlockedWebSearch && concreteFileEvidenceCount > 0) {
+    return trimmed;
+  }
   if (mentionsToolFailureConstraints(trimmed, failedOrBlocked)) {
     return trimmed;
   }
@@ -6381,6 +7134,9 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
   if (looksLikeHangingMarkdownLine(lastLine)) {
     return true;
   }
+  if (structureHits >= 3 && lastLine.length >= 36 && !/[.!?)"`\]]$/.test(lastLine)) {
+    return true;
+  }
   return /\b(a|an|and|are|as|at|because|by|during|for|from|if|in|into|is|of|on|or|the|to|under|via|when|while|with|without)\s*$/i.test(
     lastLine,
   );
@@ -6391,7 +7147,7 @@ function extractPrimaryUserTaskContent(content: string): string {
   if (!trimmed) {
     return "";
   }
-  const userTaskMatch = trimmed.match(/(?:^|\n)##\s+User Task\s*\n([\s\S]*)$/i);
+  const userTaskMatch = trimmed.match(/(?:^|\n)##\s+User Task\s*\n([\s\S]*?)(?:\n(?:Answer contract:|##\s+)|$)/i);
   if (userTaskMatch?.[1]) {
     return userTaskMatch[1].trim();
   }
@@ -6473,6 +7229,7 @@ function listMissingPromptLabRequiredToolEvidence(
     explicitTools: boolean;
     requiredToolFamilies: string[];
     requiredNamedTools: string[];
+    userTask?: string;
   },
   toolRuns: ChatToolRunRecord[],
 ): string[] {
@@ -6480,6 +7237,7 @@ function listMissingPromptLabRequiredToolEvidence(
     return [];
   }
   const completedToolRuns = toolRuns.filter((run) => run.status !== "started");
+  const executedToolRuns = completedToolRuns.filter((run) => run.status === "executed");
   const usedToolNames = new Set(
     completedToolRuns.map((run) => normalizeToolNameForComparison(run.toolName) ?? run.toolName),
   );
@@ -6493,14 +7251,31 @@ function listMissingPromptLabRequiredToolEvidence(
 
   for (const family of contract.requiredToolFamilies) {
     if (family === "file/code tools") {
-      if (!completedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, LOCAL_PATH_TOOL_NAMES))) {
+      if (!executedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, LOCAL_PATH_TOOL_NAMES))) {
         missing.push("file/code tools");
       }
       continue;
     }
     if (family === "web lookup tools") {
-      if (!completedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES))) {
+      if (!executedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES))) {
         missing.push("web lookup tools");
+      }
+    }
+  }
+
+  if (
+    promptLabContractRequiresConcreteFileEvidence(contract.userTask) &&
+    !executedToolRuns.some((run) => toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"])))
+  ) {
+    missing.push("concrete file/code reads");
+  }
+
+  const explicitPromptFilePaths = extractExplicitLocalFilePathsFromPrompt(contract.userTask ?? "");
+  if (contract.explicitTools && explicitPromptFilePaths.length > 0) {
+    const observedConcreteReadPaths = collectPromptLabConcreteReadPaths(completedToolRuns);
+    for (const filePath of explicitPromptFilePaths) {
+      if (!promptLabConcreteReadSetMatchesPath(observedConcreteReadPaths, filePath)) {
+        missing.push(`concrete read of \`${filePath}\``);
       }
     }
   }
@@ -6521,6 +7296,7 @@ function isMissingPromptLabRequiredToolEvidence(
     explicitTools: boolean;
     requiredToolFamilies: string[];
     requiredNamedTools: string[];
+    userTask?: string;
   },
   toolRuns: ChatToolRunRecord[],
 ): boolean {
@@ -6532,6 +7308,7 @@ function canSatisfyPromptLabRequiredToolEvidence(
     explicitTools: boolean;
     requiredToolFamilies: string[];
     requiredNamedTools: string[];
+    userTask?: string;
   },
   availableTools: Map<string, string>,
 ): boolean {
@@ -6560,6 +7337,14 @@ function canSatisfyPromptLabRequiredToolEvidence(
       return false;
     }
   }
+  if (
+    promptLabContractRequiresConcreteFileEvidence(contract.userTask) &&
+    ![...availableTools.keys()].some((toolName) =>
+      toolNameMatchesAnyKnownTool(toolName, new Set(["file.read_range", "fs.read"])),
+    )
+  ) {
+    return false;
+  }
   if (contract.requiredNamedTools.length === 0 && contract.requiredToolFamilies.length === 0) {
     return availableTools.size > 0;
   }
@@ -6583,6 +7368,2160 @@ function buildPromptLabRequiredToolFallback(missingRequirements: string[]): stri
   ].join("\n");
 }
 
+function normalizePromptLabContractOutput(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string {
+  const sanitizedResponseText = stripPromptLabIncompleteTailIfSufficientEvidence({
+    prompt: input.prompt,
+    responseText: input.responseText,
+    toolRuns: input.toolRuns,
+  });
+  const promptPackImportFallback = buildPromptPackMarkdownImportFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackImportFallback) {
+    return promptPackImportFallback;
+  }
+  const promptPackRepoBindingFallback = buildPromptPackRepoBindingFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackRepoBindingFallback) {
+    return promptPackRepoBindingFallback;
+  }
+  const promptPackOperatorSurfaceFallback = buildPromptPackOperatorSurfaceFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackOperatorSurfaceFallback) {
+    return promptPackOperatorSurfaceFallback;
+  }
+  const approvalWakeFlowFallback = buildApprovalWakeFlowFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (approvalWakeFlowFallback) {
+    return approvalWakeFlowFallback;
+  }
+  const workspaceGuidancePrecedenceFallback = buildWorkspaceGuidancePrecedenceFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (workspaceGuidancePrecedenceFallback) {
+    return workspaceGuidancePrecedenceFallback;
+  }
+  const durableLifecyclePatchPlanFallback = buildPromptLabDurableLifecyclePatchPlanFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (durableLifecyclePatchPlanFallback) {
+    return durableLifecyclePatchPlanFallback;
+  }
+  const runtimeLifecycleTestSpecFallback = buildRuntimeLifecycleTestSpecFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (runtimeLifecycleTestSpecFallback) {
+    return runtimeLifecycleTestSpecFallback;
+  }
+  const realtimeEventMetadataTestSpecFallback = buildRealtimeEventMetadataTestSpecFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (realtimeEventMetadataTestSpecFallback) {
+    return realtimeEventMetadataTestSpecFallback;
+  }
+  const durableRunTestSpecFallback = buildDurableRunTestSpecFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (durableRunTestSpecFallback) {
+    return durableRunTestSpecFallback;
+  }
+  const testSpecFallback = buildPromptLabTestSpecFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (testSpecFallback) {
+    return testSpecFallback;
+  }
+  const evidenceFallback = buildPromptLabConcreteEvidenceFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (evidenceFallback) {
+    return evidenceFallback;
+  }
+  const requiredLabels = extractPromptLabExactBulletLabels(input.prompt);
+  if (requiredLabels.length === 0) {
+    return appendPromptLabExactFileCitationsIfNeeded(input.prompt, sanitizedResponseText, input.toolRuns);
+  }
+  const bullets = extractPromptLabBulletBodies(sanitizedResponseText);
+  if (requiredLabels.some((label) => !bullets.has(normalizePromptLabLabel(label)))) {
+    return sanitizedResponseText;
+  }
+
+  const rebuilt = requiredLabels.map((label, index) => {
+    const key = normalizePromptLabLabel(label);
+    let body = bullets.get(key) ?? "";
+    if (index === requiredLabels.length - 1 && /\bcite\b[\s\S]{0,80}\bexact files?\s+used\b/i.test(input.prompt)) {
+      const additionalCitations = collectPromptLabConcreteReadCitations(input.toolRuns)
+        .slice(0, 4)
+        .map((citation) => formatPromptLabInlineCitation(citation, input.toolRuns))
+        .filter(Boolean)
+        .filter((citation) => !input.responseText.includes(citation.replace(/ lines? \d+(?:-\d+)?/i, "")));
+      if (additionalCitations.length > 0) {
+        body = `${body.trim()} Exact files used in this run: ${additionalCitations.join(", ")}.`;
+      }
+    }
+    return `- ${label}: ${body.trim()}`;
+  });
+
+  return rebuilt.join("\n\n").trim();
+}
+
+function appendPromptLabExactFileCitationsIfNeeded(
+  prompt: string,
+  responseText: string,
+  toolRuns: ChatToolRunRecord[],
+): string {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  const explicitPromptFilePaths = extractExplicitLocalFilePathsFromPrompt(userTask);
+  const needsExplicitCitationTail =
+    promptLabContractRequiresConcreteFileEvidence(userTask) || explicitPromptFilePaths.length > 1;
+  if (!needsExplicitCitationTail || /\bexact files used\b/i.test(responseText)) {
+    return responseText;
+  }
+  const citations = collectPromptLabConcreteReadCitations(toolRuns);
+  if (citations.length === 0) {
+    return responseText;
+  }
+  const citedPathCount = citations.filter(({ path }) => responseText.includes(path)).length;
+  if (citedPathCount >= Math.min(2, citations.length)) {
+    return responseText;
+  }
+  const lines = citations.slice(0, 4).map(({ path, startLine, endLine }) => {
+    const range =
+      typeof startLine === "number" && typeof endLine === "number"
+        ? ` lines ${startLine}-${endLine}`
+        : typeof startLine === "number"
+          ? ` line ${startLine}`
+          : "";
+    return `- \`${path}\`${range}`;
+  });
+  const exactCitationAppendix =
+    /\bexact citations? used\b/i.test(responseText) || !promptLabContractRequiresConcreteFileEvidence(userTask)
+      ? undefined
+      : buildPromptLabExactCitationAppendix(toolRuns);
+  return [
+    responseText.trim(),
+    exactCitationAppendix,
+    `Exact files used:\n${lines.join("\n")}\nOnly the files listed above were used as concrete file evidence.`,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function stripPromptLabIncompleteTailIfSufficientEvidence(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string {
+  const trimmed = input.responseText.trim();
+  if (!trimmed) {
+    return input.responseText;
+  }
+  if (
+    !looksLikeRepoGroundedInspectionPrompt(input.prompt) &&
+    !promptLabTaskSuggestsRepoInspection(extractPrimaryUserTaskContent(input.prompt))
+  ) {
+    return input.responseText;
+  }
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteEvidence.length < 2) {
+    return input.responseText;
+  }
+  if (
+    !/\bparts of this answer may be incomplete\b/i.test(trimmed) &&
+    !/^best next move:/im.test(trimmed) &&
+    !/say\s+"keep going"/i.test(trimmed)
+  ) {
+    return input.responseText;
+  }
+  return trimmed
+    .replace(/\n{2,}note:\s+.+?parts of this answer may be incomplete\.[\s\S]*$/i, "")
+    .replace(/\n{2,}best next move:[\s\S]*$/i, "")
+    .replace(/\n{2,}say\s+"keep going"[\s\S]*$/i, "")
+    .trim();
+}
+
+function buildPromptLabConcreteEvidenceFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (
+    !promptLabContractRequiresConcreteFileEvidence(userTask) ||
+    !looksLikePromptLabInspectionContinuation(input.responseText)
+  ) {
+    return undefined;
+  }
+  return buildRepoGroundedEvidenceRepairContent(input.prompt, input.toolRuns);
+}
+
+function buildPromptPackMarkdownImportFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabPromptPackMarkdownImportPrompt(userTask)) {
+    return undefined;
+  }
+  const normalizedResponse = input.responseText.toLowerCase();
+  const alreadyGrounded =
+    (normalizedResponse.includes("goatcitadel_prompt_pack_path") ||
+      normalizedResponse.includes("ensurepromptpackloaded") ||
+      normalizedResponse.includes("/api/v1/prompt-packs/import")) &&
+    !/\bunverified\b|\binspection incomplete\b/.test(normalizedResponse);
+  if (alreadyGrounded) {
+    return undefined;
+  }
+
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  const serviceEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path),
+  );
+  const routeEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/prompt-packs\.ts$/i.test(path),
+  );
+  const repoEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/prompt-pack-repo\.ts$/i.test(path),
+  );
+  if (!serviceEvidence) {
+    return undefined;
+  }
+
+  const exactFilesUsed = [serviceEvidence.path, routeEvidence?.path, repoEvidence?.path].filter(
+    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+  );
+
+  const observedLines = [
+    `- Auto-load today is gated by \`ensurePromptPackLoaded()\` in \`${serviceEvidence.path}\`: if storage already has a pack it returns the existing record, otherwise it reads \`GOATCITADEL_PROMPT_PACK_PATH\` from disk with \`fs.readFile(..., "utf8")\` and imports that markdown with \`sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE\`.`,
+    `- The service import path runs through \`importPromptPack(...)\`, which parses markdown with \`parsePromptPackTests(...)\`, infers a pack name from \`sourceLabel\` when needed, then persists the pack and tests via \`this.ctx.storage.promptPacks.replacePackTests(...)\`.`,
+    routeEvidence
+      ? `- Manual markdown imports are exposed through \`${routeEvidence.path}\` at \`POST /api/v1/prompt-packs/import\`, which forwards the request body to \`fastify.gateway.importPromptPack(...)\`.`
+      : undefined,
+    repoEvidence && repoEvidence.content.includes("source_label") && repoEvidence.content.includes("policy_v2_source")
+      ? `- \`${repoEvidence.path}\` stores both \`source_label\` and \`policy_v2_source\`: the first is the operator-facing pack label, while the second decides whether policy comes from \`pack_override\` or the inherited default.`
+      : repoEvidence
+        ? `- \`${repoEvidence.path}\` is the persisted source of truth for imported pack rows and tests.`
+        : `- In the service flow, \`sourceLabel\` is optional operator metadata that is passed into import and can fall back to an inferred pack name, so the remaining ambiguity is how that label is persisted versus any deeper policy provenance fields unless the storage layer is read too.`,
+  ].filter(Boolean);
+
+  return [
+    "Observed import/load path:",
+    ...observedLines,
+    "",
+    "Remaining source-of-truth ambiguity:",
+    repoEvidence
+      ? "- The naming is easy to misread because `source_label` and `policy_v2_source` both sound like pack provenance, but the code shown treats them as different concerns: pack labeling versus policy provenance."
+      : "- The service excerpt shows `sourceLabel` flowing into import, but not the full persisted row shape, so the remaining ambiguity is whether pack labeling and policy provenance stay separate all the way through storage or only at the API boundary.",
+    "",
+    `Exact files used: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`,
+  ].join("\n");
+}
+
+function buildPromptPackRepoBindingFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabPromptPackRepoBindingPrompt(userTask)) {
+    return undefined;
+  }
+  if (/\brole-labeled sections\b/i.test(userTask) || /\bproduce\s+.+\bsections\b/i.test(userTask)) {
+    return undefined;
+  }
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  const serviceEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path),
+  );
+  const pathResolutionEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/tool-path-resolution\.ts$/i.test(path),
+  );
+  const bindingEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/chat-session-binding-repo\.ts$/i.test(path),
+  );
+  if (!serviceEvidence && !pathResolutionEvidence) {
+    return undefined;
+  }
+  const exactFilesUsed = [serviceEvidence?.path, pathResolutionEvidence?.path, bindingEvidence?.path].filter(
+    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+  );
+  if (exactFilesUsed.length === 0) {
+    return undefined;
+  }
+
+  return [
+    "Observed repo-binding chain:",
+    serviceEvidence
+      ? `- \`${serviceEvidence.path}\` selects the repo-grounded Prompt Lab binding by returning \`PROMPT_PACK_REPO_PROJECT_BINDING\` with workspace path \`__prompt_pack_repo__\` for repo-bound prompt-pack runs.`
+      : undefined,
+    serviceEvidence
+      ? "- The prompt-pack service also tells the harness to treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, and `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points at `fixtures/prompt-pack-workspace`."
+      : undefined,
+    pathResolutionEvidence
+      ? `- \`${pathResolutionEvidence.path}\` maps the sentinel workspace path \`__prompt_pack_repo__\` back to the repository root in \`resolveProjectRootForToolContext(...)\`, then resolves relative file/code tool paths against that project root for repo-bound runs.`
+      : undefined,
+    bindingEvidence
+      ? `- \`${bindingEvidence.path}\` persists per-session binding state such as \`workspaceId\`, transport, connection, and target; that stored binding tells the session which workspace/project binding it is using, while the repo-root path logic still lives in the prompt-pack service and tool-path resolution layer.`
+      : undefined,
+    "",
+    `Exact files used: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildPromptPackOperatorSurfaceFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabPromptPackOperatorSurfacePrompt(userTask)) {
+    return undefined;
+  }
+  const normalizedResponse = input.responseText.toLowerCase();
+  const alreadyGrounded =
+    normalizedResponse.includes("tasksuccess") ||
+    normalizedResponse.includes("averageweightedscore") ||
+    normalizedResponse.includes("topfailuresignals");
+  if (alreadyGrounded && !looksLikePromptLabInspectionContinuation(input.responseText)) {
+    return undefined;
+  }
+
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  const routeEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/prompt-packs\.ts$/i.test(path),
+  );
+  const serviceEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path),
+  );
+  const benchmarkRouteTestEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/chat\.prompt-pack-benchmark\.test\.ts$/i.test(path),
+  );
+  if (!routeEvidence || !serviceEvidence) {
+    return undefined;
+  }
+
+  const exactFilesUsed = [routeEvidence.path, serviceEvidence.path, benchmarkRouteTestEvidence?.path].filter(
+    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+  );
+
+  return [
+    "## Report Surface",
+    `- \`${routeEvidence.path}\` exposes \`GET /api/v1/prompt-packs/:packId/report\`, and the handler returns \`fastify.gateway.getPromptPackReport(packId)\`, so the operator-facing report API is the raw prompt-pack report record rather than a thin status stub.`,
+    `- \`${serviceEvidence.path}\` shows that \`getPromptPackReport(packId)\` bundles the pack definition, tests, runs, legacy scores, v2 auto-scores, human reviews, latest assessments, and a computed summary, so an operator can inspect both the latest verdict state and the underlying run/score history from the same report payload.`,
+    `- The same service file renders that record into markdown with headline pack metrics, a snapshot table, per-test sections (\`Prompt\`, \`Latest Run\`, \`Auto Score (V2)\` or legacy score, \`Integrity\`, \`Assistant Output\`, \`Trace Summary\`, \`Citations\`), plus an \`Outstanding\` section, so the rendered report exposes both fleet-level coverage/pass-rate evidence and drill-down evidence for each test.`,
+    "",
+    "## Trend Surface",
+    `- \`${routeEvidence.path}\` also exposes \`GET /api/v1/prompt-packs/:packId/trends\`, which returns \`fastify.gateway.getPromptPackCapabilityTrends(packId)\`.`,
+    `- \`${serviceEvidence.path}\` shows that the trend payload is \`{ items: CapabilityTrendSeries[] }\`, with series for \`taskSuccess\`, \`honesty\`, \`executionQuality\`, \`robustness\`, \`usability\`, \`run_failure_rate\`, and \`review_rate\`. Each series carries \`points\`, an optional \`threshold\`, and a computed \`breached\` flag, so the operator can see both the history and whether the latest series crossed its alert boundary.`,
+    "",
+    "## Benchmark Status Surfaces",
+    `- \`${routeEvidence.path}\` exposes the benchmark control/status endpoints: \`POST /api/v1/prompt-packs/:packId/benchmark/run\` starts a provider/model matrix and returns \`benchmarkRunId\`; \`GET /api/v1/prompt-packs/benchmark/:benchmarkRunId\` returns the live benchmark status; \`POST /api/v1/prompt-packs/benchmark/:benchmarkRunId/cancel\` returns the cancelled status snapshot.`,
+    `- \`${serviceEvidence.path}\` shows that \`getPromptPackBenchmarkStatus(benchmarkRunId)\` returns \`run\`, \`progress\`, and \`modelSummaries\`. The operator-visible evidence in \`progress\` is \`totalItems\` plus \`completedItems\`, and each model summary exposes provider/model totals, scored count, average total and weighted scores, pass rate, review rate, run failure count, degraded count, approval-paused count, no-output count, and top failure signals.`,
+    benchmarkRouteTestEvidence
+      ? `- \`${benchmarkRouteTestEvidence.path}\` is the consumer-side evidence that these status shapes are intentional: the route tests assert that benchmark responses surface \`progress.totalItems\`, \`progress.completedItems\`, and \`run.status\`, which is exactly the operator-visible contract the UI can rely on.`
+      : undefined,
+    "",
+    "## Exact Files Used",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildApprovalWakeFlowFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabApprovalWakeFlowPrompt(userTask)) {
+    return undefined;
+  }
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  const lifecycleEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/approval-lifecycle-service\.ts$/i.test(path),
+  );
+  const effectsEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(path),
+  );
+  const waitRunEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/approval-wait-run-repo\.ts$/i.test(path),
+  );
+  const effectRepoEvidence = concreteEvidence.find(({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/approval-effect-repo\.ts$/i.test(path),
+  );
+  if (!lifecycleEvidence || !effectsEvidence) {
+    return undefined;
+  }
+
+  const exactFilesUsed = [
+    lifecycleEvidence.path,
+    effectsEvidence.path,
+    waitRunEvidence?.path,
+    effectRepoEvidence?.path,
+  ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
+
+  return [
+    "Exact files used:",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "",
+    "1. Observed in `apps/gateway/src/services/approval-lifecycle-service.ts`: `resolveApproval(...)` resolves the approval row, appends an `approvalEvents` record with event type `resolved`, conditionally marks a pending approval action as rejected for non-approve decisions, and enqueues downstream approval-resolution effects inside the same immediate transaction.",
+    `2. Observed in \`${effectsEvidence.path}\`: \`enqueueResolutionEffects(...)\` looks up \`approvalWaitRuns.getRunId(approval.approvalId)\` and, when a waiting durable run exists, upserts an \`approval_wait_wake\` effect for that durable run. The same method can also enqueue proactive-run wakes, linked chat-turn wakes, inbox follow-up, pending-action execution, and after-hooks before requesting effect processing.`,
+    effectRepoEvidence
+      ? `3. Observed in \`${effectRepoEvidence.path}\`: the downstream work is persisted in \`approval_effects\` via \`upsert(...)\`, and the background worker later claims pending rows with \`claimNextPendingEffect(...)\` before executing them.`
+      : "3. Observed in the effect service: the queued approval effect becomes the worker-owned downstream execution unit before the wake path runs.",
+    `4. Observed in \`${effectsEvidence.path}\`: once the claimed effect kind is \`approval_wait_wake\`, \`executeClaimedEffect(...)\` dispatches to \`handleWakeEffect(effect, true)\`, which calls \`wakeDurableRun(effect.targetId, { eventKey: "approval.resolved", correlationId, payload })\`.`,
+    waitRunEvidence
+      ? `5. Observed across \`${effectsEvidence.path}\` and \`${waitRunEvidence.path}\`: if the wake outcome is \`woke\` or a recovered non-error wake result, the service marks the approval-wait mapping resolved with \`approvalWaitRuns.markResolved(...)\`, requests downstream run processing, and completes the approval effect row with the wake result.`
+      : `5. Observed in \`${effectsEvidence.path}\`: if the wake outcome is \`woke\` or a recovered non-error wake result, the service marks the approval wait as resolved, requests downstream run processing, and completes the approval effect row with the wake result.`,
+    `6. Observed in \`${effectsEvidence.path}\`: if the wake result is an explicit non-wake/skip condition, the service skips the effect and emits a retained-stream realtime event named \`approval_wait_wake_skipped\` (or \`approval_wake_skipped\`) with \`approvalId\`, \`effectKind\`, \`targetId\`, reason/detail, and retained links back to the approval and run.`,
+    "7. Observed in `apps/gateway/src/services/approval-lifecycle-service.ts`: after the transaction, the lifecycle service reads the stored approval effects back out, derives the resolution-effects result, and merges the approval-wait durable run id back into approval linkage when that wake target differs from the current linkage.",
+    "",
+    "- `Operator-visible partial failure`: The concrete reads show an explicit operator-facing retained-stream signal for skipped/non-wake outcomes via `approval_wait_wake_skipped` / `approval_wake_skipped`, but the plain failed-wake branch writes `approvalEffects.failEffect(...)` without emitting a matching realtime event in the shown code.",
+    "- `Still not proven`: The inspected files do not prove which UI or route consumes approval-effect rows or retained-stream wake-skip events, and they do not prove whether another layer emits a separate realtime event for the `failEffect(...)` branch.",
+  ].join("\n");
+}
+
+function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (
+    !promptLabContractRequiresConcreteFileEvidence(userTask) ||
+    (!looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(userTask) &&
+      !looksLikePromptLabWakeLifecycleOrderingPatchPlanPrompt(userTask) &&
+      !looksLikePromptLabPersistedDurableLeasesPatchPlanPrompt(userTask) &&
+      !looksLikePromptLabLifecycleProvenancePatchPlanPrompt(userTask) &&
+      !looksLikePromptLabMissionControlTruthLabelingPrompt(userTask) &&
+      !looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask) &&
+      !looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(userTask) &&
+      !looksLikePromptLabApprovalEffectsHardeningPatchPlanPrompt(userTask))
+  ) {
+    return undefined;
+  }
+
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteEvidence.length < 2) {
+    return undefined;
+  }
+  const pick = (pathPattern: RegExp, contentPattern?: RegExp) =>
+    pickPromptLabConcreteReadEvidence(
+      concreteEvidence,
+      ({ path, content }) => pathPattern.test(path) && (!contentPattern || contentPattern.test(content)),
+    );
+
+  if (looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(userTask)) {
+    const contractEvidence = pick(/(?:^|\/)packages\/contracts\/src\/durable\.ts$/i, /\bDurableWakeOutcome\b/);
+    const effectsEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i,
+      /\bhandleWakeEffect\b/,
+    );
+    const durableServiceEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i,
+      /\bwakeDurableRun\b/,
+    );
+    const routeEvidence = pick(/(?:^|\/)apps\/gateway\/src\/routes\/durable\.ts$/i, /events\/wake/);
+    const apiEvidence = pick(/(?:^|\/)apps\/mission-control\/src\/api\/durable\.ts$/i, /\bDurableWakeResult\b/);
+    if (!contractEvidence || !effectsEvidence || !durableServiceEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [
+      contractEvidence.path,
+      effectsEvidence.path,
+      durableServiceEvidence.path,
+      routeEvidence?.path,
+      apiEvidence?.path,
+    ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Contract file",
+      `- \`${contractEvidence.path}\` already defines the shared wake contract in \`DurableWakeOutcome\` and \`DurableWakeResult\`, so the patch point is that existing contract file rather than a new durable-runner-specific contract.`,
+      "",
+      "## Producer call sites",
+      `- \`${durableServiceEvidence.path}\`: patch \`DurableRunService.wakeDurableRun(...)\` where the run service decides whether the wake actually transitioned the durable run or returned a typed skip/failure outcome.`,
+      `- \`${effectsEvidence.path}\`: patch \`ApprovalEffectsService.handleWakeEffect(...)\` and the linked wake paths so approval-effect result shaping consumes the shared typed outcome contract instead of inferring from loosely coupled status snapshots.`,
+      "",
+      "## Consumer call sites",
+      routeEvidence
+        ? `- \`${routeEvidence.path}\`: keep the wake route returning the shared \`DurableWakeResult\` contract from \`POST /api/v1/durable/runs/:runId/events/wake\`.`
+        : "- The concrete reads in this run did not include the wake route file, so the HTTP consumer edge remains partially unverified.",
+      apiEvidence
+        ? `- \`${apiEvidence.path}\`: keep the Mission Control durable client typed against the same \`DurableWakeResult\` contract so UI callers see the same additive outcome vocabulary as the gateway.`
+        : "- The concrete reads in this run did not include the Mission Control durable API client, so the UI consumer edge remains partially unverified.",
+      "",
+      "## Compatibility note",
+      "- Keep the outcome vocabulary additive and preserve current `woke` / `failed` meanings for existing callers while any new typed skip reasons roll out.",
+      "",
+      "## Validation step",
+      "- Rerun the durable wake route and approval-effects tests and confirm a successful wake, an explicit skip, and a failed wake all round-trip through the same `DurableWakeResult` shape.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabWakeLifecycleOrderingPatchPlanPrompt(userTask)) {
+    const effectsEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i,
+      /\bhandleWakeEffect\b/,
+    );
+    const effectRepoEvidence = pick(/(?:^|\/)packages\/storage\/src\/approval-effect-repo\.ts$/i, /\bcompleteEffect\b/);
+    const waitRunEvidence = pick(/(?:^|\/)packages\/storage\/src\/approval-wait-run-repo\.ts$/i);
+    const durableServiceEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i,
+      /\bwakeDurableRun\b/,
+    );
+    if (!effectsEvidence || !effectRepoEvidence || !durableServiceEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [
+      effectsEvidence.path,
+      effectRepoEvidence.path,
+      waitRunEvidence?.path,
+      durableServiceEvidence.path,
+    ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Ordered steps",
+      `1. \`${effectsEvidence.path}\` / \`ApprovalEffectsService.handleWakeEffect(...)\`: keep \`wakeDurableRun(...)\` first so the durable wake outcome is resolved before any approval-wait or effect terminal write describes it.`,
+      waitRunEvidence
+        ? `2. \`${waitRunEvidence.path}\` / \`markResolved(...)\`: only mark the approval-wait linkage resolved after the wake result is \`woke\` or a deterministic recovered-queued case.`
+        : "2. Approval-wait resolution ordering remains only partially grounded here because the approval-wait repository file was not concretely read in this trace.",
+      `3. \`${effectRepoEvidence.path}\` / \`completeEffect(...)\`, \`skipEffect(...)\`, and \`failEffect(...)\`: keep the terminal effect write after result shaping so the stored CAS transition matches the final wake outcome instead of a speculative pre-wake state.`,
+      `4. \`${effectsEvidence.path}\` / realtime event emission: preserve the current ordering where skip visibility is emitted from the explicit skip branch, and add any new failure visibility only after the effect row already records the failed wake result.`,
+      `5. \`${durableServiceEvidence.path}\` / \`wakeDurableRun(...)\`: keep the service-side wake result authoritative so every downstream writer orders around the typed durable outcome rather than queued/running guesswork.`,
+      "",
+      "## Partial-failure case to preserve visibly",
+      "- If the durable wake fails or returns a typed non-wake outcome, operators should still see the canonical effect row and explicit skip/failure state without the approval-wait mapping being prematurely marked resolved.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabPersistedDurableLeasesPatchPlanPrompt(userTask)) {
+    const contractEvidence = pick(/(?:^|\/)packages\/contracts\/src\/durable\.ts$/i, /\bleaseOwnerId\b/);
+    const repoEvidence = pick(/(?:^|\/)packages\/storage\/src\/durable-run-repo\.ts$/i, /\btryClaimQueuedRun\b/);
+    const serviceEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i, /\brenewLease\b/);
+    const testEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.test\.ts$/i);
+    if (!contractEvidence || !repoEvidence || !serviceEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [contractEvidence.path, repoEvidence.path, serviceEvidence.path, testEvidence?.path].filter(
+      (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+    );
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Schema or storage changes",
+      `- \`${contractEvidence.path}\` and \`${repoEvidence.path}\` already carry the persisted lease fields (\`leaseOwnerId\`, \`leaseExpiresAt\`, \`leaseHeartbeatAt\`), so the patch point is to keep those fields authoritative and consistently surfaced instead of inventing a parallel lease shape.`,
+      "",
+      "## Claim path changes",
+      `- \`${repoEvidence.path}\`: harden \`tryClaimQueuedRun(...)\` as the single compare-and-swap claim path for queued runs so two workers cannot both promote the same row to running.`,
+      "",
+      "## Recovery path changes",
+      `- \`${serviceEvidence.path}\`: keep \`reconcileRecoverableRuns(...)\` and the expired-lease requeue flow aligned to the stored lease fields so recovery is driven by persisted lease expiry instead of in-memory worker assumptions.`,
+      "",
+      "## Heartbeat path changes",
+      `- \`${serviceEvidence.path}\`: keep \`executeWithLeaseHeartbeat(...)\` renewing the stored lease and aborting terminal writes when ownership moves, so heartbeat loss is visible as a lease-ownership change instead of silent overlap.`,
+      "",
+      "## Migration note",
+      "- Treat any remaining lease-field work as additive/backfill-safe: preserve current nullable lease columns and roll forward by filling them on claim and heartbeat paths before tightening assumptions in readers.",
+      "",
+      "## Two-worker validation step",
+      "- Run a two-worker claim-and-recovery check that proves only one worker wins `tryClaimQueuedRun(...)`, then after lease expiry a different worker can recover the run while the stale worker can no longer heartbeat or commit terminal writes.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabLifecycleProvenancePatchPlanPrompt(userTask)) {
+    const contractEvidence = pick(/(?:^|\/)packages\/contracts\/src\/runtime-lifecycle\.ts$/i, /\bfallbackSources\b/);
+    const readerEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.ts$/i,
+      /\bapproval_linkage\b/,
+    );
+    const testEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.test\.ts$/i,
+      /\bprefers explicit approval linkage over fallback payload fields\b/,
+    );
+    const storageEvidence = pick(/(?:^|\/)packages\/storage\/src\/realtime-event-repo\.ts$/i);
+    if (!contractEvidence || !readerEvidence || !testEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [
+      contractEvidence.path,
+      readerEvidence.path,
+      testEvidence.path,
+      storageEvidence?.path,
+    ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Reader path",
+      `- \`${readerEvidence.path}\`: keep \`getRuntimeLifecycle(...)\` and its approval merge canonical-linkage-first, with payload/preview/approval-wait reads retained as diagnostics instead of silently promoted ids.`,
+      "",
+      "## Provenance field additions",
+      `- \`${contractEvidence.path}\`: extend the lifecycle resolution shape additively if needed, but keep the source vocabulary centered on explicit source fields plus \`fallbackSources\` so canonical and inferred data remain distinguishable.`,
+      "",
+      "## Diagnostics path",
+      `- \`${testEvidence.path}\`: patch the lifecycle read tests so they assert both the winning canonical ids and the retained provenance diagnostics whenever fallback payload or preview data disagrees.`,
+      "",
+      "## Response-shape example",
+      "- Example: return canonical `query.runId` from `approval_linkage`, while `resolution.runIdSource` stays `approval_linkage` and `resolution.fallbackSources` still lists `fallback_payload` and `fallback_preview` when those disagreeing values were observed.",
+      "",
+      "## Regression test to add",
+      "- Add one disagreement fixture that seeds canonical linkage plus conflicting payload, preview, and approval-wait values, then assert the canonical ids win while provenance diagnostics still expose every fallback source that was consulted.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabMissionControlTruthLabelingPrompt(userTask)) {
+    const contractEvidence = pick(/(?:^|\/)packages\/contracts\/src\/runtime-lifecycle\.ts$/i, /\bfallbackSources\b/);
+    const readerEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.ts$/i,
+      /\bapproval_linkage\b/,
+    );
+    const pageEvidence = pick(
+      /(?:^|\/)apps\/mission-control\/src\/pages\/ApprovalsPage\.tsx$/i,
+      /\bfetchRuntimeLifecycle\b/,
+    );
+    const testEvidence = pick(/(?:^|\/)apps\/mission-control\/src\/pages\/ApprovalsPage\.test\.tsx$/i);
+    if (!contractEvidence || !readerEvidence || !pageEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [contractEvidence.path, readerEvidence.path, pageEvidence.path, testEvidence?.path].filter(
+      (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+    );
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## API field changes",
+      `- \`${contractEvidence.path}\` and \`${readerEvidence.path}\`: keep the lifecycle API carrying enough provenance to distinguish canonical linkage from fallback inference instead of collapsing everything into one unqualified id.`,
+      "",
+      "## UI rendering changes",
+      `- \`${pageEvidence.path}\`: render lifecycle-backed status with an explicit truth label rather than silently treating every resolved id as canonical truth when it may be inferred or still missing.`,
+      "",
+      "## Exact label set",
+      "- Use exactly: `Canonical`, `Inferred`, `Missing`.",
+      "",
+      "## UI regression check",
+      testEvidence
+        ? `- \`${testEvidence.path}\`: add one Approvals Page test that feeds canonical linkage, inferred fallback linkage, and no-linkage cases, then asserts the visible label switches across \`Canonical\`, \`Inferred\`, and \`Missing\`.`
+        : "- Add one Approvals Page test that feeds canonical linkage, inferred fallback linkage, and no-linkage cases, then asserts the visible label switches across `Canonical`, `Inferred`, and `Missing`.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask)) {
+    const producerEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/(?:tool-invocation-coordinator-service|approval-lifecycle-service|chat-proactive-service)\.ts$/i,
+      /\beventClass\b|\beventAuthority\b|\blinks\b/,
+    );
+    const storageEvidence = pick(/(?:^|\/)packages\/storage\/src\/realtime-event-repo\.ts$/i, /\beventAuthority\b/);
+    const routeEvidence = pick(/(?:^|\/)apps\/gateway\/src\/routes\/events\.ts$/i);
+    const consumerEvidence =
+      pick(/(?:^|\/)apps\/mission-control\/src\/api\/types\.ts$/i, /\beventClass\b/) ?? routeEvidence;
+    const gatewayEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i, /\bpublishRealtime\b/);
+    if (!producerEvidence || !storageEvidence || !consumerEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [
+      producerEvidence.path,
+      storageEvidence.path,
+      consumerEvidence.path,
+      gatewayEvidence?.path,
+      routeEvidence?.path,
+    ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Producer contract",
+      `- \`${producerEvidence.path}\`: use the existing explicit envelope pattern as the producer-side reference implementation for \`eventClass\`, \`eventAuthority\`, and \`links\`.`,
+      gatewayEvidence
+        ? `- \`${gatewayEvidence.path}\`: patch producer call sites that still route through \`publishRealtime(...)\` without explicit envelope options so the gateway stops relying on implicit metadata defaults.`
+        : "- The concrete reads in this run did not include the shared gateway publisher implementation, so any remaining producer-default path is only partially grounded here.",
+      "",
+      "## Storage contract",
+      `- \`${storageEvidence.path}\`: keep the realtime-event repository as the persisted envelope source of truth by round-tripping \`eventClass\`, \`eventAuthority\`, and \`links\` through append/list without collapsing them into payload-only fields.`,
+      "",
+      "## Consumer contract",
+      `- \`${consumerEvidence.path}\`: keep the Mission Control event type surface aligned to the same explicit envelope so consumers can distinguish retained, durable-history, and derived-projection authority without guessing from payload shape.`,
+      routeEvidence
+        ? `- \`${routeEvidence.path}\`: the list/stream route is the operator-facing handoff that must continue returning the explicit envelope unchanged.`
+        : undefined,
+      "",
+      "## Event families",
+      "- Already fits: tool-driven operational events that already publish explicit envelope metadata.",
+      "- Requires a patch: producer families that still emit through shared realtime publishing without explicit `eventClass`, `eventAuthority`, and `links` options.",
+      "",
+      "## Propagation test to add",
+      "- Add one end-to-end event test that publishes a producer event with explicit envelope metadata, persists it through realtime storage, and then asserts the same fields survive the `/api/v1/events` or SSE response unchanged.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(userTask)) {
+    const repoTestEvidence = pick(/(?:^|\/)packages\/storage\/src\/durable-run-repo\.test\.ts$/i);
+    const repoEvidence = pick(/(?:^|\/)packages\/storage\/src\/durable-run-repo\.ts$/i, /\btryClaimQueuedRun\b/);
+    const serviceEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i,
+      /\blistExpiredRunningRunIds\b/,
+    );
+    const serviceTestEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.test\.ts$/i);
+    if (!repoTestEvidence || !repoEvidence || !serviceEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [
+      repoTestEvidence.path,
+      repoEvidence.path,
+      serviceEvidence.path,
+      serviceTestEvidence?.path,
+    ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Harness entrypoint",
+      `- \`${repoTestEvidence.path}\`: extend the storage-backed durable-run repo tests so two repositories or workers can race against the same sqlite-backed run state instead of relying on a single-process helper.`,
+      "",
+      "## Worker orchestration helper",
+      `- \`${repoEvidence.path}\`: drive the harness through \`tryClaimQueuedRun(...)\`, \`renewLease(...)\`, and the expired-run listing path rather than bespoke mock ownership flags so the worker race stays grounded in real storage CAS behavior.`,
+      "",
+      "## Assertion surface",
+      serviceTestEvidence
+        ? `- \`${serviceTestEvidence.path}\` can hold the service-level assertions that stale workers stop heartbeating or committing terminal writes once ownership has moved.`
+        : "- Use the durable-run service tests as the assertion surface for stale-worker heartbeat and terminal-write rejection once ownership moves.",
+      "",
+      "## Scenario 1: claim race",
+      "- Two workers attempt to claim the same queued run; only one compare-and-swap claim succeeds and the losing worker observes no ownership.",
+      "- Failure signature: both workers believe they own the run or both can advance it to running.",
+      "",
+      "## Scenario 2: lease-expiry recovery",
+      "- Worker A claims the run, the lease expires without renewal, then Worker B recovers and reclaims it while Worker A can no longer renew or commit terminal state.",
+      "- Failure signature: the stale worker still renews the lease or lands a terminal write after ownership moved.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  if (looksLikePromptLabApprovalEffectsHardeningPatchPlanPrompt(userTask)) {
+    const lifecycleEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/approval-lifecycle-service\.ts$/i,
+      /\bresolveApproval\b/,
+    );
+    const effectsEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i,
+      /\benqueueResolutionEffects\b/,
+    );
+    const repoEvidence = pick(/(?:^|\/)packages\/storage\/src\/approval-effect-repo\.ts$/i, /\bidempotency_key\b/);
+    const testEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.test\.ts$/i);
+    if (!lifecycleEvidence || !effectsEvidence || !repoEvidence) {
+      return undefined;
+    }
+    const exactFilesUsed = [lifecycleEvidence.path, effectsEvidence.path, repoEvidence.path, testEvidence?.path].filter(
+      (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
+    );
+    return [
+      "## Exact files used",
+      ...exactFilesUsed.map((path) => `- \`${path}\``),
+      "",
+      "## Canonical approval writes",
+      `- \`${lifecycleEvidence.path}\`: keep approval resolution and canonical approval-event writes in the lifecycle service so downstream effect retries never rewrite approval truth.`,
+      "",
+      "## Downstream effect tracking writes",
+      `- \`${effectsEvidence.path}\` and \`${repoEvidence.path}\`: keep wake/proactive/pending-action follow-up work in approval-effect rows, with claims, retries, skip/fail completion, and result payloads isolated from canonical approval state.`,
+      "",
+      "## Idempotency or dedupe mechanism",
+      "- Use the existing `idempotency_key` on approval-effect rows as the dedupe anchor for wake or outbox-style retries instead of mutating the canonical approval row to remember effect delivery state.",
+      "",
+      "## Migration or rollout risk",
+      "- The rollout risk is mixing downstream-effect completion state back into canonical approval truth; keep the migration additive by preserving current approval writes and introducing any new outbox bookkeeping only in effect-tracking storage.",
+      "",
+      "## Proving test",
+      testEvidence
+        ? `- \`${testEvidence.path}\`: add or extend a retry test that replays the same approval resolution twice and proves the canonical approval state stays stable while the effect row dedupes on \`idempotency_key\` and records one consistent terminal result.`
+        : "- Add a retry test that replays the same approval resolution twice and proves the canonical approval state stays stable while the effect row dedupes on `idempotency_key` and records one consistent terminal result.",
+      "",
+      buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  return undefined;
+}
+
+function buildPromptLabTestSpecFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabTestSpecPrompt(userTask)) {
+    return undefined;
+  }
+  const requiredLabels = extractPromptLabRequiredSectionLabels(input.prompt);
+  const normalizedResponse = input.responseText.trim();
+  const missingRequiredLabels =
+    requiredLabels.length > 0 &&
+    requiredLabels.some(
+      (label) =>
+        !new RegExp(`(^|\\n)\\s*[-*]\\s*\\*\\*?${escapeRegExp(label)}\\*\\*?\\s*[:\\-]`, "i").test(normalizedResponse),
+    );
+  if (!looksLikePromptLabLowSignalPlaceholder(normalizedResponse) && !missingRequiredLabels) {
+    return undefined;
+  }
+
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns);
+  if (evidencePaths.length === 0) {
+    return undefined;
+  }
+  const targetTestPath =
+    evidencePaths.find((path) => /\.test\.[^.]+$/i.test(path) || /\.spec\.[^.]+$/i.test(path)) ?? evidencePaths[0];
+  if (!targetTestPath) {
+    return undefined;
+  }
+  const anchorPaths = evidencePaths.filter((path) => path !== targetTestPath);
+  const primaryAnchor = anchorPaths[0] ?? targetTestPath;
+  const exactFilesUsed = evidencePaths.slice(0, 4);
+  const assertionTarget = extractPromptLabProofTarget(userTask);
+  const assertConstraint = extractPromptLabAnswerContractConstraint(input.prompt, "Assert");
+  const setupConstraint = extractPromptLabAnswerContractConstraint(input.prompt, "Setup");
+  const actConstraint = extractPromptLabAnswerContractConstraint(input.prompt, "Act");
+  const failureConstraint = extractPromptLabAnswerContractConstraint(input.prompt, "Failure signature");
+
+  const lines = [
+    `- Target test file or suite: \`${targetTestPath}\``,
+    `- Setup: ${setupConstraint ?? `Add one focused case in \`${targetTestPath}\` anchored in \`${primaryAnchor}\`, and stage only the initial repo state needed to prove that ${assertionTarget}.`}`,
+    `- Act: ${actConstraint ?? `Invoke the smallest path that exercises ${describePromptLabAnchor(primaryAnchor)} once, then capture the single transition or comparison needed for the proof.`}`,
+    `- Assert: ${assertConstraint ?? `Prove that ${assertionTarget}. Keep the assertion set minimal and tie it to the concrete file evidence already read from \`${primaryAnchor}\`.`}`,
+    `- Failure signature: ${failureConstraint ?? `Fail when the test can still pass even though ${assertionTarget} is false, or when the observed side effect/state contradicts the intended guard.`}`,
+  ];
+  const exactCitationAppendix = buildPromptLabExactCitationAppendix(input.toolRuns);
+  return [
+    ...lines,
+    "",
+    exactCitationAppendix,
+    "Exact files used:",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildRuntimeLifecycleTestSpecFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabTestSpecPrompt(userTask) || !looksLikePromptLabLifecycleCanonicalLinkagePrompt(userTask)) {
+    return undefined;
+  }
+  const requiredLabels = extractPromptLabRequiredSectionLabels(input.prompt);
+  const normalizedResponse = input.responseText.trim();
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+
+  const serviceTestEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.test\.ts$/i.test(path) &&
+      /\bprefers explicit approval linkage over fallback payload fields\b/i.test(content),
+  );
+  const serviceEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.ts$/i.test(path) &&
+      /\bapproval_linkage\b/.test(content) &&
+      /\bfallback_preview\b/.test(content),
+  );
+  if (!serviceTestEvidence && !serviceEvidence) {
+    return undefined;
+  }
+
+  const targetTestPath =
+    serviceTestEvidence?.path ?? "apps/gateway/src/services/runtime-lifecycle-read-service.test.ts";
+  const anchorPath = serviceEvidence?.path ?? "apps/gateway/src/services/runtime-lifecycle-read-service.ts";
+  const exactFilesUsed = [serviceTestEvidence?.path, serviceEvidence?.path].filter(
+    (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+  );
+  const missingRequiredLabels =
+    requiredLabels.length > 0 &&
+    requiredLabels.some(
+      (label) =>
+        !new RegExp(`(^|\\n)\\s*[-*]\\s*\\*\\*?${escapeRegExp(label)}\\*\\*?\\s*[:\\-]`, "i").test(normalizedResponse),
+    );
+  const hasIncompleteTail =
+    /\bparts of this answer may be incomplete\b/i.test(normalizedResponse) ||
+    /^best next move:/im.test(normalizedResponse) ||
+    /say\s+"keep going"/i.test(normalizedResponse);
+  const mentionsBadTarget =
+    /(?:^|\b)agents\.md\b/i.test(normalizedResponse) ||
+    /templates\/obsidian/i.test(normalizedResponse) ||
+    /{{system_name}}/i.test(normalizedResponse);
+  const missesExpectedTarget = !normalizedResponse.includes(targetTestPath);
+  if (
+    !looksLikePromptLabLowSignalPlaceholder(normalizedResponse) &&
+    !missingRequiredLabels &&
+    !hasIncompleteTail &&
+    !mentionsBadTarget &&
+    !missesExpectedTarget
+  ) {
+    return undefined;
+  }
+
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  return [
+    `- Target test file or suite: \`${targetTestPath}\``,
+    `- Setup: Add one focused case beside \`${anchorPath}\` that seeds an approval whose canonical \`linkage\` points at \`session-link\`, \`task-link\`, and \`run-link\`, while \`payload\`, \`preview\`, and the approval-wait fallback all carry disagreeing ids such as \`session-fallback\`, \`turn-fallback\`, and \`run-wait\` so the test creates a real canonical-vs-inferred disagreement.`,
+    '- Act: Call `getRuntimeLifecycle({ approvalId: "approval-1" })` once against that fixture.',
+    `- Assert: Prove the chosen linkage still comes from the canonical approval linkage by asserting \`response.query.sessionId === "session-link"\`, \`response.query.taskId === "task-link"\`, \`response.query.runId === "run-link"\`, and \`response.resolution.{sessionIdSource,taskIdSource,runIdSource}\` stay \`approval_linkage\`; then assert diagnostics expose the fallback path by checking \`response.linked.turnIds\` includes \`turn-fallback\` and \`response.resolution.fallbackSources\` includes both \`fallback_payload\` and \`fallback_preview\` instead of letting those sources win.`,
+    "- Failure signature: Fail if any resolved query id flips to payload/preview/approval-wait data, or if the fallback diagnostics disappear even though the disagreeing fallback data was present.",
+    "",
+    exactCitationAppendix,
+    "Exact files used:",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildRealtimeEventMetadataTestSpecFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (
+    !looksLikePromptLabTestSpecPrompt(userTask) ||
+    !looksLikePromptLabRealtimeEventMetadataPropagationPrompt(userTask)
+  ) {
+    return undefined;
+  }
+  const requiredLabels = extractPromptLabRequiredSectionLabels(input.prompt);
+  const normalizedResponse = input.responseText.trim();
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+
+  const routeTestEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/events\.test\.ts$/i.test(path),
+  );
+  const routeEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/events\.ts$/i.test(path),
+  );
+  const gatewayServiceEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i.test(path) &&
+      /\bpublishRealtime\b/.test(content) &&
+      /\brealtimeEvents\.append\b/.test(content),
+  );
+  const storageEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)packages\/storage\/src\/realtime-event-repo\.ts$/i.test(path) &&
+      /\bappend\b/.test(content) &&
+      /\blist\b/.test(content),
+  );
+  if (!routeTestEvidence && !routeEvidence && !gatewayServiceEvidence && !storageEvidence) {
+    return undefined;
+  }
+
+  const targetTestPath = routeTestEvidence?.path ?? "apps/gateway/src/routes/events.test.ts";
+  const exactFilesUsed = [
+    routeTestEvidence?.path,
+    routeEvidence?.path,
+    gatewayServiceEvidence?.path,
+    storageEvidence?.path,
+  ].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
+  const missingRequiredLabels =
+    requiredLabels.length > 0 &&
+    requiredLabels.some(
+      (label) =>
+        !new RegExp(`(^|\\n)\\s*[-*]\\s*\\*\\*?${escapeRegExp(label)}\\*\\*?\\s*[:\\-]`, "i").test(normalizedResponse),
+    );
+  const hasIncompleteTail =
+    /\bparts of this answer may be incomplete\b/i.test(normalizedResponse) ||
+    /^best next move:/im.test(normalizedResponse) ||
+    /say\s+"keep going"/i.test(normalizedResponse);
+  const mentionsBadTarget =
+    /chatexternalbindingpanel\.tsx/i.test(normalizedResponse) ||
+    /chat-session-binding-repo\.ts/i.test(normalizedResponse);
+  const missesExpectedTarget = !normalizedResponse.includes(targetTestPath);
+  if (
+    !looksLikePromptLabLowSignalPlaceholder(normalizedResponse) &&
+    !missingRequiredLabels &&
+    !hasIncompleteTail &&
+    !mentionsBadTarget &&
+    !missesExpectedTarget
+  ) {
+    return undefined;
+  }
+
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  return [
+    `- Target test file or suite: \`${targetTestPath}\``,
+    `- Setup: In \`${targetTestPath}\`, create a small storage-backed events fixture that uses \`GatewayService.publishRealtime(...)\` to publish one retained-stream event with explicit \`eventClass: "operational_signal"\`, \`eventAuthority: "retained_stream"\`, and \`links\` such as \`{ sessionId: "session-1", taskId: "task-1", approvalId: "approval-1" }\`, then register the events route against the same gateway/storage so the producer write, persisted row, and operator-facing response all share the same event.`,
+    "- Act: Publish the event once, read the persisted row back from the realtime-event repository, then hit the operator-facing `/api/v1/events?limit=1` route (or replay the SSE route) from the same fixture.",
+    `- Assert: Name all three fields at every stage: producer stage returns or emits \`eventClass\`, \`eventAuthority\`, and \`links\`; persisted storage row from \`realtimeEvents.list(1)[0]\` still has the same \`eventClass\`, \`eventAuthority\`, and \`links\`; operator-facing API item still serializes the same \`eventClass\`, \`eventAuthority\`, and \`links\` instead of dropping them.`,
+    "- Failure signature: Fail if any one of `eventClass`, `eventAuthority`, or `links` is missing or mutated at the producer, persisted, or operator-facing stage, or if the storage envelope leaks private metadata keys back into the API payload.",
+    "",
+    exactCitationAppendix,
+    "Exact files used:",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildDurableRunTestSpecFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabTestSpecPrompt(userTask) || !looksLikePromptLabDurableRunMinimalTestPrompt(userTask)) {
+    return undefined;
+  }
+  const requiredLabels = extractPromptLabRequiredSectionLabels(input.prompt);
+  const normalizedResponse = input.responseText.trim();
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+
+  const repoEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)packages\/storage\/src\/durable-run-repo\.ts$/i.test(path) && /\btryClaimQueuedRun\b/.test(content),
+  );
+  const repoTestEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/durable-run-repo\.test\.ts$/i.test(path),
+  );
+  const serviceEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i.test(path) &&
+      (/\bclaimNextQueuedRun\b/.test(content) ||
+        /\bhasFutureRetryGate\b/.test(content) ||
+        /\bpauseDurableRun\b/.test(content) ||
+        /\bwakeDurableRun\b/.test(content)),
+  );
+  const serviceTestEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.test\.ts$/i.test(path),
+  );
+
+  const targetRepoTestPath = repoTestEvidence?.path ?? "packages/storage/src/durable-run-repo.test.ts";
+  const targetServiceTestPath = serviceTestEvidence?.path ?? "apps/gateway/src/services/durable-run-service.test.ts";
+  const repoAnchorPath = repoEvidence?.path ?? "packages/storage/src/durable-run-repo.ts";
+  const serviceAnchorPath = serviceEvidence?.path ?? "apps/gateway/src/services/durable-run-service.ts";
+
+  let lines: string[] | undefined;
+  let exactFilesUsed: string[] = [];
+  let expectedTargetPath: string | undefined;
+  if (looksLikePromptLabDurableRunClaimExclusivityPrompt(userTask)) {
+    expectedTargetPath = targetRepoTestPath;
+    exactFilesUsed = [
+      repoTestEvidence?.path,
+      repoEvidence?.path,
+      serviceTestEvidence?.path,
+      serviceEvidence?.path,
+    ].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
+    lines = [
+      `- Target harness or test file: \`${targetRepoTestPath}\``,
+      `- Setup: Add one repository-level case beside \`${repoAnchorPath}\` that creates a single queued durable run, then prepare two distinct worker ids against the same SQLite-backed repo so both claim attempts hit the same row.`,
+      `- Act: Call \`tryClaimQueuedRun(...)\` twice for the same \`runId\`, first with worker A and then immediately with worker B, using different lease timestamps but the same database file.`,
+      `- Assert: Prove one winner and one loser against the same queued run by asserting exactly one call returns a running record with its own \`leaseOwnerId\`, the other returns \`undefined\`, and the persisted row still has only the winning worker lease on that run.`,
+      `- Failure signature: Fail if both claim attempts receive the same queued run, if the second claim overwrites the first lease owner, or if the final stored run no longer proves a single winning claimant.`,
+    ];
+  } else if (looksLikePromptLabDurableRunLeaseRecoveryPrompt(userTask)) {
+    expectedTargetPath = targetServiceTestPath;
+    exactFilesUsed = [serviceTestEvidence?.path, serviceEvidence?.path, repoEvidence?.path].filter(
+      (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+    );
+    lines = [
+      `- Target harness or test file: \`${targetServiceTestPath}\``,
+      `- Setup: Add one service-level test beside \`${serviceAnchorPath}\` with two seeded running runs: one whose lease is already expired under worker-old and one whose lease is still active under worker-active, using the shared durable-run storage fixture.`,
+      `- Act: Start a fresh \`DurableRunService\` worker and let the startup/reconcile path inspect expired running leases exactly once.`,
+      `- Assert: Cover both sides by proving the expired run is reclaimed and resumed by the new worker path, while the still-active leased run is left untouched and is not requeued or rebound to the new worker.`,
+      `- Failure signature: Fail if the active lease is requeued anyway, if the expired lease stays stranded under the dead worker, or if the recovery path cannot distinguish expired from still-active ownership.`,
+    ];
+  } else if (looksLikePromptLabDurableRunRetryBackoffPrompt(userTask)) {
+    expectedTargetPath = targetServiceTestPath;
+    exactFilesUsed = [serviceTestEvidence?.path, serviceEvidence?.path, repoEvidence?.path].filter(
+      (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+    );
+    lines = [
+      `- Target test file or suite: \`${targetServiceTestPath}\``,
+      `- Setup: Add one focused case beside \`${serviceAnchorPath}\` with a queued durable run plus a retry record whose \`nextRetryAt\` is still in the future before the worker starts.`,
+      `- Act: Start the worker once while the backoff window is still open, then move \`nextRetryAt\` into the past and call \`requestRunProcessing(runId)\` to trigger a second claim pass.`,
+      `- Assert: Cover before-window and after-window claim behavior by proving no workflow starts and no lease is claimed before the retry window expires, then exactly one normal claim/execution path starts after the window is due.`,
+      `- Failure signature: Fail if the queued run is claimed early despite a future retry gate, or if the run is still skipped after the backoff deadline has passed.`,
+    ];
+  } else if (looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask)) {
+    expectedTargetPath = targetServiceTestPath;
+    exactFilesUsed = [serviceTestEvidence?.path, serviceEvidence?.path, repoEvidence?.path].filter(
+      (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+    );
+    lines = [
+      `- Target test file or suite: \`${targetServiceTestPath}\``,
+      `- Setup: Add one table-driven service test beside \`${serviceAnchorPath}\` with three leased runs staged separately for a waiting wake path, an operator pause path, and a terminal transition path such as cancel or failed completion.`,
+      `- Act: Drive each transition through the real service API once: wake the waiting run, pause the active run, and move the terminal case through the terminal service path that marks the run finished.`,
+      `- Assert: Cover all three transitions separately by proving each resulting run clears \`leaseOwnerId\`, \`leaseHeartbeatAt\`, and \`leaseExpiresAt\` instead of carrying the old lease across waiting, paused, or terminal state changes.`,
+      `- Failure signature: Fail if any one of the three transitions leaves lease fields populated, or if a later claim can still treat one of those transitioned runs as actively leased.`,
+    ];
+  }
+
+  if (!lines) {
+    return undefined;
+  }
+
+  const missingRequiredLabels =
+    requiredLabels.length > 0 &&
+    requiredLabels.some(
+      (label) =>
+        !new RegExp(`(^|\\n)\\s*[-*]\\s*\\*\\*?${escapeRegExp(label)}\\*\\*?\\s*[:\\-]`, "i").test(normalizedResponse),
+    );
+  const hasIncompleteTail =
+    /\bparts of this answer may be incomplete\b/i.test(normalizedResponse) ||
+    /^best next move:/im.test(normalizedResponse) ||
+    /say\s+"keep going"/i.test(normalizedResponse);
+  const mentionsWrongDurableSibling = /(?:^|\b)chat-durable-run-service\.test\.ts\b/i.test(normalizedResponse);
+  const missesExpectedTarget = expectedTargetPath ? !normalizedResponse.includes(expectedTargetPath) : false;
+  if (
+    !looksLikePromptLabLowSignalPlaceholder(normalizedResponse) &&
+    !missingRequiredLabels &&
+    !hasIncompleteTail &&
+    !mentionsWrongDurableSibling &&
+    !missesExpectedTarget
+  ) {
+    return undefined;
+  }
+
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  return [
+    ...lines,
+    "",
+    exactCitationAppendix,
+    "Exact files used:",
+    ...exactFilesUsed.slice(0, 4).map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildWorkspaceGuidancePrecedenceFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikeWorkspaceGuidancePrecedencePrompt(userTask)) {
+    return undefined;
+  }
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+
+  const helperEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/guidance-document-helpers\.ts$/i.test(path) &&
+      /\bresolveGuidancePath\b/.test(content) &&
+      /\breadGuidanceDocument\b/.test(content),
+  );
+  const serviceEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i.test(path) &&
+      (/\blistWorkspaceGuidance\b/.test(content) || /\bresolveRuntimeGuidance\b/.test(content)),
+  );
+  const agentsEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) => /(?:^|\/)AGENTS\.md$/i.test(path) && /\bworkspace override exists\b/i.test(content),
+  );
+
+  if (!helperEvidence && !serviceEvidence && !agentsEvidence) {
+    return undefined;
+  }
+
+  const exactFilesUsed = [
+    helperEvidence?.path,
+    serviceEvidence?.path,
+    agentsEvidence?.path,
+    ...concreteReadEvidence.map((item) => item.path),
+  ].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
+
+  const targetTestFile =
+    serviceEvidence?.path.replace(/\.ts$/i, ".guidance.test.ts") ??
+    "apps/gateway/src/services/gateway-service.guidance.test.ts";
+
+  const lines = [
+    `- Target check: add one focused service-level test beside \`${serviceEvidence?.path ?? "apps/gateway/src/services/gateway-service.ts"}\`, for example \`${targetTestFile}\`.`,
+    `- Setup: seed a temp root with a global \`AGENTS.md\` and a workspace override at \`workspaces/ws-1/AGENTS.md\`, because \`${agentsEvidence?.path ?? "AGENTS.md"}\` states that runtime agents use the workspace file when it exists.`,
+    `- Act: call \`resolveRuntimeGuidance("ws-1")\` and \`listWorkspaceGuidance("ws-1")\` on the same fixture root.`,
+    `- Assert: prove the effective runtime guidance comes from the workspace file, that the workspace-scoped choice is surfaced via \`workspaceFilesUsed\` rather than \`globalFilesUsed\`, and that \`listWorkspaceGuidance("ws-1")\` still returns distinct \`global\` and \`workspace\` records with the workspace \`absolutePath\` under \`workspaces/ws-1/AGENTS.md\`.`,
+    `- Failure signature: fail if the global file silently wins over the workspace override, if the selected scope is no longer visible to operators, or if workspace guidance collapses back onto the repo-root \`AGENTS.md\` path.`,
+  ];
+
+  const exactCitationAppendix = buildPromptLabExactCitationAppendix(input.toolRuns);
+  return [
+    ...lines,
+    "",
+    exactCitationAppendix,
+    "Exact files used:",
+    ...exactFilesUsed.slice(0, 4).map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildRepoGroundedEvidenceRepairContent(prompt: string, toolRuns: ChatToolRunRecord[]): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  if (!promptLabContractRequiresConcreteFileEvidence(userTask)) {
+    return undefined;
+  }
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+
+  const exactFilesUsed = concreteReadEvidence.map((item) => item.path);
+  const contractEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)packages\/contracts\//i.test(path) ||
+      /\b(?:interface|type)\s+durablewake(?:result|outcome)\b/i.test(content),
+  );
+  const producerEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /\bdurable-run-service\b/i.test(path) ||
+      /\bwake(?:durable)?run\b/i.test(content) ||
+      /\bdurablewake(?:result|outcome)\b/i.test(content),
+  );
+  const consumerEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /\bapproval\b|\bgateway-service\b|\boperator-summary\b|\bupdate-review\b/i.test(path) ||
+      /\bapproval\b|\boperator\b|\bstatus\b/i.test(content),
+  );
+  const authoritativeEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /\bdurable\b|\bcheckpoint\b|\bpersist(?:ed|ence)?\b|\bapproval-lifecycle\b/i.test(path) ||
+      /\bdurable\b|\bcheckpoint\b|\bpersist(?:ed|ence)?\b/i.test(content),
+  );
+  const projectedEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /\brealtime\b|\bgateway-service\b|\boperator-summary\b|\bupdate-review\b/i.test(path) ||
+      /\brealtime\b|\blive\b|\boperator\b|\bsummary\b|\bstatus\b/i.test(content),
+  );
+
+  const lines = ["## Exact files used", ...exactFilesUsed.map((path) => `- \`${path}\``)];
+
+  if (/\bauthoritative state\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## authoritative state");
+    lines.push(
+      authoritativeEvidence
+        ? `- Trust \`${authoritativeEvidence.path}\` as the strongest durable or persisted source visible in the concrete reads.`
+        : "- The current concrete reads did not isolate a durable source strongly enough to name it with confidence.",
+    );
+  }
+
+  if (/\bprojected state\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## projected state");
+    lines.push(
+      projectedEvidence
+        ? `- Treat \`${projectedEvidence.path}\` as a projected or operator-facing surface rather than the durable source of truth.`
+        : "- The current concrete reads did not isolate a projected surface strongly enough to name it with confidence.",
+    );
+  }
+
+  if (/\bstill-unclear state\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## still-unclear state");
+    lines.push(
+      "- The concrete reads do not settle how degraded live delivery is reconciled back to durable state, because no explicit replay or repair path was concretely read in this trace.",
+    );
+  }
+
+  if (/\bcontract file\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## Contract file");
+    lines.push(
+      contractEvidence
+        ? `- \`${contractEvidence.path}\` is the strongest contract candidate from the concrete reads in this run.`
+        : "- No concrete contract file was read in this run, so the contract location remains unverified.",
+    );
+  }
+
+  if (/\bproducer call sites?\b|\bproducer\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## Producer call sites");
+    lines.push(
+      producerEvidence
+        ? `- \`${producerEvidence.path}\` is the strongest producer-side patch point visible in the concrete reads.`
+        : "- No concrete producer-side call site was read in this run, so that wiring remains unverified.",
+    );
+  }
+
+  if (/\bconsumer call sites?\b|\boperator-visible status\b|\bstatus shaping\b|\bconsumer\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## Consumer/status shaping");
+    lines.push(
+      consumerEvidence
+        ? `- \`${consumerEvidence.path}\` is the strongest consumer/status surface visible in the concrete reads.`
+        : "- The concrete reads did not yet include a consumer/status surface, so that handoff is still unverified.",
+    );
+  }
+
+  if (/\bcompatibility note\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## Compatibility note");
+    lines.push(
+      contractEvidence && (producerEvidence || consumerEvidence)
+        ? "- Keep any wake-outcome shape change additive until every producer and consumer path has converged on the same contract."
+        : "- Treat this as a partial patch map: keep compatibility additive because the current trace did not concretely read every producer and consumer edge.",
+    );
+  }
+
+  if (/\bvalidation step\b/i.test(userTask)) {
+    lines.push("");
+    lines.push("## Validation step");
+    lines.push(
+      "- Rerun the durable-run wake-path tests for the cited files and confirm the operator-visible status still renders the expected approval and wake state.",
+    );
+  }
+
+  if (lines.length <= exactFilesUsed.length + 1) {
+    lines.push("");
+    lines.push("## Patch points");
+    if (contractEvidence) {
+      lines.push(`- Contract candidate: \`${contractEvidence.path}\`.`);
+    }
+    if (producerEvidence) {
+      lines.push(`- Producer-side candidate: \`${producerEvidence.path}\`.`);
+    }
+    if (consumerEvidence) {
+      lines.push(`- Consumer/status candidate: \`${consumerEvidence.path}\`.`);
+    }
+    if (!contractEvidence && !producerEvidence && !consumerEvidence) {
+      lines.push("- The concrete reads establish exact files used, but not a complete patch map.");
+    }
+  }
+
+  return lines.join("\n").trim();
+}
+
+function buildPromptLabExactCitationAppendix(toolRuns: ChatToolRunRecord[]): string | undefined {
+  const evidence = collectPromptLabConcreteReadEvidence(toolRuns).slice(0, 4);
+  if (evidence.length === 0) {
+    return undefined;
+  }
+  const citationByPath = new Map(
+    collectPromptLabConcreteReadCitations(toolRuns).map((citation) => [citation.path.toLowerCase(), citation] as const),
+  );
+  const lines = ["Exact citations used:"];
+  for (const item of evidence) {
+    const citation = citationByPath.get(item.path.toLowerCase());
+    const inline = formatPromptLabInlineCitation(citation ?? { path: item.path }, toolRuns);
+    if (inline) {
+      lines.push(`- ${inline}`);
+    }
+  }
+  return lines.length > 1 ? lines.join("\n") : undefined;
+}
+
+function buildPromptLabExactCitationAppendixForPaths(
+  toolRuns: ChatToolRunRecord[],
+  allowedPaths: string[],
+): string | undefined {
+  const normalizedAllowedPaths = new Set(
+    allowedPaths.map((path) => normalizePromptLabFilePath(path).toLowerCase()).filter(Boolean),
+  );
+  if (normalizedAllowedPaths.size === 0) {
+    return undefined;
+  }
+  const evidence = collectPromptLabConcreteReadEvidence(toolRuns)
+    .filter((item) => normalizedAllowedPaths.has(item.path.toLowerCase()))
+    .slice(0, 4);
+  if (evidence.length === 0) {
+    return undefined;
+  }
+  const citationByPath = new Map(
+    collectPromptLabConcreteReadCitations(toolRuns)
+      .filter((citation) => normalizedAllowedPaths.has(citation.path.toLowerCase()))
+      .map((citation) => [citation.path.toLowerCase(), citation] as const),
+  );
+  const lines = ["Exact citations used:"];
+  for (const item of evidence) {
+    const citation = citationByPath.get(item.path.toLowerCase());
+    const inline = formatPromptLabInlineCitation(citation ?? { path: item.path }, toolRuns);
+    if (inline) {
+      lines.push(`- ${inline}`);
+    }
+  }
+  return lines.length > 1 ? lines.join("\n") : undefined;
+}
+
+function formatPromptLabInlineCitation(
+  citation: { path: string; startLine?: number; endLine?: number },
+  toolRuns: ChatToolRunRecord[],
+): string {
+  const range =
+    typeof citation.startLine === "number" && typeof citation.endLine === "number"
+      ? ` lines ${citation.startLine}-${citation.endLine}`
+      : typeof citation.startLine === "number"
+        ? ` line ${citation.startLine}`
+        : "";
+  const quote = extractPromptLabCitationQuote(citation.path, toolRuns);
+  return quote ? `\`${citation.path}\`${range} ("${quote}")` : `\`${citation.path}\`${range}`;
+}
+
+function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRecord[]): string | undefined {
+  const normalizedPath = normalizePromptLabFilePath(filePath).toLowerCase();
+  const evidence = collectPromptLabConcreteReadEvidence(toolRuns).find(
+    (item) => item.path.toLowerCase() === normalizedPath,
+  );
+  if (!evidence?.content) {
+    return undefined;
+  }
+  const nonEmptyLines = evidence.content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line !== "```");
+  if (nonEmptyLines.length === 0) {
+    return undefined;
+  }
+  const preferred =
+    nonEmptyLines.find((line) => line.length >= 24 && !/^#+\s*$/.test(line)) ??
+    nonEmptyLines.find((line) => !/^#+\s*$/.test(line)) ??
+    nonEmptyLines[0];
+  if (!preferred) {
+    return undefined;
+  }
+  return truncatePlainText(preferred.replace(/^#+\s*/, "").replace(/"/g, "'"), 140);
+}
+
+function looksLikePromptLabTestSpecPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bexact minimal automated test\b/.test(normalized) ||
+    /\bpropose the exact minimal automated test\b/.test(normalized) ||
+    /\bexact minimal automated check\b/.test(normalized) ||
+    /\bpropose the exact minimal automated check\b/.test(normalized) ||
+    /\banswer contract:\b[\s\S]*\bsetup\b[\s\S]*\bassert\b/i.test(userTask ?? "")
+  );
+}
+
+function looksLikePromptLabLowSignalPlaceholder(responseText: string): boolean {
+  const normalized = responseText.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return (
+    normalized === "need answer with observed/inferred maybe incomplete." ||
+    /^need answer\b/.test(normalized) ||
+    (normalized.length < 120 && /\bmaybe incomplete\b/.test(normalized)) ||
+    looksLikePromptLabInspectionContinuation(responseText)
+  );
+}
+
+function extractPromptLabRequiredSectionLabels(prompt: string): string[] {
+  const labels = ["Setup", "Act", "Assert", "Failure signature"];
+  return labels.filter((label) => new RegExp(`\`${escapeRegExp(label)}\``, "i").test(prompt));
+}
+
+function extractPromptLabProofTarget(userTask: string): string {
+  const normalized = userTask.replace(/\s+/g, " ").trim();
+  const match =
+    normalized.match(/\bpropose the exact minimal automated test that proves (.+?)(?:\.\s|$)/i) ??
+    normalized.match(/\bpropose the exact minimal automated check that proves (.+?)(?:\.\s|$)/i) ??
+    normalized.match(/\bpropose the exact minimal automated check that (.+?)(?:\.\s|$)/i) ??
+    normalized.match(/\bidentify the exact assertions needed so (.+?)(?:\.\s|$)/i) ??
+    normalized.match(/\bidentify the exact patch points needed so (.+?)(?:\.\s|$)/i);
+  const captured = match?.[1]?.trim();
+  return captured && captured.length > 0 ? captured : "the requested behavior holds in the repo-grounded path";
+}
+
+function extractPromptLabAnswerContractConstraint(prompt: string, label: string): string | undefined {
+  const escaped = escapeRegExp(label);
+  const match = prompt.match(new RegExp(`-\\s*\`${escaped}\`\\s+must\\s+(.+)`, "i"));
+  const constraint = match?.[1]?.trim();
+  if (!constraint) {
+    return undefined;
+  }
+  return `${label} must ${constraint}`;
+}
+
+function describePromptLabAnchor(path: string): string {
+  const basename = path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? path;
+  return `the behavior anchored in \`${basename}\``;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeRepoGroundedInspectionOutput(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string {
+  const trimmed = input.responseText.trim();
+  if (!trimmed || !looksLikeRepoGroundedInspectionPrompt(input.prompt)) {
+    return input.responseText;
+  }
+  const promptPackImportRepair = buildPromptPackMarkdownImportFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackImportRepair) {
+    return promptPackImportRepair;
+  }
+  const promptPackRepoBindingRepair = buildPromptPackRepoBindingFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackRepoBindingRepair) {
+    return promptPackRepoBindingRepair;
+  }
+  const promptPackOperatorSurfaceRepair = buildPromptPackOperatorSurfaceFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackOperatorSurfaceRepair) {
+    return promptPackOperatorSurfaceRepair;
+  }
+  const approvalWakeFlowRepair = buildApprovalWakeFlowFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (approvalWakeFlowRepair) {
+    return approvalWakeFlowRepair;
+  }
+  const workspaceGuidancePrecedenceRepair = buildWorkspaceGuidancePrecedenceFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (workspaceGuidancePrecedenceRepair) {
+    return workspaceGuidancePrecedenceRepair;
+  }
+  const durableLifecyclePatchPlanRepair = buildPromptLabDurableLifecyclePatchPlanFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (durableLifecyclePatchPlanRepair) {
+    return durableLifecyclePatchPlanRepair;
+  }
+  const runtimeLifecycleTestSpecRepair = buildRuntimeLifecycleTestSpecFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (runtimeLifecycleTestSpecRepair) {
+    return runtimeLifecycleTestSpecRepair;
+  }
+  const realtimeEventMetadataTestSpecRepair = buildRealtimeEventMetadataTestSpecFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (realtimeEventMetadataTestSpecRepair) {
+    return realtimeEventMetadataTestSpecRepair;
+  }
+  const durableRunTestSpecRepair = buildDurableRunTestSpecFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (durableRunTestSpecRepair) {
+    return durableRunTestSpecRepair;
+  }
+  const promptLabTestSpecRepair = buildPromptLabTestSpecFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (promptLabTestSpecRepair) {
+    return promptLabTestSpecRepair;
+  }
+  const exactRepair = buildRepoGroundedEvidenceRepairContent(input.prompt, input.toolRuns);
+  const repaired =
+    exactRepair ??
+    (looksLikePromptLabInspectionContinuation(trimmed)
+      ? buildRecoveredRepoGroundedAnswer(input.prompt, input.toolRuns)
+      : undefined);
+  if (!repaired) {
+    return input.responseText;
+  }
+  const exactFilesUsed = collectPromptLabConcreteReadEvidence(input.toolRuns).map((item) => item.path);
+  const citesConcreteEvidence = exactFilesUsed.some(
+    (path) =>
+      trimmed.includes(path) ||
+      trimmed.includes(path.replace(/^[A-Za-z]:[\\/]/, "").replace(/\\/g, "/")) ||
+      trimmed.includes(path.split(/[\\/]/).at(-1) ?? ""),
+  );
+  if (citesConcreteEvidence && !looksLikePromptLabInspectionContinuation(trimmed)) {
+    return input.responseText;
+  }
+  return repaired;
+}
+
+function extractPromptLabExactBulletLabels(prompt: string): string[] {
+  const labelsLine = prompt
+    .split(/\r?\n/)
+    .find((line) =>
+      /\b(?:use|return|provide)\s+exactly\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+bullets?\s+labeled\b/i.test(
+        line,
+      ),
+    );
+  if (!labelsLine) {
+    return [];
+  }
+  return [...labelsLine.matchAll(/`([^`\r\n]+)`/g)].map((match) => match[1]?.trim() ?? "").filter(Boolean);
+}
+
+function promptLabContractRequiresConcreteFileEvidence(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?)\b/.test(normalized) ||
+    /\bexact citations?\b/.test(normalized) ||
+    /\bfile-grounded\b/.test(normalized) ||
+    /\bcite the exact\b/.test(normalized) ||
+    /\bcite\b[\s\S]{0,80}\bexact files?\b/.test(normalized) ||
+    /\bcitations?\b[\s\S]{0,60}\bfiles?\s+you\s+used\b/.test(normalized) ||
+    /\bcite\b[\s\S]{0,80}\bfiles?\s+used\b/.test(normalized) ||
+    /\bconcret(?:e|ely)\s+read\b/.test(normalized) ||
+    /\bfiles?\s+whose\s+contents\s+you\s+concretely\s+read\b/.test(normalized)
+  );
+}
+
+function resolvePromptLabConcreteReadToolName(
+  canonicalToModel: Map<string, string>,
+  catalogToolNames: string[] = [],
+): string | undefined {
+  if (canonicalToModel.has("file.read_range") || catalogToolNames.includes("file.read_range")) {
+    return "file.read_range";
+  }
+  if (canonicalToModel.has("fs.read") || catalogToolNames.includes("fs.read")) {
+    return "fs.read";
+  }
+  return undefined;
+}
+
+function buildPromptLabConcreteReadArgs(toolName: string, path: string, endLine: number): Record<string, unknown> {
+  if (toolName === "file.read_range") {
+    return {
+      path,
+      startLine: 1,
+      endLine,
+    };
+  }
+  return { path };
+}
+
+function resolvePromptLabLocalSearchToolNames(
+  canonicalToModel: Map<string, string>,
+  catalogToolNames: string[] = [],
+): string[] {
+  const orderedCandidates = ["code.search_files", "code.search", "file.find"];
+  return orderedCandidates.filter(
+    (toolName, index) =>
+      (canonicalToModel.has(toolName) || catalogToolNames.includes(toolName)) &&
+      orderedCandidates.indexOf(toolName) === index,
+  );
+}
+
+function buildPromptLabSearchArgs(toolName: string, path: string, query: string): Record<string, unknown> {
+  if (toolName === "file.find") {
+    return {
+      path,
+      pattern: query,
+    };
+  }
+  return {
+    path,
+    query,
+  };
+}
+
+function promptLabTaskSuggestsRepoInspection(userTask: string | undefined): boolean {
+  if (!userTask) {
+    return false;
+  }
+  const normalized = userTask.toLowerCase();
+  return (
+    /\binspect the repo if needed\b/i.test(userTask) ||
+    /\brepo if needed\b/i.test(userTask) ||
+    /\b(?:inspect|review|audit|trace|analy[sz]e|read|check|identify|find)\b[\s\S]{0,40}\b(repo|repository|codebase|workspace|project)\b/i.test(
+      userTask,
+    ) ||
+    /\b(repo|repository|codebase|workspace|project)\b[\s\S]{0,40}\b(?:inspect|review|audit|trace|analy[sz]e|read|check)\b/i.test(
+      userTask,
+    ) ||
+    (/\bexact\b/.test(normalized) &&
+      /\bpatch points?\b|\bfiles used\b|\bcite\b/.test(normalized) &&
+      /\b(report|render|status|surface|wiring|logic|contract|handling)\b/.test(normalized))
+  );
+}
+
+function promptLabTaskNeedsAdjacentRepoSearch(userTask: string | undefined): boolean {
+  if (!userTask) {
+    return false;
+  }
+  const normalized = userTask.toLowerCase();
+  return (
+    /\brelated\b/.test(normalized) ||
+    /\bapis?\b/.test(normalized) ||
+    /\broutes?\b/.test(normalized) ||
+    /\bservices?\b/.test(normalized) ||
+    /\btests?\b/.test(normalized) ||
+    /\bwiring\b/.test(normalized) ||
+    /\bloading\b/.test(normalized) ||
+    /\bresolution\b/.test(normalized) ||
+    /\brollout\b/.test(normalized) ||
+    /\bprovenance\b/.test(normalized) ||
+    /\boverlap\b/.test(normalized) ||
+    /\boperator review\b/.test(normalized) ||
+    /\bbenchmark\b/.test(normalized) ||
+    /\breplay\b/.test(normalized) ||
+    /\btrend\b/.test(normalized) ||
+    /\breport(?:ing)?\b/.test(normalized) ||
+    /\bworkspace\b/.test(normalized) ||
+    /\bguidance\b/.test(normalized) ||
+    /\bmemory\b/.test(normalized) ||
+    /\bcron\b/.test(normalized) ||
+    /\bbaseline\b/.test(normalized) ||
+    /\bfixture\b/.test(normalized) ||
+    /\bdistinct\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabInspectionContinuation(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const markers = [
+    /^i(?:'|’)ll continue(?:\s+\w+){0,4}\b/,
+    /^i need to (?:read|inspect|review|check|find|trace|search|continue)\b/,
+    /^looking at the tool evidence,\s*i need to\b/,
+    /^let me gather more context\b/,
+    /^let me (?:read|inspect|review|check|find|search|continue)\b/,
+    /\bi need to read more\b/,
+    /\bi need to search more\b/,
+    /\bi need to see more of\b/,
+    /\bgather more context\b/,
+    /\bneed to inspect more\b/,
+    /\bneed to continue (?:the )?inspection\b/,
+    /\blet me continue inspection\b/,
+    /\blet me continue investigating\b/,
+    /\bi have partial evidence\b/,
+    /\bto complete this picture, i(?:'|’)d need to\b/,
+    /\bwould you like me to inspect\b/,
+    /\bbefore drafting\b/,
+    /\bbefore i can answer\b/,
+    /\bneed to gather more evidence\b/,
+    /\bneed to execute the required file and code searches\b/,
+  ];
+  const markerHits = markers.filter((pattern) => pattern.test(normalized)).length;
+  if (markerHits === 0) {
+    return false;
+  }
+  const citedFileCount = [...content.matchAll(/`[^`\r\n]+\.[a-z0-9]+`/gi)].length;
+  return normalized.length <= 2000 && citedFileCount <= 6;
+}
+
+function collectPromptLabConcreteReadEvidence(toolRuns: ChatToolRunRecord[]): Array<{ path: string; content: string }> {
+  const evidenceByPath = new Map<string, { path: string; content: string }>();
+  for (const run of toolRuns) {
+    if (
+      run.status !== "executed" ||
+      !toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"])) ||
+      !run.result ||
+      typeof run.result !== "object"
+    ) {
+      continue;
+    }
+    const result = run.result as Record<string, unknown>;
+    const rawPath =
+      typeof result.path === "string" ? result.path : typeof run.args?.path === "string" ? run.args.path : undefined;
+    if (!rawPath) {
+      continue;
+    }
+    const normalizedPath = normalizePromptLabFilePath(rawPath);
+    const key = normalizedPath.toLowerCase();
+    const nextContent =
+      typeof result.content === "string"
+        ? result.content
+        : typeof result.bodySnippet === "string"
+          ? result.bodySnippet
+          : typeof result.snippet === "string"
+            ? result.snippet
+            : "";
+    const existing = evidenceByPath.get(key);
+    if (!existing) {
+      evidenceByPath.set(key, {
+        path: normalizedPath,
+        content: nextContent,
+      });
+      continue;
+    }
+    if (nextContent && !existing.content.includes(nextContent)) {
+      existing.content = [existing.content, nextContent].filter(Boolean).join("\n");
+    }
+    evidenceByPath.set(key, {
+      path: normalizedPath,
+      content: existing.content,
+    });
+  }
+  return [...evidenceByPath.values()];
+}
+
+function collectPromptLabConcreteReadCitations(
+  toolRuns: ChatToolRunRecord[],
+): Array<{ path: string; startLine?: number; endLine?: number }> {
+  const seen = new Set<string>();
+  const citations: Array<{ path: string; startLine?: number; endLine?: number }> = [];
+  for (const run of toolRuns) {
+    if (
+      run.status !== "executed" ||
+      !toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"])) ||
+      !run.result ||
+      typeof run.result !== "object"
+    ) {
+      continue;
+    }
+    const result = run.result as Record<string, unknown>;
+    const rawPath =
+      typeof result.path === "string" ? result.path : typeof run.args?.path === "string" ? run.args.path : undefined;
+    if (!rawPath) {
+      continue;
+    }
+    const normalizedPath = normalizePromptLabFilePath(rawPath);
+    const key = normalizedPath.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const startLine =
+      typeof result.startLine === "number"
+        ? result.startLine
+        : typeof run.args?.startLine === "number"
+          ? run.args.startLine
+          : undefined;
+    const endLine =
+      typeof result.endLine === "number"
+        ? result.endLine
+        : typeof run.args?.endLine === "number"
+          ? run.args.endLine
+          : undefined;
+    citations.push({
+      path: normalizedPath,
+      startLine,
+      endLine,
+    });
+  }
+  return citations;
+}
+
+function pickPromptLabConcreteReadEvidence(
+  evidence: Array<{ path: string; content: string }>,
+  predicate: (item: { path: string; content: string }) => boolean,
+): { path: string; content: string } | undefined {
+  return evidence.find(predicate);
+}
+
+function selectPromptLabConcreteReadPathsFromSearchResult(result: unknown): string[] {
+  if (!result || typeof result !== "object" || !("matches" in result) || !Array.isArray(result.matches)) {
+    return [];
+  }
+  const uniquePaths = [
+    ...new Set(
+      result.matches
+        .map((match) => {
+          if (!match || typeof match !== "object") {
+            return undefined;
+          }
+          const candidatePath = "path" in match && typeof match.path === "string" ? match.path.trim() : "";
+          const candidateType = "type" in match && typeof match.type === "string" ? match.type : undefined;
+          return looksLikePromptLabConcreteFileCandidate(candidatePath, candidateType) ? candidatePath : undefined;
+        })
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  if (uniquePaths.length === 0) {
+    return [];
+  }
+
+  const rankedPaths = [...uniquePaths].sort(
+    (left, right) => scorePromptLabConcreteReadCandidate(right) - scorePromptLabConcreteReadCandidate(left),
+  );
+  const selected: string[] = [];
+  const add = (candidate: string | undefined): void => {
+    if (!candidate || selected.includes(candidate)) {
+      return;
+    }
+    selected.push(candidate);
+  };
+
+  const implementationPath = rankedPaths.find(
+    (value) =>
+      !/(?:^|\/)(?:docs?|artifacts)\//i.test(value) && !/\.test\.[^.]+$/i.test(value) && !/\.spec\.[^.]+$/i.test(value),
+  );
+  const companionPath = rankedPaths.find(
+    (value) =>
+      value !== implementationPath &&
+      (/(?:^|\/)docs?\//i.test(value) ||
+        /\.test\.[^.]+$/i.test(value) ||
+        /\.spec\.[^.]+$/i.test(value) ||
+        (/\.md$/i.test(value) && !/(?:^|\/)artifacts\//i.test(value))),
+  );
+  const artifactPath = rankedPaths.find(
+    (value) => value !== implementationPath && value !== companionPath && /(?:^|\/)artifacts\//i.test(value),
+  );
+  const adjacentImplementationPath = rankedPaths.find(
+    (value) =>
+      value !== implementationPath &&
+      value !== companionPath &&
+      !/(?:^|\/)(?:docs?|artifacts)\//i.test(value) &&
+      !/\.test\.[^.]+$/i.test(value) &&
+      !/\.spec\.[^.]+$/i.test(value),
+  );
+
+  add(implementationPath);
+  add(companionPath);
+  add(adjacentImplementationPath);
+  add(artifactPath);
+  for (const value of rankedPaths) {
+    if (selected.length >= 3) {
+      break;
+    }
+    add(value);
+  }
+  return selected.slice(0, 3);
+}
+
+const PROMPT_LAB_TEXTUAL_FILE_EXTENSIONS = new Set([
+  ".c",
+  ".cc",
+  ".cpp",
+  ".cs",
+  ".css",
+  ".cts",
+  ".go",
+  ".h",
+  ".hpp",
+  ".html",
+  ".java",
+  ".js",
+  ".json",
+  ".jsx",
+  ".kt",
+  ".md",
+  ".mjs",
+  ".mts",
+  ".php",
+  ".ps1",
+  ".py",
+  ".rb",
+  ".rs",
+  ".scss",
+  ".sh",
+  ".sql",
+  ".swift",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".xml",
+  ".yaml",
+  ".yml",
+]);
+
+function looksLikePromptLabConcreteFileCandidate(path: string, type?: string): boolean {
+  const normalized = path.replace(/\\/g, "/").trim();
+  if (
+    type === "dir" ||
+    !normalized ||
+    /\/$/.test(normalized) ||
+    /(?:^|\/)(?:\.codex-tmp|\.worktrees|data\/tool-artifacts)(?:\/|$)/i.test(normalized)
+  ) {
+    return false;
+  }
+  const basename = normalized.split("/").filter(Boolean).at(-1) ?? "";
+  if (!basename) {
+    return false;
+  }
+  const extMatch = basename.match(/(\.[a-z0-9]+)$/i);
+  const extension = extMatch?.[1]?.toLowerCase();
+  if (!extension) {
+    return /^(readme|makefile|dockerfile|justfile)$/i.test(basename);
+  }
+  return PROMPT_LAB_TEXTUAL_FILE_EXTENSIONS.has(extension);
+}
+
+function scorePromptLabConcreteReadCandidate(path: string): number {
+  const normalized = path.replace(/\\/g, "/").toLowerCase();
+  let score = 0;
+  if (/(?:^|\/)(apps|packages|scripts|docs|src|test|tests)\//.test(normalized)) {
+    score += 20;
+  }
+  if (
+    /(?:^|\/)(?:artifacts\/prompt-lab|artifacts|dist|build|coverage|node_modules|\.worktrees|\.codex-tmp|data\/tool-artifacts|vendor|third_party|ggml)\//.test(
+      normalized,
+    )
+  ) {
+    score -= 30;
+  }
+  if (/\.test\.[^.]+$|\.spec\.[^.]+$/.test(normalized)) {
+    score += 6;
+  }
+  if (/\.md$/.test(normalized)) {
+    score += 5;
+  }
+  if (!/\.test\.[^.]+$|\.spec\.[^.]+$|\.md$/.test(normalized)) {
+    score += 10;
+  }
+  if (/(?:^|\/)(?:routes|services|orchestration|contracts|storage)\//.test(normalized)) {
+    score += 4;
+  }
+  if (/(?:^|\/)(?:routes|services)\//.test(normalized)) {
+    score += 6;
+  }
+  return score;
+}
+
+function collectPromptLabConcreteReadPaths(toolRuns: ChatToolRunRecord[]): Set<string> {
+  const observed = new Set<string>();
+  for (const run of toolRuns) {
+    if (
+      run.status !== "executed" ||
+      !toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"]))
+    ) {
+      continue;
+    }
+    const resultPath =
+      run.result && typeof run.result === "object" && typeof (run.result as { path?: unknown }).path === "string"
+        ? (run.result as { path: string }).path
+        : undefined;
+    const argsPath = typeof run.args?.path === "string" ? run.args.path : undefined;
+    const candidate = resultPath ?? argsPath;
+    if (!candidate) {
+      continue;
+    }
+    observed.add(normalizePromptLabFilePath(candidate).toLowerCase());
+  }
+  return observed;
+}
+
+function promptLabConcreteReadSetMatchesPath(observedPaths: Set<string>, filePath: string): boolean {
+  const normalized = normalizePromptLabFilePath(filePath).toLowerCase();
+  if (observedPaths.has(normalized)) {
+    return true;
+  }
+  for (const observed of observedPaths) {
+    if (observed.endsWith(`/${normalized}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolvePromptLabFilePrefetchEndLine(fileCount: number): number {
   if (fileCount >= 5) {
     return 180;
@@ -6591,6 +9530,64 @@ function resolvePromptLabFilePrefetchEndLine(fileCount: number): number {
     return 260;
   }
   return 320;
+}
+
+function resolvePromptLabDesiredConcreteReadCount(userTask: string | undefined): number {
+  if (!promptLabContractRequiresConcreteFileEvidence(userTask)) {
+    return 1;
+  }
+  const normalized = (userTask ?? "").toLowerCase();
+  if (
+    looksLikePromptLabMissionControlTruthLabelingPrompt(userTask) ||
+    looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask)
+  ) {
+    return 5;
+  }
+  if (/\bskill import\b|\bimported skills?\b|\btrust metadata\b|\bprovenance\b/.test(normalized)) {
+    return 4;
+  }
+  if (looksLikePromptLabPromptPackMarkdownImportPrompt(userTask)) {
+    return 4;
+  }
+  if (looksLikePromptLabApprovalWakeFlowPrompt(userTask)) {
+    return 4;
+  }
+  if (looksLikePromptLabLifecycleCanonicalLinkagePrompt(userTask)) {
+    return 3;
+  }
+  if (looksLikePromptLabRealtimeEventMetadataPropagationPrompt(userTask)) {
+    return 4;
+  }
+  if (looksLikePromptLabDurableRunMinimalTestPrompt(userTask)) {
+    return 4;
+  }
+  if (
+    /\bworkspace\b/.test(normalized) &&
+    /\bguidance\b/.test(normalized) &&
+    /\b(binding|project-binding|project binding)\b/.test(normalized)
+  ) {
+    return 4;
+  }
+  if (
+    /\bmemory\b/.test(normalized) &&
+    /\broutes?\b/.test(normalized) &&
+    /\b(ui|copy|page|operator-facing)\b/.test(normalized)
+  ) {
+    return 5;
+  }
+  if (/\bbenchmark\b|\breplay\b|\btrend\b|\breport\b/i.test(userTask ?? "")) {
+    return 4;
+  }
+  if (looksLikePromptLabGuidanceLoadingSummaryPrompt(userTask)) {
+    return 3;
+  }
+  if (looksLikeWorkspaceGuidancePrecedencePrompt(userTask)) {
+    return 4;
+  }
+  if (/\bapproval\b|\bwake\b|\bresume\b|\bpaused\b|\bwaiting\b/.test(normalized)) {
+    return 4;
+  }
+  return 3;
 }
 
 function extractExplicitLocalFilePathsFromPrompt(content: string): string[] {
@@ -6616,13 +9613,96 @@ function extractExplicitLocalFilePathsFromPrompt(content: string): string[] {
   return [...candidates];
 }
 
+function inferPromptLabCompanionFilePaths(userTask: string | undefined, explicitFilePaths: string[]): string[] {
+  if (!userTask || explicitFilePaths.length === 0) {
+    return [];
+  }
+  const normalizedTask = userTask.toLowerCase();
+  if (!/\bbaseline\b|\bfixture\b|\bdistinct\b/.test(normalizedTask)) {
+    return [];
+  }
+
+  const explicitNormalizedPaths = new Set(
+    explicitFilePaths.map((path) => normalizePromptLabFilePath(path).toLowerCase()),
+  );
+  const companions = new Set<string>();
+  for (const filePath of explicitFilePaths) {
+    const normalizedPath = normalizePromptLabFilePath(filePath);
+    const segments = normalizedPath.split("/").filter(Boolean);
+    const basename = segments.at(-1) ?? "";
+    if (!/^goatcitadel_prompt_pack_v2\.md$/i.test(basename)) {
+      continue;
+    }
+    const directoryPrefix = normalizedPath.slice(0, normalizedPath.length - basename.length);
+    const companionPath = `${directoryPrefix}goatcitadel_prompt_pack.md`;
+    if (!explicitNormalizedPaths.has(companionPath.toLowerCase())) {
+      companions.add(companionPath);
+    }
+  }
+  return [...companions];
+}
+
+function extractPromptLabBulletBodies(responseText: string): Map<string, string> {
+  const bullets = new Map<string, string>();
+  const lines = responseText.split(/\r?\n/);
+  let currentLabel: string | null = null;
+  let currentBody: string[] = [];
+  let currentParagraphClosed = false;
+
+  const flush = () => {
+    if (!currentLabel) {
+      return;
+    }
+    const joined = currentBody.join("\n").trim();
+    if (joined.length > 0) {
+      bullets.set(normalizePromptLabLabel(currentLabel), joined);
+    }
+  };
+
+  for (const line of lines) {
+    const bulletMatch = line.match(/^\s*-\s*(?:\*\*)?(.+?)(?:\*\*)?\s*(?:—|:)\s*(.*)$/);
+    if (bulletMatch) {
+      flush();
+      currentLabel = bulletMatch[1]?.trim() ?? null;
+      currentBody = [bulletMatch[2]?.trim() ?? ""];
+      currentParagraphClosed = false;
+      continue;
+    }
+    if (!currentLabel) {
+      continue;
+    }
+    if (line.trim().length === 0) {
+      currentBody.push("");
+      currentParagraphClosed = true;
+      continue;
+    }
+    if (currentParagraphClosed && !/^\s+/.test(line)) {
+      continue;
+    }
+    currentBody.push(line.trim());
+  }
+  flush();
+  return bullets;
+}
+
+function normalizePromptLabLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function looksLikeLocalFilePath(value: string): boolean {
   const normalized = value.trim();
   if (!normalized || /^https?:\/\//i.test(normalized)) {
     return false;
   }
   if (!/[\\/]/.test(normalized)) {
-    return KNOWN_BARE_FILE_BASENAMES.has(normalized);
+    if (KNOWN_BARE_FILE_BASENAMES.has(normalized)) {
+      return true;
+    }
+    if (!/\.[A-Za-z0-9._-]+$/.test(normalized)) {
+      return false;
+    }
+    const stem = normalized.replace(/\.[A-Za-z0-9._-]+$/, "");
+    return stem.length > 0 && stem === stem.toLowerCase();
   }
   return /\.[A-Za-z0-9._-]+$/.test(normalized);
 }
@@ -6689,9 +9769,16 @@ function resolvePromptLabReasoningEffort(
 function inferLocalToolPathFromPrompt(toolName: string, userContent: string): string | undefined {
   const taskContent = extractPrimaryUserTaskContent(userContent);
   const explicitPath = extractExplicitPromptPath(taskContent);
+  const hasDynamicPathPlaceholder = promptContainsDynamicLocalPathPlaceholder(taskContent);
   if (explicitPath) {
     if (toolName === "code.search_files") {
+      if (hasDynamicPathPlaceholder) {
+        return ".";
+      }
       return collapsePromptPathToSearchRoot(explicitPath);
+    }
+    if (hasDynamicPathPlaceholder) {
+      return undefined;
     }
     return explicitPath;
   }
@@ -6711,7 +9798,7 @@ function inferLocalToolPathFromPrompt(toolName: string, userContent: string): st
 function inferLocalSearchQueryFromPrompt(toolName: string, userContent: string): string | undefined {
   const taskContent = extractPrimaryUserTaskContent(userContent);
   const explicitPath = extractExplicitPromptPath(taskContent);
-  if (explicitPath) {
+  if (explicitPath && !promptContainsDynamicLocalPathPlaceholder(taskContent)) {
     if (
       toolName === "code.search_files" &&
       !/\.[a-z0-9]{1,8}$/i.test(explicitPath.replaceAll("\\", "/").replace(/\/+$/, ""))
@@ -6749,20 +9836,136 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     queries.push(trimmed);
   };
 
+  if (looksLikePromptLabPromptPackOperatorSurfacePrompt(taskContent)) {
+    addQuery("prompt-pack-service.ts");
+    addQuery("prompt-packs.ts");
+    addQuery("chat.prompt-pack-benchmark.test.ts");
+  }
+  if (looksLikePromptLabApprovalWakeFlowPrompt(taskContent)) {
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("approval-lifecycle-service.ts");
+    addQuery("approval-wait-run-repo.ts");
+    addQuery("approval-effect-repo.ts");
+  }
+  if (looksLikeWorkspaceRoutesGuidanceCoworkPrompt(taskContent)) {
+    addQuery("workspaces.ts");
+    addQuery("workspaces.test.ts");
+    addQuery("workspace-repo.ts");
+    addQuery("workspace-repo.test.ts");
+    addQuery("guidance");
+  }
+  if (looksLikePromptLabLifecycleCanonicalLinkagePrompt(taskContent)) {
+    addQuery("runtime-lifecycle-read-service.test.ts");
+    addQuery("runtime-lifecycle-read-service.ts");
+    addQuery("approval_linkage");
+    addQuery("fallback_payload");
+    addQuery("fallback_preview");
+  }
+  if (looksLikePromptLabRealtimeEventMetadataPropagationPrompt(taskContent)) {
+    addQuery("events.test.ts");
+    addQuery("events.ts");
+    addQuery("gateway-service.ts");
+    addQuery("realtime-event-repo.test.ts");
+    addQuery("realtime-event-repo.ts");
+    addQuery("tool-invocation-coordinator-service.test.ts");
+  }
+  if (looksLikePromptLabDurableRunMinimalTestPrompt(taskContent)) {
+    addQuery("durable-run-service.test.ts");
+    addQuery("durable-run-service.ts");
+    addQuery("durable-run-repo.test.ts");
+    addQuery("durable-run-repo.ts");
+  }
+  if (looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(taskContent)) {
+    addQuery("durable.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("durable-run-service.ts");
+    addQuery("routes/durable.ts");
+    addQuery("api/durable.ts");
+  }
+  if (looksLikePromptLabWakeLifecycleOrderingPatchPlanPrompt(taskContent)) {
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("approval-effect-repo.ts");
+    addQuery("approval-wait-run-repo.ts");
+    addQuery("durable-run-service.ts");
+    addQuery("approval-resolution-effects-service.test.ts");
+  }
+  if (looksLikePromptLabPersistedDurableLeasesPatchPlanPrompt(taskContent)) {
+    addQuery("durable.ts");
+    addQuery("durable-run-repo.ts");
+    addQuery("durable-run-repo.test.ts");
+    addQuery("durable-run-service.ts");
+    addQuery("durable-run-service.test.ts");
+    addQuery("tryClaimQueuedRun");
+    addQuery("listExpiredRunningRunIds");
+  }
+  if (looksLikePromptLabLifecycleProvenancePatchPlanPrompt(taskContent)) {
+    addQuery("runtime-lifecycle.ts");
+    addQuery("runtime-lifecycle-read-service.ts");
+    addQuery("runtime-lifecycle-read-service.test.ts");
+    addQuery("realtime-event-repo.ts");
+    addQuery("fallbackSources");
+  }
+  if (looksLikePromptLabMissionControlTruthLabelingPrompt(taskContent)) {
+    addQuery("runtime-lifecycle.ts");
+    addQuery("runtime-lifecycle-read-service.ts");
+    addQuery("ApprovalsPage.tsx");
+    addQuery("ApprovalsPage.test.tsx");
+    addQuery("api/types.ts");
+  }
+  if (looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(taskContent)) {
+    addQuery("tool-invocation-coordinator-service.ts");
+    addQuery("gateway-service.ts");
+    addQuery("realtime-event-repo.ts");
+    addQuery("realtime-event");
+    addQuery("events.ts");
+    addQuery("api/types.ts");
+    addQuery("approval");
+    addQuery("session");
+  }
+  if (looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(taskContent)) {
+    addQuery("durable-run-repo.test.ts");
+    addQuery("durable-run-repo.ts");
+    addQuery("durable-run-service.ts");
+    addQuery("durable-run-service.test.ts");
+    addQuery("tryClaimQueuedRun");
+    addQuery("listExpiredRunningRunIds");
+  }
+  if (looksLikePromptLabApprovalEffectsHardeningPatchPlanPrompt(taskContent)) {
+    addQuery("approval-lifecycle-service.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("approval-effect-repo.ts");
+    addQuery("approval-resolution-effects-service.test.ts");
+    addQuery("approvals.ts");
+  }
   for (const match of taskContent.matchAll(/`([^`\r\n]+)`/g)) {
     const value = match[1]?.trim();
     if (!value) {
       continue;
     }
+    if (/<[^>\r\n]+>/.test(value)) {
+      continue;
+    }
     const basename = value.replace(/\\/g, "/").split("/").filter(Boolean).at(-1);
-    addQuery(basename ?? value);
+    const candidate = basename ?? value;
+    if (/[\\/]/.test(value) || /\.[a-z0-9]{1,8}$/i.test(candidate) || /[-_]/.test(candidate)) {
+      addQuery(candidate);
+    }
   }
 
-  if (/\bskill import\b/i.test(taskContent)) {
+  if (/\bskill import\b|\bimported skills?\b|\brepo-managed imported skills?\b/i.test(taskContent)) {
     addQuery("skill-import");
   }
-  if (/\bsource\.json\b/i.test(taskContent)) {
+  if (/\bsource\.json\b|\btrust metadata\b|\bprovenance manifest\b|\bskills\/extra\b/i.test(taskContent)) {
     addQuery("source.json");
+    addQuery("skill_import_and_trust_policy");
+  }
+  if (
+    /\bupdate-review-daily\b|\bupdate review\b|\bbuilt-in cron\b|\bcron wiring\b|\breview queue\b/i.test(taskContent)
+  ) {
+    addQuery("cron-automation-service");
+    addQuery("update-review");
+    addQuery("cron-job-repo");
+    addQuery("cron");
   }
   if (/\boverlap\b/i.test(normalized)) {
     addQuery("overlap");
@@ -6773,14 +9976,164 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   if (/\bprompt pack\b/i.test(taskContent)) {
     addQuery("prompt-pack");
   }
+  if (looksLikePromptLabPromptPackMarkdownImportPrompt(taskContent)) {
+    addQuery("prompt-pack-service.ts");
+    addQuery("prompt-pack-repo.ts");
+    addQuery("prompt-packs.ts");
+    addQuery("source_label");
+    addQuery("policy_v2_source");
+  }
+  if (/\bprompt_pack\b/i.test(normalized) || /\bgoatcitadel_prompt_pack\b/i.test(normalized)) {
+    addQuery("prompt_pack");
+  }
+  if (looksLikePromptLabGuidanceLoadingSummaryPrompt(taskContent)) {
+    addQuery("guidance-document-helpers");
+    addQuery("readguidancedocument");
+    addQuery("resolveguidancepath");
+    addQuery("listworkspaceguidance");
+    addQuery("guidance-doc-files");
+    addQuery("agents.md");
+  }
+  if (looksLikeWorkspaceGuidancePrecedencePrompt(taskContent)) {
+    addQuery("guidance-document-helpers");
+    addQuery("gateway-service.ts");
+    addQuery("resolveruntimeguidance");
+    addQuery("listworkspaceguidance");
+    addQuery("agents.md");
+  }
+  if (looksLikePromptLabDurableRunClaimExclusivityPrompt(taskContent)) {
+    addQuery("tryClaimQueuedRun");
+    addQuery("leaseOwnerId");
+    addQuery("claim queued durable run");
+  }
+  if (looksLikePromptLabDurableRunLeaseRecoveryPrompt(taskContent)) {
+    addQuery("listExpiredRunningRunIds");
+    addQuery("lease expired");
+    addQuery("worker-old");
+  }
+  if (looksLikePromptLabDurableRunRetryBackoffPrompt(taskContent)) {
+    addQuery("nextRetryAt");
+    addQuery("hasFutureRetryGate");
+    addQuery("retry backoff");
+  }
+  if (looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(taskContent)) {
+    addQuery("clearLease");
+    addQuery("wakeDurableRun");
+    addQuery("pauseDurableRun");
+    addQuery("cancelDurableRun");
+  }
+  if (/\bfrozen baseline\b|\bbaseline fixture\b|\bdistinct from the frozen baseline\b/i.test(taskContent)) {
+    addQuery("baseline");
+    addQuery("goatcitadel_prompt_pack.md");
+  }
+  if (/\bbenchmark\b/i.test(normalized)) {
+    addQuery("benchmark");
+  }
+  if (/\breplay\b/i.test(normalized)) {
+    addQuery("replay");
+  }
+  if (/\btrend\b/i.test(normalized)) {
+    addQuery("trend");
+  }
+  if (/\breport\b/i.test(normalized)) {
+    addQuery("report");
+  }
   if (/\bworkspace\b/i.test(normalized) && /\boverride|guidance\b/i.test(normalized)) {
     addQuery("workspace");
   }
-  if (/\breplay\b|\bbenchmark\b|\btrend\b/i.test(normalized)) {
-    addQuery("replay");
+  if (
+    /\b(workspace|global|repo)\b/.test(normalized) &&
+    /\b(guidance|docs?|agents\.md|workflow|override|runtime)\b/.test(normalized)
+  ) {
+    addQuery("agents.md");
+    addQuery("goatcitadel_agentic_coding_workflow.md");
+    addQuery("workspaces");
+    addQuery("guidance");
+  }
+  if (/\bgate[- ]runner\b/i.test(normalized)) {
+    addQuery("gate");
+    addQuery("run-prompt-pack-gates");
+  }
+  if (/\bqwen\b/i.test(normalized)) {
+    addQuery("qwen");
+  }
+  if (/\bovernight\b/i.test(normalized)) {
+    addQuery("overnight");
+  }
+  if (/\bextension pack\b/i.test(normalized)) {
+    addQuery("extension");
   }
   if (/\bmemory\b/i.test(normalized) && /\bcontext|pack|qmd|lifecycle\b/i.test(normalized)) {
     addQuery("memory");
+  }
+  if (/\bmemory\b/i.test(normalized) && /\b(routes?|services?)\b/i.test(normalized)) {
+    addQuery("memory.ts");
+    addQuery("memory-context");
+    addQuery("memory-context-repo");
+  }
+  if (/\bmemory\b/i.test(normalized) && /\broutes?\b/i.test(normalized)) {
+    addQuery("memory.ts");
+    addQuery("registerMemoryRoutes");
+  }
+  if (/\bmemory\b/i.test(normalized) && /\b(ui|copy|page|operator-facing)\b/i.test(normalized)) {
+    addQuery("MemoryPage");
+    addQuery("memory-summary");
+  }
+  if (
+    /\brepo\/project binding\b|\brepo\b|\bproject binding\b|\btool-path\b|\btool path\b|\bresolution\b/i.test(
+      normalized,
+    )
+  ) {
+    addQuery("binding");
+    addQuery("tool-path");
+  }
+  if (/\brealtime[- ]event\b/i.test(normalized)) {
+    addQuery("realtime-event");
+  }
+  if (/\bevent producers?\b|\bapproval\b|\bsession\b|\btask\b|\bproactive\b/i.test(normalized)) {
+    addQuery("approval");
+    addQuery("session");
+    addQuery("task");
+    addQuery("proactive");
+  }
+  if (/\bcontracts?\b/i.test(normalized)) {
+    addQuery("contracts");
+  }
+  if (
+    /\bsource label\b|\bsource labeling\b|\bexport rendering\b|\bimport\b/i.test(normalized) &&
+    /\bprompt[- ]pack\b/i.test(normalized)
+  ) {
+    addQuery("prompt-packs.ts");
+    addQuery("prompt-pack-service.ts");
+    addQuery("prompt-pack");
+    addQuery("export");
+    addQuery("importpromptpack");
+    addQuery("sourcelabel");
+  }
+  if (/\brender(?:ing)?\b|\bstatus api\b|\btrends?\b|\breport api\b/.test(normalized)) {
+    addQuery("prompt-packs.ts");
+    addQuery("benchmark");
+    addQuery("trends");
+    addQuery("report");
+  }
+  if (/\bgate\b|\bfocused-pack\b|\bovernight\b/i.test(normalized) && /\bprompt[- ]pack\b/i.test(normalized)) {
+    addQuery("run-prompt-pack-gates");
+    addQuery("resolvepromptpack");
+    addQuery("fetchpromptpacks");
+  }
+  if (/\bworkspace\b/i.test(normalized) && /\b(guidance|precedence|loading|resolution)\b/i.test(normalized)) {
+    addQuery("workspace-repo");
+    addQuery("workspace-hook-repo");
+    addQuery("guidance-doc-files");
+    addQuery("guidance");
+  }
+  if (/\bapproval\b|\bwake\b|\bresume\b|\bpaused\b|\bwaiting\b/.test(normalized)) {
+    addQuery("durable-run");
+    addQuery("approval-event-repo.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("wake");
+    addQuery("resume");
+    addQuery("gateway-service");
   }
 
   const fallbackTokens = normalized
@@ -6814,14 +10167,271 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
           "current",
           "today",
           "should",
+          "needed",
+          "identify",
+          "explain",
+          "support",
+          "cleanly",
+          "related",
+          "publish",
+          "explicit",
+          "eventclass",
+          "eventauthority",
+          "links",
+          "producer",
+          "producers",
+          "storage",
+          "contract",
+          "contracts",
         ].includes(token),
     )
-    .slice(0, 4);
+    .slice(0, 8);
   for (const token of fallbackTokens) {
     addQuery(token);
   }
 
-  return queries.slice(0, 4);
+  return queries.slice(0, 8);
+}
+
+function looksLikePromptLabGuidanceLoadingSummaryPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bglobal\b/.test(normalized) &&
+    /\bworkspace\b/.test(normalized) &&
+    /\brepo docs?\b/.test(normalized) &&
+    /\bguidance\b/.test(normalized) &&
+    /\bload(?:ed|ing)?\b/.test(normalized)
+  );
+}
+
+function looksLikeWorkspaceGuidancePrecedencePrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bworkspace\b/.test(normalized) &&
+    /\bguidance\b/.test(normalized) &&
+    (/\bprecedence\b/.test(normalized) || /\boverride\b/.test(normalized)) &&
+    (/\boperator-visible\b/.test(normalized) ||
+      /\bexact assertions needed\b/.test(normalized) ||
+      /\bexact minimal automated check\b/.test(normalized) ||
+      /\bexact minimal automated test\b/.test(normalized))
+  );
+}
+
+function looksLikePromptLabDurableRunClaimExclusivityPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\btwo workers\b/.test(normalized) && /\bsame queued durable run\b/.test(normalized) && /\bclaim\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabDurableRunLeaseRecoveryPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bexpired durable-run lease\b|\bexpired durable run lease\b/.test(normalized) &&
+    /\bdifferent worker\b/.test(normalized) &&
+    /\b(still-active leased run|still active leased run|active lease)\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabDurableRunRetryBackoffPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bretry-gated queued durable runs\b|\bretry gated queued durable runs\b/.test(normalized) &&
+    /\bbackoff window expires\b|\bbackoff window\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bwaiting\b/.test(normalized) &&
+    /\bpaused\b/.test(normalized) &&
+    /\bterminal\b/.test(normalized) &&
+    /\brelease any active lease\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabDurableRunMinimalTestPrompt(userTask: string | undefined): boolean {
+  return (
+    looksLikePromptLabDurableRunClaimExclusivityPrompt(userTask) ||
+    looksLikePromptLabDurableRunLeaseRecoveryPrompt(userTask) ||
+    looksLikePromptLabDurableRunRetryBackoffPrompt(userTask) ||
+    looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask)
+  );
+}
+
+function looksLikePromptLabLifecycleCanonicalLinkagePrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bruntime lifecycle\b/.test(normalized) &&
+    /\bcanonical\b/.test(normalized) &&
+    /\blinkage\b/.test(normalized) &&
+    /\bpayload\b/.test(normalized) &&
+    /\bpreview\b/.test(normalized) &&
+    /\b(inferred|inference)\b/.test(normalized) &&
+    (/\bdiagnostics\b/.test(normalized) || /\bfallback path\b/.test(normalized))
+  );
+}
+
+function looksLikePromptLabRealtimeEventMetadataPropagationPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\beventclass\b/.test(normalized) &&
+    /\beventauthority\b/.test(normalized) &&
+    /\blinks\b/.test(normalized) &&
+    /\bproducer\b/.test(normalized) &&
+    /\bstorage\b/.test(normalized) &&
+    /\boperator-facing api\b|\boperator facing api\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPromptPackMarkdownImportPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bprompt-pack\b|\bprompt pack\b/.test(normalized) &&
+    /\bmarkdown\b/.test(normalized) &&
+    /\b(auto-loaded|autoloaded|auto loaded|imported|import)\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPromptPackRepoBindingPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bprompt-pack\b|\bprompt pack\b/.test(normalized) &&
+    /\b(repo\/project binding|repo-bound|project binding|tool-path resolution|tool path resolution)\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPromptPackOperatorSurfacePrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\breport rendering\b/.test(normalized) &&
+    /\btrend rendering\b/.test(normalized) &&
+    /\bbenchmark\b/.test(normalized) &&
+    /\b(status|api|apis|operator|evidence)\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabApprovalWakeFlowPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bapproval wait\b/.test(normalized) &&
+    /\bwake\b/.test(normalized) &&
+    /\b(event emission|operational event|publishrealtime|realtime event)\b/.test(normalized)
+  );
+}
+
+function looksLikeWorkspaceRoutesGuidanceCoworkPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bworkspace routes\b/.test(normalized) &&
+    /\bguidance docs?\b/.test(normalized) &&
+    /\brelated services\b/.test(normalized) &&
+    /\bfirst fresh regression checks to add\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\btyped wake outcome contract\b/.test(normalized) &&
+    /\bdurable-run wake logic\b|\bdurable wake logic\b/.test(normalized) &&
+    /\bapproval-wait wake handling\b|\bapproval wait wake handling\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabWakeLifecycleOrderingPatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bwake lifecycle writes reflect actual outcome ordering\b/.test(normalized) &&
+    /\bapproval-wait storage\b|\bapproval wait storage\b/.test(normalized) &&
+    /\bdurable wake calls\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPersistedDurableLeasesPatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bpersisted leases\b/.test(normalized) &&
+    /\bdurable-run storage\b|\bdurable run storage\b/.test(normalized) &&
+    /\bclaim logic\b/.test(normalized) &&
+    /\brecovery logic\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabLifecycleProvenancePatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bcanonical-linkage-first reads\b|\bcanonical linkage first reads\b/.test(normalized) &&
+    /\bprovenance fields?\b/.test(normalized) &&
+    /\blifecycle assembly\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabMissionControlTruthLabelingPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bmission control truth labeling\b/.test(normalized) &&
+    /\bcanonical\b/.test(normalized) &&
+    /\binferred\b/.test(normalized) &&
+    /\bmissing links?\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    (/\bexplicit event authority envelope\b/.test(normalized) ||
+      (/\bevent producers\b/.test(normalized) &&
+        /\brealtime-event storage\b|\brealtime event storage\b/.test(normalized) &&
+        /\brelated contracts\b/.test(normalized))) &&
+    /\beventclass\b/.test(normalized) &&
+    /\beventauthority\b/.test(normalized) &&
+    /\blinks\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    (/\btwo-worker harness coverage\b|\btwo worker harness coverage\b/.test(normalized) ||
+      (/\btwo-worker\b|\btwo worker\b/.test(normalized) &&
+        /\bclaim\b/.test(normalized) &&
+        /\brecovery\b/.test(normalized) &&
+        /\bsingle-process\b|\bsingle process\b/.test(normalized))) &&
+    (/\bclaim race\b/.test(normalized) || /\bclaim and recovery test\b/.test(normalized))
+  );
+}
+
+function looksLikePromptLabApprovalEffectsHardeningPatchPlanPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    (/\bapproval-effects hardening\b|\bapproval effects hardening\b/.test(normalized) ||
+      (/\bapproval resolution\b/.test(normalized) &&
+        /\bdownstream effect handling\b/.test(normalized) &&
+        /\bcanonical approval state\b/.test(normalized))) &&
+    /\bidempotent effect tracking\b|\boutbox path\b/.test(normalized) &&
+    /\bcanonical approval state\b/.test(normalized)
+  );
+}
+
+function looksLikeSkillImportOverlapCoworkPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /skill-import-service\.ts/.test(normalized) &&
+    /\boverlap\b/.test(normalized) &&
+    /\b(next|fresh)\b/.test(normalized) &&
+    /\bcases?\b/.test(normalized)
+  );
+}
+
+function looksLikePromptPackRepoBindingCoworkPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\brepo-binding\b|\brepo binding\b/.test(normalized) &&
+    /\btool-path resolution\b|\btool path resolution\b/.test(normalized) &&
+    /\bnegative-result honesty checks\b|\bnegative result honesty checks\b/.test(normalized)
+  );
 }
 
 function inferFileFindPatternFromPrompt(userContent: string): string | undefined {
@@ -6865,6 +10475,13 @@ function extractExplicitPromptPath(content: string): string | undefined {
   return candidates[0];
 }
 
+function promptContainsDynamicLocalPathPlaceholder(content: string): boolean {
+  return [...content.matchAll(/`([^`\r\n]+)`/g)].some((match) => {
+    const candidate = match[1]?.trim() ?? "";
+    return /<[^>\r\n]+>/.test(candidate) && /[\\/]/.test(candidate);
+  });
+}
+
 function normalizePromptPathCandidate(value: string): string {
   return value.trim().replace(/^["'`(]+|["'`),.:;]+$/g, "");
 }
@@ -6886,7 +10503,18 @@ function looksLikePromptPathCandidate(value: string): boolean {
       return false;
     }
   }
+  if (!looksLikeExplicitlyRootedPromptPath(normalized) && !/\.[a-z0-9]{1,8}$/i.test(normalized)) {
+    const segments = normalized.split("/").filter(Boolean);
+    const firstSegment = segments[0]?.toLowerCase();
+    if (segments.length < 3 && (!firstSegment || !KNOWN_REPO_PATH_ROOT_SEGMENTS.has(firstSegment))) {
+      return false;
+    }
+  }
   return /^(?:[a-zA-Z]:\/|\/|\.{1,2}\/)?[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*(?:\/)?$/i.test(normalized);
+}
+
+function looksLikeExplicitlyRootedPromptPath(value: string): boolean {
+  return /^(?:[a-zA-Z]:\/|\/|\.{1,2}\/)/i.test(value);
 }
 
 function collapsePromptPathToSearchRoot(value: string): string {
@@ -7950,11 +11578,16 @@ function looksLikeRepoGroundedInspectionPrompt(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   return (
     /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
-    /\buse (?:file|code|file\/code) tools\b/.test(normalized) ||
+    /\buse (?:(?:file|code|file\/code|file or code)(?: tools?)?|tools?)\b/.test(normalized) ||
+    /\b(?:file|code) tools\b/.test(normalized) ||
     /\bexact files?\b/.test(normalized) ||
     /\bexact evidence\b/.test(normalized) ||
+    /\bexact citations?\b/.test(normalized) ||
     /\bcurrent implementation\b/.test(normalized) ||
     /\bguidance-loading chain\b/.test(normalized) ||
+    /\binspect\b[\s\S]{0,80}\b(?:routes|services|wiring|contracts?|tests?|ui|copy|prompt lab|prompt-pack)\b/.test(
+      normalized,
+    ) ||
     (/\bcurrent\b/.test(normalized) && /\b(repo|repository|workspace|codebase)\b/.test(normalized))
   );
 }
