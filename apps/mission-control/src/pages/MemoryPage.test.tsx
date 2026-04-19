@@ -24,9 +24,15 @@ const apiMocks = vi.hoisted(() => ({
   runMemoryMaintenanceNow: vi.fn(),
 }));
 
+const refreshMocks = vi.hoisted(() => ({
+  callback: undefined as undefined | (() => Promise<void> | void),
+}));
+
 vi.mock("../api/client", () => apiMocks);
 vi.mock("../hooks/useRefreshSubscription", () => ({
-  useRefreshSubscription: () => undefined,
+  useRefreshSubscription: (_channel: string, callback: () => Promise<void> | void) => {
+    refreshMocks.callback = callback;
+  },
 }));
 vi.mock("../hooks/useProviderModelCatalog", () => ({
   useProviderModelCatalog: () => ({
@@ -55,17 +61,29 @@ vi.mock("../hooks/useProviderModelCatalog", () => ({
 }));
 vi.mock("../components/ActionButton", () => ({
   ActionButton: ({ label, onClick, disabled }: { label: string; onClick?: () => void; disabled?: boolean }) => (
-    <button type="button" disabled={disabled} onClick={onClick}>{label}</button>
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {label}
+    </button>
   ),
 }));
 vi.mock("../components/DataToolbar", () => ({
   DataToolbar: ({ primary }: { primary?: React.ReactNode }) => <div>{primary}</div>,
 }));
 vi.mock("../components/FieldHelp", () => ({
-  FieldHelp: ({ children, className }: { children?: React.ReactNode; className?: string }) => <div className={className}>{children}</div>,
+  FieldHelp: ({ children, className }: { children?: React.ReactNode; className?: string }) => (
+    <div className={className}>{children}</div>
+  ),
 }));
 vi.mock("../components/PageHeader", () => ({
-  PageHeader: ({ title, subtitle, actions }: { title?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode }) => (
+  PageHeader: ({
+    title,
+    subtitle,
+    actions,
+  }: {
+    title?: React.ReactNode;
+    subtitle?: React.ReactNode;
+    actions?: React.ReactNode;
+  }) => (
     <header>
       <h1>{title}</h1>
       <p>{subtitle}</p>
@@ -90,10 +108,21 @@ vi.mock("../components/OperatorSplitLayout", () => ({
     primary?: React.ReactNode;
     inspector?: React.ReactNode;
     emptyInspector?: React.ReactNode;
-  }) => <div>{primary}{inspector ?? emptyInspector}</div>,
+  }) => (
+    <div>
+      {primary}
+      {inspector ?? emptyInspector}
+    </div>
+  ),
 }));
 vi.mock("../components/Panel", () => ({
-  Panel: ({ title, subtitle, actions, children, className }: {
+  Panel: ({
+    title,
+    subtitle,
+    actions,
+    children,
+    className,
+  }: {
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
     actions?: React.ReactNode;
@@ -109,12 +138,21 @@ vi.mock("../components/Panel", () => ({
   ),
 }));
 vi.mock("../components/ConfirmModal", () => ({
-  ConfirmModal: ({ open, title, message }: { open?: boolean; title?: string; message?: string }) => (
-    open ? <div>{title}{message}</div> : null
-  ),
+  ConfirmModal: ({ open, title, message }: { open?: boolean; title?: string; message?: string }) =>
+    open ? (
+      <div>
+        {title}
+        {message}
+      </div>
+    ) : null,
 }));
 vi.mock("../components/HelpHint", () => ({
-  HelpHint: ({ label, text }: { label?: string; text?: string }) => <span>{label}{text}</span>,
+  HelpHint: ({ label, text }: { label?: string; text?: string }) => (
+    <span>
+      {label}
+      {text}
+    </span>
+  ),
 }));
 vi.mock("../components/StatusChip", () => ({
   StatusChip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
@@ -129,7 +167,12 @@ vi.mock("../components/StatCard", () => ({
   ),
 }));
 vi.mock("../components/SelectOrCustom", () => ({
-  SelectOrCustom: ({ value, customLabel }: { value?: string; customLabel?: string }) => <div>{customLabel}{value}</div>,
+  SelectOrCustom: ({ value, customLabel }: { value?: string; customLabel?: string }) => (
+    <div>
+      {customLabel}
+      {value}
+    </div>
+  ),
 }));
 vi.mock("../components/ui", () => ({
   GCSelect: ({
@@ -145,7 +188,9 @@ vi.mock("../components/ui", () => ({
   }) => (
     <select disabled={disabled} value={value} onChange={(event) => onChange?.(event.target.value)}>
       {options.map((option) => (
-        <option key={option.value} value={option.value}>{option.label}</option>
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
       ))}
     </select>
   ),
@@ -234,6 +279,7 @@ function buildSettings(features: {
 describe("MemoryPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    refreshMocks.callback = undefined;
     apiMocks.fetchFilesList.mockResolvedValue({
       items: [
         {
@@ -398,11 +444,13 @@ describe("MemoryPage", () => {
   });
 
   it("hides memory maintenance when the feature flag is off", async () => {
-    apiMocks.fetchSettings.mockResolvedValue(buildSettings({
-      durableKernelV1Enabled: true,
-      memoryMaintenanceV1Enabled: false,
-      memoryLifecycleAdminV1Enabled: false,
-    }));
+    apiMocks.fetchSettings.mockResolvedValue(
+      buildSettings({
+        durableKernelV1Enabled: true,
+        memoryMaintenanceV1Enabled: false,
+        memoryLifecycleAdminV1Enabled: false,
+      }),
+    );
 
     let renderer = create(<div />);
     try {
@@ -422,11 +470,13 @@ describe("MemoryPage", () => {
   });
 
   it("shows an infrastructure block when Dream is enabled but durable execution is unavailable", async () => {
-    apiMocks.fetchSettings.mockResolvedValue(buildSettings({
-      durableKernelV1Enabled: false,
-      memoryMaintenanceV1Enabled: true,
-      memoryLifecycleAdminV1Enabled: false,
-    }));
+    apiMocks.fetchSettings.mockResolvedValue(
+      buildSettings({
+        durableKernelV1Enabled: false,
+        memoryMaintenanceV1Enabled: true,
+        memoryLifecycleAdminV1Enabled: false,
+      }),
+    );
 
     let renderer = create(<div />);
     try {
@@ -445,11 +495,13 @@ describe("MemoryPage", () => {
   });
 
   it("renders memory maintenance policy, history, recommendations, and durable details when enabled", async () => {
-    apiMocks.fetchSettings.mockResolvedValue(buildSettings({
-      durableKernelV1Enabled: true,
-      memoryMaintenanceV1Enabled: true,
-      memoryLifecycleAdminV1Enabled: false,
-    }));
+    apiMocks.fetchSettings.mockResolvedValue(
+      buildSettings({
+        durableKernelV1Enabled: true,
+        memoryMaintenanceV1Enabled: true,
+        memoryLifecycleAdminV1Enabled: false,
+      }),
+    );
 
     let renderer = create(<div />);
     try {
@@ -478,11 +530,13 @@ describe("MemoryPage", () => {
   });
 
   it("renders relation scope and citation provenance for recent context packs", async () => {
-    apiMocks.fetchSettings.mockResolvedValue(buildSettings({
-      durableKernelV1Enabled: true,
-      memoryMaintenanceV1Enabled: false,
-      memoryLifecycleAdminV1Enabled: false,
-    }));
+    apiMocks.fetchSettings.mockResolvedValue(
+      buildSettings({
+        durableKernelV1Enabled: true,
+        memoryMaintenanceV1Enabled: false,
+        memoryLifecycleAdminV1Enabled: false,
+      }),
+    );
     apiMocks.fetchMemoryQmdStats.mockResolvedValue({
       ...buildQmdStats(),
       recent: [
@@ -530,6 +584,44 @@ describe("MemoryPage", () => {
       expect(text).toContain("turn-1");
       expect(text).toContain("freshness recent");
       expect(text).toContain("Matched current objective");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("re-checks capability settings during background refresh instead of reusing stale flags", async () => {
+    apiMocks.fetchSettings
+      .mockResolvedValueOnce(
+        buildSettings({
+          durableKernelV1Enabled: true,
+          memoryMaintenanceV1Enabled: false,
+          memoryLifecycleAdminV1Enabled: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSettings({
+          durableKernelV1Enabled: true,
+          memoryMaintenanceV1Enabled: true,
+          memoryLifecycleAdminV1Enabled: false,
+        }),
+      );
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<MemoryPage workspaceId="default" />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).not.toContain("Memory Maintenance");
+
+      await act(async () => {
+        await refreshMocks.callback?.();
+      });
+      await flush();
+
+      expect(apiMocks.fetchSettings).toHaveBeenCalledTimes(2);
+      expect(rendererText(renderer)).toContain("Memory Maintenance");
     } finally {
       renderer.unmount();
     }

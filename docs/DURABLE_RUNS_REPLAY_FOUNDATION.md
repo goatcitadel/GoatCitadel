@@ -7,6 +7,8 @@ The canonical current runtime posture lives in `docs/CANONICAL_RUNTIME_STATE_MOD
 ## Current Shipped Posture
 
 - Shipped Chat / Cowork / Code operator sends, retry, resume, approval wait/resume, worker restart recovery, and dead-letter recovery now run on durable execution by default.
+- Cowork/orchestration now uses the durable workflow key `orchestration.plan.execute`, links each orchestration run to one durable run by default, and allocates one worktree per orchestration run by default.
+- Approval resume for orchestration is durable-worker owned: the approval endpoint records operator intent and requeues the linked durable run, while the durable workflow resumes the same orchestration/worktree context.
 - `assistant.durable.enabled`, `executionEnabled`, `chatAutoPromoteEnabled`, and `durableKernelV1Enabled` default to `true` in the shipped gateway runtime.
 - `replayOverridesV1Enabled` remains default-off for replay-with-overrides.
 - The earlier rollout guidance that described durable defaults as off is retired and must not be reintroduced here.
@@ -38,6 +40,8 @@ Migration `v21` creates:
 - `durable_dead_letters`
 
 No existing tables were changed or dropped.
+
+Later additive migrations extended `orchestration_runs` with durable/worktree ownership fields so operator views can inspect execution truth directly instead of inferring it from plan-state transitions alone.
 
 ## Contracts Added
 

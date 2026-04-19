@@ -11,6 +11,7 @@ describe("CoworkCanvasPanel", () => {
         orchestration={
           {
             workflowTemplate: "research_plan",
+            runId: "orch-run-1",
             status: "running",
             finalSummary: "Research is in motion and implementation is queued behind it.",
             routeDecision: {
@@ -35,6 +36,47 @@ describe("CoworkCanvasPanel", () => {
             ],
           } as any
         }
+        orchestrationRun={
+          {
+            runId: "orch-run-1",
+            planId: "plan-1",
+            status: "paused",
+            startedAt: "2026-04-19T10:00:00.000Z",
+            currentWaveId: "wave-1",
+            currentPhaseId: "phase-2",
+            totalCostUsd: 0.5,
+            totalIterations: 1,
+            workspaceId: "default",
+            durableRunId: "durable-run-1",
+            executionState: "paused_for_approval",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/orch-run-1",
+            worktreeStatus: "ready",
+            worktreeBaseRef: "main",
+            pendingApprovalPhaseId: "phase-2",
+          } as any
+        }
+        orchestrationCheckpoints={[
+          {
+            checkpointId: "cp-1",
+            runId: "orch-run-1",
+            planId: "plan-1",
+            checkpointKind: "durable_run_linked",
+            details: {
+              lifecycleState: "queued",
+            },
+            createdAt: "2026-04-19T10:00:01.000Z",
+          },
+          {
+            checkpointId: "cp-2",
+            runId: "orch-run-1",
+            planId: "plan-1",
+            waveId: "wave-1",
+            phaseId: "phase-1",
+            checkpointKind: "worktree_allocated",
+            details: {},
+            createdAt: "2026-04-19T10:00:02.000Z",
+          },
+        ]}
         executionPlan={
           {
             planId: "plan-1",
@@ -103,8 +145,17 @@ describe("CoworkCanvasPanel", () => {
     );
 
     expect(markup).toContain("Execution Board");
-    expect(markup).toContain("Workflow research_plan");
+    expect(markup).toContain("Run orch-run-1");
     expect(markup).toContain("Researcher -&gt; Coder");
+    expect(markup).toContain("Execution truth");
+    expect(markup).toContain("Plan state");
+    expect(markup).toContain("Execution state");
+    expect(markup).toContain("Durable run durable-run-1");
+    expect(markup).toContain("Worktree ready");
+    expect(markup).toContain("Approval pause on phase-2");
+    expect(markup).toContain("paused for approval");
+    expect(markup).toContain("Durable linked");
+    expect(markup).toContain("Worktree allocated");
     expect(markup).toContain("Planned steps");
     expect(markup).toContain("Role execution");
     expect(markup).toContain("Collected constraints and scoped the problem.");

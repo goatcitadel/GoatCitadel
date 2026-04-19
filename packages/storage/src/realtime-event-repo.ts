@@ -383,6 +383,9 @@ function normalizeRealtimeEventOptions(
   payload: Record<string, unknown>,
   options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
 ): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> | undefined {
+  if (requiresExplicitRealtimeMetadata(eventType, source)) {
+    return requireExplicitRealtimeEventOptions(eventType, source, options);
+  }
   const inferred = inferRealtimeEventMetadata(eventType, source, payload);
   const normalizedLinks = normalizeRealtimeLinks({
     ...(inferred.links ?? {}),
@@ -394,6 +397,22 @@ function normalizeRealtimeEventOptions(
     links: normalizedLinks,
   };
   return next.eventClass || next.eventAuthority || next.links ? next : undefined;
+}
+
+function requireExplicitRealtimeEventOptions(
+  eventType: string,
+  source: string,
+  options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
+  const normalizedLinks = normalizeRealtimeLinks(options?.links);
+  if (!options?.eventClass || !options?.eventAuthority || !normalizedLinks) {
+    throw new Error(`Explicit realtime metadata is required for protected event ${source}:${eventType}.`);
+  }
+  return {
+    eventClass: options.eventClass,
+    eventAuthority: options.eventAuthority,
+    links: normalizedLinks,
+  };
 }
 
 function stripRealtimeEnvelope(payload: Record<string, unknown>): Record<string, unknown> {
@@ -464,6 +483,25 @@ function inferRealtimeEventAuthority(eventType: string, source: string): Realtim
   return "retained_stream";
 }
 
+function requiresExplicitRealtimeMetadata(eventType: string, source: string): boolean {
+  const normalizedType = eventType.trim().toLowerCase();
+  const normalizedSource = source.trim().toLowerCase();
+  if (
+    normalizedType === "approval_created" ||
+    normalizedType === "approval_resolved" ||
+    normalizedType === "session_event" ||
+    normalizedType === "auth_device_request_created" ||
+    normalizedType === "auth_device_request_resolved" ||
+    normalizedType === "task_created" ||
+    normalizedType === "task_updated" ||
+    normalizedType === "task_deleted" ||
+    normalizedType === "orchestration_event"
+  ) {
+    return true;
+  }
+  return normalizedSource === "orchestration";
+}
+
 function normalizeRealtimeLinks(links?: RealtimeEvent["links"]): RealtimeEvent["links"] {
   if (!links) {
     return undefined;
@@ -496,5 +534,3 @@ function pickString(payload: Record<string, unknown>, keys: string[]): string | 
   }
   return undefined;
 }
-
-

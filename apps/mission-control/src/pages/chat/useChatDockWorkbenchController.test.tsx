@@ -4,6 +4,32 @@ import { describe, expect, it, vi } from "vitest";
 import { defaultDockOpenForMode } from "./surface-config";
 import { useChatDockWorkbenchController } from "./useChatDockWorkbenchController";
 
+const platformMocks = vi.hoisted(() => ({
+  fetchOrchestrationRun: vi.fn(async () => ({
+    runId: "orch-run-1",
+    planId: "plan-1",
+    status: "paused",
+    startedAt: "2026-04-19T00:00:00.000Z",
+    totalCostUsd: 0,
+    totalIterations: 1,
+    durableRunId: "durable-run-1",
+    executionState: "paused_for_approval",
+    worktreeStatus: "ready",
+  })),
+  fetchOrchestrationRunCheckpoints: vi.fn(async () => ({
+    items: [
+      {
+        checkpointId: "cp-1",
+        runId: "orch-run-1",
+        planId: "plan-1",
+        checkpointKind: "run_paused_for_approval",
+        details: {},
+        createdAt: "2026-04-19T00:00:01.000Z",
+      },
+    ],
+  })),
+}));
+
 vi.mock("./useChatWorkbench", () => ({
   useChatWorkbench: vi.fn(() => ({
     workbenchState: { baseRef: "main" },
@@ -20,6 +46,11 @@ vi.mock("./useChatWorkbench", () => ({
   })),
 }));
 
+vi.mock("../../api/platform", () => ({
+  fetchOrchestrationRun: platformMocks.fetchOrchestrationRun,
+  fetchOrchestrationRunCheckpoints: platformMocks.fetchOrchestrationRunCheckpoints,
+}));
+
 let latest: ReturnType<typeof useChatDockWorkbenchController> | null = null;
 
 function Harness(props: { mode: "chat" | "cowork" | "code" }) {
@@ -30,7 +61,7 @@ function Harness(props: { mode: "chat" | "cowork" | "code" }) {
     selectedTurn: {
       turnId: "turn-1",
       trace: {
-        orchestration: { phase: "active", steps: [] },
+        orchestration: { phase: "active", runId: "orch-run-1", steps: [] },
       },
     } as any,
     thread: {
@@ -55,5 +86,17 @@ describe("useChatDockWorkbenchController", () => {
       renderer.update(<Harness mode="code" />);
     });
     expect(latest?.dockOpen).toBe(defaultDockOpenForMode("code", undefined));
+  });
+
+  it("loads canonical orchestration truth for cowork mode", async () => {
+    await act(async () => {
+      create(<Harness mode="cowork" />);
+    });
+
+    expect(platformMocks.fetchOrchestrationRun).toHaveBeenCalledWith("orch-run-1");
+    expect(platformMocks.fetchOrchestrationRunCheckpoints).toHaveBeenCalledWith("orch-run-1");
+    expect(latest?.orchestrationRun?.durableRunId).toBe("durable-run-1");
+    expect(latest?.orchestrationCheckpoints).toHaveLength(1);
+    expect(latest?.orchestrationLoading).toBe(false);
   });
 });

@@ -427,4 +427,24 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON prompt_pack_benchmark_runs(status, claim_expires_at, started_at ASC);
     `,
   },
+  {
+    version: 9,
+    name: "orchestration_execution_ownership_schema",
+    sql: `
+      ALTER TABLE orchestration_runs
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS durable_run_id TEXT,
+        ADD COLUMN IF NOT EXISTS execution_state TEXT,
+        ADD COLUMN IF NOT EXISTS worktree_path TEXT,
+        ADD COLUMN IF NOT EXISTS worktree_status TEXT,
+        ADD COLUMN IF NOT EXISTS worktree_base_ref TEXT,
+        ADD COLUMN IF NOT EXISTS pending_approval_phase_id TEXT,
+        ADD COLUMN IF NOT EXISTS pending_approved_by TEXT,
+        ADD COLUMN IF NOT EXISTS pending_cost_increment_usd DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_orchestration_runs_durable_run_id
+        ON orchestration_runs(durable_run_id);
+    `,
+  },
 ];

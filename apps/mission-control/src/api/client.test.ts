@@ -209,6 +209,63 @@ describe("isTrustedGatewayHost", () => {
     disconnect();
   });
 
+  it("surfaces bridge-token failures for authenticated realtime streams instead of falling back to anonymous SSE", async () => {
+    persistGatewayAuthState({
+      mode: "token",
+      token: "secret-token",
+    });
+
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/auth/sse-token")) {
+        return new Response(JSON.stringify({ error: "bridge token unavailable" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    class MockEventSource {
+      public static instances: MockEventSource[] = [];
+
+      public constructor(_url: string) {
+        MockEventSource.instances.push(this);
+      }
+
+      public close(): void {}
+
+      public addEventListener(): void {}
+    }
+
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const states: string[] = [];
+    const disconnect = connectEventStream(
+      () => undefined,
+      (state) => {
+        states.push(state);
+      },
+    );
+
+    await settlePromises(8);
+
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(states).toContain("error");
+    expect(states).toContain("retrying");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/v1/auth/sse-token"))).toBe(true);
+
+    disconnect();
+  });
+
   it("migrates legacy localStorage auth into session storage", () => {
     window.localStorage.setItem(
       "goatcitadel.gateway.auth",

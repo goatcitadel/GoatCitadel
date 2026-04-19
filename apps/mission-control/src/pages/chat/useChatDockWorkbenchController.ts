@@ -1,6 +1,7 @@
 import type { ChatMessageRecord, ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
+import { fetchOrchestrationRun, fetchOrchestrationRunCheckpoints } from "../../api/platform";
 import { deriveCoworkItems } from "./chat-page-derivations";
 import { defaultDockOpenForMode } from "./surface-config";
 import { useChatWorkbench } from "./useChatWorkbench";
@@ -23,6 +24,14 @@ export function useChatDockWorkbenchController(input: {
   const [dockOpen, setDockOpen] = useState<boolean>(() =>
     defaultDockOpenForMode(input.messageMode, getViewportWidth()),
   );
+  const [orchestrationRun, setOrchestrationRun] = useState<Awaited<ReturnType<typeof fetchOrchestrationRun>> | null>(
+    null,
+  );
+  const [orchestrationCheckpoints, setOrchestrationCheckpoints] = useState<
+    Awaited<ReturnType<typeof fetchOrchestrationRunCheckpoints>>["items"]
+  >([]);
+  const [orchestrationLoading, setOrchestrationLoading] = useState(false);
+  const [orchestrationError, setOrchestrationError] = useState<string | null>(null);
 
   const {
     workbenchState,
@@ -49,6 +58,51 @@ export function useChatDockWorkbenchController(input: {
     () => input.selectedTurn?.trace.orchestration ?? input.thread?.turns.at(-1)?.trace.orchestration,
     [input.selectedTurn, input.thread],
   );
+  const canonicalOrchestrationRunId = latestOrchestration?.runId?.trim() || undefined;
+
+  useEffect(() => {
+    if (input.messageMode !== "cowork" || !canonicalOrchestrationRunId) {
+      setOrchestrationRun(null);
+      setOrchestrationCheckpoints([]);
+      setOrchestrationLoading(false);
+      setOrchestrationError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setOrchestrationLoading(true);
+    setOrchestrationError(null);
+
+    void Promise.all([
+      fetchOrchestrationRun(canonicalOrchestrationRunId),
+      fetchOrchestrationRunCheckpoints(canonicalOrchestrationRunId),
+    ])
+      .then(([run, checkpoints]) => {
+        if (cancelled) {
+          return;
+        }
+        setOrchestrationRun(run);
+        setOrchestrationCheckpoints(checkpoints.items);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setOrchestrationRun(null);
+        setOrchestrationCheckpoints([]);
+        setOrchestrationError(error instanceof Error ? error.message : "Failed to load orchestration run.");
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setOrchestrationLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canonicalOrchestrationRunId, input.messageMode]);
+
   const coworkItems = useMemo(
     () => deriveCoworkItems(input.messages, input.localNotices, latestOrchestration),
     [input.localNotices, input.messages, latestOrchestration],
@@ -76,6 +130,10 @@ export function useChatDockWorkbenchController(input: {
     createWorkbenchWorktree,
     openWorkbenchFile,
     latestOrchestration,
+    orchestrationRun,
+    orchestrationCheckpoints,
+    orchestrationLoading,
+    orchestrationError,
     coworkItems,
     selectedSessionProjectValue,
     dockSectionStyle,

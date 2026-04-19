@@ -64,6 +64,8 @@ Implementation status:
 Notes:
 - A run records execution intent and outcome for the shipped resumable operator flow set.
 - Durable execution now owns worker startup, retry scheduling, wake/resume, dead-letter recovery mechanics, approval wait/resume wake effects, approval-linked proactive wakes, and durable-linked chat-turn stream resumption for mission-session Chat / Cowork / Code operator work.
+- Cowork/orchestration runs are durable-run backed and worktree-owned. `orchestration_runs.status`, `currentWaveId`, and `currentPhaseId` describe plan/operator position; `durableRunId`, `executionState`, `worktreePath`, `worktreeStatus`, and `worktreeBaseRef` describe execution truth.
+- Approval-gated orchestration resume must re-enter the linked durable run. An approval action may set resume intent on the orchestration record, but durable worker execution remains the authority that advances phases after approval.
 - External writeback sessions remain visible operator sessions, but their integration send/retry/edit/stream lanes are still one-shot writeback paths outside durable replay/resume because the external side effect is not yet durably wrapped.
 - Legacy traces without durable linkage may still require compatibility reads or resume fallbacks for historical rows, but new mission-session LLM sends do not bypass durable ownership.
 - Runs may be linked to sessions, turns, tasks, and approvals.
@@ -96,8 +98,10 @@ Notes:
 - Approval payloads may still contain legacy nested values, but operator surfaces should prefer explicit `linkage`.
 - Replay snapshots may expose a top-level `durableRunId`, but the approval linkage is the canonical association.
 - Runtime lifecycle responses must expose per-field provenance for `sessionId`, `turnId`, `runId`, `approvalId`, and `taskId`.
+- `RuntimeLifecycleResponse.canonical` is the operator-facing canonical field set. For approval-scoped reads, `canonical.sessionId`, `canonical.taskId`, and `canonical.runId` must prefer `approval.linkage` over turn-trace, execution-plan, delegation, or wait-run inference.
+- `RuntimeLifecycleResponse.linked` is the related/inferred set. It may include alternate runs, sessions, turns, and tasks, but those values do not overwrite the canonical field set.
 - Approval resolution follow-on truth is owned by `approval + approval_events + approval_effects`.
-- `approval_wait_runs` remains a canonical wait mapping, but it is not the effect-status source after approval resolution; post-resolution wake, pending action execution, inbox finalization, and after-hooks are tracked through effect rows.
+- `approval_wait_runs` remains a canonical wait mapping, but it is not canonical execution truth. Mission Control should label it as wait mapping, not canonical run ownership. Post-resolution wake, pending action execution, inbox finalization, and after-hooks are tracked through effect rows.
 
 ### Realtime Event
 
@@ -131,7 +135,9 @@ Canonical classification fields:
 Notes:
 - Realtime events are not the authoritative historical record for sessions or runs.
 - The stream is retained and pruned. Consumers must treat it as an operator signal lane, not complete history.
-- Producers for approval/run/session/task/proactive events should populate classification and `links` explicitly. Repository inference is compatibility-only.
+- Producers for approval/run/session/task/proactive events must populate `eventClass`, `eventAuthority`, and `links` explicitly.
+- Repository inference is legacy compatibility-only. Protected approval/session/task/orchestration/auth-device event types must fail loudly when explicit metadata is omitted.
+- If a compatibility shim remains for non-protected legacy callers, it must emit diagnostics and be removable without changing the protected producer contract.
 
 ## Linkage Rules
 
@@ -155,6 +161,14 @@ Operator-facing runtime lifecycle reads should follow this order:
 4. compatibility fallback inference from payload, preview, or metadata
 
 Fallback reads remain temporary compatibility behavior. Mission Control should label inferred relationships as inferred, not canonical.
+
+For approval-scoped lifecycle reads, apply the precedence per field:
+
+1. query `approvalId` and approval existence
+2. `approval.linkage.sessionId`, `approval.linkage.taskId`, `approval.linkage.durableRunId`
+3. explicit turn-trace / execution-plan / delegation linkage
+4. wait mapping display via `approval_wait_runs`
+5. compatibility fallback inference
 
 ### Approval-related realtime events
 

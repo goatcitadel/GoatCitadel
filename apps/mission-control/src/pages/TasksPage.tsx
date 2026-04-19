@@ -39,6 +39,7 @@ import { GCSelect } from "../components/ui";
 import { GCEmptyState } from "../components/ui/GCEmptyState";
 import { BUILTIN_AGENT_ROSTER } from "../data/agent-roster";
 import { useAction } from "../hooks/useAction";
+import { describeDurableTimelineEvent } from "../lib/durable-timeline";
 import { pageCopy } from "../content/copy";
 
 const statuses: TaskRecord["status"][] = ["inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"];
@@ -85,6 +86,8 @@ const TASK_BOARD_STATUSES: TaskRecord["status"][] = [
   "done",
 ];
 
+type DurableTimelineEventRecord = Awaited<ReturnType<typeof fetchDurableRunTimeline>>["items"][number];
+
 export function TasksPage({ workspaceId = "default" }: { workspaceId?: string }) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
@@ -111,14 +114,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
     blockedReason?: string;
     updatedAt: string;
   } | null>(null);
-  const [durableTimeline, setDurableTimeline] = useState<
-    Array<{
-      eventId: string;
-      eventType: string;
-      stepKey?: string;
-      createdAt: string;
-    }>
-  >([]);
+  const [durableTimeline, setDurableTimeline] = useState<DurableTimelineEventRecord[]>([]);
   const [durableBusy, setDurableBusy] = useState<null | "load" | "resume" | "wake">(null);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -583,570 +579,579 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         className="tasks-operator-layout"
         primary={
           <Panel
-          title={viewFilter === "trash" ? "Task Trash" : "Task Board"}
-          subtitle={
-            viewFilter === "trash"
-              ? "Inspect trashed tasks before restoring or permanently deleting them."
-              : "Use the board to scan queue state, then open the selected task in the inspector."
-          }
-        >
-          {tasks.length === 0 ? (
-            <GCEmptyState
-              title={viewFilter === "trash" ? "No trashed tasks right now" : "No tasks in this view yet"}
-              subtitle={
-                viewFilter === "trash"
-                  ? "Moved tasks will appear here for restore or permanent cleanup."
-                  : "Create a task to start tracking operator work, checkpoints, and delegated execution."
-              }
-              action={
-                viewFilter === "trash" ? (
-                  <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
-                    Return to active tasks
-                  </button>
-                ) : (
-                  <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
-                    Create Task
-                  </button>
-                )
-              }
-              secondaryAction={
-                <button type="button" className="gc-button" onClick={loadTasks}>
-                  Refresh board
-                </button>
-              }
-            />
-          ) : viewFilter === "trash" ? (
-            <div className="task-trash-list" role="list" aria-label="Trashed tasks">
-              {tasks.map((task) => (
-                <button
-                  key={task.taskId}
-                  type="button"
-                  className={`task-queue-card task-queue-card-trash${task.taskId === selectedTaskId ? " active" : ""}`}
-                  aria-pressed={task.taskId === selectedTaskId}
-                  onClick={() => setSelectedTaskId(task.taskId)}
-                >
-                  <div className="task-queue-card-head">
-                    <strong>{task.title}</strong>
-                    <StatusChip tone="warning">Trash</StatusChip>
-                  </div>
-                  <p className="task-queue-card-meta">
-                    Priority {task.priority} | Updated {new Date(task.updatedAt).toLocaleString()}
-                  </p>
-                  <p className="task-queue-card-note">
-                    {task.deleteReason
-                      ? `Reason: ${task.deleteReason}`
-                      : "Open this task to restore or permanently delete it."}
-                  </p>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="task-board" aria-label="Task board">
-              {taskBoardColumns.map((column) => (
-                <section key={column.status} className="task-board-column">
-                  <div className="task-board-column-head">
-                    <strong>{column.status.replaceAll("_", " ")}</strong>
-                    <StatusChip tone={column.items.length > 0 ? "live" : "muted"}>{column.items.length}</StatusChip>
-                  </div>
-                  {column.items.length > 0 ? (
-                    <div className="task-board-stack">
-                      {column.items.map((task) => (
-                        <button
-                          key={task.taskId}
-                          type="button"
-                          className={`task-queue-card${task.taskId === selectedTaskId ? " active" : ""}`}
-                          aria-pressed={task.taskId === selectedTaskId}
-                          onClick={() => setSelectedTaskId(task.taskId)}
-                        >
-                          <div className="task-queue-card-head">
-                            <strong>{task.title}</strong>
-                            <StatusChip
-                              tone={
-                                task.status === "blocked" ? "warning" : task.status === "done" ? "success" : "muted"
-                              }
-                            >
-                              P{task.priority}
-                            </StatusChip>
-                          </div>
-                          <p className="task-queue-card-meta">Updated {new Date(task.updatedAt).toLocaleString()}</p>
-                          <p className="task-queue-card-note">
-                            {task.proactiveContext?.durableRunId
-                              ? `Durable ${task.proactiveContext.durableRunId}`
-                              : task.description?.trim() ||
-                                "Open the inspector for linkage, deliverables, and recovery details."}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
+            title={viewFilter === "trash" ? "Task Trash" : "Task Board"}
+            subtitle={
+              viewFilter === "trash"
+                ? "Inspect trashed tasks before restoring or permanently deleting them."
+                : "Use the board to scan queue state, then open the selected task in the inspector."
+            }
+          >
+            {tasks.length === 0 ? (
+              <GCEmptyState
+                title={viewFilter === "trash" ? "No trashed tasks right now" : "No tasks in this view yet"}
+                subtitle={
+                  viewFilter === "trash"
+                    ? "Moved tasks will appear here for restore or permanent cleanup."
+                    : "Create a task to start tracking operator work, checkpoints, and delegated execution."
+                }
+                action={
+                  viewFilter === "trash" ? (
+                    <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
+                      Return to active tasks
+                    </button>
                   ) : (
-                    <p className="task-board-empty">No tasks in this column.</p>
-                  )}
-                </section>
-              ))}
-            </div>
-          )}
+                    <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
+                      Create Task
+                    </button>
+                  )
+                }
+                secondaryAction={
+                  <button type="button" className="gc-button" onClick={loadTasks}>
+                    Refresh board
+                  </button>
+                }
+              />
+            ) : viewFilter === "trash" ? (
+              <div className="task-trash-list" role="list" aria-label="Trashed tasks">
+                {tasks.map((task) => (
+                  <button
+                    key={task.taskId}
+                    type="button"
+                    className={`task-queue-card task-queue-card-trash${task.taskId === selectedTaskId ? " active" : ""}`}
+                    aria-pressed={task.taskId === selectedTaskId}
+                    onClick={() => setSelectedTaskId(task.taskId)}
+                  >
+                    <div className="task-queue-card-head">
+                      <strong>{task.title}</strong>
+                      <StatusChip tone="warning">Trash</StatusChip>
+                    </div>
+                    <p className="task-queue-card-meta">
+                      Priority {task.priority} | Updated {new Date(task.updatedAt).toLocaleString()}
+                    </p>
+                    <p className="task-queue-card-note">
+                      {task.deleteReason
+                        ? `Reason: ${task.deleteReason}`
+                        : "Open this task to restore or permanently delete it."}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="task-board" aria-label="Task board">
+                {taskBoardColumns.map((column) => (
+                  <section key={column.status} className="task-board-column">
+                    <div className="task-board-column-head">
+                      <strong>{column.status.replaceAll("_", " ")}</strong>
+                      <StatusChip tone={column.items.length > 0 ? "live" : "muted"}>{column.items.length}</StatusChip>
+                    </div>
+                    {column.items.length > 0 ? (
+                      <div className="task-board-stack">
+                        {column.items.map((task) => (
+                          <button
+                            key={task.taskId}
+                            type="button"
+                            className={`task-queue-card${task.taskId === selectedTaskId ? " active" : ""}`}
+                            aria-pressed={task.taskId === selectedTaskId}
+                            onClick={() => setSelectedTaskId(task.taskId)}
+                          >
+                            <div className="task-queue-card-head">
+                              <strong>{task.title}</strong>
+                              <StatusChip
+                                tone={
+                                  task.status === "blocked" ? "warning" : task.status === "done" ? "success" : "muted"
+                                }
+                              >
+                                P{task.priority}
+                              </StatusChip>
+                            </div>
+                            <p className="task-queue-card-meta">Updated {new Date(task.updatedAt).toLocaleString()}</p>
+                            <p className="task-queue-card-note">
+                              {task.proactiveContext?.durableRunId
+                                ? `Durable ${task.proactiveContext.durableRunId}`
+                                : task.description?.trim() ||
+                                  "Open the inspector for linkage, deliverables, and recovery details."}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="task-board-empty">No tasks in this column.</p>
+                    )}
+                  </section>
+                ))}
+              </div>
+            )}
           </Panel>
         }
-        inspector={<div className="task-detail-stack">
-          {!selectedTask ? (
-            <GCEmptyState
-              title="Select a task to inspect details"
-              subtitle="Open a card from the board to review queue controls, deliverables, delegated sessions, and durable recovery."
-              action={
-                <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
-                  Focus the active board
-                </button>
-              }
-            />
-          ) : null}
-          {selectedTask ? (
-            <>
-              <Panel
-                title={selectedTask.title}
-                subtitle="Task summary and queue controls."
-                actions={
-                  <div className="workflow-summary-strip">
-                    <StatusChip tone={isSelectedTaskDeleted ? "muted" : "live"}>{selectedTask.status}</StatusChip>
-                    <StatusChip tone="muted">Priority {selectedTask.priority}</StatusChip>
-                    {selectedTask.deletedAt ? <StatusChip tone="warning">In trash</StatusChip> : null}
-                    {!selectedTask.deletedAt ? (
+        inspector={
+          <div className="task-detail-stack">
+            {!selectedTask ? (
+              <GCEmptyState
+                title="Select a task to inspect details"
+                subtitle="Open a card from the board to review queue controls, deliverables, delegated sessions, and durable recovery."
+                action={
+                  <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
+                    Focus the active board
+                  </button>
+                }
+              />
+            ) : null}
+            {selectedTask ? (
+              <>
+                <Panel
+                  title={selectedTask.title}
+                  subtitle="Task summary and queue controls."
+                  actions={
+                    <div className="workflow-summary-strip">
+                      <StatusChip tone={isSelectedTaskDeleted ? "muted" : "live"}>{selectedTask.status}</StatusChip>
+                      <StatusChip tone="muted">Priority {selectedTask.priority}</StatusChip>
+                      {selectedTask.deletedAt ? <StatusChip tone="warning">In trash</StatusChip> : null}
+                      {!selectedTask.deletedAt ? (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDelete({ task: selectedTask, mode: "soft" })}
+                          className="gc-button"
+                        >
+                          Move to Trash
+                        </button>
+                      ) : (
+                        <button type="button" onClick={() => void onRestore(selectedTask)} className="gc-button">
+                          Restore
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => setConfirmDelete({ task: selectedTask, mode: "soft" })}
-                        className="gc-button"
+                        className="gc-button danger"
+                        onClick={() => setConfirmDelete({ task: selectedTask, mode: "hard" })}
+                        disabled={deleteAction.pending}
                       >
-                        Move to Trash
+                        Delete Permanently
                       </button>
-                    ) : (
-                      <button type="button" onClick={() => void onRestore(selectedTask)} className="gc-button">
-                        Restore
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="gc-button danger"
-                      onClick={() => setConfirmDelete({ task: selectedTask, mode: "hard" })}
-                      disabled={deleteAction.pending}
-                    >
-                      Delete Permanently
-                    </button>
-                  </div>
-                }
-                className="task-detail-summary-panel"
-              >
-                <p>{selectedTask.description || "No description yet."}</p>
-                <FieldHelp>
-                  Use the status controls here to move the task through the execution lane before updating detailed
-                  notes.
-                </FieldHelp>
-                {selectedTask.deletedAt ? (
-                  <p className="office-subtitle">
-                    In Trash since {new Date(selectedTask.deletedAt).toLocaleString()}
-                    {selectedTask.deleteReason ? ` (${selectedTask.deleteReason})` : ""}
-                  </p>
-                ) : null}
-                <div className="task-summary-grid">
-                  <div className="task-summary-stat">
-                    <span>Session</span>
-                    <strong>{selectedTask.proactiveContext?.sessionId ?? "none"}</strong>
-                  </div>
-                  <div className="task-summary-stat">
-                    <span>Proactive run</span>
-                    <strong>{selectedTask.proactiveContext?.proactiveRunId ?? "none"}</strong>
-                  </div>
-                  <div className="task-summary-stat">
-                    <span>Durable run</span>
-                    <strong>{selectedTask.proactiveContext?.durableRunId ?? durableStatus?.runId ?? "none"}</strong>
-                  </div>
-                  <div className="task-summary-stat">
-                    <span>Subagents</span>
-                    <strong>{subagents.length}</strong>
-                  </div>
-                </div>
-
-                <div className="controls-row task-status-row">
-                  <span>Status:</span>
-                  {statuses.map((status) => (
-                    <button
-                      type="button"
-                      key={status}
-                      className={["gc-button", selectedTask.status === status ? "active" : ""]
-                        .filter(Boolean)
-                        .join(" ")}
-                      disabled={isSelectedTaskDeleted}
-                      onClick={() => void onStatusChange(status)}
-                    >
-                      {status}
-                    </button>
-                  ))}
-                </div>
-                {selectedTask.proactiveContext ? (
-                  <div className="replay-box">
-                    <h4>Proactive orchestration linkage</h4>
-                    <p className="office-subtitle">
-                      Session: {selectedTask.proactiveContext.sessionId}
-                      {" | "}
-                      Surface: {selectedTask.proactiveContext.originSurface}
-                      {" | "}
-                      Proactive run: {selectedTask.proactiveContext.proactiveRunId ?? "none"}
-                    </p>
-                    <p className="office-subtitle">
-                      Proactive durable run: {selectedTask.proactiveContext.durableRunId ?? "none"}
-                      {" | "}
-                      Approval: {selectedTask.proactiveContext.approvalId ?? "none"}
-                      {" | "}
-                      Next wake:{" "}
-                      {selectedTask.proactiveContext.nextWakeAt
-                        ? new Date(selectedTask.proactiveContext.nextWakeAt).toLocaleString()
-                        : "none"}
-                    </p>
-                    <p className="office-subtitle">
-                      Stop reason: {selectedTask.proactiveContext.stopReason ?? "active"}
-                    </p>
-                    {selectedTask.proactiveContext.externalReferenceRoots?.length ? (
-                      <p className="office-subtitle">
-                        Reference roots:{" "}
-                        {selectedTask.proactiveContext.externalReferenceRoots.map((root) => root.label).join(", ")}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </Panel>
-
-              <Panel title="Execution spine" subtitle="Canonical lineage for this task across plans, delegation, and durable runs.">
-                {loadingDetails ? <p className="office-subtitle">Refreshing lineage…</p> : null}
-                {!taskLifecycle ? (
-                  <p className="office-subtitle">
-                    No runtime lifecycle view is attached yet for this task.
-                  </p>
-                ) : (
-                  <>
-                    <div className="task-summary-grid">
-                      <div className="task-summary-stat">
-                        <span>Execution plans</span>
-                        <strong>{taskLifecycle.executionPlans?.length ?? 0}</strong>
-                      </div>
-                      <div className="task-summary-stat">
-                        <span>Delegation runs</span>
-                        <strong>{taskLifecycle.delegationRuns?.length ?? 0}</strong>
-                      </div>
-                      <div className="task-summary-stat">
-                        <span>Delegation steps</span>
-                        <strong>{taskLifecycle.delegationSteps?.length ?? 0}</strong>
-                      </div>
-                      <div className="task-summary-stat">
-                        <span>Durable runs</span>
-                        <strong>{taskLifecycle.linked.runIds.length}</strong>
-                      </div>
                     </div>
+                  }
+                  className="task-detail-summary-panel"
+                >
+                  <p>{selectedTask.description || "No description yet."}</p>
+                  <FieldHelp>
+                    Use the status controls here to move the task through the execution lane before updating detailed
+                    notes.
+                  </FieldHelp>
+                  {selectedTask.deletedAt ? (
+                    <p className="office-subtitle">
+                      In Trash since {new Date(selectedTask.deletedAt).toLocaleString()}
+                      {selectedTask.deleteReason ? ` (${selectedTask.deleteReason})` : ""}
+                    </p>
+                  ) : null}
+                  <div className="task-summary-grid">
+                    <div className="task-summary-stat">
+                      <span>Session</span>
+                      <strong>{selectedTask.proactiveContext?.sessionId ?? "none"}</strong>
+                    </div>
+                    <div className="task-summary-stat">
+                      <span>Proactive run</span>
+                      <strong>{selectedTask.proactiveContext?.proactiveRunId ?? "none"}</strong>
+                    </div>
+                    <div className="task-summary-stat">
+                      <span>Durable run</span>
+                      <strong>{selectedTask.proactiveContext?.durableRunId ?? durableStatus?.runId ?? "none"}</strong>
+                    </div>
+                    <div className="task-summary-stat">
+                      <span>Subagents</span>
+                      <strong>{subagents.length}</strong>
+                    </div>
+                  </div>
 
-                    {taskLifecycle.executionPlans?.length ? (
-                      <div className="replay-box">
-                        <h4>Execution plans</h4>
-                        <ul className="compact-list">
-                          {taskLifecycle.executionPlans.map((plan) => (
-                            <li key={plan.planId}>
-                              <strong>{plan.objective}</strong>
-                              {` | ${plan.status} | ${plan.mode}`}
-                              {plan.summary ? ` | ${plan.summary}` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-
-                    {taskLifecycle.delegationRuns?.length ? (
-                      <div className="replay-box">
-                        <h4>Delegation runs</h4>
-                        <ul className="compact-list">
-                          {taskLifecycle.delegationRuns.map((run) => (
-                            <li key={run.runId}>
-                              <strong>{run.objective}</strong>
-                              {` | ${run.status} | ${run.mode}`}
-                              {run.executionPlanId ? ` | Plan ${run.executionPlanId}` : ""}
-                              {run.roles.length ? ` | ${run.roles.join(" -> ")}` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-
-                    {taskLifecycle.delegationSteps?.length ? (
-                      <div className="replay-box">
-                        <h4>Delegation steps</h4>
-                        <ul className="compact-list">
-                          {taskLifecycle.delegationSteps.map((step) => (
-                            <li key={step.stepId}>
-                              <strong>{step.role}</strong>
-                              {` | ${step.status} | step ${step.index + 1}`}
-                              {step.childSessionId ? ` | Session ${step.childSessionId}` : ""}
-                              {step.childTurnId ? ` | Turn ${step.childTurnId}` : ""}
-                              {step.durableRunId ? ` | Durable ${step.durableRunId}` : ""}
-                              {step.error ? ` | ${step.error}` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-
-                    {taskLifecycle.resolution?.fallbackSources.length ? (
+                  <div className="controls-row task-status-row">
+                    <span>Status:</span>
+                    {statuses.map((status) => (
+                      <button
+                        type="button"
+                        key={status}
+                        className={["gc-button", selectedTask.status === status ? "active" : ""]
+                          .filter(Boolean)
+                          .join(" ")}
+                        disabled={isSelectedTaskDeleted}
+                        onClick={() => void onStatusChange(status)}
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </div>
+                  {selectedTask.proactiveContext ? (
+                    <div className="replay-box">
+                      <h4>Proactive orchestration linkage</h4>
                       <p className="office-subtitle">
-                        Diagnostics: {taskLifecycle.resolution.fallbackSources.join(", ")}
+                        Session: {selectedTask.proactiveContext.sessionId}
+                        {" | "}
+                        Surface: {selectedTask.proactiveContext.originSurface}
+                        {" | "}
+                        Proactive run: {selectedTask.proactiveContext.proactiveRunId ?? "none"}
                       </p>
-                    ) : (
-                      <p className="office-subtitle">Diagnostics: canonical linkage resolved without fallback.</p>
-                    )}
-                  </>
-                )}
-              </Panel>
+                      <p className="office-subtitle">
+                        Proactive durable run: {selectedTask.proactiveContext.durableRunId ?? "none"}
+                        {" | "}
+                        Approval: {selectedTask.proactiveContext.approvalId ?? "none"}
+                        {" | "}
+                        Next wake:{" "}
+                        {selectedTask.proactiveContext.nextWakeAt
+                          ? new Date(selectedTask.proactiveContext.nextWakeAt).toLocaleString()
+                          : "none"}
+                      </p>
+                      <p className="office-subtitle">
+                        Stop reason: {selectedTask.proactiveContext.stopReason ?? "active"}
+                      </p>
+                      {selectedTask.proactiveContext.externalReferenceRoots?.length ? (
+                        <p className="office-subtitle">
+                          Reference roots:{" "}
+                          {selectedTask.proactiveContext.externalReferenceRoots.map((root) => root.label).join(", ")}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </Panel>
 
-              <Panel
-                title="Run checkpoint resume"
-                subtitle="Recover long-running workflows from the last known checkpoint."
-              >
-                <p className="office-subtitle">
-                  Use this when a long-running workflow is paused or waiting. Resume continues from the exact
-                  checkpoint.
-                </p>
-                <FieldHelp>Load the run first so you can see the blocked step before resuming or waking it.</FieldHelp>
-                <div className="controls-row">
-                  <label htmlFor="taskDurableRunId">Run ID</label>
-                  <input
-                    id="taskDurableRunId"
-                    value={durableRunId}
-                    onChange={(event) => setDurableRunId(event.target.value)}
-                    placeholder="durable run id"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void loadDurableState(durableRunId);
-                    }}
-                    disabled={durableBusy !== null}
-                    className="gc-button"
-                  >
-                    {durableBusy === "load" ? "Loading..." : "Load run"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void onResumeDurable();
-                    }}
-                    disabled={durableBusy !== null || !durableStatus}
-                    className="gc-button"
-                  >
-                    {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
-                  </button>
-                </div>
-                {durableStatus?.status === "waiting" ? (
+                <Panel
+                  title="Execution spine"
+                  subtitle="Canonical lineage for this task across plans, delegation, and durable runs."
+                >
+                  {loadingDetails ? <p className="office-subtitle">Refreshing lineage…</p> : null}
+                  {!taskLifecycle ? (
+                    <p className="office-subtitle">No runtime lifecycle view is attached yet for this task.</p>
+                  ) : (
+                    <>
+                      <div className="task-summary-grid">
+                        <div className="task-summary-stat">
+                          <span>Execution plans</span>
+                          <strong>{taskLifecycle.executionPlans?.length ?? 0}</strong>
+                        </div>
+                        <div className="task-summary-stat">
+                          <span>Delegation runs</span>
+                          <strong>{taskLifecycle.delegationRuns?.length ?? 0}</strong>
+                        </div>
+                        <div className="task-summary-stat">
+                          <span>Delegation steps</span>
+                          <strong>{taskLifecycle.delegationSteps?.length ?? 0}</strong>
+                        </div>
+                        <div className="task-summary-stat">
+                          <span>Durable runs</span>
+                          <strong>{taskLifecycle.linked.runIds.length}</strong>
+                        </div>
+                      </div>
+
+                      {taskLifecycle.executionPlans?.length ? (
+                        <div className="replay-box">
+                          <h4>Execution plans</h4>
+                          <ul className="compact-list">
+                            {taskLifecycle.executionPlans.map((plan) => (
+                              <li key={plan.planId}>
+                                <strong>{plan.objective}</strong>
+                                {` | ${plan.status} | ${plan.mode}`}
+                                {plan.summary ? ` | ${plan.summary}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {taskLifecycle.delegationRuns?.length ? (
+                        <div className="replay-box">
+                          <h4>Delegation runs</h4>
+                          <ul className="compact-list">
+                            {taskLifecycle.delegationRuns.map((run) => (
+                              <li key={run.runId}>
+                                <strong>{run.objective}</strong>
+                                {` | ${run.status} | ${run.mode}`}
+                                {run.executionPlanId ? ` | Plan ${run.executionPlanId}` : ""}
+                                {run.roles.length ? ` | ${run.roles.join(" -> ")}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {taskLifecycle.delegationSteps?.length ? (
+                        <div className="replay-box">
+                          <h4>Delegation steps</h4>
+                          <ul className="compact-list">
+                            {taskLifecycle.delegationSteps.map((step) => (
+                              <li key={step.stepId}>
+                                <strong>{step.role}</strong>
+                                {` | ${step.status} | step ${step.index + 1}`}
+                                {step.childSessionId ? ` | Session ${step.childSessionId}` : ""}
+                                {step.childTurnId ? ` | Turn ${step.childTurnId}` : ""}
+                                {step.durableRunId ? ` | Durable ${step.durableRunId}` : ""}
+                                {step.error ? ` | ${step.error}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {taskLifecycle.resolution?.fallbackSources.length ? (
+                        <p className="office-subtitle">
+                          Diagnostics: {taskLifecycle.resolution.fallbackSources.join(", ")}
+                        </p>
+                      ) : (
+                        <p className="office-subtitle">Diagnostics: canonical linkage resolved without fallback.</p>
+                      )}
+                    </>
+                  )}
+                </Panel>
+
+                <Panel
+                  title="Run checkpoint resume"
+                  subtitle="Recover long-running workflows from the last known checkpoint."
+                >
+                  <p className="office-subtitle">
+                    Use this when a long-running workflow is paused or waiting. Resume continues from the exact
+                    checkpoint.
+                  </p>
+                  <FieldHelp>
+                    Load the run first so you can see the blocked step before resuming or waking it.
+                  </FieldHelp>
                   <div className="controls-row">
-                    <label htmlFor="taskDurableWake">Wake event</label>
+                    <label htmlFor="taskDurableRunId">Run ID</label>
                     <input
-                      id="taskDurableWake"
-                      value={durableWakeKey}
-                      onChange={(event) => setDurableWakeKey(event.target.value)}
-                      placeholder="manual.resume"
+                      id="taskDurableRunId"
+                      value={durableRunId}
+                      onChange={(event) => setDurableRunId(event.target.value)}
+                      placeholder="durable run id"
                     />
                     <button
                       type="button"
                       onClick={() => {
-                        void onWakeDurable();
+                        void loadDurableState(durableRunId);
                       }}
                       disabled={durableBusy !== null}
                       className="gc-button"
                     >
-                      {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
+                      {durableBusy === "load" ? "Loading..." : "Load run"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onResumeDurable();
+                      }}
+                      disabled={durableBusy !== null || !durableStatus}
+                      className="gc-button"
+                    >
+                      {durableBusy === "resume" ? "Resuming..." : "Resume from checkpoint"}
                     </button>
                   </div>
-                ) : null}
-                {durableStatus ? (
-                  <p className="office-subtitle">
-                    Status: {durableStatus.status}
-                    {durableStatus.blockedStep ? ` | Blocked step: ${durableStatus.blockedStep}` : ""}
-                    {durableStatus.blockedReason ? ` | Reason: ${durableStatus.blockedReason}` : ""}
-                    {" | "}
-                    Updated: {new Date(durableStatus.updatedAt).toLocaleString()}
-                  </p>
-                ) : (
-                  <p className="office-subtitle">
-                    No run loaded yet. If unsure, copy a run ID from Improvement or durable diagnostics.
-                  </p>
-                )}
-                {durableTimeline.length > 0 ? (
-                  <details>
-                    <summary>Checkpoint timeline ({durableTimeline.length})</summary>
-                    <ul className="compact-list">
-                      {durableTimeline
-                        .slice(-12)
-                        .reverse()
-                        .map((event) => (
-                          <li key={event.eventId}>
-                            <strong>{event.eventType}</strong>
-                            {event.stepKey ? ` | ${event.stepKey}` : ""}
-                            {" | "}
-                            {new Date(event.createdAt).toLocaleString()}
-                          </li>
-                        ))}
-                    </ul>
-                  </details>
-                ) : null}
-              </Panel>
+                  {durableStatus?.status === "waiting" ? (
+                    <div className="controls-row">
+                      <label htmlFor="taskDurableWake">Wake event</label>
+                      <input
+                        id="taskDurableWake"
+                        value={durableWakeKey}
+                        onChange={(event) => setDurableWakeKey(event.target.value)}
+                        placeholder="manual.resume"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void onWakeDurable();
+                        }}
+                        disabled={durableBusy !== null}
+                        className="gc-button"
+                      >
+                        {durableBusy === "wake" ? "Waking..." : "Wake waiting run"}
+                      </button>
+                    </div>
+                  ) : null}
+                  {durableStatus ? (
+                    <p className="office-subtitle">
+                      Status: {durableStatus.status}
+                      {durableStatus.blockedStep ? ` | Blocked step: ${durableStatus.blockedStep}` : ""}
+                      {durableStatus.blockedReason ? ` | Reason: ${durableStatus.blockedReason}` : ""}
+                      {" | "}
+                      Updated: {new Date(durableStatus.updatedAt).toLocaleString()}
+                    </p>
+                  ) : (
+                    <p className="office-subtitle">
+                      No run loaded yet. If unsure, copy a run ID from Improvement or durable diagnostics.
+                    </p>
+                  )}
+                  {durableTimeline.length > 0 ? (
+                    <details>
+                      <summary>Checkpoint timeline ({durableTimeline.length})</summary>
+                      <ul className="compact-list">
+                        {durableTimeline
+                          .slice(-12)
+                          .reverse()
+                          .map((event) => {
+                            const summary = describeDurableTimelineEvent(event);
+                            return (
+                              <li key={event.eventId}>
+                                <strong>{summary.label}</strong>
+                                {summary.detail ? ` | ${summary.detail}` : ""}
+                                {event.stepKey ? ` | ${event.stepKey}` : ""}
+                                {" | "}
+                                {new Date(event.createdAt).toLocaleString()}
+                              </li>
+                            );
+                          })}
+                      </ul>
+                    </details>
+                  ) : null}
+                </Panel>
 
-              <Panel title="Activities" subtitle="Operator-visible progress notes for the selected task.">
-                {loadingDetails ? <p className="office-subtitle">Refreshing task details...</p> : null}
-                <FieldHelp>Use activities for short operator-visible progress notes.</FieldHelp>
-                <div className="controls-row">
-                  <SelectOrCustom
-                    value={activityMessage}
-                    onChange={setActivityMessage}
-                    options={ACTIVITY_OPTIONS}
-                    customPlaceholder="Custom activity message"
-                    customLabel="Activity message"
-                    autoSelectFirstOption
-                  />
-                  <button
-                    type="button"
-                    disabled={!canAddActivity}
-                    onClick={() => void onAddActivity()}
-                    className="gc-button"
-                  >
-                    Add Activity
-                  </button>
-                </div>
-                {!canAddActivity ? <p className="office-subtitle">{activityBlockedReason}</p> : null}
-                <ul className="compact-list">
-                  {activities.map((activity) => (
-                    <li key={activity.activityId}>
-                      <strong>{activity.activityType}</strong> - {activity.message}
-                      <small> ({new Date(activity.createdAt).toLocaleString()})</small>
-                    </li>
-                  ))}
-                </ul>
-                {activities.length === 0 ? <p className="office-subtitle">No activities yet.</p> : null}
-              </Panel>
+                <Panel title="Activities" subtitle="Operator-visible progress notes for the selected task.">
+                  {loadingDetails ? <p className="office-subtitle">Refreshing task details...</p> : null}
+                  <FieldHelp>Use activities for short operator-visible progress notes.</FieldHelp>
+                  <div className="controls-row">
+                    <SelectOrCustom
+                      value={activityMessage}
+                      onChange={setActivityMessage}
+                      options={ACTIVITY_OPTIONS}
+                      customPlaceholder="Custom activity message"
+                      customLabel="Activity message"
+                      autoSelectFirstOption
+                    />
+                    <button
+                      type="button"
+                      disabled={!canAddActivity}
+                      onClick={() => void onAddActivity()}
+                      className="gc-button"
+                    >
+                      Add Activity
+                    </button>
+                  </div>
+                  {!canAddActivity ? <p className="office-subtitle">{activityBlockedReason}</p> : null}
+                  <ul className="compact-list">
+                    {activities.map((activity) => (
+                      <li key={activity.activityId}>
+                        <strong>{activity.activityType}</strong> - {activity.message}
+                        <small> ({new Date(activity.createdAt).toLocaleString()})</small>
+                      </li>
+                    ))}
+                  </ul>
+                  {activities.length === 0 ? <p className="office-subtitle">No activities yet.</p> : null}
+                </Panel>
 
-              <Panel title="Deliverables" subtitle="Attach concrete outputs so review stays bound to the task.">
-                <FieldHelp>Attach concrete outputs here so review stays tied to the task.</FieldHelp>
-                <div className="controls-row">
-                  <SelectOrCustom
-                    value={deliverableTitle}
-                    onChange={setDeliverableTitle}
-                    options={DELIVERABLE_TITLE_OPTIONS}
-                    customPlaceholder="Custom deliverable title"
-                    customLabel="Deliverable title"
-                    autoSelectFirstOption
-                  />
-                  <SelectOrCustom
-                    value={deliverablePath}
-                    onChange={setDeliverablePath}
-                    options={DELIVERABLE_PATH_OPTIONS}
-                    customPlaceholder="Optional custom path"
-                    customLabel="Deliverable path"
-                  />
-                  <button
-                    type="button"
-                    disabled={!canAddDeliverable}
-                    onClick={() => void onAddDeliverable()}
-                    className="gc-button"
-                  >
-                    Add Deliverable
-                  </button>
-                </div>
-                {!canAddDeliverable ? <p className="office-subtitle">{deliverableBlockedReason}</p> : null}
-                <ul className="compact-list">
-                  {deliverables.map((deliverable) => (
-                    <li key={deliverable.deliverableId}>
-                      <strong>{deliverable.title}</strong>
-                      {deliverable.path ? ` - ${deliverable.path}` : ""}
-                    </li>
-                  ))}
-                </ul>
-                {deliverables.length === 0 ? <p className="office-subtitle">No deliverables yet.</p> : null}
-              </Panel>
+                <Panel title="Deliverables" subtitle="Attach concrete outputs so review stays bound to the task.">
+                  <FieldHelp>Attach concrete outputs here so review stays tied to the task.</FieldHelp>
+                  <div className="controls-row">
+                    <SelectOrCustom
+                      value={deliverableTitle}
+                      onChange={setDeliverableTitle}
+                      options={DELIVERABLE_TITLE_OPTIONS}
+                      customPlaceholder="Custom deliverable title"
+                      customLabel="Deliverable title"
+                      autoSelectFirstOption
+                    />
+                    <SelectOrCustom
+                      value={deliverablePath}
+                      onChange={setDeliverablePath}
+                      options={DELIVERABLE_PATH_OPTIONS}
+                      customPlaceholder="Optional custom path"
+                      customLabel="Deliverable path"
+                    />
+                    <button
+                      type="button"
+                      disabled={!canAddDeliverable}
+                      onClick={() => void onAddDeliverable()}
+                      className="gc-button"
+                    >
+                      Add Deliverable
+                    </button>
+                  </div>
+                  {!canAddDeliverable ? <p className="office-subtitle">{deliverableBlockedReason}</p> : null}
+                  <ul className="compact-list">
+                    {deliverables.map((deliverable) => (
+                      <li key={deliverable.deliverableId}>
+                        <strong>{deliverable.title}</strong>
+                        {deliverable.path ? ` - ${deliverable.path}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                  {deliverables.length === 0 ? <p className="office-subtitle">No deliverables yet.</p> : null}
+                </Panel>
 
-              <Panel
-                title="Goat subagent sessions"
-                subtitle="Track delegated execution without leaving the selected task."
-              >
-                <FieldHelp>Link delegated sessions here when the task is split across agents.</FieldHelp>
-                <div className="controls-row">
-                  <SelectOrCustom
-                    value={subagentSessionId}
-                    onChange={setSubagentSessionId}
-                    options={subagentSessionOptions}
-                    customPlaceholder="Session id"
-                    customLabel="Session id"
-                    autoSelectFirstOption
-                  />
-                  <SelectOrCustom
-                    value={subagentRoleId}
-                    onChange={(nextRoleId) => {
-                      setSubagentRoleId(nextRoleId);
-                      const role =
-                        agentProfiles.length > 0
-                          ? agentProfiles.find((item) => item.roleId === nextRoleId)
-                          : BUILTIN_AGENT_ROSTER.find((item) => item.roleId === nextRoleId);
-                      if (role) {
-                        setSubagentName(role.name);
-                      }
-                    }}
-                    options={subagentRoleOptions}
-                    customPlaceholder="Optional role id"
-                    customLabel="Role id"
-                  />
-                  <SelectOrCustom
-                    value={subagentName}
-                    onChange={setSubagentName}
-                    options={subagentNameOptions}
-                    customPlaceholder="Optional agent name"
-                    customLabel="Agent name"
-                  />
-                  <button
-                    type="button"
-                    disabled={!canAddSubagent}
-                    onClick={() => void onAddSubagent()}
-                    className="gc-button"
-                  >
-                    Add Subagent
+                <Panel
+                  title="Goat subagent sessions"
+                  subtitle="Track delegated execution without leaving the selected task."
+                >
+                  <FieldHelp>Link delegated sessions here when the task is split across agents.</FieldHelp>
+                  <div className="controls-row">
+                    <SelectOrCustom
+                      value={subagentSessionId}
+                      onChange={setSubagentSessionId}
+                      options={subagentSessionOptions}
+                      customPlaceholder="Session id"
+                      customLabel="Session id"
+                      autoSelectFirstOption
+                    />
+                    <SelectOrCustom
+                      value={subagentRoleId}
+                      onChange={(nextRoleId) => {
+                        setSubagentRoleId(nextRoleId);
+                        const role =
+                          agentProfiles.length > 0
+                            ? agentProfiles.find((item) => item.roleId === nextRoleId)
+                            : BUILTIN_AGENT_ROSTER.find((item) => item.roleId === nextRoleId);
+                        if (role) {
+                          setSubagentName(role.name);
+                        }
+                      }}
+                      options={subagentRoleOptions}
+                      customPlaceholder="Optional role id"
+                      customLabel="Role id"
+                    />
+                    <SelectOrCustom
+                      value={subagentName}
+                      onChange={setSubagentName}
+                      options={subagentNameOptions}
+                      customPlaceholder="Optional agent name"
+                      customLabel="Agent name"
+                    />
+                    <button
+                      type="button"
+                      disabled={!canAddSubagent}
+                      onClick={() => void onAddSubagent()}
+                      className="gc-button"
+                    >
+                      Add Subagent
+                    </button>
+                  </div>
+                  {!canAddSubagent ? <p className="office-subtitle">{subagentBlockedReason}</p> : null}
+                  {!showAdvanced && subagentSessionOptions.length === 0 ? (
+                    <p className="office-subtitle">
+                      No existing session IDs found yet. Create a chat session first, or open advanced mode to enter an
+                      external session ID.
+                    </p>
+                  ) : null}
+                  <button type="button" onClick={() => setShowAdvanced((current) => !current)} className="gc-button">
+                    {showAdvanced ? "Hide advanced subagent details" : "Show advanced subagent details"}
                   </button>
-                </div>
-                {!canAddSubagent ? <p className="office-subtitle">{subagentBlockedReason}</p> : null}
-                {!showAdvanced && subagentSessionOptions.length === 0 ? (
-                  <p className="office-subtitle">
-                    No existing session IDs found yet. Create a chat session first, or open advanced mode to enter an
-                    external session ID.
-                  </p>
-                ) : null}
-                <button type="button" onClick={() => setShowAdvanced((current) => !current)} className="gc-button">
-                  {showAdvanced ? "Hide advanced subagent details" : "Show advanced subagent details"}
-                </button>
-                {showAdvanced ? (
-                  <p className="office-subtitle">
-                    Advanced mode lets you provide arbitrary session IDs and custom names for external sessions.
-                  </p>
-                ) : null}
-                <ul className="compact-list">
-                  {subagents.map((session) => (
-                    <li key={session.subagentSessionId}>
-                      <strong>{session.agentName ?? session.agentSessionId}</strong> - {session.status}
-                      {session.status === "active" ? (
-                        <button
-                          type="button"
-                          disabled={isSelectedTaskDeleted}
-                          onClick={() => void onCompleteSubagent(session.agentSessionId)}
-                          className="gc-button"
-                        >
-                          Mark Completed
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-                {subagents.length === 0 ? <p className="office-subtitle">No subagent sessions linked yet.</p> : null}
-              </Panel>
-            </>
-          ) : null}
-        </div>}
+                  {showAdvanced ? (
+                    <p className="office-subtitle">
+                      Advanced mode lets you provide arbitrary session IDs and custom names for external sessions.
+                    </p>
+                  ) : null}
+                  <ul className="compact-list">
+                    {subagents.map((session) => (
+                      <li key={session.subagentSessionId}>
+                        <strong>{session.agentName ?? session.agentSessionId}</strong> - {session.status}
+                        {session.status === "active" ? (
+                          <button
+                            type="button"
+                            disabled={isSelectedTaskDeleted}
+                            onClick={() => void onCompleteSubagent(session.agentSessionId)}
+                            className="gc-button"
+                          >
+                            Mark Completed
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  {subagents.length === 0 ? <p className="office-subtitle">No subagent sessions linked yet.</p> : null}
+                </Panel>
+              </>
+            ) : null}
+          </div>
+        }
       />
       <ConfirmModal
         open={Boolean(confirmDelete)}

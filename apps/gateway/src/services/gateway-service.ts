@@ -19,7 +19,7 @@ import {
 } from "./integration-plugin-author-contract.js";
 import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
-import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
+import { OrchestrationEngine, WorktreeManager, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
   ToolPolicyEngine,
   assertExistingPathRealpathAllowed,
@@ -379,6 +379,7 @@ import type {
   MemoryLifecyclePatch,
   MemoryChangeEvent,
   ConnectorDiagnosticReport,
+  OrchestrationPlanWorkflowPayload,
   McpTemplateDiscoveryResult,
   CronReviewItem,
   CronRunDiff,
@@ -1911,6 +1912,18 @@ export class GatewayService {
           recordImprovementDurableRunCompletion: (run, checkpointState) =>
             this.recordImprovementDurableRunCompletion(run, checkpointState),
         },
+        orchestration: {
+          storage: this.storage,
+          durableRunService: this.durableRunService,
+          publishRealtime: (eventType, source, payload, options) => {
+            this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: (runId, eventType, payload) =>
+            this.recordDurableTimelineEvent(runId, eventType, payload),
+          recordImprovementDurableRunCompletion: (run, checkpointState) =>
+            this.recordImprovementDurableRunCompletion(run, checkpointState),
+          executeDurableOrchestrationRun: (run, context) => this.executeDurableOrchestrationRun(run, context),
+        },
       }),
     );
   }
@@ -2870,24 +2883,19 @@ export class GatewayService {
     relationScope?: MemoryRelationScope;
   }): void {
     const prewarmContext = this.memoryLifecycleService?.prewarmContext?.bind(this.memoryLifecycleService);
-    if (
-      this.closing
-      || !input.prompt.trim()
-      || typeof prewarmContext !== "function"
-    ) {
+    if (this.closing || !input.prompt.trim() || typeof prewarmContext !== "function") {
       return;
     }
     const task = prewarmContext({
-        scope: "chat",
-        sessionId: input.sessionId,
-        prompt: input.prompt,
-        relationScope: input.relationScope,
-        workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
-        forceRefresh: true,
-      })
-      .catch((error) => {
-        log.error("chat memory prewarm failed", error);
-      });
+      scope: "chat",
+      sessionId: input.sessionId,
+      prompt: input.prompt,
+      relationScope: input.relationScope,
+      workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
+      forceRefresh: true,
+    }).catch((error) => {
+      log.error("chat memory prewarm failed", error);
+    });
     this.backgroundTasks.add(task);
     task.finally(() => this.backgroundTasks.delete(task));
   }
@@ -4025,11 +4033,7 @@ export class GatewayService {
         const traceStatus = response.trace?.status;
         const waitingForApproval = traceStatus === "waiting_for_approval";
         const stillActive = traceStatus === "waiting_for_tool";
-        const failed =
-          traceStatus === "failed" ||
-          traceStatus === "cancelled" ||
-          waitingForApproval ||
-          stillActive;
+        const failed = traceStatus === "failed" || traceStatus === "cancelled" || waitingForApproval || stillActive;
         const output =
           response.assistantMessage?.content?.trim() ||
           response.trace?.failure?.message?.trim() ||
@@ -4137,14 +4141,13 @@ export class GatewayService {
     for (const stage of stages) {
       const runnableSteps: NormalizedDelegationStep[] = [];
       for (const step of stage) {
-        const failedDependencies = step.dependsOnStepIds
-          .reduce<ChatDelegationStepRecord[]>((out, dependencyStepId) => {
-            const dependency = stepResults.get(dependencyStepId)?.step;
-            if (dependency && dependency.status !== "completed") {
-              out.push(dependency);
-            }
-            return out;
-          }, []);
+        const failedDependencies = step.dependsOnStepIds.reduce<ChatDelegationStepRecord[]>((out, dependencyStepId) => {
+          const dependency = stepResults.get(dependencyStepId)?.step;
+          if (dependency && dependency.status !== "completed") {
+            out.push(dependency);
+          }
+          return out;
+        }, []);
         if (failedDependencies.length === 0) {
           runnableSteps.push(step);
           continue;
@@ -4196,7 +4199,7 @@ export class GatewayService {
     const stitchedSections = persistedSteps.map((step) => {
       const body =
         step.status === "completed"
-          ? step.output ?? "(delegate returned no output)"
+          ? (step.output ?? "(delegate returned no output)")
           : step.status === "skipped"
             ? `SKIPPED: ${step.error ?? "Dependency did not complete."}`
             : `FAILED: ${step.error ?? step.output ?? "Delegate failed without an error message."}`;
@@ -5736,6 +5739,10 @@ export class GatewayService {
     return durableExecutionService.parseHookDeliveryWorkflowPayload(run);
   }
 
+  private parseOrchestrationWorkflowPayload(run: DurableRunRecord): OrchestrationPlanWorkflowPayload | undefined {
+    return durableExecutionService.parseOrchestrationWorkflowPayload(run);
+  }
+
   private parseMemoryMaintenanceWorkflowPayload(run: DurableRunRecord) {
     return this.memoryLifecycleService.parseMaintenanceWorkflowPayload(run);
   }
@@ -5794,6 +5801,12 @@ export class GatewayService {
         if (meta?.workspaceId) {
           return this.normalizeWorkspaceId(meta.workspaceId);
         }
+      }
+    }
+    if (run.workflowKey === "orchestration.plan.execute") {
+      const payload = this.parseOrchestrationWorkflowPayload(run);
+      if (payload?.workspaceId) {
+        return this.normalizeWorkspaceId(payload.workspaceId);
       }
     }
     return DEFAULT_WORKSPACE_ID;
@@ -8952,7 +8965,7 @@ export class GatewayService {
     return candidates;
   }
 
-  public createOrchestrationPlan(plan: OrchestrationPlan): OrchestrationRun {
+  public async createOrchestrationPlan(plan: OrchestrationPlan): Promise<OrchestrationRun> {
     return orchestrationLifecycleService.createOrchestrationPlan(this, plan);
   }
 
@@ -8975,6 +8988,71 @@ export class GatewayService {
 
   public listRunCheckpoints(runId: string): OrchestrationCheckpoint[] {
     return orchestrationLifecycleService.listRunCheckpoints(this, runId);
+  }
+
+  /** @internal */ public requestDurableRunProcessing(runId: string): void {
+    this.durableRunService.requestRunProcessing(runId);
+  }
+
+  /** @internal */ public updateDurableRunState(input: {
+    runId: string;
+    status?: DurableRunRecord["status"];
+    metadata?: Record<string, unknown>;
+    lastError?: string;
+    finishedAt?: string;
+  }): DurableRunRecord {
+    const current = this.storage.durableRuns.getRun(input.runId);
+    return this.storage.durableRuns.updateRun({
+      runId: input.runId,
+      status: input.status ?? current.status,
+      metadata: input.metadata ?? current.metadata,
+      lastError: input.lastError,
+      finishedAt: input.finishedAt,
+      updatedAt: new Date().toISOString(),
+      expectedVersion: current.version,
+    });
+  }
+
+  /** @internal */ public async allocateOrchestrationWorktree(input: {
+    runId: string;
+    workspaceId: string;
+    baseRef?: string;
+  }): Promise<{
+    worktreePath: string;
+    worktreeStatus: NonNullable<OrchestrationRun["worktreeStatus"]>;
+    worktreeBaseRef: string;
+  }> {
+    const baseRef = input.baseRef?.trim() || "HEAD";
+    const worktreesRoot = path.resolve(this.config.rootDir, this.config.assistant.worktreesDir, "orchestration");
+    const targetPath = path.resolve(worktreesRoot, input.runId);
+    await fs.mkdir(worktreesRoot, { recursive: true });
+    assertWritePathInJail(targetPath, this.config.toolPolicy.sandbox.writeJailRoots);
+    const gitDirPath = path.join(targetPath, ".git");
+    if (fsSync.existsSync(targetPath) && !fsSync.existsSync(gitDirPath)) {
+      throw new ValidationError({
+        message:
+          "Orchestration worktree path already exists but is not a valid git worktree. Clean it up before retrying.",
+      });
+    }
+    if (!fsSync.existsSync(targetPath)) {
+      const manager = new WorktreeManager({
+        repoRoot: this.config.rootDir,
+        worktreesRoot,
+      });
+      await manager.create(input.runId, baseRef);
+    }
+    return {
+      worktreePath: targetPath,
+      worktreeStatus: "ready",
+      worktreeBaseRef: baseRef,
+    };
+  }
+
+  /** @internal */ public async executeDurableOrchestrationRun(
+    run: DurableRunRecord,
+    context?: durableExecutionService.DurableWorkflowExecutionContext,
+  ): Promise<{ outcome: "paused" | "completed"; checkpointState: Record<string, unknown> }> {
+    return orchestrationLifecycleService.executeDurableOrchestrationRun(this, run, context);
   }
 
   public getBankrOptionalMigrationMessage(): string {
@@ -9733,18 +9811,30 @@ export class GatewayService {
       deviceTokenExpiresAt,
     });
 
-    this.publishRealtime("auth_device_request_resolved", "auth", {
-      requestId: request.requestId,
-      approvalId: currentApproval.approvalId,
-      status: requestStatus,
-      resolvedAt,
-      resolvedBy: input.resolvedBy,
-      deviceLabel: request.deviceLabel,
-      deviceType: request.deviceType,
-      platform: request.platform,
-      requestedIp: request.requestedIp,
-      deviceTokenExpiresAt,
-    });
+    this.publishRealtime(
+      "auth_device_request_resolved",
+      "auth",
+      {
+        requestId: request.requestId,
+        approvalId: currentApproval.approvalId,
+        status: requestStatus,
+        resolvedAt,
+        resolvedBy: input.resolvedBy,
+        deviceLabel: request.deviceLabel,
+        deviceType: request.deviceType,
+        platform: request.platform,
+        requestedIp: request.requestedIp,
+        deviceTokenExpiresAt,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: {
+          approvalId: currentApproval.approvalId,
+        },
+        correlationId: currentApproval.approvalId,
+      },
+    );
 
     const effects = this.approvalEffectsService.listByApproval(currentApproval.approvalId);
     return {
@@ -9828,17 +9918,29 @@ export class GatewayService {
       requestedIp: request.requestedIp,
     });
 
-    this.publishRealtime("auth_device_request_resolved", "auth", {
-      requestId: request.requestId,
-      approvalId: request.approvalId,
-      status: "expired",
-      resolvedAt,
-      resolvedBy: resolutionInput.resolvedBy,
-      deviceLabel: request.deviceLabel,
-      deviceType: request.deviceType,
-      platform: request.platform,
-      requestedIp: request.requestedIp,
-    });
+    this.publishRealtime(
+      "auth_device_request_resolved",
+      "auth",
+      {
+        requestId: request.requestId,
+        approvalId: request.approvalId,
+        status: "expired",
+        resolvedAt,
+        resolvedBy: resolutionInput.resolvedBy,
+        deviceLabel: request.deviceLabel,
+        deviceType: request.deviceType,
+        platform: request.platform,
+        requestedIp: request.requestedIp,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: {
+          approvalId: request.approvalId,
+        },
+        correlationId: request.approvalId,
+      },
+    );
 
     return (
       this.getAuthDeviceRequestById(request.requestId) ?? {
@@ -10042,6 +10144,9 @@ export class GatewayService {
     payload: Record<string, unknown>,
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): RealtimeEvent {
+    if (requiresExplicitRealtimeMetadata(eventType, source) && !hasExplicitRealtimeMetadata(options)) {
+      throw new Error(`Explicit realtime metadata is required for protected event ${source}:${eventType}.`);
+    }
     const event = this.storage.realtimeEvents.append(eventType, source, payload, options);
     this.realtime.emit("event", event);
     return event;
@@ -14591,6 +14696,34 @@ function inferToolArtifactExtension(contentType?: string): string {
     return ".md";
   }
   return ".txt";
+}
+
+function hasExplicitRealtimeMetadata(
+  options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+): boolean {
+  if (!options?.eventClass || !options?.eventAuthority || !options.links) {
+    return false;
+  }
+  return Object.values(options.links).some((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+function requiresExplicitRealtimeMetadata(eventType: string, source: string): boolean {
+  const normalizedType = eventType.trim().toLowerCase();
+  const normalizedSource = source.trim().toLowerCase();
+  if (
+    normalizedType === "approval_created" ||
+    normalizedType === "approval_resolved" ||
+    normalizedType === "session_event" ||
+    normalizedType === "auth_device_request_created" ||
+    normalizedType === "auth_device_request_resolved" ||
+    normalizedType === "task_created" ||
+    normalizedType === "task_updated" ||
+    normalizedType === "task_deleted" ||
+    normalizedType === "orchestration_event"
+  ) {
+    return true;
+  }
+  return normalizedSource === "orchestration";
 }
 
 function wait(ms: number): Promise<void> {

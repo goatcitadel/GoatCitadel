@@ -173,7 +173,7 @@ describe("RuntimeLifecycleReadService", () => {
                 updatedAt: "2026-04-12T00:00:00.000Z",
                 retryPolicy: { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, backoffMultiplier: 2 },
                 currentAttempt: 1,
-              }) as unknown as DurableRunRecord
+              } as unknown as DurableRunRecord)
             : undefined,
         getApproval: (approvalId) =>
           ({
@@ -208,7 +208,9 @@ describe("RuntimeLifecycleReadService", () => {
       childSessionId: "session-child",
       childTurnId: "turn-child",
     });
-    expect(response.resolution?.fallbackSources).toEqual(expect.arrayContaining(["fallback_preview", "fallback_payload"]));
+    expect(response.resolution?.fallbackSources).toEqual(
+      expect.arrayContaining(["fallback_preview", "fallback_payload"]),
+    );
   });
 
   it("lets turn-trace durable linkage outrank execution-plan linkage when both are present", async () => {
@@ -290,7 +292,9 @@ describe("RuntimeLifecycleReadService", () => {
       childSessionId: "session-delegate-child",
       childTurnId: "turn-delegate-child",
     });
-    expect(response.resolution?.fallbackSources).toEqual(expect.arrayContaining(["fallback_payload", "fallback_metadata"]));
+    expect(response.resolution?.fallbackSources).toEqual(
+      expect.arrayContaining(["fallback_payload", "fallback_metadata"]),
+    );
   });
 
   it("surfaces persisted repair, reuse, and explicit halt metadata without inferring from prose", async () => {
@@ -360,5 +364,82 @@ describe("RuntimeLifecycleReadService", () => {
       reusedFromToolRunId: "tool-0",
       reuseReason: "matching_recent_browser_result",
     });
+  });
+
+  it("pins approval linkage as canonical lifecycle truth while preserving inferred related runs", async () => {
+    const service = new RuntimeLifecycleReadService(
+      createHost({
+        getApproval: (approvalId) =>
+          ({
+            approvalId,
+            kind: "tool.invoke",
+            riskLevel: "danger",
+            status: "pending",
+            payload: {},
+            linkage: {
+              sessionId: "session-approval",
+              taskId: "task-approval",
+              durableRunId: "run-approval",
+            },
+            createdAt: "2026-04-12T00:00:00.000Z",
+            updatedAt: "2026-04-12T00:00:00.000Z",
+            explanationStatus: "not_requested",
+          }) as unknown as ApprovalRequest,
+        getApprovalWaitRunId: () => "run-wait",
+        findDurableRunMaybe: (runId) =>
+          runId === "run-wait"
+            ? ({
+                runId,
+                workflowKey: "approval.wait",
+                status: "waiting",
+                payload: {},
+                metadata: {},
+                createdAt: "2026-04-12T00:00:00.000Z",
+                updatedAt: "2026-04-12T00:00:00.000Z",
+                retryPolicy: { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, backoffMultiplier: 2 },
+                currentAttempt: 1,
+              } as unknown as DurableRunRecord)
+            : undefined,
+        getTurnTrace: (turnId) =>
+          ({
+            turnId,
+            sessionId: "session-turn",
+            userMessageId: "user-1",
+            status: "completed",
+            mode: "chat",
+            startedAt: "2026-04-12T00:00:00.000Z",
+            durable: { runId: "run-turn" },
+            toolRuns: [],
+          }) as unknown as ChatTurnTraceRecord,
+        listChatExecutionPlans: () => [buildPlan()],
+        listChatDelegationRuns: () => [buildDelegationRun()],
+        listChatDelegationSteps: () => [buildDelegationStep()],
+      }),
+    );
+
+    const response = await service.getRuntimeLifecycle({ approvalId: "approval-1", turnId: "turn-1" });
+
+    expect(response.query).toMatchObject({
+      approvalId: "approval-1",
+      sessionId: "session-approval",
+      taskId: "task-approval",
+      runId: "run-approval",
+      turnId: "turn-1",
+    });
+    expect(response.canonical).toMatchObject({
+      approvalId: "approval-1",
+      sessionId: "session-approval",
+      taskId: "task-approval",
+      runId: "run-approval",
+      turnId: "turn-1",
+    });
+    expect(response.resolution).toMatchObject({
+      sessionIdSource: "approval_linkage",
+      taskIdSource: "approval_linkage",
+      runIdSource: "approval_linkage",
+      turnIdSource: "query",
+    });
+    expect(response.linked.runIds).toEqual(expect.arrayContaining(["run-approval", "run-turn", "run-plan"]));
+    expect(response.approvalWaitDurableRun?.runId).toBe("run-wait");
   });
 });

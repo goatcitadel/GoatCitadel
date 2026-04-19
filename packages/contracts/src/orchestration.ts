@@ -1,5 +1,17 @@
 export type LoopMode = "fresh-context" | "compaction";
 export type RunMode = "auto" | "hitl";
+export type OrchestrationExecutionState =
+  | "created"
+  | "worktree_allocating"
+  | "worktree_ready"
+  | "queued"
+  | "running"
+  | "paused_for_approval"
+  | "resume_requested"
+  | "completed"
+  | "failed"
+  | "stopped_by_limit";
+export type OrchestrationWorktreeStatus = "uninitialized" | "allocating" | "ready" | "blocked";
 
 export interface OrchestrationPhase {
   phaseId: string;
@@ -37,4 +49,14 @@ export interface OrchestrationRun {
   currentPhaseId?: string;
   totalCostUsd: number;
   totalIterations: number;
+  workspaceId?: string;
+  durableRunId?: string;
+  executionState?: OrchestrationExecutionState;
+  worktreePath?: string;
+  worktreeStatus?: OrchestrationWorktreeStatus;
+  worktreeBaseRef?: string;
+  pendingApprovalPhaseId?: string;
+  pendingApprovedBy?: string;
+  pendingCostIncrementUsd?: number;
+  lastError?: string;
 }

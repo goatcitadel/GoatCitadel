@@ -19,6 +19,7 @@ import type {
   ModelReputation,
   NpuModelManifest,
   NpuRuntimeStatus,
+  OrchestrationRun,
 } from "@goatcitadel/contracts";
 import type {
   LlmChatCompletionResponse,
@@ -27,6 +28,7 @@ import type {
   MeshReplicationOffsetRecord,
   MeshSessionOwnerRecord,
   MeshStatusResponse,
+  OrchestrationCheckpointRecord,
   RuntimeSettingsResponse,
 } from "./types.js";
 import { request } from "./client-core.js";
@@ -134,6 +136,18 @@ export async function uninstallAddon(addonId: string): Promise<AddonUninstallRes
 
 export async function fetchOrchestrationRunContext(runId: string): Promise<{ items: MemoryContextPack[] }> {
   return request<{ items: MemoryContextPack[] }>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}/context`);
+}
+
+export async function fetchOrchestrationRun(runId: string): Promise<OrchestrationRun> {
+  return request<OrchestrationRun>(`/api/v1/orchestration/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchOrchestrationRunCheckpoints(
+  runId: string,
+): Promise<{ items: OrchestrationCheckpointRecord[] }> {
+  return request<{ items: OrchestrationCheckpointRecord[] }>(
+    `/api/v1/orchestration/runs/${encodeURIComponent(runId)}/checkpoints`,
+  );
 }
 
 export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
@@ -304,17 +318,13 @@ export async function startLlamaCppHuggingFaceDownload(
   });
 }
 
-export async function fetchLlamaCppHuggingFaceDownload(
-  jobId: string,
-): Promise<LlamaCppHuggingFaceDownloadStatus> {
+export async function fetchLlamaCppHuggingFaceDownload(jobId: string): Promise<LlamaCppHuggingFaceDownloadStatus> {
   return request<LlamaCppHuggingFaceDownloadStatus>(
     `/api/v1/llamacpp/huggingface/downloads/${encodeURIComponent(jobId)}`,
   );
 }
 
-export async function cancelLlamaCppHuggingFaceDownload(
-  jobId: string,
-): Promise<LlamaCppHuggingFaceDownloadStatus> {
+export async function cancelLlamaCppHuggingFaceDownload(jobId: string): Promise<LlamaCppHuggingFaceDownloadStatus> {
   return request<LlamaCppHuggingFaceDownloadStatus>(
     `/api/v1/llamacpp/huggingface/downloads/${encodeURIComponent(jobId)}/cancel`,
     {

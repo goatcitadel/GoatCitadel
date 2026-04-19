@@ -19,6 +19,7 @@ import type {
   IntegrationOperatorAction,
   NpuRuntimeStatus,
   OnboardingState,
+  OrchestrationRun,
   OpenclawParityProgramReport,
   PackagingProofLaneDraft,
   LlamaCppRuntimeStatus,
@@ -160,6 +161,32 @@ export interface DashboardStateResponse {
   taskStatusCounts: Array<{ status: string; count: number }>;
   recentEvents: RealtimeEvent[];
   dailyCostUsd: number;
+}
+
+export type OrchestrationRunResponse = OrchestrationRun;
+
+export interface OrchestrationCheckpointRecord {
+  checkpointId: string;
+  runId: string;
+  planId: string;
+  waveId?: string;
+  phaseId?: string;
+  checkpointKind:
+    | "run_created"
+    | "durable_run_linked"
+    | "worktree_allocated"
+    | "run_queued"
+    | "run_started"
+    | "run_paused_for_approval"
+    | "run_resumed"
+    | "phase_approved"
+    | "phase_executed"
+    | "wave_advanced"
+    | "run_completed"
+    | "run_stopped"
+    | "run_failed";
+  details: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface TimelineSummaryResponse {

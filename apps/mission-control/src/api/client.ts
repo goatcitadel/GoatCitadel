@@ -602,6 +602,8 @@ export {
   fetchLlamaCppStatus,
   fetchNpuModels,
   fetchNpuStatus,
+  fetchOrchestrationRun,
+  fetchOrchestrationRunCheckpoints,
   fetchOrchestrationRunContext,
   fetchProviderSecretStatus,
   installAddon,
@@ -736,15 +738,8 @@ async function buildEventStreamUrl(): Promise<string> {
     Boolean(auth.token?.trim()) ||
     Boolean(auth.username && auth.password)
   ) {
-    try {
-      const issued = await issueSseBridgeToken("events:stream");
-      url.searchParams.set("sse_token", issued.token);
-    } catch (error) {
-      if (isApiRequestError(error) && error.status === 400) {
-        return url.toString();
-      }
-      throw error;
-    }
+    const issued = await issueSseBridgeToken("events:stream");
+    url.searchParams.set("sse_token", issued.token);
   }
 
   return url.toString();

@@ -103,4 +103,101 @@ describe("OrchestrationEngine", () => {
     const afterApproval = engine.approvePhase(autoPlan, waitingForApproval, "phase-2");
     expect(afterApproval.status).toBe("completed");
   });
+
+  it("advances non-approval phases and pauses when the next phase needs approval", () => {
+    const engine = new OrchestrationEngine();
+    const autoPlan: OrchestrationPlan = {
+      ...plan,
+      mode: "auto",
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [
+            {
+              ...plan.waves[0]!.phases[0]!,
+              phaseId: "phase-1",
+              requiresApproval: false,
+            },
+            {
+              ...plan.waves[0]!.phases[1]!,
+              phaseId: "phase-2",
+              requiresApproval: true,
+            },
+          ],
+        },
+      ],
+    };
+    const started: OrchestrationRun = {
+      runId: "run-3",
+      planId: autoPlan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    const advanced = engine.advancePhase(autoPlan, started, "phase-1");
+    expect(advanced.status).toBe("paused");
+    expect(advanced.currentPhaseId).toBe("phase-2");
+    expect(advanced.totalIterations).toBe(1);
+  });
+
+  it("rejects advancing approval-gated phases without approval", () => {
+    const engine = new OrchestrationEngine();
+    const run: OrchestrationRun = {
+      runId: "run-4",
+      planId: plan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    expect(() => engine.advancePhase(plan, run, "phase-1")).toThrow("requires approval");
+  });
+
+  it("stops by limit after advancement when the next phase would exceed iteration budget", () => {
+    const engine = new OrchestrationEngine();
+    const limitedPlan: OrchestrationPlan = {
+      ...plan,
+      mode: "auto",
+      maxIterations: 1,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [
+            {
+              ...plan.waves[0]!.phases[0]!,
+              phaseId: "phase-1",
+              requiresApproval: false,
+            },
+            {
+              ...plan.waves[0]!.phases[1]!,
+              phaseId: "phase-2",
+              requiresApproval: false,
+            },
+          ],
+        },
+      ],
+    };
+    const run: OrchestrationRun = {
+      runId: "run-5",
+      planId: limitedPlan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    const advanced = engine.advancePhase(limitedPlan, run, "phase-1");
+    expect(advanced.status).toBe("stopped_by_limit");
+    expect(advanced.currentPhaseId).toBe("phase-2");
+    expect(advanced.endedAt).toBeDefined();
+  });
 });

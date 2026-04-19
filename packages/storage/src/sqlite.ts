@@ -606,6 +606,28 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "derived_response_signals_json", "TEXT");
     },
   },
+  {
+    version: 63,
+    name: "orchestration_execution_ownership_schema",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "workspace_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "durable_run_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "execution_state", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_path", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_status", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "worktree_base_ref", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "pending_approval_phase_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "pending_approved_by", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "pending_cost_increment_usd", "REAL");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "last_error", "TEXT");
+      if (tableExists(db, "orchestration_runs")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_orchestration_runs_durable_run_id
+            ON orchestration_runs(durable_run_id);
+        `);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -944,10 +966,21 @@ function createBaseSchema(db: DatabaseSync): void {
       current_wave_id TEXT,
       current_phase_id TEXT,
       total_cost_usd REAL NOT NULL DEFAULT 0,
-      total_iterations INTEGER NOT NULL DEFAULT 0
+      total_iterations INTEGER NOT NULL DEFAULT 0,
+      workspace_id TEXT,
+      durable_run_id TEXT,
+      execution_state TEXT,
+      worktree_path TEXT,
+      worktree_status TEXT,
+      worktree_base_ref TEXT,
+      pending_approval_phase_id TEXT,
+      pending_approved_by TEXT,
+      pending_cost_increment_usd REAL,
+      last_error TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_orchestration_runs_plan_id ON orchestration_runs(plan_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_orchestration_runs_durable_run_id ON orchestration_runs(durable_run_id);
 
     CREATE TABLE IF NOT EXISTS orchestration_plans (
       plan_id TEXT PRIMARY KEY,
@@ -2789,6 +2822,7 @@ function ensurePromptPackBenchmarkDedupAudit(db: DatabaseSync): void {
 
   const duplicateCounts = getPromptPackBenchmarkDuplicateCounts(db);
   if (duplicateCounts.duplicateRowCount > 0) {
+    // eslint-disable-next-line no-console
     console.warn("[goatcitadel] archiving duplicate prompt-pack benchmark items before unique-index migration", {
       duplicateGroupCount: duplicateCounts.duplicateGroupCount,
       duplicateRowCount: duplicateCounts.duplicateRowCount,
@@ -3002,7 +3036,9 @@ function repairPromptPackBenchmarkDedupWinners(db: DatabaseSync): void {
     return;
   }
 
-  const liveRows = db.prepare(`SELECT rowid, * FROM prompt_pack_benchmark_items`).all() as PromptPackBenchmarkDedupRow[];
+  const liveRows = db
+    .prepare(`SELECT rowid, * FROM prompt_pack_benchmark_items`)
+    .all() as PromptPackBenchmarkDedupRow[];
   if (liveRows.length === 0) {
     return;
   }
@@ -3197,7 +3233,8 @@ function comparePromptPackBenchmarkDedupRows(
   left: PromptPackBenchmarkDedupRow,
   right: PromptPackBenchmarkDedupRow,
 ): number {
-  const completenessDelta = getPromptPackBenchmarkDedupCompletenessRank(left) - getPromptPackBenchmarkDedupCompletenessRank(right);
+  const completenessDelta =
+    getPromptPackBenchmarkDedupCompletenessRank(left) - getPromptPackBenchmarkDedupCompletenessRank(right);
   if (completenessDelta !== 0) {
     return completenessDelta;
   }

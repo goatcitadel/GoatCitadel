@@ -28,6 +28,7 @@ import {
   type DurableRunRecord,
   type DurableRunTimelineEvent,
   type HookTrigger,
+  type OrchestrationPlanWorkflowPayload,
   type ProactiveTickWorkflowPayload,
   type ProactiveRunRecord,
   type RealtimeEvent,
@@ -72,6 +73,10 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     "parseMaintenanceWorkflowPayload" | "syncMaintenanceFromDurableRun" | "executeMaintenanceDurableRun"
   >;
   readonly chatProactiveService: Pick<ChatProactiveService, "executeDurableProactiveTickRun">;
+  executeDurableOrchestrationRun(
+    run: DurableRunRecord,
+    context?: DurableWorkflowExecutionContext,
+  ): Promise<{ outcome: "paused" | "completed"; checkpointState: Record<string, unknown> }>;
   prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -168,6 +173,9 @@ type DurableConnectorDeliveryWorkflowHost = DurableWorkflowCompletionHost &
 type DurableHookDeliveryWorkflowHost = DurableWorkflowCompletionHost &
   Pick<DurableExecutionHost, "hooksService" | "durableRunService" | "computeDurableRetryDelayMs">;
 
+type DurableOrchestrationWorkflowHost = DurableWorkflowCompletionHost &
+  Pick<DurableExecutionHost, "executeDurableOrchestrationRun" | "durableRunService">;
+
 export interface DurableWorkflowExecutorHosts {
   memoryMaintenance: DurableMemoryMaintenanceWorkflowHost;
   chatTurn: DurableChatTurnWorkflowHost;
@@ -175,6 +183,7 @@ export interface DurableWorkflowExecutorHosts {
   approvalWait: DurableApprovalWaitWorkflowHost;
   connectorDelivery: DurableConnectorDeliveryWorkflowHost;
   hookDelivery: DurableHookDeliveryWorkflowHost;
+  orchestration: DurableOrchestrationWorkflowHost;
 }
 
 function buildConnectorDeliveryRealtimeLinks(input: {
@@ -319,6 +328,22 @@ export function parseHookDeliveryWorkflowPayload(run: DurableRunRecord): HookDel
   return payload as HookDeliveryWorkflowPayload;
 }
 
+export function parseOrchestrationWorkflowPayload(run: DurableRunRecord): OrchestrationPlanWorkflowPayload | undefined {
+  const payload = run.payload as Partial<OrchestrationPlanWorkflowPayload> | undefined;
+  if (!payload || payload.version !== "orchestration.plan.execute.v1") {
+    return undefined;
+  }
+  if (
+    typeof payload.orchestrationRunId !== "string" ||
+    typeof payload.planId !== "string" ||
+    typeof payload.workspaceId !== "string" ||
+    typeof payload.requestedAt !== "string"
+  ) {
+    return undefined;
+  }
+  return payload as OrchestrationPlanWorkflowPayload;
+}
+
 export function createDurableWorkflowExecutorRegistry(
   executors: Record<string, DurableWorkflowExecutor>,
 ): DurableWorkflowExecutorRegistry {
@@ -450,6 +475,34 @@ export function buildDurableWorkflowExecutors(
           : { recoverable: false, reason: "Durable hook delivery payload is invalid or incomplete." },
       markUnrecoverable: (run, reason) => markDurableHookDeliveryUnrecoverable(hosts.hookDelivery, run, reason),
     },
+    "orchestration.plan.execute": {
+      execute: async (run, context) => {
+        const result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
+        if (result.outcome === "paused") {
+          return;
+        }
+        completeDurableWorkflowRun(hosts.orchestration, run.runId, result.checkpointState);
+      },
+      isRecoverable: (run) =>
+        parseOrchestrationWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable orchestration payload is invalid or incomplete." },
+      markUnrecoverable: async (run, reason) => {
+        hosts.orchestration.publishRealtime(
+          "system",
+          "durable",
+          {
+            type: "durable_workflow_unrecoverable",
+            runId: run.runId,
+            workflowKey: run.workflowKey,
+            reason,
+          },
+          buildDurableRealtimeOptions({
+            runId: run.runId,
+          }),
+        );
+      },
+    },
   };
 }
 
@@ -463,6 +516,7 @@ function buildDurableWorkflowExecutorsFromExecutionHost(
     approvalWait: host,
     connectorDelivery: host,
     hookDelivery: host,
+    orchestration: host,
   });
 }
 
@@ -861,7 +915,9 @@ function isDurableWorkflowAbortError(error: unknown, context?: DurableWorkflowEx
   if (!signal?.aborted) {
     return false;
   }
-  return error === signal.reason || (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)));
+  return (
+    error === signal.reason || (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)))
+  );
 }
 
 export function getDurableDiagnostics(host: DurableExecutionHost): DurableDiagnosticsResponse {

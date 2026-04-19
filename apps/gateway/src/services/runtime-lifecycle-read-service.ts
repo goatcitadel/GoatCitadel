@@ -35,6 +35,7 @@ interface LifecycleResolutionState {
   approvalId?: string;
   taskId?: string;
   executionPlanId?: string;
+  preferApprovalCanonical: boolean;
   fallbackSources: Set<RuntimeLifecycleFieldSource>;
   resolution: NonNullable<RuntimeLifecycleResponse["resolution"]>;
   sourceRanks: Record<LifecycleFieldName, number>;
@@ -78,6 +79,7 @@ export class RuntimeLifecycleReadService {
       approvalId: normalizeLifecycleId(input.approvalId),
       taskId: normalizeLifecycleId(input.taskId),
       executionPlanId: undefined,
+      preferApprovalCanonical: Boolean(input.approvalId),
       fallbackSources: new Set<RuntimeLifecycleFieldSource>(),
       resolution: {
         sessionIdSource: input.sessionId ? "query" : undefined,
@@ -98,6 +100,7 @@ export class RuntimeLifecycleReadService {
 
     let approval = state.approvalId ? this.host.getApproval(state.approvalId) : undefined;
     if (approval) {
+      state.preferApprovalCanonical = true;
       collectLifecycleLinksFromUnknown(linked, approval.linkage);
       collectLifecycleLinksFromUnknown(linked, approval.payload);
       collectLifecycleLinksFromUnknown(linked, approval.preview);
@@ -157,6 +160,7 @@ export class RuntimeLifecycleReadService {
     }
     if (state.approvalId && !approval) {
       approval = this.host.getApproval(state.approvalId);
+      state.preferApprovalCanonical = true;
       collectLifecycleLinksFromUnknown(linked, approval.linkage);
       collectLifecycleLinksFromUnknown(linked, approval.payload);
       collectLifecycleLinksFromUnknown(linked, approval.preview);
@@ -232,6 +236,13 @@ export class RuntimeLifecycleReadService {
 
     return {
       query: {
+        sessionId: state.sessionId,
+        turnId: state.turnId,
+        runId: state.runId,
+        approvalId: state.approvalId,
+        taskId: state.taskId,
+      },
+      canonical: {
         sessionId: state.sessionId,
         turnId: state.turnId,
         runId: state.runId,
@@ -375,7 +386,11 @@ export class RuntimeLifecycleReadService {
     }
     if (
       state.runId &&
-      plan.steps.some((step) => step.durableRunId === state.runId || resolveDeprecatedChildRunId(step, this.host.findDurableRunMaybe.bind(this.host)) === state.runId)
+      plan.steps.some(
+        (step) =>
+          step.durableRunId === state.runId ||
+          resolveDeprecatedChildRunId(step, this.host.findDurableRunMaybe.bind(this.host)) === state.runId,
+      )
     ) {
       return true;
     }
@@ -598,7 +613,7 @@ function assignLifecycleField(
   if (!normalized) {
     return;
   }
-  const rank = getLifecycleSourceRank(source);
+  const rank = getLifecycleSourceRank(source, field, state.preferApprovalCanonical);
   if (rank < state.sourceRanks[field]) {
     return;
   }
@@ -623,18 +638,25 @@ function assignLifecycleField(
   }
 }
 
-function getLifecycleSourceRank(source: RuntimeLifecycleFieldSource): number {
+function getLifecycleSourceRank(
+  source: RuntimeLifecycleFieldSource,
+  field?: LifecycleFieldName,
+  preferApprovalCanonical = false,
+): number {
   switch (source) {
     case "query":
       return 100;
+    case "approval_linkage":
+      if (preferApprovalCanonical && (field === "sessionId" || field === "runId" || field === "taskId")) {
+        return 95;
+      }
+      return 60;
     case "turn_trace":
       return 90;
     case "execution_plan":
       return 80;
     case "delegation_step":
       return 70;
-    case "approval_linkage":
-      return 60;
     case "approval_wait_run":
       return 55;
     case "task_context":

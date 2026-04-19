@@ -683,6 +683,10 @@ export function ChatPage({
     createWorkbenchWorktree,
     openWorkbenchFile,
     latestOrchestration,
+    orchestrationRun,
+    orchestrationCheckpoints,
+    orchestrationLoading,
+    orchestrationError,
     coworkItems,
     selectedSessionProjectValue,
     dockSectionStyle,
@@ -936,6 +940,10 @@ export function ChatPage({
         refreshWorkbench,
         handleRunCodeHelper,
         latestOrchestration,
+        orchestrationRun,
+        orchestrationCheckpoints,
+        orchestrationLoading,
+        orchestrationError,
         coworkItems,
         activeDelegationRun: visibleDelegationRun,
         onOpenTasks,
@@ -1222,6 +1230,10 @@ function renderWorkSurface(input: {
   refreshWorkbench: () => Promise<void>;
   handleRunCodeHelper: (language: string, source: string) => Promise<void>;
   latestOrchestration: ReturnType<typeof useChatDockWorkbenchController>["latestOrchestration"];
+  orchestrationRun: ReturnType<typeof useChatDockWorkbenchController>["orchestrationRun"];
+  orchestrationCheckpoints: ReturnType<typeof useChatDockWorkbenchController>["orchestrationCheckpoints"];
+  orchestrationLoading: ReturnType<typeof useChatDockWorkbenchController>["orchestrationLoading"];
+  orchestrationError: ReturnType<typeof useChatDockWorkbenchController>["orchestrationError"];
   coworkItems: ReturnType<typeof useChatDockWorkbenchController>["coworkItems"];
   activeDelegationRun: ActiveChatDelegationRun | null;
   onOpenTasks: () => void;
@@ -1248,6 +1260,10 @@ function renderWorkSurface(input: {
         coworkPanel={{
           items: input.coworkItems,
           orchestration: input.latestOrchestration ?? undefined,
+          orchestrationRun: input.orchestrationRun,
+          orchestrationCheckpoints: input.orchestrationCheckpoints,
+          orchestrationLoading: input.orchestrationLoading,
+          orchestrationError: input.orchestrationError,
           executionPlan: selectedTurn?.trace.executionPlan,
           delegationRun: input.activeDelegationRun,
           selectedTurn,

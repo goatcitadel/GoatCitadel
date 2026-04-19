@@ -14,6 +14,8 @@ export interface PhaseApprovalOptions {
   costIncrementUsd?: number;
 }
 
+export type PhaseAdvanceOptions = PhaseApprovalOptions;
+
 export class OrchestrationEngine {
   public validate(plan: OrchestrationPlan): void {
     validatePlan(plan);
@@ -85,42 +87,27 @@ export class OrchestrationEngine {
       throw new Error(`Phase ${approvedPhaseId} is not approval-gated for run ${run.runId}`);
     }
 
-    const now = options.now ?? new Date().toISOString();
-    const next = this.nextPhase(plan, approvedPhaseId);
+    return this.advanceFromPhase(plan, run, approvedPhaseId, options);
+  }
 
-    const candidate: OrchestrationRun = {
-      ...run,
-      totalIterations: run.totalIterations + 1,
-      totalCostUsd: run.totalCostUsd + (options.costIncrementUsd ?? 0),
-      currentWaveId: next?.waveId,
-      currentPhaseId: next?.phaseId,
-      status: next ? (this.shouldPauseAtPhase(plan, next.phaseId) ? "paused" : "running") : "completed",
-      endedAt: next ? undefined : now,
-    };
-
-    const runtimeMinutes = Math.max(
-      0,
-      (Date.parse(now) - Date.parse(run.startedAt)) / 60000,
-    );
-
-    if (
-      next
-      && (
-      this.shouldStopByLimits(plan, {
-        iterations: candidate.totalIterations,
-        runtimeMinutes,
-        costUsd: candidate.totalCostUsd,
-      })
-      )
-    ) {
-      return {
-        ...candidate,
-        status: "stopped_by_limit",
-        endedAt: now,
-      };
+  public advancePhase(
+    plan: OrchestrationPlan,
+    run: OrchestrationRun,
+    phaseId: string,
+    options: PhaseAdvanceOptions = {},
+  ): OrchestrationRun {
+    if (run.status !== "running") {
+      throw new Error(`Run ${run.runId} is not actively running: ${run.status}`);
     }
-
-    return candidate;
+    if (run.currentPhaseId !== phaseId) {
+      throw new Error(
+        `Run ${run.runId} expected phase ${run.currentPhaseId ?? "<none>"} but received advancement for ${phaseId}`,
+      );
+    }
+    if (this.requiresApproval(plan, phaseId)) {
+      throw new Error(`Phase ${phaseId} requires approval and cannot auto-advance for run ${run.runId}`);
+    }
+    return this.advanceFromPhase(plan, run, phaseId, options);
   }
 
   public shouldStopByLimits(plan: OrchestrationPlan, state: RunLimitState): boolean {
@@ -131,9 +118,7 @@ export class OrchestrationEngine {
     );
   }
 
-  private firstPhase(
-    plan: OrchestrationPlan,
-  ): { waveId: string; phaseId: string } | undefined {
+  private firstPhase(plan: OrchestrationPlan): { waveId: string; phaseId: string } | undefined {
     const firstWave = plan.waves[0];
     const firstPhase = firstWave?.phases[0];
     if (!firstWave || !firstPhase) {
@@ -146,10 +131,7 @@ export class OrchestrationEngine {
     };
   }
 
-  private nextPhase(
-    plan: OrchestrationPlan,
-    currentPhaseId: string,
-  ): { waveId: string; phaseId: string } | undefined {
+  private nextPhase(plan: OrchestrationPlan, currentPhaseId: string): { waveId: string; phaseId: string } | undefined {
     for (let waveIndex = 0; waveIndex < plan.waves.length; waveIndex += 1) {
       const wave = plan.waves[waveIndex];
       if (!wave) {
@@ -186,6 +168,45 @@ export class OrchestrationEngine {
 
   private shouldPauseAtPhase(plan: OrchestrationPlan, phaseId: string): boolean {
     return plan.mode === "hitl" || this.requiresApproval(plan, phaseId);
+  }
+
+  private advanceFromPhase(
+    plan: OrchestrationPlan,
+    run: OrchestrationRun,
+    phaseId: string,
+    options: PhaseAdvanceOptions,
+  ): OrchestrationRun {
+    const now = options.now ?? new Date().toISOString();
+    const next = this.nextPhase(plan, phaseId);
+
+    const candidate: OrchestrationRun = {
+      ...run,
+      totalIterations: run.totalIterations + 1,
+      totalCostUsd: run.totalCostUsd + (options.costIncrementUsd ?? 0),
+      currentWaveId: next?.waveId,
+      currentPhaseId: next?.phaseId,
+      status: next ? (this.shouldPauseAtPhase(plan, next.phaseId) ? "paused" : "running") : "completed",
+      endedAt: next ? undefined : now,
+    };
+
+    const runtimeMinutes = Math.max(0, (Date.parse(now) - Date.parse(run.startedAt)) / 60000);
+
+    if (
+      next &&
+      this.shouldStopByLimits(plan, {
+        iterations: candidate.totalIterations,
+        runtimeMinutes,
+        costUsd: candidate.totalCostUsd,
+      })
+    ) {
+      return {
+        ...candidate,
+        status: "stopped_by_limit",
+        endedAt: now,
+      };
+    }
+
+    return candidate;
   }
 
   private requiresApproval(plan: OrchestrationPlan, phaseId: string): boolean {

@@ -40,6 +40,7 @@ import {
   type DeviceAccessRequestStatusResponse,
   type FilesystemReadAccessMode,
   type LlmProviderRequestConfig,
+  type RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { MeshService } from "@goatcitadel/mesh-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -129,7 +130,12 @@ export interface SettingsAuthRuntimeHost {
   readonly storage: Pick<Storage, "audit" | "runImmediateTransaction">;
   createApproval(input: ApprovalCreateInput): Promise<{ approvalId: string }>;
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
-  publishRealtime(eventType: string, source: string, payload: Record<string, unknown>): void;
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
   getAuthDeviceRequestById(requestId: string): AuthDeviceRequestRecord | undefined;
   expireDeviceAccessRequestIfNeeded(request: AuthDeviceRequestRecord): Promise<AuthDeviceRequestRecord>;
   getActiveAuthDeviceGrantById(grantId: string): AuthDeviceGrantRecord | undefined;
@@ -768,20 +774,32 @@ export async function createDeviceAccessRequest(
     originSurface,
   });
 
-  host.publishRealtime("auth_device_request_created", "auth", {
-    requestId,
-    approvalId: approval.approvalId,
-    deviceLabel,
-    deviceType,
-    platform,
-    requestedOrigin,
-    requestedIp,
-    correlationId,
-    traceId,
-    originSurface,
-    createdAt,
-    expiresAt,
-  });
+  host.publishRealtime(
+    "auth_device_request_created",
+    "auth",
+    {
+      requestId,
+      approvalId: approval.approvalId,
+      deviceLabel,
+      deviceType,
+      platform,
+      requestedOrigin,
+      requestedIp,
+      correlationId,
+      traceId,
+      originSurface,
+      createdAt,
+      expiresAt,
+    },
+    {
+      eventClass: "domain_fact",
+      eventAuthority: "retained_stream",
+      links: {
+        approvalId: approval.approvalId,
+      },
+      correlationId: approval.approvalId,
+    },
+  );
 
   return {
     requestId,

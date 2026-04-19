@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { buildRouteSearch, type ResolvedRoute } from "../content/page-registry";
 import {
@@ -179,6 +179,13 @@ export function ApprovalsPage() {
       ...prev,
       [result.approval.approvalId]: {
         query: {
+          approvalId: result.approval.approvalId,
+          sessionId: result.approval.linkage?.sessionId,
+          turnId: result.approval.linkage?.turnId,
+          runId: result.durableRunId ?? result.approval.linkage?.durableRunId,
+          taskId: result.approval.linkage?.taskId,
+        },
+        canonical: {
           approvalId: result.approval.approvalId,
           sessionId: result.approval.linkage?.sessionId,
           turnId: result.approval.linkage?.turnId,
@@ -732,13 +739,7 @@ function ApprovalInspector(props: {
       subtitle={
         <div className="workflow-summary-strip">
           <StatusChip
-            tone={
-              approval.riskLevel === "nuclear"
-                ? "critical"
-                : approval.riskLevel === "danger"
-                  ? "warning"
-                  : "muted"
-            }
+            tone={approval.riskLevel === "nuclear" ? "critical" : approval.riskLevel === "danger" ? "warning" : "muted"}
           >
             {approval.riskLevel} risk
           </StatusChip>
@@ -810,11 +811,19 @@ function ApprovalInspector(props: {
               </button>
             </>
           ) : null}
-          <button type="button" className="gc-button approval-action-tertiary" onClick={() => onReplay(approval.approvalId)}>
+          <button
+            type="button"
+            className="gc-button approval-action-tertiary"
+            onClick={() => onReplay(approval.approvalId)}
+          >
             Load replay trail
           </button>
           {liveLaneHref ? (
-            <a className="approval-action-tertiary" href={liveLaneHref.href} onClick={(event) => openLiveLane(event, liveLaneHref.route)}>
+            <a
+              className="approval-action-tertiary"
+              href={liveLaneHref.href}
+              onClick={(event) => openLiveLane(event, liveLaneHref.route)}
+            >
               Open live lane
             </a>
           ) : null}
@@ -894,9 +903,9 @@ function ApprovalInspector(props: {
         <div className="replay-box">
           <h4>Runtime linkage</h4>
           <p className="office-subtitle">
-            Canonical session: {lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId ?? "absent"}
+            Canonical session: {lifecycle.canonical?.sessionId ?? lifecycle.approval?.linkage?.sessionId ?? "absent"}
             {" | "}
-            Canonical task: {lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId ?? "absent"}
+            Canonical task: {lifecycle.canonical?.taskId ?? lifecycle.approval?.linkage?.taskId ?? "absent"}
             {" | "}
             Canonical run: {getCanonicalDurableRunId(lifecycle) ?? "absent"}
           </p>
@@ -904,14 +913,24 @@ function ApprovalInspector(props: {
             Inferred sessions:{" "}
             {formatInferredIds(
               lifecycle.linked.sessionIds,
-              lifecycle.query.sessionId ?? lifecycle.approval?.linkage?.sessionId,
+              lifecycle.canonical?.sessionId ?? lifecycle.approval?.linkage?.sessionId,
             )}
             {" | "}
             Inferred tasks:{" "}
-            {formatInferredIds(lifecycle.linked.taskIds, lifecycle.query.taskId ?? lifecycle.approval?.linkage?.taskId)}
+            {formatInferredIds(
+              lifecycle.linked.taskIds,
+              lifecycle.canonical?.taskId ?? lifecycle.approval?.linkage?.taskId,
+            )}
             {" | "}
             Inferred runs: {formatInferredIds(lifecycle.linked.runIds, getCanonicalDurableRunId(lifecycle))}
           </p>
+          {lifecycle.approvalWaitDurableRun ? (
+            <p className="office-subtitle">
+              Wait mapping: {lifecycle.approvalWaitDurableRun.runId}
+              {" | "}
+              Status: {lifecycle.approvalWaitDurableRun.status}
+            </p>
+          ) : null}
           {lifecycle.resolution ? (
             <p className="office-subtitle">
               Provenance: session {lifecycle.resolution.sessionIdSource ?? "absent"}
@@ -1131,12 +1150,7 @@ function isExpiredApproval(approval: ApprovalsResponse["items"][number]): boolea
 }
 
 function getCanonicalDurableRunId(lifecycle: RuntimeLifecycleResponse): string | null {
-  return (
-    lifecycle.query.runId ??
-    lifecycle.approval?.linkage?.durableRunId ??
-    lifecycle.approvalWaitDurableRun?.runId ??
-    null
-  );
+  return lifecycle.canonical?.runId ?? lifecycle.approval?.linkage?.durableRunId ?? null;
 }
 
 function isBlockedDurableStatus(status: string): boolean {

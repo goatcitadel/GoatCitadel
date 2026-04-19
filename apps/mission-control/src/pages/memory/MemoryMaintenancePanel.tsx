@@ -21,6 +21,7 @@ import {
   shortId,
   type MemoryMaintenancePolicyDraft,
 } from "../memory/memory-page-helpers";
+import { describeDurableTimelineEvent } from "../../lib/durable-timeline";
 
 type MemoryMaintenanceStatusState = Awaited<ReturnType<typeof fetchMemoryMaintenanceStatus>>;
 type MemoryMaintenanceRunState = Awaited<ReturnType<typeof fetchMemoryMaintenanceRuns>>["items"][number];
@@ -611,14 +612,18 @@ export function MemoryMaintenancePanel(props: MemoryMaintenancePanelProps) {
                             {selectedMaintenanceTimeline
                               .slice(-16)
                               .reverse()
-                              .map((event) => (
-                                <li key={event.eventId}>
-                                  <strong>{event.eventType}</strong>
-                                  {event.stepKey ? ` · ${event.stepKey}` : ""}
-                                  {" · "}
-                                  {new Date(event.createdAt).toLocaleString()}
-                                </li>
-                              ))}
+                              .map((event) => {
+                                const summary = describeDurableTimelineEvent(event);
+                                return (
+                                  <li key={event.eventId}>
+                                    <strong>{summary.label}</strong>
+                                    {summary.detail ? ` · ${summary.detail}` : ""}
+                                    {event.stepKey ? ` · ${event.stepKey}` : ""}
+                                    {" · "}
+                                    {new Date(event.createdAt).toLocaleString()}
+                                  </li>
+                                );
+                              })}
                           </ul>
                         </details>
                       )}
@@ -635,4 +640,3 @@ export function MemoryMaintenancePanel(props: MemoryMaintenancePanelProps) {
     </Panel>
   );
 }
-

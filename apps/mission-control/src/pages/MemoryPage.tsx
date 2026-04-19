@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   acceptMemoryMaintenanceRecommendation,
@@ -272,9 +272,7 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
         setIsInitialLoading(true);
       }
       try {
-        const settingsPromise = background
-          ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
-          : fetchSettings();
+        const settingsPromise = fetchSettings();
         const [filesRes, stats, settings] = await Promise.all([
           fetchFilesList(".", 3000),
           fetchMemoryQmdStats(),

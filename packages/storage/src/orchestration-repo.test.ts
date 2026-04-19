@@ -70,9 +70,33 @@ describe("OrchestrationRepository", () => {
       startedAt: "2026-02-27T00:00:00.000Z",
       totalCostUsd: 0,
       totalIterations: 0,
+      workspaceId: "default",
+      durableRunId: "durable-run-1",
+      executionState: "worktree_ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/run-1",
+      worktreeStatus: "ready",
+      worktreeBaseRef: "HEAD",
     };
 
     repo.createRun(run);
+    repo.updateRun({
+      ...run,
+      status: "paused",
+      executionState: "paused_for_approval",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      pendingApprovalPhaseId: "phase-1",
+      pendingApprovedBy: "operator",
+      pendingCostIncrementUsd: 0.25,
+    });
+
+    const persistedRun = repo.getRun("run-1");
+    assert.equal(persistedRun.durableRunId, "durable-run-1");
+    assert.equal(persistedRun.executionState, "paused_for_approval");
+    assert.equal(persistedRun.worktreeStatus, "ready");
+    assert.equal(persistedRun.pendingApprovalPhaseId, "phase-1");
+    assert.equal(persistedRun.pendingApprovedBy, "operator");
+    assert.equal(persistedRun.pendingCostIncrementUsd, 0.25);
 
     repo.createCheckpoint({
       runId: "run-1",

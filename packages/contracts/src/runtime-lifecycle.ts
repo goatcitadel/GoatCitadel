@@ -139,8 +139,17 @@ export interface RuntimeLifecycleResolution {
   fallbackSources: RuntimeLifecycleFieldSource[];
 }
 
+export interface RuntimeLifecycleCanonicalIds {
+  sessionId?: string;
+  turnId?: string;
+  runId?: string;
+  approvalId?: string;
+  taskId?: string;
+}
+
 export interface RuntimeLifecycleResponse {
   query: RuntimeLifecycleQuery;
+  canonical: RuntimeLifecycleCanonicalIds;
   linked: RuntimeLifecycleLinkedIds;
   resolution?: RuntimeLifecycleResolution;
   session?: SessionMeta;

@@ -167,6 +167,10 @@ describe("ApprovalsPage", () => {
 
   it("prefers the replay durable run id over payload scraping when loading checkpoint status", async () => {
     apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      canonical: {
+        approvalId: "approval-1",
+        runId: "durable-run-42",
+      },
       query: {
         approvalId: "approval-1",
         runId: "durable-run-42",
@@ -240,6 +244,10 @@ describe("ApprovalsPage", () => {
           : [],
     }));
     apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      canonical: {
+        approvalId: "approval-recovery",
+        runId: "durable-run-42",
+      },
       query: {
         approvalId: "approval-recovery",
         runId: "durable-run-42",
@@ -326,6 +334,10 @@ describe("ApprovalsPage", () => {
           : [],
     }));
     apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      canonical: {
+        approvalId: "approval-recovery",
+        runId: "durable-run-77",
+      },
       query: {
         approvalId: "approval-recovery",
         runId: "durable-run-77",
@@ -599,6 +611,62 @@ describe("ApprovalsPage", () => {
       text = rendererText(renderer);
       expect(text).toContain("expired");
       expect(text).not.toContain("Approve now");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("renders canonical approval linkage separately from inferred and wait-mapped runs", async () => {
+    apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      canonical: {
+        approvalId: "approval-1",
+        sessionId: "session-canonical",
+        taskId: "task-canonical",
+        runId: "run-canonical",
+      },
+      query: {
+        approvalId: "approval-1",
+        sessionId: "session-canonical",
+        taskId: "task-canonical",
+        runId: "run-canonical",
+      },
+      linked: {
+        sessionIds: ["session-canonical", "session-inferred"],
+        turnIds: [],
+        runIds: ["run-canonical", "run-inferred", "run-wait"],
+        proactiveRunIds: [],
+        approvalIds: ["approval-1"],
+        taskIds: ["task-canonical", "task-inferred"],
+        workspaceIds: [],
+      },
+      approvalWaitDurableRun: {
+        runId: "run-wait",
+        status: "waiting",
+        updatedAt: new Date("2026-03-29T18:05:00.000Z").toISOString(),
+      },
+      turns: [],
+      toolRuns: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+      await clickButton(renderer, "Load durable status");
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("Canonical run: run-canonical");
+      expect(text).toContain("Inferred runs: run-inferred, run-wait");
+      expect(text).toContain("Wait mapping: run-wait | Status: waiting");
+      expect(text).toContain("Canonical session: session-canonical");
+      expect(text).toContain("Canonical task: task-canonical");
     } finally {
       renderer.unmount();
     }

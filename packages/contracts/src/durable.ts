@@ -27,7 +27,8 @@ export type DurableSupportedWorkflowKey =
   | "approval.wait"
   | "connector.delivery"
   | "hook.delivery"
-  | "memory.maintenance";
+  | "memory.maintenance"
+  | "orchestration.plan.execute";
 
 export interface ProactiveTickWorkflowPayload {
   version: "proactive.tick.v1";
@@ -60,6 +61,14 @@ export interface ConnectorDeliveryWorkflowPayload {
   traceId?: string;
   originSurface?: string;
   simulateFailureReason?: string;
+}
+
+export interface OrchestrationPlanWorkflowPayload {
+  version: "orchestration.plan.execute.v1";
+  orchestrationRunId: string;
+  planId: string;
+  workspaceId: string;
+  requestedAt: string;
 }
 
 export interface DurableRunCreateRequest {
