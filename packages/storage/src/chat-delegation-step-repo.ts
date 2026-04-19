@@ -15,6 +15,7 @@ interface ChatDelegationStepRow {
   output: string | null;
   error: string | null;
   failure_guidance: string | null;
+  durable_run_id: string | null;
   child_session_id: string | null;
   child_turn_id: string | null;
   citations_json: string | null;
@@ -34,10 +35,10 @@ export class ChatDelegationStepRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_steps (
         step_id, run_id, role, step_index, status, provider_id, model, summary, output, error, started_at, finished_at, duration_ms
-        , failure_guidance, child_session_id, child_turn_id, citations_json
+        , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json
       ) VALUES (
         @stepId, @runId, @role, @index, @status, @providerId, @model, @summary, @output, @error, @startedAt, @finishedAt, @durationMs,
-        @failureGuidance, @childSessionId, @childTurnId, @citationsJson
+        @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson
       )
     `);
     this.patchStmt = db.prepare(`
@@ -50,6 +51,7 @@ export class ChatDelegationStepRepository {
         output = @output,
         error = @error,
         failure_guidance = @failureGuidance,
+        durable_run_id = @durableRunId,
         child_session_id = @childSessionId,
         child_turn_id = @childTurnId,
         citations_json = @citationsJson,
@@ -84,6 +86,7 @@ export class ChatDelegationStepRepository {
     output?: string;
     error?: string;
     failureGuidance?: string;
+    durableRunId?: string;
     childSessionId?: string;
     childTurnId?: string;
     citations?: ChatCitationRecord[];
@@ -103,6 +106,7 @@ export class ChatDelegationStepRepository {
       output: input.output ?? null,
       error: input.error ?? null,
       failureGuidance: input.failureGuidance ?? null,
+      durableRunId: input.durableRunId ?? null,
       childSessionId: input.childSessionId ?? null,
       childTurnId: input.childTurnId ?? null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
@@ -121,6 +125,7 @@ export class ChatDelegationStepRepository {
     output?: string;
     error?: string;
     failureGuidance?: string;
+    durableRunId?: string;
     childSessionId?: string;
     childTurnId?: string;
     citations?: ChatCitationRecord[];
@@ -137,6 +142,7 @@ export class ChatDelegationStepRepository {
       output: input.output !== undefined ? input.output : (current.output ?? null),
       error: input.error !== undefined ? input.error : (current.error ?? null),
       failureGuidance: input.failureGuidance !== undefined ? input.failureGuidance : (current.failureGuidance ?? null),
+      durableRunId: input.durableRunId !== undefined ? input.durableRunId : (current.durableRunId ?? null),
       childSessionId: input.childSessionId !== undefined ? input.childSessionId : (current.childSessionId ?? null),
       childTurnId: input.childTurnId !== undefined ? input.childTurnId : (current.childTurnId ?? null),
       citationsJson: input.citations !== undefined
@@ -173,6 +179,7 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
     && (typeof value.output === "string" || value.output === null)
     && (typeof value.error === "string" || value.error === null)
     && (typeof value.failure_guidance === "string" || value.failure_guidance === null)
+    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
     && (typeof value.child_session_id === "string" || value.child_session_id === null)
     && (typeof value.child_turn_id === "string" || value.child_turn_id === null)
     && (typeof value.citations_json === "string" || value.citations_json === null)
@@ -205,6 +212,7 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     output: row.output ?? undefined,
     error: row.error ?? undefined,
     failureGuidance: row.failure_guidance ?? undefined,
+    durableRunId: row.durable_run_id ?? undefined,
     childSessionId: row.child_session_id ?? undefined,
     childTurnId: row.child_turn_id ?? undefined,
     citations: row.citations_json ? safeJsonParse<ChatCitationRecord[]>(row.citations_json, []) : undefined,

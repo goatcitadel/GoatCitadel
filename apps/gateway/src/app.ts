@@ -63,12 +63,17 @@ loadLocalEnvFile();
 const MUTATING_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 const BROWSER_MUTATION_INTENT_VALUE = "mutation";
+const DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS = 120_000;
 
 export async function buildApp() {
   const verbose = isVerboseLoggingEnabled();
   const app = Fastify({
     loggerInstance: createGatewayLogger(verbose),
     disableRequestLogging: !verbose,
+    // Startup can legitimately spend tens of seconds waiting for bundled
+    // Postgres recovery after an unclean Windows restart. Keep Fastify from
+    // aborting the storage plugin before recovery finishes.
+    pluginTimeout: resolveFastifyPluginTimeoutMs(),
   });
   const allowedOrigins = resolveAllowedOrigins();
   const allowTailnetDevOrigins = resolveAllowTailnetDevOrigins();
@@ -332,6 +337,18 @@ export async function buildApp() {
   await app.register(devVerificationRoutes);
 
   return app;
+}
+
+function resolveFastifyPluginTimeoutMs(): number {
+  const raw = process.env.GOATCITADEL_FASTIFY_PLUGIN_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1_000) {
+    return DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS;
+  }
+  return parsed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

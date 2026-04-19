@@ -58,7 +58,7 @@ export class OrchestrationEngine {
 
     return {
       ...run,
-      status: plan.mode === "hitl" ? "paused" : "running",
+      status: this.shouldPauseAtPhase(plan, first.phaseId) ? "paused" : "running",
       currentWaveId: first.waveId,
       currentPhaseId: first.phaseId,
       endedAt: undefined,
@@ -71,14 +71,18 @@ export class OrchestrationEngine {
     approvedPhaseId: string,
     options: PhaseApprovalOptions = {},
   ): OrchestrationRun {
-    if (run.status !== "paused" && run.status !== "running") {
-      throw new Error(`Run ${run.runId} is not in an approvable state: ${run.status}`);
+    if (run.status !== "paused") {
+      throw new Error(`Run ${run.runId} is not waiting for approval: ${run.status}`);
     }
 
     if (run.currentPhaseId !== approvedPhaseId) {
       throw new Error(
         `Run ${run.runId} expected phase ${run.currentPhaseId ?? "<none>"} but received approval for ${approvedPhaseId}`,
       );
+    }
+    const currentPhase = this.findPhase(plan, approvedPhaseId);
+    if (!this.requiresApproval(plan, currentPhase.phaseId)) {
+      throw new Error(`Phase ${approvedPhaseId} is not approval-gated for run ${run.runId}`);
     }
 
     const now = options.now ?? new Date().toISOString();
@@ -90,7 +94,7 @@ export class OrchestrationEngine {
       totalCostUsd: run.totalCostUsd + (options.costIncrementUsd ?? 0),
       currentWaveId: next?.waveId,
       currentPhaseId: next?.phaseId,
-      status: next ? (plan.mode === "hitl" ? "paused" : "running") : "completed",
+      status: next ? (this.shouldPauseAtPhase(plan, next.phaseId) ? "paused" : "running") : "completed",
       endedAt: next ? undefined : now,
     };
 
@@ -178,5 +182,23 @@ export class OrchestrationEngine {
     }
 
     throw new Error(`Phase ${currentPhaseId} not found in plan ${plan.planId}`);
+  }
+
+  private shouldPauseAtPhase(plan: OrchestrationPlan, phaseId: string): boolean {
+    return plan.mode === "hitl" || this.requiresApproval(plan, phaseId);
+  }
+
+  private requiresApproval(plan: OrchestrationPlan, phaseId: string): boolean {
+    return this.findPhase(plan, phaseId).requiresApproval;
+  }
+
+  private findPhase(plan: OrchestrationPlan, phaseId: string) {
+    for (const wave of plan.waves) {
+      const phase = wave.phases.find((candidate) => candidate.phaseId === phaseId);
+      if (phase) {
+        return phase;
+      }
+    }
+    throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
   }
 }

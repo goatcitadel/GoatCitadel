@@ -31,11 +31,13 @@ const WINDOWS_1252_EXTRA_CODE_POINTS = new Set<number>([
 export function sanitizeParamsForServerEncoding(
   params: readonly unknown[],
   serverEncoding: string | undefined,
+  sql?: string,
 ): unknown[] {
   if (normalizeServerEncoding(serverEncoding) !== "WIN1252") {
     return [...params];
   }
-  return params.map((value) => sanitizeValueForWindows1252(value));
+  const context = looksLikeWriteStatement(sql) ? "top_level_write" : "plain";
+  return params.map((value) => sanitizeStructuredValueForWindows1252(value, context));
 }
 
 export function normalizeServerEncoding(serverEncoding: string | undefined): string | undefined {
@@ -55,19 +57,41 @@ export function escapeUnsupportedWindows1252Characters(input: string): string {
   return output;
 }
 
-function sanitizeValueForWindows1252(value: unknown): unknown {
+type ServerEncodingSanitizeContext = "plain" | "top_level_write" | "structured_value";
+
+function sanitizeStructuredValueForWindows1252(
+  value: unknown,
+  context: ServerEncodingSanitizeContext,
+): unknown {
   if (typeof value === "string") {
-    return escapeUnsupportedWindows1252Characters(value);
+    if (looksLikeStructuredStringPayload(value)) {
+      return context === "structured_value"
+        ? escapeUnsupportedWindows1252Characters(value)
+        : escapeUnsupportedWindows1252CharactersForJsonText(value);
+    }
+    return context === "plain" ? value : escapeUnsupportedWindows1252Characters(value);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeValueForWindows1252(item));
+    return value.map((item) => sanitizeStructuredValueForWindows1252(item, "structured_value"));
   }
   if (isPlainObject(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, sanitizeValueForWindows1252(item)]),
+      Object.entries(value).map(([key, item]) => [
+        escapeUnsupportedWindows1252Characters(key),
+        sanitizeStructuredValueForWindows1252(item, "structured_value"),
+      ]),
     );
   }
   return value;
+}
+
+function looksLikeStructuredStringPayload(value: string): boolean {
+  const trimmed = value.trimStart();
+  return trimmed.startsWith("{") || trimmed.startsWith("[");
+}
+
+function looksLikeWriteStatement(sql: string | undefined): boolean {
+  return /^\s*(insert|update|merge)\b/i.test(sql ?? "");
 }
 
 function isWindows1252CodePoint(codePoint: number): boolean {
@@ -79,10 +103,34 @@ function isWindows1252CodePoint(codePoint: number): boolean {
 }
 
 function formatEscapedCodePoint(codePoint: number): string {
-  if (codePoint <= 0xffff) {
-    return `\\u${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+  return formatEscapedCodePointForJsonText(codePoint, false);
+}
+
+function escapeUnsupportedWindows1252CharactersForJsonText(input: string): string {
+  let output = "";
+  for (const char of input) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined || isWindows1252CodePoint(codePoint)) {
+      output += char;
+      continue;
+    }
+    output += formatEscapedCodePointForJsonText(codePoint, true);
   }
-  return `\\u{${codePoint.toString(16).toUpperCase()}}`;
+  return output;
+}
+
+function formatEscapedCodePointForJsonText(codePoint: number, literalBackslashes: boolean): string {
+  const prefix = literalBackslashes ? "\\\\u" : "\\u";
+  if (codePoint <= 0xffff) {
+    return `${prefix}${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+  }
+  const adjusted = codePoint - 0x10000;
+  const highSurrogate = 0xd800 + (adjusted >> 10);
+  const lowSurrogate = 0xdc00 + (adjusted & 0x3ff);
+  return (
+    `${prefix}${highSurrogate.toString(16).toUpperCase().padStart(4, "0")}` +
+    `${prefix}${lowSurrogate.toString(16).toUpperCase().padStart(4, "0")}`
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

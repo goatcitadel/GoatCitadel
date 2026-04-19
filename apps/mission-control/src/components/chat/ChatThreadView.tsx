@@ -7,8 +7,10 @@ import type {
   ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
+import { Badge } from "../ui";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
+import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
 
 export interface ChatThreadNotice {
   id: string;
@@ -23,6 +25,18 @@ function formatTone(tone: ChatThreadNotice["tone"]): "neutral" | "warning" | "cr
 
 function formatActorTimestamp(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString();
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): boolean {
+  return Boolean(turn.trace.completion?.repaired);
 }
 
 function summarizeRouting(turn: ChatThreadTurnRecord): string[] {
@@ -251,6 +265,18 @@ function ChatTurnCard({
           <p className="chat-v11-message-meta">
             <strong>GoatCitadel</strong> ·{" "}
             {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
+            {turnHasRepairedAssistantOutput(turn) ? (
+              <>
+                {" "}
+                <Badge
+                  variant="outline"
+                  className="align-middle"
+                  title="The final answer was recovered after completion repair."
+                >
+                  Repaired
+                </Badge>
+              </>
+            ) : null}
           </p>
           {turn.assistantMessage ? (
             <AssistantMessageRenderer role="assistant" content={turn.assistantMessage.content} />
@@ -305,10 +331,66 @@ function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) {
   );
 }
 
+function ChatDelegationRunSummary({ delegationRun }: { delegationRun: ActiveChatDelegationRun | null }) {
+  if (!delegationRun) {
+    return null;
+  }
+  const completedCount = delegationRun.steps.filter((step) => step.status === "completed").length;
+  const failedCount = delegationRun.steps.filter((step) => step.status === "failed").length;
+  const skippedCount = delegationRun.steps.filter((step) => step.status === "skipped").length;
+  const runningCount = delegationRun.steps.filter((step) => step.status === "running").length;
+  return (
+    <section className="chat-v11-turn-card chat-v11-thread-delegation">
+      <div className="chat-v11-turn-strip chat-v11-execution-strip">
+        <StatusChip tone={delegationRun.status === "failed" ? "critical" : delegationRun.status === "partial" ? "warning" : delegationRun.status === "completed" ? "success" : "warning"}>
+          {delegationRun.status}
+        </StatusChip>
+        <span>Delegation run</span>
+        {delegationRun.runId ? <span>{delegationRun.runId}</span> : null}
+        {delegationRun.executionPlanId ? <span>Plan {delegationRun.executionPlanId}</span> : null}
+        {delegationRun.taskId ? <span>Task {delegationRun.taskId}</span> : null}
+      </div>
+      <div className="chat-v11-turn-bubble assistant">
+        <p className="chat-v11-message-meta">
+          <strong>{delegationRun.label}</strong> · {delegationRun.mode}
+        </p>
+        <p>{delegationRun.objective}</p>
+        <p>
+          Completed {completedCount} · Running {runningCount} · Failed {failedCount} · Skipped {skippedCount}
+        </p>
+        <ol className="chat-cowork-plan-list">
+          {delegationRun.steps.map((step) => (
+            <li key={step.stepId}>
+              <div className="chat-cowork-step-head">
+                <strong>{toTitleCase(step.role)}</strong>
+                <span>{step.status}</span>
+              </div>
+              {step.durableRunId ? <p>Durable {step.durableRunId}</p> : null}
+              {step.childSessionId ? <p>Child session {step.childSessionId}</p> : null}
+              {step.childTurnId ? <p>Child turn {step.childTurnId}</p> : null}
+              {step.output ? <p>{step.output}</p> : null}
+              {step.error ? <p>{step.error}</p> : null}
+            </li>
+          ))}
+        </ol>
+        {delegationRun.stitchedOutput ? (
+          <>
+            <p className="chat-v11-message-meta">
+              <strong>Stitched result</strong>
+            </p>
+            <AssistantMessageRenderer role="assistant" content={delegationRun.stitchedOutput} />
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 export function ChatThreadView({
   loading,
   thread,
   selectedTurnId,
+  delegationRun,
   notices,
   followOutput,
   streamStatus = "idle",
@@ -324,6 +406,7 @@ export function ChatThreadView({
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
+  delegationRun?: ActiveChatDelegationRun | null;
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus?: ChatStreamStatus;
@@ -370,6 +453,7 @@ export function ChatThreadView({
     <div className="chat-v11-thread-view">
       <ChatStreamStatusBar status={streamStatus} queuedCount={queuedCount} error={streamError} />
       <div className="chat-v11-thread-list chat-v11-thread-virtuoso">
+        <ChatDelegationRunSummary delegationRun={delegationRun ?? null} />
         {thread.turns.map((turn) => (
           <ChatTurnCard
             key={turn.turnId}

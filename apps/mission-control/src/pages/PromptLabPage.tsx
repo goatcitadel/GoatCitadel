@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
@@ -10,6 +10,7 @@ import type {
 import {
   autoScorePromptPackBatch,
   autoScorePromptPackTest,
+  cancelPromptPackBenchmark,
   exportPromptPackReport,
   fetchPromptPackBenchmark,
   fetchPromptPackReplayRegressionStatus,
@@ -92,6 +93,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
   const [benchmarkRunId, setBenchmarkRunId] = useState<string | null>(null);
   const [benchmarkStatus, setBenchmarkStatus] = useState<PromptPackBenchmarkStatusRecord | null>(null);
   const [benchmarkPending, setBenchmarkPending] = useState(false);
+  const [benchmarkStopping, setBenchmarkStopping] = useState(false);
   const [regressionRunId, setRegressionRunId] = useState<string | null>(null);
   const [regressionPending, setRegressionPending] = useState(false);
   const [regressionStatus, setRegressionStatus] = useState<Awaited<
@@ -725,7 +727,11 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     async (runId: string) => {
       const status = await fetchPromptPackBenchmark(runId);
       setBenchmarkStatus(status);
-      if (status.run.status === "completed" || status.run.status === "failed") {
+      if (
+        status.run.status === "completed" ||
+        status.run.status === "failed" ||
+        status.run.status === "cancelled"
+      ) {
         setBenchmarkPending(false);
         await loadPack(status.run.packId);
       } else {
@@ -811,6 +817,26 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
     }
     void loadBenchmarkStatus(benchmarkRunId).catch((err: Error) => setError(err.message));
   }, [benchmarkRunId, loadBenchmarkStatus]);
+
+  const stopBenchmark = useCallback(async () => {
+    if (!benchmarkRunId) {
+      return;
+    }
+    setBenchmarkStopping(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const status = await cancelPromptPackBenchmark(benchmarkRunId);
+      setBenchmarkStatus(status);
+      setBenchmarkPending(false);
+      await loadPack(status.run.packId);
+      setSuccess(`Benchmark stopped: ${status.run.benchmarkRunId}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBenchmarkStopping(false);
+    }
+  }, [benchmarkRunId, loadPack]);
 
   const refreshRegression = useCallback(() => {
     if (!regressionRunId) {
@@ -1003,7 +1029,9 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 selectedRunModel={selectedRunModel ?? null}
                 benchmarkTestCodes={benchmarkTestCodes}
                 benchmarkProvidersInput={benchmarkProvidersInput}
+                benchmarkActive={benchmarkActive}
                 benchmarkPending={benchmarkPending}
+                benchmarkStopping={benchmarkStopping}
                 benchmarkRunId={benchmarkRunId}
                 regressionPending={regressionPending}
                 regressionRunId={regressionRunId}
@@ -1027,6 +1055,7 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
                 onBenchmarkTestCodesChange={setBenchmarkTestCodes}
                 onBenchmarkProvidersInputChange={setBenchmarkProvidersInput}
                 onRunBenchmark={() => void runBenchmark()}
+                onCancelBenchmark={() => void stopBenchmark()}
                 onRefreshBenchmark={refreshBenchmark}
                 onRunRegression={() => void runRegression()}
                 onRefreshRegression={refreshRegression}

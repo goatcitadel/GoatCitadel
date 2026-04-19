@@ -100,7 +100,7 @@ export interface ApprovalLifecycleHost {
   ): { tokenId: string; connectorId: string; approvalId?: string; mutation?: Record<string, unknown> };
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
   resolveDeviceAccessApproval(current: ApprovalRequest, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
-  executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined>;
+  executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
   parseApprovalCreateHookPatch(value: unknown): Record<string, unknown> | undefined;
   scheduleApprovalExplanation(approval: ApprovalRequest): void;
@@ -494,6 +494,12 @@ export async function resolveApproval(
   input: ApprovalResolveInput,
 ): Promise<ApprovalResolveResult> {
   const current = host.storage.approvals.get(approvalId);
+  const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    throw new ValidationError({
+      message: `Approval ${approvalId} has expired and can no longer be resolved.`,
+    });
+  }
   if (current.kind === DEVICE_ACCESS_APPROVAL_KIND) {
     return host.resolveDeviceAccessApproval(current, input);
   }

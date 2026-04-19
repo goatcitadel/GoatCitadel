@@ -86,4 +86,43 @@ describe("prompt-pack benchmark routes", () => {
       },
     });
   });
+
+  it("cancels a benchmark run by id", async () => {
+    const cancelPromptPackBenchmark = vi.fn(() => ({
+      run: {
+        benchmarkRunId: "ppb-123",
+        packId: "pack-1",
+        status: "cancelled",
+        testCodes: ["TEST-03"],
+        providers: [{ providerId: "glm", model: "glm-5" }],
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        error: "Cancelled by operator.",
+      },
+      progress: {
+        totalItems: 10,
+        completedItems: 4,
+      },
+      modelSummaries: [],
+    }));
+
+    app = Fastify();
+    app.decorate("gateway", {
+      cancelPromptPackBenchmark,
+    } as never);
+    await app.register(promptPackRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/prompt-packs/benchmark/ppb-123/cancel",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(cancelPromptPackBenchmark).toHaveBeenCalledWith("ppb-123");
+    expect(response.json()).toMatchObject({
+      run: {
+        status: "cancelled",
+      },
+    });
+  });
 });

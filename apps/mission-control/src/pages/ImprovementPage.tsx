@@ -834,6 +834,81 @@ export function ImprovementPage({ workspaceId: _workspaceId }: { workspaceId?: s
                 ))}
               </ul>
 
+              {reportDetail.strategyTags?.length ? (
+                <>
+                  <h4>Strategy tags</h4>
+                  <div className="workflow-summary-strip">
+                    {reportDetail.strategyTags.map((tag) => (
+                      <StatusChip
+                        key={tag.tag}
+                        tone={tag.tag === "repair" ? "warning" : tag.tag === "harden" ? "default" : "muted"}
+                      >
+                        {tag.tag} ({tag.count})
+                      </StatusChip>
+                    ))}
+                  </div>
+                  <ul className="improvement-simple-list">
+                    {reportDetail.strategyTags.map((tag) => (
+                      <li key={`${tag.tag}:detail`}>
+                        <strong>{tag.tag}</strong> - {tag.rationale}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+
+              {reportDetail.routingGapSummary ? (
+                <>
+                  <h4>Routing gaps</h4>
+                  <p className="office-subtitle">
+                    {reportDetail.routingGapSummary.totalEvents} gap events this week
+                    {reportDetail.routingGapSummary.topRequestedTools.length > 0
+                      ? ` · tools ${reportDetail.routingGapSummary.topRequestedTools.join(", ")}`
+                      : ""}
+                  </p>
+                  <ul className="improvement-simple-list">
+                    {reportDetail.routingGapSummary.topCauseClasses.map((entry) => (
+                      <li key={`gap-${entry.causeClass}`}>
+                        <strong>{entry.causeClass}</strong> - {entry.count}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+
+              {reportDetail.proposalDrafts?.length ? (
+                <>
+                  <h4>Proposal drafts</h4>
+                  <ul className="improvement-simple-list">
+                    {reportDetail.proposalDrafts.map((draft) => (
+                      <li key={draft.draftId}>
+                        <strong>{draft.title}</strong> - {draft.kind}
+                        <div className="table-subtext">
+                          {draft.summary} · {draft.evidenceCount} evidence · {draft.nativeDestination}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+
+              {reportDetail.specialistCandidateSuggestions?.length ? (
+                <>
+                  <h4>Specialist candidates</h4>
+                  <ul className="improvement-simple-list">
+                    {reportDetail.specialistCandidateSuggestions.map((suggestion) => (
+                      <li key={suggestion.candidateId}>
+                        <strong>{suggestion.title}</strong> - {suggestion.role}
+                        <div className="table-subtext">
+                          {suggestion.summary} · {suggestion.suggestedRoutingMode} · confidence{" "}
+                          {Math.round(suggestion.confidence * 100)}%
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+
               <h4>Week-over-week</h4>
               <details open>
                 <summary>What changed</summary>

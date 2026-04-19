@@ -187,6 +187,7 @@ import type {
   ChatToolRunRecord,
   ChatTurnBranchKind,
   ChatTurnFailureRecord,
+  ChatTurnRepairRecord,
   ChatTurnTraceRecord,
   ChatWebMode,
   DocsIngestInput,
@@ -195,6 +196,7 @@ import type {
   ContextManifestDetail,
   MemoryContextComposeRequest,
   MemoryContextPack,
+  MemoryRelationScope,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
   MemoryMaintenanceProvenanceRecord,
@@ -329,6 +331,7 @@ import type {
   DurableDiagnosticsResponse,
   DurableRunRecord,
   WeeklyImprovementReportRecord,
+  HarnessAuditReportRecord,
   SystemVitals,
   TaskActivityCreateInput,
   TaskActivityRecord,
@@ -445,6 +448,7 @@ import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
+import { buildHarnessAuditReport } from "./harness-audit.js";
 import { AddonsService } from "./addons-service.js";
 import {
   GatewayDevDiagnosticsService,
@@ -1136,6 +1140,22 @@ interface ChatDelegationProgressCallbacks {
   onStep?: (step: ChatDelegationStepRecord) => Promise<void> | void;
 }
 
+interface NormalizedDelegationStep {
+  stepId: string;
+  index: number;
+  role: string;
+  parallelizable: boolean;
+  dependsOnStepIds: string[];
+}
+
+interface DelegationStepExecutionResult {
+  step: ChatDelegationStepRecord;
+  output?: string;
+  citations: ChatCitationRecord[];
+  trace?: ChatTurnTraceRecord["routing"];
+  completed: boolean;
+}
+
 interface ImprovementReplayTriggerInput {
   sampleSize?: number;
 }
@@ -1364,7 +1384,27 @@ function buildFollowOnProfileCoverage(input: {
   };
 }
 
+function applyDurableExecutionBaselineToConfig(config: GatewayRuntimeConfig): GatewayRuntimeConfig {
+  return {
+    ...config,
+    assistant: {
+      ...config.assistant,
+      durable: {
+        ...config.assistant.durable,
+        enabled: true,
+        executionEnabled: true,
+        chatAutoPromoteEnabled: true,
+      },
+      features: {
+        ...config.assistant.features,
+        durableKernelV1Enabled: true,
+      },
+    },
+  };
+}
+
 export class GatewayService {
+  /** @internal */ public config: GatewayRuntimeConfig;
   /** @internal */ public readonly storage: Storage;
   private readonly eventIngestService: EventIngestService;
   /** @internal */ public readonly policyEngine: ToolPolicyEngine;
@@ -1424,8 +1464,11 @@ export class GatewayService {
     return this.storage.gatewaySql;
   }
 
-  public constructor(/** @internal */ public readonly config: GatewayRuntimeConfig) {
+  public constructor(inputConfig: GatewayRuntimeConfig) {
+    this.config = applyDurableExecutionBaselineToConfig(inputConfig);
+    const config = this.config;
     this.storage = createGatewayStorage(config);
+    this.enforceDurableExecutionBaseline();
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
       resolveDevDiagnosticsEnabled(),
@@ -1550,6 +1593,7 @@ export class GatewayService {
       evaluateToolAccess: (request) => this.policyEngine.evaluateAccess(request),
       invokeMcpTool: (request) => this.invokeMcpTool(request),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
+      toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
     });
     this.researchService = new ResearchService({
       storage: this.storage,
@@ -1679,8 +1723,8 @@ export class GatewayService {
       wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
       requestRunProcessing: (runId) => this.durableRunService.requestRunProcessing(runId),
       findProactiveDurableRunIdsForApproval: (approvalId) => this.findProactiveDurableRunIdsForApproval(approvalId),
-      executeCodeModePendingApproval: (approvalId) => this.executeCodeModePendingApproval(approvalId),
-      executeApprovedPendingAction: (approvalId) => this.policyEngine.executeApprovedAction(approvalId),
+      executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
+      executeApprovedPendingAction: (approvalId, signal) => this.policyEngine.executeApprovedAction(approvalId, signal),
       enqueueAfterHooks: (input) => this.hooksService.enqueueAfterHooks(input),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
     });
@@ -1696,7 +1740,7 @@ export class GatewayService {
       consumeRemoteActionTokenById: (tokenId, actionType) => this.consumeRemoteActionTokenById(tokenId, actionType),
       resolveApproval: (approvalId, input) => this.approvalRuntime.resolveApproval(approvalId, input),
       resolveDeviceAccessApproval: (current, input) => this.resolveDeviceAccessApproval(current, input),
-      executeCodeModePendingApproval: (approvalId) => this.executeCodeModePendingApproval(approvalId),
+      executeCodeModePendingApproval: (approvalId, signal) => this.executeCodeModePendingApproval(approvalId, signal),
       resolveApprovalHookWorkspaceId: (payload) => this.resolveApprovalHookWorkspaceId(payload),
       parseApprovalCreateHookPatch: (value) => this.parseApprovalCreateHookPatch(value as Record<string, unknown>),
       scheduleApprovalExplanation: (approval) => this.scheduleApprovalExplanation(approval),
@@ -1756,6 +1800,9 @@ export class GatewayService {
       findTask: (taskId) => this.storage.tasks.find(taskId),
       getTurnTrace: (turnId) => this.storage.chatTurnTraces.get(turnId),
       listHydratedChatTurnTraces: (sessionId, limit) => this.listHydratedChatTurnTraces(sessionId, limit),
+      listChatExecutionPlans: (sessionId, limit) => this.storage.chatExecutionPlans.listBySession(sessionId, limit),
+      listChatDelegationRuns: (sessionId, limit) => this.storage.chatDelegationRuns.listBySession(sessionId, limit),
+      listChatDelegationSteps: (runId) => this.storage.chatDelegationSteps.listByRun(runId),
       getSession: (sessionId) => this.getSession(sessionId),
       getSessionSummary: (sessionId) => this.getSessionSummary(sessionId),
       listChatSessionProactiveRuns: (sessionId, limit) => this.listChatSessionProactiveRuns(sessionId, limit),
@@ -1898,6 +1945,7 @@ export class GatewayService {
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
+      scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
       recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
@@ -2107,6 +2155,7 @@ export class GatewayService {
     }
     this.durableRunService.startWorker();
     this.approvalEffectsService.startWorker();
+    this.promptPackService.resumeInterruptedBenchmarkRuns();
     if (isVerboseLoggingEnabled()) {
       log.info("feature flags", { flags: this.readFeatureFlags() });
     } else {
@@ -2815,6 +2864,34 @@ export class GatewayService {
     task.finally(() => this.backgroundTasks.delete(task));
   }
 
+  /** @internal */ public scheduleChatMemoryContextPrewarm(input: {
+    sessionId: string;
+    prompt: string;
+    relationScope?: MemoryRelationScope;
+  }): void {
+    const prewarmContext = this.memoryLifecycleService?.prewarmContext?.bind(this.memoryLifecycleService);
+    if (
+      this.closing
+      || !input.prompt.trim()
+      || typeof prewarmContext !== "function"
+    ) {
+      return;
+    }
+    const task = prewarmContext({
+        scope: "chat",
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        relationScope: input.relationScope,
+        workspace: this.resolveMemoryWorkspaceRelativeDir(undefined, input.sessionId),
+        forceRefresh: true,
+      })
+      .catch((error) => {
+        log.error("chat memory prewarm failed", error);
+      });
+    this.backgroundTasks.add(task);
+    task.finally(() => this.backgroundTasks.delete(task));
+  }
+
   private async runPrivateBetaBackupSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
     const job = this.storage.cronJobs.get(PRIVATE_BETA_BACKUP_JOB_ID);
     if (!job?.enabled) {
@@ -3288,6 +3365,7 @@ export class GatewayService {
             turnId,
             messageId: assistantMessage.messageId,
             content: assistantMessage.content,
+            repaired: Boolean(hydratedTrace.completion?.repaired),
           },
           hydratedTrace.durable?.runId,
         );
@@ -3822,11 +3900,17 @@ export class GatewayService {
       throw new Error("at least one role is required");
     }
     const requestedMode = input.mode ?? "sequential";
-    const mode = requestedMode === "parallel" ? "sequential" : requestedMode;
+    const mode = requestedMode;
+    const delegationSteps = normalizeDelegationSteps({
+      roles,
+      mode,
+      steps: input.steps,
+    });
     const prefs = this.ensureChatSessionModelDefaults(sessionId, this.storage.chatSessionPrefs.ensure(sessionId));
     const providerId = input.providerId ?? prefs.providerId;
     const model = input.model ?? prefs.model;
     const sessionWorkspaceId = this.normalizeWorkspaceId(this.storage.chatSessionMeta.ensure(sessionId).workspaceId);
+    const parentProjectId = this.storage.chatSessionProjects.get(sessionId)?.projectId;
 
     const task = this.createTask({
       workspaceId: sessionWorkspaceId,
@@ -3843,7 +3927,7 @@ export class GatewayService {
       sessionId,
       taskId: task.taskId,
       objective,
-      roles,
+      roles: dedupeStrings(delegationSteps.map((step) => step.role)),
       mode,
       providerId,
       model,
@@ -3857,125 +3941,176 @@ export class GatewayService {
     });
     this.appendTaskActivity(task.taskId, {
       activityType: "comment",
-      message: `Delegation started (${roles.join(" -> ")})`,
+      message: `Delegation started (${delegationSteps.map((step) => step.role).join(mode === "parallel" ? " | " : " -> ")})`,
       metadata: { runId, sessionId, mode, requestedMode },
     });
-    if (requestedMode === "parallel") {
-      await callbacks?.onStatus?.({
-        runId,
-        taskId: task.taskId,
-        message:
-          "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
-      });
-      this.appendTaskActivity(task.taskId, {
-        activityType: "comment",
-        message:
-          "Parallel delegation was requested but downgraded to sequential execution because parallel worker scheduling is not implemented yet.",
-        metadata: { runId, requestedMode, effectiveMode: mode },
-      });
-    }
 
-    const stitchedSections: string[] = [];
     const citations: ChatCitationRecord[] = [];
     let trace: ChatTurnTraceRecord["routing"] | undefined;
-    let failures = 0;
-    const sharedContext: Array<{ role: string; output: string }> = [];
+    const completedOutputs = new Map<string, { role: string; output: string }>();
+    const stepResults = new Map<string, DelegationStepExecutionResult>();
+    const stages = buildDelegationStages(delegationSteps);
 
-    for (let index = 0; index < roles.length; index += 1) {
-      const role = roles[index]!;
-      const stepId = randomUUID();
+    const executeDelegationStep = async (step: NormalizedDelegationStep): Promise<DelegationStepExecutionResult> => {
       const startedAt = new Date().toISOString();
       const runningStep = this.storage.chatDelegationSteps.create({
-        stepId,
+        stepId: step.stepId,
         runId,
-        role,
-        index,
+        role: step.role,
+        index: step.index,
         status: "running",
         startedAt,
       });
       await callbacks?.onStep?.(runningStep);
 
-      const agentSessionId = `delegate:${runId}:${index + 1}`;
+      const childSession = this.createChatSession({
+        workspaceId: sessionWorkspaceId,
+        title: `Delegate · ${toTitleCase(step.role)}`,
+        projectId: parentProjectId,
+        mode: prefs.mode,
+      });
+      this.inheritDelegatedSessionToolGrants(sessionId, childSession.sessionId);
+      this.updateChatSessionPrefs(childSession.sessionId, {
+        mode: prefs.mode,
+        planningMode: "off",
+        providerId,
+        model,
+        webMode: prefs.webMode,
+        memoryMode: prefs.memoryMode,
+        thinkingLevel: prefs.thinkingLevel,
+        toolAutonomy: prefs.toolAutonomy,
+        orchestrationEnabled: false,
+        orchestrationIntensity: "minimal",
+        orchestrationVisibility: "explicit",
+        orchestrationProviderPreference: prefs.orchestrationProviderPreference,
+        orchestrationReviewDepth: prefs.orchestrationReviewDepth,
+        orchestrationParallelism: "sequential",
+        codeAutoApply: prefs.codeAutoApply,
+        proactiveMode: "off",
+        retrievalMode: prefs.retrievalMode,
+        reflectionMode: "off",
+      });
+      const agentSessionId = childSession.sessionId;
       this.registerTaskSubagent(task.taskId, {
         agentSessionId,
-        agentName: role,
+        agentName: step.role,
       });
 
+      const dependencyContext = step.dependsOnStepIds
+        .map((dependencyStepId) => completedOutputs.get(dependencyStepId))
+        .filter((item): item is { role: string; output: string } => Boolean(item));
+
       try {
-        const completion = await this.createChatCompletion({
-          providerId,
-          model,
-          stream: false,
-          memory: {
-            enabled: true,
-            mode: "qmd",
-            sessionId,
-          },
-          messages: [
-            {
-              role: "system",
-              content: buildDelegationSystemPrompt(role),
-            },
-            {
-              role: "user",
-              content: buildDelegationUserPrompt({
+        const response = await this.agentSendChatMessage(
+          childSession.sessionId,
+          buildDelegatedChatSendRequest({
+            content: [
+              buildDelegationSystemPrompt(step.role),
+              buildDelegationUserPrompt({
                 objective,
-                role,
+                role: step.role,
                 mode,
-                sharedContext,
+                sharedContext: dependencyContext,
               }),
-            },
-          ],
-        });
-        const output = extractCompletionText(completion).trim() || "(no output returned)";
+            ].join("\n\n"),
+            providerId,
+            model,
+            mode: prefs.mode,
+            webMode: prefs.webMode,
+            memoryMode: prefs.memoryMode,
+            thinkingLevel: prefs.thinkingLevel,
+            retrievalMode: prefs.retrievalMode ?? "standard",
+          }),
+        );
+        const traceStatus = response.trace?.status;
+        const waitingForApproval = traceStatus === "waiting_for_approval";
+        const stillActive = traceStatus === "waiting_for_tool";
+        const failed =
+          traceStatus === "failed" ||
+          traceStatus === "cancelled" ||
+          waitingForApproval ||
+          stillActive;
+        const output =
+          response.assistantMessage?.content?.trim() ||
+          response.trace?.failure?.message?.trim() ||
+          (waitingForApproval
+            ? response.trace?.pendingApprovalSummary?.reason?.trim() || "Delegate is waiting for approval."
+            : stillActive
+              ? "Delegate is still waiting on a tool result."
+              : "(delegate returned no output)");
         const finishedAt = new Date().toISOString();
-        const completedStep = this.storage.chatDelegationSteps.patch(stepId, {
-          status: "completed",
+        const completedStep = this.storage.chatDelegationSteps.patch(step.stepId, {
+          status: failed ? "failed" : "completed",
+          providerId: response.trace?.routing?.effectiveProviderId ?? providerId,
+          model: response.trace?.model ?? model,
+          summary: truncateSummaryLine(output, 180),
           output,
+          error: failed ? (response.trace?.failure?.message ?? output) : undefined,
+          failureGuidance: failed ? buildDelegationFailureGuidance(output, step.role) : undefined,
+          durableRunId: response.trace?.durable?.runId,
+          childSessionId: childSession.sessionId,
+          childTurnId: response.turnId,
+          citations: response.citations ?? [],
           finishedAt,
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
         await callbacks?.onStep?.(completedStep);
         this.updateTaskSubagent(agentSessionId, {
-          status: "completed",
+          status: failed ? "failed" : "completed",
           endedAt: finishedAt,
         });
         this.appendTaskActivity(task.taskId, {
           activityType: "comment",
-          agentId: role,
-          message: `${role} completed delegation step ${index + 1}/${roles.length}.`,
-          metadata: { runId, stepId },
+          agentId: step.role,
+          message: failed
+            ? `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}.`
+            : `${step.role} completed delegation step ${step.index + 1}/${delegationSteps.length}.`,
+          metadata: {
+            runId,
+            stepId: step.stepId,
+            childSessionId: childSession.sessionId,
+            childTurnId: response.turnId,
+            durableRunId: response.trace?.durable?.runId,
+          },
         });
-        this.appendTaskDeliverable(task.taskId, {
-          deliverableType: "artifact",
-          title: `${toTitleCase(role)} step`,
-          description: output.slice(0, 6000),
-        });
-        stitchedSections.push(`### ${toTitleCase(role)}\n${output}`);
-        sharedContext.push({
-          role,
-          output: output.slice(0, 4000),
-        });
+        if (!failed) {
+          this.appendTaskDeliverable(task.taskId, {
+            deliverableType: "artifact",
+            title: `${toTitleCase(step.role)} step`,
+            description: output.slice(0, 6000),
+          });
+          completedOutputs.set(step.stepId, {
+            role: step.role,
+            output: output.slice(0, 4000),
+          });
+        }
 
-        const completionRouting = readCompletionRouting(completion);
+        const completionRouting = response.routing ?? response.trace?.routing;
         if (completionRouting) {
           trace = {
             ...(trace ?? {}),
             ...completionRouting,
           };
         }
-
-        const completionCitations = readCompletionCitations(completion);
-        for (const citation of completionCitations) {
+        for (const citation of response.citations ?? []) {
           citations.push(citation);
         }
+
+        return {
+          step: completedStep,
+          output,
+          citations: response.citations ?? [],
+          trace: completionRouting,
+          completed: !failed,
+        };
       } catch (error) {
-        failures += 1;
         const finishedAt = new Date().toISOString();
         const message = (error as Error).message;
-        const failedStep = this.storage.chatDelegationSteps.patch(stepId, {
+        const failedStep = this.storage.chatDelegationSteps.patch(step.stepId, {
           status: "failed",
           error: message,
+          failureGuidance: buildDelegationFailureGuidance(message, step.role),
+          childSessionId: childSession.sessionId,
           finishedAt,
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
@@ -3986,21 +4121,92 @@ export class GatewayService {
         });
         this.appendTaskActivity(task.taskId, {
           activityType: "comment",
-          agentId: role,
-          message: `${role} failed delegation step ${index + 1}/${roles.length}: ${message}`,
-          metadata: { runId, stepId, error: message },
+          agentId: step.role,
+          message: `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}: ${message}`,
+          metadata: { runId, stepId: step.stepId, error: message },
         });
-        stitchedSections.push(`### ${toTitleCase(role)}\nFAILED: ${message}`);
-        if (mode === "sequential") {
-          break;
-        }
+        return {
+          step: failedStep,
+          output: message,
+          citations: [],
+          completed: false,
+        };
       }
+    };
+
+    for (const stage of stages) {
+      const runnableSteps: NormalizedDelegationStep[] = [];
+      for (const step of stage) {
+        const failedDependencies = step.dependsOnStepIds
+          .reduce<ChatDelegationStepRecord[]>((out, dependencyStepId) => {
+            const dependency = stepResults.get(dependencyStepId)?.step;
+            if (dependency && dependency.status !== "completed") {
+              out.push(dependency);
+            }
+            return out;
+          }, []);
+        if (failedDependencies.length === 0) {
+          runnableSteps.push(step);
+          continue;
+        }
+        const failedDependencyRoles = failedDependencies.map((dependency) => dependency?.role ?? "unknown");
+        const startedAt = new Date().toISOString();
+        const skippedStep = this.storage.chatDelegationSteps.create({
+          stepId: step.stepId,
+          runId,
+          role: step.role,
+          index: step.index,
+          status: "skipped",
+          error: `Skipped because dependency failed: ${failedDependencyRoles.join(", ")}`,
+          failureGuidance: buildDelegationFailureGuidance(
+            `Blocked by dependency failure from ${failedDependencyRoles.join(", ")}`,
+            step.role,
+          ),
+          startedAt,
+          finishedAt: startedAt,
+          durationMs: 0,
+        });
+        await callbacks?.onStep?.(skippedStep);
+        this.appendTaskActivity(task.taskId, {
+          activityType: "comment",
+          agentId: step.role,
+          message: `${step.role} skipped delegation step ${step.index + 1}/${delegationSteps.length} due to failed dependency.`,
+          metadata: {
+            runId,
+            stepId: step.stepId,
+            failedDependencyStepIds: failedDependencies.map((dependency) => dependency.stepId),
+          },
+        });
+        stepResults.set(step.stepId, {
+          step: skippedStep,
+          citations: [],
+          completed: false,
+        });
+      }
+
+      await mapWithConcurrency(runnableSteps, 4, async (step) => {
+        const result = await executeDelegationStep(step);
+        stepResults.set(step.stepId, result);
+        return result;
+      });
     }
 
     const finishedAt = new Date().toISOString();
+    const persistedSteps = this.storage.chatDelegationSteps.listByRun(runId);
+    const stitchedSections = persistedSteps.map((step) => {
+      const body =
+        step.status === "completed"
+          ? step.output ?? "(delegate returned no output)"
+          : step.status === "skipped"
+            ? `SKIPPED: ${step.error ?? "Dependency did not complete."}`
+            : `FAILED: ${step.error ?? step.output ?? "Delegate failed without an error message."}`;
+      return `### ${toTitleCase(step.role)}\n${body}`;
+    });
     const stitchedOutput = stitchedSections.join("\n\n").trim();
+    const completedSteps = persistedSteps.filter((step) => step.status === "completed").length;
+    const nonCompletedSteps = persistedSteps.length - completedSteps;
     const status: ChatDelegationRunRecord["status"] =
-      failures === 0 ? "completed" : stitchedSections.length > failures ? "partial" : "failed";
+      nonCompletedSteps === 0 ? "completed" : completedSteps > 0 ? "partial" : "failed";
     this.storage.chatDelegationRuns.patch(runId, {
       status,
       stitchedOutput,
@@ -4011,11 +4217,21 @@ export class GatewayService {
     this.appendTaskActivity(task.taskId, {
       activityType: "comment",
       message: `Delegation ${status}.`,
-      metadata: { runId, failures, steps: roles.length },
+      metadata: {
+        runId,
+        completedSteps,
+        failedSteps: persistedSteps.filter((step) => step.status === "failed").length,
+        skippedSteps: persistedSteps.filter((step) => step.status === "skipped").length,
+        steps: delegationSteps.length,
+      },
     });
-    if (stitchedSections.length > 0) {
+    if (completedSteps > 0 && status === "completed") {
       this.updateTask(task.taskId, {
-        status: status === "completed" ? "review" : "blocked",
+        status: "review",
+      });
+    } else if (completedSteps > 0) {
+      this.updateTask(task.taskId, {
+        status: "blocked",
       });
     } else {
       this.updateTask(task.taskId, {
@@ -4032,12 +4248,17 @@ export class GatewayService {
         role: "assistant",
         sourceRef: runId,
       });
+      this.scheduleChatMemoryContextPrewarm({
+        sessionId,
+        prompt: stitchedOutput,
+        relationScope: "peer",
+      });
     }
 
     return {
       runId,
       taskId: task.taskId,
-      steps: this.storage.chatDelegationSteps.listByRun(runId),
+      steps: persistedSteps,
       stitchedOutput,
       citations,
       trace,
@@ -4495,6 +4716,10 @@ export class GatewayService {
     return this.promptPackService.getPromptPackBenchmarkStatus(benchmarkRunId);
   }
 
+  public cancelPromptPackBenchmark(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
+    return this.promptPackService.cancelPromptPackBenchmark(benchmarkRunId);
+  }
+
   public runPromptPackReplayRegression(
     packId: string,
     input: {
@@ -4541,6 +4766,17 @@ export class GatewayService {
 
   public listImprovementReports(limit = 24): WeeklyImprovementReportRecord[] {
     return this.improvementService.listImprovementReports(limit);
+  }
+
+  public getHarnessAuditReport(): HarnessAuditReportRecord {
+    return buildHarnessAuditReport({
+      skills: this.listSkills(),
+      policy: this.getSkillActivationPolicy(),
+      inspectableCatalog: this.listCapabilityCatalog("inspectable"),
+      proposals: this.listCapabilityProposals(100),
+      importHistory: this.listSkillImportHistory(50),
+      improvementReportCount: this.listImprovementReports(24).length,
+    });
   }
 
   public listDecisionReplayRuns(limit = 24): DecisionReplayRunRecord[] {
@@ -6280,8 +6516,11 @@ export class GatewayService {
     return this.capabilitySystemService.rollbackCandidate(candidateId, targetVersionId);
   }
 
-  public async executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined> {
-    return this.capabilitySystemService.executeApprovedCodeModeRun(approvalId);
+  public async executeCodeModePendingApproval(
+    approvalId: string,
+    signal?: AbortSignal,
+  ): Promise<ToolInvokeResult | undefined> {
+    return this.capabilitySystemService.executeApprovedCodeModeRun(approvalId, signal);
   }
 
   public listChatPendingApprovals(sessionId: string): CodeModeApprovalQueueItem[] {
@@ -7819,7 +8058,7 @@ export class GatewayService {
     connection: IntegrationConnection,
     input: ChannelTypingInput,
   ): Promise<ChannelTypingResult> {
-    return this.discordRuntimeService.sendTyping(connection.connectionId, input.target, input.durationMs);
+    return this.discordRuntimeService.sendTyping(connection.connectionId, input.target, input.durationMs, input.signal);
   }
 
   public async emitTelegramTyping(
@@ -8742,6 +8981,35 @@ export class GatewayService {
     return BANKR_OPTIONAL_MIGRATION_MESSAGE;
   }
 
+  private enforceDurableExecutionBaseline(): void {
+    const durable = this.config.assistant.durable;
+    const configuredFeatureFlag = this.config.assistant.features.durableKernelV1Enabled;
+    const stored =
+      this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
+    const driftedFields: string[] = [];
+    if (!durable.enabled) {
+      driftedFields.push("assistant.durable.enabled");
+    }
+    if (!durable.executionEnabled) {
+      driftedFields.push("assistant.durable.executionEnabled");
+    }
+    if (!durable.chatAutoPromoteEnabled) {
+      driftedFields.push("assistant.durable.chatAutoPromoteEnabled");
+    }
+    if (!configuredFeatureFlag) {
+      driftedFields.push("features.durableKernelV1Enabled");
+    }
+    if (stored?.durableKernelV1Enabled === false) {
+      driftedFields.push("feature_flags_v1.durableKernelV1Enabled");
+    }
+
+    if (driftedFields.length > 0) {
+      log.warn("durable baseline drift detected; coercing always-on durable execution", {
+        driftedFields,
+      });
+    }
+  }
+
   public isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean {
     return this.readFeatureFlags()[flag];
   }
@@ -8759,9 +9027,14 @@ export class GatewayService {
   }
 
   public updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"] {
+    if (patch.durableKernelV1Enabled === false) {
+      throw new ValidationError({
+        message: "features.durableKernelV1Enabled is a shipped baseline runtime setting and cannot be disabled.",
+      });
+    }
     const current = this.readFeatureFlags();
     const next: RuntimeSettings["features"] = {
-      durableKernelV1Enabled: patch.durableKernelV1Enabled ?? current.durableKernelV1Enabled,
+      durableKernelV1Enabled: true,
       replayOverridesV1Enabled: patch.replayOverridesV1Enabled ?? current.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: patch.memoryLifecycleAdminV1Enabled ?? current.memoryLifecycleAdminV1Enabled,
       memoryMaintenanceV1Enabled: patch.memoryMaintenanceV1Enabled ?? current.memoryMaintenanceV1Enabled,
@@ -8788,7 +9061,7 @@ export class GatewayService {
       this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)?.value;
     const fromConfig = this.config.assistant.features;
     return {
-      durableKernelV1Enabled: stored?.durableKernelV1Enabled ?? fromConfig.durableKernelV1Enabled,
+      durableKernelV1Enabled: true,
       replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
       memoryMaintenanceV1Enabled: stored?.memoryMaintenanceV1Enabled ?? fromConfig.memoryMaintenanceV1Enabled,
@@ -9256,6 +9529,8 @@ export class GatewayService {
     this.closing = true;
     this.chatProactiveService.stopScheduler();
     this.improvementService.stopScheduler();
+    this.durableRunService.stopWorker();
+    this.approvalEffectsService.stopWorker();
     if (this.maintenanceScheduler) {
       clearInterval(this.maintenanceScheduler);
       this.maintenanceScheduler = undefined;
@@ -9855,7 +10130,9 @@ export class GatewayService {
         ].join("\n"),
         runId: run.runId,
         phaseId: phase.phaseId,
+        relationScope: "project",
         workspace: "memory",
+        forceRefresh: true,
       })
       .then((pack) => {
         this.publishRealtime(
@@ -11957,6 +12234,91 @@ function normalizeDelegationRoles(roles: string[]): string[] {
   return out;
 }
 
+function normalizeDelegationSteps(input: {
+  roles: string[];
+  mode: "sequential" | "parallel";
+  steps?: NonNullable<ChatDelegateRequest["steps"]>;
+}): NormalizedDelegationStep[] {
+  if (!input.steps || input.steps.length === 0) {
+    const stepIds = input.roles.map(() => randomUUID());
+    return input.roles.map((role, index) => ({
+      stepId: stepIds[index]!,
+      index,
+      role,
+      parallelizable: input.mode === "parallel",
+      dependsOnStepIds: input.mode === "sequential" && index > 0 ? [stepIds[index - 1]!] : [],
+    }));
+  }
+
+  const allowedRoles = new Set(input.roles);
+  const provisional = input.steps.map((step, index) => {
+    const normalizedRole = normalizeDelegationRoles([step.role])[0];
+    if (!normalizedRole) {
+      throw new Error(`delegation step ${index + 1} is missing a valid role`);
+    }
+    if (!allowedRoles.has(normalizedRole)) {
+      throw new Error(`delegation step role "${normalizedRole}" must also appear in roles`);
+    }
+    return {
+      requestedStepId: step.stepId?.trim(),
+      requestedIndex: Number.isFinite(step.index) ? Math.max(0, Math.trunc(step.index!)) : index,
+      role: normalizedRole,
+      parallelizable: step.parallelizable ?? input.mode === "parallel",
+      dependsOnStepIds: dedupeStrings(step.dependsOnStepIds ?? []),
+    };
+  });
+
+  provisional.sort((left, right) => left.requestedIndex - right.requestedIndex);
+  const seenStepIds = new Set<string>();
+  const normalized = provisional.map((step, index) => {
+    const stepId = step.requestedStepId && !seenStepIds.has(step.requestedStepId) ? step.requestedStepId : randomUUID();
+    seenStepIds.add(stepId);
+    return {
+      stepId,
+      index,
+      role: step.role,
+      parallelizable: step.parallelizable,
+      dependsOnStepIds: step.dependsOnStepIds,
+    };
+  });
+
+  const validStepIds = new Set(normalized.map((step) => step.stepId));
+  for (const step of normalized) {
+    for (const dependencyStepId of step.dependsOnStepIds) {
+      if (!validStepIds.has(dependencyStepId)) {
+        throw new Error(`delegation step "${step.stepId}" depends on unknown step "${dependencyStepId}"`);
+      }
+      if (dependencyStepId === step.stepId) {
+        throw new Error(`delegation step "${step.stepId}" cannot depend on itself`);
+      }
+    }
+  }
+  return normalized;
+}
+
+function buildDelegationStages(steps: readonly NormalizedDelegationStep[]): NormalizedDelegationStep[][] {
+  const remaining = new Map(steps.map((step) => [step.stepId, step] as const));
+  const resolved = new Set<string>();
+  const stages: NormalizedDelegationStep[][] = [];
+
+  while (remaining.size > 0) {
+    const ready = [...remaining.values()]
+      .filter((step) => step.dependsOnStepIds.every((dependencyStepId) => resolved.has(dependencyStepId)))
+      .sort((left, right) => left.index - right.index);
+    if (ready.length === 0) {
+      throw new Error("delegation steps contain a dependency cycle or unresolved dependency");
+    }
+    const stage = ready.some((step) => !step.parallelizable) ? [ready[0]!] : ready;
+    stages.push(stage);
+    for (const step of stage) {
+      remaining.delete(step.stepId);
+      resolved.add(step.stepId);
+    }
+  }
+
+  return stages;
+}
+
 export function detectDelegationRoles(objective: string): string[] {
   const normalized = objective.toLowerCase();
   const roleHints: Array<{ role: string; patterns: RegExp[] }> = [
@@ -12483,10 +12845,34 @@ function buildDelegationUserPrompt(input: {
     `Objective: ${input.objective}`,
     `Execution mode: ${input.mode}`,
     `Current role: ${input.role}`,
-    "Prior outputs from earlier roles:",
+    "Completed dependency outputs available to this role:",
     previous,
     "Produce your role output now.",
   ].join("\n\n");
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  items: readonly TInput[],
+  concurrency: number,
+  worker: (item: TInput, index: number) => Promise<TOutput>,
+): Promise<TOutput[]> {
+  const cappedConcurrency = Math.max(1, Math.min(concurrency, items.length || 1));
+  const results = new Array<TOutput>(items.length);
+  let nextIndex = 0;
+
+  const runWorker = async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) {
+        return;
+      }
+      results[currentIndex] = await worker(items[currentIndex]!, currentIndex);
+    }
+  };
+
+  await Promise.all(Array.from({ length: cappedConcurrency }, () => runWorker()));
+  return results;
 }
 
 export function renderExecutionPlanAsMarkdown(input: {
@@ -12729,6 +13115,7 @@ export function mergeExecutionPlanStepStatuses(
       startedAt: result.startedAt,
       finishedAt: result.finishedAt,
       childRunId: result.childRunId,
+      durableRunId: result.durableRunId,
       childSessionId: result.childSessionId,
       childTurnId: result.childTurnId,
     };
@@ -13499,27 +13886,6 @@ export function extractCompletionText(response: ChatCompletionResponse): string 
   return "";
 }
 
-function readCompletionRouting(response: ChatCompletionResponse): ChatTurnTraceRecord["routing"] | undefined {
-  const raw = response.routing as Record<string, unknown> | undefined;
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  return raw as ChatTurnTraceRecord["routing"];
-}
-
-function readCompletionCitations(response: ChatCompletionResponse): ChatCitationRecord[] {
-  const raw = response.citations;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return dedupeChatCitations(
-    raw.filter(
-      (item): item is ChatCitationRecord =>
-        typeof item === "object" && item !== null && typeof (item as ChatCitationRecord).url === "string",
-    ),
-  );
-}
-
 export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] {
   const deduped: ChatCitationRecord[] = [];
   const seen = new Map<string, number>();
@@ -13856,8 +14222,22 @@ function isChatToolRunRecord(value: unknown): value is ChatToolRunRecord {
     (value.approvalId === undefined || typeof value.approvalId === "string") &&
     (value.args === undefined || isRecord(value.args)) &&
     (value.result === undefined || isRecord(value.result)) &&
+    (value.reused === undefined || typeof value.reused === "boolean") &&
+    (value.reusedFromToolRunId === undefined || typeof value.reusedFromToolRunId === "string") &&
+    (value.reuseReason === undefined || typeof value.reuseReason === "string") &&
     (value.error === undefined || typeof value.error === "string") &&
     (value.failureGuidance === undefined || typeof value.failureGuidance === "string")
+  );
+}
+
+function isChatTurnRepairRecord(value: unknown): value is ChatTurnRepairRecord {
+  return (
+    isRecord(value) &&
+    typeof value.applied === "boolean" &&
+    (value.kind === undefined || typeof value.kind === "string") &&
+    (value.source === undefined || typeof value.source === "string") &&
+    (value.preRepairContent === undefined || typeof value.preRepairContent === "string") &&
+    (value.postRepairContent === undefined || typeof value.postRepairContent === "string")
   );
 }
 
@@ -13959,6 +14339,8 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
             turnId: value.turnId,
             messageId: value.messageId,
             content: value.content,
+            ...(typeof value.repaired === "boolean" ? { repaired: value.repaired } : {}),
+            ...(isChatTurnRepairRecord(value.repair) ? { repair: value.repair } : {}),
           }
         : undefined;
     case "tool_start":

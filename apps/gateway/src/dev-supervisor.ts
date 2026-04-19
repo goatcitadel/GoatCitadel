@@ -165,6 +165,10 @@ async function startChild(): Promise<void> {
     return;
   }
 
+  if (!ensureGatewayProjectReferencesBuilt()) {
+    return;
+  }
+
   const { command, args } = buildGatewayStartCommand();
 
   child = spawn(command, args, {
@@ -217,6 +221,44 @@ async function startChild(): Promise<void> {
   if (delay !== null) {
     scheduleRestartAfter(delay, "health timeout");
   }
+}
+
+function ensureGatewayProjectReferencesBuilt(): boolean {
+  log.info("building gateway project references");
+  const env = {
+    ...process.env,
+    NODE_NO_WARNINGS: "1",
+  };
+  const result =
+    process.platform === "win32"
+      ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "pnpm exec tsc -b tsconfig.json --pretty false"], {
+          cwd: gatewayDir,
+          env,
+          stdio: "pipe",
+          encoding: "utf8",
+        })
+      : spawnSync("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"], {
+          cwd: gatewayDir,
+          env,
+          stdio: "pipe",
+          encoding: "utf8",
+        });
+
+  if ((result.status ?? 1) === 0) {
+    return true;
+  }
+
+  log.error("gateway project reference build failed", {
+    status: result.status ?? "null",
+    signal: result.signal ?? "null",
+    stderr: sanitizeSpawnOutput(result.stderr),
+    stdout: sanitizeSpawnOutput(result.stdout),
+  });
+  const delay = registerFailureAndGetDelay("reference_build_failed");
+  if (delay !== null) {
+    scheduleRestartAfter(delay, "reference build failed");
+  }
+  return false;
 }
 
 function buildGatewayStartCommand(): { command: string; args: string[] } {
@@ -337,6 +379,14 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function sanitizeSpawnOutput(value: string | Buffer | null | undefined): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const text = String(value).trim();
+  return text.length > 0 ? text.slice(-1200) : undefined;
 }
 
 function readPositiveInt(value: string | undefined, fallback: number): number {

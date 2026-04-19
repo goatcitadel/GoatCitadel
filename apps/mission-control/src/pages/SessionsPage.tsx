@@ -301,7 +301,11 @@ export function SessionsPage() {
                       {" | "}
                       Runs: {lifecycle.linked.runIds.length}
                       {" | "}
-                      Proactive summaries: {lifecycle.linked.proactiveRunIds.length}
+                      Execution plans: {lifecycle.executionPlans?.length ?? 0}
+                      {" | "}
+                      Delegation runs: {lifecycle.delegationRuns?.length ?? 0}
+                      {" | "}
+                      Delegation steps: {lifecycle.delegationSteps?.length ?? 0}
                       {" | "}
                       Tasks: {lifecycle.linked.taskIds.length}
                     </p>
@@ -312,6 +316,33 @@ export function SessionsPage() {
                       {" | "}
                       Queried run: {lifecycle.durableRun?.runId ?? "none"}
                     </p>
+                    {lifecycle.executionPlans?.length ? (
+                      <ul className="compact-list">
+                        {lifecycle.executionPlans.slice(0, 3).map((plan) => (
+                          <li key={plan.planId}>
+                            <strong>{plan.status}</strong>
+                            {" | "}
+                            {plan.objective}
+                            {" | "}
+                            {plan.planId}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {lifecycle.delegationSteps?.length ? (
+                      <ul className="compact-list">
+                        {lifecycle.delegationSteps.slice(0, 4).map((step) => (
+                          <li key={step.stepId}>
+                            <strong>{step.role}</strong>
+                            {" | "}
+                            {step.status}
+                            {step.durableRunId ? ` | durable ${step.durableRunId}` : ""}
+                            {step.childSessionId ? ` | session ${step.childSessionId}` : ""}
+                            {step.childTurnId ? ` | turn ${step.childTurnId}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 ) : null}
                 <h4>Recent Timeline</h4>

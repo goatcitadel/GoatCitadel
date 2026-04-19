@@ -48,7 +48,7 @@
     },
     {
       "slug": "06-observe-activity",
-      "label": "Observe · Activity",
+      "label": "Watch · Activity",
       "search": "?space=observe&page=activity&tab=activity",
       "url": "http://127.0.0.1:5173/?space=observe&page=activity&tab=activity",
       "file": "screenshots/06-observe-activity.png",
@@ -56,7 +56,7 @@
     },
     {
       "slug": "07-observe-scheduler",
-      "label": "Observe · Scheduler",
+      "label": "Watch · Scheduler",
       "search": "?space=observe&page=activity&tab=scheduler",
       "url": "http://127.0.0.1:5173/?space=observe&page=activity&tab=scheduler",
       "file": "screenshots/07-observe-scheduler.png",
@@ -64,7 +64,7 @@
     },
     {
       "slug": "08-observe-improvement",
-      "label": "Observe · Improvement",
+      "label": "Watch · Improvement",
       "search": "?space=observe&page=activity&tab=improvement",
       "url": "http://127.0.0.1:5173/?space=observe&page=activity&tab=improvement",
       "file": "screenshots/08-observe-improvement.png",
@@ -72,7 +72,7 @@
     },
     {
       "slug": "09-observe-sessions",
-      "label": "Observe · Sessions",
+      "label": "Watch · Sessions",
       "search": "?space=observe&page=sessions",
       "url": "http://127.0.0.1:5173/?space=observe&page=sessions",
       "file": "screenshots/09-observe-sessions.png",
@@ -80,7 +80,7 @@
     },
     {
       "slug": "10-observe-artifacts-memory",
-      "label": "Observe · Artifacts / Memory",
+      "label": "Watch · Artifacts / Memory",
       "search": "?space=observe&page=artifacts&tab=memory",
       "url": "http://127.0.0.1:5173/?space=observe&page=artifacts&tab=memory",
       "file": "screenshots/10-observe-artifacts-memory.png",
@@ -88,7 +88,7 @@
     },
     {
       "slug": "11-observe-artifacts-files",
-      "label": "Observe · Artifacts / Files",
+      "label": "Watch · Artifacts / Files",
       "search": "?space=observe&page=artifacts&tab=files",
       "url": "http://127.0.0.1:5173/?space=observe&page=artifacts&tab=files",
       "file": "screenshots/11-observe-artifacts-files.png",
@@ -96,7 +96,7 @@
     },
     {
       "slug": "12-observe-costs",
-      "label": "Observe · Costs",
+      "label": "Watch · Costs",
       "search": "?space=observe&page=costs",
       "url": "http://127.0.0.1:5173/?space=observe&page=costs",
       "file": "screenshots/12-observe-costs.png",
@@ -104,7 +104,7 @@
     },
     {
       "slug": "13-observe-system",
-      "label": "Observe · System",
+      "label": "Watch · System",
       "search": "?space=observe&page=system",
       "url": "http://127.0.0.1:5173/?space=observe&page=system",
       "file": "screenshots/13-observe-system.png",
@@ -112,7 +112,7 @@
     },
     {
       "slug": "14-observe-quality",
-      "label": "Observe · Quality",
+      "label": "Watch · Quality",
       "search": "?space=observe&page=quality",
       "url": "http://127.0.0.1:5173/?space=observe&page=quality",
       "file": "screenshots/14-observe-quality.png",
@@ -120,7 +120,7 @@
     },
     {
       "slug": "15-tune-general",
-      "label": "Tune · General",
+      "label": "Setup · General",
       "search": "?space=configure&page=settings&tab=general",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=general",
       "file": "screenshots/15-tune-general.png",
@@ -128,7 +128,7 @@
     },
     {
       "slug": "16-tune-providers",
-      "label": "Tune · Providers",
+      "label": "Setup · Providers",
       "search": "?space=configure&page=settings&tab=providers",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=providers",
       "file": "screenshots/16-tune-providers.png",
@@ -136,7 +136,7 @@
     },
     {
       "slug": "17-tune-access",
-      "label": "Tune · Access",
+      "label": "Setup · Access",
       "search": "?space=configure&page=settings&tab=access",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=access",
       "file": "screenshots/17-tune-access.png",
@@ -144,7 +144,7 @@
     },
     {
       "slug": "18-tune-budget",
-      "label": "Tune · Budget",
+      "label": "Setup · Budget",
       "search": "?space=configure&page=settings&tab=budget",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=budget",
       "file": "screenshots/18-tune-budget.png",
@@ -152,7 +152,7 @@
     },
     {
       "slug": "19-tune-runtime",
-      "label": "Tune · Runtime",
+      "label": "Setup · Runtime",
       "search": "?space=configure&page=settings&tab=runtime",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=runtime",
       "file": "screenshots/19-tune-runtime.png",
@@ -160,7 +160,7 @@
     },
     {
       "slug": "20-tune-workspaces",
-      "label": "Tune · Workspaces",
+      "label": "Setup · Workspaces",
       "search": "?space=configure&page=settings&tab=workspaces",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=workspaces",
       "file": "screenshots/20-tune-workspaces.png",
@@ -168,7 +168,7 @@
     },
     {
       "slug": "21-tune-addons",
-      "label": "Tune · Addons",
+      "label": "Setup · Addons",
       "search": "?space=configure&page=settings&tab=addons",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=addons",
       "file": "screenshots/21-tune-addons.png",
@@ -176,7 +176,7 @@
     },
     {
       "slug": "22-tune-onboarding",
-      "label": "Tune · Onboarding",
+      "label": "Setup · Onboarding",
       "search": "?space=configure&page=settings&tab=onboarding",
       "url": "http://127.0.0.1:5173/?space=configure&page=settings&tab=onboarding",
       "file": "screenshots/22-tune-onboarding.png",
@@ -184,7 +184,7 @@
     },
     {
       "slug": "23-tune-integrations-overview",
-      "label": "Tune · Integrations / Overview",
+      "label": "Setup · Integrations / Overview",
       "search": "?space=configure&page=integrations&tab=overview",
       "url": "http://127.0.0.1:5173/?space=configure&page=integrations&tab=overview",
       "file": "screenshots/23-tune-integrations-overview.png",
@@ -192,7 +192,7 @@
     },
     {
       "slug": "24-tune-integrations-channels",
-      "label": "Tune · Integrations / Channels",
+      "label": "Setup · Integrations / Channels",
       "search": "?space=configure&page=integrations&tab=channels",
       "url": "http://127.0.0.1:5173/?space=configure&page=integrations&tab=channels",
       "file": "screenshots/24-tune-integrations-channels.png",
@@ -200,7 +200,7 @@
     },
     {
       "slug": "25-tune-integrations-mcp",
-      "label": "Tune · Integrations / MCP",
+      "label": "Setup · Integrations / MCP",
       "search": "?space=configure&page=integrations&tab=mcp",
       "url": "http://127.0.0.1:5173/?space=configure&page=integrations&tab=mcp",
       "file": "screenshots/25-tune-integrations-mcp.png",
@@ -208,7 +208,7 @@
     },
     {
       "slug": "26-tune-tools",
-      "label": "Tune · Tools",
+      "label": "Setup · Tools",
       "search": "?space=configure&page=tools",
       "url": "http://127.0.0.1:5173/?space=configure&page=tools",
       "file": "screenshots/26-tune-tools.png",
@@ -216,7 +216,7 @@
     },
     {
       "slug": "27-tune-agents-overview",
-      "label": "Tune · Agents / Overview",
+      "label": "Setup · Agents / Overview",
       "search": "?space=configure&page=agents&tab=overview",
       "url": "http://127.0.0.1:5173/?space=configure&page=agents&tab=overview",
       "file": "screenshots/27-tune-agents-overview.png",
@@ -224,7 +224,7 @@
     },
     {
       "slug": "28-tune-agents-herd-live",
-      "label": "Tune · Agents / Herd Live",
+      "label": "Setup · Agents / Herd Live",
       "search": "?space=configure&page=agents&tab=herd-live",
       "url": "http://127.0.0.1:5173/?space=configure&page=agents&tab=herd-live",
       "file": "screenshots/28-tune-agents-herd-live.png",
@@ -232,7 +232,7 @@
     },
     {
       "slug": "29-tune-agents-herd-lab",
-      "label": "Tune · Agents / Herd Lab",
+      "label": "Setup · Agents / Herd Lab",
       "search": "?space=configure&page=agents&tab=herd-lab",
       "url": "http://127.0.0.1:5173/?space=configure&page=agents&tab=herd-lab",
       "file": "screenshots/29-tune-agents-herd-lab.png",
@@ -240,7 +240,7 @@
     },
     {
       "slug": "30-tune-agents-skills",
-      "label": "Tune · Agents / Skills",
+      "label": "Setup · Agents / Skills",
       "search": "?space=configure&page=agents&tab=skills",
       "url": "http://127.0.0.1:5173/?space=configure&page=agents&tab=skills",
       "file": "screenshots/30-tune-agents-skills.png",

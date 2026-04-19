@@ -421,7 +421,7 @@ describe("MemoryPage", () => {
     }
   });
 
-  it("shows a durable-kernel block when Dream is enabled but durable runs are off", async () => {
+  it("shows an infrastructure block when Dream is enabled but durable execution is unavailable", async () => {
     apiMocks.fetchSettings.mockResolvedValue(buildSettings({
       durableKernelV1Enabled: false,
       memoryMaintenanceV1Enabled: true,
@@ -437,7 +437,7 @@ describe("MemoryPage", () => {
 
       const text = rendererText(renderer);
       expect(text).toContain("Memory Maintenance");
-      expect(text).toContain("durableKernelV1Enabled");
+      expect(text).toContain("Durable execution is part of the shipped runtime baseline");
       expect(apiMocks.fetchMemoryMaintenanceStatus).not.toHaveBeenCalled();
     } finally {
       renderer.unmount();
@@ -472,6 +472,64 @@ describe("MemoryPage", () => {
       expect(apiMocks.fetchMemoryMaintenanceRunProvenance).toHaveBeenCalledWith("maintenance-run-1");
       expect(apiMocks.fetchDurableRun).toHaveBeenCalledWith("durable-run-1");
       expect(apiMocks.fetchDurableRunTimeline).toHaveBeenCalledWith("durable-run-1", 120);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("renders relation scope and citation provenance for recent context packs", async () => {
+    apiMocks.fetchSettings.mockResolvedValue(buildSettings({
+      durableKernelV1Enabled: true,
+      memoryMaintenanceV1Enabled: false,
+      memoryLifecycleAdminV1Enabled: false,
+    }));
+    apiMocks.fetchMemoryQmdStats.mockResolvedValue({
+      ...buildQmdStats(),
+      recent: [
+        {
+          contextId: "ctx-1",
+          scope: "chat",
+          relationScope: "project",
+          queryHash: "query-1",
+          sourcesHash: "sources-1",
+          contextText: "Distilled context",
+          createdAt: "2026-04-01T09:00:00.000Z",
+          expiresAt: "2026-04-01T10:00:00.000Z",
+          originalTokenEstimate: 400,
+          distilledTokenEstimate: 120,
+          quality: { status: "generated" },
+          citations: [
+            {
+              candidateId: "cand-1",
+              sourceType: "transcript",
+              sourceRef: "turn-1",
+              score: 0.91,
+              provenance: {
+                relationScope: "project",
+                freshness: "recent",
+                selectionReason: "Matched current objective",
+                sourceTimestamp: "2026-04-01T08:55:00.000Z",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<MemoryPage workspaceId="default" />);
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("ctx-1");
+      expect(text).toContain("project");
+      expect(text).toContain("1 citations");
+      expect(text).toContain("turn-1");
+      expect(text).toContain("freshness recent");
+      expect(text).toContain("Matched current objective");
     } finally {
       renderer.unmount();
     }

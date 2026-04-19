@@ -7,12 +7,14 @@ import { SurfaceReconnectBanner } from "../../components/chat/SurfaceReconnectBa
 import { ChatThreadView, type ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import type { EventStreamStatus } from "../../api/shell-client";
+import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 
 export function ChatThreadShell(props: {
   mode: ChatMode;
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
+  delegationRun: ActiveChatDelegationRun | null;
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
@@ -37,6 +39,7 @@ export function ChatThreadShell(props: {
     loading,
     thread,
     selectedTurnId,
+    delegationRun,
     notices,
     followOutput,
     streamStatus,
@@ -68,6 +71,7 @@ export function ChatThreadShell(props: {
           loading={loading}
           thread={thread}
           selectedTurnId={selectedTurnId}
+          delegationRun={delegationRun}
           notices={notices}
           followOutput={followOutput}
           streamStatus={streamStatus}

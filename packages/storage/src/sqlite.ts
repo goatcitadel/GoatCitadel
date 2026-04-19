@@ -1,16 +1,14 @@
 /* eslint-disable max-lines */
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { clampInt, DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
+import { hashPromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
-const DEFAULT_PROMPT_PACK_POLICY_V2_JSON = JSON.stringify(DEFAULT_PROMPT_PACK_POLICY_V2);
-const DEFAULT_PROMPT_PACK_POLICY_V2_HASH = createHash("sha256")
-  .update(DEFAULT_PROMPT_PACK_POLICY_V2_JSON)
-  .digest("hex");
+const DEFAULT_PROMPT_PACK_POLICY_V2_JSON = stringifyPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2);
+const DEFAULT_PROMPT_PACK_POLICY_V2_HASH = hashPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2);
 
 export interface SqliteOptions {
   dbPath: string;
@@ -590,6 +588,24 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 60,
+    name: "prompt_pack_benchmark_dedup_audit_schema",
+    up: ensurePromptPackBenchmarkDedupAudit,
+  },
+  {
+    version: 61,
+    name: "prompt_pack_benchmark_dedup_repair_schema",
+    up: ensurePromptPackBenchmarkDedupRepair,
+  },
+  {
+    version: 62,
+    name: "prompt_pack_run_derived_response_fields",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "derived_response_text", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "derived_response_signals_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1133,6 +1149,7 @@ function createChatBranchingAndPlanningSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "branch_kind", "TEXT NOT NULL DEFAULT 'append'");
   addColumnIfMissing(db, "chat_turn_traces", "source_turn_id", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "citations_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "loop_guard_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "capability_upgrade_suggestions_json", "TEXT");
 
   db.exec(`
@@ -1261,6 +1278,7 @@ function repairChatTurnTraceShape(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "proactive_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "orchestration_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "guidance_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "loop_guard_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "citations_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "failure_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "capability_upgrade_suggestions_json", "TEXT");
@@ -1284,11 +1302,16 @@ function repairChatTurnTraceShape(db: DatabaseSync): void {
 function createChatPlansAndSummariesSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "execution_plan_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_tool_runs", "failure_guidance", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_tool_runs", "reused", "INTEGER");
+  addColumnIfMissingIfTableExists(db, "chat_tool_runs", "reused_from_tool_run_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_tool_runs", "reuse_reason", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "execution_plan_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "failure_guidance", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "durable_run_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "child_session_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "child_turn_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "citations_json", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_execution_plan_steps", "durable_run_id", "TEXT");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_execution_plans (
@@ -1330,6 +1353,7 @@ function createChatPlansAndSummariesSchema(db: DatabaseSync): void {
       started_at TEXT,
       finished_at TEXT,
       child_run_id TEXT,
+      durable_run_id TEXT,
       child_session_id TEXT,
       child_turn_id TEXT
     );
@@ -1835,6 +1859,7 @@ function createAgenticChatSchema(db: DatabaseSync): void {
       proactive_json TEXT,
       orchestration_json TEXT,
       guidance_json TEXT,
+      loop_guard_json TEXT,
       citations_json TEXT,
       failure_json TEXT,
       capability_upgrade_suggestions_json TEXT,
@@ -1854,7 +1879,11 @@ function createAgenticChatSchema(db: DatabaseSync): void {
       approval_id TEXT,
       args_json TEXT,
       result_json TEXT,
+      reused INTEGER,
+      reused_from_tool_run_id TEXT,
+      reuse_reason TEXT,
       error TEXT,
+      failure_guidance TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT
     );
@@ -1953,6 +1982,11 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       summary TEXT,
       output TEXT,
       error TEXT,
+      failure_guidance TEXT,
+      durable_run_id TEXT,
+      child_session_id TEXT,
+      child_turn_id TEXT,
+      citations_json TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT,
       duration_ms INTEGER
@@ -2000,6 +2034,8 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       provider_id TEXT,
       model TEXT,
       response_text TEXT,
+      derived_response_text TEXT,
+      derived_response_signals_json TEXT,
       trace_json TEXT,
       citations_json TEXT,
       integrity_json TEXT,
@@ -2586,6 +2622,9 @@ function createPromptPackBenchmarkSchema(db: DatabaseSync): void {
       providers_json TEXT NOT NULL,
       total_items INTEGER NOT NULL DEFAULT 0,
       completed_items INTEGER NOT NULL DEFAULT 0,
+      claimed_by_worker_id TEXT,
+      claim_heartbeat_at TEXT,
+      claim_expires_at TEXT,
       error TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT
@@ -2595,6 +2634,8 @@ function createPromptPackBenchmarkSchema(db: DatabaseSync): void {
       ON prompt_pack_benchmark_runs(pack_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_runs_status
       ON prompt_pack_benchmark_runs(status, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_runs_claim
+      ON prompt_pack_benchmark_runs(status, claim_expires_at ASC, started_at ASC);
 
     CREATE TABLE IF NOT EXISTS prompt_pack_benchmark_items (
       item_id TEXT PRIMARY KEY,
@@ -2619,6 +2660,8 @@ function createPromptPackBenchmarkSchema(db: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_run
       ON prompt_pack_benchmark_items(benchmark_run_id, created_at ASC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique
+      ON prompt_pack_benchmark_items(benchmark_run_id, provider_id, model, test_id);
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_model
       ON prompt_pack_benchmark_items(provider_id, model, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_test
@@ -2702,6 +2745,507 @@ function createPromptPackScoringV2Schema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "weighted_score", "REAL");
   addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "verdict", "TEXT");
   addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_items", "score_state", "TEXT");
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_runs", "claimed_by_worker_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_runs", "claim_heartbeat_at", "TEXT");
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_runs", "claim_expires_at", "TEXT");
+  ensurePromptPackBenchmarkDedupAudit(db);
+  if (tableExists(db, "prompt_pack_benchmark_runs")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_runs_claim
+        ON prompt_pack_benchmark_runs(status, claim_expires_at ASC, started_at ASC);
+    `);
+  }
+}
+
+function ensurePromptPackBenchmarkDedupAudit(db: DatabaseSync): void {
+  if (!tableExists(db, "prompt_pack_benchmark_items")) {
+    return;
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_pack_benchmark_item_dedup_audit (
+      item_id TEXT PRIMARY KEY,
+      benchmark_run_id TEXT NOT NULL,
+      pack_id TEXT NOT NULL,
+      test_id TEXT NOT NULL,
+      test_code TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      run_id TEXT,
+      score_id TEXT,
+      auto_score_id TEXT,
+      run_status TEXT NOT NULL,
+      total_score INTEGER,
+      weighted_score REAL,
+      verdict TEXT,
+      score_state TEXT,
+      failure_signal TEXT,
+      original_rowid INTEGER NOT NULL,
+      source_created_at TEXT,
+      archived_at TEXT NOT NULL
+    );
+  `);
+  addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_item_dedup_audit", "source_created_at", "TEXT");
+
+  const duplicateCounts = getPromptPackBenchmarkDuplicateCounts(db);
+  if (duplicateCounts.duplicateRowCount > 0) {
+    console.warn("[goatcitadel] archiving duplicate prompt-pack benchmark items before unique-index migration", {
+      duplicateGroupCount: duplicateCounts.duplicateGroupCount,
+      duplicateRowCount: duplicateCounts.duplicateRowCount,
+    });
+  }
+
+  runPromptPackBenchmarkDedupPass(db);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique
+      ON prompt_pack_benchmark_items(benchmark_run_id, provider_id, model, test_id);
+  `);
+}
+
+function ensurePromptPackBenchmarkDedupRepair(db: DatabaseSync): void {
+  if (!tableExists(db, "prompt_pack_benchmark_items")) {
+    return;
+  }
+  ensurePromptPackBenchmarkDedupAudit(db);
+  repairPromptPackBenchmarkDedupWinners(db);
+}
+
+type PromptPackBenchmarkDedupRow = {
+  rowid?: number;
+  item_id: string;
+  benchmark_run_id: string;
+  pack_id: string;
+  test_id: string;
+  test_code: string;
+  provider_id: string;
+  model: string;
+  run_id: string | null;
+  score_id: string | null;
+  auto_score_id: string | null;
+  run_status: string;
+  total_score: number | null;
+  weighted_score: number | null;
+  verdict: string | null;
+  score_state: string | null;
+  failure_signal: string | null;
+  created_at: string | null;
+  original_rowid?: number | null;
+  source_created_at?: string | null;
+  archived_at?: string | null;
+};
+
+function getPromptPackBenchmarkDuplicateCounts(db: DatabaseSync): {
+  duplicateGroupCount: number;
+  duplicateRowCount: number;
+} {
+  const duplicateCounts = db
+    .prepare(
+      `
+        SELECT
+          COUNT(*) AS duplicate_group_count,
+          COALESCE(SUM(group_size - 1), 0) AS duplicate_row_count
+        FROM (
+          SELECT COUNT(*) AS group_size
+          FROM prompt_pack_benchmark_items
+          GROUP BY benchmark_run_id, provider_id, model, test_id
+          HAVING COUNT(*) > 1
+        )
+      `,
+    )
+    .get() as
+    | {
+        duplicate_group_count?: number;
+        duplicate_row_count?: number;
+      }
+    | undefined;
+
+  return {
+    duplicateGroupCount: Number(duplicateCounts?.duplicate_group_count ?? 0),
+    duplicateRowCount: Number(duplicateCounts?.duplicate_row_count ?? 0),
+  };
+}
+
+function runPromptPackBenchmarkDedupPass(db: DatabaseSync): void {
+  const duplicateGroups = db
+    .prepare(
+      `
+        SELECT benchmark_run_id, provider_id, model, test_id
+        FROM prompt_pack_benchmark_items
+        GROUP BY benchmark_run_id, provider_id, model, test_id
+        HAVING COUNT(*) > 1
+      `,
+    )
+    .all() as Array<{
+    benchmark_run_id: string;
+    provider_id: string;
+    model: string;
+    test_id: string;
+  }>;
+
+  if (duplicateGroups.length === 0) {
+    return;
+  }
+
+  const selectLiveRows = db.prepare(
+    `
+      SELECT rowid, *
+      FROM prompt_pack_benchmark_items
+      WHERE benchmark_run_id = @benchmarkRunId
+        AND provider_id = @providerId
+        AND model = @model
+        AND test_id = @testId
+    `,
+  );
+  const insertAuditRow = db.prepare(
+    `
+      INSERT OR IGNORE INTO prompt_pack_benchmark_item_dedup_audit (
+        item_id,
+        benchmark_run_id,
+        pack_id,
+        test_id,
+        test_code,
+        provider_id,
+        model,
+        run_id,
+        score_id,
+        auto_score_id,
+        run_status,
+        total_score,
+        weighted_score,
+        verdict,
+        score_state,
+        failure_signal,
+        original_rowid,
+        source_created_at,
+        archived_at
+      ) VALUES (
+        @item_id,
+        @benchmark_run_id,
+        @pack_id,
+        @test_id,
+        @test_code,
+        @provider_id,
+        @model,
+        @run_id,
+        @score_id,
+        @auto_score_id,
+        @run_status,
+        @total_score,
+        @weighted_score,
+        @verdict,
+        @score_state,
+        @failure_signal,
+        @original_rowid,
+        @source_created_at,
+        @archived_at
+      )
+    `,
+  );
+  const deleteLiveRow = db.prepare(`DELETE FROM prompt_pack_benchmark_items WHERE item_id = ?`);
+
+  db.exec("SAVEPOINT prompt_pack_benchmark_dedup_pass");
+  try {
+    for (const group of duplicateGroups) {
+      const rows = selectLiveRows.all({
+        benchmarkRunId: group.benchmark_run_id,
+        providerId: group.provider_id,
+        model: group.model,
+        testId: group.test_id,
+      }) as PromptPackBenchmarkDedupRow[];
+      if (rows.length < 2) {
+        continue;
+      }
+      const winner = [...rows].sort(comparePromptPackBenchmarkDedupRows).at(-1);
+      if (!winner) {
+        continue;
+      }
+      const archivedAt = new Date().toISOString();
+      for (const row of rows) {
+        if (row.item_id === winner.item_id) {
+          continue;
+        }
+        insertAuditRow.run({
+          item_id: row.item_id,
+          benchmark_run_id: row.benchmark_run_id,
+          pack_id: row.pack_id,
+          test_id: row.test_id,
+          test_code: row.test_code,
+          provider_id: row.provider_id,
+          model: row.model,
+          run_id: row.run_id,
+          score_id: row.score_id,
+          auto_score_id: row.auto_score_id,
+          run_status: row.run_status,
+          total_score: row.total_score,
+          weighted_score: row.weighted_score,
+          verdict: row.verdict,
+          score_state: row.score_state,
+          failure_signal: row.failure_signal,
+          original_rowid: Number(row.rowid ?? 0),
+          source_created_at: row.created_at,
+          archived_at: archivedAt,
+        });
+        deleteLiveRow.run(row.item_id);
+      }
+    }
+    db.exec("RELEASE SAVEPOINT prompt_pack_benchmark_dedup_pass");
+  } catch (error) {
+    db.exec("ROLLBACK TO SAVEPOINT prompt_pack_benchmark_dedup_pass");
+    db.exec("RELEASE SAVEPOINT prompt_pack_benchmark_dedup_pass");
+    throw error;
+  }
+}
+
+function repairPromptPackBenchmarkDedupWinners(db: DatabaseSync): void {
+  if (!tableExists(db, "prompt_pack_benchmark_item_dedup_audit")) {
+    return;
+  }
+
+  const liveRows = db.prepare(`SELECT rowid, * FROM prompt_pack_benchmark_items`).all() as PromptPackBenchmarkDedupRow[];
+  if (liveRows.length === 0) {
+    return;
+  }
+
+  const selectArchivedRows = db.prepare(
+    `
+      SELECT
+        item_id,
+        benchmark_run_id,
+        pack_id,
+        test_id,
+        test_code,
+        provider_id,
+        model,
+        run_id,
+        score_id,
+        auto_score_id,
+        run_status,
+        total_score,
+        weighted_score,
+        verdict,
+        score_state,
+        failure_signal,
+        original_rowid,
+        source_created_at,
+        archived_at
+      FROM prompt_pack_benchmark_item_dedup_audit
+      WHERE benchmark_run_id = @benchmarkRunId
+        AND provider_id = @providerId
+        AND model = @model
+        AND test_id = @testId
+    `,
+  );
+  const insertAuditRow = db.prepare(
+    `
+      INSERT OR IGNORE INTO prompt_pack_benchmark_item_dedup_audit (
+        item_id,
+        benchmark_run_id,
+        pack_id,
+        test_id,
+        test_code,
+        provider_id,
+        model,
+        run_id,
+        score_id,
+        auto_score_id,
+        run_status,
+        total_score,
+        weighted_score,
+        verdict,
+        score_state,
+        failure_signal,
+        original_rowid,
+        source_created_at,
+        archived_at
+      ) VALUES (
+        @item_id,
+        @benchmark_run_id,
+        @pack_id,
+        @test_id,
+        @test_code,
+        @provider_id,
+        @model,
+        @run_id,
+        @score_id,
+        @auto_score_id,
+        @run_status,
+        @total_score,
+        @weighted_score,
+        @verdict,
+        @score_state,
+        @failure_signal,
+        @original_rowid,
+        @source_created_at,
+        @archived_at
+      )
+    `,
+  );
+  const deleteLiveRow = db.prepare(`DELETE FROM prompt_pack_benchmark_items WHERE item_id = ?`);
+  const insertLiveRow = db.prepare(
+    `
+      INSERT OR REPLACE INTO prompt_pack_benchmark_items (
+        item_id,
+        benchmark_run_id,
+        pack_id,
+        test_id,
+        test_code,
+        provider_id,
+        model,
+        run_id,
+        score_id,
+        auto_score_id,
+        run_status,
+        total_score,
+        weighted_score,
+        verdict,
+        score_state,
+        failure_signal,
+        created_at
+      ) VALUES (
+        @item_id,
+        @benchmark_run_id,
+        @pack_id,
+        @test_id,
+        @test_code,
+        @provider_id,
+        @model,
+        @run_id,
+        @score_id,
+        @auto_score_id,
+        @run_status,
+        @total_score,
+        @weighted_score,
+        @verdict,
+        @score_state,
+        @failure_signal,
+        @created_at
+      )
+    `,
+  );
+  const deleteArchivedRow = db.prepare(`DELETE FROM prompt_pack_benchmark_item_dedup_audit WHERE item_id = ?`);
+
+  db.exec("SAVEPOINT prompt_pack_benchmark_dedup_repair");
+  try {
+    for (const liveRow of liveRows) {
+      const archivedRows = selectArchivedRows.all({
+        benchmarkRunId: liveRow.benchmark_run_id,
+        providerId: liveRow.provider_id,
+        model: liveRow.model,
+        testId: liveRow.test_id,
+      }) as PromptPackBenchmarkDedupRow[];
+      if (archivedRows.length === 0) {
+        continue;
+      }
+      const winner = [liveRow, ...archivedRows].sort(comparePromptPackBenchmarkDedupRows).at(-1);
+      if (!winner || winner.item_id === liveRow.item_id) {
+        continue;
+      }
+      const archivedAt = new Date().toISOString();
+      insertAuditRow.run({
+        item_id: liveRow.item_id,
+        benchmark_run_id: liveRow.benchmark_run_id,
+        pack_id: liveRow.pack_id,
+        test_id: liveRow.test_id,
+        test_code: liveRow.test_code,
+        provider_id: liveRow.provider_id,
+        model: liveRow.model,
+        run_id: liveRow.run_id,
+        score_id: liveRow.score_id,
+        auto_score_id: liveRow.auto_score_id,
+        run_status: liveRow.run_status,
+        total_score: liveRow.total_score,
+        weighted_score: liveRow.weighted_score,
+        verdict: liveRow.verdict,
+        score_state: liveRow.score_state,
+        failure_signal: liveRow.failure_signal,
+        original_rowid: Number(liveRow.rowid ?? 0),
+        source_created_at: liveRow.created_at,
+        archived_at: archivedAt,
+      });
+      deleteLiveRow.run(liveRow.item_id);
+      insertLiveRow.run({
+        item_id: winner.item_id,
+        benchmark_run_id: winner.benchmark_run_id,
+        pack_id: winner.pack_id,
+        test_id: winner.test_id,
+        test_code: winner.test_code,
+        provider_id: winner.provider_id,
+        model: winner.model,
+        run_id: winner.run_id,
+        score_id: winner.score_id,
+        auto_score_id: winner.auto_score_id,
+        run_status: winner.run_status,
+        total_score: winner.total_score,
+        weighted_score: winner.weighted_score,
+        verdict: winner.verdict,
+        score_state: winner.score_state,
+        failure_signal: winner.failure_signal,
+        created_at: winner.created_at ?? winner.source_created_at ?? liveRow.created_at ?? archivedAt,
+      });
+      deleteArchivedRow.run(winner.item_id);
+    }
+    db.exec("RELEASE SAVEPOINT prompt_pack_benchmark_dedup_repair");
+  } catch (error) {
+    db.exec("ROLLBACK TO SAVEPOINT prompt_pack_benchmark_dedup_repair");
+    db.exec("RELEASE SAVEPOINT prompt_pack_benchmark_dedup_repair");
+    throw error;
+  }
+}
+
+function comparePromptPackBenchmarkDedupRows(
+  left: PromptPackBenchmarkDedupRow,
+  right: PromptPackBenchmarkDedupRow,
+): number {
+  const completenessDelta = getPromptPackBenchmarkDedupCompletenessRank(left) - getPromptPackBenchmarkDedupCompletenessRank(right);
+  if (completenessDelta !== 0) {
+    return completenessDelta;
+  }
+  const createdAtDelta = getPromptPackBenchmarkDedupTimestamp(left) - getPromptPackBenchmarkDedupTimestamp(right);
+  if (createdAtDelta !== 0) {
+    return createdAtDelta;
+  }
+  return getPromptPackBenchmarkDedupOrdinal(left) - getPromptPackBenchmarkDedupOrdinal(right);
+}
+
+function getPromptPackBenchmarkDedupCompletenessRank(row: PromptPackBenchmarkDedupRow): number {
+  if (
+    row.run_status === "completed" &&
+    (row.auto_score_id ||
+      row.score_id ||
+      row.verdict ||
+      row.score_state ||
+      row.weighted_score !== null ||
+      row.total_score !== null)
+  ) {
+    return 3;
+  }
+  if (row.run_status === "completed") {
+    return 2;
+  }
+  if (row.run_status === "failed") {
+    return 1;
+  }
+  return 0;
+}
+
+function getPromptPackBenchmarkDedupTimestamp(row: PromptPackBenchmarkDedupRow): number {
+  const value = row.created_at ?? row.source_created_at;
+  if (typeof value !== "string") {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function getPromptPackBenchmarkDedupOrdinal(row: PromptPackBenchmarkDedupRow): number {
+  if (typeof row.original_rowid === "number" && Number.isFinite(row.original_rowid)) {
+    return row.original_rowid;
+  }
+  if (typeof row.rowid === "number" && Number.isFinite(row.rowid)) {
+    return row.rowid;
+  }
+  return 0;
 }
 
 function createWorkspaceIsolationSchema(db: DatabaseSync): void {
@@ -2731,6 +3275,7 @@ function createWorkspaceIsolationSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_session_bindings", "workspace_id", "TEXT NOT NULL DEFAULT 'default'");
   addColumnIfMissing(db, "chat_attachments", "workspace_id", "TEXT NOT NULL DEFAULT 'default'");
   addColumnIfMissing(db, "chat_turn_traces", "guidance_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "loop_guard_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "failure_json", "TEXT");
   addColumnIfMissing(db, "tasks", "workspace_id", "TEXT NOT NULL DEFAULT 'default'");
 

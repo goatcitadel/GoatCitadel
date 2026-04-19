@@ -186,6 +186,7 @@ export interface ChatCompletionRequest {
     sessionId?: string;
     taskId?: string;
     workspace?: string;
+    relationScope?: import("./memory.js").MemoryRelationScope;
     maxContextTokens?: number;
     forceRefresh?: boolean;
   };

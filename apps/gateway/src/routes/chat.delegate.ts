@@ -2,12 +2,21 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
 
+const delegateStepSchema = z.object({
+  stepId: z.string().min(1).optional(),
+  index: z.number().int().nonnegative().optional(),
+  role: z.string().min(1),
+  parallelizable: z.boolean().optional(),
+  dependsOnStepIds: z.array(z.string().min(1)).optional(),
+});
+
 const delegateBodySchema = z.object({
   objective: z.string().min(1),
   roles: z.array(z.string().min(1)).min(1),
   mode: z.enum(["sequential", "parallel"]).default("sequential"),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  steps: z.array(delegateStepSchema).optional(),
 });
 
 const delegationRunParamsSchema = z.object({
@@ -28,6 +37,7 @@ const delegateAcceptSchema = z.object({
   mode: z.enum(["sequential", "parallel"]).optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  steps: z.array(delegateStepSchema).optional(),
 });
 
 export function registerChatDelegateRoutes(fastify: FastifyInstance): void {

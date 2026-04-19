@@ -4,6 +4,7 @@ import type {
   ChatSessionWorkbenchRecord,
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
+import type { ActiveChatDelegationRun } from "../pages/chat/useChatDelegationPolicyActions";
 
 export interface CoworkTaskItem {
   id: string;
@@ -15,6 +16,7 @@ export function CoworkCanvasPanel({
   items,
   orchestration,
   executionPlan,
+  delegationRun,
   selectedTurn,
   workbenchState,
   onRetryTurn,
@@ -24,6 +26,7 @@ export function CoworkCanvasPanel({
   items: CoworkTaskItem[];
   orchestration?: ChatOrchestrationSummary;
   executionPlan?: ChatExecutionPlanRecord;
+  delegationRun?: ActiveChatDelegationRun | null;
   selectedTurn?: ChatThreadTurnRecord | null;
   workbenchState?: ChatSessionWorkbenchRecord | null;
   onRetryTurn?: () => void;
@@ -35,6 +38,7 @@ export function CoworkCanvasPanel({
   const queuedSteps =
     orchestration?.steps.filter((step) => step.status !== "completed" && step.status !== "running").length ?? 0;
   const activePlanSteps = executionPlan?.steps ?? [];
+  const delegationSteps = delegationRun?.steps ?? [];
   const toolRuns = selectedTurn?.toolRuns?.length ?? 0;
   const waitingForApproval = selectedTurn?.trace?.status === "waiting_for_approval";
 
@@ -118,7 +122,12 @@ export function CoworkCanvasPanel({
                       <span>{step.status}</span>
                     </div>
                     {step.delegatedRole ? <p>Assigned role: {step.delegatedRole}</p> : null}
+                    {step.dependsOnStepIds?.length ? <p>Depends on: {step.dependsOnStepIds.join(", ")}</p> : null}
                     {step.successCriteria ? <p>Success: {step.successCriteria}</p> : null}
+                    {step.durableRunId ? <p>Durable: {step.durableRunId}</p> : null}
+                    {step.childSessionId ? <p>Child session: {step.childSessionId}</p> : null}
+                    {step.childTurnId ? <p>Child turn: {step.childTurnId}</p> : null}
+                    {step.childRunId ? <p>Deprecated child run: {step.childRunId}</p> : null}
                     {step.summary ? <p>{step.summary}</p> : null}
                     {step.error ? <p>{step.error}</p> : null}
                   </li>
@@ -151,6 +160,32 @@ export function CoworkCanvasPanel({
             ) : (
               <p className="chat-cowork-section-copy">No delegated role activity is available yet.</p>
             )}
+          </section>
+
+          <section className="chat-cowork-section">
+            <p className="chat-cowork-section-label">Delegation run</p>
+            {delegationSteps.length ? (
+              <ul className="chat-cowork-orchestration-steps">
+                {delegationSteps.map((step) => (
+                  <li key={step.stepId}>
+                    <div className="chat-cowork-step-head">
+                      <strong>{step.role}</strong>
+                      <span>{step.status}</span>
+                    </div>
+                    {step.durableRunId ? <p>Durable {step.durableRunId}</p> : null}
+                    {step.childSessionId ? <p>Child session {step.childSessionId}</p> : null}
+                    {step.childTurnId ? <p>Child turn {step.childTurnId}</p> : null}
+                    {step.output ? <p>{step.output}</p> : null}
+                    {step.error ? <p>{step.error}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : delegationRun ? (
+              <p className="chat-cowork-section-copy">Delegation is attached, but no step detail has arrived yet.</p>
+            ) : (
+              <p className="chat-cowork-section-copy">No delegation run is attached to the selected turn.</p>
+            )}
+            {delegationRun?.stitchedOutput ? <p>{delegationRun.stitchedOutput}</p> : null}
           </section>
 
           {items.length > 0 ? (

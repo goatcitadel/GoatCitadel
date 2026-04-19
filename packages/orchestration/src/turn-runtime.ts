@@ -1,6 +1,7 @@
 import type {
   ChatCompletionRequest,
   ChatMode,
+  ChatNormalizationProfile,
   ChatStreamChunkDraft,
   ChatThinkingLevel,
   ChatTurnBranchKind,
@@ -23,6 +24,7 @@ export interface TurnRuntimeRequest {
   memoryMode: "auto" | "on" | "off";
   thinkingLevel: ChatThinkingLevel;
   toolAutonomy: "safe_auto" | "manual";
+  normalizationProfile?: ChatNormalizationProfile;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   signal?: AbortSignal;

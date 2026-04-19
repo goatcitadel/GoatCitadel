@@ -30,8 +30,9 @@ export function useChatProviderRoutingController(input: {
   const [commandIndex, setCommandIndex] = useState(0);
 
   const providerOptions = useMemo<ChatModelProviderOption[]>(() => {
-    const activeProviderId = input.runtimeLlmConfig?.activeProviderId ?? input.settings?.llm.activeProviderId;
-    const activeModel = input.runtimeLlmConfig?.activeModel ?? input.settings?.llm.activeModel;
+    const settingsLlm = input.settings?.llm;
+    const activeProviderId = input.runtimeLlmConfig?.activeProviderId ?? settingsLlm?.activeProviderId;
+    const activeModel = input.runtimeLlmConfig?.activeModel ?? settingsLlm?.activeModel;
     return input.runtimeProviderCatalog.map((provider) => ({
       providerId: provider.providerId,
       label: provider.label,
@@ -57,28 +58,28 @@ export function useChatProviderRoutingController(input: {
     input.runtimeLlmConfig?.activeModel,
     input.runtimeLlmConfig?.activeProviderId,
     input.runtimeProviderCatalog,
-    input.settings?.llm.activeModel,
-    input.settings?.llm.activeProviderId,
+    input.settings?.llm?.activeModel,
+    input.settings?.llm?.activeProviderId,
   ]);
 
   const selectedProviderId = useMemo(() => {
     const preferredProviderId =
-      input.prefs?.providerId ?? input.runtimeLlmConfig?.activeProviderId ?? input.settings?.llm.activeProviderId;
+      input.prefs?.providerId ?? input.runtimeLlmConfig?.activeProviderId ?? input.settings?.llm?.activeProviderId;
     return providerOptions.find((provider) => provider.providerId === preferredProviderId)?.providerId;
-  }, [input.prefs?.providerId, input.runtimeLlmConfig?.activeProviderId, input.settings?.llm.activeProviderId, providerOptions]);
+  }, [input.prefs?.providerId, input.runtimeLlmConfig?.activeProviderId, input.settings?.llm?.activeProviderId, providerOptions]);
 
   const selectedProviderSelection = useMemo(() => {
     const provider = providerOptions.find((item) => item.providerId === selectedProviderId);
     return resolveProviderModelSelection({
       provider,
       loadedModels: selectedProviderId ? input.getCachedModels(selectedProviderId) : [],
-      selectedModel: input.prefs?.model ?? input.runtimeLlmConfig?.activeModel ?? input.settings?.llm.activeModel,
+      selectedModel: input.prefs?.model ?? input.runtimeLlmConfig?.activeModel ?? input.settings?.llm?.activeModel,
     });
   }, [
     input.getCachedModels,
     input.prefs?.model,
     input.runtimeLlmConfig?.activeModel,
-    input.settings?.llm.activeModel,
+    input.settings?.llm?.activeModel,
     providerOptions,
     selectedProviderId,
   ]);

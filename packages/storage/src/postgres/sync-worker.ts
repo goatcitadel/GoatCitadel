@@ -47,7 +47,7 @@ async function handleRequest(request: PostgresWorkerRequest): Promise<unknown> {
       const executor = request.txId ? getTransactionClient(request.txId) : pool;
       const result = await executor.query(
         request.sql,
-        sanitizeParamsForServerEncoding(request.params, await getServerEncoding()),
+        sanitizeParamsForServerEncoding(request.params, await getServerEncoding(), request.sql),
       );
       if (request.mode === "run") {
         return {

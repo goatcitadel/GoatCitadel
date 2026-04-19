@@ -1083,7 +1083,9 @@ export class ChatProactiveService {
   private async executeProactiveToolAction(
     action: ProactiveActionRecord,
     durableRunId: string,
+    signal?: AbortSignal,
   ): Promise<ProactiveActionRecord> {
+    throwIfProactiveDurableRunAborted(signal);
     if (!action.toolName) {
       return this.updateProactiveAction(action.actionId, {
         status: "blocked",
@@ -1098,11 +1100,13 @@ export class ChatProactiveService {
         agentId: "proactive",
         sessionId: action.sessionId,
         taskId: action.linkedTaskId,
+        signal,
         consentContext: {
           source: "agent",
           reason: "proactive durable execution",
         },
       });
+      throwIfProactiveDurableRunAborted(signal);
       const externalReferenceRoots = this.detectExternalReferenceRoots(action.args, result.result);
       if (result.outcome === "executed") {
         return this.updateProactiveAction(action.actionId, {
@@ -1142,6 +1146,7 @@ export class ChatProactiveService {
         externalReferenceRoots,
       });
     } catch (error) {
+      throwIfProactiveDurableRunAborted(signal);
       return this.updateProactiveAction(action.actionId, {
         status: "failed",
         linkedDurableRunId: durableRunId,
@@ -1236,7 +1241,9 @@ export class ChatProactiveService {
     proactiveRun: ProactiveRunRecord,
     approvalId: string,
     blockedActionId: string,
+    context?: { signal?: AbortSignal },
   ): Promise<"continue" | ProactiveRunRecord> {
+    throwIfProactiveDurableRunAborted(context?.signal);
     const approval = this.ctx.storage.approvals.get(approvalId);
     const blockedAction = this.getProactiveAction(blockedActionId);
 
@@ -1273,6 +1280,7 @@ export class ChatProactiveService {
             approvalId,
           },
         });
+        throwIfProactiveDurableRunAborted(context?.signal);
         return "continue";
       }
 
@@ -1356,6 +1364,7 @@ export class ChatProactiveService {
       });
     }
     this.touchSessionProactiveTick(proactiveRun.sessionId, proactiveRun.runId);
+    throwIfProactiveDurableRunAborted(context?.signal);
     return completed;
   }
 
@@ -1363,7 +1372,9 @@ export class ChatProactiveService {
     run: DurableRunRecord,
     payload: ProactiveTickWorkflowPayload,
     proactiveRun: ProactiveRunRecord,
+    context?: { signal?: AbortSignal },
   ): Promise<ProactiveRunRecord> {
+    throwIfProactiveDurableRunAborted(context?.signal);
     const sessionId = payload.sessionId;
     const proactiveRunId = payload.proactiveRunId;
     const policy = payload.policySnapshot;
@@ -1456,7 +1467,9 @@ export class ChatProactiveService {
     let linkedTaskId = proactiveRun.linkedTaskId;
     let actions = this.listProactiveRunActions(proactiveRunId);
     if (actions.length === 0) {
+      throwIfProactiveDurableRunAborted(context?.signal);
       const plan = await this.planProactiveActions(sessionId);
+      throwIfProactiveDurableRunAborted(context?.signal);
       if (plan.actions.length === 0) {
         const completed = this.finishProactiveDurableRun(
           run,
@@ -1615,7 +1628,9 @@ export class ChatProactiveService {
 
       remainingHourBudget = Math.max(0, remainingHourBudget - 1);
       remainingTurnBudget = Math.max(0, remainingTurnBudget - 1);
-      const executed = await this.executeProactiveToolAction(action, run.runId);
+      throwIfProactiveDurableRunAborted(context?.signal);
+      const executed = await this.executeProactiveToolAction(action, run.runId, context?.signal);
+      throwIfProactiveDurableRunAborted(context?.signal);
       if (executed.approvalId) {
         const waiting = this.refreshProactiveRunSummary(proactiveRunId, {
           status: "blocked",
@@ -1752,7 +1767,11 @@ export class ChatProactiveService {
     return completed;
   }
 
-  async executeDurableProactiveTickRun(run: DurableRunRecord): Promise<void> {
+  async executeDurableProactiveTickRun(
+    run: DurableRunRecord,
+    context?: { signal?: AbortSignal },
+  ): Promise<void> {
+    throwIfProactiveDurableRunAborted(context?.signal);
     const payload = this.parseProactiveTickWorkflowPayload(run);
     if (!payload) {
       throw new Error("Durable proactive tick payload is invalid or incomplete.");
@@ -1773,7 +1792,9 @@ export class ChatProactiveService {
         proactiveRun,
         durableState.approvalId,
         durableState.blockedActionId,
+        context,
       );
+      throwIfProactiveDurableRunAborted(context?.signal);
       if (resumed !== "continue") {
         return;
       }
@@ -1784,7 +1805,8 @@ export class ChatProactiveService {
       });
     }
 
-    await this.continueDurableProactiveExecution(run, payload, proactiveRun);
+    await this.continueDurableProactiveExecution(run, payload, proactiveRun, context);
+    throwIfProactiveDurableRunAborted(context?.signal);
   }
 
   private touchSessionProactiveTick(sessionId: string, runId: string): void {
@@ -2130,4 +2152,12 @@ function dedupeReferenceRoots(items: ProactiveReferenceRootRecord[]): ProactiveR
     deduped.push(item);
   }
   return deduped;
+}
+
+function throwIfProactiveDurableRunAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Durable proactive run aborted.");
 }

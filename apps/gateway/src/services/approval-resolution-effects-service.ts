@@ -36,8 +36,8 @@ export interface ApprovalEffectsServiceDeps {
   ): DurableWakeResult;
   requestRunProcessing(runId: string): void;
   findProactiveDurableRunIdsForApproval(approvalId: string): string[];
-  executeCodeModePendingApproval(approvalId: string): Promise<ToolInvokeResult | undefined>;
-  executeApprovedPendingAction(approvalId: string): Promise<ToolInvokeResult | undefined>;
+  executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
+  executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   enqueueAfterHooks(input: {
     workspaceId: string;
     trigger: "approval.resolve.after";
@@ -70,8 +70,10 @@ export interface ApprovalEffectsServiceContext {
 export class ApprovalEffectsService {
   private workerActive = false;
   private workerRequested = false;
+  private workerStopped = false;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly workerId = randomUUID();
+  private readonly activeEffectAbortControllers = new Map<string, AbortController>();
 
   public constructor(
     private readonly ctx: ApprovalEffectsServiceContext,
@@ -79,11 +81,30 @@ export class ApprovalEffectsService {
   ) {}
 
   public startWorker(): void {
+    this.workerStopped = false;
     this.ensurePollLoop();
     this.requestEffectProcessing();
   }
 
+  public stopWorker(): void {
+    this.workerStopped = true;
+    this.workerRequested = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    for (const [effectId, controller] of this.activeEffectAbortControllers.entries()) {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error(`Approval effect ${effectId} aborted because the worker stopped.`));
+      }
+    }
+    this.activeEffectAbortControllers.clear();
+  }
+
   public requestEffectProcessing(): void {
+    if (this.workerStopped) {
+      return;
+    }
     this.workerRequested = true;
     if (this.workerActive) {
       return;
@@ -95,7 +116,7 @@ export class ApprovalEffectsService {
         do {
           this.workerRequested = false;
           await this.drainPendingEffects();
-        } while (this.workerRequested);
+        } while (this.workerRequested && !this.workerStopped);
       } finally {
         this.workerActive = false;
         backgroundTasks.delete(task);
@@ -109,6 +130,9 @@ export class ApprovalEffectsService {
   }
 
   public enqueueResolutionEffects(approval: ApprovalRequest, input: ApprovalResolveInput): ApprovalEffectRecord[] {
+    if (isExpiredApprovalRequest(approval)) {
+      return [];
+    }
     const enqueued: ApprovalEffectRecord[] = [];
     const wakePayload = buildWakePayload(approval, input);
     const approvalWaitRunId = this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
@@ -221,7 +245,7 @@ export class ApprovalEffectsService {
         return;
       }
       try {
-        await this.executeWithLeaseHeartbeat(effect, () => this.executeClaimedEffect(effect.effectId));
+        await this.executeWithLeaseHeartbeat(effect, (signal) => this.executeClaimedEffect(effect.effectId, signal));
       } catch (error) {
         const current = this.ctx.storage.approvalEffects.get(effect.effectId);
         if (current.status === "running" && current.claimedBy === this.workerId) {
@@ -236,40 +260,99 @@ export class ApprovalEffectsService {
     }
   }
 
-  private async executeWithLeaseHeartbeat<T>(effect: ApprovalEffectRecord, execute: () => Promise<T>): Promise<T> {
+  private async executeWithLeaseHeartbeat<T>(
+    effect: ApprovalEffectRecord,
+    execute: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     let active = true;
     let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+    let rejectHeartbeatFailure!: (error: Error) => void;
+    const controller = new AbortController();
+    this.activeEffectAbortControllers.set(effect.effectId, controller);
+    const heartbeatFailure = new Promise<never>((_, reject) => {
+      rejectHeartbeatFailure = reject;
+    });
     const heartbeat = async () => {
       if (!active) {
         return;
       }
-      const current = this.ctx.storage.approvalEffects.get(effect.effectId);
+      if (this.workerStopped) {
+        active = false;
+        const failure = new Error(`Approval effect ${effect.effectId} worker stopped.`);
+        if (!controller.signal.aborted) {
+          controller.abort(failure);
+        }
+        rejectHeartbeatFailure(failure);
+        return;
+      }
+      let current: ApprovalEffectRecord;
+      try {
+        current = this.ctx.storage.approvalEffects.get(effect.effectId);
+      } catch (error) {
+        active = false;
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (!controller.signal.aborted) {
+          controller.abort(failure);
+        }
+        rejectHeartbeatFailure(failure);
+        return;
+      }
       if (current.status !== "running" || current.claimedBy !== this.workerId) {
+        active = false;
+        const failure = new Error(`Approval effect ${current.effectId} lease ownership moved to another worker.`);
+        if (!controller.signal.aborted) {
+          controller.abort(failure);
+        }
+        rejectHeartbeatFailure(failure);
         return;
       }
       const now = new Date().toISOString();
-      this.ctx.storage.approvalEffects.renewEffectLease(
-        current.effectId,
-        this.workerId,
-        current.version,
-        now,
-        new Date(Date.now() + APPROVAL_EFFECT_LEASE_TTL_MS).toISOString(),
-      );
+      try {
+        const renewed = this.ctx.storage.approvalEffects.renewEffectLease(
+          current.effectId,
+          this.workerId,
+          current.version,
+          now,
+          new Date(Date.now() + APPROVAL_EFFECT_LEASE_TTL_MS).toISOString(),
+        );
+        if (!renewed) {
+          throw new Error(`Approval effect ${current.effectId} lease renewal lost ownership.`);
+        }
+      } catch (error) {
+        active = false;
+        const failure =
+          error instanceof Error ? error : new Error(`Approval effect ${effect.effectId} lease heartbeat failed.`);
+        if (!controller.signal.aborted) {
+          controller.abort(failure);
+        }
+        rejectHeartbeatFailure(failure);
+        return;
+      }
       heartbeatTimer = setTimeout(() => void heartbeat(), APPROVAL_EFFECT_HEARTBEAT_MS);
     };
 
     heartbeatTimer = setTimeout(() => void heartbeat(), APPROVAL_EFFECT_HEARTBEAT_MS);
     try {
-      return await execute();
+      return await Promise.race([execute(controller.signal), heartbeatFailure]);
     } finally {
       active = false;
+      this.activeEffectAbortControllers.delete(effect.effectId);
       if (heartbeatTimer) {
         clearTimeout(heartbeatTimer);
       }
     }
   }
 
-  private async executeClaimedEffect(effectId: string): Promise<void> {
+  private isEffectStillClaimed(effectId: string): boolean {
+    try {
+      const current = this.ctx.storage.approvalEffects.get(effectId);
+      return current.status === "running" && current.claimedBy === this.workerId;
+    } catch {
+      return false;
+    }
+  }
+
+  private async executeClaimedEffect(effectId: string, signal?: AbortSignal): Promise<void> {
     const effect = this.ctx.storage.approvalEffects.get(effectId);
     switch (effect.effectKind) {
       case "approval_wait_wake":
@@ -282,7 +365,7 @@ export class ApprovalEffectsService {
         await this.handleLinkedChatTurnWake(effect);
         return;
       case "pending_action_execute":
-        await this.handlePendingActionExecute(effect);
+        await this.handlePendingActionExecute(effect, signal);
         return;
       case "approval_inbox_follow_up":
         await this.handleApprovalInboxFollowUp(effect);
@@ -329,6 +412,36 @@ export class ApprovalEffectsService {
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: recoveredResult,
       });
+      return;
+    }
+    const explicitNonWakeResult = buildExplicitNonWakeResult(
+      result,
+      resultRecord,
+      this.buildAlreadyRunningWakeProof(effect),
+    );
+    if (explicitNonWakeResult) {
+      this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+        result: explicitNonWakeResult,
+      });
+      this.ctx.publishRealtime(
+        resolveApprovalWait ? "approval_wait_wake_skipped" : "approval_wake_skipped",
+        "approvals",
+        {
+          approvalId: effect.approvalId,
+          effectKind: effect.effectKind,
+          targetId: effect.targetId,
+          reason: explicitNonWakeResult.outcome,
+          detail: result.detail,
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            approvalId: effect.approvalId,
+            runId: effect.targetId,
+          },
+        },
+      );
       return;
     }
     if (result.outcome === "failed") {
@@ -400,6 +513,17 @@ export class ApprovalEffectsService {
       });
       return;
     }
+    const explicitNonWakeResult = buildExplicitNonWakeResult(
+      result,
+      resultRecord,
+      this.buildAlreadyRunningWakeProof(effect),
+    );
+    if (explicitNonWakeResult) {
+      this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+        result: explicitNonWakeResult,
+      });
+      return;
+    }
     if (result.outcome === "failed") {
       this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
         lastError: result.detail ?? "Linked chat turn wake failed.",
@@ -412,7 +536,7 @@ export class ApprovalEffectsService {
     });
   }
 
-  private async handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void> {
+  private async handlePendingActionExecute(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
     const pendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
     if (!pendingAction || pendingAction.resolutionStatus === "executed") {
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
@@ -435,17 +559,35 @@ export class ApprovalEffectsService {
 
     let executedAction: ToolInvokeResult | undefined;
     if (pendingAction.actionType === "code_mode.run") {
-      executedAction = await this.deps.executeCodeModePendingApproval(effect.approvalId);
+      executedAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
     } else {
-      executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId);
+      executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId, signal);
+    }
+
+    if (!this.isEffectStillClaimed(effect.effectId)) {
+      return;
+    }
+
+    const refreshedPendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
+    if (refreshedPendingAction && refreshedPendingAction.resolutionStatus && refreshedPendingAction.resolutionStatus !== "pending") {
+      this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+        result: {
+          actionType: refreshedPendingAction.actionType,
+          resolutionStatus: refreshedPendingAction.resolutionStatus,
+          ...(refreshedPendingAction.result ? { result: refreshedPendingAction.result } : {}),
+        },
+      });
+      return;
     }
 
     if (executedAction?.outcome === "executed") {
-      this.ctx.storage.pendingApprovalActions.markResolved(
-        effect.approvalId,
-        "executed",
-        toolInvokeResultToRecord(executedAction),
-      );
+      if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
+        this.ctx.storage.pendingApprovalActions.markResolved(
+          effect.approvalId,
+          "executed",
+          toolInvokeResultToRecord(executedAction),
+        );
+      }
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: toolInvokeResultToRecord(executedAction),
       });
@@ -453,7 +595,9 @@ export class ApprovalEffectsService {
     }
 
     const failureRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
-    this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord);
+    if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
+      this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord);
+    }
     this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
       lastError: executedAction?.policyReason ?? "Approved action could not execute.",
       result: failureRecord,
@@ -568,19 +712,72 @@ export class ApprovalEffectsService {
   }
 
   private ensurePollLoop(): void {
-    if (this.pollTimer) {
+    if (this.pollTimer || this.workerStopped) {
       return;
     }
     const scheduleNext = () => {
+      if (this.workerStopped) {
+        return;
+      }
       const jitter = Math.floor(Math.random() * APPROVAL_EFFECT_POLL_JITTER_MS);
       this.pollTimer = setTimeout(() => {
         this.pollTimer = undefined;
+        if (this.workerStopped) {
+          return;
+        }
         this.requestEffectProcessing();
         scheduleNext();
       }, APPROVAL_EFFECT_POLL_MIN_MS + jitter);
     };
     scheduleNext();
   }
+
+  private buildAlreadyRunningWakeProof(effect: ApprovalEffectRecord): Record<string, unknown> | undefined {
+    const pendingAction = this.ctx.storage.pendingApprovalActions?.find(effect.approvalId);
+    const executedOutcome =
+      typeof pendingAction?.result?.outcome === "string" ? pendingAction.result.outcome : undefined;
+    if (pendingAction?.resolutionStatus === "executed" || executedOutcome === "executed") {
+      return {
+        proofSource: "pending_approval_action",
+        proofStatus: pendingAction?.resolutionStatus ?? executedOutcome ?? "executed",
+        actionType: pendingAction?.actionType,
+      };
+    }
+
+    try {
+      const trace = this.ctx.storage.chatTurnTraces?.get(effect.targetId) as
+        | {
+            assistantMessageId?: string;
+            status?: string;
+            durable?: { status?: string; checkpointKind?: string };
+          }
+        | undefined;
+      if (
+        trace?.assistantMessageId ||
+        trace?.status === "completed" ||
+        trace?.durable?.status === "completed" ||
+        trace?.durable?.checkpointKind === "run_completed"
+      ) {
+        return {
+          proofSource: "chat_turn_trace",
+          proofStatus: trace?.durable?.status ?? trace?.status ?? "completed",
+          checkpointKind: trace?.durable?.checkpointKind,
+        };
+      }
+    } catch {
+      // no proof available from chat traces
+    }
+
+    return undefined;
+  }
+}
+
+function isExpiredApprovalRequest(approval: ApprovalRequest): boolean {
+  if (!approval.expiresAt) {
+    return false;
+  }
+  const expiresAt = Date.parse(approval.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
 export function deriveApprovalResolutionEffectsResult(
@@ -652,7 +849,7 @@ function buildRecoveredWakeResult(
   if (result.outcome !== "skipped_not_waiting") {
     return undefined;
   }
-  if (result.run?.status !== "queued" && result.run?.status !== "running") {
+  if (result.run?.status !== "queued") {
     return undefined;
   }
   return {
@@ -661,6 +858,23 @@ function buildRecoveredWakeResult(
     reconciled: true,
     reconciledFrom: "skipped_not_waiting",
     observedRunStatus: result.run.status,
+  };
+}
+
+function buildExplicitNonWakeResult(
+  result: DurableWakeResult,
+  resultRecord: Record<string, unknown>,
+  proof: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (result.outcome !== "skipped_not_waiting" || result.run?.status !== "running") {
+    return undefined;
+  }
+  return {
+    ...resultRecord,
+    outcome: "already_running_unverified",
+    reconciled: false,
+    observedRunStatus: result.run.status,
+    ...(proof ? { proof } : {}),
   };
 }
 

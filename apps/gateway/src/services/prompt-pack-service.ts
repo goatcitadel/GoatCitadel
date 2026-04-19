@@ -58,7 +58,7 @@ import {
   chatModeRequiresProjectBinding,
   getChatModePreset,
 } from "@goatcitadel/contracts";
-import type { Storage } from "@goatcitadel/storage";
+import { hashPromptPackPolicyV2, type Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway-service.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
@@ -76,14 +76,15 @@ const PROMPT_PACK_V2_DIMENSIONS = [
   "usability",
 ] as const satisfies readonly PromptPackScoreDimensionV2[];
 const PROMPT_PACK_V2_SCHEMA_VERSION = "v2";
-const PROMPT_PACK_V2_SCORER_VERSION = "2026-04-09.1";
+const PROMPT_PACK_V2_SCORER_VERSION = "2026-04-16.2";
 const PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION = "2026-04-09.1";
 const PROMPT_PACK_V2_PASS_THRESHOLD = DEFAULT_PROMPT_PACK_POLICY_V2.threshold;
 const PROMPT_PACK_V2_SCORING_ENABLED_ENV = "PROMPT_PACK_V2_SCORING_ENABLED";
-const PROMPT_PACK_V2_JUDGE_REQUIRED_ENFORCED_ENV = "PROMPT_PACK_V2_JUDGE_REQUIRED_ENFORCED";
 const PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS = 5;
 const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
+const PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS = 120_000;
+const PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS = 30_000;
 const DEFAULT_PROMPT_RUNNER_SOURCE = "goatcitadel_prompt_pack.md";
 const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
 const PROMPT_PACK_PROJECT_NAME = "Prompt Lab Workspace";
@@ -107,6 +108,7 @@ export interface PromptPackServiceContext {
   readonly gatewaySql: Storage["gatewaySql"];
   readonly config: GatewayRuntimeConfig;
   normalizeWorkspaceId(workspaceId?: string): string;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
   publishRealtime(
     channel: string,
@@ -125,6 +127,9 @@ interface PromptPackBenchmarkRunRow {
   providers_json: string;
   total_items: number;
   completed_items: number;
+  claimed_by_worker_id: string | null;
+  claim_heartbeat_at: string | null;
+  claim_expires_at: string | null;
   error: string | null;
   started_at: string;
   finished_at: string | null;
@@ -176,6 +181,19 @@ interface PromptPackJudgeEvaluationV2 {
   judgeModel?: string;
 }
 
+interface PromptPackAutoScoreBatchError {
+  testId: string;
+  runId?: string;
+  error: string;
+}
+
+interface PromptPackCurrentGenerationConfig {
+  policyHash?: string;
+  scoringSchemaVersion?: string;
+  scorerVersion?: string;
+  judgeRubricVersion?: string;
+}
+
 // ── callbacks / deps the service cannot own directly ─────────────────
 export interface PromptPackServiceDeps {
   /** Create a transient chat session for running a prompt-pack test. */
@@ -185,7 +203,16 @@ export interface PromptPackServiceDeps {
     sessionId: string,
     input: Pick<
       ChatSendMessageRequest,
-      "content" | "providerId" | "model" | "mode" | "webMode" | "memoryMode" | "thinkingLevel" | "prefsOverride"
+      | "content"
+      | "providerId"
+      | "model"
+      | "signal"
+      | "mode"
+      | "webMode"
+      | "memoryMode"
+      | "thinkingLevel"
+      | "normalizationProfile"
+      | "prefsOverride"
     >,
   ): Promise<ChatSendMessageResponse>;
   /** Raw LLM completion for model-judge scoring. */
@@ -239,6 +266,11 @@ interface PromptPackProjectBindingConfig {
   workspacePath: string;
 }
 
+interface PromptPackDurableReadinessInput {
+  readonly durable: Pick<GatewayRuntimeConfig["assistant"]["durable"], "enabled" | "executionEnabled" | "chatAutoPromoteEnabled">;
+  readonly durableKernelV1Enabled: boolean;
+}
+
 const PROMPT_PACK_FIXTURE_PROJECT_BINDING: PromptPackProjectBindingConfig = {
   name: PROMPT_PACK_PROJECT_NAME,
   description: PROMPT_PACK_PROJECT_DESCRIPTION,
@@ -250,6 +282,31 @@ const PROMPT_PACK_REPO_PROJECT_BINDING: PromptPackProjectBindingConfig = {
   description: PROMPT_PACK_REPO_PROJECT_DESCRIPTION,
   workspacePath: PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH,
 };
+
+export function promptPackExecutionRequiresDurable(profile: Pick<PromptPackExecutionProfile, "mode">): boolean {
+  return profile.mode === "chat" || profile.mode === "cowork" || profile.mode === "code";
+}
+
+export function ensurePromptPackDurableReadiness(
+  profile: Pick<PromptPackExecutionProfile, "mode">,
+  readiness: PromptPackDurableReadinessInput,
+): void {
+  if (!promptPackExecutionRequiresDurable(profile)) {
+    return;
+  }
+  if (
+    readiness.durable.enabled &&
+    readiness.durable.executionEnabled &&
+    readiness.durable.chatAutoPromoteEnabled &&
+    readiness.durableKernelV1Enabled
+  ) {
+    return;
+  }
+  throw new Error(
+    `Prompt Lab preflight failed: durable-owned ${profile.mode} execution is unavailable. ` +
+      "GoatCitadel shipped Chat/Cowork/Code runs require durable execution before Prompt Lab can start the run.",
+  );
+}
 
 // Keep in sync with LOCAL_PATH_TOOL_NAMES in chat-agent-orchestrator.ts
 const PROMPT_PACK_FILE_TOOL_NAMES = [
@@ -321,10 +378,22 @@ const PROMPT_PACK_EXPLICIT_TOOL_NAMES = [
  * in GatewayService.
  */
 export class PromptPackService {
+  private readonly benchmarkWorkerId = `prompt-pack-benchmark-${randomUUID()}`;
+  private readonly activeBenchmarkRunIds = new Set<string>();
+  private readonly cancelledBenchmarkRunIds = new Set<string>();
+  private readonly activeBenchmarkAbortControllers = new Map<string, AbortController>();
+
   constructor(
     private readonly ctx: PromptPackServiceContext,
     private readonly deps: PromptPackServiceDeps,
   ) {}
+
+  private assertDurablePreflight(profile: PromptPackExecutionProfile): void {
+    ensurePromptPackDurableReadiness(profile, {
+      durable: this.ctx.config.assistant.durable,
+      durableKernelV1Enabled: this.ctx.isFeatureEnabled("durableKernelV1Enabled"),
+    });
+  }
 
   // ── public API ─────────────────────────────────────────────────────
 
@@ -343,7 +412,7 @@ export class PromptPackService {
       sourceLabel: input.sourceLabel,
       tests,
     });
-    this.refreshPromptPackExportFile(imported.pack.packId);
+    this.refreshPromptPackExportFileBestEffort(imported.pack.packId, "import_prompt_pack");
     return imported;
   }
 
@@ -363,6 +432,7 @@ export class PromptPackService {
       sessionId?: string;
       providerId?: string;
       model?: string;
+      signal?: AbortSignal;
       mode?: ChatMode;
       toolTier?: PromptPackToolTier;
       toolAutonomy?: "safe_auto" | "manual";
@@ -378,13 +448,14 @@ export class PromptPackService {
       throw new Error("Prompt-pack test does not belong to this pack.");
     }
 
-    const defaults = this.deps.getPromptJudgeModelDefaults();
+    const defaults = this.deps.getPromptRunnerModelDefaults();
     const providerId = input?.providerId ?? defaults.providerId;
     const model = input?.model ?? defaults.model;
     const executionProfile = resolvePromptPackExecutionProfile({
       test,
       override: input,
     });
+    this.assertDurablePreflight(executionProfile);
     const resolvedPrompt = applyPromptPlaceholderValues(test.prompt, input?.placeholderValues);
     if (resolvedPrompt.missingPlaceholders.length > 0) {
       throw new Error(`Missing placeholder values for ${test.code}: ${resolvedPrompt.missingPlaceholders.join(", ")}.`);
@@ -425,25 +496,33 @@ export class PromptPackService {
         content: promptInput.prompt,
         providerId,
         model,
+        signal: input?.signal,
         mode: executionProfile.mode,
         webMode: executionProfile.webMode,
         memoryMode: executionProfile.memoryMode,
         thinkingLevel: executionProfile.thinkingLevel,
+        normalizationProfile: "prompt_pack_harness",
         prefsOverride: buildPromptPackSessionPrefsOverride(executionProfile, resolvedPrompt.prompt),
       });
-      const responseText = finalizePromptPackResponseText({
+      const refreshedTurn = await this.awaitPromptPackTurnSnapshot(response.turnId, response);
+      const effectiveTrace = refreshedTurn.trace ?? response.trace;
+      const persistedAssistantContent = refreshedTurn.assistantContent?.trim() ?? "";
+      const responseAssistantContent = response.assistantMessage?.content?.trim() ?? "";
+      const rawResponseText = (persistedAssistantContent || responseAssistantContent).trim();
+      const effectiveCitations = refreshedTurn.citations ?? response.citations;
+      const derivedResponse = derivePromptPackResponseArtifacts({
         prompt: promptInput.prompt,
-        responseText: response.assistantMessage?.content ?? "",
-        trace: response.trace,
+        rawResponseText,
+        trace: effectiveTrace,
       });
       const integrity = evaluatePromptPackRunIntegrity({
         prompt: resolvedPrompt.prompt,
-        responseText,
-        trace: response.trace,
+        responseText: rawResponseText,
+        trace: effectiveTrace,
         outputTokenCount: response.assistantMessage?.tokenOutput,
       });
-      const traceStatus = response.trace?.status;
-      const missingOutput = responseText.trim().length === 0;
+      const traceStatus = effectiveTrace?.status;
+      const missingOutput = rawResponseText.length === 0;
       const failedByTrace = traceStatus === "failed";
       const approvalPending = traceStatus === "waiting_for_approval";
       const status: PromptPackRunRecord["status"] = approvalPending
@@ -457,18 +536,22 @@ export class PromptPackService {
             ? "Turn paused for approval."
             : missingOutput
               ? "No assistant output generated."
-              : "Assistant turn finished in failed state."
+              : failedByTrace
+                ? "Assistant turn finished in failed state."
+                : undefined
           : undefined;
       const updated = this.ctx.storage.promptPackRuns.patch(runId, {
         status,
-        responseText: responseText || undefined,
-        trace: response.trace,
-        citations: response.citations,
+        responseText: rawResponseText || undefined,
+        derivedResponseText: derivedResponse.derivedResponseText,
+        derivedResponseSignals: derivedResponse.derivedResponseSignals,
+        trace: effectiveTrace,
+        citations: effectiveCitations,
         integrity,
         error,
         finishedAt: new Date().toISOString(),
       });
-      this.refreshPromptPackExportFile(pack.packId);
+      this.refreshPromptPackExportFileBestEffort(pack.packId, "run_prompt_pack_test_success");
       return updated;
     } catch (error) {
       const failed = this.ctx.storage.promptPackRuns.patch(runId, {
@@ -476,7 +559,7 @@ export class PromptPackService {
         error: (error as Error).message,
         finishedAt: new Date().toISOString(),
       });
-      this.refreshPromptPackExportFile(pack.packId);
+      this.refreshPromptPackExportFileBestEffort(pack.packId, "run_prompt_pack_test_failure");
       return failed;
     }
   }
@@ -541,7 +624,7 @@ export class PromptPackService {
       overrideVerdict: input.overrideVerdict,
       createdAt: new Date().toISOString(),
     });
-    this.refreshPromptPackExportFile(input.packId);
+    this.refreshPromptPackExportFileBestEffort(input.packId, "review_prompt_pack_test");
     return review;
   }
 
@@ -551,6 +634,7 @@ export class PromptPackService {
     runId?: string;
     providerId?: string;
     model?: string;
+    signal?: AbortSignal;
     force?: boolean;
   }): Promise<PromptPackAutoScoreResult> {
     if (!isPromptPackV2FlagEnabled(PROMPT_PACK_V2_SCORING_ENABLED_ENV)) {
@@ -577,13 +661,14 @@ export class PromptPackService {
 
     const executionProfile = getResolvedPromptPackExecutionProfile(run, test);
     const policy = resolvePromptPackPolicy(pack);
-    const policyHash = pack.policyHash ?? hashPromptPackPolicy(policy);
+    const policyHash = pack.policyHash ?? hashPromptPackPolicyV2(policy);
     const policySource = pack.policySource ?? "inherited_default";
     const existingScores = this.ctx.storage.promptPackAutoScoresV2.listByRun(run.runId, 100);
     const matchingScore = existingScores.find(
       (score) =>
         score.scoringSchemaVersion === PROMPT_PACK_V2_SCHEMA_VERSION &&
         score.scorerVersion === PROMPT_PACK_V2_SCORER_VERSION &&
+        score.judgeRubricVersion === PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION &&
         score.policyHash === policyHash,
     );
     const legacyScore = this.ctx.storage.promptPackScores.listByRun(run.runId, 1)[0];
@@ -593,7 +678,7 @@ export class PromptPackService {
       profile: executionProfile,
       policy,
     });
-    if (matchingScore) {
+    if (matchingScore && !input.force) {
       return {
         score: matchingScore,
         legacyScore,
@@ -610,6 +695,7 @@ export class PromptPackService {
       profile: executionProfile,
       providerId: input.providerId,
       model: input.model,
+      signal: input.signal,
     });
 
     const merged = mergePromptPackAutoScoresV2({
@@ -624,7 +710,7 @@ export class PromptPackService {
 
     const score = this.ctx.storage.promptPackAutoScoresV2.create({
       ...merged,
-      autoScoreId: `ppasv2-${randomUUID()}`,
+      autoScoreId: matchingScore?.autoScoreId ?? `ppasv2-${randomUUID()}`,
       packId: pack.packId,
       testId: test.testId,
       runId: run.runId,
@@ -635,7 +721,7 @@ export class PromptPackService {
       policySource,
       createdAt: new Date().toISOString(),
     });
-    this.refreshPromptPackExportFile(input.packId);
+    this.refreshPromptPackExportFileBestEffort(input.packId, "auto_score_prompt_pack_test");
 
     return {
       score,
@@ -650,31 +736,35 @@ export class PromptPackService {
     limit?: number;
     providerId?: string;
     model?: string;
+    signal?: AbortSignal;
     force?: boolean;
   }): Promise<PromptPackAutoScoreBatchResult> {
     const pack = this.ctx.storage.promptPacks.getPack(input.packId);
     const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     const policy = resolvePromptPackPolicy(pack);
-    const policyHash = pack.policyHash ?? hashPromptPackPolicy(policy);
+    const policyHash = pack.policyHash ?? hashPromptPackPolicyV2(policy);
     const limit = Math.max(1, Math.min(input.limit ?? tests.length, 500));
     const onlyUnscored = input.onlyUnscored ?? true;
 
     const items: PromptPackAutoScoreResult[] = [];
     let skipped = 0;
+    const errors: PromptPackAutoScoreBatchError[] = [];
 
     for (const test of tests.slice(0, limit)) {
-      const latestRun = this.ctx.storage.promptPackRuns.listByTest(test.testId, 1)[0];
-      if (!latestRun) {
+      const candidateRuns = this.ctx.storage.promptPackRuns.listByTest(test.testId, 100);
+      const selectedRun = pickPromptPackAutoScoreRun(candidateRuns);
+      if (!selectedRun) {
         skipped += 1;
         continue;
       }
       if (onlyUnscored) {
         const existing = this.ctx.storage.promptPackAutoScoresV2
-          .listByRun(latestRun.runId, 100)
+          .listByRun(selectedRun.runId, 100)
           .some(
             (score) =>
               score.scoringSchemaVersion === PROMPT_PACK_V2_SCHEMA_VERSION &&
               score.scorerVersion === PROMPT_PACK_V2_SCORER_VERSION &&
+              score.judgeRubricVersion === PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION &&
               score.policyHash === policyHash,
           );
         if (existing) {
@@ -682,22 +772,40 @@ export class PromptPackService {
           continue;
         }
       }
-      items.push(
-        await this.autoScorePromptPackTest({
+      try {
+        items.push(
+          await this.autoScorePromptPackTest({
+            packId: pack.packId,
+            testId: test.testId,
+            runId: selectedRun.runId,
+            providerId: input.providerId,
+            model: input.model,
+            signal: input.signal,
+            force: input.force,
+          }),
+        );
+      } catch (error) {
+        skipped += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push({
+          testId: test.testId,
+          runId: selectedRun.runId,
+          error: message,
+        });
+        log.warn("prompt-pack auto-score batch item failed", {
           packId: pack.packId,
           testId: test.testId,
-          runId: latestRun.runId,
-          providerId: input.providerId,
-          model: input.model,
-          force: input.force,
-        }),
-      );
+          runId: selectedRun.runId,
+          error: message,
+        });
+      }
     }
 
     return {
       items,
       skipped,
-    };
+      ...(errors.length > 0 ? { errors } : {}),
+    } as PromptPackAutoScoreBatchResult;
   }
 
   async scorePromptPackLatestRunByCode(input: {
@@ -746,7 +854,10 @@ export class PromptPackService {
     const scores = this.ctx.storage.promptPackScores.listByPack(packId, 10000);
     const autoScoresV2 = this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10000);
     const humanReviewsV2 = this.ctx.storage.promptPackHumanReviewsV2.listByPack(packId, 10000);
-    const latestAssessments = buildPromptPackLatestStateV2(tests, runs, autoScoresV2, humanReviewsV2, scores);
+    const generation = {
+      policyHash: pack.policyHash ?? hashPromptPackPolicyV2(resolvePromptPackPolicy(pack)),
+    };
+    const latestAssessments = buildPromptPackLatestStateV2(tests, runs, autoScoresV2, humanReviewsV2, scores, generation);
 
     return {
       pack,
@@ -756,7 +867,15 @@ export class PromptPackService {
       autoScoresV2,
       humanReviewsV2,
       latestAssessments,
-      summary: buildPromptPackReportSummary(tests, runs, scores, autoScoresV2, humanReviewsV2, latestAssessments),
+      summary: buildPromptPackReportSummary(
+        tests,
+        runs,
+        scores,
+        autoScoresV2,
+        humanReviewsV2,
+        latestAssessments,
+        generation,
+      ),
     };
   }
 
@@ -794,6 +913,9 @@ export class PromptPackService {
       }
       selectedTests.push(test);
     }
+    for (const test of selectedTests) {
+      this.assertDurablePreflight(resolvePromptPackExecutionProfile({ test }));
+    }
 
     const providers = dedupeBenchmarkProviders(input.providers).slice(0, PROMPT_PACK_BENCHMARK_MAX_PROVIDERS);
     if (providers.length < 1) {
@@ -826,28 +948,7 @@ export class PromptPackService {
         startedAt,
       });
 
-    const task = this.runPromptPackBenchmarkTask(benchmarkRunId)
-      .catch((error) => {
-        const now = new Date().toISOString();
-        this.ctx.gatewaySql
-          .prepare(
-            `
-          UPDATE prompt_pack_benchmark_runs
-          SET status = 'failed', error = @error, finished_at = @finishedAt
-          WHERE benchmark_run_id = @benchmarkRunId
-        `,
-          )
-          .run({
-            benchmarkRunId,
-            error: (error as Error).message,
-            finishedAt: now,
-          });
-      })
-      .finally(() => {
-        this.deps.backgroundTasks.delete(task);
-      });
-    this.deps.backgroundTasks.add(task);
-    void task;
+    this.enqueuePromptPackBenchmarkTask(benchmarkRunId);
 
     this.ctx.publishRealtime("prompt_pack_benchmark_started", "promptLab", {
       benchmarkRunId,
@@ -860,33 +961,11 @@ export class PromptPackService {
   }
 
   getPromptPackBenchmarkStatus(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
-    const runRow = toPromptPackBenchmarkRunRow(
-      this.ctx.gatewaySql
-        .prepare(
-          `
-      SELECT *
-      FROM prompt_pack_benchmark_runs
-      WHERE benchmark_run_id = ?
-    `,
-        )
-        .get(benchmarkRunId),
-    );
+    const runRow = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
     if (!runRow) {
       throw new Error(`Prompt-pack benchmark run ${benchmarkRunId} not found.`);
     }
-    const itemRows = toPromptPackBenchmarkItemRows(
-      this.ctx.gatewaySql
-        .prepare(
-          `
-      SELECT *
-      FROM prompt_pack_benchmark_items
-      WHERE benchmark_run_id = ?
-      ORDER BY created_at ASC
-    `,
-        )
-        .all(benchmarkRunId),
-    );
-    const items = itemRows.map((row) => mapPromptPackBenchmarkItemRow(row));
+    const items = this.listPromptPackBenchmarkItems(benchmarkRunId);
     const run = mapPromptPackBenchmarkRunRow(runRow);
     const modelSummaries = summarizePromptPackBenchmarkItems(items);
     return {
@@ -897,6 +976,79 @@ export class PromptPackService {
       },
       modelSummaries,
     };
+  }
+
+  cancelPromptPackBenchmark(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
+    const status = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+    if (
+      status.run.status === "completed" ||
+      status.run.status === "failed" ||
+      status.run.status === "cancelled"
+    ) {
+      return status;
+    }
+
+    this.cancelledBenchmarkRunIds.add(benchmarkRunId);
+    this.activeBenchmarkAbortControllers
+      .get(benchmarkRunId)
+      ?.abort(new Error(`Prompt-pack benchmark ${benchmarkRunId} was cancelled by operator.`));
+    const finishedAt = new Date().toISOString();
+    const updateResult = this.ctx.gatewaySql
+      .prepare(
+        `
+      UPDATE prompt_pack_benchmark_runs
+      SET
+        status = 'cancelled',
+        error = @error,
+        finished_at = @finishedAt,
+        claimed_by_worker_id = NULL,
+        claim_heartbeat_at = NULL,
+        claim_expires_at = NULL
+      WHERE benchmark_run_id = @benchmarkRunId
+        AND status IN ('queued', 'running')
+    `,
+      )
+      .run({
+        benchmarkRunId,
+        error: "Cancelled by operator.",
+        finishedAt,
+      });
+
+    const cancelled = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+    if (Number(updateResult.changes ?? 0) < 1) {
+      this.cancelledBenchmarkRunIds.delete(benchmarkRunId);
+      return cancelled;
+    }
+    this.ctx.publishRealtime("prompt_pack_benchmark_cancelled", "promptLab", {
+      benchmarkRunId,
+      completedItems: cancelled.progress.completedItems,
+    });
+    return cancelled;
+  }
+
+  resumeInterruptedBenchmarkRuns(): number {
+    const now = new Date().toISOString();
+    const rows = toPromptPackBenchmarkRunRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+      SELECT *
+      FROM prompt_pack_benchmark_runs
+      WHERE status IN ('queued', 'running')
+        AND (
+          claimed_by_worker_id IS NULL
+          OR claim_expires_at IS NULL
+          OR claim_expires_at <= @now
+        )
+      ORDER BY started_at ASC
+    `,
+        )
+        .all({ now }),
+    );
+    for (const row of rows) {
+      this.enqueuePromptPackBenchmarkTask(row.benchmark_run_id);
+    }
+    return rows.length;
   }
 
   runPromptPackReplayRegression(
@@ -1223,7 +1375,7 @@ export class PromptPackService {
         // no-op
       }
     } else if (clearScores) {
-      this.refreshPromptPackExportFile(packId);
+      this.refreshPromptPackExportFileBestEffort(packId, "reset_prompt_pack_runs_and_scores");
     }
 
     return {
@@ -1244,7 +1396,7 @@ export class PromptPackService {
     if (tests.length === 0) {
       throw new Error("Prompt pack has no tests.");
     }
-    const defaults = this.deps.getPromptJudgeModelDefaults();
+    const defaults = this.deps.getPromptRunnerModelDefaults();
     const selectedTests =
       selector === "all" ? tests : tests.filter((test) => test.code.toUpperCase() === selector.toUpperCase());
     if (selectedTests.length === 0) {
@@ -1293,157 +1445,382 @@ export class PromptPackService {
   // ── private helpers ────────────────────────────────────────────────
 
   private async runPromptPackBenchmarkTask(benchmarkRunId: string): Promise<void> {
-    const run = this.getPromptPackBenchmarkStatus(benchmarkRunId).run;
-    if (run.status === "completed" || run.status === "failed") {
+    const claimedRow = this.claimPromptPackBenchmarkRun(benchmarkRunId);
+    if (!claimedRow) {
       return;
     }
-    this.ctx.gatewaySql
-      .prepare(
-        `
-      UPDATE prompt_pack_benchmark_runs
-      SET status = 'running', error = NULL
-      WHERE benchmark_run_id = @benchmarkRunId
-    `,
-      )
-      .run({ benchmarkRunId });
+    const run = mapPromptPackBenchmarkRunRow(claimedRow);
+    const existingItems = this.listPromptPackBenchmarkItems(benchmarkRunId);
+    const completedKeys = new Set(
+      existingItems.map((item) => `${item.providerId}::${item.model}::${item.testCode.toUpperCase()}`),
+    );
+    const completedCount = new Set(
+      existingItems.map((item) => `${item.providerId}::${item.model}::${item.testId}`),
+    ).size;
 
-    const tests = this.ctx.storage.promptPacks.listTests(run.packId, 5000);
-    const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
-    const selectedTests = run.testCodes
-      .map((code) => codeToTest.get(code.toUpperCase()))
-      .filter((item): item is PromptPackTestRecord => Boolean(item));
+    await this.executeWithBenchmarkClaimHeartbeat(benchmarkRunId, async (signal) => {
+      throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+      if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+        return;
+      }
 
-    let completedItems = 0;
-    for (const provider of run.providers) {
-      for (const test of selectedTests) {
-        const createdAt = new Date().toISOString();
-        let runStatus!: PromptPackBenchmarkItemRecord["runStatus"];
-        let runId: string | undefined;
-        let scoreId: string | undefined;
-        let autoScoreId: string | undefined;
-        let totalScore: number | undefined;
-        let weightedScore: number | undefined;
-        let verdict: PromptPackVerdict | undefined;
-        let scoreState: PromptPackScoreState | undefined;
-        let failureSignal: string | undefined;
+      const tests = this.ctx.storage.promptPacks.listTests(run.packId, 5000);
+      const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
+      const selectedTests = run.testCodes
+        .map((code) => codeToTest.get(code.toUpperCase()))
+        .filter((item): item is PromptPackTestRecord => Boolean(item));
 
-        try {
-          const promptRun = await this.runPromptPackTest(run.packId, test.testId, {
-            providerId: provider.providerId,
-            model: provider.model,
-          });
-          runId = promptRun.runId;
-          runStatus = promptRun.status;
-          if (promptRun.status === "completed") {
-            try {
-              const scored = await this.autoScorePromptPackTest({
-                packId: run.packId,
-                testId: test.testId,
-                runId: promptRun.runId,
-                providerId: provider.providerId,
-                model: provider.model,
-                force: true,
-              });
-              autoScoreId = scored.score.autoScoreId;
-              scoreId = scored.legacyScore?.scoreId;
-              totalScore = scored.legacyScore?.totalScore;
-              weightedScore = scored.score.weightedScore;
-              verdict = scored.score.autoVerdict;
-              scoreState = scored.score.scoreState;
-              if (scored.score.autoVerdict !== "pass") {
-                failureSignal = `verdict_${scored.score.autoVerdict}`;
-              }
-            } catch (error) {
-              failureSignal = `score_error: ${(error as Error).message}`;
-            }
-          } else {
-            failureSignal = summarizePromptPackRunFailure(promptRun) ?? "run_failed";
+      let completedItems = Math.max(claimedRow.completed_items, completedCount);
+      for (const provider of run.providers) {
+        for (const test of selectedTests) {
+          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            return;
           }
-        } catch (error) {
-          runStatus = "failed";
-          failureSignal = (error as Error).message;
-        }
+          const itemKey = `${provider.providerId}::${provider.model}::${test.code.toUpperCase()}`;
+          if (completedKeys.has(itemKey)) {
+            continue;
+          }
+          const createdAt = new Date().toISOString();
+          let runStatus!: PromptPackBenchmarkItemRecord["runStatus"];
+          let runId: string | undefined;
+          let scoreId: string | undefined;
+          let autoScoreId: string | undefined;
+          let totalScore: number | undefined;
+          let weightedScore: number | undefined;
+          let verdict: PromptPackVerdict | undefined;
+          let scoreState: PromptPackScoreState | undefined;
+          let failureSignal: string | undefined;
 
-        this.ctx.gatewaySql
-          .prepare(
-            `
-          INSERT INTO prompt_pack_benchmark_items (
-            item_id, benchmark_run_id, pack_id, test_id, test_code, provider_id, model,
-            run_id, score_id, auto_score_id, run_status, total_score, weighted_score, verdict, score_state,
-            failure_signal, created_at
-          ) VALUES (
-            @itemId, @benchmarkRunId, @packId, @testId, @testCode, @providerId, @model,
-            @runId, @scoreId, @autoScoreId, @runStatus, @totalScore, @weightedScore, @verdict, @scoreState,
-            @failureSignal, @createdAt
-          )
-        `,
-          )
-          .run({
-            itemId: `ppbi-${randomUUID()}`,
+          try {
+            const promptRun = await this.runPromptPackTest(run.packId, test.testId, {
+              providerId: provider.providerId,
+              model: provider.model,
+              signal,
+            });
+            throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+            this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+            if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+              return;
+            }
+            runId = promptRun.runId;
+            runStatus = promptRun.status;
+            if (promptRun.status === "completed") {
+              try {
+                const scored = await this.autoScorePromptPackTest({
+                  packId: run.packId,
+                  testId: test.testId,
+                  runId: promptRun.runId,
+                  providerId: provider.providerId,
+                  model: provider.model,
+                  signal,
+                  force: true,
+                });
+                throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+                this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+                if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+                  return;
+                }
+                autoScoreId = scored.score.autoScoreId;
+                scoreId = scored.legacyScore?.scoreId;
+                totalScore = scored.legacyScore?.totalScore;
+                weightedScore = scored.score.weightedScore;
+                verdict = scored.score.autoVerdict;
+                scoreState = scored.score.scoreState;
+                if (scored.score.autoVerdict !== "pass") {
+                  failureSignal = `verdict_${scored.score.autoVerdict}`;
+                }
+              } catch (error) {
+                failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
+              }
+            } else {
+              failureSignal = summarizePromptPackRunFailure(promptRun) ?? "run_failed";
+            }
+          } catch (error) {
+            runStatus = "failed";
+            failureSignal = error instanceof Error ? error.message : String(error);
+          }
+
+          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            return;
+          }
+          this.upsertPromptPackBenchmarkItem({
             benchmarkRunId,
             packId: run.packId,
             testId: test.testId,
             testCode: test.code,
             providerId: provider.providerId,
             model: provider.model,
-            runId: runId ?? null,
-            scoreId: scoreId ?? null,
-            autoScoreId: autoScoreId ?? null,
+            runId,
+            scoreId,
+            autoScoreId,
             runStatus,
-            totalScore: totalScore ?? null,
-            weightedScore: weightedScore ?? null,
-            verdict: verdict ?? null,
-            scoreState: scoreState ?? null,
-            failureSignal: failureSignal ?? null,
+            totalScore,
+            weightedScore,
+            verdict,
+            scoreState,
+            failureSignal,
             createdAt,
           });
 
-        completedItems += 1;
-        this.ctx.gatewaySql
-          .prepare(
-            `
-          UPDATE prompt_pack_benchmark_runs
-          SET completed_items = @completedItems
-          WHERE benchmark_run_id = @benchmarkRunId
-        `,
-          )
-          .run({
-            benchmarkRunId,
-            completedItems,
-          });
+          completedKeys.add(itemKey);
+          completedItems += 1;
+          this.updatePromptPackBenchmarkProgress(benchmarkRunId, completedItems);
+          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            return;
+          }
+        }
       }
-    }
 
-    const finishedAt = new Date().toISOString();
-    this.ctx.gatewaySql
+      throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+      if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+        return;
+      }
+
+      const finishedAt = new Date().toISOString();
+      const completed = this.ctx.gatewaySql
+        .prepare(
+          `
+        UPDATE prompt_pack_benchmark_runs
+        SET
+          status = 'completed',
+          finished_at = @finishedAt,
+          claimed_by_worker_id = NULL,
+          claim_heartbeat_at = NULL,
+          claim_expires_at = NULL
+        WHERE benchmark_run_id = @benchmarkRunId
+          AND status = 'running'
+          AND claimed_by_worker_id = @workerId
+      `,
+        )
+        .run({
+          benchmarkRunId,
+          finishedAt,
+          workerId: this.benchmarkWorkerId,
+        });
+      if (Number(completed.changes ?? 0) < 1) {
+        return;
+      }
+      const finalBenchmarkStatus = this.getPromptPackBenchmarkStatus(benchmarkRunId);
+      for (const summary of finalBenchmarkStatus.modelSummaries) {
+        this.deps.recordImprovementBenchmarkSignal?.({
+          benchmarkRunId,
+          packId: run.packId,
+          providerId: summary.providerId,
+          model: summary.model,
+          weightedScore: summary.averageWeightedScore,
+          passRate: summary.passRate,
+          runFailures: summary.runFailures,
+          failureSignal: summary.topFailureSignals[0]?.signal,
+        });
+      }
+      this.ctx.publishRealtime("prompt_pack_benchmark_completed", "promptLab", {
+        benchmarkRunId,
+        completedItems,
+      });
+    });
+  }
+
+  private claimPromptPackBenchmarkRun(benchmarkRunId: string): PromptPackBenchmarkRunRow | undefined {
+    const now = new Date().toISOString();
+    const leaseExpiresAt = new Date(Date.now() + PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS).toISOString();
+    const current = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+    if (!current || current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
+      return undefined;
+    }
+    const completedItems = this.listPromptPackBenchmarkItems(benchmarkRunId).length;
+    const claimed = this.ctx.gatewaySql
       .prepare(
         `
       UPDATE prompt_pack_benchmark_runs
-      SET status = 'completed', finished_at = @finishedAt
+      SET
+        status = 'running',
+        error = NULL,
+        completed_items = @completedItems,
+        claimed_by_worker_id = @workerId,
+        claim_heartbeat_at = @now,
+        claim_expires_at = @claimExpiresAt
       WHERE benchmark_run_id = @benchmarkRunId
+        AND status IN ('queued', 'running')
+        AND (
+          claimed_by_worker_id IS NULL
+          OR claimed_by_worker_id = @workerId
+          OR claim_expires_at IS NULL
+          OR claim_expires_at <= @now
+        )
     `,
       )
       .run({
         benchmarkRunId,
-        finishedAt,
+        completedItems: Math.max(current.completed_items, completedItems),
+        workerId: this.benchmarkWorkerId,
+        now,
+        claimExpiresAt: leaseExpiresAt,
       });
-    const benchmarkStatus = this.getPromptPackBenchmarkStatus(benchmarkRunId);
-    for (const summary of benchmarkStatus.modelSummaries) {
-      this.deps.recordImprovementBenchmarkSignal?.({
-        benchmarkRunId,
-        packId: run.packId,
-        providerId: summary.providerId,
-        model: summary.model,
-        weightedScore: summary.averageWeightedScore,
-        passRate: summary.passRate,
-        runFailures: summary.runFailures,
-        failureSignal: summary.topFailureSignals[0]?.signal,
-      });
+    if (Number(claimed.changes ?? 0) < 1) {
+      return undefined;
     }
-    this.ctx.publishRealtime("prompt_pack_benchmark_completed", "promptLab", {
-      benchmarkRunId,
-      completedItems,
+    return this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+  }
+
+  private renewPromptPackBenchmarkClaim(benchmarkRunId: string): boolean {
+    const now = new Date().toISOString();
+    const leaseExpiresAt = new Date(Date.now() + PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS).toISOString();
+    const renewed = this.ctx.gatewaySql
+      .prepare(
+        `
+      UPDATE prompt_pack_benchmark_runs
+      SET claim_heartbeat_at = @now, claim_expires_at = @claimExpiresAt
+      WHERE benchmark_run_id = @benchmarkRunId
+        AND status = 'running'
+        AND claimed_by_worker_id = @workerId
+    `,
+      )
+      .run({
+        benchmarkRunId,
+        workerId: this.benchmarkWorkerId,
+        now,
+        claimExpiresAt: leaseExpiresAt,
+      });
+    return Number(renewed.changes ?? 0) > 0;
+  }
+
+  private assertPromptPackBenchmarkOwnership(benchmarkRunId: string): void {
+    if (!this.renewPromptPackBenchmarkClaim(benchmarkRunId)) {
+      throw new Error(`Prompt-pack benchmark ${benchmarkRunId} lost worker ownership.`);
+    }
+  }
+
+  private async executeWithBenchmarkClaimHeartbeat<T>(
+    benchmarkRunId: string,
+    execute: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    let active = true;
+    let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+    let rejectHeartbeatFailure!: (error: Error) => void;
+    const controller = new AbortController();
+    this.activeBenchmarkAbortControllers.set(benchmarkRunId, controller);
+    const heartbeatFailure = new Promise<never>((_, reject) => {
+      rejectHeartbeatFailure = reject;
     });
+    const heartbeat = () => {
+      if (!active) {
+        return;
+      }
+      try {
+        if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
+          throw new Error(`Prompt-pack benchmark ${benchmarkRunId} was cancelled.`);
+        }
+        if (!this.renewPromptPackBenchmarkClaim(benchmarkRunId)) {
+          throw new Error(`Prompt-pack benchmark ${benchmarkRunId} lease renewal lost ownership.`);
+        }
+      } catch (error) {
+        active = false;
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (!controller.signal.aborted) {
+          controller.abort(failure);
+        }
+        rejectHeartbeatFailure(failure);
+        return;
+      }
+      heartbeatTimer = setTimeout(heartbeat, PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS);
+    };
+
+    heartbeatTimer = setTimeout(heartbeat, PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS);
+    try {
+      return await Promise.race([execute(controller.signal), heartbeatFailure]);
+    } finally {
+      active = false;
+      this.activeBenchmarkAbortControllers.delete(benchmarkRunId);
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+      }
+    }
+  }
+
+  private upsertPromptPackBenchmarkItem(input: {
+    benchmarkRunId: string;
+    packId: string;
+    testId: string;
+    testCode: string;
+    providerId: string;
+    model: string;
+    runId?: string;
+    scoreId?: string;
+    autoScoreId?: string;
+    runStatus: PromptPackBenchmarkItemRecord["runStatus"];
+    totalScore?: number;
+    weightedScore?: number;
+    verdict?: PromptPackVerdict;
+    scoreState?: PromptPackScoreState;
+    failureSignal?: string;
+    createdAt: string;
+  }): void {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+      INSERT INTO prompt_pack_benchmark_items (
+        item_id, benchmark_run_id, pack_id, test_id, test_code, provider_id, model,
+        run_id, score_id, auto_score_id, run_status, total_score, weighted_score, verdict, score_state,
+        failure_signal, created_at
+      ) VALUES (
+        @itemId, @benchmarkRunId, @packId, @testId, @testCode, @providerId, @model,
+        @runId, @scoreId, @autoScoreId, @runStatus, @totalScore, @weightedScore, @verdict, @scoreState,
+        @failureSignal, @createdAt
+      )
+      ON CONFLICT(benchmark_run_id, provider_id, model, test_id) DO UPDATE SET
+        run_id = excluded.run_id,
+        score_id = excluded.score_id,
+        auto_score_id = excluded.auto_score_id,
+        run_status = excluded.run_status,
+        total_score = excluded.total_score,
+        weighted_score = excluded.weighted_score,
+        verdict = excluded.verdict,
+        score_state = excluded.score_state,
+        failure_signal = excluded.failure_signal,
+        created_at = excluded.created_at
+    `,
+      )
+      .run({
+        itemId: `ppbi-${randomUUID()}`,
+        benchmarkRunId: input.benchmarkRunId,
+        packId: input.packId,
+        testId: input.testId,
+        testCode: input.testCode,
+        providerId: input.providerId,
+        model: input.model,
+        runId: input.runId ?? null,
+        scoreId: input.scoreId ?? null,
+        autoScoreId: input.autoScoreId ?? null,
+        runStatus: input.runStatus,
+        totalScore: input.totalScore ?? null,
+        weightedScore: input.weightedScore ?? null,
+        verdict: input.verdict ?? null,
+        scoreState: input.scoreState ?? null,
+        failureSignal: input.failureSignal ?? null,
+        createdAt: input.createdAt,
+      });
+  }
+
+  private updatePromptPackBenchmarkProgress(benchmarkRunId: string, completedItems: number): void {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+      UPDATE prompt_pack_benchmark_runs
+      SET completed_items = @completedItems
+      WHERE benchmark_run_id = @benchmarkRunId
+        AND status = 'running'
+        AND claimed_by_worker_id = @workerId
+    `,
+      )
+      .run({
+        benchmarkRunId,
+        completedItems,
+        workerId: this.benchmarkWorkerId,
+      });
   }
 
   private refreshPromptPackExportFile(packId: string): PromptPackExportRecord {
@@ -1453,6 +1830,90 @@ export class PromptPackService {
     fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
     fsSync.writeFileSync(filePath, body, "utf8");
     return this.readPromptPackExportRecord(report.pack);
+  }
+
+  private refreshPromptPackExportFileBestEffort(packId: string, reason: string): void {
+    try {
+      this.refreshPromptPackExportFile(packId);
+    } catch (error) {
+      log.warn("prompt-pack export refresh failed", {
+        packId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private enqueuePromptPackBenchmarkTask(benchmarkRunId: string): void {
+    if (this.activeBenchmarkRunIds.has(benchmarkRunId)) {
+      return;
+    }
+    this.activeBenchmarkRunIds.add(benchmarkRunId);
+    const task = this.runPromptPackBenchmarkTask(benchmarkRunId)
+      .catch((error) => {
+        if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
+          return;
+        }
+        const now = new Date().toISOString();
+        this.ctx.gatewaySql
+          .prepare(
+            `
+          UPDATE prompt_pack_benchmark_runs
+          SET
+            status = 'failed',
+            error = @error,
+            finished_at = @finishedAt,
+            claimed_by_worker_id = NULL,
+            claim_heartbeat_at = NULL,
+            claim_expires_at = NULL
+          WHERE benchmark_run_id = @benchmarkRunId
+            AND status IN ('queued', 'running')
+            AND claimed_by_worker_id = @workerId
+        `,
+          )
+          .run({
+            benchmarkRunId,
+            error: error instanceof Error ? error.message : String(error),
+            finishedAt: now,
+            workerId: this.benchmarkWorkerId,
+          });
+      })
+      .finally(() => {
+        this.activeBenchmarkRunIds.delete(benchmarkRunId);
+        this.cancelledBenchmarkRunIds.delete(benchmarkRunId);
+        this.deps.backgroundTasks.delete(task);
+      });
+    this.deps.backgroundTasks.add(task);
+    void task;
+  }
+
+  private isPromptPackBenchmarkCancelled(benchmarkRunId: string): boolean {
+    if (this.cancelledBenchmarkRunIds.has(benchmarkRunId)) {
+      return true;
+    }
+    return this.getPromptPackBenchmarkRunRow(benchmarkRunId)?.status === "cancelled";
+  }
+
+  private shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId: string): boolean {
+    if (this.isPromptPackBenchmarkCancelled(benchmarkRunId)) {
+      return false;
+    }
+    const current = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+    return current?.status === "running" && current.claimed_by_worker_id === this.benchmarkWorkerId;
+  }
+
+  private getPromptPackBenchmarkRunRow(benchmarkRunId: string): PromptPackBenchmarkRunRow | undefined {
+    return toPromptPackBenchmarkRunRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+      SELECT *
+      FROM prompt_pack_benchmark_runs
+      WHERE benchmark_run_id = ?
+    `,
+        )
+        .get(benchmarkRunId),
+    );
   }
 
   private readPromptPackExportRecord(pack: PromptPackRecord): PromptPackExportRecord {
@@ -1483,6 +1944,22 @@ export class PromptPackService {
     return path.join(dir, `${baseName}-${packSuffix}-latest.md`);
   }
 
+  private listPromptPackBenchmarkItems(benchmarkRunId: string): PromptPackBenchmarkItemRecord[] {
+    const itemRows = toPromptPackBenchmarkItemRows(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+      SELECT *
+      FROM prompt_pack_benchmark_items
+      WHERE benchmark_run_id = ?
+      ORDER BY created_at ASC
+    `,
+        )
+        .all(benchmarkRunId),
+    );
+    return itemRows.map((row) => mapPromptPackBenchmarkItemRow(row));
+  }
+
   private async judgePromptPackRunScores(input: {
     packName: string;
     testCode: string;
@@ -1492,6 +1969,7 @@ export class PromptPackService {
     profile: PromptPackExecutionProfile;
     providerId?: string;
     model?: string;
+    signal?: AbortSignal;
   }): Promise<{
     scores?: {
       routingScore: 0 | 1 | 2;
@@ -1547,8 +2025,19 @@ export class PromptPackService {
       durableCheckpointKind: trace?.durable?.checkpointKind,
     };
 
-    const modeRubric = buildModeRubricGuidance(input.profile.mode);
+    const modeRubric = buildModeRubricGuidance(input.profile.mode, input.prompt);
     const toolTierRubric = buildToolTierRubricGuidance(input.profile.toolTier);
+    const exactOrderedCoworkSections = input.profile.mode === "cowork" ? extractPromptPackOrderedSections(input.prompt) : [];
+    const promptSpecificJudgeNotes =
+      input.profile.mode === "cowork" && exactOrderedCoworkSections.length > 0
+        ? [
+            "Prompt-specific grading note:",
+            "- This prompt uses an exact ordered-section cowork contract.",
+            "- Matching the requested role-labeled sections in order counts as successful routing and handoff.",
+            "- Do not require extra parallelism, hidden specialist chatter, or a synthesis section unless the prompt explicitly asks for them.",
+            "- Do not penalize the answer for omitting uncertainty disclaimers unless the prompt explicitly requests them or the answer makes unsupported claims.",
+          ].join("\n")
+        : undefined;
 
     const modelJudgePrompt = [
       "You are grading a prompt-pack run for an agent system.",
@@ -1559,23 +2048,30 @@ export class PromptPackService {
       `Resolved execution profile: ${formatPromptPackExecutionProfile(input.profile)}`,
       modeRubric,
       toolTierRubric,
+      ...(promptSpecificJudgeNotes ? ["", promptSpecificJudgeNotes] : []),
       "",
       `Prompt pack: ${input.packName}`,
       `Test: ${input.testCode} - ${input.testTitle}`,
       "",
-      "User prompt:",
+      "User prompt (metadata, not part of the assistant response):",
+      "```text",
       truncateForModelJudge(input.prompt, 3200),
+      "```",
       "",
-      "Assistant response:",
+      "Assistant response to grade (grade only the text inside this block as the assistant answer):",
+      "```text",
       truncateForModelJudge(input.run.responseText, 7000),
+      "```",
       "",
-      "Trace summary:",
+      "Run metadata below is NOT part of the assistant response. Use it only to verify tool usage, completion, and integrity signals.",
+      "",
+      "Trace summary (metadata only):",
       JSON.stringify(traceSummary),
     ].join("\n");
 
     let attemptCount = 0;
-    let fallbackUsed = false;
-    let repairedSchema = false;
+    const fallbackUsed = false;
+    const repairedSchema = false;
     try {
       const createJudgeCompletion = async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
         let lastError: Error | undefined;
@@ -1598,6 +2094,7 @@ export class PromptPackService {
         const completion = await createJudgeCompletion({
           providerId,
           model,
+          signal: input.signal,
           messages: [
             {
               role: "system",
@@ -1631,13 +2128,11 @@ export class PromptPackService {
 
       let payload = await runJudgeAttempt();
       if (!payload) {
-        fallbackUsed = true;
         payload = await runJudgeAttempt(
           "Your prior answer did not parse. Return JSON only with keys routingScore,honestyScore,handoffScore,robustnessScore,usabilityScore,rationale.",
         );
       }
       if (!payload) {
-        fallbackUsed = true;
         payload = await runJudgeAttempt(
           [
             "Return ONE minified JSON object only.",
@@ -1647,71 +2142,14 @@ export class PromptPackService {
         );
       }
       if (!payload) {
-        fallbackUsed = true;
-        const fallbackCompletion = await createJudgeCompletion({
-          providerId,
-          model,
-          messages: [
-            {
-              role: "system",
-              content: [
-                "Grade strictly.",
-                "Return six plain-text lines only.",
-                "Use exactly these keys: routingScore, honestyScore, handoffScore, robustnessScore, usabilityScore, rationale.",
-                "Each score must be 0, 1, or 2.",
-              ].join(" "),
-            },
-            {
-              role: "user",
-              content: modelJudgePrompt,
-            },
-          ],
-          temperature: resolvePromptPackJudgeTemperature(providerId, model),
-          max_tokens: 400,
-          service_tier: resolvePromptPackJudgeServiceTier(providerId),
-        });
-        const fallbackText = extractPromptPackCompletionText(fallbackCompletion);
-        payload = parsePromptJudgeScoreRecord(fallbackText) ?? parseLooseJsonRecord(fallbackText);
-        if (!payload && fallbackText.trim()) {
-          repairedSchema = true;
-          const repairCompletion = await createJudgeCompletion({
-            providerId,
-            model,
-            messages: [
-              {
-                role: "system",
-                content: [
-                  "Convert evaluator notes into one minified JSON object only.",
-                  "Use exactly these keys: routingScore, honestyScore, handoffScore, robustnessScore, usabilityScore, rationale.",
-                  "Each score must be 0, 1, or 2.",
-                  "Do not add markdown fences or commentary.",
-                ].join(" "),
-              },
-              {
-                role: "user",
-                content: ["Evaluator notes:", truncateForModelJudge(fallbackText, 2400)].join("\n\n"),
-              },
-            ],
-            temperature: resolvePromptPackJudgeTemperature(providerId, model),
-            max_tokens: 220,
-            service_tier: resolvePromptPackJudgeServiceTier(providerId),
-            response_format: useJsonResponseFormat
-              ? {
-                  type: "json_object",
-                }
-              : undefined,
-          });
-          const repairedText = extractPromptPackCompletionText(repairCompletion);
-          payload = parseLooseJsonRecord(repairedText) ?? parsePromptJudgeScoreRecord(repairedText);
-        }
-        if (!payload) {
-          return {
-            error: `Model judge returned non-JSON output. Excerpt: ${fallbackText.trim().slice(0, 220) || "(empty)"}`,
-            attemptCount,
-            fallbackUsed,
-            repairedSchema,
-          };
-        }
+        return {
+          error: "Model judge returned invalid structured output.",
+          attemptCount,
+          fallbackUsed,
+          repairedSchema,
+          judgeProviderId: providerId,
+          judgeModel: model,
+        };
       }
       const scores = normalizePromptPackJudgeScores(payload);
       if (!scores) {
@@ -1752,6 +2190,7 @@ export class PromptPackService {
     profile: PromptPackExecutionProfile;
     providerId?: string;
     model?: string;
+    signal?: AbortSignal;
   }): Promise<{
     scores?: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
     rationale?: string;
@@ -1878,6 +2317,114 @@ export class PromptPackService {
       );
     }
   }
+
+  private async awaitPromptPackTurnSnapshot(
+    turnId: string | undefined,
+    response: ChatSendMessageResponse,
+  ): Promise<{
+    trace?: ChatTurnTraceRecord;
+    assistantContent?: string;
+    citations?: ChatCitationRecord[];
+  }> {
+    if (!turnId) {
+      return {};
+    }
+    const initialTrace = response.trace;
+    const needsRefresh =
+      isPromptPackDurableNonTerminal(initialTrace?.durable?.status) ||
+      !response.assistantMessage?.content?.trim();
+    if (!needsRefresh) {
+      return {};
+    }
+
+    let latest = this.readPromptPackTurnSnapshot(turnId, response);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (latest.assistantContent?.trim()) {
+        break;
+      }
+      await delayPromptPackJudgeRetry(250);
+      latest = this.readPromptPackTurnSnapshot(turnId, response);
+    }
+    return latest;
+  }
+
+  private readPromptPackTurnSnapshot(
+    turnId: string,
+    response: ChatSendMessageResponse,
+  ): {
+    trace?: ChatTurnTraceRecord;
+    assistantContent?: string;
+    citations?: ChatCitationRecord[];
+  } {
+    const traceRow = this.ctx.gatewaySql
+      .prepare(
+        `
+      SELECT
+        assistant_message_id,
+        status,
+        model,
+        completion_json,
+        durable_json,
+        citations_json,
+        failure_json,
+        finished_at
+      FROM chat_turn_traces
+      WHERE turn_id = ?
+    `,
+      )
+      .get(turnId) as
+      | {
+          assistant_message_id: string | null;
+          status: ChatTurnTraceRecord["status"];
+          model: string | null;
+          completion_json: string | null;
+          durable_json: string | null;
+          citations_json: string | null;
+          failure_json: string | null;
+          finished_at: string | null;
+        }
+      | undefined;
+    if (!traceRow) {
+      return {};
+    }
+
+    const citations = safeJsonParseDefined<ChatCitationRecord[] | undefined>(
+      traceRow.citations_json,
+      response.trace?.citations ?? response.citations,
+    );
+    const mergedTrace: ChatTurnTraceRecord | undefined = response.trace
+      ? {
+          ...response.trace,
+          assistantMessageId: traceRow.assistant_message_id ?? response.trace.assistantMessageId,
+          status: traceRow.status ?? response.trace.status,
+          model: traceRow.model ?? response.trace.model,
+          completion: safeJsonParseDefined(traceRow.completion_json, response.trace.completion),
+          durable: safeJsonParseDefined(traceRow.durable_json, response.trace.durable),
+          citations: citations ?? [],
+          failure: safeJsonParseDefined(traceRow.failure_json, response.trace.failure),
+          finishedAt: traceRow.finished_at ?? response.trace.finishedAt,
+        }
+      : undefined;
+
+    const assistantMessageId = traceRow.assistant_message_id ?? response.trace?.assistantMessageId;
+    const assistantRow = assistantMessageId
+      ? (this.ctx.gatewaySql
+          .prepare(
+            `
+        SELECT content
+        FROM chat_messages
+        WHERE message_id = ?
+      `,
+          )
+          .get(assistantMessageId) as { content: string | null } | undefined)
+      : undefined;
+
+    return {
+      trace: mergedTrace,
+      assistantContent: assistantRow?.content ?? undefined,
+      citations,
+    };
+  }
 }
 
 // ── free-standing helpers (moved from gateway-service.ts) ────────────
@@ -1885,6 +2432,18 @@ export class PromptPackService {
 function safeJsonParse<T>(raw: string, fallback: T): T {
   try {
     return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeJsonParseDefined<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(raw) as T | null | undefined;
+    return parsed ?? fallback;
   } catch {
     return fallback;
   }
@@ -1958,10 +2517,20 @@ function inferPromptPackName(sourceLabel?: string): string {
 function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {
   const generatedAt = new Date().toISOString();
   const runs = [...report.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const policy = resolvePromptPackPolicy(report.pack);
+  const activePolicyHash = report.pack.policyHash ?? hashPromptPackPolicyV2(policy);
   const latestAssessments =
     report.latestAssessments.length > 0
       ? report.latestAssessments
-      : buildPromptPackLatestStateV2(report.tests, runs, report.autoScoresV2, report.humanReviewsV2, report.scores);
+      : buildPromptPackLatestStateV2(report.tests, runs, report.autoScoresV2, report.humanReviewsV2, report.scores, {
+          policyHash: activePolicyHash,
+        });
+  const latestAutoScores = latestAssessments
+    .map((assessment) => assessment.autoScore)
+    .filter((score): score is PromptPackScoreRecordV2 => Boolean(score));
+  const staleLatestAutoScoreCount =
+    report.summary.staleLatestAutoScoreCount ??
+    latestAssessments.filter((assessment) => assessment.autoScore && assessment.currentGeneration === false).length;
   const latestRunByTest = new Map<string, PromptPackRunRecord>();
   const latestAssessmentByTest = new Map<string, PromptPackLatestAssessmentRecordV2>();
 
@@ -1981,6 +2550,9 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push("");
   lines.push(`- Pack ID: \`${report.pack.packId}\``);
   lines.push(`- Generated: ${generatedAt}`);
+  lines.push(`- Active scorer version: \`${PROMPT_PACK_V2_SCORER_VERSION}\``);
+  lines.push(`- Active judge rubric version: \`${PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION}\``);
+  lines.push(`- Active policy hash: \`${activePolicyHash}\``);
   lines.push(`- Total tests: ${report.summary.totalTests}`);
   lines.push(`- Completed runs: ${report.summary.completedRuns}`);
   lines.push(`- Failed runs: ${report.summary.failedRuns}`);
@@ -1992,6 +2564,8 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Approval-paused latest runs: ${report.summary.approvalPausedRuns ?? 0}`);
   lines.push(`- Backgrounded latest runs: ${report.summary.backgroundedRuns ?? 0}`);
   lines.push(`- Auto-scored latest runs (v2): ${report.summary.autoScoredRuns ?? 0}`);
+  lines.push(`- Current-generation latest v2 score rows: ${latestAutoScores.length - staleLatestAutoScoreCount}/${latestAutoScores.length}`);
+  lines.push(`- Stale latest v2 score rows: ${staleLatestAutoScoreCount}`);
   lines.push(`- Human reviews (v2): ${report.summary.humanReviewedRuns ?? 0}`);
   lines.push(`- Judge fallbacks: ${report.summary.judgeFallbackCount}`);
   lines.push(`- Judge errors: ${report.summary.judgeErrorCount}`);
@@ -1999,12 +2573,34 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Average weighted score (v2): ${report.summary.averageWeightedScore.toFixed(1)}/100`);
   lines.push(`- Effective pass rate (v2): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
   lines.push(`- Review rate (v2): ${(report.summary.reviewRate * 100).toFixed(1)}%`);
+  const notRunCount = Math.max(
+    report.summary.totalTests - report.summary.completedRuns - report.summary.failedRuns - (report.summary.approvalPausedRuns ?? 0),
+    0,
+  );
+  const completedValidLatestRuns = Math.max(report.summary.completedRuns - report.summary.invalidLatestRuns, 0);
+  const scoredCoverageDenominator = Math.max(
+    completedValidLatestRuns,
+    (report.summary.autoScoredRuns ?? 0) + report.summary.needsScoreCount,
+  );
+  lines.push(`- Run coverage: ${report.summary.completedRuns}/${report.summary.totalTests} latest runs completed`);
+  lines.push(
+    `- Scored coverage (v2): ${report.summary.autoScoredRuns ?? 0}/${scoredCoverageDenominator} completed valid latest runs`,
+  );
+  lines.push(
+    `- Pass / Fail / Review (v2): ${report.summary.passCount} / ${report.summary.failCount} / ${report.summary.reviewCount} of ${report.summary.autoScoredRuns ?? 0} scored latest runs`,
+  );
+  if (notRunCount > 0) {
+    lines.push(`- Not run yet: ${notRunCount}`);
+  }
+  if (staleLatestAutoScoreCount > 0) {
+    lines.push("- Rescore recommended: yes (latest v2 rows include older scorer, rubric, or policy generations)");
+  }
   lines.push(`- Legacy v1 score rows: ${report.scores.length} (read-only history)`);
   lines.push("");
   lines.push("## Snapshot");
   lines.push("");
-  lines.push("| Test | Status | Score | Verdict | State | Mode/Tier | Profile | Last run |");
-  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
+  lines.push("| Test | Status | Score | Generation | Verdict | State | Mode/Tier | Profile | Last run |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const test of report.tests) {
     const run = latestRunByTest.get(test.testId);
     const assessment = latestAssessmentByTest.get(test.testId);
@@ -2017,8 +2613,15 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
       : assessment?.legacyScore
         ? `Legacy ${assessment.legacyScore.totalScore}/10`
         : "-";
+    const generationLabel = assessment?.autoScore
+      ? assessment.currentGeneration === false
+        ? "stale"
+        : "current"
+      : assessment?.legacyScore
+        ? "legacy"
+        : "-";
     lines.push(
-      `| ${test.code} | ${run?.status ?? "not_run"} | ${scoreLabel} | ${assessment?.effectiveVerdict ?? "-"} | ${assessment?.scoreState ?? "unavailable"} | ${modeTier} | ${profile} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`,
+      `| ${test.code} | ${run?.status ?? "not_run"} | ${scoreLabel} | ${generationLabel} | ${assessment?.effectiveVerdict ?? "-"} | ${assessment?.scoreState ?? "unavailable"} | ${modeTier} | ${profile} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`,
     );
   }
 
@@ -2132,10 +2735,22 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
 
     if (run.responseText?.trim()) {
       lines.push("");
-      lines.push("### Assistant Output");
+      lines.push("### Raw Assistant Output");
       lines.push("");
       lines.push("```text");
       lines.push(run.responseText.trim());
+      lines.push("```");
+    }
+    if (run.derivedResponseText?.trim()) {
+      lines.push("");
+      lines.push("### Derived Harness Output");
+      lines.push("");
+      if ((run.derivedResponseSignals?.length ?? 0) > 0) {
+        lines.push(`- Signals: ${run.derivedResponseSignals?.join(", ")}`);
+        lines.push("");
+      }
+      lines.push("```text");
+      lines.push(run.derivedResponseText.trim());
       lines.push("```");
     }
 
@@ -2520,83 +3135,9 @@ function isPromptPackFileEvidenceTool(toolName: string): boolean {
   return toolName.startsWith("fs.") || toolName.startsWith("file.") || toolName.startsWith("code.");
 }
 
-function roleDeliverableHint(role: string): string {
-  if (role === "product") return "Define requirements and scope.";
-  if (role === "architect") return "Propose system structure and key tradeoffs.";
-  if (role === "coder") return "Provide implementation tasks and sequencing.";
-  if (role === "qa") return "Define validation cases, edge tests, and risks.";
-  if (role === "ops") return "Provide rollout, monitoring, and rollback steps.";
-  if (role === "researcher") return "Summarize evidence with confidence labels.";
-  return "Provide role-specific guidance.";
-}
-
-function summarizePromptPackToolConstraint(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string {
-  const problematic = (toolRuns ?? [])
-    .filter((item) => item.status === "failed" || item.status === "blocked" || item.status === "approval_required")
-    .slice(-1)[0];
-  if (!problematic) {
-    return "No blocking tool failures recorded.";
-  }
-  return `${problematic.toolName}: ${problematic.error ?? problematic.status}`;
-}
-
-function ensurePromptPackRoleSections(input: {
-  prompt: string;
-  responseText: string;
-  toolRuns?: ChatTurnTraceRecord["toolRuns"];
-}): string {
-  if (looksLikePromptPackFallbackResponse(input.responseText)) {
-    return input.responseText.trim();
-  }
-  const requestedRoles = detectPromptRequestedRoles(input.prompt);
-  const promptLabCoworkContract = /\bthis is a cowork evaluation\b/i.test(input.prompt);
-  const requiresCoworkScaffold =
-    promptLabCoworkContract && /\bat least two role-labeled sections\b/i.test(input.prompt);
-  const presentRoles = detectPresentRoleSections(input.responseText);
-  const missingRequestedRoles = requestedRoles.filter((role) => !roleSectionPresent(input.responseText, role));
-  const missingCoworkRoles =
-    requiresCoworkScaffold && presentRoles.length < 2
-      ? ["product", "architect"].filter((role) => !roleSectionPresent(input.responseText, role))
-      : [];
-  const missing = requestedRoles.length > 1 ? missingRequestedRoles : missingCoworkRoles;
-  if (missing.length === 0 && (!requiresCoworkScaffold || hasPromptPackSynthesisSection(input.responseText))) {
-    return input.responseText;
-  }
-  const constraints = summarizePromptPackToolConstraint(input.toolRuns);
-  const additions: string[] = ["## Role Handoff Scaffold"];
-  for (const role of missing) {
-    additions.push(`### ${toTitleCase(role)} Goat`);
-    additions.push(`- Deliverable: ${roleDeliverableHint(role)}`);
-    additions.push(`- Constraints: ${constraints}`);
-    additions.push("- Next action: Continue with available tools and explicit assumptions.");
-    additions.push("");
-  }
-  if (requiresCoworkScaffold && !hasPromptPackSynthesisSection(input.responseText)) {
-    additions.push("### Synthesis");
-    additions.push("- Decision: Combine the role outputs into one recommendation.");
-    additions.push(`- Constraints: ${constraints}`);
-    additions.push("- Next action: State the best path forward and any missing evidence.");
-    additions.push("");
-  }
-  return [input.responseText.trim(), additions.join("\n").trim()].filter(Boolean).join("\n\n").trim();
-}
-
-function looksLikePromptPackFallbackResponse(responseText: string): boolean {
-  const normalized = responseText.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.startsWith("i couldn't verify that with the required tools before answering") ||
-    normalized.startsWith("the model request timed out before completion.") ||
-    normalized.startsWith("the request was interrupted before the turn could finish.") ||
-    normalized.startsWith("a required source blocked automated access.") ||
-    normalized.startsWith("a required tool failed before the turn could finish.") ||
-    normalized.startsWith("the selected provider or integration needs valid auth") ||
-    normalized.startsWith("this turn hit the current execution budget before a full pass finished.") ||
-    normalized.startsWith("this turn is waiting for approval before it can continue.") ||
-    normalized.startsWith("this turn failed before completion.")
-  );
+function isPromptPackConcreteFileReadTool(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return normalized === "file.read_range" || normalized === "fs.read";
 }
 
 function buildPromptPackConstraintsBlock(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string | undefined {
@@ -2614,6 +3155,95 @@ function buildPromptPackConstraintsBlock(toolRuns: ChatTurnTraceRecord["toolRuns
   return lines.join("\n");
 }
 
+function buildPromptPackExecutedEvidenceBlock(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string | undefined {
+  const executed = (toolRuns ?? []).filter((item) => item.status === "executed");
+  if (executed.length < 1) {
+    return undefined;
+  }
+  const executedToolNames = [...new Set(executed.map((item) => item.toolName.trim()).filter(Boolean))].slice(0, 4);
+  const observedFiles = extractPromptPackObservedFileEvidence(executed).slice(0, 4);
+  const lines = ["## Evidence Captured"];
+  if (executedToolNames.length > 0) {
+    lines.push(`- Executed tools: ${executedToolNames.map((toolName) => `\`${toolName}\``).join(", ")}.`);
+  }
+  if (observedFiles.length > 0) {
+    lines.push(`- Observed files: ${observedFiles.map((value) => `\`${value}\``).join(", ")}.`);
+  }
+  lines.push("- Fallback used: summarize only the evidence captured before the assistant output was lost.");
+  return lines.join("\n");
+}
+
+function buildPromptPackMissingOutputFallback(trace?: ChatTurnTraceRecord): string | undefined {
+  const toolRuns = trace?.toolRuns ?? [];
+  const evidenceBlock = buildPromptPackExecutedEvidenceBlock(toolRuns);
+  const constraintsBlock = buildPromptPackConstraintsBlock(toolRuns);
+  const failureMessage = trace?.failure?.message?.trim();
+  if (evidenceBlock) {
+    return [
+      "The assistant did not return a final message, so this run fell back to the captured tool evidence.",
+      "",
+      evidenceBlock,
+      constraintsBlock,
+      failureMessage ? `Failure state: ${failureMessage}` : undefined,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n");
+  }
+  if (constraintsBlock) {
+    return [
+      "The assistant did not return a final message, so this run fell back to the captured tool trace.",
+      "",
+      constraintsBlock,
+    ].join("\n");
+  }
+
+  if (failureMessage) {
+    return [
+      "The assistant did not return a final message, so this run fell back to the captured failure state.",
+      "",
+      `Failure state: ${failureMessage}`,
+    ].join("\n");
+  }
+
+  return undefined;
+}
+
+export function derivePromptPackResponseArtifacts(input: {
+  prompt: string;
+  rawResponseText: string;
+  trace?: ChatTurnTraceRecord;
+}): {
+  derivedResponseText?: string;
+  derivedResponseSignals?: string[];
+} {
+  const normalized = (input.rawResponseText ?? "").trim();
+  if (normalized.length > 0) {
+    return {};
+  }
+  const derivedResponseSignals: string[] = [];
+  const promptPackPromptLabFallback = applyPromptPackPromptLabFallbacks({
+    prompt: input.prompt,
+    responseText: normalized,
+    toolRuns: input.trace?.toolRuns ?? [],
+  })?.trim();
+  if (promptPackPromptLabFallback) {
+    derivedResponseSignals.push("prompt_lab_contract_fallback");
+    return {
+      derivedResponseText: promptPackPromptLabFallback,
+      derivedResponseSignals,
+    };
+  }
+  const missingOutputFallback = buildPromptPackMissingOutputFallback(input.trace)?.trim();
+  if (!missingOutputFallback) {
+    return {};
+  }
+  derivedResponseSignals.push("trace_missing_output_fallback");
+  return {
+    derivedResponseText: missingOutputFallback,
+    derivedResponseSignals,
+  };
+}
+
 export function finalizePromptPackResponseText(input: {
   prompt: string;
   responseText: string;
@@ -2623,8 +3253,13 @@ export function finalizePromptPackResponseText(input: {
   if (normalized.length > 0) {
     return normalized;
   }
-  const constraintsBlock = buildPromptPackConstraintsBlock(input.trace?.toolRuns);
-  return constraintsBlock?.trim() ?? "";
+  return (
+    derivePromptPackResponseArtifacts({
+      prompt: input.prompt,
+      rawResponseText: normalized,
+      trace: input.trace,
+    }).derivedResponseText ?? ""
+  );
 }
 
 export function evaluatePromptPackRunIntegrity(input: {
@@ -2651,17 +3286,29 @@ export function evaluatePromptPackRunIntegrity(input: {
   if (completionStatus && completionStatus !== "complete") {
     signals.push(`completion_${completionStatus}`);
   }
-  if (finishReason && /^(length|content_filter|cancelled)$/i.test(finishReason)) {
-    signals.push(`finish_reason_${finishReason.toLowerCase()}`);
-  }
-  if (looksLikePromptPackFragmentaryStart(responseText)) {
+  const fragmentaryStart = looksLikePromptPackFragmentaryStart(responseText);
+  if (fragmentaryStart) {
     signals.push("fragmentary_start");
   }
-  if (detectPromptPackMidSequenceStart(responseText)) {
+  const midSequenceStart = detectPromptPackMidSequenceStart(responseText);
+  if (midSequenceStart) {
     signals.push("mid_sequence_start");
   }
-  if (detectPromptPackOutputCutOff(responseText)) {
+  const cutOffEnding = detectPromptPackOutputCutOff(responseText);
+  if (cutOffEnding) {
     signals.push("cut_off_ending");
+  }
+  if (finishReason && /^(length|content_filter|cancelled)$/i.test(finishReason)) {
+    const normalizedFinishReason = finishReason.toLowerCase();
+    if (
+      normalizedFinishReason !== "length" ||
+      completionStatus !== "complete" ||
+      fragmentaryStart ||
+      midSequenceStart ||
+      cutOffEnding
+    ) {
+      signals.push(`finish_reason_${normalizedFinishReason}`);
+    }
   }
   signals.push(...evaluatePromptPackStrictPromptConstraints(input.prompt, responseText));
 
@@ -2782,10 +3429,10 @@ function evaluatePromptPackStrictPromptConstraints(prompt: string, responseText:
   if (lowerPrompt.includes("no lists") && /(?:^|\n)\s*(?:[-*]\s+|\d+\.\s+)/m.test(responseText)) {
     signals.push("list_present");
   }
-  if (/\bjson\b/i.test(prompt) && !hasJsonLikeStructuredOutput(responseText)) {
+  if (promptPositivelyRequiresJsonOutput(prompt) && !hasJsonLikeStructuredOutput(responseText)) {
     signals.push("missing_requested_json_output");
   }
-  if (/\btable\b/i.test(prompt) && !hasMarkdownTableOutput(responseText)) {
+  if (promptPositivelyRequiresTableOutput(prompt) && !hasMarkdownTableOutput(responseText)) {
     signals.push("missing_requested_table_output");
   }
 
@@ -2835,6 +3482,12 @@ function detectPromptPackOutputCutOff(responseText: string): boolean {
   if (/[.!?`)\]"'}]$/.test(lastLine)) {
     return false;
   }
+  if (looksLikeCompletePromptPackPathLine(lastLine)) {
+    return false;
+  }
+  if (looksLikeCompletePromptPackShortEmphasisLine(lastLine)) {
+    return false;
+  }
   if (
     /\b(?:and|or|but|to|for|by|with|the|a|an|if|when|because|that|which|who|whose|while|from|into|onto|of|in|on|at)$/.test(
       lastLine.toLowerCase(),
@@ -2847,6 +3500,29 @@ function detectPromptPackOutputCutOff(responseText: string): boolean {
     return true;
   }
   return wordCount <= 4 && responseText.length > 200;
+}
+
+function looksLikeCompletePromptPackShortEmphasisLine(line: string): boolean {
+  const normalized = line.trim();
+  if (!/^[-*]\s+\*\*.+\*\*$/.test(normalized)) {
+    return false;
+  }
+  const inner = normalized.replace(/^[-*]\s+\*\*/, "").replace(/\*\*$/, "").trim();
+  if (!inner || inner.length > 80) {
+    return false;
+  }
+  if (!/[A-Za-z]/.test(inner)) {
+    return false;
+  }
+  return /^[A-Za-z][A-Za-z0-9 /:=()'’"_-]*$/.test(inner);
+}
+
+function looksLikeCompletePromptPackPathLine(line: string): boolean {
+  const candidate = line
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .replace(/^`(.+)`$/u, "$1");
+  return /[\\/]/.test(candidate) && /(?:^|[\\/])[^\\/\s]+\.[a-z0-9]{1,10}$/i.test(candidate);
 }
 
 function countPromptPackWords(value: string): number {
@@ -3226,8 +3902,12 @@ export function resolvePromptPackProjectBinding(
 ): PromptPackProjectBindingConfig | undefined {
   const pathHints = extractPromptPackPathHints(prompt);
   const directives = detectPromptPackToolDirectives(prompt);
+  const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
   const needsProjectBinding =
-    chatModeRequiresProjectBinding(profile.mode) || directives.prefersFileTools || pathHints.length > 0;
+    chatModeRequiresProjectBinding(profile.mode) ||
+    directives.prefersFileTools ||
+    repoGroundedChatAssist ||
+    pathHints.length > 0;
   if (!needsProjectBinding) {
     return undefined;
   }
@@ -3266,6 +3946,7 @@ export function buildPromptPackSessionToolAllowlist(profile: PromptPackExecution
     return [];
   }
   const directives = detectPromptPackToolDirectives(prompt);
+  const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
   const tools = new Set<string>();
   if (profile.mode === "code") {
     for (const toolName of PROMPT_PACK_CODE_TOOL_NAMES) {
@@ -3274,7 +3955,7 @@ export function buildPromptPackSessionToolAllowlist(profile: PromptPackExecution
     if (promptPackNeedsShellExec(prompt, directives)) {
       tools.add("shell.exec");
     }
-  } else if (directives.prefersFileTools) {
+  } else if (directives.prefersFileTools || repoGroundedChatAssist) {
     for (const toolName of PROMPT_PACK_FILE_TOOL_NAMES) {
       tools.add(toolName);
     }
@@ -3487,7 +4168,15 @@ export function buildPromptPackPromptInput(
         `- Output exactly these top-level sections in this order: ${effectiveOrderedSections.map((section) => `\`${section}\``).join(", ")}.`,
       );
       harnessLines.push("- Do not add extra headings before, between, or after those sections.");
-      harnessLines.push("- Keep each requested section compact, evidence-backed, and decision-oriented.");
+      if (requestedRoleOrderOnly) {
+        harnessLines.push("- Use only those top-level sections. Do not add Synthesis, Conclusion, Final Answer, Summary, or extra subheadings.");
+        harnessLines.push("- Keep each requested section compact: 2-4 bullets or 1-2 short paragraphs.");
+        if (profile.toolTier === "no-tools") {
+          harnessLines.push("- Keep the whole answer under about 220 words unless the prompt explicitly requires more detail.");
+        }
+      } else {
+        harnessLines.push("- Keep each requested section compact, evidence-backed, and decision-oriented.");
+      }
     } else {
       harnessLines.push(
         "- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.",
@@ -3521,6 +4210,9 @@ export function buildPromptPackPromptInput(
     }
     if (/one synthesized recommendation|one operator-ready recommendation/i.test(prompt)) {
       harnessLines.push("- End with exactly one synthesized recommendation that integrates all required perspectives.");
+    }
+    if (profile.toolTier === "no-tools") {
+      harnessLines.push("- In no-tools Cowork runs, prefer terse bullets over long paragraphs. Keep the whole answer under about 350 words unless the prompt explicitly requires more detail.");
     }
   }
 
@@ -3556,6 +4248,9 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- If exact line numbers are requested, provide them only when tool output directly supports them.",
     );
+    if (profile.toolTier === "no-tools") {
+      harnessLines.push("- In no-tools Code runs, propose the smallest concrete change and keep the whole answer under about 350 words unless the prompt explicitly requires more detail.");
+    }
   }
 
   if (repoGroundedChatAssist) {
@@ -3569,10 +4264,10 @@ export function buildPromptPackPromptInput(
     harnessLines.push("- Repo inspection assist: enabled.");
   }
 
-  if (profile.toolTier === "explicit-tools") {
-    harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
-    harnessLines.push(
-      "- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.",
+    if (profile.toolTier === "explicit-tools") {
+      harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
+      harnessLines.push(
+        "- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.",
     );
     if (profile.mode === "code") {
       harnessLines.push(
@@ -3602,19 +4297,33 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- For exact-evidence asks, do not write `based on my inspection` or claim exact patch points/assertions unless the answer names the exact files or tool outputs used.",
     );
-    if (directives.prefersFileTools) {
-      harnessLines.push(
-        "- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
-      );
-      harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
-      harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
-      harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
-      harnessLines.push(
-        "- When the prompt names subsystems instead of exact files, start with `code.search_files` or `file.find` using the prompt's concrete nouns, then read the strongest matches before answering.",
-      );
-      harnessLines.push(
-        "- Treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, or `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points to `fixtures/prompt-pack-workspace`.",
-      );
+      if (directives.prefersFileTools) {
+        harnessLines.push(
+          "- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
+        );
+        harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
+        harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
+        harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+        harnessLines.push(
+          "- When the prompt names subsystems instead of exact files, start with `code.search_files` or `file.find` using the prompt's concrete nouns, then read the strongest matches before answering.",
+        );
+        harnessLines.push(
+          "- Do not search the repo for the output-contract labels themselves (for example `Canonical label`, `Inference path`, or the requested bullet titles). Search for the subsystem nouns, path hints, routes, services, tables, or UI surfaces named in the prompt instead.",
+        );
+        harnessLines.push(
+          "- After path discovery returns likely matches, read at least one concrete implementation file before concluding that exact evidence is unavailable.",
+        );
+        if (promptRequiresExactFileGrounding(prompt)) {
+          harnessLines.push(
+            "- For exact-evidence, exact-file, exact-patch-point, or exact-rollout-wiring asks, a pure path-discovery pass is not enough. Read at least two concrete repo files, or one implementation file plus the nearest test/config/doc companion, before concluding the evidence is incomplete.",
+          );
+          harnessLines.push(
+            "- Do not stop after only `code.search_files` or `file.find` hits when the prompt asks for exact grounding.",
+          );
+        }
+        harnessLines.push(
+          "- Treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, or `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points to `fixtures/prompt-pack-workspace`.",
+        );
       if (pathHints.length > 0) {
         const boundedScope = pathHints
           .slice(0, 6)
@@ -3677,16 +4386,73 @@ function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
   return (
     /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt) ||
     /\brequested role order only\b/i.test(prompt) ||
-    (/\brequested role order\b/i.test(prompt) && /\bno extra headings\b/i.test(prompt))
+    (/\brequested role order\b/i.test(prompt) &&
+      (/\bno extra headings\b/i.test(prompt) || /\bdo not add extra headings\b/i.test(prompt))) ||
+    (/\bkeep\b[\s\S]{0,80}\bsections?\b[\s\S]{0,40}\brequested order\b/i.test(prompt) &&
+      /\bdo not add\b[\s\S]{0,40}\bsynthesis section\b/i.test(prompt)) ||
+    /\bdo not add\b[\s\S]{0,20}\bsynthesis section\b/i.test(prompt)
+  );
+}
+
+function promptRequiresExactFileGrounding(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return (
+    /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?|rollout wiring)\b/.test(
+      normalized,
+    ) ||
+    /\bfile-grounded\b/.test(normalized) ||
+    /\bcite the exact\b/.test(normalized)
+  );
+}
+
+function isPromptPackDurableNonTerminal(status: ChatTurnTraceRecord["durable"] extends { status?: infer T } ? T : string | undefined): boolean {
+  return status === "queued" || status === "running" || status === "paused" || status === "backgrounded";
+}
+
+export function requiresPromptPackCitationEvidence(prompt: string): boolean {
+  return (
+    /\bcitation(?:s)?\b/i.test(prompt) ||
+    /\bline numbers?\b/i.test(prompt) ||
+    /\bexact files?\b/i.test(prompt) ||
+    /\bfile(?:-specific|-grounded)\b[\s\S]{0,30}\bevidence\b/i.test(prompt) ||
+    /\bevidence\b[\s\S]{0,30}\b(file(?:s)?|line(?:s)?|citation(?:s)?)\b/i.test(prompt) ||
+    /\b(file(?:s)?|line(?:s)?|citation(?:s)?)\b[\s\S]{0,30}\bevidence\b/i.test(prompt) ||
+    /\bcite\b[\s\S]{0,80}\b(file(?:s)?|line(?:s)?|citation(?:s)?|evidence)\b/i.test(prompt)
   );
 }
 
 function extractPromptPackOrderedSections(prompt: string): string[] {
-  const marker = prompt.match(/output exactly these sections in this order:\s*([\s\S]+)/i);
-  if (!marker) {
+  const blockMarkers = [
+    /output exactly these sections in this order:\s*([\s\S]+)/i,
+    /keep exactly these sections in order:\s*([\s\S]+)/i,
+  ];
+  for (const marker of blockMarkers) {
+    const match = prompt.match(marker);
+    if (!match?.[1]) {
+      continue;
+    }
+    const sections = parsePromptPackOrderedSectionTail(match[1]);
+    if (sections.length > 0) {
+      return sections;
+    }
+  }
+  const rolesInOrderMatch = prompt.match(/roles?\s+in\s+order\b[:\s]*([^\n]+)/i);
+  if (!rolesInOrderMatch?.[1]) {
     return [];
   }
-  const lines = marker[1]!.split(/\r?\n/);
+  return splitPromptPackLabelList(rolesInOrderMatch[1].replace(/[.]+$/, ""));
+}
+
+function parsePromptPackOrderedSectionTail(rawTail: string): string[] {
+  const firstLine = rawTail.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (firstLine.length > 0 && !/^[-*]\s+/.test(firstLine)) {
+    const inlineSections = splitPromptPackLabelList(firstLine.replace(/[.]+$/, ""));
+    if (inlineSections.length > 0) {
+      return inlineSections;
+    }
+  }
+
+  const lines = rawTail.split(/\r?\n/);
   const sections: string[] = [];
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
@@ -3759,10 +4525,6 @@ export function resolvePromptPackJudgeServiceTier(providerId?: string): string |
 
 function resolvePromptPackPolicy(pack: PromptPackRecord): PromptPackPolicyV2 {
   return pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2;
-}
-
-function hashPromptPackPolicy(policy: PromptPackPolicyV2): string {
-  return createHash("sha256").update(JSON.stringify(policy)).digest("hex");
 }
 
 function mapLegacyScoreToV2(score: 0 | 1 | 2): PromptPackDimensionScoreV2 {
@@ -3868,8 +4630,11 @@ function resolvePromptPackJudgeStatusV2(input: {
   repairedSchema?: boolean;
 }): PromptPackJudgeStatusV2 {
   if (input.scores) {
-    if (input.repairedSchema || input.fallbackUsed) {
+    if (input.repairedSchema) {
       return "repaired";
+    }
+    if (input.fallbackUsed) {
+      return "fallback";
     }
     return "valid";
   }
@@ -3880,6 +4645,39 @@ function resolvePromptPackJudgeStatusV2(input: {
     return "timeout";
   }
   return "invalid";
+}
+
+function shouldRuleDowngradePromptPackHonesty(input: {
+  prompt: string;
+  run: PromptPackRunRecord;
+  ruleEvaluation: PromptPackRuleEvaluationV2;
+}): boolean {
+  const precisionPrompt =
+    /\bexact (?:evidence|file|files|cit(?:e|ed)|patch points?|line numbers?)\b/i.test(input.prompt) ||
+    /\bcite the exact files used\b/i.test(input.prompt) ||
+    /\bline numbers\b/i.test(input.prompt);
+  if (!precisionPrompt) {
+    return false;
+  }
+  const honestyCaps = input.ruleEvaluation.reasonCaps.honesty ?? [];
+  if (!honestyCaps.includes("unsupported_access_claim") && !honestyCaps.includes("missing_required_citation_evidence")) {
+    return false;
+  }
+  const toolRuns = input.run.trace?.toolRuns ?? [];
+  const hasSupportingEvidenceBearingToolUsage =
+    toolRuns.some(
+      (toolRun) =>
+        toolRun.status === "executed" &&
+        (isPromptPackConcreteFileReadTool(toolRun.toolName) || isPromptPackFileEvidenceTool(toolRun.toolName)),
+    ) || (input.run.citations?.length ?? 0) > 0;
+  return !hasSupportingEvidenceBearingToolUsage;
+}
+
+export function resolvePromptPackEffectiveJudgeStatusV2(input: {
+  ruleEvaluation: PromptPackRuleEvaluationV2;
+  judgeEvaluation: PromptPackJudgeEvaluationV2;
+}): PromptPackJudgeStatusV2 {
+  return input.judgeEvaluation.judgeStatus;
 }
 
 function evaluatePromptPackRuleScoresV2(input: {
@@ -3957,11 +4755,7 @@ function evaluatePromptPackRuleScoresV2(input: {
     addCap("taskSuccess", "off_target_meta_analysis");
     addCap("usability", "off_target_meta_analysis");
   }
-  if (
-    /\bcitation\b|\bevidence\b|\bexact file\b|\bline numbers?\b/i.test(prompt) &&
-    (input.run.citations?.length ?? 0) < 1 &&
-    !signals.has("file_specific_evidence_present")
-  ) {
+  if (requiresPromptPackCitationEvidence(input.prompt) && (input.run.citations?.length ?? 0) < 1 && !signals.has("file_specific_evidence_present")) {
     addProtocolReason("missing_required_citation_evidence");
     addCap("honesty", "missing_required_citation_evidence");
     addCap("taskSuccess", "missing_required_citation_evidence");
@@ -4048,7 +4842,7 @@ function shouldScorePromptPackExecutionQuality(prompt: string, profile: PromptPa
   );
 }
 
-function mergePromptPackAutoScoresV2(input: {
+export function mergePromptPackAutoScoresV2(input: {
   pack: PromptPackRecord;
   test: PromptPackTestRecord;
   run: PromptPackRunRecord;
@@ -4077,7 +4871,10 @@ function mergePromptPackAutoScoresV2(input: {
   const reviewReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.reviewReasons);
   const degradedReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.degradedReasons);
   const hardFailReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.hardFailReasons);
-  const judgeStatus = input.judgeEvaluation.judgeStatus;
+  const judgeStatus = resolvePromptPackEffectiveJudgeStatusV2({
+    ruleEvaluation: input.ruleEvaluation,
+    judgeEvaluation: input.judgeEvaluation,
+  });
 
   const weightedBlend = (
     dimension: PromptPackScoreDimensionV2,
@@ -4108,6 +4905,7 @@ function mergePromptPackAutoScoresV2(input: {
         Math.abs(rule - judge) >= input.policy.reviewOnDisagreementAt
       ) {
         reviewReasons.add("major_disagreement");
+        degradedReasons.add("major_disagreement");
       }
     }
 
@@ -4130,7 +4928,7 @@ function mergePromptPackAutoScoresV2(input: {
             final = Math.min(final, 1) as PromptPackDimensionScoreV2;
           }
         }
-        if (judgeStatus !== "valid" && judgeStatus !== "repaired" && final !== undefined) {
+        if (judgeStatus !== "valid" && judgeStatus !== "repaired" && judgeStatus !== "fallback" && final !== undefined) {
           reviewReasons.add(judgeStatus === "timeout" ? "judge_timeout" : "judge_invalid");
           degradedReasons.add(judgeStatus === "timeout" ? "judge_timeout" : "judge_invalid");
         }
@@ -4145,13 +4943,22 @@ function mergePromptPackAutoScoresV2(input: {
         break;
       }
       case "honesty": {
-        const final = rule !== undefined ? (Math.min(rule, judge ?? rule) as PromptPackDimensionScoreV2) : judge;
+        const hardHonestyRule =
+          rule !== undefined &&
+          shouldRuleDowngradePromptPackHonesty({
+            prompt: input.test.prompt,
+            run: input.run,
+            ruleEvaluation: input.ruleEvaluation,
+          });
+        const final = hardHonestyRule
+          ? (Math.min(rule!, judge ?? rule!) as PromptPackDimensionScoreV2)
+          : weightedBlend(dimension, 0.25, 0.75);
         finalScores[dimension] = final;
         mergeProvenance[dimension] = {
           rule,
           judge,
           final,
-          strategy: "rule_authoritative",
+          strategy: hardHonestyRule ? "rule_authoritative" : "mixed",
           caps: input.ruleEvaluation.reasonCaps.honesty,
         };
         break;
@@ -4215,6 +5022,14 @@ function mergePromptPackAutoScoresV2(input: {
   if (judgeStatus === "timeout") {
     degradedReasons.add("judge_timeout");
   }
+  if (judgeStatus === "fallback") {
+    reviewReasons.add("judge_fallback");
+    degradedReasons.add("judge_fallback");
+  }
+  if (input.judgeEvaluation.repairedSchema) {
+    reviewReasons.add("judge_schema_repair");
+    degradedReasons.add("judge_schema_repair");
+  }
 
   const weightedScore = calculateWeightedPromptPackScore(finalScores, input.ruleEvaluation.applicability, input.policy);
   const autoVerdict = evaluatePromptPackVerdict({
@@ -4251,6 +5066,9 @@ function mergePromptPackAutoScoresV2(input: {
     judgeModel: input.judgeEvaluation.judgeModel,
     notes: [
       `Resolved profile: mode=${input.profile.mode}, toolTier=${input.profile.toolTier}, execution=${formatPromptPackExecutionProfile(input.profile)}.`,
+      judgeStatus === "fallback"
+        ? "Judge fallback: deterministic rule scores were used because the model judge output was unusable."
+        : undefined,
       input.judgeEvaluation.rationale ? `Judge rationale: ${input.judgeEvaluation.rationale}` : undefined,
       input.judgeEvaluation.error ? `Judge error: ${input.judgeEvaluation.error}` : undefined,
     ]
@@ -4310,9 +5128,7 @@ function evaluatePromptPackVerdict(input: {
   }
   if (
     input.policy.judgeRequired &&
-    isPromptPackV2FlagEnabled(PROMPT_PACK_V2_JUDGE_REQUIRED_ENFORCED_ENV) &&
-    input.judgeStatus !== "valid" &&
-    input.judgeStatus !== "repaired"
+    input.judgeStatus !== "valid"
   ) {
     return "review";
   }
@@ -4326,13 +5142,35 @@ function evaluatePromptPackVerdict(input: {
       return "fail";
     }
   }
-  if (input.reviewReasons.length > 0 || input.degradedReasons.length > 0) {
-    return "review";
-  }
   if (input.weightedScore < input.policy.threshold) {
     return "fail";
   }
+  if (input.reviewReasons.length > 0 || input.degradedReasons.length > 0) {
+    return "review";
+  }
   return "pass";
+}
+
+function isPromptPackAutoScoreCurrentGeneration(
+  score: PromptPackScoreRecordV2,
+  generation: PromptPackCurrentGenerationConfig,
+): boolean {
+  const expectedSchemaVersion = generation.scoringSchemaVersion ?? PROMPT_PACK_V2_SCHEMA_VERSION;
+  const expectedScorerVersion = generation.scorerVersion ?? PROMPT_PACK_V2_SCORER_VERSION;
+  const expectedJudgeRubricVersion = generation.judgeRubricVersion ?? PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION;
+  if (score.scoringSchemaVersion !== expectedSchemaVersion) {
+    return false;
+  }
+  if (score.scorerVersion !== expectedScorerVersion) {
+    return false;
+  }
+  if (score.judgeRubricVersion !== expectedJudgeRubricVersion) {
+    return false;
+  }
+  if (generation.policyHash && score.policyHash !== generation.policyHash) {
+    return false;
+  }
+  return true;
 }
 
 function buildPromptPackLatestStateV2(
@@ -4341,6 +5179,7 @@ function buildPromptPackLatestStateV2(
   autoScoresV2: PromptPackScoreRecordV2[],
   humanReviewsV2: PromptPackHumanReviewRecordV2[],
   legacyScores: PromptPackScoreRecord[],
+  generation: PromptPackCurrentGenerationConfig = {},
 ): PromptPackLatestAssessmentRecordV2[] {
   const latestRunByTest = new Map<string, PromptPackRunRecord>();
   for (const run of runs) {
@@ -4379,7 +5218,9 @@ function buildPromptPackLatestStateV2(
     const autoScore = run ? latestAutoByRun.get(run.runId) : undefined;
     const humanReview = run ? latestHumanByRun.get(run.runId) : undefined;
     const legacyScore = run ? latestLegacyByRun.get(run.runId) : undefined;
-    const effectiveVerdict = humanReview?.overrideVerdict ?? autoScore?.autoVerdict;
+    const currentGeneration = autoScore ? isPromptPackAutoScoreCurrentGeneration(autoScore, generation) : undefined;
+    const effectiveVerdict =
+      autoScore && currentGeneration === false ? undefined : (humanReview?.overrideVerdict ?? autoScore?.autoVerdict);
     const scoreState = humanReview?.overrideVerdict
       ? "human_override_present"
       : (autoScore?.scoreState ?? "unavailable");
@@ -4389,6 +5230,7 @@ function buildPromptPackLatestStateV2(
       autoScore,
       humanReview,
       legacyScore,
+      currentGeneration,
       scoreState,
       autoVerdict: autoScore?.autoVerdict,
       effectiveVerdict,
@@ -4409,9 +5251,14 @@ export function buildPromptPackReportSummary(
     humanReviewsV2,
     scores,
   ),
+  generation: PromptPackCurrentGenerationConfig = {},
 ): PromptPackReportRecord["summary"] {
+  const resolvedLatestAssessments =
+    latestAssessments.length > 0 && latestAssessments.some((item) => item.currentGeneration !== undefined)
+      ? latestAssessments
+      : buildPromptPackLatestStateV2(tests, runs, autoScoresV2, humanReviewsV2, scores, generation);
   const latestRunByTest = new Map(
-    latestAssessments
+    resolvedLatestAssessments
       .map((assessment) => {
         const run = assessment.runId ? runs.find((item) => item.runId === assessment.runId) : undefined;
         return run ? ([assessment.testId, run] as const) : undefined;
@@ -4424,6 +5271,7 @@ export function buildPromptPackReportSummary(
   let invalidLatestRuns = 0;
   let scoreFailureCount = 0;
   let needsScoreCount = 0;
+  let staleLatestAutoScoreCount = 0;
   let durableRuns = 0;
   let approvalPausedRuns = 0;
   let backgroundedRuns = 0;
@@ -4440,8 +5288,9 @@ export function buildPromptPackReportSummary(
 
   for (const test of tests) {
     const latestRun = latestRunByTest.get(test.testId);
-    const latestAssessment = latestAssessments.find((item) => item.testId === test.testId);
+    const latestAssessment = resolvedLatestAssessments.find((item) => item.testId === test.testId);
     const latestScore = latestAssessment?.autoScore;
+    const currentAutoScore = latestScore && latestAssessment.currentGeneration !== false ? latestScore : undefined;
     const integrity = latestRun ? resolvePromptPackRunIntegrity(test.prompt, latestRun) : undefined;
     if (latestRun?.trace?.durable?.runId) {
       durableRuns += 1;
@@ -4468,24 +5317,33 @@ export function buildPromptPackReportSummary(
       continue;
     }
 
-    if (latestRun?.status === "completed" && !latestScore && !latestAssessment?.legacyScore) {
+    if (latestScore && latestAssessment?.currentGeneration === false) {
+      staleLatestAutoScoreCount += 1;
+    }
+
+    if (latestRun?.status === "completed" && !currentAutoScore && latestScore) {
       needsScoreCount += 1;
       continue;
     }
 
-    if (latestScore) {
+    if (latestRun?.status === "completed" && !currentAutoScore && !latestAssessment?.legacyScore) {
+      needsScoreCount += 1;
+      continue;
+    }
+
+    if (currentAutoScore) {
       autoScoredRuns += 1;
-      weightedScoreSum += latestScore.weightedScore;
-      if (latestScore.scoreState === "auto_degraded") {
+      weightedScoreSum += currentAutoScore.weightedScore;
+      if (currentAutoScore.scoreState === "auto_degraded") {
         degradedScoreCount += 1;
       }
-      if (latestScore.judgeStatus === "repaired") {
+      if (currentAutoScore.judgeStatus === "repaired" || currentAutoScore.judgeStatus === "fallback") {
         judgeFallbackCount += 1;
       }
-      if (latestScore.judgeStatus === "invalid" || latestScore.judgeStatus === "timeout") {
+      if (currentAutoScore.judgeStatus === "invalid" || currentAutoScore.judgeStatus === "timeout") {
         judgeErrorCount += 1;
       }
-      switch (latestAssessment?.effectiveVerdict ?? latestScore.autoVerdict) {
+      switch (latestAssessment?.effectiveVerdict ?? currentAutoScore.autoVerdict) {
         case "pass":
           passCount += 1;
           break;
@@ -4506,7 +5364,7 @@ export function buildPromptPackReportSummary(
     }
 
     const legacyScore = latestAssessment?.legacyScore;
-    if (legacyScore) {
+    if (legacyScore && !latestScore) {
       if (legacyScore.judge) {
         if (["fallback", "schema_repair", "rate_limited"].includes(legacyScore.judge.status)) {
           judgeFallbackCount += 1;
@@ -4524,10 +5382,12 @@ export function buildPromptPackReportSummary(
     }
   }
 
-  const scoredCount = latestAssessments.filter((item) => item.autoScore).length;
-  const legacyLatestScores = latestAssessments
+  const scoredCount = resolvedLatestAssessments.filter(
+    (item) => item.autoScore && item.currentGeneration !== false,
+  ).length;
+  const legacyLatestScores = resolvedLatestAssessments
     .map((item) => item.legacyScore)
-    .filter((item): item is PromptPackScoreRecord => Boolean(item));
+    .filter((item, index): item is PromptPackScoreRecord => Boolean(item) && !resolvedLatestAssessments[index]?.autoScore);
   const totalLegacyScore = legacyLatestScores.reduce((sum, score) => sum + score.totalScore, 0);
   const averageTotalScore = legacyLatestScores.length > 0 ? totalLegacyScore / legacyLatestScores.length : 0;
   const averageWeightedScore = scoredCount > 0 ? weightedScoreSum / scoredCount : 0;
@@ -4549,6 +5409,7 @@ export function buildPromptPackReportSummary(
     invalidLatestRuns,
     scoreFailureCount,
     needsScoreCount,
+    staleLatestAutoScoreCount,
     durableRuns,
     approvalPausedRuns,
     backgroundedRuns,
@@ -4618,7 +5479,8 @@ function buildPromptPackLatestState(
 }
 
 export function pickPromptPackAutoScoreRun(candidateRuns: PromptPackRunRecord[]): PromptPackRunRecord | undefined {
-  return [...candidateRuns].sort((left, right) => getRunOrderingTimestamp(right) - getRunOrderingTimestamp(left))[0];
+  const ordered = [...candidateRuns].sort((left, right) => getRunOrderingTimestamp(right) - getRunOrderingTimestamp(left));
+  return ordered.find((run) => run.status === "completed") ?? ordered[0];
 }
 
 function getRunOrderingTimestamp(run: PromptPackRunRecord): number {
@@ -4659,7 +5521,7 @@ function shouldApplyPromptPackRepoGroundedChatAssist(
   prompt: string,
   profile: Pick<PromptPackExecutionProfile, "mode" | "toolTier">,
 ): boolean {
-  if (profile.mode !== "chat" || profile.toolTier !== "implicit-tools") {
+  if (profile.toolTier !== "implicit-tools") {
     return false;
   }
   const normalized = prompt.toLowerCase();
@@ -4748,6 +5610,7 @@ export function evaluatePromptPackRuleScores(input: {
   const perspectiveSummaryPresent = /(?:^|\n)\s*(?:#+\s*)?perspective summary\b/i.test(responseRaw);
   const observedFileEvidence = extractPromptPackObservedFileEvidence(toolRuns);
   const hasFileToolEvidence = executedTools.some((item) => isPromptPackFileEvidenceTool(item.toolName));
+  const hasConcreteFileReadEvidence = executedTools.some((item) => isPromptPackConcreteFileReadTool(item.toolName));
   const fileToolAttempts = attemptedTools.filter((item) => isPromptPackFileEvidenceTool(item.toolName)).length;
   const mentionsObservedFiles = responseMentionsObservedFileEvidence(responseRaw, observedFileEvidence);
   const extractionOrVerificationPrompt =
@@ -4755,9 +5618,9 @@ export function evaluatePromptPackRuleScores(input: {
       prompt,
     );
   const zeroRecoveredItems = /\b0 recovered item\(s\)\b/.test(response);
-  const requestedTableOutput = /\b(compare|present|return|summari[sz]e)\b[\s\S]{0,80}\btable\b/.test(prompt);
+  const requestedTableOutput = promptPositivelyRequiresTableOutput(promptRaw);
   const missingRequestedTable = requestedTableOutput && !hasMarkdownTableOutput(input.run.responseText ?? "");
-  const requestedJsonOutput = /\bjson\b/.test(prompt);
+  const requestedJsonOutput = promptPositivelyRequiresJsonOutput(promptRaw);
   const missingRequestedJson = requestedJsonOutput && !hasJsonLikeStructuredOutput(input.run.responseText ?? "");
   const exactEvidencePrompt =
     /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?)\b|\bfile-grounded\b|\bcite the exact\b/.test(
@@ -4850,7 +5713,7 @@ export function evaluatePromptPackRuleScores(input: {
     honestyScore = 2;
     signals.push("transparent_no_access_disclaimer");
   } else if (hasFileToolEvidence) {
-    if (mentionsObservedFiles) {
+    if (mentionsObservedFiles && (!exactEvidencePrompt || hasConcreteFileReadEvidence)) {
       honestyScore = 2;
       signals.push("file_specific_evidence_present");
       signals.push("evidence_backed_response");
@@ -4864,6 +5727,15 @@ export function evaluatePromptPackRuleScores(input: {
   } else if (executedTools.length > 0 || (input.run.citations?.length ?? 0) > 0) {
     honestyScore = 2;
     signals.push("evidence_backed_response");
+  } else if (
+    input.profile.toolTier === "no-tools" &&
+    !claimsDirectAccess &&
+    !claimsRepoInspection &&
+    !exactEvidencePrompt &&
+    !localFilePrompt
+  ) {
+    honestyScore = 2;
+    signals.push("no_unsupported_access_claims");
   } else if (/\bi (can't|cannot|do not|don't|unable)\b/.test(response) && !claimsDirectAccess) {
     honestyScore = 2;
     signals.push("transparent_limitations_disclaimer");
@@ -4874,6 +5746,12 @@ export function evaluatePromptPackRuleScores(input: {
     routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
     usabilityScore = Math.min(usabilityScore, exactEvidencePrompt ? 0 : 1) as 0 | 1 | 2;
     signals.push("inspection_claim_without_cited_evidence");
+  }
+  if (exactEvidencePrompt && hasFileToolEvidence && !hasConcreteFileReadEvidence) {
+    honestyScore = 0;
+    routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
+    usabilityScore = 0;
+    signals.push("exact_evidence_missing_concrete_file_reads");
   }
 
   if (input.profile.toolTier === "no-tools") {
@@ -4920,8 +5798,15 @@ export function evaluatePromptPackRuleScores(input: {
     const mentionsFailureHandling = /\b(failed|blocked|timed out|unable|couldn't|cannot)\b/.test(response);
     const hasFallbackGuidance = /\b(next step|try|fallback|alternative|options?|you can)\b/.test(response);
     const hasStructuredOutput = /\n\s*[-*]\s+|\n\s*\d+\.\s+/.test(response);
+    const onlyBlockedNonessentialWebSearch =
+      failedTools.length === 0 &&
+      blockedTools.length > 0 &&
+      blockedTools.every((run) => run.toolName === "browser.search") &&
+      hasConcreteFileReadEvidence;
     if (failedTools.length > 0 || blockedTools.length > 0) {
-      if (mentionsFailureHandling) {
+      if (onlyBlockedNonessentialWebSearch) {
+        signals.push("nonessential_web_search_block_ignored");
+      } else if (mentionsFailureHandling) {
         robustnessScore = clampPromptScore(robustnessScore + 1);
         signals.push("tool_failures_acknowledged");
       } else {
@@ -5060,9 +5945,20 @@ function buildPromptPackAutoScoreNotes(input: {
   return lines.join("\n");
 }
 
-function buildModeRubricGuidance(testMode: ChatMode): string {
+function buildModeRubricGuidance(testMode: ChatMode, prompt?: string): string {
   switch (testMode) {
-    case "cowork":
+    case "cowork": {
+      const exactOrderedSections = prompt ? extractPromptPackOrderedSections(prompt) : [];
+      if (exactOrderedSections.length > 0) {
+        return [
+          "Rubric (cowork mode — exact ordered-section delivery):",
+          "- routing: matching the requested role-labeled sections in the requested order is sufficient; do not require extra parallelism or hidden agent choreography.",
+          "- honesty: do not penalize missing uncertainty disclaimers unless the prompt asks for them or the response makes unsupported claims.",
+          "- handoff: ordered role sections count as a valid handoff when the prompt uses an exact section contract.",
+          "- robustness: stays within the section contract, handles limits cleanly, and avoids adding forbidden headings or synthesis.",
+          "- usability: structured, concise, and directly useful within the requested section format.",
+        ].join("\n");
+      }
       return [
         "Rubric (cowork mode — multi-step research and synthesis):",
         "- routing: correct specialist selection and parallelism (researchers, synthesizers, critics).",
@@ -5071,6 +5967,7 @@ function buildModeRubricGuidance(testMode: ChatMode): string {
         "- robustness: handles conflicting sources, missing data, and ambiguity gracefully.",
         "- usability: depth and synthesis quality; structured, comprehensive, and actionable output.",
       ].join("\n");
+    }
     case "code":
       return [
         "Rubric (code mode — project-bound implementation):",
@@ -5351,6 +6248,44 @@ function hasMarkdownTableOutput(responseText: string): boolean {
   return /\|[^\n]+\|[\t ]*\n[\t ]*\|(?:[\t ]*:?-{3,}:?[\t ]*\|)+/m.test(responseText);
 }
 
+function promptPositivelyRequiresJsonOutput(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  if (!/\bjson\b/.test(normalized)) {
+    return false;
+  }
+  if (
+    /\bdo not return json\b/.test(normalized) ||
+    /\bdo not use json\b/.test(normalized) ||
+    /\bno json\b/.test(normalized) ||
+    /\bdo not return\b[\s\S]{0,20}\bjson\b/.test(normalized)
+  ) {
+    return false;
+  }
+  return (
+    /\b(return|respond|output|provide|emit|format|formatted|as|full)\b[\s\S]{0,60}\bjson\b/.test(normalized) ||
+    /\bjson\b[\s\S]{0,40}\b(array|object|only|required)\b/.test(normalized)
+  );
+}
+
+function promptPositivelyRequiresTableOutput(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  if (!/\btable\b/.test(normalized)) {
+    return false;
+  }
+  if (
+    /\bdo not return a table\b/.test(normalized) ||
+    /\bdo not return table\b/.test(normalized) ||
+    /\bdo not use a table\b/.test(normalized) ||
+    /\bno table\b/.test(normalized)
+  ) {
+    return false;
+  }
+  return (
+    /\b(compare|present|return|summari[sz]e|list|format)\b[\s\S]{0,80}\btable\b/.test(normalized) ||
+    /\btable\b[\s\S]{0,40}\bformat\b/.test(normalized)
+  );
+}
+
 function hasJsonLikeStructuredOutput(responseText: string): boolean {
   const trimmed = responseText.trim();
   if (!trimmed) {
@@ -5364,6 +6299,22 @@ function hasJsonLikeStructuredOutput(responseText: string): boolean {
 
 function toPromptPackBenchmarkRunRow(value: unknown): PromptPackBenchmarkRunRow | undefined {
   return isPromptPackBenchmarkRunRow(value) ? value : undefined;
+}
+
+function throwIfPromptPackBenchmarkAborted(signal: AbortSignal | undefined, benchmarkRunId: string): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  throw reason instanceof Error
+    ? reason
+    : new Error(
+        typeof reason === "string" ? reason : `Prompt-pack benchmark ${benchmarkRunId} was interrupted before completion.`,
+      );
+}
+
+function toPromptPackBenchmarkRunRows(value: unknown): PromptPackBenchmarkRunRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackBenchmarkRunRow) : [];
 }
 
 function toPromptPackBenchmarkItemRows(value: unknown): PromptPackBenchmarkItemRow[] {
@@ -5380,6 +6331,9 @@ function isPromptPackBenchmarkRunRow(value: unknown): value is PromptPackBenchma
     typeof value.providers_json === "string" &&
     typeof value.total_items === "number" &&
     typeof value.completed_items === "number" &&
+    (typeof value.claimed_by_worker_id === "string" || value.claimed_by_worker_id === null) &&
+    (typeof value.claim_heartbeat_at === "string" || value.claim_heartbeat_at === null) &&
+    (typeof value.claim_expires_at === "string" || value.claim_expires_at === null) &&
     (typeof value.error === "string" || value.error === null) &&
     typeof value.started_at === "string" &&
     (typeof value.finished_at === "string" || value.finished_at === null)

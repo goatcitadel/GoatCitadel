@@ -1,5 +1,12 @@
 import type { ApprovalEffectRecord, ApprovalRequest } from "./approvals.js";
-import type { ChatToolRunRecord, ChatTurnTraceRecord } from "./chat.js";
+import type {
+  ChatDelegationRunRecord,
+  ChatDelegationStepRecord,
+  ChatExecutionPlanRecord,
+  ChatExecutionPlanStepRecord,
+  ChatToolRunRecord,
+  ChatTurnTraceRecord,
+} from "./chat.js";
 import type { DurableRunRecord } from "./durable.js";
 import type { SessionMeta, SessionSummary } from "./session.js";
 import type { TaskRecord } from "./tasks.js";
@@ -20,11 +27,82 @@ export interface RuntimeLifecycleTurnSummary extends Pick<
   userMessageId: string;
   assistantMessageId?: string;
   durableRunId?: string;
+  completion?: ChatTurnTraceRecord["completion"];
+  failure?: ChatTurnTraceRecord["failure"];
 }
 
 export type RuntimeLifecycleToolRunSummary = Pick<
   ChatToolRunRecord,
-  "toolRunId" | "turnId" | "sessionId" | "toolName" | "status" | "approvalId" | "startedAt" | "finishedAt"
+  | "toolRunId"
+  | "turnId"
+  | "sessionId"
+  | "toolName"
+  | "status"
+  | "approvalId"
+  | "startedAt"
+  | "finishedAt"
+  | "reused"
+  | "reusedFromToolRunId"
+  | "reuseReason"
+>;
+
+export type RuntimeLifecycleExecutionPlanStepSummary = Pick<
+  ChatExecutionPlanStepRecord,
+  | "stepId"
+  | "index"
+  | "objective"
+  | "status"
+  | "delegatedRole"
+  | "childRunId"
+  | "durableRunId"
+  | "childSessionId"
+  | "childTurnId"
+>;
+
+export interface RuntimeLifecycleExecutionPlanSummary extends Pick<
+  ChatExecutionPlanRecord,
+  | "planId"
+  | "sessionId"
+  | "turnId"
+  | "mode"
+  | "planningMode"
+  | "status"
+  | "source"
+  | "advisoryOnly"
+  | "objective"
+  | "summary"
+  | "startedAt"
+  | "finishedAt"
+> {
+  steps: RuntimeLifecycleExecutionPlanStepSummary[];
+}
+
+export type RuntimeLifecycleDelegationRunSummary = Pick<
+  ChatDelegationRunRecord,
+  | "runId"
+  | "sessionId"
+  | "taskId"
+  | "objective"
+  | "roles"
+  | "mode"
+  | "status"
+  | "executionPlanId"
+  | "startedAt"
+  | "finishedAt"
+>;
+
+export type RuntimeLifecycleDelegationStepSummary = Pick<
+  ChatDelegationStepRecord,
+  | "stepId"
+  | "runId"
+  | "role"
+  | "status"
+  | "index"
+  | "summary"
+  | "error"
+  | "childSessionId"
+  | "childTurnId"
+  | "durableRunId"
 >;
 
 export interface RuntimeLifecycleLinkedIds {
@@ -39,9 +117,11 @@ export interface RuntimeLifecycleLinkedIds {
 
 export type RuntimeLifecycleFieldSource =
   | "query"
+  | "turn_trace"
+  | "execution_plan"
+  | "delegation_step"
   | "approval_linkage"
   | "approval_wait_run"
-  | "turn_trace"
   | "durable_payload"
   | "durable_metadata"
   | "task_context"
@@ -74,4 +154,7 @@ export interface RuntimeLifecycleResponse {
   approvalEffects?: ApprovalEffectRecord[];
   turns: RuntimeLifecycleTurnSummary[];
   toolRuns: RuntimeLifecycleToolRunSummary[];
+  executionPlans?: RuntimeLifecycleExecutionPlanSummary[];
+  delegationRuns?: RuntimeLifecycleDelegationRunSummary[];
+  delegationSteps?: RuntimeLifecycleDelegationStepSummary[];
 }

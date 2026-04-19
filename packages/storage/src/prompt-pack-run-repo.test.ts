@@ -37,6 +37,8 @@ describe("PromptPackRunRepository", () => {
       testId: "test-1",
       status: "running",
       responseText: "initial response",
+      derivedResponseText: "initial derived response",
+      derivedResponseSignals: ["prompt_lab_contract_fallback"],
       error: "initial error",
       startedAt: "2026-03-02T00:00:00.000Z",
     });
@@ -47,6 +49,8 @@ describe("PromptPackRunRepository", () => {
     });
     assert.equal(firstPatch.status, "completed");
     assert.equal(firstPatch.responseText, "final response");
+    assert.equal(firstPatch.derivedResponseText, "initial derived response");
+    assert.deepEqual(firstPatch.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
     assert.equal(firstPatch.error, "initial error");
 
     const secondPatch = repo.patch("run-1", {
@@ -54,7 +58,33 @@ describe("PromptPackRunRepository", () => {
     });
     assert.equal(secondPatch.status, "completed");
     assert.equal(secondPatch.responseText, "final response");
+    assert.equal(secondPatch.derivedResponseText, "initial derived response");
+    assert.deepEqual(secondPatch.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
     assert.equal(secondPatch.error, "updated error");
+  });
+
+  it("round-trips derived response metadata through create and patch", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      runId: "run-derived-1",
+      packId: "pack-1",
+      testId: "test-1",
+      status: "failed",
+      derivedResponseText: "Recovered harness helper text.",
+      derivedResponseSignals: ["trace_missing_output_fallback"],
+      startedAt: "2026-03-02T00:00:00.000Z",
+    });
+
+    assert.equal(created.derivedResponseText, "Recovered harness helper text.");
+    assert.deepEqual(created.derivedResponseSignals, ["trace_missing_output_fallback"]);
+
+    const patched = repo.patch("run-derived-1", {
+      derivedResponseText: "Updated derived text.",
+      derivedResponseSignals: ["prompt_lab_contract_fallback"],
+    });
+
+    assert.equal(patched.derivedResponseText, "Updated derived text.");
+    assert.deepEqual(patched.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
   });
 
   it("round-trips integrity metadata through create and patch", () => {

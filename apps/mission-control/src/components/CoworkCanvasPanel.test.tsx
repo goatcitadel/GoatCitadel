@@ -35,6 +35,70 @@ describe("CoworkCanvasPanel", () => {
             ],
           } as any
         }
+        executionPlan={
+          {
+            planId: "plan-1",
+            sessionId: "sess-1",
+            turnId: "turn-1",
+            mode: "cowork",
+            planningMode: "advisory",
+            status: "running",
+            source: "planner",
+            advisoryOnly: false,
+            objective: "Ship the runtime fix",
+            summary: "Plan attached.",
+            steps: [
+              {
+                stepId: "plan-step-1",
+                index: 0,
+                objective: "Design the fix",
+                parallelizable: false,
+                delegatedRole: "Architect",
+                status: "completed",
+                dependsOnStepIds: [],
+                durableRunId: "durable-plan-1",
+                childSessionId: "child-session-1",
+                childTurnId: "child-turn-1",
+                childRunId: "legacy-child-1",
+              },
+              {
+                stepId: "plan-step-2",
+                index: 1,
+                objective: "Ship the patch",
+                parallelizable: true,
+                delegatedRole: "Coder",
+                status: "pending",
+                dependsOnStepIds: ["plan-step-1"],
+              },
+            ],
+          } as any
+        }
+        delegationRun={{
+          label: "Delegation",
+          objective: "Ship the runtime fix",
+          mode: "parallel",
+          status: "partial",
+          steps: [
+            {
+              stepId: "delegate-step-1",
+              role: "Architect",
+              status: "completed",
+              index: 0,
+              durableRunId: "durable-child-1",
+              childSessionId: "child-session-1",
+              childTurnId: "child-turn-1",
+              output: "Design locked.",
+            },
+            {
+              stepId: "delegate-step-2",
+              role: "Coder",
+              status: "skipped",
+              index: 1,
+              error: "Skipped because dependency failed.",
+            },
+          ],
+          stitchedOutput: "### Architect\nDesign locked.",
+        }}
       />,
     );
 
@@ -46,5 +110,11 @@ describe("CoworkCanvasPanel", () => {
     expect(markup).toContain("Collected constraints and scoped the problem.");
     expect(markup).toContain("Research is in motion and implementation is queued behind it.");
     expect(markup).toContain("Tools used");
+    expect(markup).toContain("Depends on: plan-step-1");
+    expect(markup).toContain("Durable: durable-plan-1");
+    expect(markup).toContain("Deprecated child run: legacy-child-1");
+    expect(markup).toContain("Delegation run");
+    expect(markup).toContain("Durable durable-child-1");
+    expect(markup).toContain("Skipped because dependency failed.");
   });
 });

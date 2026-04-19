@@ -1,5 +1,6 @@
 /* eslint-disable max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RuntimeLifecycleResponse } from "@goatcitadel/contracts";
 import {
   addTaskActivity,
   addTaskDeliverable,
@@ -8,6 +9,7 @@ import {
   fetchAgents,
   fetchDurableRun,
   fetchDurableRunTimeline,
+  fetchRuntimeLifecycle,
   fetchSessions,
   fetchTaskActivities,
   fetchTaskDeliverables,
@@ -89,6 +91,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   const [activities, setActivities] = useState<TaskActivityRecord[]>([]);
   const [deliverables, setDeliverables] = useState<TaskDeliverableRecord[]>([]);
   const [subagents, setSubagents] = useState<TaskSubagentSession[]>([]);
+  const [taskLifecycle, setTaskLifecycle] = useState<RuntimeLifecycleResponse | null>(null);
   const [viewFilter, setViewFilter] = useState<"active" | "trash" | "all">("active");
   const [createTitle, setCreateTitle] = useState("");
   const [activityMessage, setActivityMessage] = useState("");
@@ -185,14 +188,20 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
   const loadTaskDetail = (taskId: string) => {
     const requestId = ++detailRequestSeq.current;
     setLoadingDetails(true);
-    void Promise.all([fetchTaskActivities(taskId), fetchTaskDeliverables(taskId), fetchTaskSubagents(taskId)])
-      .then(([a, d, s]) => {
+    void Promise.all([
+      fetchTaskActivities(taskId),
+      fetchTaskDeliverables(taskId),
+      fetchTaskSubagents(taskId),
+      fetchRuntimeLifecycle({ taskId }).catch(() => null),
+    ])
+      .then(([a, d, s, lifecycle]) => {
         if (requestId !== detailRequestSeq.current) {
           return;
         }
         setActivities(a.items);
         setDeliverables(d.items);
         setSubagents(s.items);
+        setTaskLifecycle(lifecycle);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => {
@@ -233,6 +242,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
       setActivities([]);
       setDeliverables([]);
       setSubagents([]);
+      setTaskLifecycle(null);
       setLoadingDetails(false);
       return;
     }
@@ -801,6 +811,93 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                     ) : null}
                   </div>
                 ) : null}
+              </Panel>
+
+              <Panel title="Execution spine" subtitle="Canonical lineage for this task across plans, delegation, and durable runs.">
+                {loadingDetails ? <p className="office-subtitle">Refreshing lineage…</p> : null}
+                {!taskLifecycle ? (
+                  <p className="office-subtitle">
+                    No runtime lifecycle view is attached yet for this task.
+                  </p>
+                ) : (
+                  <>
+                    <div className="task-summary-grid">
+                      <div className="task-summary-stat">
+                        <span>Execution plans</span>
+                        <strong>{taskLifecycle.executionPlans?.length ?? 0}</strong>
+                      </div>
+                      <div className="task-summary-stat">
+                        <span>Delegation runs</span>
+                        <strong>{taskLifecycle.delegationRuns?.length ?? 0}</strong>
+                      </div>
+                      <div className="task-summary-stat">
+                        <span>Delegation steps</span>
+                        <strong>{taskLifecycle.delegationSteps?.length ?? 0}</strong>
+                      </div>
+                      <div className="task-summary-stat">
+                        <span>Durable runs</span>
+                        <strong>{taskLifecycle.linked.runIds.length}</strong>
+                      </div>
+                    </div>
+
+                    {taskLifecycle.executionPlans?.length ? (
+                      <div className="replay-box">
+                        <h4>Execution plans</h4>
+                        <ul className="compact-list">
+                          {taskLifecycle.executionPlans.map((plan) => (
+                            <li key={plan.planId}>
+                              <strong>{plan.objective}</strong>
+                              {` | ${plan.status} | ${plan.mode}`}
+                              {plan.summary ? ` | ${plan.summary}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {taskLifecycle.delegationRuns?.length ? (
+                      <div className="replay-box">
+                        <h4>Delegation runs</h4>
+                        <ul className="compact-list">
+                          {taskLifecycle.delegationRuns.map((run) => (
+                            <li key={run.runId}>
+                              <strong>{run.objective}</strong>
+                              {` | ${run.status} | ${run.mode}`}
+                              {run.executionPlanId ? ` | Plan ${run.executionPlanId}` : ""}
+                              {run.roles.length ? ` | ${run.roles.join(" -> ")}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {taskLifecycle.delegationSteps?.length ? (
+                      <div className="replay-box">
+                        <h4>Delegation steps</h4>
+                        <ul className="compact-list">
+                          {taskLifecycle.delegationSteps.map((step) => (
+                            <li key={step.stepId}>
+                              <strong>{step.role}</strong>
+                              {` | ${step.status} | step ${step.index + 1}`}
+                              {step.childSessionId ? ` | Session ${step.childSessionId}` : ""}
+                              {step.childTurnId ? ` | Turn ${step.childTurnId}` : ""}
+                              {step.durableRunId ? ` | Durable ${step.durableRunId}` : ""}
+                              {step.error ? ` | ${step.error}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {taskLifecycle.resolution?.fallbackSources.length ? (
+                      <p className="office-subtitle">
+                        Diagnostics: {taskLifecycle.resolution.fallbackSources.join(", ")}
+                      </p>
+                    ) : (
+                      <p className="office-subtitle">Diagnostics: canonical linkage resolved without fallback.</p>
+                    )}
+                  </>
+                )}
               </Panel>
 
               <Panel

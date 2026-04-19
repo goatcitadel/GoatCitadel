@@ -25,7 +25,8 @@ export class RealtimeEventRepository {
   private readonly listAfterSequenceStmt;
   private readonly boundsStmt;
   private readonly listStmt;
-  private readonly pruneStmt;
+  private readonly countStmt;
+  private readonly pruneOverflowStmt;
   private readonly pruneOlderThanStmt;
   private appendCount = 0;
 
@@ -82,12 +83,17 @@ export class RealtimeEventRepository {
       LIMIT @limit
     `);
 
-    this.pruneStmt = db.prepare(`
+    this.countStmt = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM realtime_events
+    `);
+    this.pruneOverflowStmt = db.prepare(`
       DELETE FROM realtime_events
       WHERE event_id IN (
-        SELECT event_id FROM realtime_events
-        ORDER BY created_at DESC, event_id DESC
-        LIMIT -1 OFFSET @maxRows
+        SELECT event_id
+        FROM realtime_events
+        ORDER BY created_at ASC, event_id ASC
+        LIMIT @overflowRows
       )
     `);
     this.pruneOlderThanStmt = db.prepare(`
@@ -130,7 +136,7 @@ export class RealtimeEventRepository {
     });
     this.appendCount += 1;
     if (this.appendCount % 100 === 0) {
-      this.pruneStmt.run({ maxRows: 10000 });
+      this.pruneToMaxRows(10000);
     }
 
     return {
@@ -201,6 +207,22 @@ export class RealtimeEventRepository {
     }
     this.pruneOlderThanStmt.run({ cutoff: cutoffIso });
     return count;
+  }
+
+  public pruneToMaxRows(maxRows: number): number {
+    const normalizedMaxRows = Math.max(1, Math.floor(maxRows));
+    return this.db.transaction("immediate", () => {
+      const countRow = toCountRow(this.countStmt.get());
+      const totalRows = Number(countRow?.count ?? 0);
+      if (totalRows <= normalizedMaxRows) {
+        return 0;
+      }
+      const overflowRows = totalRows - normalizedMaxRows;
+      this.pruneOverflowStmt.run({
+        overflowRows,
+      });
+      return overflowRows;
+    });
   }
 }
 

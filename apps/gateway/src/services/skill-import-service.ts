@@ -124,6 +124,32 @@ const FALLBACK_SOURCE_ITEMS: SkillSourceResultRecord[] = [
   },
   {
     sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/louis-szeto/harness-engineer",
+    name: "Harness Engineer",
+    description:
+      "Harness-engineering framework that maps well to GoatCitadel's native skills, routing, memory, and trust surfaces.",
+    tags: ["clawhub", "harness", "audit", "routing", "policy", "memory"],
+    sourceKind: "reference",
+    installability: "review_only",
+    installHint:
+      "Treat as a reference pattern. GoatCitadel should absorb the audit framing natively instead of importing this skill.",
+    skillFamily: "harness_engineering",
+  },
+  {
+    sourceProvider: "clawhub",
+    sourceUrl: "https://clawhub.ai/kennyzir/capability-evolver-pro",
+    name: "Capability Evolver Pro",
+    description:
+      "Autonomous capability evolution workflow whose report-first ideas are useful, but whose self-modifying runtime model conflicts with GoatCitadel's trust posture.",
+    tags: ["clawhub", "self-improvement", "evolver", "replay", "autonomous"],
+    sourceKind: "reference",
+    installability: "not_installable",
+    installHint:
+      "Treat as a bounded inspiration source only. Borrow report-first ideas without importing the autonomous self-modification loop.",
+    skillFamily: "capability_evolution",
+  },
+  {
+    sourceProvider: "clawhub",
     sourceUrl: "https://clawhub.ai/rot13maxi/shards",
     name: "Shards",
     description: "Agent skill by @rot13maxi on ClawHub.",
@@ -336,6 +362,19 @@ const REVIEW_POLICY_HINTS: Array<{
   message: string;
 }> = [
   {
+    pattern: /\bharness[-\s]?engineer\b/i,
+    duplicateFamily: "harness_engineering",
+    reviewDisposition: "reference_only",
+    message:
+      "GoatCitadel already owns harness engineering natively across Configure > Agents, Skills review, orchestration, memory, and policy. Keep this as a reference pattern only.",
+  },
+  {
+    pattern: /\bcapability[-\s]?evolver\b|\bevolver\b/i,
+    reviewDisposition: "reject",
+    message:
+      "Capability Evolver-style autonomous self-modification conflicts with GoatCitadel's explicit approval and proposal-before-activation trust posture. Borrow the report-first ideas, but do not import this runtime directly.",
+  },
+  {
     pattern: /\bself[-\s]?improv/i,
     duplicateFamily: "safe_self_improvement",
     reviewDisposition: "reject",
@@ -405,6 +444,11 @@ const NATIVE_OVERLAP_HINTS: Record<string, {
   nativeDestination: string;
   blockingReason: string;
 }> = {
+  harness_engineering: {
+    nativeAlternativeName: "Native harness audit and operator governance",
+    nativeDestination: "Configure > Agents > Skills",
+    blockingReason: "GoatCitadel already owns harness engineering natively across its operator surfaces.",
+  },
   safe_self_improvement: {
     nativeAlternativeName: "Native memory maintenance",
     nativeDestination: "Observe > Artifacts > Memory",
@@ -1118,6 +1162,8 @@ export class SkillImportService {
     return {
       valid: errors.length === 0,
       riskLevel,
+      reviewDisposition: reviewPolicy?.reviewDisposition,
+      reviewMessage: reviewPolicy?.message,
       errors,
       warnings,
       checks: {

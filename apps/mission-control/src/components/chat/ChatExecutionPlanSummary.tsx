@@ -76,6 +76,15 @@ export function ChatExecutionPlanSummary({
             <p>Status: {formatPlanStepStatus(currentStep)}</p>
             {currentStep.summary ? <p>{currentStep.summary}</p> : null}
             {currentStep.error ? <p>Error: {currentStep.error}</p> : null}
+            {currentStep.durableRunId || currentStep.childSessionId || currentStep.childTurnId || currentStep.childRunId ? (
+              <p>
+                Lineage:
+                {currentStep.durableRunId ? ` durable ${currentStep.durableRunId}` : ""}
+                {currentStep.childSessionId ? ` | child session ${currentStep.childSessionId}` : ""}
+                {currentStep.childTurnId ? ` | child turn ${currentStep.childTurnId}` : ""}
+                {currentStep.childRunId ? ` | deprecated childRunId ${currentStep.childRunId}` : ""}
+              </p>
+            ) : null}
           </div>
         ) : null
       ) : (
@@ -91,6 +100,15 @@ export function ChatExecutionPlanSummary({
               {step.summary ? <p>{step.summary}</p> : null}
               {step.error ? <p>Error: {step.error}</p> : null}
               {step.delegatedRole ? <p>Delegated role: {step.delegatedRole}</p> : null}
+              {step.durableRunId || step.childSessionId || step.childTurnId || step.childRunId ? (
+                <p>
+                  Lineage:
+                  {step.durableRunId ? ` durable ${step.durableRunId}` : ""}
+                  {step.childSessionId ? ` | child session ${step.childSessionId}` : ""}
+                  {step.childTurnId ? ` | child turn ${step.childTurnId}` : ""}
+                  {step.childRunId ? ` | deprecated childRunId ${step.childRunId}` : ""}
+                </p>
+              ) : null}
             </li>
           ))}
         </ol>

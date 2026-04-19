@@ -601,6 +601,72 @@ describe("DiscordRuntimeService", () => {
     });
   });
 
+  it("throws when typing delivery is already aborted before Discord fetch begins", async () => {
+    const service = createService();
+    const fetch = vi.fn();
+    (service as any).runtimesByToken.set("token_1", {
+      token: "token_1",
+      client: {
+        channels: {
+          fetch,
+        },
+      },
+      connectionIds: new Set(["11111111-1111-1111-1111-111111111111"]),
+      guildIds: [],
+      ready: true,
+    });
+
+    await expect(
+      service.sendTyping(
+        "11111111-1111-1111-1111-111111111111",
+        "channel_1",
+        3_000,
+        AbortSignal.abort(new Error("lease lost")),
+      ),
+    ).resolves.toMatchObject({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      target: "channel_1",
+      supported: false,
+      status: "unsupported",
+      reason: "lease lost",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("re-checks abort state after Discord fetch and before sending typing", async () => {
+    const service = createService();
+    const controller = new AbortController();
+    const sendTyping = vi.fn();
+    (service as any).runtimesByToken.set("token_1", {
+      token: "token_1",
+      client: {
+        channels: {
+          fetch: vi.fn(async () => {
+            controller.abort(new Error("lease lost"));
+            return {
+              id: "channel_1",
+              sendTyping,
+            };
+          }),
+        },
+      },
+      connectionIds: new Set(["11111111-1111-1111-1111-111111111111"]),
+      guildIds: [],
+      ready: true,
+    });
+
+    await expect(
+      service.sendTyping("11111111-1111-1111-1111-111111111111", "channel_1", 3_000, controller.signal),
+    ).resolves.toMatchObject({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      target: "channel_1",
+      supported: false,
+      status: "unsupported",
+      reason: "lease lost",
+    });
+    expect(sendTyping).not.toHaveBeenCalled();
+  });
+
   it("reconnects a managed runtime and refreshes the stored status snapshot", async () => {
     const service = createService();
     const destroy = vi.fn().mockResolvedValue(undefined);

@@ -414,4 +414,17 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       ${buildPostgresRuntimeSchemaSql()}
     `,
   },
+  {
+    version: 8,
+    name: "prompt_pack_benchmark_claim_repairs",
+    sql: `
+      ALTER TABLE prompt_pack_benchmark_runs
+        ADD COLUMN IF NOT EXISTS claimed_by_worker_id TEXT,
+        ADD COLUMN IF NOT EXISTS claim_heartbeat_at TEXT,
+        ADD COLUMN IF NOT EXISTS claim_expires_at TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_runs_claim
+        ON prompt_pack_benchmark_runs(status, claim_expires_at, started_at ASC);
+    `,
+  },
 ];

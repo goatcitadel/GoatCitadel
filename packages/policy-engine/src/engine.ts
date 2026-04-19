@@ -311,7 +311,10 @@ export class ToolPolicyEngine {
     );
   }
 
-  public async executeApprovedAction(approvalId: string): Promise<ToolInvokeResult | undefined> {
+  public async executeApprovedAction(
+    approvalId: string,
+    signal?: AbortSignal,
+  ): Promise<ToolInvokeResult | undefined> {
     const pending = this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending") {
       return undefined;
@@ -327,6 +330,7 @@ export class ToolPolicyEngine {
     const request = asToolInvokeRequest(pending.request);
     const approvedRequest: ToolInvokeRequest = {
       ...request,
+      signal,
       consentContext: {
         ...(request.consentContext ?? {}),
         source: request.consentContext?.source ?? "ui",

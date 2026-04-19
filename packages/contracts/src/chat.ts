@@ -14,6 +14,7 @@ export type ChatModeTeamBehavior = "single_lead" | "guided_swarm" | "constrained
 export type ChatWebMode = "auto" | "off" | "quick" | "deep";
 export type ChatMemoryMode = "auto" | "on" | "off";
 export type ChatThinkingLevel = "minimal" | "standard" | "extended";
+export type ChatNormalizationProfile = "live" | "prompt_pack_harness";
 export type ChatProactiveMode = "off" | "suggest" | "auto_safe" | "auto_full";
 export type ChatRetrievalMode = "standard" | "layered";
 export type ChatReflectionMode = "off" | "on";
@@ -492,6 +493,9 @@ export interface ChatToolRunRecord {
   finishedAt?: string;
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
+  reused?: boolean;
+  reusedFromToolRunId?: string;
+  reuseReason?: string;
   error?: string;
   failureGuidance?: string;
 }
@@ -511,11 +515,24 @@ export type ChatTurnFailureClass =
   | "tool_blocked"
   | "tool_failed"
   | "auth_required"
+  | "tool_loop_guard"
+  | "global_circuit_breaker"
+  | "tool_run_budget_exceeded"
+  | "turn_budget_exceeded"
   | "budget_exceeded"
   | "approval_required"
   | "unknown";
 
 export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
+
+export type ChatTurnRepairKind =
+  | "degraded_answer_synthesis"
+  | "incomplete_truncated_completion"
+  | "deterministic_empty_output_synthesis"
+  | "cowork_contract_normalization"
+  | "prompt_pack_harness_normalization";
+
+export type ChatTurnRepairSource = "orchestrator" | "prompt_pack_harness" | "stream_layer";
 
 export type ChatTurnRecoveryAction =
   | "retry"
@@ -533,10 +550,19 @@ export interface ChatTurnFailureRecord {
   recommendedAction?: ChatTurnRecoveryAction;
 }
 
+export interface ChatTurnRepairRecord {
+  applied: boolean;
+  kind?: ChatTurnRepairKind;
+  source?: ChatTurnRepairSource;
+  preRepairContent?: string;
+  postRepairContent?: string;
+}
+
 export interface ChatTurnCompletionRecord {
   finishReason?: string;
   status: ChatTurnCompletionStatus;
   repaired: boolean;
+  repair?: ChatTurnRepairRecord;
 }
 
 export interface ChatTurnDurableRecord {
@@ -553,9 +579,13 @@ export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): C
       return "check_gateway_connection";
     case "tool_blocked":
     case "tool_failed":
+    case "tool_loop_guard":
+    case "global_circuit_breaker":
+    case "tool_run_budget_exceeded":
       return "retry_narrower";
     case "auth_required":
       return "reconnect_auth";
+    case "turn_budget_exceeded":
     case "budget_exceeded":
       return "switch_to_deep_mode";
     case "approval_required":
@@ -724,6 +754,7 @@ export interface ChatExecutionPlanStepRecord {
   startedAt?: string;
   finishedAt?: string;
   childRunId?: string;
+  durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
 }
@@ -758,6 +789,20 @@ export interface ChatConversationSummaryRecord {
   summary: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type ChatToolLoopGuardSeverity = "warning" | "critical" | "global_circuit_breaker";
+
+export interface ChatToolLoopGuardEventRecord {
+  eventId: string;
+  detector: import("./policy.js").ToolLoopDetectorKind;
+  severity: ChatToolLoopGuardSeverity;
+  toolName?: string;
+  message: string;
+  repetitionCount: number;
+  historySize: number;
+  suppressed: boolean;
+  createdAt: string;
 }
 
 export interface ChatTurnTraceRecord {
@@ -831,6 +876,11 @@ export interface ChatTurnTraceRecord {
     workspaceFilesUsed: string[];
     truncated: boolean;
   };
+  loopGuard?: {
+    enabled: boolean;
+    historySize: number;
+    events: ChatToolLoopGuardEventRecord[];
+  };
   executionPlanId?: string;
   executionPlan?: ChatExecutionPlanRecord;
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
@@ -852,6 +902,7 @@ export interface ChatDelegationStepRecord {
   output?: string;
   error?: string;
   failureGuidance?: string;
+  durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
   citations?: ChatCitationRecord[];
@@ -879,12 +930,21 @@ export interface ChatDelegationRunRecord {
   trace?: ChatTurnTraceRecord["routing"];
 }
 
+export interface ChatDelegateStepRequest {
+  stepId?: string;
+  index?: number;
+  role: string;
+  parallelizable?: boolean;
+  dependsOnStepIds?: string[];
+}
+
 export interface ChatDelegateRequest {
   objective: string;
   roles: string[];
   mode?: ChatDelegationMode;
   providerId?: string;
   model?: string;
+  steps?: ChatDelegateStepRequest[];
 }
 
 export interface ChatDelegateResponse {
@@ -1036,12 +1096,14 @@ export interface ChatSendMessageRequest {
   parts?: ChatInputPart[];
   providerId?: string;
   model?: string;
+  signal?: AbortSignal;
   useMemory?: boolean;
   attachments?: string[];
   mode?: ChatMode;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
+  normalizationProfile?: ChatNormalizationProfile;
   commandText?: string;
   prefsOverride?: ChatSessionPrefsPatch;
 }
@@ -1155,6 +1217,8 @@ export interface ChatStreamMessageDoneChunk extends ChatStreamChunkBase {
   turnId: string;
   messageId: string;
   content: string;
+  repaired?: boolean;
+  repair?: ChatTurnRepairRecord;
 }
 
 export interface ChatStreamToolStartChunk extends ChatStreamChunkBase {

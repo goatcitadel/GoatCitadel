@@ -48,7 +48,7 @@ export class PostgresDatabaseClient {
     sql: string,
     params: readonly unknown[] = [],
   ): Promise<T[]> {
-    const result = await this.pool.query<T>(sql, await this.sanitizeParams(params));
+    const result = await this.pool.query<T>(sql, await this.sanitizeParams(sql, params));
     return result.rows;
   }
 
@@ -134,8 +134,8 @@ export class PostgresDatabaseClient {
     await this.pool.end();
   }
 
-  private async sanitizeParams(params: readonly unknown[]): Promise<unknown[]> {
-    return sanitizeParamsForServerEncoding(params, await this.getServerEncoding());
+  private async sanitizeParams(sql: string, params: readonly unknown[]): Promise<unknown[]> {
+    return sanitizeParamsForServerEncoding(params, await this.getServerEncoding(), sql);
   }
 
   private async getServerEncoding(): Promise<string | undefined> {

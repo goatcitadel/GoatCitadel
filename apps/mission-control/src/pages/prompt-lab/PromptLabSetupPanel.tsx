@@ -34,7 +34,9 @@ interface PromptLabSetupPanelProps {
   selectedRunModel: PromptLabModelRef | null;
   benchmarkTestCodes: string;
   benchmarkProvidersInput: string;
+  benchmarkActive: boolean;
   benchmarkPending: boolean;
+  benchmarkStopping: boolean;
   benchmarkRunId: string | null;
   regressionPending: boolean;
   regressionRunId: string | null;
@@ -50,6 +52,7 @@ interface PromptLabSetupPanelProps {
   onBenchmarkTestCodesChange: (value: string) => void;
   onBenchmarkProvidersInputChange: (value: string) => void;
   onRunBenchmark: () => void;
+  onCancelBenchmark: () => void;
   onRefreshBenchmark: () => void;
   onRunRegression: () => void;
   onRefreshRegression: () => void;
@@ -69,7 +72,9 @@ export function PromptLabSetupPanel({
   selectedRunModel,
   benchmarkTestCodes,
   benchmarkProvidersInput,
+  benchmarkActive,
   benchmarkPending,
+  benchmarkStopping,
   benchmarkRunId,
   regressionPending,
   regressionRunId,
@@ -85,6 +90,7 @@ export function PromptLabSetupPanel({
   onBenchmarkTestCodesChange,
   onBenchmarkProvidersInputChange,
   onRunBenchmark,
+  onCancelBenchmark,
   onRefreshBenchmark,
   onRunRegression,
   onRefreshRegression,
@@ -200,6 +206,12 @@ export function PromptLabSetupPanel({
               pending={benchmarkPending}
               disabled={!selectedPackId || running}
               onClick={onRunBenchmark}
+            />
+            <ActionButton
+              label="Stop benchmark"
+              pending={benchmarkStopping}
+              disabled={!benchmarkActive}
+              onClick={onCancelBenchmark}
             />
             <ActionButton label="Refresh benchmark" disabled={!benchmarkRunId} onClick={onRefreshBenchmark} />
             <ActionButton

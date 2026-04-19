@@ -35,13 +35,13 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
   return (
     <TuneHubLayout
       title="General"
-      subtitle="Core defaults, provider posture, access controls, budgets, and onboarding decisions stay in one Tune surface."
+      subtitle="Core defaults, provider posture, access controls, budgets, and onboarding decisions stay in one Setup area."
       summaries={[
-        { label: "Current decision", value: activeLabel, note: "The active Tune lane", tone: "accent" },
+        { label: "Current decision", value: activeLabel, note: "The active Setup section", tone: "accent" },
         {
           label: "Default posture",
           value: "Shared across surfaces",
-          note: "Changes here echo into Work, Observe, and Tune",
+          note: "Changes here echo into Work, Watch, and Setup",
         },
         { label: "Operator focus", value: "Defaults before detail", note: decisionSummary },
       ]}

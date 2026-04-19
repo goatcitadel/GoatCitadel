@@ -1,5 +1,6 @@
 import type { ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
+import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import type { EventStreamStatus } from "../../api/shell-client";
 import { ChatComposerShell } from "./ChatComposerShell";
@@ -18,6 +19,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
+  delegationRun: ActiveChatDelegationRun | null;
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
@@ -87,6 +89,7 @@ export function MissionControlActiveSessionSurface({
   loading,
   thread,
   selectedTurnId,
+  delegationRun,
   notices,
   followOutput,
   streamStatus,
@@ -166,6 +169,7 @@ export function MissionControlActiveSessionSurface({
           loading={loading}
           thread={thread}
           selectedTurnId={selectedTurnId}
+          delegationRun={delegationRun}
           notices={notices}
           followOutput={followOutput}
           streamStatus={streamStatus}

@@ -37,15 +37,15 @@ interface RouteInfo {
 export const SPACE_META: Record<Space, { label: string; description: string }> = {
   operate: {
     label: "Work",
-    description: "Core work surfaces, active decisions, and operator flow.",
+    description: "Chat, Cowork, Code, and the decisions around active work.",
   },
   observe: {
-    label: "Observe",
+    label: "Watch",
     description: "What the system is doing and how it is behaving.",
   },
   configure: {
-    label: "Tune",
-    description: "Runtime setup, governance, and ecosystem control.",
+    label: "Setup",
+    description: "Models, runtime, governance, and integrations.",
   },
 };
 
@@ -53,8 +53,8 @@ export const PAGE_META: Record<SpacePage, RouteInfo> = {
   surface: {
     space: "operate",
     page: "surface",
-    label: "Surface",
-    description: "Chat, Cowork, and Code live here.",
+    label: "Work",
+    description: "Fast path into chat, orchestration, and implementation.",
   },
   tasks: {
     space: "operate",
@@ -132,7 +132,7 @@ export const PAGE_META: Record<SpacePage, RouteInfo> = {
 
 export const SPACE_PAGES: Record<Space, Array<{ page: SpacePage; label: string }>> = {
   operate: [
-    { page: "surface", label: "Chat" },
+    { page: "surface", label: "Work" },
     { page: "tasks", label: "Tasks" },
     { page: "approvals", label: "Approvals" },
   ],

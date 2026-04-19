@@ -31,4 +31,15 @@ describe("Postgres runtime schema generation", () => {
     assert.equal(repairMigration?.name, "canonical_runtime_schema_repairs");
     assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS approval_effects \(/);
   });
+
+  it("repairs benchmark lease columns for older Postgres prompt-pack runtime tables", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 8);
+
+    assert.equal(repairMigration?.name, "prompt_pack_benchmark_claim_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_benchmark_runs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS claimed_by_worker_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS claim_heartbeat_at TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS claim_expires_at TEXT/);
+    assert.match(repairMigration?.sql ?? "", /CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_runs_claim/);
+  });
 });

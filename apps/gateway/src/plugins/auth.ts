@@ -43,15 +43,6 @@ const MAX_ACTIVE_SSE_TOKENS_PER_ACTOR = 50;
 export const authPlugin = fp(async (fastify) => {
   const sseTokens = new Map<string, SseTokenRecord>();
   const configuredQueryParam = fastify.gatewayConfig.assistant.auth.token.queryParam?.trim();
-  if (configuredQueryParam) {
-    fastify.log.warn(
-      {
-        authMode: fastify.gatewayConfig.assistant.auth.mode,
-        queryParam: configuredQueryParam,
-      },
-      "assistant.auth.token.queryParam is deprecated for normal gateway requests; only SSE bridge tokens still use query parameters.",
-    );
-  }
   fastify.decorateRequest("authActorId", "anonymous");
   fastify.decorateRequest("authActorSource", "none");
   fastify.decorateRequest("authDeviceId", undefined);
@@ -145,6 +136,19 @@ export const authPlugin = fp(async (fastify) => {
       if (sseToken && validateSseToken(sseToken, sseScope, sseTokens)) {
         setAuthActor(request, `sse:${tokenFingerprint(sseToken)}`, "sse");
         return;
+      }
+    }
+    if (!sseScope && configuredQueryParam) {
+      const deprecatedQueryToken = readQueryToken(request.query, configuredQueryParam);
+      if (deprecatedQueryToken) {
+        fastify.log.warn(
+          {
+            authMode: fastify.gatewayConfig.assistant.auth.mode,
+            queryParam: configuredQueryParam,
+            url: request.url,
+          },
+          "assistant.auth.token.queryParam is deprecated for normal gateway requests; only SSE bridge tokens still use query parameters.",
+        );
       }
     }
 

@@ -319,10 +319,14 @@ export class HooksService {
     });
   }
 
-  public async executeHookDelivery(hookRunId: string, attemptCount: number): Promise<HookRunRecord> {
+  public async executeHookDelivery(
+    hookRunId: string,
+    attemptCount: number,
+    options?: { signal?: AbortSignal },
+  ): Promise<HookRunRecord> {
     const run = this.ctx.storage.hookRuns.get(hookRunId);
     const hook = this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
-    const delivered = await this.executeRecordedHookRun(hook, run.runId, run.requestPayload ?? {}, attemptCount);
+    const delivered = await this.executeRecordedHookRun(hook, run.runId, run.requestPayload ?? {}, attemptCount, options);
     if (delivered.status === "failed" || delivered.status === "timed_out") {
       throw new Error(delivered.errorText ?? "Hook delivery failed");
     }
@@ -351,7 +355,9 @@ export class HooksService {
     hookRunId: string,
     payload: Record<string, unknown>,
     attemptCount: number,
+    options?: { signal?: AbortSignal },
   ): Promise<HookRunRecord> {
+    throwIfHookExecutionAborted(options?.signal);
     if (this.isCircuitBreakerTripped(hook.hookId)) {
       if (hook.failPolicy === "closed" && hook.mode !== "observe") {
         this.ctx.storage.hookRuns.markOutcome(hookRunId, {
@@ -388,7 +394,8 @@ export class HooksService {
     this.activeExecutions.add(executionKey);
     const startedAt = Date.now();
     try {
-      const response = await this.postWebhook(hook, current, payload);
+      const response = await this.postWebhook(hook, current, payload, options);
+      throwIfHookExecutionAborted(options?.signal);
       const decision = normalizeDecision(response.decision);
       const patchSummary = summarizePatch(response.patch);
       const status = decision?.type === "block" ? "blocked" : "completed";
@@ -404,6 +411,9 @@ export class HooksService {
       this.recordCircuitBreakerOutcome(hook.hookId, true);
       return completed;
     } catch (error) {
+      if (isHookAbortError(error, options?.signal)) {
+        throw error;
+      }
       const timedOut = isTimeoutError(error);
       const failed = this.ctx.storage.hookRuns.markOutcome(hookRunId, {
         status: timedOut ? "timed_out" : "failed",
@@ -429,6 +439,7 @@ export class HooksService {
     hook: HookRecord,
     run: HookRunRecord,
     payload: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
   ): Promise<HookWebhookResponse> {
     const fetchImpl = this.deps.fetchImpl ?? fetch;
     const envelope: HookDispatchEnvelope = {
@@ -456,11 +467,13 @@ export class HooksService {
     };
     const body = JSON.stringify(envelope);
     const controller = new AbortController();
+    const removeAbortRelay = relayAbortSignal(options?.signal, controller);
     const timeout = setTimeout(
       () => controller.abort(new Error(`Hook webhook timed out after ${hook.timeoutMs}ms`)),
       hook.timeoutMs,
     );
     try {
+      throwIfHookExecutionAborted(options?.signal);
       const timestamp = new Date().toISOString();
       const signature = signHookBody(timestamp, body, hook.action.webhook.secret);
       const response = await fetchImpl(hook.action.webhook.url, {
@@ -489,6 +502,7 @@ export class HooksService {
       return parsed as HookWebhookResponse;
     } finally {
       clearTimeout(timeout);
+      removeAbortRelay();
     }
   }
 
@@ -641,4 +655,45 @@ function safeJsonParse(raw: string): unknown {
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.message.toLowerCase().includes("timed out"));
+}
+
+function relayAbortSignal(signal: AbortSignal | undefined, controller: AbortController): () => void {
+  if (!signal) {
+    return () => undefined;
+  }
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return () => undefined;
+  }
+  const abort = () => controller.abort(signal.reason);
+  signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
+}
+
+function throwIfHookExecutionAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw resolveAbortReason(signal.reason, "Hook execution aborted.");
+}
+
+function isHookAbortError(error: unknown, signal?: AbortSignal): boolean {
+  const abortedSignal = signal;
+  if (!abortedSignal?.aborted) {
+    return false;
+  }
+  return (
+    error === abortedSignal.reason ||
+    (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)))
+  );
+}
+
+function resolveAbortReason(reason: unknown, fallbackMessage: string): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string" && reason.trim()) {
+    return new Error(reason);
+  }
+  return new Error(fallbackMessage);
 }

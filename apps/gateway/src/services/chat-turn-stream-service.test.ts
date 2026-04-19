@@ -44,6 +44,13 @@ describe("streamPreparedAgentChatTurn", () => {
         type: "message_done",
         content: "Recovered empty assistant output.",
         repaired: true,
+        repair: {
+          applied: true,
+          kind: "deterministic_empty_output_synthesis",
+          source: "stream_layer",
+          preRepairContent: "",
+          postRepairContent: "Recovered empty assistant output.",
+        },
       }),
     );
     expect(traceUpdate).toEqual(
@@ -53,6 +60,11 @@ describe("streamPreparedAgentChatTurn", () => {
           completion: expect.objectContaining({
             status: "complete",
             repaired: true,
+            repair: expect.objectContaining({
+              applied: true,
+              kind: "deterministic_empty_output_synthesis",
+              source: "stream_layer",
+            }),
           }),
         }),
       }),
@@ -60,6 +72,13 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.storage.chatTurnTraces.get("turn-1").completion).toEqual({
       status: "complete",
       repaired: true,
+      repair: {
+        applied: true,
+        kind: "deterministic_empty_output_synthesis",
+        source: "stream_layer",
+        preRepairContent: "",
+        postRepairContent: "Recovered empty assistant output.",
+      },
     });
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
@@ -145,6 +164,7 @@ function createHost(): ChatTurnStreamHost & {
     collectSpecialistCandidateSuggestions: vi.fn(() => []),
     publishRealtime: vi.fn(),
     extractAndPersistLearnedMemory: vi.fn(),
+    scheduleChatMemoryContextPrewarm: vi.fn(),
     scheduleMemoryMaintenancePostTurnEvaluation: vi.fn(),
     recordCapabilityGapFromTrace: vi.fn(),
     markChatTurnCancelled: vi.fn(() => trace),

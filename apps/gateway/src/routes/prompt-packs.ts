@@ -347,6 +347,18 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.post("/api/v1/prompt-packs/benchmark/:benchmarkRunId/cancel", async (request, reply) => {
+    const params = promptPackBenchmarkParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gateway.cancelPromptPackBenchmark(params.data.benchmarkRunId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.post("/api/v1/prompt-packs/:packId/replay-regression/run", async (request, reply) => {
     const params = promptPackParamsSchema.safeParse(request.params);
     const body = promptPackReplayRegressionRunBodySchema.safeParse(request.body ?? {});

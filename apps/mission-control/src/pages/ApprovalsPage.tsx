@@ -936,6 +936,40 @@ function ApprovalInspector(props: {
               {approval.linkage.externalReferenceRoots.map((root) => `${root.label} (${root.access})`).join(", ")}
             </p>
           ) : null}
+          <p className="office-subtitle">
+            Execution plans: {lifecycle.executionPlans?.length ?? 0}
+            {" | "}
+            Delegation runs: {lifecycle.delegationRuns?.length ?? 0}
+            {" | "}
+            Delegation steps: {lifecycle.delegationSteps?.length ?? 0}
+          </p>
+          {lifecycle.executionPlans?.length ? (
+            <ul className="compact-list">
+              {lifecycle.executionPlans.slice(0, 2).map((plan) => (
+                <li key={plan.planId}>
+                  <strong>{plan.status}</strong>
+                  {" | "}
+                  {plan.objective}
+                  {" | "}
+                  {plan.planId}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {lifecycle.delegationSteps?.length ? (
+            <ul className="compact-list">
+              {lifecycle.delegationSteps.slice(0, 3).map((step) => (
+                <li key={step.stepId}>
+                  <strong>{step.role}</strong>
+                  {" | "}
+                  {step.status}
+                  {step.durableRunId ? ` | durable ${step.durableRunId}` : ""}
+                  {step.childSessionId ? ` | session ${step.childSessionId}` : ""}
+                  {step.childTurnId ? ` | turn ${step.childTurnId}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {lifecycle.proactiveRuns?.length ? (
             <ul className="compact-list">
               {lifecycle.proactiveRuns.slice(0, 3).map((run) => (

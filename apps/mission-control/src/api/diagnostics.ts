@@ -1,7 +1,7 @@
 import type { DevDiagnosticsEvent, DevDiagnosticsLevel, DevDiagnosticsListResponse } from "@goatcitadel/contracts";
 
 import { recordClientDiagnostic, setDevDiagnosticsGatewayReachable } from "../state/dev-diagnostics-store";
-import { API_BASE, readStoredGatewayAuthState, request } from "./client-core.js";
+import { buildGatewayUrl, readStoredGatewayAuthState, request } from "./client-core.js";
 import { isApiRequestError } from "./http-internal";
 import { computeReconnectDelay, issueSseBridgeToken } from "./sse-bridge.js";
 
@@ -59,7 +59,7 @@ export function connectDevDiagnosticsStream(onEvent: (event: DevDiagnosticsEvent
   };
 
   const buildDiagnosticsStreamUrl = async () => {
-    const url = new URL(`${API_BASE}/api/v1/dev/diagnostics/stream`);
+    const url = new URL(buildGatewayUrl("/api/v1/dev/diagnostics/stream"));
     url.searchParams.set("replay", "50");
     const auth = readStoredGatewayAuthState();
     if (!auth) {

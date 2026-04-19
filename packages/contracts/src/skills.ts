@@ -223,6 +223,8 @@ export interface SkillImportValidationChecks {
 export interface SkillImportValidationResult {
   valid: boolean;
   riskLevel: "low" | "medium" | "high";
+  reviewDisposition?: "allow" | "conditional" | "reference_only" | "reject";
+  reviewMessage?: string;
   errors: string[];
   warnings: string[];
   checks: SkillImportValidationChecks;

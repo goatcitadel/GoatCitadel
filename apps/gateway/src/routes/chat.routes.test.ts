@@ -336,12 +336,29 @@ describe("chat routes additional coverage", () => {
         runId: "run-1",
         taskId: "task-1",
         step: {
+          stepId: "step-2",
+          runId: "run-1",
+          role: "qa",
+          status: "completed",
+          index: 1,
+          startedAt: "2026-03-11T20:00:02.000Z",
+          finishedAt: "2026-03-11T20:00:03.000Z",
+          output: "Validation complete.",
+        },
+      };
+      yield {
+        type: "step" as const,
+        runId: "run-1",
+        taskId: "task-1",
+        step: {
           stepId: "step-1",
           runId: "run-1",
           role: "architect",
-          status: "running",
+          status: "completed",
           index: 0,
           startedAt: "2026-03-11T20:00:00.000Z",
+          finishedAt: "2026-03-11T20:00:04.000Z",
+          output: "Design locked.",
         },
       };
       yield {
@@ -351,8 +368,36 @@ describe("chat routes additional coverage", () => {
         result: {
           runId: "run-1",
           taskId: "task-1",
-          steps: [],
-          stitchedOutput: "### Architect\nDone",
+          executionPlanId: "plan-1",
+          steps: [
+            {
+              stepId: "step-1",
+              runId: "run-1",
+              role: "architect",
+              status: "completed",
+              index: 0,
+              startedAt: "2026-03-11T20:00:00.000Z",
+              finishedAt: "2026-03-11T20:00:04.000Z",
+              childSessionId: "sess-child-1",
+              childTurnId: "turn-child-1",
+              durableRunId: "durable-child-1",
+              output: "Design locked.",
+            },
+            {
+              stepId: "step-2",
+              runId: "run-1",
+              role: "qa",
+              status: "completed",
+              index: 1,
+              startedAt: "2026-03-11T20:00:02.000Z",
+              finishedAt: "2026-03-11T20:00:03.000Z",
+              childSessionId: "sess-child-2",
+              childTurnId: "turn-child-2",
+              durableRunId: "durable-child-2",
+              output: "Validation complete.",
+            },
+          ],
+          stitchedOutput: "### Architect\nDesign locked.\n\n### QA\nValidation complete.",
           citations: [],
         },
       };
@@ -368,8 +413,22 @@ describe("chat routes additional coverage", () => {
       url: "/api/v1/chat/sessions/sess-1/delegate/stream",
       payload: {
         objective: "Implement the fix",
-        roles: ["Architect"],
-        mode: "sequential",
+        roles: ["Architect", "QA"],
+        mode: "parallel",
+        steps: [
+          {
+            stepId: "step-1",
+            index: 0,
+            role: "Architect",
+            parallelizable: true,
+          },
+          {
+            stepId: "step-2",
+            index: 1,
+            role: "QA",
+            parallelizable: true,
+          },
+        ],
       },
     });
 
@@ -380,8 +439,123 @@ describe("chat routes additional coverage", () => {
     expect(response.body).toContain('"type":"done"');
     expect(runChatDelegationStream).toHaveBeenCalledWith("sess-1", {
       objective: "Implement the fix",
-      roles: ["Architect"],
-      mode: "sequential",
+      roles: ["Architect", "QA"],
+      mode: "parallel",
+      steps: [
+        {
+          stepId: "step-1",
+          index: 0,
+          role: "Architect",
+          parallelizable: true,
+        },
+        {
+          stepId: "step-2",
+          index: 1,
+          role: "QA",
+          parallelizable: true,
+        },
+      ],
+    });
+    expect(response.body.indexOf('"stepId":"step-2"')).toBeLessThan(response.body.indexOf('"stepId":"step-1"'));
+    expect(response.body).toContain('"durableRunId":"durable-child-1"');
+  });
+
+  it("accepts dependency-aware delegation steps over the route stack", async () => {
+    const runChatDelegation = vi.fn(async () => ({
+      runId: "run-2",
+      taskId: "task-2",
+      executionPlanId: "plan-2",
+      steps: [
+        {
+          stepId: "step-1",
+          runId: "run-2",
+          role: "architect",
+          status: "completed",
+          index: 0,
+          startedAt: "2026-03-11T20:10:00.000Z",
+          finishedAt: "2026-03-11T20:10:04.000Z",
+          childSessionId: "sess-child-a",
+          childTurnId: "turn-child-a",
+          durableRunId: "durable-child-a",
+          output: "Design complete.",
+        },
+        {
+          stepId: "step-2",
+          runId: "run-2",
+          role: "coder",
+          status: "skipped",
+          index: 1,
+          startedAt: "2026-03-11T20:10:05.000Z",
+          error: "Skipped because architect failed dependency checks.",
+        },
+      ],
+      stitchedOutput: "### Architect\nDesign complete.",
+      citations: [],
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      runChatDelegation,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/delegate",
+      payload: {
+        objective: "Implement the fix",
+        roles: ["Architect", "Coder"],
+        mode: "parallel",
+        steps: [
+          {
+            stepId: "step-1",
+            index: 0,
+            role: "Architect",
+            parallelizable: true,
+          },
+          {
+            stepId: "step-2",
+            index: 1,
+            role: "Coder",
+            dependsOnStepIds: ["step-1"],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runChatDelegation).toHaveBeenCalledWith("sess-1", {
+      objective: "Implement the fix",
+      roles: ["Architect", "Coder"],
+      mode: "parallel",
+      steps: [
+        {
+          stepId: "step-1",
+          index: 0,
+          role: "Architect",
+          parallelizable: true,
+        },
+        {
+          stepId: "step-2",
+          index: 1,
+          role: "Coder",
+          dependsOnStepIds: ["step-1"],
+        },
+      ],
+    });
+    expect(response.json()).toMatchObject({
+      executionPlanId: "plan-2",
+      steps: [
+        {
+          stepId: "step-1",
+          childSessionId: "sess-child-a",
+          childTurnId: "turn-child-a",
+          durableRunId: "durable-child-a",
+        },
+        {
+          stepId: "step-2",
+          status: "skipped",
+        },
+      ],
     });
   });
 

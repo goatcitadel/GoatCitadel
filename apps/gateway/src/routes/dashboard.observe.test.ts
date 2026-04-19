@@ -16,6 +16,7 @@ describe("dashboard observe aggregate routes", () => {
   it("returns the unified timeline aggregate", async () => {
     app = Fastify();
     app.decorate("gateway", {
+      isFeatureEnabled: vi.fn(() => true),
       listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
       listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
       listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
@@ -43,6 +44,37 @@ describe("dashboard observe aggregate routes", () => {
         replayRuns: [{ runId: "run-1" }],
       },
     });
+  });
+
+  it("returns an empty review queue when the cron review feature flag is disabled", async () => {
+    const listCronReviewQueue = vi.fn(() => {
+      throw new Error("Feature flag cronReviewQueueV1Enabled is disabled.");
+    });
+    app = Fastify();
+    app.decorate("gateway", {
+      isFeatureEnabled: vi.fn((flag: string) => flag !== "cronReviewQueueV1Enabled"),
+      listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
+      listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
+      listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
+      listCronReviewQueue,
+      listImprovementReports: vi.fn(() => [{ reportId: "report-1" }]),
+      listDecisionReplayRuns: vi.fn(() => [{ runId: "run-1" }]),
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/observe/timeline?eventLimit=10&sessionLimit=5&cronReviewLimit=3&improvementLimit=2",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      scheduler: {
+        jobs: [{ jobId: "job-1" }],
+        reviewQueue: [],
+      },
+    });
+    expect(listCronReviewQueue).not.toHaveBeenCalled();
   });
 
   it("returns the unified health aggregate", async () => {

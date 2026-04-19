@@ -2,6 +2,7 @@ export type DecisionReplayRunStatus = "queued" | "running" | "completed" | "fail
 export type DecisionReplayTriggerMode = "scheduled" | "manual";
 export type DecisionReplayDecisionType = "chat_turn" | "tool_run";
 export type DecisionReplayLabel = "ok" | "uncertain" | "likely_wrong";
+export type ImprovementStrategyTag = "repair" | "harden" | "stabilize";
 export type DecisionReplayCauseClass =
   | "false_refusal_tone"
   | "weak_blocker_explanation"
@@ -98,6 +99,63 @@ export interface DecisionAutoTuneRecord {
   revertedAt?: string;
 }
 
+export type HarnessAuditPillarId =
+  | "skill_composition"
+  | "context_engineering"
+  | "orchestration_routing"
+  | "persistence_state"
+  | "quality_feedback"
+  | "permissions_safety"
+  | "ergonomics_trust";
+
+export interface HarnessAuditPillarRecord {
+  pillarId: HarnessAuditPillarId;
+  label: string;
+  score: number;
+  status: "strong" | "watch" | "attention";
+  rationale: string;
+  nativeDestination: string;
+  evidence: string[];
+  recommendedActions: string[];
+}
+
+export interface HarnessAuditReportRecord {
+  generatedAt: string;
+  summary: string;
+  overallScore: number;
+  overallStatus: "strong" | "watch" | "attention";
+  pillars: HarnessAuditPillarRecord[];
+  strategyGlossary: Array<{
+    tag: ImprovementStrategyTag;
+    description: string;
+  }>;
+}
+
+export interface WeeklyImprovementProposalDraftRecord {
+  draftId: string;
+  title: string;
+  summary: string;
+  kind: "routing_rule" | "playbook" | "specialist_candidate";
+  inspectable: true;
+  backingType: "report_only_draft";
+  nativeDestination: string;
+  evidenceCount: number;
+}
+
+export interface WeeklyImprovementSpecialistSuggestionRecord {
+  candidateId: string;
+  title: string;
+  role: string;
+  summary: string;
+  reason: string;
+  source: "manual" | "runtime_gap" | "replay";
+  confidence: number;
+  suggestedRoutingMode: "disabled" | "manual_only" | "strong_match_only";
+  suggestedTools?: string[];
+  suggestedSkills?: string[];
+  evidenceCount: number;
+}
+
 export interface WeeklyImprovementReportRecord {
   reportId: string;
   runId: string;
@@ -115,6 +173,27 @@ export interface WeeklyImprovementReportRecord {
   topFindings: DecisionReplayFindingRecord[];
   appliedAutoTunes: DecisionAutoTuneRecord[];
   queuedRecommendations: DecisionAutoTuneRecord[];
+  strategyTags?: Array<{
+    tag: ImprovementStrategyTag;
+    count: number;
+    rationale: string;
+  }>;
+  routingGapSummary?: {
+    totalEvents: number;
+    topCauseClasses: Array<{ causeClass: CapabilityGapCauseClass; count: number }>;
+    topRequestedTools: string[];
+  };
+  proposalDrafts?: WeeklyImprovementProposalDraftRecord[];
+  specialistCandidateSuggestions?: WeeklyImprovementSpecialistSuggestionRecord[];
+  harnessAudit?: {
+    generatedAt: string;
+    overallScore: number;
+    weakestPillars: Array<{
+      pillarId: HarnessAuditPillarId;
+      label: string;
+      score: number;
+    }>;
+  };
   weekOverWeek: {
     improved: string[];
     regressed: string[];

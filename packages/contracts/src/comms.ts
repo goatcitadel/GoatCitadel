@@ -19,6 +19,7 @@ export interface ChannelSendInput {
   sessionId?: string;
   agentId?: string;
   taskId?: string;
+  signal?: AbortSignal;
 }
 
 export interface ChannelReactInput {
@@ -31,6 +32,7 @@ export interface ChannelReactInput {
   sessionId?: string;
   agentId?: string;
   taskId?: string;
+  signal?: AbortSignal;
 }
 
 export interface ChannelReplyInput extends ChannelSendInput {
@@ -45,6 +47,7 @@ export interface ChannelUnsendInput {
   sessionId?: string;
   agentId?: string;
   taskId?: string;
+  signal?: AbortSignal;
 }
 
 export interface ChannelTypingInput {
@@ -55,6 +58,7 @@ export interface ChannelTypingInput {
   sessionId?: string;
   agentId?: string;
   taskId?: string;
+  signal?: AbortSignal;
 }
 
 export interface ChannelTypingResult {

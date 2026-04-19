@@ -6,6 +6,7 @@
  */
 
 import {
+  type ChannelSendInput,
   type ChannelReplyInput,
   type ChannelReactInput,
   type ChannelTypingInput,
@@ -85,6 +86,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     },
   ): Promise<PreparedAgentChatTurn>;
   requireConnectorRecord(connectorId: string): ConnectorRecord;
+  commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
@@ -113,14 +115,18 @@ type HookDeliveryWorkflowPayload = {
 
 type DurableWorkflowRecoverability = { recoverable: boolean; reason?: string };
 
+export interface DurableWorkflowExecutionContext {
+  signal?: AbortSignal;
+}
+
 export interface DurableWorkflowExecutor {
-  execute(run: DurableRunRecord): Promise<void>;
+  execute(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isRecoverable?(run: DurableRunRecord): DurableWorkflowRecoverability;
   markUnrecoverable?(run: DurableRunRecord, reason: string): Promise<void> | void;
 }
 
 export interface DurableWorkflowExecutorRegistry {
-  executeWorkflow(run: DurableRunRecord): Promise<void>;
+  executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isWorkflowRecoverable(run: DurableRunRecord): DurableWorkflowRecoverability;
   markWorkflowUnrecoverable(run: DurableRunRecord, reason: string): Promise<void>;
 }
@@ -319,12 +325,12 @@ export function createDurableWorkflowExecutorRegistry(
   const getExecutor = (run: DurableRunRecord): DurableWorkflowExecutor | undefined => executors[run.workflowKey];
 
   return {
-    async executeWorkflow(run: DurableRunRecord): Promise<void> {
+    async executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void> {
       const executor = getExecutor(run);
       if (!executor) {
         throw new Error(`Unsupported durable workflow: ${run.workflowKey}`);
       }
-      await executor.execute(run);
+      await executor.execute(run, context);
     },
 
     isWorkflowRecoverable(run: DurableRunRecord): DurableWorkflowRecoverability {
@@ -350,12 +356,14 @@ export function buildDurableWorkflowExecutors(
 ): Record<string, DurableWorkflowExecutor> {
   return {
     "memory.maintenance": {
-      execute: async (run) =>
+      execute: async (run, context) => {
+        throwIfDurableWorkflowAborted(context);
         completeDurableWorkflowRun(
           hosts.memoryMaintenance,
           run.runId,
-          await hosts.memoryMaintenance.memoryLifecycleService.executeMaintenanceDurableRun(run),
-        ),
+          await hosts.memoryMaintenance.memoryLifecycleService.executeMaintenanceDurableRun(run, context),
+        );
+      },
       isRecoverable: (run) =>
         hosts.memoryMaintenance.memoryLifecycleService.parseMaintenanceWorkflowPayload(run)
           ? { recoverable: true }
@@ -376,12 +384,12 @@ export function buildDurableWorkflowExecutors(
       },
     },
     "chat.turn.execute": {
-      execute: (run) => executeDurableChatTurnRun(hosts.chatTurn, run),
+      execute: (run, context) => executeDurableChatTurnRun(hosts.chatTurn, run, context),
       isRecoverable: (run) => isDurableChatTurnRecoverable(hosts.chatTurn, run),
       markUnrecoverable: (run, reason) => markDurableChatTurnUnrecoverable(hosts.chatTurn, run, reason),
     },
     "proactive.tick": {
-      execute: (run) => hosts.proactiveTick.chatProactiveService.executeDurableProactiveTickRun(run),
+      execute: (run, context) => hosts.proactiveTick.chatProactiveService.executeDurableProactiveTickRun(run, context),
       isRecoverable: (run) =>
         parseProactiveTickWorkflowPayload(run)
           ? { recoverable: true }
@@ -389,7 +397,7 @@ export function buildDurableWorkflowExecutors(
       markUnrecoverable: (run, reason) => markDurableProactiveTickUnrecoverable(hosts.proactiveTick, run, reason),
     },
     "approval.wait": {
-      execute: (run) => executeDurableApprovalWaitRun(hosts.approvalWait, run),
+      execute: (run, context) => executeDurableApprovalWaitRun(hosts.approvalWait, run, context),
       isRecoverable: (run) =>
         parseApprovalWaitWorkflowPayload(run)
           ? { recoverable: true }
@@ -412,7 +420,7 @@ export function buildDurableWorkflowExecutors(
       },
     },
     "connector.delivery": {
-      execute: (run) => executeDurableConnectorDeliveryRun(hosts.connectorDelivery, run),
+      execute: (run, context) => executeDurableConnectorDeliveryRun(hosts.connectorDelivery, run, context),
       isRecoverable: (run) =>
         parseConnectorDeliveryWorkflowPayload(run)
           ? { recoverable: true }
@@ -435,7 +443,7 @@ export function buildDurableWorkflowExecutors(
       },
     },
     "hook.delivery": {
-      execute: (run) => executeDurableHookDeliveryRun(hosts.hookDelivery, run),
+      execute: (run, context) => executeDurableHookDeliveryRun(hosts.hookDelivery, run, context),
       isRecoverable: (run) =>
         parseHookDeliveryWorkflowPayload(run)
           ? { recoverable: true }
@@ -499,7 +507,9 @@ function completeDurableWorkflowRun(
 export async function executeDurableApprovalWaitRun(
   host: DurableApprovalWaitWorkflowHost,
   run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
 ): Promise<void> {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseApprovalWaitWorkflowPayload(run);
   if (!payload) {
     throw new Error("Durable approval wait payload is invalid or incomplete.");
@@ -529,7 +539,9 @@ export async function executeDurableApprovalWaitRun(
 export async function executeDurableConnectorDeliveryRun(
   host: DurableConnectorDeliveryWorkflowHost,
   run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
 ): Promise<void> {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseConnectorDeliveryWorkflowPayload(run);
   if (!payload) {
     throw new Error("Durable connector delivery payload is invalid or incomplete.");
@@ -544,10 +556,12 @@ export async function executeDurableConnectorDeliveryRun(
     commsReact: (input) => host.commsReact(input),
     commsUnsend: (input) => host.commsUnsend(input),
     commsTyping: (input) => host.commsTyping(input),
-    invokeMcpTool: (input) => host.invokeMcpTool(input),
+    invokeMcpTool: (input) => host.invokeMcpTool({ ...input, signal: context?.signal }),
     publishRealtime: (eventType, source, eventPayload, options) =>
       host.publishRealtime(eventType, source, eventPayload, options),
+    signal: context?.signal,
   });
+  throwIfDurableWorkflowAborted(context);
   const checkpointState = {
     connectorId: connector.connectorId,
     connectorType: connector.connectorType,
@@ -579,13 +593,18 @@ export async function executeDurableConnectorDeliveryRun(
 export async function executeDurableHookDeliveryRun(
   host: DurableHookDeliveryWorkflowHost,
   run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
 ): Promise<void> {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseHookDeliveryWorkflowPayload(run);
   if (!payload) {
     throw new Error("Durable hook delivery payload is invalid or incomplete.");
   }
   try {
-    const delivered = await host.hooksService.executeHookDelivery(payload.hookRunId, run.attemptCount + 1);
+    const delivered = await host.hooksService.executeHookDelivery(payload.hookRunId, run.attemptCount + 1, {
+      signal: context?.signal,
+    });
+    throwIfDurableWorkflowAborted(context);
     completeDurableWorkflowRun(host, run.runId, {
       hookRunId: delivered.runId,
       hookId: delivered.hookId,
@@ -593,6 +612,9 @@ export async function executeDurableHookDeliveryRun(
       trigger: delivered.trigger,
     });
   } catch (error) {
+    if (isDurableWorkflowAbortError(error, context)) {
+      throw error;
+    }
     const retry = host.durableRunService.retryDurableRun(
       run.runId,
       error instanceof Error ? error.message : "hook delivery failed",
@@ -615,7 +637,9 @@ export async function executeDurableHookDeliveryRun(
 export async function executeDurableChatTurnRun(
   host: DurableChatTurnWorkflowHost,
   run: DurableRunRecord,
+  context?: DurableWorkflowExecutionContext,
 ): Promise<void> {
+  throwIfDurableWorkflowAborted(context);
   const payload = parseDurableChatTurnPayload(run);
   if (!payload) {
     throw new Error("Durable chat run payload is invalid or incomplete.");
@@ -624,7 +648,11 @@ export async function executeDurableChatTurnRun(
   if (!userMessage) {
     throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
   }
-  const prepared = await host.prepareAgentChatTurn(payload.sessionId, payload.request, {
+  const request = {
+    ...payload.request,
+    signal: context?.signal,
+  };
+  const prepared = await host.prepareAgentChatTurn(payload.sessionId, request, {
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,
     parentTurnId: payload.parentTurnId,
@@ -637,7 +665,7 @@ export async function executeDurableChatTurnRun(
   await chatTurnDispatchService.executePreparedAgentChatTurnBackground(
     host,
     payload.sessionId,
-    payload.request,
+    request,
     prepared,
     payload.threadEventType,
     run.runId,
@@ -818,6 +846,22 @@ export async function markDurableWorkflowUnrecoverable(
 ): Promise<void> {
   const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutorsFromExecutionHost(host));
   await registry.markWorkflowUnrecoverable(run, reason);
+}
+
+function throwIfDurableWorkflowAborted(context?: DurableWorkflowExecutionContext): void {
+  if (!context?.signal?.aborted) {
+    return;
+  }
+  const reason = context.signal.reason;
+  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Durable workflow aborted.");
+}
+
+function isDurableWorkflowAbortError(error: unknown, context?: DurableWorkflowExecutionContext): boolean {
+  const signal = context?.signal;
+  if (!signal?.aborted) {
+    return false;
+  }
+  return error === signal.reason || (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)));
 }
 
 export function getDurableDiagnostics(host: DurableExecutionHost): DurableDiagnosticsResponse {

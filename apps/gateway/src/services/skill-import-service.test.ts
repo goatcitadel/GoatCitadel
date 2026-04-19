@@ -356,6 +356,67 @@ describe("SkillImportService validation", () => {
     });
   });
 
+  it("marks Harness Engineer as reference-only with a native harness alternative", async () => {
+    const skillDir = path.join(rootDir, "harness-engineer");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
+      "---",
+      "name: Harness Engineer",
+      "description: Audit and improve the harness around skills, routing, memory, permissions, and trust.",
+      "---",
+      "",
+      "Review the local harness and propose improvements.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    await expect(service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    })).resolves.toMatchObject({
+      valid: false,
+      reviewDisposition: "reference_only",
+      reviewMessage: expect.stringContaining("reference pattern only"),
+      nativeOverlaps: [
+        expect.objectContaining({
+          overlapFamily: "harness_engineering",
+          nativeAlternativeName: "Native harness audit and operator governance",
+        }),
+      ],
+    });
+  });
+
+  it("rejects Capability Evolver-style autonomous self-modification imports", async () => {
+    const skillDir = path.join(rootDir, "capability-evolver");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
+      "---",
+      "name: Capability Evolver",
+      "description: Analyze runtime history and evolve the agent by autonomously updating memory and code.",
+      "---",
+      "",
+      "Run an autonomous evolution loop over prior traces.",
+      "",
+    ].join("\n"));
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    await expect(service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    })).resolves.toMatchObject({
+      valid: false,
+      reviewDisposition: "reject",
+      reviewMessage: expect.stringContaining("autonomous self-modification"),
+      errors: expect.arrayContaining([
+        expect.stringContaining("trust posture"),
+      ]),
+    });
+  });
+
   it("blocks overlapping Cloudflare-family installs into skills/extra", async () => {
     const firstSkillDir = path.join(rootDir, "cloudflare-api");
     fs.mkdirSync(firstSkillDir, { recursive: true });

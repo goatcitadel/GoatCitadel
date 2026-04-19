@@ -24,8 +24,8 @@ describe("MissionControlSurfaceHeader", () => {
       />,
     );
 
-    expect(markup).toContain("Execution posture stays exact");
     expect(markup).toContain("Patch queue");
+    expect(markup).toContain("Review the diff and move the run forward.");
     expect(markup).not.toContain("OpenAI / gpt-5.4");
     expect(markup).not.toContain("3 active runtimes");
     expect(markup).not.toContain("Gateway healthy");

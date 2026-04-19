@@ -174,7 +174,21 @@ function updateTurnFromStreamChunk(
       const sameAssistant = turn.assistantMessage
         && turn.assistantMessage.messageId === chunk.messageId
         && turn.assistantMessage.content === chunk.content;
-      if (sameAssistant) {
+      const nextTraceCompletion = chunk.repaired
+        ? {
+            ...turn.trace.completion,
+            repaired: true,
+            status: turn.trace.completion?.status ?? "complete",
+          }
+        : turn.trace.completion;
+      const sameTraceCompletion =
+        nextTraceCompletion === turn.trace.completion ||
+        (
+          nextTraceCompletion?.repaired === turn.trace.completion?.repaired &&
+          nextTraceCompletion?.status === turn.trace.completion?.status &&
+          nextTraceCompletion?.finishReason === turn.trace.completion?.finishReason
+        );
+      if (sameAssistant && sameTraceCompletion) {
         return turn;
       }
       return {
@@ -191,6 +205,10 @@ function updateTurnFromStreamChunk(
           actorId: "assistant",
           content: chunk.content,
           timestamp: new Date().toISOString(),
+        },
+        trace: {
+          ...turn.trace,
+          completion: nextTraceCompletion,
         },
       };
     }

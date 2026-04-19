@@ -7,6 +7,7 @@ type TelegramTypingRequest = {
   chatId: string;
   threadId?: string;
   durationMs?: number;
+  signal?: AbortSignal;
   fetcher: (url: string, init?: RequestInit) => Promise<Response>;
 };
 
@@ -22,6 +23,7 @@ export async function sendTelegramTypingIndicator(input: TelegramTypingRequest):
       action: "typing",
       message_thread_id: parseOptionalPositiveInt(input.threadId),
     }),
+    signal: input.signal,
   });
   const payload = parseJsonRecord(await response.text());
   if (!response.ok || payload.ok === false) {

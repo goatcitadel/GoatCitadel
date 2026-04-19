@@ -58,4 +58,49 @@ describe("OrchestrationEngine", () => {
     const afterPhase2 = engine.approvePhase(plan, afterPhase1, "phase-2");
     expect(afterPhase2.status).toBe("completed");
   });
+
+  it("starts auto runs in running state for non-approval phases and pauses only on approval-gated phases", () => {
+    const engine = new OrchestrationEngine();
+    const autoPlan: OrchestrationPlan = {
+      ...plan,
+      mode: "auto",
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [
+            {
+              ...plan.waves[0]!.phases[0]!,
+              phaseId: "phase-1",
+              requiresApproval: false,
+            },
+            {
+              ...plan.waves[0]!.phases[1]!,
+              phaseId: "phase-2",
+              requiresApproval: true,
+            },
+          ],
+        },
+      ],
+    };
+    const run: OrchestrationRun = {
+      runId: "run-2",
+      planId: autoPlan.planId,
+      status: "queued",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    const started = engine.startRun(autoPlan, run);
+    expect(started.status).toBe("running");
+    expect(() => engine.approvePhase(autoPlan, started, "phase-1")).toThrow("not waiting for approval");
+
+    const waitingForApproval = {
+      ...started,
+      status: "paused" as const,
+      currentPhaseId: "phase-2",
+    };
+    const afterApproval = engine.approvePhase(autoPlan, waitingForApproval, "phase-2");
+    expect(afterApproval.status).toBe("completed");
+  });
 });

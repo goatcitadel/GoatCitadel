@@ -74,7 +74,6 @@ export function ChatSessionSidebar(props: {
     <aside className={`panel panel-soft panel-pad-default chat-v11-left mode-${mode}`}>
       <div className="chat-v11-workspace-summary">
         <div className="chat-v11-workspace-copy">
-          <p className="chat-v11-workspace-kicker">{surfaceConfig.shellEyebrow}</p>
           <h3>{summaryTitle}</h3>
           {mode === "chat" ? <p className="chat-v11-muted">{summaryCopy}</p> : null}
         </div>

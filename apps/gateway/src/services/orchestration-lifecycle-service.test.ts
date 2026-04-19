@@ -40,13 +40,12 @@ function buildRun(planId = "plan-1"): OrchestrationRun {
   return {
     runId: "run-1",
     planId,
-    status: "created",
+    status: "paused",
+    startedAt: "2026-04-12T00:00:00.000Z",
     currentWaveId: "wave-1",
     currentPhaseId: "phase-1",
     totalIterations: 0,
     totalCostUsd: 0,
-    createdAt: "2026-04-12T00:00:00.000Z",
-    updatedAt: "2026-04-12T00:00:00.000Z",
   } as unknown as OrchestrationRun;
 }
 
@@ -81,7 +80,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     storage,
     orchestrationEngine: {
       createRun: vi.fn(() => run),
-      startRun: vi.fn(() => ({ ...run, status: "running" }) as OrchestrationRun),
+      startRun: vi.fn(() => ({ ...run, status: "paused" }) as OrchestrationRun),
       approvePhase: vi.fn(
         () =>
           ({
@@ -150,12 +149,14 @@ describe("orchestration-lifecycle-service", () => {
     );
   });
 
-  it("starts plans and schedules orchestration memory context when enabled", async () => {
+  it("starts plans as fresh runs and schedules orchestration memory context when enabled", async () => {
     const host = createHost();
 
     const result = await runOrchestrationPlan(host, "plan-1");
 
-    expect(result.status).toBe("running");
+    expect(result.status).toBe("paused");
+    expect(host.storage.orchestration.findLatestRunByPlan).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.createRun).toHaveBeenCalledTimes(1);
     expect(host.orchestrationEngine.startRun).toHaveBeenCalled();
     expect(host.scheduleOrchestrationMemoryContext).toHaveBeenCalledWith(
       expect.objectContaining({ planId: "plan-1" }),
@@ -218,6 +219,54 @@ describe("orchestration-lifecycle-service", () => {
           runId: "run-1",
         },
       }),
+    );
+  });
+
+  it("rejects approvals when the run is not paused", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            status: "running",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow(
+      "not waiting for approval",
+    );
+  });
+
+  it("rejects approvals for non-approval phases in auto mode", async () => {
+    const plan = {
+      ...buildPlan(),
+      mode: "auto" as const,
+      waves: [
+        {
+          ...buildPlan().waves[0]!,
+          phases: [
+            {
+              ...buildPlan().waves[0]!.phases[0]!,
+              requiresApproval: false,
+            },
+          ],
+        },
+      ],
+    };
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getPlan: vi.fn(() => plan),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow(
+      "not approval-gated",
     );
   });
 });

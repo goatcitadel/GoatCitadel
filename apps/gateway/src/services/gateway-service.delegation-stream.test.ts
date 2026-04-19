@@ -20,7 +20,7 @@ function createStep(overrides: Partial<ChatDelegationStepRecord> = {}): ChatDele
 }
 
 describe("GatewayService delegation stream bridge", () => {
-  it("emits progress chunks before the final done chunk", async () => {
+  it("emits interleaved step chunks before the final done chunk", async () => {
     const gateway = Object.create(GatewayService.prototype) as GatewayService & {
       runChatDelegation: ReturnType<typeof vi.fn>;
     };
@@ -33,12 +33,21 @@ describe("GatewayService delegation stream bridge", () => {
           onStep?: (step: ChatDelegationStepRecord) => Promise<void> | void;
         },
       ): Promise<ChatDelegateResponse> => {
-        const runningStep = createStep();
-        const completedStep = createStep({
+        const runningArchitect = createStep();
+        const completedQa = createStep({
+          stepId: "step-2",
+          role: "qa",
+          index: 1,
           status: "completed",
           finishedAt: "2026-03-31T00:00:01.000Z",
           durationMs: 1000,
-          output: "Done",
+          output: "QA done",
+        });
+        const completedArchitect = createStep({
+          status: "completed",
+          finishedAt: "2026-03-31T00:00:02.000Z",
+          durationMs: 2000,
+          output: "Architect done",
         });
 
         await callbacks?.onStatus?.({
@@ -47,15 +56,17 @@ describe("GatewayService delegation stream bridge", () => {
           message: "Delegation started.",
         });
         await Promise.resolve();
-        await callbacks?.onStep?.(runningStep);
+        await callbacks?.onStep?.(runningArchitect);
         await Promise.resolve();
-        await callbacks?.onStep?.(completedStep);
+        await callbacks?.onStep?.(completedQa);
+        await Promise.resolve();
+        await callbacks?.onStep?.(completedArchitect);
 
         return {
           runId: "run-1",
           taskId: "task-1",
-          steps: [completedStep],
-          stitchedOutput: "### Architect\nDone",
+          steps: [completedArchitect, completedQa].sort((left, right) => left.index - right.index),
+          stitchedOutput: "### Architect\nArchitect done\n\n### Qa\nQA done",
           citations: [],
         };
       },
@@ -78,7 +89,7 @@ describe("GatewayService delegation stream bridge", () => {
       chunks.push(chunk);
     }
 
-    expect(chunks.map((chunk) => chunk.type)).toEqual(["status", "step", "step", "done"]);
+    expect(chunks.map((chunk) => chunk.type)).toEqual(["status", "step", "step", "step", "done"]);
     expect(chunks[0]).toMatchObject({
       type: "status",
       runId: "run-1",
@@ -87,13 +98,20 @@ describe("GatewayService delegation stream bridge", () => {
     });
     expect(chunks[1]?.step?.status).toBe("running");
     expect(chunks[2]?.step?.status).toBe("completed");
+    expect(chunks[2]?.step?.role).toBe("qa");
+    expect(chunks[3]?.step?.role).toBe("architect");
     expect(chunks[3]).toMatchObject({
+      type: "step",
+      runId: "run-1",
+    });
+    expect(chunks[4]).toMatchObject({
       type: "done",
       runId: "run-1",
       taskId: "task-1",
       result: {
         runId: "run-1",
         taskId: "task-1",
+        stitchedOutput: "### Architect\nArchitect done\n\n### Qa\nQA done",
       },
     });
   });

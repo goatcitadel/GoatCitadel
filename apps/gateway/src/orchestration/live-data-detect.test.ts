@@ -28,4 +28,12 @@ describe("live data detection", () => {
     expect(hasLiveDataKeywords("What are the latest news headlines today?")).toBe(true);
     expect(hasLiveDataKeywords("Show me recently released games this month.")).toBe(true);
   });
+
+  it("does not treat non-web uncertainty phrasing with right now as live-data intent", () => {
+    expect(
+      hasLiveDataKeywords(
+        "Without assuming tool access, explain what to do when two docs appear to conflict and you cannot verify which one is authoritative right now.",
+      ),
+    ).toBe(false);
+  });
 });

@@ -43,6 +43,18 @@ export class PromptPackAutoScoreV2Repository {
         @scoreState, @autoVerdict, @weightedScore, @judgeStatus, @protocolPass,
         @recordJson, @createdAt
       )
+      ON CONFLICT(run_id, scoring_schema_version, scorer_version, policy_hash) DO UPDATE SET
+        pack_id = excluded.pack_id,
+        test_id = excluded.test_id,
+        judge_rubric_version = excluded.judge_rubric_version,
+        policy_source = excluded.policy_source,
+        score_state = excluded.score_state,
+        auto_verdict = excluded.auto_verdict,
+        weighted_score = excluded.weighted_score,
+        judge_status = excluded.judge_status,
+        protocol_pass = excluded.protocol_pass,
+        record_json = excluded.record_json,
+        created_at = excluded.created_at
     `);
     this.listByPackStmt = db.prepare(`
       SELECT * FROM prompt_pack_auto_scores_v2

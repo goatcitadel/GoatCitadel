@@ -54,7 +54,7 @@ export function TuneHubLayout<TTab extends string>({
     return registerEntry({
       id: `tune-hub-guide:${title}`,
       title: typeof guideTitle === "string" ? guideTitle : "Page details",
-      kicker: "Tune context",
+      kicker: "Setup context",
       subtitle: subtitle,
       body: detailBody,
       priority: 10,

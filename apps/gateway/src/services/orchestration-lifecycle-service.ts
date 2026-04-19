@@ -150,11 +150,7 @@ export async function runOrchestrationPlan(
   planId: string,
 ): Promise<OrchestrationRun> {
   let plan = host.storage.orchestration.getPlan(planId);
-  let run = host.storage.orchestration.findLatestRunByPlan(planId);
-
-  if (!run) {
-    run = createOrchestrationPlan(host, plan);
-  }
+  const run = createOrchestrationPlan(host, plan);
 
   const runBeforeHook = await host.hooksService.runInlineHooks<{
     maxIterations?: number;
@@ -239,6 +235,19 @@ export async function approvePhase(
   const run = host.storage.orchestration.getRun(runId);
   let plan = host.storage.orchestration.getPlan(run.planId);
   const previousWaveId = run.currentWaveId;
+  const currentPhase = findPhaseInPlan(plan, phaseId);
+
+  if (run.status !== "paused") {
+    throw new Error(`Run ${run.runId} is not waiting for approval: ${run.status}`);
+  }
+  if (run.currentPhaseId !== phaseId) {
+    throw new Error(
+      `Run ${run.runId} expected phase ${run.currentPhaseId ?? "<none>"} but received approval for ${phaseId}`,
+    );
+  }
+  if (plan.mode !== "hitl" && !currentPhase.requiresApproval) {
+    throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
+  }
 
   const phaseBeforeHook = await host.hooksService.runInlineHooks<{
     ownerAgentId?: string;
@@ -268,6 +277,10 @@ export async function approvePhase(
   if (phaseBeforeHook.patch) {
     plan = host.applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
     host.storage.orchestration.upsertPlan(plan);
+    const patchedPhase = findPhaseInPlan(plan, phaseId);
+    if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {
+      throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
+    }
   }
 
   const next = host.orchestrationEngine.approvePhase(plan, run, phaseId, {
@@ -373,6 +386,16 @@ export async function approvePhase(
     run: persisted,
     checkpoints: host.storage.orchestration.listCheckpoints(runId),
   };
+}
+
+function findPhaseInPlan(plan: OrchestrationPlan, phaseId: string) {
+  for (const wave of plan.waves) {
+    const phase = wave.phases.find((candidate) => candidate.phaseId === phaseId);
+    if (phase) {
+      return phase;
+    }
+  }
+  throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
 }
 
 export function getRun(host: OrchestrationLifecycleHost, runId: string): OrchestrationRun {

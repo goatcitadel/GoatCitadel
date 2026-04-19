@@ -69,6 +69,9 @@ describe("DurableRunService", () => {
         runId: "run-1",
         status: "running",
       }),
+      expect.objectContaining({
+        signal: expect.any(Object),
+      }),
     );
     expect(runs.get("run-1")?.status).toBe("completed");
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
@@ -159,6 +162,78 @@ describe("DurableRunService", () => {
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
     expect(runs.get(run.runId)?.status).toBe("completed");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
+  });
+
+  it("ignores the durable foundation env override once runtime config is normalized on", async () => {
+    const previous = process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED;
+    process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED = "false";
+    try {
+      const runs = new Map<string, DurableRunRecord>([["run-1", createRun("run-1", "queued")]]);
+      const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const backgroundTasks = new Set<Promise<void>>();
+      const executeWorkflow = vi.fn(async (run: DurableRunRecord) => {
+        updateRun(runs, run.runId, {
+          status: "completed",
+          finishedAt: "2026-03-14T00:00:05.000Z",
+        });
+      });
+      const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      });
+
+      service.startWorker();
+      await Promise.all([...backgroundTasks]);
+
+      expect(executeWorkflow).toHaveBeenCalledTimes(1);
+      expect(runs.get("run-1")?.status).toBe("completed");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED;
+      } else {
+        process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED = previous;
+      }
+    }
+  });
+
+  it("stops polling when the worker is stopped", async () => {
+    vi.useFakeTimers();
+    try {
+      const runs = new Map<string, DurableRunRecord>([["run-1", createRun("run-1", "queued")]]);
+      const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const backgroundTasks = new Set<Promise<void>>();
+      const executeWorkflow = vi.fn(async (run: DurableRunRecord) => {
+        updateRun(runs, run.runId, {
+          status: "completed",
+          finishedAt: "2026-03-14T00:00:05.000Z",
+        });
+      });
+      const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      });
+
+      service.startWorker();
+      await Promise.all([...backgroundTasks]);
+      service.stopWorker();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(backgroundTasks.size).toBe(0);
+      expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("requeues recovered dead letters and immediately schedules them for execution", async () => {
@@ -261,6 +336,251 @@ describe("DurableRunService", () => {
         }),
       }),
     );
+  });
+
+  it("fails the run when lease heartbeat renewal throws", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = createRun("run-heartbeat-failure", "queued");
+      const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+      const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const backgroundTasks = new Set<Promise<void>>();
+      let resolveWorkflow!: () => void;
+      const workflow = new Promise<void>((resolve) => {
+        resolveWorkflow = resolve;
+      });
+      const context = createContext(runs, checkpoints, timeline);
+      const renewLease = vi.fn(() => {
+        throw new Error("transient lease failure");
+      });
+      context.storage.durableRuns.renewLease = renewLease as never;
+      const service = new DurableRunService(context as unknown as ServiceContext, {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow: vi.fn(() => workflow),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      });
+
+      service.startWorker();
+      await vi.advanceTimersByTimeAsync(5_100);
+      await Promise.allSettled([...backgroundTasks]);
+      resolveWorkflow();
+
+      expect(renewLease).toHaveBeenCalled();
+      expect(runs.get(run.runId)?.status).toBe("failed");
+      expect(timeline.map((item) => item.eventType)).toContain("run_failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not clobber a run after lease ownership moves to another worker", async () => {
+    const run = createRun("run-lease-steal", "queued");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow: vi.fn(async (current: DurableRunRecord) => {
+            const nextLeaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+            updateRun(runs, current.runId, {
+              status: "running",
+              leaseOwnerId: "worker-other",
+              leaseHeartbeatAt: new Date().toISOString(),
+              leaseExpiresAt: nextLeaseExpiresAt,
+            });
+            throw new Error("stolen by another worker");
+          }),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+
+    service.startWorker();
+    await Promise.allSettled([...backgroundTasks]);
+
+    expect(runs.get(run.runId)?.status).toBe("running");
+    expect(runs.get(run.runId)?.leaseOwnerId).toBe("worker-other");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_run_failure_skipped_lease_lost",
+        runId: "run-lease-steal",
+      }),
+      expect.objectContaining({
+        eventClass: "operational_signal",
+      }),
+    );
+  });
+
+  it("does not fail a run after lease ownership moves and the replacement lease is already expired", async () => {
+    const run = createRun("run-expired-replacement-lease", "queued");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow: vi.fn(async (current: DurableRunRecord) => {
+            updateRun(runs, current.runId, {
+              status: "running",
+              leaseOwnerId: "worker-other",
+              leaseHeartbeatAt: "2026-03-14T00:00:02.000Z",
+              leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+            });
+            throw new Error("replacement worker stalled");
+          }),
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+
+    service.startWorker();
+    await Promise.allSettled([...backgroundTasks]);
+
+    expect(runs.get(run.runId)?.status).toBe("running");
+    expect(runs.get(run.runId)?.leaseOwnerId).toBe("worker-other");
+    expect(timeline.map((item) => item.eventType)).not.toContain("run_failed");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_run_failure_skipped_lease_lost",
+        runId: "run-expired-replacement-lease",
+      }),
+      expect.objectContaining({
+        eventClass: "operational_signal",
+      }),
+    );
+  });
+
+  it("requeues and resumes a recoverable run after the stale replacement lease expires", async () => {
+    const run = createRun("run-stale-lease-reaper", "queued");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    let executionCount = 0;
+    const executeWorkflow = vi.fn(async (current: DurableRunRecord) => {
+      executionCount += 1;
+      if (executionCount === 1) {
+        updateRun(runs, current.runId, {
+          status: "running",
+          leaseOwnerId: "worker-other",
+          leaseHeartbeatAt: "2026-03-14T00:00:02.000Z",
+          leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+        });
+        throw new Error("replacement worker stalled");
+      }
+      updateRun(runs, current.runId, {
+        status: "completed",
+        finishedAt: "2026-03-14T00:00:05.000Z",
+        clearLease: true,
+      });
+    });
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+
+    service.startWorker();
+    await Promise.allSettled([...backgroundTasks]);
+
+    expect(runs.get(run.runId)).toMatchObject({
+      status: "running",
+      leaseOwnerId: "worker-other",
+      leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+    });
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+
+    service.requestRunProcessing(run.runId);
+    await Promise.allSettled([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(2);
+    expect(runs.get(run.runId)?.status).toBe("completed");
+    expect(runs.get(run.runId)?.leaseOwnerId).toBeUndefined();
+    expect(timeline.map((item) => item.eventType)).not.toContain("run_failed");
+    expect(checkpoints.filter((item) => item.checkpointKind === "run_started")).toHaveLength(2);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_run_failure_skipped_lease_lost",
+        runId: "run-stale-lease-reaper",
+      }),
+      expect.objectContaining({
+        eventClass: "operational_signal",
+      }),
+    );
+  });
+
+  it("retries reconcile updates after a transient version conflict", async () => {
+    const run = {
+      ...createRun("run-conflict", "running"),
+      leaseOwnerId: "worker-old",
+      leaseHeartbeatAt: "2026-03-14T00:00:00.000Z",
+      leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async (current: DurableRunRecord) => {
+      updateRun(runs, current.runId, {
+        status: "completed",
+        finishedAt: "2026-03-14T00:00:05.000Z",
+      });
+    });
+    const context = createContext(runs, checkpoints, timeline);
+    const originalUpdateRun = context.storage.durableRuns.updateRun;
+    let queuedConflictPending = true;
+    context.storage.durableRuns.updateRun = ((input: Parameters<typeof originalUpdateRun>[0]) => {
+      if (input.runId === run.runId && input.status === "queued" && queuedConflictPending) {
+        queuedConflictPending = false;
+        updateRun(runs, run.runId, {
+          updatedAt: "2026-03-14T00:00:02.000Z",
+        });
+        throw new Error(`Durable run ${run.runId} update conflict`);
+      }
+      return originalUpdateRun(input);
+    }) as typeof originalUpdateRun;
+    const service = new DurableRunService(context as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)?.status).toBe("completed");
   });
 });
 

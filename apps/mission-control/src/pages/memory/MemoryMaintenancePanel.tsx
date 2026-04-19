@@ -115,8 +115,8 @@ export function MemoryMaintenancePanel(props: MemoryMaintenancePanelProps) {
     >
       {!memoryMaintenanceDurableReady ? (
         <p className="office-subtitle">
-          Dream is blocked because `durableKernelV1Enabled` is off. Re-enable the durable kernel before changing or
-          running memory maintenance.
+          Dream is waiting for durable execution to become ready. Durable execution is part of the shipped runtime
+          baseline, so this usually means startup healing or runtime allocation is still unavailable.
         </p>
       ) : (
         <>

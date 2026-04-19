@@ -44,8 +44,10 @@ function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventC
 export class DurableRunService {
   private workerActive = false;
   private workerRequested = false;
+  private workerStopped = false;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly workerId = randomUUID();
+  private readonly activeRunAbortControllers = new Map<string, AbortController>();
 
   constructor(
     private readonly ctx: DurableRunServiceContext,
@@ -104,13 +106,27 @@ export class DurableRunService {
     if (!this.isDurableFoundationEnabled() || !this.deps) {
       return;
     }
+    this.workerStopped = false;
     this.reconcileRecoverableRuns();
     this.ensurePollLoop();
     this.requestRunProcessing();
   }
 
+  stopWorker(): void {
+    this.workerStopped = true;
+    this.workerRequested = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    for (const [runId, controller] of this.activeRunAbortControllers) {
+      controller.abort(new Error(`Durable worker ${this.workerId} stopped while ${runId} was running.`));
+    }
+    this.activeRunAbortControllers.clear();
+  }
+
   requestRunProcessing(_runId?: string): void {
-    if (!this.isDurableFoundationEnabled() || !this.deps) {
+    if (!this.isDurableFoundationEnabled() || !this.deps || this.workerStopped) {
       return;
     }
     this.workerRequested = true;
@@ -125,7 +141,7 @@ export class DurableRunService {
           this.workerRequested = false;
           await this.reconcileRecoverableRuns();
           await this.drainQueuedRuns();
-        } while (this.workerRequested);
+        } while (this.workerRequested && !this.workerStopped);
       } finally {
         this.workerActive = false;
         backgroundTasks.delete(task);
@@ -539,10 +555,6 @@ export class DurableRunService {
   // ── helpers (previously private on GatewayService) ───────────────
 
   isDurableFoundationEnabled(): boolean {
-    const fromEnv = process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED?.trim().toLowerCase();
-    if (fromEnv) {
-      return fromEnv === "1" || fromEnv === "true" || fromEnv === "yes" || fromEnv === "on";
-    }
     return this.ctx.config.assistant.durable.enabled;
   }
 
@@ -600,22 +612,27 @@ export class DurableRunService {
       const run = this.ctx.storage.durableRuns.getRun(runId);
       const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(run);
       if (!recoverability.recoverable) {
-        await this.failWorkflowRun(run, recoverability.reason ?? "Run could not be recovered after restart.");
+        await this.failExpiredOrphanedWorkflowRun(
+          run,
+          recoverability.reason ?? "Run could not be recovered after restart.",
+        );
         await this.deps.workflowRegistry.markWorkflowUnrecoverable(
           this.ctx.storage.durableRuns.getRun(run.runId),
           recoverability.reason ?? "Run could not be recovered after restart.",
         );
         continue;
       }
-      this.ctx.storage.durableRuns.updateRun({
-        runId: run.runId,
-        status: "queued",
-        finishedAt: undefined,
-        clearLease: true,
-        lastError: undefined,
-        updatedAt: new Date().toISOString(),
-        expectedVersion: run.version,
-      });
+      this.retryDurableRunUpdate(run.runId, (current) =>
+        this.ctx.storage.durableRuns.updateRun({
+          runId: current.runId,
+          status: "queued",
+          finishedAt: undefined,
+          clearLease: true,
+          lastError: undefined,
+          updatedAt: new Date().toISOString(),
+          expectedVersion: current.version,
+        }),
+      );
     }
   }
 
@@ -631,8 +648,13 @@ export class DurableRunService {
         return;
       }
       try {
-        await this.executeWithLeaseHeartbeat(run, () =>
-          this.executeWithTimeout(deps.workflowRegistry.executeWorkflow(run), timeoutMs, run.runId),
+        await this.executeWithLeaseHeartbeat(run, ({ signal, controller }) =>
+          this.executeWithTimeout(
+            () => deps.workflowRegistry.executeWorkflow(run, { signal }),
+            timeoutMs,
+            run.runId,
+            controller,
+          ),
         );
       } catch (error) {
         await this.failWorkflowRun(run, error instanceof Error ? error.message : "Durable workflow execution failed.");
@@ -645,12 +667,19 @@ export class DurableRunService {
     }
   }
 
-  private executeWithTimeout<T>(promise: Promise<T>, timeoutMs: number, runId: string): Promise<T> {
+  private executeWithTimeout<T>(
+    execute: () => Promise<T>,
+    timeoutMs: number,
+    runId: string,
+    controller: AbortController,
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`Durable workflow ${runId} exceeded ${timeoutMs}ms execution timeout.`));
+        const error = new Error(`Durable workflow ${runId} exceeded ${timeoutMs}ms execution timeout.`);
+        controller.abort(error);
+        reject(error);
       }, timeoutMs);
-      promise.then(
+      execute().then(
         (value) => {
           clearTimeout(timer);
           resolve(value);
@@ -663,27 +692,58 @@ export class DurableRunService {
     });
   }
 
-  private async executeWithLeaseHeartbeat<T>(run: DurableRunRecord, execute: () => Promise<T>): Promise<T> {
+  private async executeWithLeaseHeartbeat<T>(
+    run: DurableRunRecord,
+    execute: (context: { signal: AbortSignal; controller: AbortController }) => Promise<T>,
+  ): Promise<T> {
     let active = true;
     let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+    let rejectHeartbeatFailure!: (error: Error) => void;
+    const controller = new AbortController();
+    this.activeRunAbortControllers.set(run.runId, controller);
+    const heartbeatFailure = new Promise<never>((_, reject) => {
+      rejectHeartbeatFailure = reject;
+    });
     const heartbeat = async () => {
       if (!active) {
         return;
       }
-      const current = this.ctx.storage.durableRuns.getRun(run.runId);
+      let current: DurableRunRecord;
+      try {
+        current = this.ctx.storage.durableRuns.getRun(run.runId);
+      } catch (error) {
+        active = false;
+        controller.abort(error instanceof Error ? error : new Error(String(error)));
+        rejectHeartbeatFailure(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
       if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+        active = false;
+        const error = new Error(`Durable run ${run.runId} lease ownership moved to another worker.`);
+        controller.abort(error);
+        rejectHeartbeatFailure(error);
         return;
       }
       const now = new Date().toISOString();
       try {
-        this.ctx.storage.durableRuns.renewLease({
+        const renewed = this.ctx.storage.durableRuns.renewLease({
           runId: run.runId,
           workerId: this.workerId,
           leaseHeartbeatAt: now,
           leaseExpiresAt: new Date(Date.now() + DURABLE_LEASE_TTL_MS).toISOString(),
           updatedAt: now,
         });
-      } catch {
+        if (!renewed) {
+          throw new Error(`Durable run ${run.runId} lease renewal lost ownership.`);
+        }
+      } catch (error) {
+        active = false;
+        controller.abort(error instanceof Error ? error : new Error(String(error)));
+        rejectHeartbeatFailure(
+          error instanceof Error
+            ? error
+            : new Error(`Durable run ${run.runId} lease heartbeat failed.`),
+        );
         return;
       }
       heartbeatTimer = setTimeout(() => void heartbeat(), DURABLE_LEASE_HEARTBEAT_MS);
@@ -691,12 +751,13 @@ export class DurableRunService {
 
     heartbeatTimer = setTimeout(() => void heartbeat(), DURABLE_LEASE_HEARTBEAT_MS);
     try {
-      return await execute();
+      return await Promise.race([execute({ signal: controller.signal, controller }), heartbeatFailure]);
     } finally {
       active = false;
       if (heartbeatTimer) {
         clearTimeout(heartbeatTimer);
       }
+      this.activeRunAbortControllers.delete(run.runId);
     }
   }
 
@@ -762,31 +823,36 @@ export class DurableRunService {
 
   private async failWorkflowRun(run: DurableRunRecord, message: string): Promise<void> {
     const now = new Date().toISOString();
-    let failed!: DurableRunRecord;
-    this.ctx.storage.runImmediateTransaction(() => {
-      failed = this.ctx.storage.durableRuns.updateRun({
-        runId: run.runId,
-        status: "failed",
-        finishedAt: now,
-        clearLease: true,
-        lastError: message,
-        updatedAt: now,
-        expectedVersion: run.version,
-      });
-      this.ctx.storage.durableRuns.createCheckpoint({
-        runId: failed.runId,
-        checkpointKind: "run_failed",
-        state: {
-          workflowKey: failed.workflowKey,
-          error: message,
-        },
-        createdAt: now,
-      });
-      this.recordDurableTimelineEvent(failed.runId, "run_failed", {
-        workflowKey: failed.workflowKey,
-        error: message,
-      });
+    const failed = this.retryDurableRunUpdate(run.runId, (current) => {
+      if (this.isTerminalRunStatus(current.status)) {
+        return current;
+      }
+      if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+        return current;
+      }
+      return this.persistFailedRun(current, message, now);
     });
+    if (failed.status !== "failed") {
+      if (failed.leaseOwnerId !== this.workerId) {
+        this.ctx.publishRealtime(
+          "system",
+          "durable",
+          {
+            type: "durable_run_failure_skipped_lease_lost",
+            runId: failed.runId,
+            error: message,
+            status: failed.status,
+            leaseOwnerId: failed.leaseOwnerId,
+          },
+          {
+            eventClass: "operational_signal",
+            eventAuthority: "retained_stream",
+            links: { runId: failed.runId },
+          },
+        );
+      }
+      return;
+    }
     this.ctx.publishRealtime(
       "system",
       "durable",
@@ -800,18 +866,132 @@ export class DurableRunService {
     await this.deps?.onRunFailed?.(failed, message);
   }
 
+  private async failExpiredOrphanedWorkflowRun(run: DurableRunRecord, message: string): Promise<void> {
+    const now = new Date().toISOString();
+    const failed = this.retryDurableRunUpdate(run.runId, (current) => {
+      if (this.isTerminalRunStatus(current.status)) {
+        return current;
+      }
+      if (current.status !== "running" || !this.isLeaseExpiredAt(current, now)) {
+        return current;
+      }
+      return this.persistFailedRun(current, message, now);
+    });
+    if (failed.status !== "failed") {
+      return;
+    }
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_run_failed",
+        runId: failed.runId,
+        error: message,
+      },
+      buildDurableRealtimeOptions(failed.runId),
+    );
+    await this.deps?.onRunFailed?.(failed, message);
+  }
+
+  private persistFailedRun(current: DurableRunRecord, message: string, now: string): DurableRunRecord {
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId: current.runId,
+        status: "failed",
+        finishedAt: now,
+        clearLease: true,
+        lastError: message,
+        updatedAt: now,
+        expectedVersion: current.version,
+      });
+      this.ctx.storage.durableRuns.createCheckpoint({
+        runId: next.runId,
+        checkpointKind: "run_failed",
+        state: {
+          workflowKey: next.workflowKey,
+          error: message,
+        },
+        createdAt: now,
+      });
+      this.recordDurableTimelineEvent(next.runId, "run_failed", {
+        workflowKey: next.workflowKey,
+        error: message,
+      });
+    });
+    return next;
+  }
+
+  private isLeaseExpiredAt(run: DurableRunRecord, nowIso: string): boolean {
+    return (
+      typeof run.leaseExpiresAt === "string" &&
+      Number.isFinite(Date.parse(run.leaseExpiresAt)) &&
+      Date.parse(run.leaseExpiresAt) <= Date.parse(nowIso)
+    );
+  }
+
+  private isTerminalRunStatus(status: DurableRunRecord["status"]): boolean {
+    return status === "completed" || status === "failed" || status === "cancelled";
+  }
+
+  private retryDurableRunUpdate(
+    runId: string,
+    update: (current: DurableRunRecord) => DurableRunRecord,
+    maxAttempts = 3,
+  ): DurableRunRecord {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const current = this.ctx.storage.durableRuns.getRun(runId);
+      try {
+        return update(current);
+      } catch (error) {
+        if (!isDurableRunUpdateConflict(error) || attempt === maxAttempts - 1) {
+          throw error;
+        }
+        lastError = error;
+      }
+    }
+    this.ctx.publishRealtime(
+      "durable_run_update_conflict_exhausted",
+      "durable",
+      {
+        runId,
+        attempts: maxAttempts,
+        error: lastError instanceof Error ? lastError.message : String(lastError),
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          runId,
+        },
+      },
+    );
+    throw lastError instanceof Error ? lastError : new Error(`Durable run ${runId} update conflict`);
+  }
+
   private ensurePollLoop(): void {
-    if (this.pollTimer) {
+    if (this.pollTimer || this.workerStopped) {
       return;
     }
     const scheduleNext = () => {
+      if (this.workerStopped) {
+        return;
+      }
       const jitter = Math.floor(Math.random() * DURABLE_WORKER_POLL_JITTER_MS);
       this.pollTimer = setTimeout(() => {
         this.pollTimer = undefined;
+        if (this.workerStopped) {
+          return;
+        }
         this.requestRunProcessing();
         scheduleNext();
       }, DURABLE_WORKER_POLL_MIN_MS + jitter);
     };
     scheduleNext();
   }
+}
+
+function isDurableRunUpdateConflict(error: unknown): boolean {
+  return error instanceof Error && /durable run .* update conflict/i.test(error.message);
 }

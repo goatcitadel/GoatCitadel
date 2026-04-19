@@ -500,7 +500,10 @@ export class CapabilitySystemService {
     return stored;
   }
 
-  public async executeApprovedCodeModeRun(approvalId: string): Promise<ToolInvokeResult | undefined> {
+  public async executeApprovedCodeModeRun(
+    approvalId: string,
+    signal?: AbortSignal,
+  ): Promise<ToolInvokeResult | undefined> {
     const pending = this.options.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending" || pending.actionType !== "code_mode.run") {
       return undefined;
@@ -538,6 +541,7 @@ export class CapabilitySystemService {
 
     let finalRun = existing;
     try {
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
       if (!sandbox.available) {
         this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
           runId,
@@ -555,7 +559,9 @@ export class CapabilitySystemService {
         input: runInput,
         requestedOutputIntent: existing.requestedOutputIntent,
         wrapperManifest,
+        signal,
       });
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution started.`);
 
       let stdoutArtifact: CapabilityArtifactRecord | undefined;
       let stderrArtifact: CapabilityArtifactRecord | undefined;
@@ -818,6 +824,7 @@ export class CapabilitySystemService {
     input: Record<string, unknown>;
     requestedOutputIntent?: string;
     wrapperManifest: CodeModeWrapperManifest;
+    signal?: AbortSignal;
   }): Promise<{
     result?: Record<string, unknown>;
     error?: string;
@@ -848,6 +855,20 @@ export class CapabilitySystemService {
 
     const stdout = createBoundedCapture();
     const stderr = createBoundedCapture();
+    const abortChild = (reason?: string) => {
+      replyToChild({
+        jsonrpc: "2.0",
+        method: "run.cancel",
+        params: {
+          reason: reason ?? `Code Mode run ${input.runId} was aborted.`,
+        },
+      });
+      setTimeout(() => {
+        if (!child.killed) {
+          child.kill();
+        }
+      }, 200).unref();
+    };
     child.stdout?.on("data", (chunk: Buffer | string) => stdout.append(chunk));
     child.stderr?.on("data", (chunk: Buffer | string) => stderr.append(chunk));
 
@@ -940,6 +961,7 @@ export class CapabilitySystemService {
             agentId: `code-mode:${input.runId}`,
             sessionId: input.runId,
             taskId: input.runId,
+            signal: input.signal,
             consentContext: {
               source: "agent",
               reason: `code-mode:${input.runId}`,
@@ -1006,21 +1028,27 @@ export class CapabilitySystemService {
     };
 
     const timeoutHandle = setTimeout(() => {
-      replyToChild({
-        jsonrpc: "2.0",
-        method: "run.cancel",
-        params: {
-          reason: `Code Mode run exceeded ${CODE_MODE_RUN_TIMEOUT_MS}ms.`,
-        },
-      });
-      setTimeout(() => {
-        if (!child.killed) {
-          child.kill();
-        }
-      }, 200).unref();
+      abortChild(`Code Mode run exceeded ${CODE_MODE_RUN_TIMEOUT_MS}ms.`);
     }, CODE_MODE_RUN_TIMEOUT_MS);
+    const abortListener = () => {
+      abortChild(
+        input.signal?.reason instanceof Error
+          ? input.signal.reason.message
+          : typeof input.signal?.reason === "string"
+            ? input.signal.reason
+            : `Code Mode run ${input.runId} was aborted.`,
+      );
+    };
+    if (input.signal) {
+      if (input.signal.aborted) {
+        abortListener();
+      } else {
+        input.signal.addEventListener("abort", abortListener, { once: true });
+      }
+    }
 
     try {
+      throwIfCapabilitySystemAborted(input.signal, `Code mode run ${input.runId} was aborted before child execution.`);
       const result = await sendRequest<Record<string, unknown>>("run.execute", {
         runId: input.runId,
         source: input.source,
@@ -1049,6 +1077,9 @@ export class CapabilitySystemService {
       };
     } finally {
       clearTimeout(timeoutHandle);
+      if (input.signal) {
+        input.signal.removeEventListener("abort", abortListener);
+      }
     }
   }
 
@@ -1505,6 +1536,14 @@ function toPreview(value: string): string | undefined {
     return `${head}\n${truncationMarker}`;
   }
   return `${normalized.slice(0, 3997)}...`;
+}
+
+function throwIfCapabilitySystemAborted(signal: AbortSignal | undefined, fallbackMessage: string): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : fallbackMessage);
 }
 
 function asOptionalString(value: unknown): string | undefined {

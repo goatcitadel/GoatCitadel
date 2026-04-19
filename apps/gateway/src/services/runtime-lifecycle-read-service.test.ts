@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
   ApprovalRequest,
+  ChatDelegationRunRecord,
+  ChatDelegationStepRecord,
+  ChatExecutionPlanRecord,
   ChatTurnTraceRecord,
   DurableRunRecord,
-  ProactiveRunRecord,
   SessionMeta,
   SessionSummary,
   TaskRecord,
@@ -50,6 +52,9 @@ function createHost(overrides: Partial<RuntimeLifecycleReadHost> = {}): RuntimeL
         toolRuns: [],
       }) as unknown as ChatTurnTraceRecord,
     listHydratedChatTurnTraces: () => [],
+    listChatExecutionPlans: () => [],
+    listChatDelegationRuns: () => [],
+    listChatDelegationSteps: () => [],
     getSession: (sessionId) =>
       ({
         sessionId,
@@ -79,10 +84,97 @@ function createHost(overrides: Partial<RuntimeLifecycleReadHost> = {}): RuntimeL
   };
 }
 
+function buildPlan(overrides: Partial<ChatExecutionPlanRecord> = {}): ChatExecutionPlanRecord {
+  return {
+    planId: "plan-1",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    mode: "cowork",
+    planningMode: "manual",
+    status: "running",
+    source: "delegate_request",
+    advisoryOnly: false,
+    objective: "Plan objective",
+    summary: "Plan summary",
+    createdAt: "2026-04-12T00:00:00.000Z",
+    updatedAt: "2026-04-12T00:00:00.000Z",
+    steps: [
+      {
+        stepId: "step-1",
+        index: 0,
+        objective: "Plan step",
+        parallelizable: false,
+        status: "running",
+        childRunId: "run-legacy",
+        durableRunId: "run-plan",
+        childSessionId: "session-child",
+        childTurnId: "turn-child",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function buildDelegationRun(overrides: Partial<ChatDelegationRunRecord> = {}): ChatDelegationRunRecord {
+  return {
+    runId: "delegation-1",
+    sessionId: "session-1",
+    taskId: "task-1",
+    objective: "Delegate objective",
+    roles: ["architect"],
+    mode: "parallel",
+    status: "running",
+    startedAt: "2026-04-12T00:00:00.000Z",
+    citations: [],
+    ...overrides,
+  };
+}
+
+function buildDelegationStep(overrides: Partial<ChatDelegationStepRecord> = {}): ChatDelegationStepRecord {
+  return {
+    stepId: "delegation-step-1",
+    runId: "delegation-1",
+    role: "architect",
+    status: "completed",
+    index: 0,
+    startedAt: "2026-04-12T00:00:00.000Z",
+    durableRunId: "run-delegation",
+    childSessionId: "session-delegate-child",
+    childTurnId: "turn-delegate-child",
+    ...overrides,
+  };
+}
+
 describe("RuntimeLifecycleReadService", () => {
-  it("prefers explicit approval linkage over fallback payload fields", async () => {
+  it("prefers execution-plan lineage over fallback payloads and keeps deprecated childRunId as diagnostic only", async () => {
     const service = new RuntimeLifecycleReadService(
       createHost({
+        getTurnTrace: (turnId) =>
+          ({
+            turnId,
+            sessionId: "session-1",
+            userMessageId: "user-1",
+            status: "completed",
+            mode: "chat",
+            startedAt: "2026-04-12T00:00:00.000Z",
+            executionPlanId: "plan-1",
+            toolRuns: [],
+          }) as unknown as ChatTurnTraceRecord,
+        listChatExecutionPlans: () => [buildPlan()],
+        findDurableRunMaybe: (runId) =>
+          runId === "run-legacy"
+            ? ({
+                runId,
+                workflowKey: "legacy.child",
+                status: "completed",
+                payload: {},
+                metadata: {},
+                createdAt: "2026-04-12T00:00:00.000Z",
+                updatedAt: "2026-04-12T00:00:00.000Z",
+                retryPolicy: { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, backoffMultiplier: 2 },
+                currentAttempt: 1,
+              }) as unknown as DurableRunRecord
+            : undefined,
         getApproval: (approvalId) =>
           ({
             approvalId,
@@ -90,62 +182,61 @@ describe("RuntimeLifecycleReadService", () => {
             riskLevel: "danger",
             status: "pending",
             payload: {
-              sessionId: "session-fallback",
+              runId: "run-fallback",
               turnId: "turn-fallback",
             },
-            preview: undefined,
-            linkage: {
-              sessionId: "session-link",
-              taskId: "task-link",
-              durableRunId: "run-link",
-              proactiveRunId: "proactive-link",
-              workspaceId: "workspace-link",
-            },
+            preview: { runId: "run-preview" },
             createdAt: "2026-04-12T00:00:00.000Z",
             updatedAt: "2026-04-12T00:00:00.000Z",
             explanationStatus: "not_requested",
           }) as unknown as ApprovalRequest,
-        getDurableRun: (runId) =>
-          ({
-            runId,
-            workflowKey: "approval.wait",
-            status: "waiting",
-            payload: {},
-            metadata: {},
-            createdAt: "2026-04-12T00:00:00.000Z",
-            updatedAt: "2026-04-12T00:00:00.000Z",
-            retryPolicy: { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, backoffMultiplier: 2 },
-            currentAttempt: 1,
-          }) as unknown as DurableRunRecord,
-        findTask: (taskId) =>
-          ({
-            taskId,
-            workspaceId: "workspace-link",
-            title: "Task",
-            status: "in_progress",
-            priority: "normal",
-            createdAt: "2026-04-12T00:00:00.000Z",
-            updatedAt: "2026-04-12T00:00:00.000Z",
-          }) as unknown as TaskRecord,
       }),
     );
 
-    const response = await service.getRuntimeLifecycle({ approvalId: "approval-1" });
+    const response = await service.getRuntimeLifecycle({ turnId: "turn-1", approvalId: "approval-1" });
 
-    expect(response.query.sessionId).toBe("session-link");
-    expect(response.query.runId).toBe("run-link");
-    expect(response.query.taskId).toBe("task-link");
+    expect(response.query.runId).toBe("run-plan");
+    expect(response.query.turnId).toBe("turn-1");
     expect(response.resolution).toMatchObject({
-      sessionIdSource: "approval_linkage",
-      runIdSource: "approval_linkage",
-      taskIdSource: "approval_linkage",
+      runIdSource: "execution_plan",
+      turnIdSource: "query",
     });
-    expect(response.linked.turnIds).toContain("turn-fallback");
-    expect(response.linked.workspaceIds).toContain("workspace-link");
-    expect(response.resolution?.fallbackSources).toContain("fallback_payload");
+    expect(response.linked.runIds).toEqual(expect.arrayContaining(["run-plan", "run-fallback"]));
+    expect(response.executionPlans?.[0]?.steps[0]).toMatchObject({
+      durableRunId: "run-plan",
+      childRunId: "run-legacy",
+      childSessionId: "session-child",
+      childTurnId: "turn-child",
+    });
+    expect(response.resolution?.fallbackSources).toEqual(expect.arrayContaining(["fallback_preview", "fallback_payload"]));
   });
 
-  it("loads canonical approval and durable records after deriving ids from task context", async () => {
+  it("lets turn-trace durable linkage outrank execution-plan linkage when both are present", async () => {
+    const service = new RuntimeLifecycleReadService(
+      createHost({
+        getTurnTrace: (turnId) =>
+          ({
+            turnId,
+            sessionId: "session-1",
+            userMessageId: "user-1",
+            status: "completed",
+            mode: "chat",
+            startedAt: "2026-04-12T00:00:00.000Z",
+            executionPlanId: "plan-1",
+            durable: { runId: "run-turn" },
+            toolRuns: [],
+          }) as unknown as ChatTurnTraceRecord,
+        listChatExecutionPlans: () => [buildPlan()],
+      }),
+    );
+
+    const response = await service.getRuntimeLifecycle({ turnId: "turn-1" });
+
+    expect(response.query.runId).toBe("run-turn");
+    expect(response.resolution?.runIdSource).toBe("turn_trace");
+  });
+
+  it("prefers delegation-step canonical linkage over task context and durable payload inference", async () => {
     const service = new RuntimeLifecycleReadService(
       createHost({
         findTask: (taskId) =>
@@ -157,45 +248,25 @@ describe("RuntimeLifecycleReadService", () => {
             priority: "normal",
             proactiveContext: {
               sessionId: "session-1",
-              durableRunId: "run-1",
-              approvalId: "approval-1",
-              proactiveRunId: "proactive-1",
+              durableRunId: "run-task",
             },
             createdAt: "2026-04-12T00:00:00.000Z",
             updatedAt: "2026-04-12T00:00:00.000Z",
           }) as unknown as TaskRecord,
-        getApproval: (approvalId) =>
-          ({
-            approvalId,
-            kind: "tool.invoke",
-            riskLevel: "danger",
-            status: "pending",
-            payload: {},
-            preview: undefined,
-            createdAt: "2026-04-12T00:00:00.000Z",
-            updatedAt: "2026-04-12T00:00:00.000Z",
-            explanationStatus: "not_requested",
-          }) as unknown as ApprovalRequest,
+        listChatDelegationRuns: () => [buildDelegationRun()],
+        listChatDelegationSteps: () => [buildDelegationStep()],
         getDurableRun: (runId) =>
           ({
             runId,
             workflowKey: "chat.turn.execute",
             status: "running",
-            payload: { sessionId: "session-1" },
-            metadata: {},
+            payload: { sessionId: "session-payload", taskId: "task-payload" },
+            metadata: { sessionId: "session-meta" },
             createdAt: "2026-04-12T00:00:00.000Z",
             updatedAt: "2026-04-12T00:00:00.000Z",
             retryPolicy: { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, backoffMultiplier: 2 },
             currentAttempt: 1,
           }) as unknown as DurableRunRecord,
-        listChatSessionProactiveRuns: () => [
-          {
-            runId: "proactive-1",
-            linkedTaskId: "task-1",
-            linkedDurableRunId: "run-1",
-            approvalId: "approval-1",
-          } as ProactiveRunRecord,
-        ],
       }),
     );
 
@@ -203,82 +274,91 @@ describe("RuntimeLifecycleReadService", () => {
 
     expect(response.query).toMatchObject({
       sessionId: "session-1",
-      runId: "run-1",
-      approvalId: "approval-1",
+      turnId: "turn-delegate-child",
+      runId: "run-delegation",
       taskId: "task-1",
     });
     expect(response.resolution).toMatchObject({
-      sessionIdSource: "task_context",
-      runIdSource: "task_context",
-      approvalIdSource: "task_context",
+      sessionIdSource: "turn_trace",
+      turnIdSource: "turn_trace",
+      runIdSource: "delegation_step",
+      taskIdSource: "query",
     });
-    expect(response.approval?.approvalId).toBe("approval-1");
-    expect(response.durableRun?.runId).toBe("run-1");
-    expect(response.linked.proactiveRunIds).toContain("proactive-1");
+    expect(response.delegationRuns?.[0]?.runId).toBe("delegation-1");
+    expect(response.delegationSteps?.[0]).toMatchObject({
+      durableRunId: "run-delegation",
+      childSessionId: "session-delegate-child",
+      childTurnId: "turn-delegate-child",
+    });
+    expect(response.resolution?.fallbackSources).toEqual(expect.arrayContaining(["fallback_payload", "fallback_metadata"]));
   });
 
-  it("marks session provenance as turn_trace when recovered from a queried turn", async () => {
+  it("surfaces persisted repair, reuse, and explicit halt metadata without inferring from prose", async () => {
     const service = new RuntimeLifecycleReadService(
       createHost({
         getTurnTrace: (turnId) =>
           ({
             turnId,
-            sessionId: "session-turn",
+            sessionId: "session-1",
             userMessageId: "user-1",
+            assistantMessageId: "assistant-1",
             status: "completed",
             mode: "chat",
             startedAt: "2026-04-12T00:00:00.000Z",
-            durable: { runId: "run-turn" },
+            finishedAt: "2026-04-12T00:01:00.000Z",
+            completion: {
+              status: "complete",
+              repaired: true,
+              repair: {
+                applied: true,
+                kind: "degraded_answer_synthesis",
+                source: "orchestrator",
+                preRepairContent: "bad fallback",
+                postRepairContent: "good answer",
+              },
+            },
+            failure: {
+              failureClass: "global_circuit_breaker",
+              message: "Repeated tool failure for browser.navigate (2 attempts).",
+            },
             toolRuns: [
               {
                 toolRunId: "tool-1",
                 turnId,
-                sessionId: "session-turn",
-                toolName: "shell.exec",
-                status: "completed",
-                approvalId: "approval-turn",
-                startedAt: "2026-04-12T00:00:00.000Z",
-                finishedAt: "2026-04-12T00:00:01.000Z",
+                sessionId: "session-1",
+                toolName: "browser.navigate",
+                status: "executed",
+                startedAt: "2026-04-12T00:00:10.000Z",
+                finishedAt: "2026-04-12T00:00:12.000Z",
+                reused: true,
+                reusedFromToolRunId: "tool-0",
+                reuseReason: "matching_recent_browser_result",
               },
             ],
           }) as unknown as ChatTurnTraceRecord,
-        getApproval: (approvalId) =>
-          ({
-            approvalId,
-            kind: "tool.invoke",
-            riskLevel: "danger",
-            status: "approved",
-            payload: {},
-            preview: undefined,
-            createdAt: "2026-04-12T00:00:00.000Z",
-            updatedAt: "2026-04-12T00:00:00.000Z",
-            explanationStatus: "completed",
-          }) as unknown as ApprovalRequest,
-        getDurableRun: (runId) =>
-          ({
-            runId,
-            workflowKey: "chat.turn.execute",
-            status: "completed",
-            payload: {},
-            metadata: {},
-            createdAt: "2026-04-12T00:00:00.000Z",
-            updatedAt: "2026-04-12T00:00:00.000Z",
-            retryPolicy: { maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 30000, backoffMultiplier: 2 },
-            currentAttempt: 1,
-          }) as unknown as DurableRunRecord,
       }),
     );
 
     const response = await service.getRuntimeLifecycle({ turnId: "turn-1" });
 
-    expect(response.query.sessionId).toBe("session-turn");
-    expect(response.query.runId).toBe("run-turn");
-    expect(response.query.approvalId).toBe("approval-turn");
-    expect(response.resolution).toMatchObject({
-      sessionIdSource: "turn_trace",
-      runIdSource: "turn_trace",
-      approvalIdSource: "turn_trace",
+    expect(response.turns[0]).toMatchObject({
+      turnId: "turn-1",
+      completion: {
+        repaired: true,
+        repair: expect.objectContaining({
+          kind: "degraded_answer_synthesis",
+          postRepairContent: "good answer",
+        }),
+      },
+      failure: {
+        failureClass: "global_circuit_breaker",
+      },
     });
-    expect(response.toolRuns).toHaveLength(1);
+    expect(response.toolRuns[0]).toMatchObject({
+      toolRunId: "tool-1",
+      reused: true,
+      reusedFromToolRunId: "tool-0",
+      reuseReason: "matching_recent_browser_result",
+    });
   });
 });

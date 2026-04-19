@@ -90,7 +90,22 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
     compressionPercent: number;
     expansionPercent: number;
     efficiencyLabel: "reduced" | "expanded" | "neutral";
-    recent: Array<{ contextId: string; scope: string; createdAt: string; quality: { status: string } }>;
+    recent: Array<{
+      contextId: string;
+      scope: string;
+      relationScope?: string;
+      createdAt: string;
+      quality: { status: string };
+      citations: Array<{
+        candidateId: string;
+        sourceRef: string;
+        provenance?: {
+          freshness: string;
+          selectionReason: string;
+          sourceTimestamp?: string;
+        };
+      }>;
+    }>;
   } | null>(null);
   const [selectedArea, setSelectedArea] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -354,8 +369,20 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
           recent: stats.recent.map((item) => ({
             contextId: item.contextId,
             scope: item.scope,
+            relationScope: item.relationScope,
             createdAt: item.createdAt,
             quality: { status: item.quality.status },
+            citations: item.citations.map((citation) => ({
+              candidateId: citation.candidateId,
+              sourceRef: citation.sourceRef,
+              provenance: citation.provenance
+                ? {
+                    freshness: citation.provenance.freshness,
+                    selectionReason: citation.provenance.selectionReason,
+                    sourceTimestamp: citation.provenance.sourceTimestamp,
+                  }
+                : undefined,
+            })),
           })),
         });
         setError(null);
@@ -932,21 +959,45 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
             <tr>
               <th>Context ID</th>
               <th>Scope</th>
+              <th>Relation</th>
               <th>Status</th>
+              <th>Provenance</th>
               <th>Created</th>
             </tr>
           </thead>
           <tbody>
             {!qmdStats || qmdStats.recent.length === 0 ? (
               <tr>
-                <td colSpan={4}>No QMD contexts generated yet.</td>
+                <td colSpan={6}>No QMD contexts generated yet.</td>
               </tr>
             ) : (
               qmdStats.recent.slice(0, 20).map((item) => (
                 <tr key={item.contextId}>
                   <td>{item.contextId}</td>
                   <td>{item.scope}</td>
+                  <td>{item.relationScope ?? "-"}</td>
                   <td>{item.quality.status}</td>
+                  <td>
+                    {item.citations.length === 0 ? (
+                      "-"
+                    ) : (
+                      <details>
+                        <summary>{item.citations.length} citations</summary>
+                        <ul className="compact-list">
+                          {item.citations.slice(0, 3).map((citation) => (
+                            <li key={citation.candidateId}>
+                              <strong>{citation.sourceRef}</strong>
+                              {citation.provenance?.freshness ? ` | freshness ${citation.provenance.freshness}` : ""}
+                              {citation.provenance?.selectionReason ? ` | ${citation.provenance.selectionReason}` : ""}
+                              {citation.provenance?.sourceTimestamp
+                                ? ` | source ${new Date(citation.provenance.sourceTimestamp).toLocaleString()}`
+                                : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </td>
                   <td>{new Date(item.createdAt).toLocaleString()}</td>
                 </tr>
               ))

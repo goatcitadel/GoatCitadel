@@ -4,6 +4,7 @@ import type {
   DecisionReplayFindingRecord,
   DecisionReplayItemRecord,
   DecisionReplayRunRecord,
+  HarnessAuditReportRecord,
   ImprovementActivationRecord,
   ImprovementCandidateDetailResponse,
   ImprovementCandidateRecord,
@@ -23,6 +24,10 @@ export async function fetchImprovementReports(limit = 24): Promise<{ items: Week
 
 export async function fetchImprovementReport(reportId: string): Promise<WeeklyImprovementReportRecord> {
   return request<WeeklyImprovementReportRecord>(`/api/v1/improvement/reports/${encodeURIComponent(reportId)}`);
+}
+
+export async function fetchHarnessAuditReport(): Promise<HarnessAuditReportRecord> {
+  return request<HarnessAuditReportRecord>("/api/v1/improvement/harness-audit");
 }
 
 export async function runImprovementReplay(input?: { sampleSize?: number }): Promise<{

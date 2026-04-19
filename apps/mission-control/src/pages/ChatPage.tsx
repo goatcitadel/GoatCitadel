@@ -64,6 +64,7 @@ import { useChatSessionData } from "./chat/useChatSessionData";
 import { useChatSessionControls } from "./chat/useChatSessionControls";
 import { useChatDockWorkbenchController } from "./chat/useChatDockWorkbenchController";
 import { useChatProviderRoutingController } from "./chat/useChatProviderRoutingController";
+import type { ActiveChatDelegationRun } from "./chat/useChatDelegationPolicyActions";
 import {
   resolveOutboundDraftContent,
   useChatSurfaceOrchestration,
@@ -428,6 +429,7 @@ export function ChatPage({
     selectedSessionId,
     selectedSession,
     selectedTurnId,
+    thread,
     draft,
     messages,
     prefs,
@@ -459,6 +461,7 @@ export function ChatPage({
     setCapabilitySuggestions,
     specialistSuggestions,
     setSpecialistSuggestions,
+    activeDelegationRun,
     delegationSuggestion,
     setDelegationSuggestion,
     capabilitySuggestionConfirm,
@@ -860,6 +863,10 @@ export function ChatPage({
         : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`;
 
   const rootClassName = `chat-v11 mode-${messageMode}${lockSurface ? " shell-owned-surface" : ""}`;
+  const visibleDelegationRun =
+    activeDelegationRun?.attachedTurnId && selectedTurn && activeDelegationRun.attachedTurnId !== selectedTurn.turnId
+      ? null
+      : activeDelegationRun;
   if (loading) {
     return (
       <section className={rootClassName}>
@@ -930,6 +937,7 @@ export function ChatPage({
         handleRunCodeHelper,
         latestOrchestration,
         coworkItems,
+        activeDelegationRun: visibleDelegationRun,
         onOpenTasks,
         handleRetryTurn,
         handleStopActiveTurn,
@@ -985,6 +993,7 @@ export function ChatPage({
             loading={messagesLoading}
             thread={thread}
             selectedTurnId={selectedTurnId}
+            delegationRun={visibleDelegationRun}
             notices={localNotices}
             followOutput={followThreadOutput}
             streamStatus={streamStatus as ChatStreamStatus}
@@ -1214,6 +1223,7 @@ function renderWorkSurface(input: {
   handleRunCodeHelper: (language: string, source: string) => Promise<void>;
   latestOrchestration: ReturnType<typeof useChatDockWorkbenchController>["latestOrchestration"];
   coworkItems: ReturnType<typeof useChatDockWorkbenchController>["coworkItems"];
+  activeDelegationRun: ActiveChatDelegationRun | null;
   onOpenTasks: () => void;
   handleRetryTurn: (turnId: string) => Promise<void>;
   handleStopActiveTurn: () => Promise<void>;
@@ -1239,6 +1249,7 @@ function renderWorkSurface(input: {
           items: input.coworkItems,
           orchestration: input.latestOrchestration ?? undefined,
           executionPlan: selectedTurn?.trace.executionPlan,
+          delegationRun: input.activeDelegationRun,
           selectedTurn,
           workbenchState: input.workbenchState,
           onRetryTurn: selectedTurn ? () => void input.handleRetryTurn(selectedTurn.turnId) : undefined,

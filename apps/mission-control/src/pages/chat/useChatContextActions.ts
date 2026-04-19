@@ -3,6 +3,7 @@ import type {
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatSpecialistCandidateRecord,
+  ChatThreadResponse,
   LearnedMemoryItemRecord,
   McpServerRecord,
   McpServerTemplateRecord,
@@ -20,6 +21,7 @@ export function useChatContextActions(input: {
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   selectedTurnId: string | null;
+  thread: ChatThreadResponse | null;
   draft: string;
   messages: ChatMessageRecord[];
   prefs: ChatSessionPrefsRecord | null;

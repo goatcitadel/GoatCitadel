@@ -21,6 +21,11 @@ async function createConfigFixture(): Promise<{ rootDir: string; configDir: stri
     auth: {
       mode: "none",
     },
+    durable: {
+      enabled: false,
+      executionEnabled: false,
+      chatAutoPromoteEnabled: false,
+    },
     features: {
       durableKernelV1Enabled: false,
     },
@@ -78,6 +83,17 @@ describe("loadGatewayConfig", () => {
 
     const config = await loadGatewayConfig(rootDir);
     expect(config.assistant.features.computerUseGuardrailsV1Enabled).toBe(true);
+  });
+
+  it("coerces the durable baseline on even when config asks to disable it", async () => {
+    const { rootDir } = await createConfigFixture();
+
+    const config = await loadGatewayConfig(rootDir);
+
+    expect(config.assistant.durable.enabled).toBe(true);
+    expect(config.assistant.durable.executionEnabled).toBe(true);
+    expect(config.assistant.durable.chatAutoPromoteEnabled).toBe(true);
+    expect(config.assistant.features.durableKernelV1Enabled).toBe(true);
   });
 
   it("returns contextual parse error for malformed assistant config", async () => {

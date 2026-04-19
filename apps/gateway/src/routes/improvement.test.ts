@@ -104,6 +104,14 @@ describe("improvement routes", () => {
       attemptManifestSummary: [],
     }));
     const getImprovementActivation = vi.fn(() => ({ activationId: "act-1", status: "active" }));
+    const getHarnessAuditReport = vi.fn(() => ({
+      generatedAt: "2026-04-16T10:00:00.000Z",
+      summary: "Harness audit summary",
+      overallScore: 84,
+      overallStatus: "strong",
+      pillars: [],
+      strategyGlossary: [],
+    }));
 
     app = Fastify();
     app.decorate("gateway", {
@@ -112,6 +120,7 @@ describe("improvement routes", () => {
       listImprovementCandidates,
       getImprovementCandidate,
       getImprovementActivation,
+      getHarnessAuditReport,
     } as never);
     await app.register(improvementRoutes);
 
@@ -149,6 +158,13 @@ describe("improvement routes", () => {
     });
     expect(activation.statusCode).toBe(200);
     expect(getImprovementActivation).toHaveBeenCalledWith("act-1");
+
+    const audit = await app.inject({
+      method: "GET",
+      url: "/api/v1/improvement/harness-audit",
+    });
+    expect(audit.statusCode).toBe(200);
+    expect(getHarnessAuditReport).toHaveBeenCalledOnce();
   });
 
   it("returns 409 for activation request, pause, and rollback conflicts", async () => {

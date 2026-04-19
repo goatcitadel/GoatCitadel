@@ -4,7 +4,9 @@ import type {
   ChatCompletionResponse,
   MemoryContextComposeRequest,
   MemoryContextPack,
+  MemoryFreshness,
   MemoryQmdStatsResponse,
+  MemoryRelationScope,
 } from "@goatcitadel/contracts";
 import {
   buildCacheKey,
@@ -41,6 +43,7 @@ export class MemoryContextService {
     const qmd = memoryConfig.qmd;
     const maxContextTokens = input.maxContextTokens ?? qmd.maxContextTokens;
     const prompt = input.prompt.trim();
+    const relationScope = resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled
       || !qmd.enabled
       || prompt.length < qmd.minPromptChars;
@@ -54,6 +57,7 @@ export class MemoryContextService {
         taskId: input.taskId,
         runId: input.runId,
         phaseId: input.phaseId,
+        relationScope,
         maxContextTokens,
         candidates: [],
       });
@@ -76,6 +80,7 @@ export class MemoryContextService {
         distilledTokenEstimate: fallback.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
+      const enrichedFallback = enrichMemoryPack(pack, relationScope, new Map());
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
@@ -93,9 +98,9 @@ export class MemoryContextService {
       this.publishRealtime("memory_qmd_fallback", {
         contextId: pack.contextId,
         scope: input.scope,
-        reason: pack.quality.reason,
+        reason: enrichedFallback.quality.reason,
       });
-      return pack;
+      return enrichedFallback;
     }
 
     const sources = await this.collectSources(input);
@@ -117,6 +122,7 @@ export class MemoryContextService {
       taskId: input.taskId,
       runId: input.runId,
       phaseId: input.phaseId,
+      relationScope,
       maxContextTokens,
       candidates,
     });
@@ -131,6 +137,7 @@ export class MemoryContextService {
         phaseId: input.phaseId,
       });
       if (cached) {
+        const enrichedCached = enrichMemoryPack(cached, relationScope, new Map());
         this.storage.memoryQmdRuns.append({
           scope: input.scope,
           sessionId: input.sessionId,
@@ -140,19 +147,19 @@ export class MemoryContextService {
           status: "cache_hit",
           durationMs: Math.max(1, Date.now() - startedAt),
           candidateCount: candidates.length,
-          citationsCount: cached.citations.length,
-          originalTokenEstimate: cached.originalTokenEstimate,
-          distilledTokenEstimate: cached.distilledTokenEstimate,
-          savingsPercent: calculateSavings(cached.originalTokenEstimate, cached.distilledTokenEstimate),
+          citationsCount: enrichedCached.citations.length,
+          originalTokenEstimate: enrichedCached.originalTokenEstimate,
+          distilledTokenEstimate: enrichedCached.distilledTokenEstimate,
+          savingsPercent: calculateSavings(enrichedCached.originalTokenEstimate, enrichedCached.distilledTokenEstimate),
         });
         this.publishRealtime("memory_qmd_cache_hit", {
-          contextId: cached.contextId,
+          contextId: enrichedCached.contextId,
           scope: input.scope,
           sessionId: input.sessionId,
           runId: input.runId,
           phaseId: input.phaseId,
         });
-        return cached;
+        return enrichedCached;
       }
     }
 
@@ -179,6 +186,7 @@ export class MemoryContextService {
         distilledTokenEstimate: fallback.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
+      const enrichedFallback = enrichMemoryPack(pack, relationScope, new Map(candidates.map((candidate) => [candidate.candidateId, candidate])));
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
@@ -188,17 +196,17 @@ export class MemoryContextService {
         status: "fallback",
         durationMs: Math.max(1, Date.now() - startedAt),
         candidateCount: candidates.length,
-        citationsCount: fallback.citations.length,
-        originalTokenEstimate,
-        distilledTokenEstimate: fallback.distilledTokenEstimate,
-        savingsPercent: calculateSavings(originalTokenEstimate, fallback.distilledTokenEstimate),
-      });
+          citationsCount: enrichedFallback.citations.length,
+          originalTokenEstimate,
+          distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
+          savingsPercent: calculateSavings(originalTokenEstimate, enrichedFallback.distilledTokenEstimate),
+        });
       this.publishRealtime("memory_qmd_fallback", {
-        contextId: pack.contextId,
+        contextId: enrichedFallback.contextId,
         scope: input.scope,
-        reason: pack.quality.reason,
+        reason: enrichedFallback.quality.reason,
       });
-      return pack;
+      return enrichedFallback;
     }
 
     const runtime = this.llmService.getRuntimeConfig();
@@ -264,6 +272,11 @@ export class MemoryContextService {
         distilledTokenEstimate: composed.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
+      const enrichedGenerated = enrichMemoryPack(
+        pack,
+        relationScope,
+        new Map(candidates.map((candidate) => [candidate.candidateId, candidate])),
+      );
 
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
@@ -276,14 +289,14 @@ export class MemoryContextService {
         model,
         durationMs: Math.max(1, Date.now() - startedAt),
         candidateCount: candidates.length,
-        citationsCount: parsed.citations.length,
+        citationsCount: enrichedGenerated.citations.length,
         originalTokenEstimate,
-        distilledTokenEstimate: composed.distilledTokenEstimate,
-        savingsPercent: calculateSavings(originalTokenEstimate, composed.distilledTokenEstimate),
+        distilledTokenEstimate: enrichedGenerated.distilledTokenEstimate,
+        savingsPercent: calculateSavings(originalTokenEstimate, enrichedGenerated.distilledTokenEstimate),
       });
 
       this.publishRealtime("memory_qmd_generated", {
-        contextId: pack.contextId,
+        contextId: enrichedGenerated.contextId,
         scope: input.scope,
         sessionId: input.sessionId,
         runId: input.runId,
@@ -291,7 +304,7 @@ export class MemoryContextService {
         providerId,
         model,
       });
-      return pack;
+      return enrichedGenerated;
     } catch (error) {
       const fallback = composeFallbackContext(candidates, maxContextTokens);
       const message = truncate((error as Error).message, 500);
@@ -314,6 +327,11 @@ export class MemoryContextService {
         distilledTokenEstimate: fallback.distilledTokenEstimate,
         expiresAt: new Date(Date.now() + qmd.cacheTtlSeconds * 1000).toISOString(),
       });
+      const enrichedFallback = enrichMemoryPack(
+        pack,
+        relationScope,
+        new Map(candidates.map((candidate) => [candidate.candidateId, candidate])),
+      );
       this.storage.memoryQmdRuns.append({
         scope: input.scope,
         sessionId: input.sessionId,
@@ -325,18 +343,18 @@ export class MemoryContextService {
         model,
         durationMs: Math.max(1, Date.now() - startedAt),
         candidateCount: candidates.length,
-        citationsCount: fallback.citations.length,
+        citationsCount: enrichedFallback.citations.length,
         originalTokenEstimate,
-        distilledTokenEstimate: fallback.distilledTokenEstimate,
-        savingsPercent: calculateSavings(originalTokenEstimate, fallback.distilledTokenEstimate),
+        distilledTokenEstimate: enrichedFallback.distilledTokenEstimate,
+        savingsPercent: calculateSavings(originalTokenEstimate, enrichedFallback.distilledTokenEstimate),
         errorText: message,
       });
       this.publishRealtime("memory_qmd_fallback", {
-        contextId: pack.contextId,
+        contextId: enrichedFallback.contextId,
         scope: input.scope,
         reason: message,
       });
-      return pack;
+      return enrichedFallback;
     }
   }
 
@@ -358,8 +376,9 @@ export class MemoryContextService {
 
   private async collectSources(input: MemoryContextComposeRequest): Promise<MemorySourceInput[]> {
     const sources: MemorySourceInput[] = [];
-    if (input.sessionId) {
-      const transcript = await readTranscriptOrEmpty(this.storage, input.sessionId);
+    const relationScope = resolveMemoryRelationScope(input);
+    for (const sessionId of await this.resolveTranscriptSessionIds(input, relationScope)) {
+      const transcript = await readTranscriptOrEmpty(this.storage, sessionId);
       sources.push({
         type: "transcript",
         events: transcript,
@@ -385,6 +404,81 @@ export class MemoryContextService {
 
     return sources;
   }
+
+  private async resolveTranscriptSessionIds(
+    input: MemoryContextComposeRequest,
+    relationScope: MemoryRelationScope,
+  ): Promise<string[]> {
+    const sessionIds = new Set<string>();
+    if (input.sessionId) {
+      sessionIds.add(input.sessionId);
+    }
+    if ((relationScope === "peer" || relationScope === "project") && input.runId) {
+      for (const step of this.storage.chatDelegationSteps.listByRun(input.runId)) {
+        if (step.childSessionId) {
+          sessionIds.add(step.childSessionId);
+        }
+      }
+    }
+    return [...sessionIds];
+  }
+}
+
+function enrichMemoryPack(
+  pack: MemoryContextPack,
+  relationScope: MemoryRelationScope,
+  candidatesById: Map<string, { sourceType: "transcript" | "file"; timestamp?: string; rankScore?: number }>,
+): MemoryContextPack {
+  return {
+    ...pack,
+    relationScope,
+    citations: pack.citations.map((citation) => {
+      const candidate = candidatesById.get(citation.candidateId);
+      const selectionReason = candidate?.rankScore !== undefined
+        ? `selected for lexical/recency score ${candidate.rankScore.toFixed(3)}`
+        : "selected from reusable cached context";
+      return {
+        ...citation,
+        provenance: {
+          relationScope,
+          freshness: classifyMemoryFreshness(candidate?.timestamp),
+          selectionReason,
+          sourceTimestamp: candidate?.timestamp,
+        },
+      };
+    }),
+  };
+}
+
+function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryRelationScope {
+  if (input.relationScope) {
+    return input.relationScope;
+  }
+  if (input.phaseId || input.runId) {
+    return "project";
+  }
+  if (input.taskId) {
+    return "peer";
+  }
+  return "self";
+}
+
+function classifyMemoryFreshness(timestamp?: string): MemoryFreshness {
+  if (!timestamp) {
+    return "unknown";
+  }
+  const parsed = Date.parse(timestamp);
+  if (Number.isNaN(parsed)) {
+    return "unknown";
+  }
+  const ageHours = Math.max(0, Date.now() - parsed) / (60 * 60 * 1000);
+  if (ageHours <= 1) {
+    return "fresh";
+  }
+  if (ageHours <= 24 * 7) {
+    return "recent";
+  }
+  return "stale";
 }
 
 async function readTranscriptOrEmpty(storage: Storage, sessionId: string) {

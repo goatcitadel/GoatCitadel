@@ -241,7 +241,11 @@ export class MemoryMaintenanceService {
     await this.evaluateWorkspace(sessionInfo.workspaceId, "post_turn");
   }
 
-  public async executeDurableRun(run: DurableRunRecord): Promise<Record<string, unknown>> {
+  public async executeDurableRun(
+    run: DurableRunRecord,
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, unknown>> {
+    throwIfMemoryMaintenanceAborted(options?.signal);
     this.requireReady();
     const payload = this.parseWorkflowPayload(run);
     if (!payload) {
@@ -267,6 +271,7 @@ export class MemoryMaintenanceService {
 
     const resolvedModel = this.resolveProviderAndModel(policy);
     const availability = await this.checkExecutionAvailability(policy, resolvedModel.providerId, resolvedModel.model);
+    throwIfMemoryMaintenanceAborted(options?.signal);
     if (!availability.available) {
       const unavailableReason = availability.reason ?? "Memory maintenance model is unavailable.";
       if (policy.unavailableModelPolicy === "error") {
@@ -294,6 +299,7 @@ export class MemoryMaintenanceService {
     try {
       const state = this.ensureState(workspaceId);
       const sources = await this.collectSources(workspaceId, state.lastSuccessfulRunAt, maintenanceRun.runId);
+      throwIfMemoryMaintenanceAborted(options?.signal);
       const generated = await this.generateConsolidatedArtifact({
         workspaceId,
         runId: maintenanceRun.runId,
@@ -303,6 +309,7 @@ export class MemoryMaintenanceService {
         model: resolvedModel.model,
         sources,
       });
+      throwIfMemoryMaintenanceAborted(options?.signal);
       const output = await this.writeMaintenanceArtifacts({
         workspaceId,
         runId: maintenanceRun.runId,
@@ -311,6 +318,7 @@ export class MemoryMaintenanceService {
         consolidatedMarkdown: generated.markdown,
         generatedSummary: generated.summary,
       });
+      throwIfMemoryMaintenanceAborted(options?.signal);
       const allSources = [
         ...sources.transcriptSources,
         ...sources.fileSources,
@@ -347,8 +355,11 @@ export class MemoryMaintenanceService {
         changedArtifactCount: output.changes.length,
       };
     } catch (error) {
+      if (isMemoryMaintenanceAbortError(error, options?.signal)) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : "Memory maintenance execution failed.";
-      this.finalizeRunFailure(maintenanceRun.runId, message);
+      this.finalizeRunFailureIfCurrent(maintenanceRun.runId, run.runId, message);
       throw error;
     }
   }
@@ -1259,6 +1270,30 @@ export class MemoryMaintenanceService {
     });
   }
 
+  private finalizeRunFailureIfCurrent(
+    memoryMaintenanceRunId: string,
+    durableRunId: string,
+    errorText: string,
+  ): MemoryMaintenanceRunRecord | undefined {
+    const current = this.ctx.storage.memoryMaintenance.getRun(memoryMaintenanceRunId);
+    if (current.durableRunId !== durableRunId) {
+      return undefined;
+    }
+    const state = this.ctx.storage.memoryMaintenance.findState(current.workspaceId);
+    if (state?.activeRunId !== memoryMaintenanceRunId) {
+      return undefined;
+    }
+    try {
+      const durableRun = this.callbacks.getDurableRun(durableRunId);
+      if (durableRun.status !== "queued" && durableRun.status !== "running") {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+    return this.finalizeRunFailure(memoryMaintenanceRunId, errorText);
+  }
+
   private async readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]> {
     try {
       return await this.ctx.storage.transcripts.read(sessionId);
@@ -1273,6 +1308,27 @@ export class MemoryMaintenanceService {
   private getWorkspaceRootDir(): string {
     return path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir);
   }
+}
+
+function throwIfMemoryMaintenanceAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Memory maintenance aborted.");
+}
+
+function isMemoryMaintenanceAbortError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    const reason = signal.reason;
+    if (reason === error) {
+      return true;
+    }
+    if (reason instanceof Error && error instanceof Error) {
+      return reason.message === error.message;
+    }
+  }
+  return error instanceof Error && error.message === "Memory maintenance aborted.";
 }
 
 function getWorkspaceMemoryRelativeDir(workspaceId: string): string {

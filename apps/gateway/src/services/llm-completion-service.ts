@@ -118,6 +118,7 @@ export async function createChatCompletion(
         sessionId: memoryInput?.sessionId,
         taskId: memoryInput?.taskId,
         workspace: host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
+        relationScope: memoryInput?.relationScope,
         maxContextTokens: memoryInput?.maxContextTokens,
         forceRefresh: memoryInput?.forceRefresh,
       });
@@ -449,6 +450,7 @@ export async function* createChatCompletionStream(
         sessionId: memoryInput?.sessionId,
         taskId: memoryInput?.taskId,
         workspace: host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
+        relationScope: memoryInput?.relationScope,
         maxContextTokens: memoryInput?.maxContextTokens,
         forceRefresh: memoryInput?.forceRefresh,
       });

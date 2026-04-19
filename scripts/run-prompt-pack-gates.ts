@@ -10,7 +10,9 @@ import type {
 } from "@goatcitadel/contracts";
 import type { AuthConfig } from "../apps/gateway/src/config.ts";
 
-const TARGET_CODES = ["TEST-04", "TEST-12", "TEST-23", "TEST-32"] as const;
+const LEGACY_TARGET_CODES = ["TEST-04", "TEST-12", "TEST-23", "TEST-32"] as const;
+const MODERN_TARGET_CODE_CANDIDATES = ["TEST-C101", "TEST-W102", "TEST-C147", "TEST-D101"] as const;
+const PROMPT_PACK_GATE_CODES_ENV = "PROMPT_PACK_GATE_CODES";
 const PROMPT_PACK_V2_GATING_ENABLED_ENV = "PROMPT_PACK_V2_GATING_ENABLED";
 
 interface InjectErrorPayload {
@@ -18,24 +20,29 @@ interface InjectErrorPayload {
 }
 
 async function main(): Promise<void> {
-  const args = new Set(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
   const fullRun = !args.has("--target-only");
+  const explicitTargetCodes = resolveExplicitTargetCodes(argv);
 
   const app = await buildApp();
   await app.ready();
   const authHeaders = buildInternalAuthHeaders(app.gatewayConfig.assistant.auth);
 
   try {
-    const { pack, tests } = await resolvePromptPack(app, authHeaders);
+    const { pack, tests, targetCodes } = await resolvePromptPack(app, authHeaders, explicitTargetCodes);
     const byCode = new Map(tests.map((test) => [normalizeCode(test.code), test]));
 
-    const missing = TARGET_CODES.filter((code) => !byCode.has(normalizeCode(code)));
+    const missing = targetCodes.filter((code) => !byCode.has(normalizeCode(code)));
     if (missing.length > 0) {
       throw new Error(`Selected pack ${pack.packId} is missing target codes: ${missing.join(", ")}`);
     }
 
+    // eslint-disable-next-line no-console
+    console.log(`[gate] using target codes: ${targetCodes.join(", ")}`);
+
     const queue: PromptPackTestRecord[] = [];
-    for (const code of TARGET_CODES) {
+    for (const code of targetCodes) {
       queue.push(byCode.get(normalizeCode(code))!);
     }
     if (fullRun) {
@@ -141,6 +148,7 @@ async function main(): Promise<void> {
         pack,
         report,
         runResults,
+        targetCodes,
         durationMs,
         fullRun,
       }),
@@ -152,7 +160,8 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(
       `[gate] summary: runFailures=${report.summary.runFailureCount} fail=${report.summary.failCount} review=${report.summary.reviewCount}` +
-        ` needsScore=${report.summary.needsScoreCount} degraded=${report.summary.degradedScoreCount}` +
+        ` needsScore=${report.summary.needsScoreCount} stale=${report.summary.staleLatestAutoScoreCount}` +
+        ` degraded=${report.summary.degradedScoreCount}` +
         ` avg=${report.summary.averageWeightedScore.toFixed(1)} passRate=${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
     );
     if (!isEnvEnabled(PROMPT_PACK_V2_GATING_ENABLED_ENV)) {
@@ -160,7 +169,12 @@ async function main(): Promise<void> {
       console.log(
         `[gate] release gating disabled via ${PROMPT_PACK_V2_GATING_ENABLED_ENV}; leaving exit code unchanged.`,
       );
-    } else if (report.summary.failCount > 0 || report.summary.reviewCount > 0 || report.summary.needsScoreCount > 0) {
+    } else if (
+      report.summary.failCount > 0 ||
+      report.summary.reviewCount > 0 ||
+      report.summary.needsScoreCount > 0 ||
+      report.summary.staleLatestAutoScoreCount > 0
+    ) {
       process.exitCode = 1;
     }
   } finally {
@@ -171,7 +185,8 @@ async function main(): Promise<void> {
 async function resolvePromptPack(
   app: Awaited<ReturnType<typeof buildApp>>,
   authHeaders: Record<string, string>,
-): Promise<{ pack: PromptPackRecord; tests: PromptPackTestRecord[] }> {
+  explicitTargetCodes?: string[],
+): Promise<{ pack: PromptPackRecord; tests: PromptPackTestRecord[]; targetCodes: string[] }> {
   const response = await app.inject({
     method: "GET",
     url: "/api/v1/prompt-packs?limit=200",
@@ -186,35 +201,62 @@ async function resolvePromptPack(
     throw new Error("No prompt packs available. Import a prompt pack before running gates.");
   }
 
-  let selected: PromptPackRecord | undefined;
-  let selectedTests: PromptPackTestRecord[] = [];
-  let selectedMatchCount = -1;
-  let selectedTestCount = -1;
-
   const testsByPackId = new Map(
     await Promise.all(
       packs.map(async (pack) => [pack.packId, await listTests(app, pack.packId, authHeaders)] as const),
     ),
   );
 
-  for (const pack of packs) {
-    const tests = testsByPackId.get(pack.packId) ?? [];
-    const byCode = new Set(tests.map((test) => normalizeCode(test.code)));
-    const matchCount = TARGET_CODES.filter((code) => byCode.has(normalizeCode(code))).length;
-    if (matchCount > selectedMatchCount || (matchCount === selectedMatchCount && tests.length > selectedTestCount)) {
-      selected = pack;
-      selectedTests = tests;
-      selectedMatchCount = matchCount;
-      selectedTestCount = tests.length;
+  if (explicitTargetCodes && explicitTargetCodes.length > 0) {
+    const matchingPacks = packs
+      .map((pack) => ({
+        pack,
+        tests: testsByPackId.get(pack.packId) ?? [],
+      }))
+      .filter(({ tests }) => {
+        const byCode = new Set(tests.map((test) => normalizeCode(test.code)));
+        return explicitTargetCodes.every((code) => byCode.has(normalizeCode(code)));
+      });
+    if (matchingPacks.length === 0) {
+      throw new Error(`No prompt pack contains all requested gate codes: ${explicitTargetCodes.join(", ")}`);
     }
+    if (matchingPacks.length > 1) {
+      throw new Error(
+        `Explicit gate codes are ambiguous across multiple prompt packs: ${matchingPacks.map(({ pack }) => pack.packId).join(", ")}`,
+      );
+    }
+    return {
+      pack: matchingPacks[0].pack,
+      tests: matchingPacks[0].tests,
+      targetCodes: explicitTargetCodes,
+    };
   }
 
+  const candidates = packs
+    .map((pack) => {
+      const tests = testsByPackId.get(pack.packId) ?? [];
+      return {
+        pack,
+        tests,
+        targetCodes: selectPromptPackGateTargetCodes(tests),
+      };
+    })
+    .filter((candidate) => candidate.targetCodes.length > 0)
+    .sort((left, right) => {
+      if (right.targetCodes.length !== left.targetCodes.length) {
+        return right.targetCodes.length - left.targetCodes.length;
+      }
+      return right.tests.length - left.tests.length;
+    });
+
+  const selected = candidates[0];
   if (!selected) {
-    throw new Error("Unable to resolve a prompt pack for gate run.");
+    throw new Error("No prompt pack matched the known legacy or modern gate target sets. Pass --codes explicitly.");
   }
   return {
-    pack: selected,
-    tests: selectedTests,
+    pack: selected.pack,
+    tests: selected.tests,
+    targetCodes: selected.targetCodes,
   };
 }
 
@@ -296,10 +338,11 @@ function renderReport(input: {
     autoScoreError?: string;
     runError?: string;
   }>;
+  targetCodes: string[];
   durationMs: number;
   fullRun: boolean;
 }): string {
-  const { pack, report, runResults, durationMs, fullRun } = input;
+  const { pack, report, runResults, targetCodes, durationMs, fullRun } = input;
   const latestRunByTestId = new Map<string, PromptPackRunRecord>();
   for (const run of report.runs) {
     if (!latestRunByTestId.has(run.testId)) {
@@ -313,7 +356,7 @@ function renderReport(input: {
     }
   }
   const testByCode = new Map(report.tests.map((test) => [normalizeCode(test.code), test]));
-  const targetedRows = TARGET_CODES.map((code) => {
+  const targetedRows = targetCodes.map((code) => {
     const test = testByCode.get(normalizeCode(code));
     const run = test ? latestRunByTestId.get(test.testId) : undefined;
     const assessment = test ? latestAssessmentByTestId.get(test.testId) : undefined;
@@ -324,7 +367,8 @@ function renderReport(input: {
     `# Prompt Gate Run (${new Date().toISOString()})`,
     "",
     `- Pack: ${pack.name} (\`${pack.packId}\`)`,
-    `- Mode: ${fullRun ? "Targeted 4 + full pack" : "Targeted 4 only"}`,
+    `- Mode: ${fullRun ? `Targeted ${targetCodes.length} + full pack` : `Targeted ${targetCodes.length} only`}`,
+    `- Target codes: ${targetCodes.join(", ")}`,
     `- Duration: ${(durationMs / 1000).toFixed(1)}s`,
     "",
     "## Targeted Test Status",
@@ -340,6 +384,7 @@ function renderReport(input: {
     `- Fail verdicts: ${report.summary.failCount}`,
     `- Review verdicts: ${report.summary.reviewCount}`,
     `- Needs score: ${report.summary.needsScoreCount}`,
+    `- Stale latest auto scores: ${report.summary.staleLatestAutoScoreCount}`,
     `- Degraded auto scores: ${report.summary.degradedScoreCount}`,
     `- Average weighted score: ${report.summary.averageWeightedScore.toFixed(1)}/100`,
     `- Effective pass rate @ ${report.summary.passThreshold}/100: ${(report.summary.effectivePassRate * 100).toFixed(1)}%`,
@@ -372,6 +417,60 @@ function formatStamp(date: Date): string {
 
 function normalizeCode(value: string): string {
   return value.trim().toUpperCase();
+}
+
+function resolveExplicitTargetCodes(argv: string[]): string[] | undefined {
+  const cliRaw =
+    extractFlagValue(argv, "--codes") ??
+    extractFlagValue(argv, "--target-codes") ??
+    process.env[PROMPT_PACK_GATE_CODES_ENV];
+  if (!cliRaw) {
+    return undefined;
+  }
+  const values = splitCodeList(cliRaw);
+  return values.length > 0 ? values : undefined;
+}
+
+function extractFlagValue(argv: string[], flag: string): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    const current = argv[index];
+    if (current === flag) {
+      return argv[index + 1];
+    }
+    if (current.startsWith(`${flag}=`)) {
+      return current.slice(flag.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function splitCodeList(raw: string): string[] {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const part of raw.split(",")) {
+    const normalized = normalizeCode(part);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    values.push(normalized);
+  }
+  return values;
+}
+
+function selectPromptPackGateTargetCodes(tests: PromptPackTestRecord[]): string[] {
+  const availableCodes = new Set(tests.map((test) => normalizeCode(test.code)));
+  if (LEGACY_TARGET_CODES.every((code) => availableCodes.has(normalizeCode(code)))) {
+    return [...LEGACY_TARGET_CODES];
+  }
+
+  const selected: string[] = [];
+  for (const code of MODERN_TARGET_CODE_CANDIDATES) {
+    if (availableCodes.has(normalizeCode(code))) {
+      selected.push(normalizeCode(code));
+    }
+  }
+  return selected;
 }
 
 function safeJson<T>(value: string): T {

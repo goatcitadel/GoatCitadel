@@ -17,6 +17,7 @@ import {
   fetchCapabilityCatalog,
   fetchCapabilityProposal,
   fetchCapabilityProposals,
+  fetchHarnessAuditReport,
   fetchSkillLookup,
   fetchSkillImportHistory,
   fetchSkillSources,
@@ -106,6 +107,7 @@ export function SkillsPage() {
   const [validationResult, setValidationResult] = useState<Awaited<ReturnType<typeof validateSkillImport>> | null>(
     null,
   );
+  const [harnessAudit, setHarnessAudit] = useState<Awaited<ReturnType<typeof fetchHarnessAuditReport>> | null>(null);
   const [importHistory, setImportHistory] = useState<Awaited<ReturnType<typeof fetchSkillImportHistory>>["items"]>([]);
   const [importBusy, setImportBusy] = useState<null | "validate" | "install">(null);
   const [confirmHighRiskImport, setConfirmHighRiskImport] = useState(false);
@@ -120,13 +122,14 @@ export function SkillsPage() {
       setIsInitialLoading(true);
     }
     try {
-      const [skillsResponse, policyResponse, importHistoryResponse, catalogResponse, proposalsResponse] =
+      const [skillsResponse, policyResponse, importHistoryResponse, catalogResponse, proposalsResponse, harnessAuditResponse] =
         await Promise.all([
           fetchSkills(),
           includeStatic ? fetchSkillActivationPolicies() : Promise.resolve(null),
           includeStatic ? fetchSkillImportHistory(30) : Promise.resolve(null),
           fetchCapabilityCatalog("inspectable"),
           fetchCapabilityProposals(100),
+          includeStatic ? fetchHarnessAuditReport() : Promise.resolve(null),
         ]);
       setSkills(skillsResponse.items);
       setCapabilityCatalog(catalogResponse.items);
@@ -139,6 +142,9 @@ export function SkillsPage() {
       }
       if (importHistoryResponse) {
         setImportHistory(importHistoryResponse.items);
+      }
+      if (harnessAuditResponse) {
+        setHarnessAudit(harnessAuditResponse);
       }
       setStateDraftBySkill((current) =>
         Object.fromEntries(
@@ -360,6 +366,10 @@ export function SkillsPage() {
       setError("This import is blocked because it overlaps a native GoatCitadel capability family.");
       return;
     }
+    if (validationResult?.reviewDisposition === "reference_only" || validationResult?.reviewDisposition === "reject") {
+      setError(validationResult.reviewMessage ?? "This import is review-only and cannot be installed directly.");
+      return;
+    }
     setImportBusy("install");
     try {
       const installed = await installSkillImport({
@@ -450,6 +460,12 @@ export function SkillsPage() {
     event.preventDefault();
     setSelectedSkillId(skillId);
   };
+
+  const harnessAuditTone = useCallback(
+    (status: "strong" | "watch" | "attention") =>
+      status === "strong" ? "success" : status === "watch" ? "warning" : "critical",
+    [],
+  );
 
   if (isInitialLoading) {
     return <p>Loading Playbook skills...</p>;
@@ -682,6 +698,61 @@ export function SkillsPage() {
       </Panel>
 
       <Panel
+        title="Harness Audit"
+        subtitle="Native seven-pillar review of GoatCitadel's harness posture. Use marketplace skills in this family as reference patterns, not as a second runtime control plane."
+      >
+        {harnessAudit ? (
+          <div className="stack-md">
+            <div className="workflow-summary-strip">
+              <StatusChip tone={harnessAuditTone(harnessAudit.overallStatus)}>
+                {harnessAudit.overallStatus}
+              </StatusChip>
+              <StatusChip tone="default">{harnessAudit.overallScore}/100 overall</StatusChip>
+              {harnessAudit.strategyGlossary.map((item) => (
+                <StatusChip key={item.tag} tone="muted">
+                  {item.tag}
+                </StatusChip>
+              ))}
+            </div>
+            <p className="field-help">{harnessAudit.summary}</p>
+            <ul className="improvement-simple-list">
+              {harnessAudit.pillars.map((pillar) => (
+                <li key={pillar.pillarId}>
+                  <strong>{pillar.label}</strong> - {pillar.score}/100
+                  <div className="prompt-lab-test-meta">
+                    <span className={`prompt-lab-chip run-${pillar.status === "strong" ? "completed" : pillar.status === "watch" ? "running" : "failed"}`}>
+                      {pillar.status}
+                    </span>
+                    <span>{pillar.nativeDestination}</span>
+                  </div>
+                  <div className="table-subtext">{pillar.rationale}</div>
+                </li>
+              ))}
+            </ul>
+            <div className="replay-box">
+              <h4>Capability states</h4>
+              <ul className="compact-list">
+                <li>
+                  <strong>reference pattern</strong>: source or marketplace inspiration only, never callable at runtime.
+                </li>
+                <li>
+                  <strong>proposal</strong>: inspectable draft for operator review, not callable.
+                </li>
+                <li>
+                  <strong>candidate</strong>: staged capability artifact that still needs promotion or activation.
+                </li>
+                <li>
+                  <strong>activated capability</strong>: live only after explicit review, approval, and destination-specific promotion.
+                </li>
+              </ul>
+            </div>
+          </div>
+        ) : (
+          <p className="table-subtext">Harness audit data loads with the operator policy snapshot.</p>
+        )}
+      </Panel>
+
+      <Panel
         title="Skill Sources & Import"
         subtitle="Browse curated sources first, validate before install, and keep imported skills disabled until you explicitly enable them."
         className="skills-source-panel"
@@ -854,7 +925,12 @@ export function SkillsPage() {
           <button
             type="button"
             onClick={() => void onInstallImport()}
-            disabled={importBusy !== null || Boolean(validationResult?.nativeOverlaps?.length)}
+            disabled={
+              importBusy !== null ||
+              Boolean(validationResult?.nativeOverlaps?.length) ||
+              validationResult?.reviewDisposition === "reference_only" ||
+              validationResult?.reviewDisposition === "reject"
+            }
             className="gc-button"
           >
             {importBusy === "install" ? "Installing..." : "Install (disabled by default)"}
@@ -871,6 +947,9 @@ export function SkillsPage() {
               {validationResult.valid ? "Validation passed" : "Validation failed"}
             </span>
             <span className="token-chip">Risk: {validationResult.riskLevel}</span>
+            {validationResult.reviewDisposition ? (
+              <span className="token-chip">Review: {validationResult.reviewDisposition}</span>
+            ) : null}
             {validationResult.nativeOverlaps?.length ? (
               <span className="token-chip">Blocked: native overlap</span>
             ) : null}
@@ -882,6 +961,12 @@ export function SkillsPage() {
         {validationResult ? (
           <div className="stack-md">
             <p className="field-help">Trust report: {describeValidationTrust(validationResult)}</p>
+            {validationResult.reviewMessage ? (
+              <div className="replay-box">
+                <h4>Review classification</h4>
+                <p>{validationResult.reviewMessage}</p>
+              </div>
+            ) : null}
             {validationResult.nativeOverlaps?.length ? (
               <div className="replay-box">
                 <h4>Native alternative</h4>

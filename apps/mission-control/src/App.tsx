@@ -28,7 +28,7 @@ import {
 import { fetchDashboardState, type DashboardStateResponse } from "./api/client";
 import { DeviceAccessApprovalModal, type DeviceAccessApprovalPrompt } from "./components/DeviceAccessApprovalModal";
 import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
-import { GCSelect, GCSegmentedControl } from "./components/ui";
+import { GCSelect } from "./components/ui";
 import { GatewayAccessGate } from "./components/GatewayAccessGate";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
 import { PageErrorBoundary } from "./components/PageErrorBoundary";
@@ -54,7 +54,6 @@ import {
   type AgentsTab,
   type ArtifactsTab,
   type IntegrationsTab,
-  type OperatePage,
   type ResolvedRoute,
   type Space,
   type VisiblePage,
@@ -63,7 +62,7 @@ import type { GeneralTab } from "./pages/GeneralHubPage";
 import type { HealthTab } from "./pages/HealthPage";
 import type { TimelineTab } from "./pages/TimelinePage";
 import type { WorkspacesTab } from "./pages/WorkspacesHubPage";
-import { formatWorkloadSummaryDescriptor, type WorkTrustDescriptor } from "./pages/chat/work-trust";
+import { type WorkTrustDescriptor } from "./pages/chat/work-trust";
 import { emitRefresh, type RefreshTopic } from "./state/refresh-bus";
 import { useUiPreferences } from "./state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "./state/effects-mode";
@@ -554,17 +553,6 @@ export function App() {
       navigate(buildRouteForVisiblePage(route, page));
     },
     [navigate, route],
-  );
-
-  const handleSelectOperatePage = useCallback(
-    (page: OperatePage) => {
-      navigate(
-        page === "surface"
-          ? { space: "operate", page: "surface", surface: route.surface ?? "chat" }
-          : { space: "operate", page },
-      );
-    },
-    [navigate, route.surface],
   );
 
   const handleOnboardingCompleted = useCallback(() => {
@@ -1107,12 +1095,12 @@ export function App() {
     0,
   );
   const operateStatusFreshness = deriveOperateStatusFreshness(operateStatusLastSuccessAt, operateStatusLastError);
-  const decisionsChipLabel =
+  const approvalsChipLabel =
     operateApprovalsCount > 0
-      ? `${operateApprovalsCount} decisions`
+      ? `${operateApprovalsCount} approval${operateApprovalsCount === 1 ? "" : "s"}`
       : operateStatusFreshness.state === "stale"
-        ? "Decision status stale"
-        : "Decisions clear";
+        ? "Approvals stale"
+        : "Approvals clear";
 
   const operateSurfaceTab = route.space === "operate" && route.page === "surface" ? (route.surface ?? "chat") : "chat";
   const timelineTab = deriveTimelineTab(route);
@@ -1184,23 +1172,17 @@ export function App() {
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
   const runtimeSummaryLabel =
     operateActiveAgentsCount > 0
-      ? `${operateActiveAgentsCount} active runtime${operateActiveAgentsCount === 1 ? "" : "s"}`
-      : "No active runtime";
+      ? `${operateActiveAgentsCount} runtime${operateActiveAgentsCount === 1 ? "" : "s"}`
+      : "No runtime";
   const hasOperateUrgency =
     operateStatusFreshness.state === "stale" || shellGatewayState.status === "degraded-live-updates";
   const operateStatusVariant = hasOperateUrgency || operateStatusStripExpanded ? "expanded" : "compact";
-  const workloadSummary = formatWorkloadSummaryDescriptor({
-    approvalsCount: operateApprovalsCount,
-    activeAgentsCount: operateActiveAgentsCount,
-    openTasksCount: operateOpenTasksCount,
-    dailyCostUsd: operateDailyCostUsd,
-  });
   const workTrustDescriptor = useMemo<WorkTrustDescriptor>(
     () => ({
       workspaceLabel: activeWorkspaceName.trim().length > 0 ? activeWorkspaceName : "Workspace unavailable",
       gatewayTone: shellGatewayState.tone,
       gatewayLabel: shellGatewayState.label,
-      approvalsSummary: decisionsChipLabel,
+      approvalsSummary: approvalsChipLabel,
       activeModeLabel:
         route.space === "operate" && route.page === "surface"
           ? CHAT_MODE_PRESETS[operateSurfaceTab].label
@@ -1210,8 +1192,8 @@ export function App() {
     }),
     [
       activeWorkspaceName,
+      approvalsChipLabel,
       currentPageLabel,
-      decisionsChipLabel,
       operateProviderModelSummary,
       operateSurfaceTab,
       route.page,
@@ -1497,23 +1479,10 @@ export function App() {
                   ))}
                 </nav>
               )
-            ) : route.space === "operate" && route.page === "surface" ? (
-              <GCSegmentedControl
-                ariaLabel="Work surface"
-                value={operateSurfaceTab}
-                onChange={(surface) => navigate({ space: "operate", page: "surface", surface })}
-                options={[
-                  { value: "chat", label: "Chat" },
-                  { value: "cowork", label: "Cowork" },
-                  { value: "code", label: "Code" },
-                ]}
-              />
             ) : (
               <div className="shell-context-summary">
                 <p className="shell-action-label">{SPACE_META[route.space].label}</p>
-                <p className="shell-bar-page-note">
-                  {currentPageLabel} stays in the left rail so the workspace keeps its width.
-                </p>
+                <p className="shell-bar-page-note">{currentPageLabel}</p>
               </div>
             )}
           </div>
@@ -1547,18 +1516,14 @@ export function App() {
               {workTrustDescriptor.approvalsSummary}
             </button>
             {route.space === "operate" ? (
-              <StatusChip tone={operateActiveAgentsCount > 0 ? "live" : "muted"}>
-                {workTrustDescriptor.runtimeSummary}
-              </StatusChip>
-            ) : null}
-            {route.space === "operate" ? (
               <button
                 type="button"
-                className={`shell-workload-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
+                className={`shell-trust-action shell-status-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
                 aria-expanded={operateStatusVariant === "expanded"}
+                aria-controls="shell-attached-status-panel"
                 onClick={() => setOperateStatusStripExpanded((current) => !current)}
               >
-                {workloadSummary.label}
+                {workTrustDescriptor.runtimeSummary}
               </button>
             ) : null}
           </div>
@@ -1582,14 +1547,13 @@ export function App() {
                 visiblePage={visiblePage}
                 navMode={navMode}
                 onSelectSpace={handleSelectSpace}
-                onSelectOperatePage={handleSelectOperatePage}
                 onSelectVisiblePage={handleSelectVisiblePage}
                 onCycleNavMode={handleCycleNavMode}
               />
             ) : null}
             <div className="shell-workspace">
               {route.space === "operate" && operateStatusVariant === "expanded" ? (
-                <div className="shell-attached-status-panel">
+                <div className="shell-attached-status-panel" id="shell-attached-status-panel">
                   <StatusStrip
                     approvalsCount={operateApprovalsCount}
                     approvalsLabel="Pending decisions"

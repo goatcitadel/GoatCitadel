@@ -519,6 +519,7 @@ export async function* streamPreparedIntegrationChatTurn(
     turnId: prepared.turnId,
     messageId: prepared.assistantMessageId,
     content,
+    repaired: Boolean(response.trace?.completion?.repaired),
   };
   yield {
     type: "trace_update",

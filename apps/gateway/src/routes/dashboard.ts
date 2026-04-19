@@ -177,6 +177,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const reviewQueue = fastify.gateway.isFeatureEnabled("cronReviewQueueV1Enabled")
+      ? fastify.gateway.listCronReviewQueue(parsed.data.cronReviewLimit)
+      : [];
     return reply.send({
       generatedAt: new Date().toISOString(),
       events: {
@@ -187,7 +190,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       },
       scheduler: {
         jobs: fastify.gateway.listCronJobs(),
-        reviewQueue: fastify.gateway.listCronReviewQueue(parsed.data.cronReviewLimit),
+        reviewQueue,
       },
       improvement: {
         reports: fastify.gateway.listImprovementReports(parsed.data.improvementLimit),

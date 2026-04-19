@@ -167,7 +167,12 @@ export class DiscordRuntimeService {
     return this.getConnectionStatus(connectionId);
   }
 
-  public async sendTyping(connectionId: string, target: string, durationMs = 8_000): Promise<ChannelTypingResult> {
+  public async sendTyping(
+    connectionId: string,
+    target: string,
+    durationMs = 8_000,
+    signal?: AbortSignal,
+  ): Promise<ChannelTypingResult> {
     const runtime = [...this.runtimesByToken.values()].find((entry) => entry.connectionIds.has(connectionId));
     if (!runtime || !runtime.ready) {
       return {
@@ -182,10 +187,12 @@ export class DiscordRuntimeService {
 
     const normalized = normalizeDiscordRuntimeTarget(target);
     try {
+      throwIfDiscordRuntimeAborted(signal);
       const channel =
         normalized.kind === "user"
           ? await (await runtime.client.users.fetch(normalized.id)).createDM()
           : await runtime.client.channels.fetch(normalized.id);
+      throwIfDiscordRuntimeAborted(signal);
       if (!channel || !supportsTyping(channel)) {
         return {
           channelKey: "discord",
@@ -197,6 +204,7 @@ export class DiscordRuntimeService {
         };
       }
       await channel.sendTyping();
+      throwIfDiscordRuntimeAborted(signal);
       const expiresAt = new Date(Date.now() + Math.max(1_000, durationMs)).toISOString();
       return {
         channelKey: "discord",
@@ -782,6 +790,16 @@ export class DiscordRuntimeService {
       }
     }
   }
+}
+
+function throwIfDiscordRuntimeAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  throw reason instanceof Error
+    ? reason
+    : new Error(typeof reason === "string" ? reason : "Discord typing delivery aborted.");
 }
 
 function readDiscordSecret(config: Record<string, unknown>, key: string, envKey: string): string | undefined {

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
   PromptPackPolicySource,
@@ -8,6 +8,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { hashPromptPackPolicyV2, parsePromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
 interface PromptPackRow {
   pack_id: string;
@@ -139,17 +140,21 @@ export class PromptPackRepository {
     const now = new Date().toISOString();
     const packId = input.packId ?? `pack-${randomUUID()}`;
     const existing = toPromptPackRow(this.getPackStmt.get(packId));
-    const resolvedPolicy = input.policyV2 ?? parsePolicy(existing?.policy_v2_json) ?? DEFAULT_PROMPT_PACK_POLICY_V2;
-    const resolvedSource =
-      input.policySource ?? normalizePolicySource(existing?.policy_v2_source) ?? "inherited_default";
+    const existingSource = normalizePolicySource(existing?.policy_v2_source);
+    const existingPolicy = parsePromptPackPolicyV2(existing?.policy_v2_json);
+    const resolvedSource = input.policySource ?? existingSource ?? "inherited_default";
+    const resolvedPolicy =
+      input.policyV2 ??
+      (resolvedSource === "pack_override" ? existingPolicy : DEFAULT_PROMPT_PACK_POLICY_V2) ??
+      DEFAULT_PROMPT_PACK_POLICY_V2;
     this.db.transaction("immediate", () => {
       this.upsertPackStmt.run({
         packId,
         name: input.name,
         sourceLabel: input.sourceLabel ?? null,
         testCount: input.tests.length,
-        policyV2Json: JSON.stringify(resolvedPolicy),
-        policyV2Hash: hashPolicy(resolvedPolicy),
+        policyV2Json: stringifyPromptPackPolicyV2(resolvedPolicy),
+        policyV2Hash: hashPromptPackPolicyV2(resolvedPolicy),
         policyV2Source: resolvedSource,
         createdAt: existing?.created_at ?? now,
         updatedAt: now,
@@ -179,15 +184,26 @@ export class PromptPackRepository {
 }
 
 function mapPackRow(row: PromptPackRow): PromptPackRecord {
-  const policy = parsePolicy(row.policy_v2_json) ?? DEFAULT_PROMPT_PACK_POLICY_V2;
+  const policySource = normalizePolicySource(row.policy_v2_source) ?? "inherited_default";
+  const storedPolicy = parsePromptPackPolicyV2(row.policy_v2_json);
+  const policy =
+    policySource === "pack_override" ? (storedPolicy ?? DEFAULT_PROMPT_PACK_POLICY_V2) : DEFAULT_PROMPT_PACK_POLICY_V2;
+  const storedPolicyHash =
+    typeof row.policy_v2_hash === "string" && row.policy_v2_hash.trim().length > 0
+      ? row.policy_v2_hash
+      : undefined;
+  const policyHash =
+    policySource === "pack_override"
+      ? storedPolicyHash ?? hashPromptPackPolicyV2(storedPolicy ?? policy)
+      : hashPromptPackPolicyV2(policy);
   return {
     packId: row.pack_id,
     name: row.name,
     sourceLabel: row.source_label ?? undefined,
     testCount: row.test_count,
     policyV2: policy,
-    policyHash: row.policy_v2_hash ?? hashPolicy(policy),
-    policySource: normalizePolicySource(row.policy_v2_source) ?? "inherited_default",
+    policyHash,
+    policySource,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -257,23 +273,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function parsePolicy(raw?: string | null): PromptPackPolicyV2 | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as PromptPackPolicyV2;
-  } catch {
-    return undefined;
-  }
-}
-
 function normalizePolicySource(value?: string | null): PromptPackPolicySource | undefined {
   return value === "pack_override" || value === "inherited_default" ? value : undefined;
-}
-
-function hashPolicy(policy: PromptPackPolicyV2): string {
-  return createHash("sha256").update(JSON.stringify(policy)).digest("hex");
 }
 
 

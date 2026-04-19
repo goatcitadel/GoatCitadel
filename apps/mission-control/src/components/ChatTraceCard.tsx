@@ -68,6 +68,24 @@ export function ChatTraceCard({
               <p>Retryable: {trace.failure.retryable === false ? "no" : "yes"}</p>
             </div>
           ) : null}
+          {trace.loopGuard?.events?.length ? (
+            <div className="chat-trace-section">
+              <strong>Loop guard</strong>
+              <p>
+                Enabled: {trace.loopGuard.enabled ? "yes" : "no"} · History: {trace.loopGuard.historySize}
+              </p>
+              <ul className="chat-trace-list">
+                {trace.loopGuard.events.map((event, index) => (
+                  <li key={`${event.detector}-${event.severity}-${index}`}>
+                    <span>{event.detector}</span>
+                    <span>{event.severity}</span>
+                    <p>Suppressed: {event.suppressed ? "yes" : "no"}</p>
+                    <p>{event.message}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {trace.executionPlan ? (
             <div className="chat-trace-section">
               <strong>Execution plan</strong>

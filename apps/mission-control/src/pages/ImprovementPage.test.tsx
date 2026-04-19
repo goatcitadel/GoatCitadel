@@ -190,6 +190,45 @@ describe("ImprovementPage", () => {
           topFindings: [],
           appliedAutoTunes: [],
           queuedRecommendations: [],
+          strategyTags: [
+            {
+              tag: "repair",
+              count: 3,
+              rationale: "Fix recurring failures with bounded proposal drafts and replay-backed follow-up checks.",
+            },
+          ],
+          routingGapSummary: {
+            totalEvents: 4,
+            topCauseClasses: [{ causeClass: "routing_profile_mismatch", count: 4 }],
+            topRequestedTools: ["browser_snapshot"],
+          },
+          proposalDrafts: [
+            {
+              draftId: "draft-1",
+              title: "Review routing gap: routing_profile_mismatch",
+              summary: "Observed 4 routing gap events during this report window.",
+              kind: "routing_rule",
+              inspectable: true,
+              backingType: "report_only_draft",
+              nativeDestination: "Configure > Agents",
+              evidenceCount: 4,
+            },
+          ],
+          specialistCandidateSuggestions: [
+            {
+              candidateId: "routing-specialist-report-1",
+              title: "Routing Harness Specialist",
+              role: "Researcher",
+              summary: "Review profile gaps and routing drift.",
+              reason: "Routing gaps repeated often enough to warrant review.",
+              source: "runtime_gap",
+              confidence: 0.86,
+              suggestedRoutingMode: "strong_match_only",
+              suggestedTools: ["browser_snapshot"],
+              suggestedSkills: ["goatcitadel-native-safe-self-improvement"],
+              evidenceCount: 4,
+            },
+          ],
           weekOverWeek: { improved: [], regressed: [], unchanged: [] },
           weekStart: "2026-04-07T00:00:00.000Z",
           weekEnd: "2026-04-11T00:00:00.000Z",
@@ -333,6 +372,26 @@ describe("ImprovementPage", () => {
         (node) => node.type === "a" && node.props.href === "?space=operate&page=approvals&approvalId=apr-1",
       )[0];
       expect(approvalLink).toBeTruthy();
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("renders weekly strategy tags, routing gaps, proposal drafts, and specialist suggestions", async () => {
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ImprovementPage workspaceId="default" />);
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("Strategy tags");
+      expect(text).toContain("repair");
+      expect(text).toContain("Routing gaps");
+      expect(text).toContain("browser_snapshot");
+      expect(text).toContain("Review routing gap: routing_profile_mismatch");
+      expect(text).toContain("Routing Harness Specialist");
     } finally {
       renderer.unmount();
     }

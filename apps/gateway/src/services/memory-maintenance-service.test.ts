@@ -444,3 +444,41 @@ describe("MemoryMaintenanceService due evaluation", () => {
     expect(harness.memoryMaintenance.listRuns("default")).toHaveLength(0);
   });
 });
+
+describe("MemoryMaintenanceService durable execution", () => {
+  it("does not finalize a durable-backed run as failed when execution aborts", async () => {
+    const harness = createHarness();
+    harness.service.patchPolicy("default", {
+      enabled: true,
+      runMode: "manual",
+      timingStrategy: "recommendation_first",
+      timeZone: "UTC",
+      minHoursSinceLastSuccess: 1,
+      minChangedSessions: 1,
+      providerId: "ollama",
+      model: "qwen3",
+    });
+
+    const queuedRun = harness.service.runNow({
+      workspaceId: "default",
+      triggerSource: "manual",
+    });
+    const durableRun = harness.callbacks.getDurableRun(queuedRun.durableRunId!);
+    const controller = new AbortController();
+
+    vi.spyOn(harness.service as never, "checkExecutionAvailability").mockResolvedValue({
+      available: true,
+    });
+    vi.spyOn(harness.service as never, "collectSources").mockImplementation(async () => {
+      controller.abort(new Error("lease lost"));
+      throw controller.signal.reason;
+    });
+
+    await expect(harness.service.executeDurableRun(durableRun, { signal: controller.signal })).rejects.toThrow(
+      "lease lost",
+    );
+
+    expect(harness.memoryMaintenance.getRun(queuedRun.runId).status).toBe("running");
+    expect(harness.memoryMaintenance.requireState("default").activeRunId).toBe(queuedRun.runId);
+  });
+});

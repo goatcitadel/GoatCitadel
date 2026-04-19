@@ -644,6 +644,155 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.turnTrace.failure?.recommendedAction).toBe("retry_narrower");
   });
 
+  it("emits a warning loop event for repeated identical tool calls when detection is enabled", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
+      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Final answer with evidence.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValue({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-loop-warning",
+        result: {
+          results: [
+            {
+              url: "https://example.com/ai-tooling",
+              title: "AI tooling",
+              snippet: "Evidence from the same repeated search call.",
+            },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(),
+      createChatCompletion,
+      invokeTool,
+      toolLoopDetection: {
+        enabled: true,
+        historySize: 6,
+        warningThreshold: 2,
+        criticalThreshold: 4,
+        globalThreshold: 6,
+        detectors: {
+          repeated_same_call: true,
+          no_progress_polling: false,
+          ping_pong: false,
+        },
+      },
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-loop-warning-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-user-loop-warning-1",
+      content: "Search AI tooling references",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Search AI tooling references" }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.turnTrace.loopGuard?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          detector: "repeated_same_call",
+          severity: "warning",
+          suppressed: false,
+        }),
+      ]),
+    );
+  });
+
+  it("suppresses further tool execution when repeated identical calls hit the critical threshold", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
+      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
+      .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"));
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValue({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-loop-critical",
+        result: {
+          results: [
+            {
+              url: "https://example.com/ai-tooling",
+              title: "AI tooling",
+              snippet: "Evidence from the same repeated search call.",
+            },
+          ],
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(),
+      createChatCompletion,
+      invokeTool,
+      toolLoopDetection: {
+        enabled: true,
+        historySize: 6,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalThreshold: 5,
+        detectors: {
+          repeated_same_call: true,
+          no_progress_polling: false,
+          ping_pong: false,
+        },
+      },
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-loop-critical-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-user-loop-critical-1",
+      content: "Search AI tooling references",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Search AI tooling references" }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.turnTrace.loopGuard?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          detector: "repeated_same_call",
+          severity: "critical",
+          suppressed: true,
+        }),
+      ]),
+    );
+    expect(result.assistantContent).toContain("strongest leads so far");
+    expect(result.turnTrace.failure?.failureClass).toBe("tool_loop_guard");
+  });
+
   it("does not trip circuit breaker at two attempts for retryable failures", async () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
@@ -675,6 +824,78 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("I hit the same tool issue repeatedly");
     expect(result.assistantContent).not.toContain("Reason:");
     expect(result.assistantContent).not.toContain("What I need from you next");
+  });
+
+  it("marks tool-run budget halts with an explicit failure class", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: new Array(13).fill(null).map((_, index) => ({
+              id: `call-${index + 1}`,
+              type: "function",
+              function: {
+                name: "browser_search",
+                arguments: JSON.stringify({ query: `latest ai tooling ${index + 1}` }),
+              },
+            })),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-tool-run-budget",
+      result: {
+        results: [
+          {
+            url: "https://example.com/ai-tooling",
+            title: "AI tooling",
+            snippet: "Evidence from repeated search calls.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(),
+      createChatCompletion,
+      invokeTool,
+      toolLoopDetection: {
+        enabled: false,
+        historySize: 6,
+        warningThreshold: 2,
+        criticalThreshold: 4,
+        globalThreshold: 6,
+        detectors: {
+          repeated_same_call: true,
+          no_progress_polling: true,
+          ping_pong: true,
+        },
+      },
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-run-budget-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-run-budget-1",
+      content: "Keep searching AI tooling references.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Keep searching AI tooling references." }],
+    });
+
+    expect(result.turnTrace.failure?.failureClass).toBe("tool_run_budget_exceeded");
   });
 
   it("maps auth failures to reconnect auth recovery guidance", async () => {
@@ -3922,6 +4143,16 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("Moving data between frontends and backends");
     expect(result.assistantContent).not.toContain("I ran out of time before I could finish a full pass");
     expect(result.turnTrace.failure?.failureClass).toBe("unknown");
+    expect(result.turnTrace.completion).toMatchObject({
+      repaired: true,
+      repair: {
+        applied: true,
+        kind: "degraded_answer_synthesis",
+        source: "orchestrator",
+        preRepairContent: badFallback,
+        postRepairContent: repairedAnswer,
+      },
+    });
     expect(createChatCompletion).toHaveBeenCalledTimes(4);
     const invokedToolNames = (invokeTool.mock.calls as unknown as Array<[{ toolName: string }]>).map(
       (call) => call[0].toolName,
@@ -4182,9 +4413,16 @@ describe("ChatAgentOrchestrator", () => {
     expect(toolRuns).toHaveLength(2);
     expect(toolRuns[0]?.toolName).toBe("http.get");
     expect(toolRuns[1]?.toolName).toBe("http.get");
+    expect(toolRuns[1]).toMatchObject({
+      reused: true,
+      reusedFromToolRunId: toolRuns[0]?.toolRunId,
+      reuseReason: "matching_recent_browser_result",
+    });
     expect(toolRuns[1]?.result).toMatchObject({
+      reusedNotice: expect.stringContaining(toolRuns[0]?.toolRunId ?? ""),
       reusedResult: true,
       reusedPriorToolRunId: toolRuns[0]?.toolRunId,
+      reuseReason: "matching_recent_browser_result",
     });
   });
 
@@ -4249,9 +4487,15 @@ describe("ChatAgentOrchestrator", () => {
 
     expect(result.turnTrace.failure).toBeUndefined();
     expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(result.turnTrace.toolRuns[1]).toMatchObject({
+      reused: true,
+      reusedFromToolRunId: result.turnTrace.toolRuns[0]?.toolRunId,
+      reuseReason: "matching_recent_browser_result",
+    });
     expect(result.turnTrace.toolRuns[1]?.result).toMatchObject({
       reusedResult: true,
       reusedPriorToolRunId: result.turnTrace.toolRuns[0]?.toolRunId,
+      reuseReason: "matching_recent_browser_result",
     });
   });
 
@@ -4350,6 +4594,85 @@ describe("ChatAgentOrchestrator", () => {
 
     expect(result.turnTrace.failure).toBeUndefined();
     expect(invokeTool).toHaveBeenCalledTimes(3);
+    expect(result.turnTrace.toolRuns.every((run) => run.result?.reusedResult !== true)).toBe(true);
+  });
+
+  it("bypasses browser.navigate reuse when bypassCache is requested", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://example.com/research",
+        }),
+      )
+      .mockResolvedValueOnce(
+        navigateToolCallCompletion({
+          url: "https://example.com/research",
+          bypassCache: true,
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Done.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<() => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-nav-bypass-cache-1",
+        result: {
+          url: "https://example.com/research",
+          finalUrl: "https://example.com/research",
+          status: 200,
+          title: "Example research",
+          textSnippet: "Example content",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-nav-bypass-cache-2",
+        result: {
+          url: "https://example.com/research",
+          finalUrl: "https://example.com/research",
+          status: 200,
+          title: "Example research refreshed",
+          textSnippet: "Fresh example content",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-nav-bypass-cache-1",
+      turnId: "turn-nav-bypass-cache-1",
+      userMessageId: "msg-nav-bypass-cache-1",
+      content: "Open the page, then force-refresh it.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Open the page, then force-refresh it." }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(result.turnTrace.toolRuns.every((run) => run.reused !== true)).toBe(true);
     expect(result.turnTrace.toolRuns.every((run) => run.result?.reusedResult !== true)).toBe(true);
   });
 
@@ -4850,6 +5173,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -4975,6 +5299,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -6520,6 +6845,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -6610,6 +6936,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -6701,6 +7028,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -6797,6 +7125,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -6896,6 +7225,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -6979,6 +7309,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -7057,6 +7388,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -7150,6 +7482,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -7243,6 +7576,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -7525,6 +7859,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -7760,6 +8095,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -7900,6 +8236,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8041,6 +8378,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8185,6 +8523,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8329,6 +8668,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8504,6 +8844,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8523,7 +8864,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("chat-session-binding-repo.ts");
   });
 
-  it("repairs prompt-pack markdown import inspections into the actual load and import flow", async () => {
+  it("does not inject prompt-pack markdown import fallback content on live chat turns", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -8641,6 +8982,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8650,14 +8992,13 @@ describe("ChatAgentOrchestrator", () => {
         query: "prompt-pack-service.ts",
       }),
     });
-    expect(result.assistantContent).toContain("GOATCITADEL_PROMPT_PACK_PATH");
-    expect(result.assistantContent).toContain("/api/v1/prompt-packs/import");
-    expect(result.assistantContent).toContain("source_label");
-    expect(result.assistantContent).toContain("policy_v2_source");
-    expect(result.assistantContent).not.toContain("inspection incomplete");
+    expect(result.assistantContent).toContain("## Observed");
+    expect(result.assistantContent).toContain("inspection incomplete");
+    expect(result.assistantContent).not.toContain("GOATCITADEL_PROMPT_PACK_PATH");
+    expect(result.assistantContent).not.toContain("/api/v1/prompt-packs/import");
   });
 
-  it("repairs prompt-pack operator surface inspections into report, trend, and benchmark evidence surfaces", async () => {
+  it("does not inject prompt-pack operator-surface fallback content on live chat turns", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: chat",
@@ -8811,6 +9152,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -8820,12 +9162,106 @@ describe("ChatAgentOrchestrator", () => {
         query: "prompt-pack-service.ts",
       }),
     });
-    expect(result.assistantContent).toContain("GET /api/v1/prompt-packs/:packId/report");
-    expect(result.assistantContent).toContain("taskSuccess");
-    expect(result.assistantContent).toContain("totalItems");
-    expect(result.assistantContent).toContain("top failure signals");
-    expect(result.assistantContent).toContain("apps/gateway/src/routes/prompt-packs.ts");
-    expect(result.assistantContent).not.toContain("cost-report-2026-03-20-22.md");
+    expect(result.assistantContent).toContain("## Exact files used");
+    expect(result.assistantContent).toContain("apps/gateway/src/routes/chat.prompt-pack-benchmark.test.ts");
+    expect(result.assistantContent).toContain("artifacts/cost-reports/cost-report-2026-03-20-22.md");
+    expect(result.assistantContent).not.toContain("GET /api/v1/prompt-packs/:packId/report");
+    expect(result.assistantContent).not.toContain("top failure signals");
+  });
+
+  it("does not apply repo-grounded harness repair logic to ordinary live prompts", async () => {
+    const prompt =
+      "Inspect the repo and explain the current implementation for approval wake handling. Show the exact files used.";
+    const repairedAnswer = [
+      "The current implementation keeps approval wake handling in the approval effects service and cross-checks the wake result before deciding whether to skip, fail, or complete the effect.",
+      "",
+      "I would verify `apps/gateway/src/services/approval-resolution-effects-service.ts` first, then trace the durable wake call sites from there.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("file.read_range", {
+          path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+          startLine: 1,
+          endLine: 160,
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "gemma-3",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Observed from the files I did inspect:",
+            },
+            finish_reason: "length",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gemma-3",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: repairedAnswer,
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-live-repo-inspection-read-1",
+      result: {
+        path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+        startLine: 1,
+        endLine: 160,
+        content: [
+          "export class ApprovalEffectsService {",
+          "  public enqueueResolutionEffects() {}",
+          "  private async handleApprovalWaitWake() {}",
+          "}",
+        ].join("\n"),
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-live-repo-inspection-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-live-repo-inspection-1",
+      content: prompt,
+      mode: "chat",
+      providerId: "llamacpp",
+      model: "gemma-3",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.assistantContent).toBe(repairedAnswer);
+    expect(result.assistantContent).not.toContain("Files:");
+    expect(result.assistantContent).not.toContain("Anything beyond those files is unverified");
+    expect(result.turnTrace.completion).toMatchObject({
+      repaired: true,
+      repair: expect.objectContaining({
+        applied: true,
+        kind: "incomplete_truncated_completion",
+        source: "orchestrator",
+      }),
+    });
+    expect(result.turnTrace.completion?.repair?.kind).not.toBe("prompt_pack_harness_normalization");
   });
 
   it("repairs approval-wake flow inspections into an observed numbered order with exact-file evidence", async () => {
@@ -9006,6 +9442,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9020,6 +9457,14 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("approval_wait_wake_skipped");
     expect(result.assistantContent).toContain("`Operator-visible partial failure`");
     expect(result.assistantContent).toContain("`Still not proven`");
+    expect(result.turnTrace.completion).toMatchObject({
+      repaired: true,
+      repair: expect.objectContaining({
+        applied: true,
+        kind: "prompt_pack_harness_normalization",
+        source: "prompt_pack_harness",
+      }),
+    });
   });
 
   it("answers no-tools conflict prompts directly instead of surfacing a web-off refusal", async () => {
@@ -9117,6 +9562,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9224,6 +9670,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9348,6 +9795,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9426,6 +9874,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9548,6 +9997,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9676,6 +10126,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9799,6 +10250,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -9922,6 +10374,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -10039,12 +10492,13 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
     expect(result.assistantContent).toContain("approval-resolution-effects-service.test.ts");
-    expect(result.assistantContent).toContain("approvalWaitRuns.markResolved");
-    expect(result.assistantContent).toContain("approvalEffects.completeEffect");
+    expect(result.assistantContent).toContain("markResolved");
+    expect(result.assistantContent).toContain("completeEffect");
     expect(result.assistantContent).toContain("wakeDurableRun");
     expect(result.assistantContent).toContain("Setup:");
     expect(result.assistantContent).toContain("Act:");
@@ -10216,47 +10670,72 @@ describe("ChatAgentOrchestrator", () => {
         },
       ],
     });
-    const invokeTool = vi
-      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
-      .mockResolvedValueOnce({
-        outcome: "executed",
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-cowork-memory-search-1",
+          result: {
+            matches: [
+              { path: "apps/gateway/src/routes/memory.ts", name: "memory.ts", type: "file" },
+              { path: "packages/storage/src/memory-context-repo.ts", name: "memory-context-repo.ts", type: "file" },
+              { path: "apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx", type: "file" },
+            ],
+          },
+        };
+      }
+      if (request.toolName === "file.read_range") {
+        const path = String(request.args?.path ?? "");
+        if (path.endsWith("apps/gateway/src/routes/memory.ts")) {
+          return {
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-cowork-memory-read-1",
+            result: {
+              path,
+              content: "export async function registerMemoryRoutes() {}",
+            },
+          };
+        }
+        if (path.endsWith("packages/storage/src/memory-context-repo.ts")) {
+          return {
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-cowork-memory-read-2",
+            result: {
+              path,
+              content: "export class MemoryContextRepository {}",
+            },
+          };
+        }
+        if (path.endsWith("apps/mission-control/src/pages/MemoryPage.tsx")) {
+          return {
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-cowork-memory-read-3",
+            result: {
+              path,
+              content: "export function MemoryPage() { return null; }",
+            },
+          };
+        }
+        if (path.endsWith("apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx")) {
+          return {
+            outcome: "failed",
+            policyReason: "allowed",
+            auditEventId: "audit-cowork-memory-read-4",
+            error: "simulated read failure",
+          };
+        }
+      }
+      return {
+        outcome: "failed",
         policyReason: "allowed",
-        auditEventId: "audit-cowork-memory-search-1",
-        result: {
-          matches: [
-            { path: "apps/gateway/src/routes/memory.ts", name: "memory.ts", type: "file" },
-            { path: "packages/storage/src/memory-context-repo.ts", name: "memory-context-repo.ts", type: "file" },
-            { path: "apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx", type: "file" },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-cowork-memory-read-1",
-        result: {
-          path: "apps/gateway/src/routes/memory.ts",
-          content: "export async function registerMemoryRoutes() {}",
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-cowork-memory-read-2",
-        result: {
-          path: "packages/storage/src/memory-context-repo.ts",
-          content: "export class MemoryContextRepository {}",
-        },
-      })
-      .mockResolvedValueOnce({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-cowork-memory-read-3",
-        result: {
-          path: "apps/mission-control/src/pages/MemoryPage.tsx",
-          content: "export function MemoryPage() { return null; }",
-        },
-      });
+        auditEventId: "audit-cowork-memory-unexpected",
+        error: `unexpected tool call: ${request.toolName}`,
+      };
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
@@ -10283,6 +10762,8 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("QA");
     expect(result.assistantContent).not.toContain("Observed memory lifecycle surfaces");
     expect(result.assistantContent).not.toContain("## Exact files used");
+    expect(result.assistantContent).not.toContain("parts of this answer may be incomplete");
+    expect(result.assistantContent).not.toContain('Say "keep going"');
   });
 
   it("forces the cron cowork repair onto wiring, scheduled review execution, and operator report surfaces", async () => {
@@ -10463,6 +10944,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -10565,6 +11047,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
@@ -10772,6 +11255,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -10878,6 +11362,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
@@ -10960,6 +11445,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
@@ -11060,6 +11546,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
@@ -11163,6 +11650,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
@@ -11268,6 +11756,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -11358,7 +11847,11 @@ describe("ChatAgentOrchestrator", () => {
         auditEventId: "audit-memory-shape-read-3",
         result: {
           path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx",
-          content: "export function MemoryPage() { return null; }",
+          content: [
+            "import { fetchMemoryItems, fetchMemoryMaintenanceStatus, runMemoryMaintenanceNow } from '../api/client';",
+            "import { MemoryMaintenancePanel } from './memory/MemoryMaintenancePanel';",
+            "export function MemoryPage() { return null; }",
+          ].join("\n"),
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -11380,6 +11873,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
@@ -11387,12 +11881,17 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("- Stored state:");
     expect(result.assistantContent).toContain("- Operator-facing surface:");
     expect(result.assistantContent).not.toContain("Observed memory lifecycle surfaces:");
-    expect(result.assistantContent).toContain("registerMemoryRoutes");
+    expect(result.assistantContent).toContain("apps/gateway/src/routes/memory.ts");
     expect(result.assistantContent).toContain("MemoryContextRepository");
+    expect(result.assistantContent).toContain("MemoryPage");
     expect(result.assistantContent).not.toContain("'content': 'import");
     expect(result.assistantContent).not.toContain("Exact citations used:");
     expect(result.assistantContent).not.toContain("## Exact files used");
     expect(result.assistantContent.match(/^- (Route surface|Stored state|Operator-facing surface):/gm)).toHaveLength(3);
+    expect(result.turnTrace.citations.some((citation) => citation.sourceType === "file")).toBe(true);
+    expect(result.turnTrace.citations.some((citation) => citation.url.includes("apps/gateway/src/routes/memory.ts"))).toBe(
+      true,
+    );
   });
 
   it("treats MemoryMaintenancePanel as concrete operator-facing UI evidence for exact three-bullet prompts", async () => {
@@ -11445,7 +11944,10 @@ describe("ChatAgentOrchestrator", () => {
         auditEventId: "audit-memory-maintenance-read-3",
         result: {
           path: "F:/code/personal-ai/apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx",
-          content: "export function MemoryMaintenancePanel() { return null; }",
+          startLine: 1,
+          endLine: 260,
+          content:
+            "{'path': 'F:/code/personal-ai/apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx', 'content': 'export function MemoryMaintenancePanel() { return null; }'}",
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -11467,12 +11969,15 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
     expect(result.assistantContent).toContain("MemoryMaintenancePanel.tsx");
     expect(result.assistantContent).not.toContain("No operator-facing Memory UI file was concretely read");
     expect(result.assistantContent).toContain("MemoryMaintenancePanel");
+    expect(result.assistantContent).not.toContain("'path':");
+    expect(result.assistantContent).not.toContain("lines 1-260");
     expect(result.assistantContent).not.toContain("Exact citations used:");
     expect(result.assistantContent).not.toContain("## Exact files used");
     expect(result.assistantContent.match(/^- (Route surface|Stored state|Operator-facing surface):/gm)).toHaveLength(3);
@@ -11584,6 +12089,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -11704,6 +12210,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "extended",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -12828,6 +13335,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -12839,7 +13347,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("## Evidence Used");
   });
 
-  it("replaces prompt-pack repo-binding cowork prompts with negative-result honesty checks", async () => {
+  it("falls back to generic repo-grounded honesty checks for prompt-pack repo-binding cowork prompts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
       "- Mode: cowork",
@@ -12933,6 +13441,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
@@ -12942,6 +13451,8 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("missing repo-relative file");
     expect(result.assistantContent).toContain("session binding state, not successful path resolution");
     expect(result.assistantContent).toContain("## Evidence Used");
+    expect(result.assistantContent).not.toContain("No blocking tool failures recorded.");
+    expect(result.assistantContent).not.toContain("Workarounds: Use the cited files as the anchor");
   });
 
   it("repairs raw qwen tool-call markup into a final answer after tool execution", async () => {
@@ -13040,6 +13551,85 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("parser-focused regression test");
     expect(result.assistantContent).not.toContain("<function=");
   });
+  it("repairs parser-regression continuation replies into the required single paragraph", async () => {
+    const prompt = [
+      "Use file or code tools to inspect `goatcitadel_prompt_pack_v2.md` and the current prompt-pack parsing path. Then answer in one short paragraph naming the single parser-focused regression test you would add to prove the v2 pack parses cleanly and stays distinct from the frozen baseline fixture.",
+      "",
+      "Answer contract:",
+      "- Return one paragraph only.",
+      "- Do not rewrite the answer into labeled scaffolding unless the prompt requires it.",
+      "- Mention the concrete pack file you inspected.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Let me read the v2 pack file and the parsing helpers to understand the structure.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-parser-paragraph-read-v2",
+        result: {
+          path: "goatcitadel_prompt_pack_v2.md",
+          content: "# GoatCitadel Prompt Pack v2\n\nThis prompt pack is distinct from the frozen baseline fixture.\n",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-parser-paragraph-read-baseline",
+        result: {
+          path: "goatcitadel_prompt_pack.md",
+          content: "# GoatCitadel Prompt Pack\n\nFrozen baseline fixture.\n",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-parser-paragraph-read-service",
+        result: {
+          path: "apps/gateway/src/services/prompt-pack-service.ts",
+          content: "export function importPromptPack() {}\nexport function parsePromptPackTests() {}",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-parser-paragraph-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-parser-paragraph-repair-1",
+      content: prompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.assistantContent).toContain("parser-focused regression test");
+    expect(result.assistantContent).toContain("goatcitadel_prompt_pack_v2.md");
+    expect(result.assistantContent).toContain("prompt-pack-service.ts");
+    expect(result.assistantContent).not.toContain("## ");
+    expect(result.assistantContent).not.toContain("Let me read");
+  });
   it("repairs raw repo-grounded exact-minimal-test prompts into deterministic test scaffolds", async () => {
     const prompt =
       "Inspect the repo if needed and propose the exact minimal automated test that proves gate selection can intentionally target an expansion pack without silently preferring the older baseline.";
@@ -13111,15 +13701,18 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 
     expect(result.assistantContent).toContain("Target test file or suite");
     expect(result.assistantContent).toContain("scripts/run-prompt-pack-gates.test.ts");
     expect(result.assistantContent).toContain("resolvePromptPack");
-    expect(result.assistantContent).toContain("selectPromptPackGateTargetCodes");
     expect(result.assistantContent).toContain("/api/v1/prompt-packs?limit=200");
     expect(result.assistantContent).toContain("/tests?limit=2000");
+    expect(result.assistantContent).toContain("expansion-pack");
+    expect(result.assistantContent).toContain("TEST-C202");
+    expect(result.assistantContent).toContain("TEST-D204");
     expect(result.assistantContent).toContain("Setup:");
     expect(result.assistantContent).toContain("Act:");
     expect(result.assistantContent).toContain("Assert:");
@@ -13187,6 +13780,7 @@ describe("ChatAgentOrchestrator", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
       historyMessages: [{ role: "user", content: prompt }],
     });
 

@@ -58,13 +58,14 @@ export class PostgresAuditLog {
     this.db.transaction("immediate", () => {
       const nextSequenceRow = this.nextSequenceStmt.get(stream) as { next_sequence?: number } | undefined;
       const nextSequence = Number(nextSequenceRow?.next_sequence ?? 1);
+      const payloadJson = sanitizeJsonbPayloadText(JSON.stringify(sanitizeJsonValueForJsonb(sanitizedRecord)));
       this.insertStmt.run({
         streamName: stream,
         eventId: String(payload.eventId ?? randomUUID()),
         eventSequence: nextSequence,
         occurredAt: String(baseRecord.timestamp),
         actorId: typeof baseRecord.actorId === "string" ? baseRecord.actorId : null,
-        payload: JSON.stringify(sanitizedRecord),
+        payload: payloadJson,
       });
     });
   }
@@ -86,4 +87,52 @@ export class PostgresAuditLog {
       return [row.payload];
     });
   }
+}
+
+function sanitizeJsonValueForJsonb(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeJsonbString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonValueForJsonb(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+        sanitizeJsonbString(key),
+        sanitizeJsonValueForJsonb(entry),
+      ]),
+    );
+  }
+  return value;
+}
+
+function sanitizeJsonbString(value: string): string {
+  let sanitized = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.charCodeAt(index);
+    if (codePoint === 0x0000) {
+      continue;
+    }
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
+      const nextCodePoint = value.charCodeAt(index + 1);
+      if (nextCodePoint >= 0xdc00 && nextCodePoint <= 0xdfff) {
+        sanitized += value.charAt(index) + value.charAt(index + 1);
+        index += 1;
+      }
+      continue;
+    }
+    if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
+      continue;
+    }
+    sanitized += value.charAt(index);
+  }
+  return sanitized;
+}
+
+function sanitizeJsonbPayloadText(value: string): string {
+  return value
+    .replace(/\\u0000/gi, "")
+    .replace(/\\u(d[89ab][0-9a-f]{2})(?!\\u(d[cdef][0-9a-f]{2}))/gi, "")
+    .replace(/(?<!\\u(d[89ab][0-9a-f]{2}))\\u(d[cdef][0-9a-f]{2})/gi, "");
 }

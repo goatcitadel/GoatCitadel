@@ -338,6 +338,39 @@ describe("ChatProactiveService", () => {
       vi.useRealTimers();
     }
   });
+
+  it("aborts proactive durable execution without marking the pending action failed", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool } = harness;
+    const controller = new AbortController();
+    let toolStartedResolve: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      toolStartedResolve = resolve;
+    });
+
+    invokeTool.mockImplementation(
+      async (request) =>
+        await new Promise((_, reject) => {
+          expect(request.signal).toBe(controller.signal);
+          toolStartedResolve?.();
+          request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true });
+        }),
+    );
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    const runPromise = service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!, {
+      signal: controller.signal,
+    });
+    await toolStarted;
+    controller.abort(new Error("lease lost"));
+
+    await expect(runPromise).rejects.toThrow("lease lost");
+
+    const actions = actionsForRun(state, started.runId);
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.status).toBe("suggested");
+  });
 });
 
 function createHarness(options?: { durableKernelV1Enabled?: boolean }) {

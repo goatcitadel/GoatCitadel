@@ -258,6 +258,7 @@ describe("auth plugin", () => {
       mode: "token",
       token: { value: "alpha-token", queryParam: "access_token" },
     });
+    const warnSpy = vi.spyOn(app.log, "warn");
 
     const response = await app.inject({
       method: "GET",
@@ -265,6 +266,14 @@ describe("auth plugin", () => {
     });
 
     expect(response.statusCode).toBe(401);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authMode: "token",
+        queryParam: "access_token",
+        url: "/protected?access_token=alpha-token",
+      }),
+      "assistant.auth.token.queryParam is deprecated for normal gateway requests; only SSE bridge tokens still use query parameters.",
+    );
   });
 
   it("handles long token comparisons via timing-safe flow", async () => {

@@ -40,8 +40,10 @@ export async function dispatchConnectorDelivery(
       payload: Record<string, unknown>,
       options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
     ) => void;
+    signal?: AbortSignal;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
+  throwIfConnectorDeliveryAborted(deps.signal);
   requireActiveConnector(connector);
 
   switch (connector.connectorType) {
@@ -64,6 +66,7 @@ export async function dispatchConnectorDelivery(
         commsReact: deps.commsReact,
         commsUnsend: deps.commsUnsend,
         commsTyping: deps.commsTyping,
+        signal: deps.signal,
       });
 
     case "mcp_server":
@@ -73,7 +76,7 @@ export async function dispatchConnectorDelivery(
         });
       }
       requireConnectorCapability(connector, "interactive_actions", payload.action);
-      return dispatchMcpInvoke(connector, payload, deps.invokeMcpTool);
+      return dispatchMcpInvoke(connector, payload, deps.invokeMcpTool, deps.signal);
 
     case "browser":
       if (payload.action !== "realtime.emit") {
@@ -121,8 +124,10 @@ async function dispatchIntegrationChannelAction(
     commsReact: (input: ChannelReactInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
+    signal?: AbortSignal;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
+  throwIfConnectorDeliveryAborted(deps.signal);
   const actionPayload = payload.payload ?? {};
   const target = optionalString(actionPayload.target)
     ? normalizeConnectorDeliveryTarget(connector, requireNonEmptyString(actionPayload.target, "payload.target"))
@@ -141,6 +146,7 @@ async function dispatchIntegrationChannelAction(
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
+      signal: deps.signal,
     });
   } else if (payload.action === "channel.reply") {
     const message = requireNonEmptyString(actionPayload.message, "payload.message");
@@ -155,6 +161,7 @@ async function dispatchIntegrationChannelAction(
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
+      signal: deps.signal,
     });
   } else if (payload.action === "channel.react") {
     dispatchKind = "integration_channel_action";
@@ -168,6 +175,7 @@ async function dispatchIntegrationChannelAction(
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
+      signal: deps.signal,
     });
   } else if (payload.action === "channel.typing") {
     dispatchKind = "integration_channel_action";
@@ -179,6 +187,7 @@ async function dispatchIntegrationChannelAction(
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
+      signal: deps.signal,
     });
   } else {
     dispatchKind = "integration_channel_action";
@@ -190,8 +199,10 @@ async function dispatchIntegrationChannelAction(
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
+      signal: deps.signal,
     });
   }
+  throwIfConnectorDeliveryAborted(deps.signal);
   return {
     capabilityId:
       payload.action === "channel.send" || payload.action === "channel.reply"
@@ -206,9 +217,11 @@ async function dispatchMcpInvoke(
   connector: ConnectorRecord,
   payload: ConnectorDeliveryWorkflowPayload,
   invokeMcpTool: (input: McpInvokeRequest) => Promise<McpInvokeResponse>,
+  signal?: AbortSignal,
 ): Promise<ConnectorDeliveryDispatchResult> {
   const actionPayload = payload.payload ?? {};
   const toolName = requireNonEmptyString(actionPayload.toolName, "payload.toolName");
+  throwIfConnectorDeliveryAborted(signal);
   const response = await invokeMcpTool({
     serverId: connector.sourceId,
     toolName,
@@ -216,7 +229,9 @@ async function dispatchMcpInvoke(
     sessionId: optionalString(actionPayload.sessionId),
     agentId: optionalString(actionPayload.agentId),
     taskId: optionalString(actionPayload.taskId),
+    signal,
   });
+  throwIfConnectorDeliveryAborted(signal);
   if (!response.ok) {
     throw new Error(response.error ?? `MCP invoke failed for ${connector.connectorId}/${toolName}.`);
   }
@@ -428,6 +443,14 @@ function unwrapToolInvokeResult(result: ConnectorActionResult): Record<string, u
     );
   }
   return { ...result };
+}
+
+function throwIfConnectorDeliveryAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  const reason = signal.reason;
+  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Connector delivery aborted.");
 }
 
 function buildConnectorRealtimeLinks(

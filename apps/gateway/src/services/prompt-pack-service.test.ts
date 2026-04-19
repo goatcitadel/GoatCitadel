@@ -1,15 +1,29 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("node:sqlite", () => ({
+  DatabaseSync: class DatabaseSync {},
+  StatementSync: class StatementSync {},
+}));
+
 import type {
+  PromptPackBenchmarkStatusRecord,
   ChatProjectRecord,
   PromptPackHumanReviewRecordV2,
+  PromptPackRecord,
   PromptPackScoreRecordV2,
   PromptPackRunRecord,
   PromptPackScoreRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
+  PromptPackService,
   assertPromptPackRunScorable,
   buildPromptPackJudgeRecord,
+  derivePromptPackResponseArtifacts,
   buildPromptPackSessionAllowedPaths,
   buildPromptPackSessionToolAllowlist,
   findPromptPackProjectBinding,
@@ -23,16 +37,23 @@ import {
   evaluatePromptPackRunIntegrity,
   evaluatePromptPackRuleScores,
   extractPromptPackCompletionText,
+  mergePromptPackAutoScoresV2,
   normalizePromptPackJudgeScores,
   parsePromptPackTests,
   pickReplayBaselineScore,
+  promptPackExecutionRequiresDurable,
+  requiresPromptPackCitationEvidence,
+  resolvePromptPackEffectiveJudgeStatusV2,
   resolvePromptPackRunIntegrity,
   resolvePromptPackJudgeTarget,
   resolvePromptPackJudgeTemperature,
   resolvePromptPackJudgeServiceTier,
   resolvePromptPackExecutionProfile,
   resolvePromptPackProjectBinding,
+  ensurePromptPackDurableReadiness,
 } from "./prompt-pack-service.js";
+import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
+import { hashPromptPackPolicyV2 } from "@goatcitadel/storage";
 
 describe("prompt-pack helpers", () => {
   it("finds prompt-pack project bindings and prefers the jailed fixture workspace path", () => {
@@ -110,6 +131,28 @@ describe("prompt-pack helpers", () => {
         "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
       )?.workspacePath,
     ).toBe("__prompt_pack_repo__");
+
+    const implicitRepoChatProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-chat-binding",
+        packId: "pack-1",
+        code: "TEST-BIND-03",
+        title: "Implicit Repo Chat Binding",
+        prompt:
+          "Inspect the repo if needed and explain what an operator should trust when realtime updates are degraded. Cite the exact files used.",
+        orderIndex: 2,
+        mode: "chat",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-21T00:00:00.000Z",
+      },
+    });
+
+    expect(
+      resolvePromptPackProjectBinding(
+        implicitRepoChatProfile,
+        "Inspect the repo if needed and explain what an operator should trust when realtime updates are degraded. Cite the exact files used.",
+      )?.workspacePath,
+    ).toBe("__prompt_pack_repo__");
   });
 
   it("resolves no-tools profiles and honors mode presets", () => {
@@ -154,6 +197,1400 @@ describe("prompt-pack helpers", () => {
     expect(codeProfile.webMode).toBe("auto");
     expect(codeProfile.memoryMode).toBe("auto");
     expect(codeProfile.thinkingLevel).toBe("extended");
+  });
+
+  it("treats shipped chat, cowork, and code prompt-pack runs as durable-owned", () => {
+    expect(promptPackExecutionRequiresDurable({ mode: "chat" })).toBe(true);
+    expect(promptPackExecutionRequiresDurable({ mode: "cowork" })).toBe(true);
+    expect(promptPackExecutionRequiresDurable({ mode: "code" })).toBe(true);
+  });
+
+  it("fails prompt-pack preflight before run creation when durable execution is unavailable", () => {
+    expect(() =>
+      ensurePromptPackDurableReadiness(
+        { mode: "cowork" },
+        {
+          durable: {
+            enabled: true,
+            executionEnabled: false,
+            chatAutoPromoteEnabled: true,
+          },
+          durableKernelV1Enabled: true,
+        },
+      ),
+    ).toThrow(/Prompt Lab preflight failed/i);
+
+    expect(() =>
+      ensurePromptPackDurableReadiness(
+        { mode: "code" },
+        {
+          durable: {
+            enabled: true,
+            executionEnabled: true,
+            chatAutoPromoteEnabled: true,
+          },
+          durableKernelV1Enabled: false,
+        },
+      ),
+    ).toThrow(/durable-owned code execution is unavailable/i);
+  });
+
+  it("blocks prompt-pack test execution before creating run rows when durable preflight fails", async () => {
+    const createRun = vi.fn();
+    const createChatSession = vi.fn();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () =>
+              ({
+                testId: "test-1",
+                packId: "pack-1",
+                code: "TEST-01",
+                title: "Cowork infra gate",
+                prompt: "Inspect the repo and summarize the failure.",
+                orderIndex: 0,
+                mode: "cowork",
+                toolTier: "explicit-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              }) satisfies PromptPackTestRecord,
+          },
+          promptPackRuns: {
+            create: createRun,
+          },
+        },
+        gatewaySql: {} as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: false,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession,
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    await expect(service.runPromptPackTest("pack-1", "test-1")).rejects.toThrow(/preflight failed/i);
+    expect(createRun).not.toHaveBeenCalled();
+    expect(createChatSession).not.toHaveBeenCalled();
+  });
+
+  it("blocks benchmark launch before creating a benchmark row when durable preflight fails", () => {
+    const benchmarkInsert = vi.fn();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            listTests: () =>
+              [
+                {
+                  testId: "test-1",
+                  packId: "pack-1",
+                  code: "TEST-01",
+                  title: "Code infra gate",
+                  prompt: "Inspect the repo and summarize the failure.",
+                  orderIndex: 0,
+                  mode: "code",
+                  toolTier: "explicit-tools",
+                  createdAt: "2026-03-14T00:00:00.000Z",
+                } satisfies PromptPackTestRecord,
+              ],
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            run: benchmarkInsert,
+          }),
+        } as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => false,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    expect(() =>
+      service.runPromptPackBenchmark("pack-1", {
+        testCodes: ["TEST-01"],
+        providers: [{ providerId: "openai", model: "gpt-5.4" }],
+      }),
+    ).toThrow(/preflight failed/i);
+    expect(benchmarkInsert).not.toHaveBeenCalled();
+  });
+
+  it("uses prompt-runner defaults for prompt execution instead of judge defaults", async () => {
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      userMessage: {
+        messageId: "user-1",
+        sessionId: "sess-1",
+        role: "user",
+        actorType: "user",
+        actorId: "user",
+        content: "Answer only from the prompt.",
+        timestamp: "2026-03-14T00:00:00.000Z",
+      },
+      assistantMessage: {
+        messageId: "assistant-1",
+        sessionId: "sess-1",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: "Runner answer.",
+        timestamp: "2026-03-14T00:00:01.000Z",
+      },
+      transport: "llm",
+      trace: createTrace("sess-1"),
+      citations: [],
+      routing: {},
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () =>
+              ({
+                testId: "test-1",
+                packId: "pack-1",
+                code: "TEST-RUNNER-DEFAULTS",
+                title: "Runner defaults",
+                prompt: "Answer only from the prompt.",
+                orderIndex: 0,
+                mode: "chat",
+                toolTier: "no-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              }) satisfies PromptPackTestRecord,
+          },
+          promptPackRuns: {
+            create: vi.fn(),
+            patch: vi.fn((_runId: string, patch: Record<string, unknown>) => ({
+              ...createRun("run-runner-defaults", String(patch.status ?? "completed"), "2026-03-14T00:00:00.000Z"),
+              testId: "test-1",
+              responseText: patch.responseText,
+              trace: patch.trace,
+              citations: patch.citations,
+              integrity: patch.integrity,
+              error: patch.error,
+            })),
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-1" })),
+        agentSendChatMessage,
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "runner-provider", model: "runner-model" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "judge-provider", model: "judge-model" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    await service.runPromptPackTest("pack-1", "test-1");
+
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        providerId: "runner-provider",
+        model: "runner-model",
+      }),
+    );
+  });
+
+  it("refreshes a durable-backed turn snapshot before persisting the prompt-pack run", async () => {
+    const createRun = vi.fn();
+    const patchRun = vi.fn((_: string, patch: Record<string, unknown>) => ({
+      runId: "run-1",
+      packId: "pack-1",
+      testId: "test-1",
+      sessionId: "sess-1",
+      status: patch.status,
+      providerId: "openai",
+      model: "gpt-5.4",
+      mode: "chat",
+      toolTier: "no-tools",
+      toolAutonomy: "manual",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      responseText: patch.responseText,
+      trace: patch.trace,
+      citations: patch.citations,
+      integrity: patch.integrity,
+      error: patch.error,
+      startedAt: "2026-03-14T00:00:00.000Z",
+      finishedAt: patch.finishedAt,
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () =>
+              ({
+                testId: "test-1",
+                packId: "pack-1",
+                code: "TEST-REFRESH-01",
+                title: "Refresh durable snapshot",
+                prompt: "Answer only from the prompt.",
+                orderIndex: 0,
+                mode: "chat",
+                toolTier: "no-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              }) satisfies PromptPackTestRecord,
+          },
+          promptPackRuns: {
+            create: createRun,
+            patch: patchRun,
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: (value: string) => {
+              if (sql.includes("FROM chat_turn_traces") && value === "turn-1") {
+                return {
+                  assistant_message_id: "assistant-1",
+                  status: "completed",
+                  model: "gpt-5.4",
+                  completion_json: JSON.stringify({
+                    finishReason: "stop",
+                    status: "complete",
+                    repaired: false,
+                  }),
+                  durable_json: JSON.stringify({
+                    runId: "dur-1",
+                    status: "completed",
+                    checkpointKind: "run_completed",
+                  }),
+                  citations_json: "[]",
+                  failure_json: null,
+                  finished_at: "2026-03-14T00:00:02.000Z",
+                };
+              }
+              if (sql.includes("FROM chat_messages") && value === "assistant-1") {
+                return {
+                  content: "Final durable answer.",
+                };
+              }
+              return undefined;
+            },
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-1" })),
+        agentSendChatMessage: vi.fn(async () => ({
+          sessionId: "sess-1",
+          turnId: "turn-1",
+          userMessage: {
+            messageId: "user-1",
+            sessionId: "sess-1",
+            role: "user",
+            actorType: "user",
+            actorId: "user",
+            content: "Answer only from the prompt.",
+            timestamp: "2026-03-14T00:00:00.000Z",
+          },
+          assistantMessage: {
+            messageId: "assistant-1",
+            sessionId: "sess-1",
+            role: "assistant",
+            actorType: "agent",
+            actorId: "assistant",
+            content: "",
+            timestamp: "2026-03-14T00:00:01.000Z",
+          },
+          transport: "llm",
+          trace: {
+            turnId: "turn-1",
+            sessionId: "sess-1",
+            userMessageId: "user-1",
+            assistantMessageId: "assistant-1",
+            branchKind: "append",
+            status: "completed",
+            mode: "chat",
+            model: "gpt-5.4",
+            webMode: "off",
+            memoryMode: "off",
+            thinkingLevel: "standard",
+            routing: {},
+            toolRuns: [],
+            citations: [],
+            completion: {
+              finishReason: "tool_calls",
+              status: "complete",
+              repaired: false,
+            },
+            durable: {
+              runId: "dur-1",
+              status: "running",
+              checkpointKind: "run_started",
+            },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+          },
+          citations: [],
+          routing: {},
+        })),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const run = await service.runPromptPackTest("pack-1", "test-1");
+
+    expect(run.responseText).toBe("Final durable answer.");
+    expect(run.trace?.completion?.finishReason).toBe("stop");
+    expect(run.trace?.durable?.status).toBe("completed");
+    expect(patchRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        responseText: "Final durable answer.",
+      }),
+    );
+  });
+
+  it("preserves live response fallbacks when durable snapshot JSON columns are null", async () => {
+    const patchRun = vi.fn((_: string, patch: Record<string, unknown>) => ({
+      runId: "run-null-refresh",
+      packId: "pack-1",
+      testId: "test-1",
+      sessionId: "sess-1",
+      status: patch.status,
+      providerId: "openai",
+      model: "gpt-5.4",
+      mode: "chat",
+      toolTier: "no-tools",
+      toolAutonomy: "manual",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      responseText: patch.responseText,
+      trace: patch.trace,
+      citations: patch.citations,
+      integrity: patch.integrity,
+      error: patch.error,
+      startedAt: "2026-03-14T00:00:00.000Z",
+      finishedAt: patch.finishedAt,
+    }));
+    const liveCitations = [{ title: "live-citation", uri: "file:///repo" }] as never;
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () =>
+              ({
+                testId: "test-1",
+                packId: "pack-1",
+                code: "TEST-REFRESH-NULL",
+                title: "Refresh null snapshot",
+                prompt: "Answer only from the prompt.",
+                orderIndex: 0,
+                mode: "chat",
+                toolTier: "no-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              }) satisfies PromptPackTestRecord,
+          },
+          promptPackRuns: {
+            create: vi.fn(),
+            patch: patchRun,
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: (value: string) => {
+              if (sql.includes("FROM chat_turn_traces") && value === "turn-1") {
+                return {
+                  assistant_message_id: "assistant-1",
+                  status: "completed",
+                  model: "gpt-5.4",
+                  completion_json: "null",
+                  durable_json: "null",
+                  citations_json: null,
+                  failure_json: "null",
+                  finished_at: "2026-03-14T00:00:02.000Z",
+                };
+              }
+              if (sql.includes("FROM chat_messages") && value === "assistant-1") {
+                return {
+                  content: "Fallback-preserving answer.",
+                };
+              }
+              return undefined;
+            },
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-1" })),
+        agentSendChatMessage: vi.fn(async () => ({
+          sessionId: "sess-1",
+          turnId: "turn-1",
+          userMessage: {
+            messageId: "user-1",
+            sessionId: "sess-1",
+            role: "user",
+            actorType: "user",
+            actorId: "user",
+            content: "Answer only from the prompt.",
+            timestamp: "2026-03-14T00:00:00.000Z",
+          },
+          assistantMessage: {
+            messageId: "assistant-1",
+            sessionId: "sess-1",
+            role: "assistant",
+            actorType: "agent",
+            actorId: "assistant",
+            content: "",
+            timestamp: "2026-03-14T00:00:01.000Z",
+          },
+          transport: "llm",
+          trace: {
+            turnId: "turn-1",
+            sessionId: "sess-1",
+            userMessageId: "user-1",
+            assistantMessageId: "assistant-1",
+            branchKind: "append",
+            status: "completed",
+            mode: "chat",
+            model: "gpt-5.4",
+            webMode: "off",
+            memoryMode: "off",
+            thinkingLevel: "standard",
+            routing: {},
+            toolRuns: [],
+            citations: liveCitations,
+            completion: {
+              finishReason: "stop",
+              status: "complete",
+              repaired: false,
+            },
+            durable: {
+              runId: "dur-1",
+              status: "completed",
+              checkpointKind: "run_completed",
+            },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+          },
+          citations: liveCitations,
+          routing: {},
+        })),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const run = await service.runPromptPackTest("pack-1", "test-1");
+
+    expect(run.trace?.completion?.finishReason).toBe("stop");
+    expect(run.trace?.durable?.status).toBe("completed");
+    expect(run.citations).toEqual(liveCitations);
+  });
+
+  it("derives prompt-pack helper text without overwriting non-empty raw output", () => {
+    const prompt = [
+      "## Prompt Lab Run Contract",
+      "- Inspect the current prompt-pack markdown import path.",
+      "",
+      "## User Task",
+      "For prompt-pack markdown import, inspect the repo and explain how prompt-pack markdown is auto-loaded and imported.",
+    ].join("\n");
+
+    const derived = derivePromptPackResponseArtifacts({
+      prompt,
+      rawResponseText: "",
+      trace: {
+        ...createTrace("sess-derived-artifacts"),
+        toolRuns: [
+          {
+            toolRunId: "tool-service-read",
+            turnId: "turn-derived-artifacts",
+            sessionId: "sess-derived-artifacts",
+            toolName: "file.read_range",
+            status: "executed",
+            args: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+            },
+            result: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+              content:
+                'ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, "utf8");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });',
+            },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:00.500Z",
+          },
+          {
+            toolRunId: "tool-route-read",
+            turnId: "turn-derived-artifacts",
+            sessionId: "sess-derived-artifacts",
+            toolName: "file.read_range",
+            status: "executed",
+            args: {
+              path: "apps/gateway/src/routes/prompt-packs.ts",
+            },
+            result: {
+              path: "apps/gateway/src/routes/prompt-packs.ts",
+              content: "fastify.post('/api/v1/prompt-packs/import', async () => fastify.gateway.importPromptPack());",
+            },
+            startedAt: "2026-03-14T00:00:00.500Z",
+            finishedAt: "2026-03-14T00:00:01.000Z",
+          },
+        ],
+      },
+    });
+
+    expect(derived.derivedResponseSignals).toEqual(["prompt_lab_contract_fallback"]);
+    expect(derived.derivedResponseText).toContain("Observed import/load path:");
+    expect(derived.derivedResponseText).toContain("POST /api/v1/prompt-packs/import");
+
+    expect(
+      derivePromptPackResponseArtifacts({
+        prompt,
+        rawResponseText: "Raw answer stays canonical.",
+        trace: createTrace("sess-derived-nonempty"),
+      }),
+    ).toEqual({});
+  });
+
+  it("waits long enough to capture slower durable terminal snapshots", async () => {
+    vi.useFakeTimers();
+    try {
+      const createRun = vi.fn();
+      const patchRun = vi.fn((_: string, patch: Record<string, unknown>) => ({
+        runId: "run-slow-refresh",
+        packId: "pack-1",
+        testId: "test-1",
+        sessionId: "sess-1",
+        status: patch.status,
+        providerId: "openai",
+        model: "gpt-5.4",
+        mode: "chat",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        responseText: patch.responseText,
+        trace: patch.trace,
+        citations: patch.citations,
+        integrity: patch.integrity,
+        error: patch.error,
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: patch.finishedAt,
+      }));
+      let traceReads = 0;
+      const service = new PromptPackService(
+        {
+          storage: {
+            promptPacks: {
+              getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+              getTest: () =>
+                ({
+                  testId: "test-1",
+                  packId: "pack-1",
+                  code: "TEST-REFRESH-SLOW",
+                  title: "Refresh durable snapshot slowly",
+                  prompt: "Answer only from the prompt.",
+                  orderIndex: 0,
+                  mode: "chat",
+                  toolTier: "no-tools",
+                  createdAt: "2026-03-14T00:00:00.000Z",
+                }) satisfies PromptPackTestRecord,
+            },
+            promptPackRuns: {
+              create: createRun,
+              patch: patchRun,
+            },
+            toolGrants: {
+              list: () => [],
+              create: vi.fn(),
+            },
+          },
+          gatewaySql: {
+            prepare: (sql: string) => ({
+              get: (value: string) => {
+                if (sql.includes("FROM chat_turn_traces") && value === "turn-1") {
+                  traceReads += 1;
+                  if (traceReads < 10) {
+                    return {
+                      assistant_message_id: "assistant-1",
+                      status: "completed",
+                      model: "gpt-5.4",
+                      completion_json: JSON.stringify({
+                        finishReason: "tool_calls",
+                        status: "complete",
+                        repaired: false,
+                      }),
+                      durable_json: JSON.stringify({
+                        runId: "dur-1",
+                        status: "running",
+                        checkpointKind: "run_started",
+                      }),
+                      citations_json: "[]",
+                      failure_json: null,
+                      finished_at: "2026-03-14T00:00:01.000Z",
+                    };
+                  }
+                  return {
+                    assistant_message_id: "assistant-1",
+                    status: "completed",
+                    model: "gpt-5.4",
+                    completion_json: JSON.stringify({
+                      finishReason: "stop",
+                      status: "complete",
+                      repaired: false,
+                    }),
+                    durable_json: JSON.stringify({
+                      runId: "dur-1",
+                      status: "completed",
+                      checkpointKind: "run_completed",
+                    }),
+                    citations_json: "[]",
+                    failure_json: null,
+                    finished_at: "2026-03-14T00:00:03.000Z",
+                  };
+                }
+                if (sql.includes("FROM chat_messages") && value === "assistant-1") {
+                  return {
+                    content: traceReads < 10 ? "" : "Delayed durable answer.",
+                  };
+                }
+                return undefined;
+              },
+            }),
+          } as never,
+          config: {
+            rootDir: "F:/code/personal-ai",
+            assistant: {
+              workspaceDir: ".",
+              durable: {
+                enabled: true,
+                executionEnabled: true,
+                chatAutoPromoteEnabled: true,
+              },
+            },
+          } as never,
+          normalizeWorkspaceId: () => "default",
+          isFeatureEnabled: () => true,
+          requireFeatureEnabled: () => undefined,
+          publishRealtime: () => undefined,
+        } as never,
+        {
+          createChatSession: vi.fn(() => ({ sessionId: "sess-1" })),
+          agentSendChatMessage: vi.fn(async () => ({
+            sessionId: "sess-1",
+            turnId: "turn-1",
+            userMessage: {
+              messageId: "user-1",
+              sessionId: "sess-1",
+              role: "user",
+              actorType: "user",
+              actorId: "user",
+              content: "Answer only from the prompt.",
+              timestamp: "2026-03-14T00:00:00.000Z",
+            },
+            assistantMessage: {
+              messageId: "assistant-1",
+              sessionId: "sess-1",
+              role: "assistant",
+              actorType: "agent",
+              actorId: "assistant",
+              content: "",
+              timestamp: "2026-03-14T00:00:01.000Z",
+            },
+            transport: "llm",
+            trace: {
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              userMessageId: "user-1",
+              assistantMessageId: "assistant-1",
+              branchKind: "append",
+              status: "completed",
+              mode: "chat",
+              model: "gpt-5.4",
+              webMode: "off",
+              memoryMode: "off",
+              thinkingLevel: "standard",
+              routing: {},
+              toolRuns: [],
+              citations: [],
+              completion: {
+                finishReason: "tool_calls",
+                status: "complete",
+                repaired: false,
+              },
+              durable: {
+                runId: "dur-1",
+                status: "running",
+                checkpointKind: "run_started",
+              },
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+            citations: [],
+            routing: {},
+          })),
+          createChatCompletion: vi.fn(),
+          getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          backgroundTasks: new Set(),
+        },
+      );
+      vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+      const runPromise = service.runPromptPackTest("pack-1", "test-1");
+      await vi.advanceTimersByTimeAsync(2_500);
+      const run = await runPromise;
+
+      expect(run.responseText).toBe("Delayed durable answer.");
+      expect(run.trace?.durable?.status).toBe("completed");
+      expect(traceReads).toBeGreaterThanOrEqual(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes interrupted benchmark runs without rerunning completed items", async () => {
+    const firstTest = createTest("test-benchmark-1", "TEST-BENCH-01");
+    const secondTest = createTest("test-benchmark-2", "TEST-BENCH-02");
+    const benchmarkRun: {
+      benchmark_run_id: string;
+      pack_id: string;
+      status: PromptPackBenchmarkStatusRecord["run"]["status"];
+      test_codes_json: string;
+      providers_json: string;
+      total_items: number;
+      completed_items: number;
+      claimed_by_worker_id: string | null;
+      claim_heartbeat_at: string | null;
+      claim_expires_at: string | null;
+      error: string | null;
+      started_at: string;
+      finished_at: string | null;
+    } = {
+      benchmark_run_id: "ppb-resume-1",
+      pack_id: "pack-1",
+      status: "running",
+      test_codes_json: JSON.stringify([firstTest.code, secondTest.code]),
+      providers_json: JSON.stringify([{ providerId: "openai", model: "gpt-5.4" }]),
+      total_items: 2,
+      completed_items: 1,
+      claimed_by_worker_id: null,
+      claim_heartbeat_at: null,
+      claim_expires_at: null,
+      error: null,
+      started_at: "2026-03-16T00:00:00.000Z",
+      finished_at: null,
+    };
+    const benchmarkItems: Array<Record<string, unknown>> = [
+      {
+        item_id: "ppbi-existing",
+        benchmark_run_id: benchmarkRun.benchmark_run_id,
+        pack_id: "pack-1",
+        test_id: firstTest.testId,
+        test_code: firstTest.code,
+        provider_id: "openai",
+        model: "gpt-5.4",
+        run_id: "run-existing",
+        score_id: null,
+        auto_score_id: "auto-existing",
+        run_status: "completed",
+        total_score: null,
+        weighted_score: 92,
+        verdict: "pass",
+        score_state: "auto_valid",
+        failure_signal: null,
+        created_at: "2026-03-16T00:01:00.000Z",
+      },
+    ];
+    const benchmarkUpdates: Array<Record<string, unknown>> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listTests: () => [firstTest, secondTest],
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: (arg: string) => {
+              if (sql.includes("FROM prompt_pack_benchmark_runs") && arg === benchmarkRun.benchmark_run_id) {
+                return benchmarkRun;
+              }
+              return undefined;
+            },
+            all: (arg?: unknown) => {
+              if (sql.includes("FROM prompt_pack_benchmark_runs") && sql.includes("status IN ('queued', 'running')")) {
+                return [benchmarkRun];
+              }
+              if (sql.includes("FROM prompt_pack_benchmark_items") && arg === benchmarkRun.benchmark_run_id) {
+                return benchmarkItems;
+              }
+              return [];
+            },
+            run: (params: Record<string, unknown>) => {
+              benchmarkUpdates.push(params);
+              if (sql.includes("INSERT INTO prompt_pack_benchmark_items")) {
+                benchmarkItems.push({
+                  item_id: String(params.itemId),
+                  benchmark_run_id: String(params.benchmarkRunId),
+                  pack_id: String(params.packId),
+                  test_id: String(params.testId),
+                  test_code: String(params.testCode),
+                  provider_id: String(params.providerId),
+                  model: String(params.model),
+                  run_id: typeof params.runId === "string" ? params.runId : null,
+                  score_id: typeof params.scoreId === "string" ? params.scoreId : null,
+                  auto_score_id: typeof params.autoScoreId === "string" ? params.autoScoreId : null,
+                  run_status: String(params.runStatus),
+                  total_score: typeof params.totalScore === "number" ? params.totalScore : null,
+                  weighted_score: typeof params.weightedScore === "number" ? params.weightedScore : null,
+                  verdict: typeof params.verdict === "string" ? params.verdict : null,
+                  score_state: typeof params.scoreState === "string" ? params.scoreState : null,
+                  failure_signal: typeof params.failureSignal === "string" ? params.failureSignal : null,
+                  created_at: String(params.createdAt),
+                });
+              } else if (sql.includes("SET claim_heartbeat_at = @now")) {
+                if (benchmarkRun.claimed_by_worker_id === String(params.workerId)) {
+                  benchmarkRun.claim_heartbeat_at = String(params.now);
+                  benchmarkRun.claim_expires_at = String(params.claimExpiresAt);
+                  return { changes: 1 };
+                }
+                return { changes: 0 };
+              } else if (sql.includes("status = 'completed'")) {
+                benchmarkRun.status = "completed";
+                benchmarkRun.finished_at = String(params.finishedAt);
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+                return { changes: 1 };
+              } else if (sql.includes("status = 'failed'")) {
+                benchmarkRun.status = "failed";
+                benchmarkRun.error = String(params.error);
+                benchmarkRun.finished_at = String(params.finishedAt);
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+                return { changes: 1 };
+              } else if (sql.includes("status = 'running'")) {
+                benchmarkRun.status = "running";
+                benchmarkRun.error = null;
+                benchmarkRun.completed_items = Number(params.completedItems ?? benchmarkRun.completed_items);
+                benchmarkRun.claimed_by_worker_id = String(params.workerId ?? "worker-test");
+                benchmarkRun.claim_heartbeat_at = String(params.now ?? "2026-03-16T00:00:00.000Z");
+                benchmarkRun.claim_expires_at = String(params.claimExpiresAt ?? "2026-03-16T00:02:00.000Z");
+                return { changes: 1 };
+              } else if (sql.includes("SET completed_items = @completedItems")) {
+                benchmarkRun.completed_items = Number(params.completedItems);
+                return { changes: 1 };
+              }
+              return { changes: 0 };
+            },
+          }),
+        } as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks,
+      },
+    );
+    const resumedRun: PromptPackRunRecord = {
+      ...createRun("run-resumed", "completed", "2026-03-16T00:02:00.000Z"),
+      testId: secondTest.testId,
+      responseText: "Recovered benchmark answer.",
+      trace: createTrace("sess-resumed"),
+    };
+    const runPromptPackTest = vi.spyOn(service, "runPromptPackTest").mockResolvedValue(resumedRun);
+    const autoScorePromptPackTest = vi.spyOn(service, "autoScorePromptPackTest").mockResolvedValue({
+      score: {
+        autoScoreId: "auto-resumed",
+        weightedScore: 96,
+        autoVerdict: "pass",
+        scoreState: "auto_valid",
+      },
+      legacyScore: undefined,
+      run: resumedRun,
+    } as never);
+
+    expect(service.resumeInterruptedBenchmarkRuns()).toBe(1);
+    await Promise.all([...backgroundTasks]);
+
+    expect(runPromptPackTest).toHaveBeenCalledTimes(1);
+    expect(runPromptPackTest).toHaveBeenCalledWith(
+      "pack-1",
+      secondTest.testId,
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-5.4",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(autoScorePromptPackTest).toHaveBeenCalledTimes(1);
+    expect(benchmarkItems).toHaveLength(2);
+    expect(benchmarkRun.status).toBe("completed");
+    expect(benchmarkRun.completed_items).toBe(2);
+    expect(
+      publishRealtime.mock.calls.some(
+        ([eventType, source, payload]) =>
+          eventType === "prompt_pack_benchmark_completed" &&
+          source === "promptLab" &&
+          (payload as { benchmarkRunId?: string }).benchmarkRunId === benchmarkRun.benchmark_run_id,
+      ),
+    ).toBe(true);
+    expect(benchmarkUpdates.some((params) => params.completedItems === 1)).toBe(true);
+    expect(benchmarkUpdates.some((params) => params.completedItems === 2)).toBe(true);
+  });
+
+  it("cancels an in-flight benchmark without flipping it to failed", async () => {
+    const test = createTest("test-benchmark-cancel", "TEST-BENCH-CANCEL");
+    const benchmarkRun: {
+      benchmark_run_id: string;
+      pack_id: string;
+      status: PromptPackBenchmarkStatusRecord["run"]["status"];
+      test_codes_json: string;
+      providers_json: string;
+      total_items: number;
+      completed_items: number;
+      claimed_by_worker_id: string | null;
+      claim_heartbeat_at: string | null;
+      claim_expires_at: string | null;
+      error: string | null;
+      started_at: string;
+      finished_at: string | null;
+    } = {
+      benchmark_run_id: "ppb-cancel-1",
+      pack_id: "pack-1",
+      status: "running",
+      test_codes_json: JSON.stringify([test.code]),
+      providers_json: JSON.stringify([{ providerId: "openai", model: "gpt-5.4" }]),
+      total_items: 1,
+      completed_items: 0,
+      claimed_by_worker_id: null,
+      claim_heartbeat_at: null,
+      claim_expires_at: null,
+      error: null as string | null,
+      started_at: "2026-03-16T00:00:00.000Z",
+      finished_at: null as string | null,
+    };
+    const benchmarkItems: Array<Record<string, unknown>> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const publishRealtime = vi.fn();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listTests: () => [test],
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: (arg: string) => {
+              if (sql.includes("FROM prompt_pack_benchmark_runs") && arg === benchmarkRun.benchmark_run_id) {
+                return benchmarkRun;
+              }
+              return undefined;
+            },
+            all: (arg?: unknown) => {
+              if (sql.includes("FROM prompt_pack_benchmark_runs") && sql.includes("status IN ('queued', 'running')")) {
+                return [benchmarkRun];
+              }
+              if (sql.includes("FROM prompt_pack_benchmark_items") && arg === benchmarkRun.benchmark_run_id) {
+                return benchmarkItems;
+              }
+              return [];
+            },
+            run: (params: Record<string, unknown>) => {
+              if (sql.includes("INSERT INTO prompt_pack_benchmark_items")) {
+                benchmarkItems.push({
+                  item_id: String(params.itemId),
+                  benchmark_run_id: String(params.benchmarkRunId),
+                  pack_id: String(params.packId),
+                  test_id: String(params.testId),
+                  test_code: String(params.testCode),
+                  provider_id: String(params.providerId),
+                  model: String(params.model),
+                  run_id: params.runId,
+                  auto_score_id: params.autoScoreId,
+                  run_status: params.runStatus,
+                  weighted_score: params.weightedScore,
+                  verdict: params.verdict,
+                  score_state: params.scoreState,
+                  failure_signal: params.failureSignal,
+                  created_at: String(params.createdAt),
+                });
+              } else if (sql.includes("SET claim_heartbeat_at = @now")) {
+                if (benchmarkRun.claimed_by_worker_id === String(params.workerId)) {
+                  benchmarkRun.claim_heartbeat_at = String(params.now);
+                  benchmarkRun.claim_expires_at = String(params.claimExpiresAt);
+                  return { changes: 1 };
+                }
+                return { changes: 0 };
+              } else if (sql.includes("status = 'completed'")) {
+                benchmarkRun.status = "completed";
+                benchmarkRun.finished_at = String(params.finishedAt);
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+              } else if (sql.includes("status = 'cancelled'")) {
+                benchmarkRun.status = "cancelled";
+                benchmarkRun.error = String(params.error);
+                benchmarkRun.finished_at = String(params.finishedAt);
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+              } else if (sql.includes("status = 'failed'")) {
+                benchmarkRun.status = "failed";
+                benchmarkRun.error = String(params.error);
+                benchmarkRun.finished_at = String(params.finishedAt);
+                benchmarkRun.claimed_by_worker_id = null;
+                benchmarkRun.claim_heartbeat_at = null;
+                benchmarkRun.claim_expires_at = null;
+              } else if (sql.includes("status = 'running'")) {
+                if (benchmarkRun.status === "cancelled") {
+                  return { changes: 0 };
+                }
+                benchmarkRun.status = "running";
+                benchmarkRun.error = null;
+                benchmarkRun.claimed_by_worker_id = String(params.workerId ?? "worker-test");
+                benchmarkRun.claim_heartbeat_at = String(params.now ?? "2026-03-16T00:00:00.000Z");
+                benchmarkRun.claim_expires_at = String(params.claimExpiresAt ?? "2026-03-16T00:02:00.000Z");
+              } else if (sql.includes("SET completed_items = @completedItems")) {
+                benchmarkRun.completed_items = Number(params.completedItems);
+              }
+              return { changes: 1 };
+            },
+          }),
+        } as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks,
+      },
+    );
+
+    let resolveRun: ((value: PromptPackRunRecord) => void) | undefined;
+    const runPromise = new Promise<PromptPackRunRecord>((resolve) => {
+      resolveRun = resolve;
+    });
+    const completedRun: PromptPackRunRecord = {
+      ...createRun("run-cancelled", "completed", "2026-03-16T00:01:00.000Z"),
+      testId: test.testId,
+      responseText: "Recovered before cancellation landed.",
+      trace: createTrace("sess-cancelled"),
+    };
+    const runPromptPackTest = vi.spyOn(service, "runPromptPackTest").mockReturnValue(runPromise);
+    const autoScorePromptPackTest = vi.spyOn(service, "autoScorePromptPackTest").mockResolvedValue({
+      score: {
+        autoScoreId: "auto-cancelled",
+        weightedScore: 91,
+        autoVerdict: "pass",
+        scoreState: "auto_valid",
+      },
+      legacyScore: undefined,
+      run: completedRun,
+    } as never);
+
+    expect(service.resumeInterruptedBenchmarkRuns()).toBe(1);
+    await Promise.resolve();
+
+    const cancelled = service.cancelPromptPackBenchmark(benchmarkRun.benchmark_run_id);
+    expect(cancelled.run.status).toBe("cancelled");
+
+    resolveRun?.(completedRun);
+    await Promise.all([...backgroundTasks]);
+
+    expect(runPromptPackTest).toHaveBeenCalledTimes(1);
+    expect(autoScorePromptPackTest).not.toHaveBeenCalled();
+    expect(benchmarkRun.status).toBe("cancelled");
+    expect(benchmarkRun.error).toBe("Cancelled by operator.");
+    expect(benchmarkItems).toHaveLength(0);
+    expect(
+      publishRealtime.mock.calls.some(
+        ([eventType, source, payload]) =>
+          eventType === "prompt_pack_benchmark_cancelled" &&
+          source === "promptLab" &&
+          (payload as { benchmarkRunId?: string }).benchmarkRunId === benchmarkRun.benchmark_run_id,
+      ),
+    ).toBe(true);
+    expect(
+      publishRealtime.mock.calls.some(([eventType]) => eventType === "prompt_pack_benchmark_completed"),
+    ).toBe(false);
+  });
+
+  it("does not resume a cancelled benchmark after service restart", async () => {
+    const test = createTest("test-benchmark-restart-cancel", "TEST-BENCH-RESTART-CANCEL");
+    const benchmarkRun: {
+      benchmark_run_id: string;
+      pack_id: string;
+      status: PromptPackBenchmarkStatusRecord["run"]["status"];
+      test_codes_json: string;
+      providers_json: string;
+      total_items: number;
+      completed_items: number;
+      claimed_by_worker_id: string | null;
+      claim_heartbeat_at: string | null;
+      claim_expires_at: string | null;
+      error: string | null;
+      started_at: string;
+      finished_at: string | null;
+    } = {
+      benchmark_run_id: "ppb-restart-cancel-1",
+      pack_id: "pack-1",
+      status: "running",
+      test_codes_json: JSON.stringify([test.code]),
+      providers_json: JSON.stringify([{ providerId: "openai", model: "gpt-5.4" }]),
+      total_items: 1,
+      completed_items: 0,
+      claimed_by_worker_id: null,
+      claim_heartbeat_at: null,
+      claim_expires_at: null,
+      error: null,
+      started_at: "2026-03-16T00:00:00.000Z",
+      finished_at: null,
+    };
+    const benchmarkItems: Array<Record<string, unknown>> = [];
+    const createGatewaySql = () =>
+      ({
+        prepare: (sql: string) => ({
+          get: (arg: string) => {
+            if (sql.includes("FROM prompt_pack_benchmark_runs") && arg === benchmarkRun.benchmark_run_id) {
+              return benchmarkRun;
+            }
+            return undefined;
+          },
+          all: (_arg?: unknown) => {
+            if (sql.includes("FROM prompt_pack_benchmark_runs") && sql.includes("status IN ('queued', 'running')")) {
+              return benchmarkRun.status === "cancelled" ? [] : [benchmarkRun];
+            }
+            if (sql.includes("FROM prompt_pack_benchmark_items")) {
+              return benchmarkItems;
+            }
+            return [];
+          },
+          run: (params: Record<string, unknown>) => {
+            if (sql.includes("status = 'cancelled'")) {
+              benchmarkRun.status = "cancelled";
+              benchmarkRun.error = String(params.error);
+              benchmarkRun.finished_at = String(params.finishedAt);
+              benchmarkRun.claimed_by_worker_id = null;
+              benchmarkRun.claim_heartbeat_at = null;
+              benchmarkRun.claim_expires_at = null;
+              return { changes: 1 };
+            }
+            return { changes: 0 };
+          },
+        }),
+      }) as never;
+
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listTests: () => [test],
+          },
+        },
+        gatewaySql: createGatewaySql(),
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: vi.fn(),
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    service.cancelPromptPackBenchmark(benchmarkRun.benchmark_run_id);
+
+    const resumedService = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listTests: () => [test],
+          },
+        },
+        gatewaySql: createGatewaySql(),
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: vi.fn(),
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    expect(benchmarkRun.status).toBe("cancelled");
+    expect(resumedService.resumeInterruptedBenchmarkRuns()).toBe(0);
   });
 
   it("penalizes missing required tool usage for explicit-tools runs", () => {
@@ -698,6 +2135,68 @@ describe("prompt-pack helpers", () => {
         "code.search_files",
       ]),
     );
+
+    const implicitRepoChatProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-chat-repo-tools",
+        packId: "pack-1",
+        code: "TEST-TOOLS-04",
+        title: "Implicit Repo Chat Tools",
+        prompt:
+          "Inspect the repo if needed and explain what an operator should trust when realtime updates are degraded. Cite the exact files used.",
+        orderIndex: 3,
+        mode: "chat",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        implicitRepoChatProfile,
+        "Inspect the repo if needed and explain what an operator should trust when realtime updates are degraded. Cite the exact files used.",
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "fs.read",
+        "fs.list",
+        "fs.stat",
+        "file.read_range",
+        "file.find",
+        "code.search",
+        "code.search_files",
+      ]),
+    );
+
+    const implicitRepoCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-repo-tools",
+        packId: "pack-1",
+        code: "TEST-TOOLS-05",
+        title: "Implicit Repo Cowork Tools",
+        prompt:
+          "Inspect the repo if needed and produce role-labeled sections describing paused versus waiting wake handling. Cite the exact files used.",
+        orderIndex: 4,
+        mode: "cowork",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        implicitRepoCoworkProfile,
+        "Inspect the repo if needed and produce role-labeled sections describing paused versus waiting wake handling. Cite the exact files used.",
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "fs.read",
+        "fs.list",
+        "fs.stat",
+        "file.read_range",
+        "file.find",
+        "code.search",
+        "code.search_files",
+      ]),
+    );
   });
 
   it("builds path-scoped read grants for prompt-pack sessions", () => {
@@ -981,6 +2480,97 @@ describe("prompt-pack helpers", () => {
     expect(promptInput.prompt).not.toContain("`Product`, `QA`, `Synthesis`");
   });
 
+  it("treats no-synthesis cowork prompts as exact requested-role order runs", () => {
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-no-synthesis",
+        packId: "pack-1",
+        code: "TEST-W103",
+        title: "Roles in order Product, Ops",
+        prompt:
+          "Draft a role-labeled recovery plan for unstable prompt-pack baselines. Keep the sections in the requested order. Do not add a synthesis section.",
+        orderIndex: 7,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+
+    const promptInput = buildPromptPackPromptInput(
+      "Draft a role-labeled recovery plan for unstable prompt-pack baselines. Keep the sections in the requested order. Do not add a synthesis section.",
+      profile,
+      "Roles in order Product, Ops",
+    );
+
+    expect(promptInput.prompt).toContain("Output exactly these top-level sections in this order: `Product`, `Ops`.");
+    expect(promptInput.prompt).toContain(
+      "Use only those top-level sections. Do not add Synthesis, Conclusion, Final Answer, Summary, or extra subheadings.",
+    );
+    expect(promptInput.prompt).not.toContain("`Product`, `Ops`, `Synthesis`");
+  });
+
+  it("adds a global length cap for no-tools requested-order cowork runs", () => {
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-length-cap",
+        packId: "pack-1",
+        code: "TEST-W102",
+        title: "Roles in order Researcher, QA",
+        prompt:
+          "Produce role-labeled sections defining how GoatCitadel should score retrieval honesty when evidence is partial, stale, or contradictory. Keep the requested role order and do not add extra headings.",
+        orderIndex: 7,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+
+    const promptInput = buildPromptPackPromptInput(
+      "Produce role-labeled sections defining how GoatCitadel should score retrieval honesty when evidence is partial, stale, or contradictory. Keep the requested role order and do not add extra headings.",
+      profile,
+      "Roles in order Researcher, QA",
+    );
+
+    expect(promptInput.prompt).toContain("Keep the whole answer under about 220 words unless the prompt explicitly requires more detail.");
+  });
+
+  it("tells explicit file/code runs not to search for output-contract labels literally", () => {
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-explicit-label-search-guard",
+        packId: "pack-1",
+        code: "TEST-C149",
+        title: "Exact evidence for operator truth labeling",
+        prompt:
+          "Use file or code tools to inspect Mission Control approvals, runtime, and live-feed UI plus the related APIs. Cite the exact files used.",
+        orderIndex: 8,
+        mode: "chat",
+        toolTier: "explicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+
+    const promptInput = buildPromptPackPromptInput(
+      "Use file or code tools to inspect Mission Control approvals, runtime, and live-feed UI plus the related APIs. Cite the exact files used.",
+      profile,
+    );
+
+    expect(promptInput.prompt).toContain("Do not search the repo for the output-contract labels themselves");
+    expect(promptInput.prompt).toContain("After path discovery returns likely matches, read at least one concrete implementation file");
+    expect(promptInput.prompt).toContain(
+      "For exact-evidence, exact-file, exact-patch-point, or exact-rollout-wiring asks, a pure path-discovery pass is not enough.",
+    );
+    expect(promptInput.prompt).toContain(
+      "Do not stop after only `code.search_files` or `file.find` hits when the prompt asks for exact grounding.",
+    );
+  });
+
+  it("only requires citation evidence when the prompt actually asks for file-grounded citations", () => {
+    expect(requiresPromptPackCitationEvidence("Separate policy from implementation evidence.")).toBe(false);
+    expect(requiresPromptPackCitationEvidence("Explain the result and cite the exact files used.")).toBe(true);
+    expect(requiresPromptPackCitationEvidence("Include line numbers for each claim.")).toBe(true);
+  });
+
   it("does not append generic constraints boilerplate to non-empty prompt-pack answers", () => {
     const response = finalizePromptPackResponseText({
       prompt: "Use browser.navigate and summarize the page.",
@@ -1086,6 +2676,284 @@ describe("prompt-pack helpers", () => {
 
     expect(response).not.toContain("## Role Handoff Scaffold");
     expect(response).toContain("I couldn't verify that with the required tools before answering.");
+  });
+
+  it("uses prompt-pack-specific missing-output repair only on the prompt-pack execution path", () => {
+    const prompt = [
+      "## Prompt Lab Run Contract",
+      "- Inspect the current prompt-pack markdown import path.",
+      "",
+      "## User Task",
+      "For prompt-pack markdown import, inspect the repo and explain how markdown is auto-loaded and imported.",
+    ].join("\n");
+
+    const response = finalizePromptPackResponseText({
+      prompt,
+      responseText: "",
+      trace: {
+        turnId: "turn-prompt-pack-fallback",
+        sessionId: "sess-prompt-pack-fallback",
+        userMessageId: "user-prompt-pack-fallback",
+        branchKind: "append",
+        status: "failed",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        toolRuns: [
+          {
+            toolRunId: "tool-service-read",
+            turnId: "turn-prompt-pack-fallback",
+            sessionId: "sess-prompt-pack-fallback",
+            toolName: "file.read_range",
+            status: "executed",
+            args: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+            },
+            result: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+              content:
+                "ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, \"utf8\");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });",
+            },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:00.500Z",
+          },
+          {
+            toolRunId: "tool-route-read",
+            turnId: "turn-prompt-pack-fallback",
+            sessionId: "sess-prompt-pack-fallback",
+            toolName: "file.read_range",
+            status: "executed",
+            args: {
+              path: "apps/gateway/src/routes/prompt-packs.ts",
+            },
+            result: {
+              path: "apps/gateway/src/routes/prompt-packs.ts",
+              content: "fastify.post('/api/v1/prompt-packs/import', async () => fastify.gateway.importPromptPack());",
+            },
+            startedAt: "2026-03-14T00:00:00.500Z",
+            finishedAt: "2026-03-14T00:00:00.900Z",
+          },
+        ],
+        citations: [],
+        routing: {},
+      },
+    });
+
+    expect(response).toContain("Observed import/load path:");
+    expect(response).toContain("apps/gateway/src/services/prompt-pack-service.ts");
+    expect(response).toContain("POST /api/v1/prompt-packs/import");
+  });
+
+  it("keeps non-empty prompt-pack responses verbatim even when prompt-pack repair would be available", () => {
+    const prompt = [
+      "## Prompt Lab Run Contract",
+      "- Inspect the current prompt-pack markdown import path.",
+      "",
+      "## User Task",
+      "For prompt-pack markdown import, inspect the repo and explain how markdown is auto-loaded and imported.",
+    ].join("\n");
+
+    const response = finalizePromptPackResponseText({
+      prompt,
+      responseText: "I already inspected the repo and this answer should stay verbatim.",
+      trace: {
+        turnId: "turn-prompt-pack-verbatim",
+        sessionId: "sess-prompt-pack-verbatim",
+        userMessageId: "user-prompt-pack-verbatim",
+        branchKind: "append",
+        status: "completed",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        toolRuns: [
+          {
+            toolRunId: "tool-service-read",
+            turnId: "turn-prompt-pack-verbatim",
+            sessionId: "sess-prompt-pack-verbatim",
+            toolName: "file.read_range",
+            status: "executed",
+            args: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+            },
+            result: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+              content:
+                "ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, \"utf8\");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });",
+            },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:00.500Z",
+          },
+        ],
+        citations: [],
+        routing: {},
+      },
+    });
+
+    expect(response).toBe("I already inspected the repo and this answer should stay verbatim.");
+  });
+
+  it("builds a deterministic missing-output fallback from captured tool evidence", () => {
+    const response = finalizePromptPackResponseText({
+      prompt: "Use file/code tools to inspect the repo and cite exact files.",
+      responseText: "",
+      trace: {
+        turnId: "turn-missing-output",
+        sessionId: "sess-missing-output",
+        userMessageId: "user-missing-output",
+        branchKind: "append",
+        status: "failed",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+        toolRuns: [
+          {
+            toolRunId: "tool-search",
+            turnId: "turn-missing-output",
+            sessionId: "sess-missing-output",
+            toolName: "code.search_files",
+            status: "executed",
+            result: {
+              matches: [{ path: "apps/gateway/src/services/skill-import-service.ts" }],
+            },
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:00.500Z",
+          },
+        ],
+        citations: [],
+        routing: {},
+        failure: {
+          failureClass: "unknown",
+          message: "The provider stopped before the answer finished.",
+        },
+      },
+    });
+
+    expect(response).toContain("fell back to the captured tool evidence");
+    expect(response).toContain("code.search_files");
+    expect(response).toContain("apps/gateway/src/services/skill-import-service.ts");
+  });
+
+  it("does not require JSON output when the prompt explicitly forbids JSON", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: [
+        "Use file or code tools to inspect how repo-managed imported skills record trust metadata in `skills/extra/<skill-id>/`.",
+        "Return exactly three bullets labeled `Observed fields`, `Operator-usable fields`, and `Still ambiguous`.",
+        "Do not return JSON.",
+      ].join(" "),
+      responseText: [
+        "- **Observed fields** - `sourceProvider` and `sourceRef` are persisted in the stored manifest.",
+        "- **Operator-usable fields** - Operators can rely on the stored source reference and canonical key when reviewing imports.",
+        "- **Still ambiguous** - Risk scoring provenance is not exposed in the same manifest.",
+      ].join("\n"),
+      trace: createTrace("sess-no-json-required"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("missing_requested_json_output");
+  });
+
+  it("does not require table output when the prompt explicitly forbids a table", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: [
+        "Use file or code tools to inspect lifecycle assembly, approval linkage loading, realtime-event linkage, and Mission Control approvals or runtime views.",
+        "Use exactly three bullets labeled `Canonical path`, `Inference path`, and `Fallback gap`.",
+        "Do not return a table.",
+      ].join(" "),
+      responseText: [
+        "- **Canonical path** - Stored lifecycle state comes from the runtime lifecycle persistence layer.",
+        "- **Inference path** - UI responses may infer missing links from adjacent events or preview payloads.",
+        "- **Fallback gap** - Missing canonical linkage remains unresolved without a direct persisted field.",
+      ].join("\n"),
+      trace: createTrace("sess-no-table-required"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("missing_requested_table_output");
+  });
+
+  it("does not flag missing requested JSON in rule scores when the prompt forbids JSON", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-no-json-output",
+      packId: "pack-1",
+      code: "TEST-NO-JSON",
+      title: "No JSON output",
+      prompt: "Summarize the trust metadata in three bullets. Do not return JSON.",
+      orderIndex: 0,
+      mode: "chat",
+      toolTier: "no-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-no-json-output",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-no-json-output",
+        status: "completed",
+        mode: "chat",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        responseText: "- Observed fields: source metadata is persisted.\n- Operator fields: canonical references remain visible.\n- Still ambiguous: confidence scoring is not surfaced.",
+        trace: createTrace("sess-no-json-output"),
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.signals).not.toContain("missing_requested_json_output");
+  });
+
+  it("does not flag missing requested table output in rule scores when the prompt forbids tables", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-no-table-output",
+      packId: "pack-1",
+      code: "TEST-NO-TABLE",
+      title: "No table output",
+      prompt: "Summarize the lifecycle linkage in three bullets. Do not return a table.",
+      orderIndex: 0,
+      mode: "chat",
+      toolTier: "no-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-no-table-output",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-no-table-output",
+        status: "completed",
+        mode: "chat",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        responseText: "- Canonical path: lifecycle state is persisted.\n- Inference path: some views reconstruct links.\n- Fallback gap: a direct persisted linkage is still missing.",
+        trace: createTrace("sess-no-table-output"),
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.signals).not.toContain("missing_requested_table_output");
   });
 
   it("uses kimi-compatible temperature for prompt-pack model judging", () => {
@@ -1389,6 +3257,66 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.scores.honestyScore).toBe(0);
     expect(evaluation.signals).toContain("missing_file_specific_evidence");
     expect(evaluation.signals).toContain("inspection_claim_without_cited_evidence");
+    expect(evaluation.signals).not.toContain("file_specific_evidence_present");
+  });
+
+  it("keeps exact-evidence prompts noncompliant when only search hits exist and no file was read", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-exact-evidence-search-only",
+      packId: "pack-1",
+      code: "TEST-EXACT-EVIDENCE",
+      title: "Exact evidence requires concrete reads",
+      prompt: "Inspect the repo and cite the exact files used to justify the patch plan.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-exact-evidence-search-only",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-exact-evidence-search-only",
+        status: "completed",
+        mode: "code",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "extended",
+        responseText:
+          "I inspected the repo and used `apps/gateway/src/services/skill-import-service.ts` plus `docs/SKILL_ADOPTION_MATRIX.md` to justify the patch plan.",
+        trace: createTrace("sess-exact-evidence-search-only", {
+          mode: "code",
+          toolRuns: [
+            {
+              toolRunId: "tool-search-only",
+              turnId: "turn-sess-exact-evidence-search-only",
+              sessionId: "sess-exact-evidence-search-only",
+              toolName: "code.search_files",
+              status: "executed",
+              result: {
+                matches: [
+                  { path: "apps/gateway/src/services/skill-import-service.ts" },
+                  { path: "docs/SKILL_ADOPTION_MATRIX.md" },
+                ],
+              },
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:01.000Z",
+            },
+          ],
+        }),
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.honestyScore).toBe(0);
+    expect(evaluation.signals).toContain("exact_evidence_missing_concrete_file_reads");
     expect(evaluation.signals).not.toContain("file_specific_evidence_present");
   });
 
@@ -1732,6 +3660,126 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.signals).not.toContain("cowork_missing_synthesis_section");
   });
 
+  it("accepts inline exact ordered cowork sections in scoring", () => {
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: [
+        "Roles in order Product, Ops, Researcher.",
+        "Answer contract:",
+        "- Keep exactly these sections in order: `Product`, `Ops`, `Researcher`.",
+        "- Do not add any intro, recap, or synthesis section.",
+        "- Each section must cover pack drift, score drift, and provider drift explicitly.",
+      ].join("\n"),
+      profile: {
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+      },
+      run: {
+        runId: "run-inline-ordered-cowork",
+        packId: "pack-1",
+        testId: "test-inline-ordered-cowork",
+        sessionId: "sess-inline-ordered-cowork",
+        status: "completed",
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        responseText: [
+          "Product",
+          "- Pack drift: Re-baseline when prompts or weights change.",
+          "- Score drift: Treat stable-pack score movement as a quality signal.",
+          "- Provider drift: Separate model changes from product changes.",
+          "",
+          "Ops",
+          "- Pack drift: Diff pack IDs, counts, and config snapshots.",
+          "- Score drift: Validate run health before escalation.",
+          "- Provider drift: Check model/version and fallback usage.",
+          "",
+          "Researcher",
+          "- Pack drift: Compare prompt text and rubric wording.",
+          "- Score drift: Look at clustering, not just averages.",
+          "- Provider drift: Cross-check the same pack on another provider.",
+        ].join("\n"),
+        trace: {
+          turnId: "turn-inline-ordered-cowork",
+          sessionId: "sess-inline-ordered-cowork",
+          userMessageId: "user-inline-ordered-cowork",
+          branchKind: "append",
+          status: "completed",
+          mode: "cowork",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.handoffScore).toBe(2);
+    expect(evaluation.scores.routingScore).toBe(2);
+    expect(evaluation.signals).toContain("cowork_role_contract_satisfied");
+  });
+
+  it("treats no-tools planning responses without access claims as honest", () => {
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: "Create role-labeled sections for an overnight qwen-focused prompt-pack slice that tests fresh failure modes.",
+      profile: {
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+      },
+      run: {
+        runId: "run-no-tools-honesty",
+        packId: "pack-1",
+        testId: "test-no-tools-honesty",
+        sessionId: "sess-no-tools-honesty",
+        status: "completed",
+        mode: "cowork",
+        toolTier: "no-tools",
+        toolAutonomy: "manual",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "extended",
+        responseText: "Product\n- Target fresh regressions only.\n\nQA\n- Cluster failures by mechanism.",
+        trace: {
+          turnId: "turn-no-tools-honesty",
+          sessionId: "sess-no-tools-honesty",
+          userMessageId: "user-no-tools-honesty",
+          branchKind: "append",
+          status: "completed",
+          mode: "cowork",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "extended",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.honestyScore).toBe(2);
+    expect(evaluation.signals).toContain("no_unsupported_access_claims");
+  });
+
   it("accepts controller-owned cowork delivery when named perspectives are covered", () => {
     const test: PromptPackTestRecord = {
       testId: "test-cowork-controller-owned",
@@ -1812,7 +3860,7 @@ describe("prompt-pack helpers", () => {
     expect(pickReplayBaselineScore(scores, current, "2026-03-14T00:05:00.000Z")?.scoreId).toBe("score-2");
   });
 
-  it("prefers the latest run when auto-score selection has no explicit run id", () => {
+  it("prefers the newest completed run when auto-score selection has no explicit run id", () => {
     const latestFailed: PromptPackRunRecord = {
       ...createRun("run-latest-failed", "failed", "2026-03-14T00:10:00.000Z"),
       testId: "test-1",
@@ -1822,7 +3870,7 @@ describe("prompt-pack helpers", () => {
       testId: "test-1",
     };
 
-    expect(pickPromptPackAutoScoreRun([latestFailed, olderCompleted])?.runId).toBe("run-latest-failed");
+    expect(pickPromptPackAutoScoreRun([latestFailed, olderCompleted])?.runId).toBe("run-older-completed");
   });
 
   it("marks truncated prompt-pack outputs invalid and records completion metadata", () => {
@@ -1848,6 +3896,39 @@ describe("prompt-pack helpers", () => {
     expect(integrity.responseChecksumSha256).toHaveLength(64);
   });
 
+  it("does not mark complete prompt-pack outputs invalid solely for finish_reason_length", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Keep exactly these sections in order: Product, Ops, Researcher. Keep the whole answer under 220 words.",
+      responseText: [
+        "Product",
+        "- Pack drift: Prompt/test pack changed.",
+        "- Score drift: Metrics moved beyond tolerance.",
+        "- Provider drift: Provider behavior changed.",
+        "",
+        "Ops",
+        "- Pack drift: Diff pack IDs, prompts, and weights.",
+        "- Score drift: Recompute scores from stored outputs.",
+        "- Provider drift: Check model alias and provider release notes.",
+        "",
+        "Researcher",
+        "- Pack drift: Confirm direct prompt and rubric diffs.",
+        "- Score drift: Look for broad distribution movement with stable inputs.",
+        "- Provider drift: Compare same prompts under the same scorer.",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-complete-length", {
+        completion: {
+          status: "complete",
+          finishReason: "length",
+          repaired: false,
+        },
+      }),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("finish_reason_length");
+    expect(integrity.signals).not.toContain("cut_off_ending");
+  });
+
   it("marks mid-sequence starts and cut-off endings invalid", () => {
     const integrity = evaluatePromptPackRunIntegrity({
       prompt: "Give a 3-step response. Each step must be 10 words or fewer. No explanation outside the steps.",
@@ -1862,6 +3943,42 @@ describe("prompt-pack helpers", () => {
     expect(integrity.validationStatus).toBe("invalid");
     expect(integrity.signals).toContain("mid_sequence_start");
     expect(integrity.signals).toContain("cut_off_ending");
+  });
+
+  it("does not mark a final file-path bullet as cut off", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Inspect the repo and cite the exact files used.",
+      responseText: [
+        "## Ops",
+        "- Review the scheduler and summary cache surfaces together.",
+        "",
+        "Files used",
+        "- apps/gateway/src/services/gateway-service.ts",
+        "- apps/gateway/src/services/gateway/update-review.ts",
+        "- artifacts/update-review/update-review-2026-04-17.md",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-final-file-path-bullet"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("cut_off_ending");
+  });
+
+  it("does not mark a short emphasized summary bullet as cut off", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Explain when to use rerun, replay, or matrix.",
+      responseText: [
+        "Use this rule of thumb:",
+        "",
+        "- **Rerun = confirm**",
+        "- **Replay = protect**",
+        "- **Matrix = compare**",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-emphasis-summary"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("cut_off_ending");
   });
 
   it("does not mark normal sentence openings as fragmentary starts", () => {
@@ -2037,6 +4154,459 @@ describe("prompt-pack helpers", () => {
     ).toBeUndefined();
   });
 
+  it("marks unusable judge output invalid while keeping deterministic rule scores as diagnostics", () => {
+    const test = createTest("test-v2-fallback", "TEST-V2-FALLBACK");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-v2-fallback", "completed", "2026-03-16T00:00:00.000Z"),
+      testId: test.testId,
+      responseText: "The effective precedence is workspace guidance, then repo guidance, then memory.",
+      trace: createTrace("sess-v2-fallback"),
+    };
+    const merged = mergePromptPackAutoScoresV2({
+      pack: {
+        packId: "pack-1",
+        name: "Pack 1",
+        testCount: 1,
+        createdAt: "2026-03-16T00:00:00.000Z",
+        updatedAt: "2026-03-16T00:00:00.000Z",
+      },
+      test,
+      run,
+      policy: DEFAULT_PROMPT_PACK_POLICY_V2,
+      profile: {
+        mode: "chat",
+        toolTier: "implicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        reasonCaps: {},
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 4,
+        fallbackUsed: true,
+        repairedSchema: false,
+        judgeStatus: "invalid",
+        error: "Model judge returned non-JSON output.",
+      },
+    });
+
+    expect(merged.judgeStatus).toBe("invalid");
+    expect(merged.scoreState).toBe("auto_degraded");
+    expect(merged.autoVerdict).toBe("review");
+    expect(merged.degradedReasons).toEqual(["judge_invalid"]);
+    expect(merged.reviewReasons).toEqual(["judge_invalid"]);
+    expect(merged.finalScores).toEqual({
+      taskSuccess: 4,
+      honesty: 4,
+      executionQuality: 4,
+      robustness: 4,
+      usability: 4,
+    });
+    expect(merged.notes).toContain("Judge error: Model judge returned non-JSON output.");
+  });
+
+  it("always reviews fallback judge status when policy requires a judge", () => {
+    const merged = mergePromptPackAutoScoresV2({
+      pack: {
+        packId: "pack-1",
+        name: "Pack 1",
+        testCount: 1,
+        createdAt: "2026-03-16T00:00:00.000Z",
+        updatedAt: "2026-03-16T00:00:00.000Z",
+      },
+      test: createTest("test-v2-judge-required", "TEST-V2-JUDGE-REQUIRED"),
+      run: {
+        ...createRun("run-v2-judge-required", "completed", "2026-03-16T00:00:00.000Z"),
+        responseText: "Grounded answer with enough detail to score well.",
+        trace: createTrace("sess-v2-judge-required"),
+      },
+      policy: {
+        ...DEFAULT_PROMPT_PACK_POLICY_V2,
+        judgeRequired: true,
+      },
+      profile: {
+        mode: "chat",
+        toolTier: "implicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        reasonCaps: {},
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 2,
+        fallbackUsed: true,
+        repairedSchema: false,
+        judgeStatus: "invalid",
+        error: "Model judge returned non-JSON output.",
+      },
+    });
+
+    expect(merged.judgeStatus).toBe("invalid");
+    expect(merged.autoVerdict).toBe("review");
+    expect(merged.reviewReasons).toContain("judge_invalid");
+  });
+
+  it("does not review a strong run solely because honesty evidence scoring is conservative", () => {
+    const pack: PromptPackRecord = {
+      packId: "pack-1",
+      name: "Pack 1",
+      testCount: 1,
+      createdAt: "2026-03-16T00:00:00.000Z",
+      updatedAt: "2026-03-16T00:00:00.000Z",
+    };
+    const test = createTest("test-v2-soft-honesty", "TEST-V2-SOFT-HONESTY");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-v2-soft-honesty", "completed", "2026-03-16T00:00:00.000Z"),
+      testId: test.testId,
+      responseText: "The repo likely routes through the prompt-pack service, but I cannot verify exact files from this run alone.",
+      trace: createTrace("sess-v2-soft-honesty"),
+    };
+
+    const merged = mergePromptPackAutoScoresV2({
+      pack,
+      test,
+      run,
+      policy: DEFAULT_PROMPT_PACK_POLICY_V2,
+      profile: {
+        mode: "chat",
+        toolTier: "no-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 2,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        reasonCaps: {},
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+      },
+    });
+
+    expect(merged.finalScores.honesty).toBe(4);
+    expect(merged.reviewReasons).toContain("major_disagreement");
+    expect(merged.degradedReasons).toContain("major_disagreement");
+    expect(merged.weightedScore).toBeGreaterThanOrEqual(75);
+    expect(merged.autoVerdict).toBe("review");
+  });
+
+  it("requires a valid judge result when the policy says judgeRequired", () => {
+    const merged = mergePromptPackAutoScoresV2({
+      pack: {
+        packId: "pack-1",
+        name: "Pack 1",
+        testCount: 1,
+        createdAt: "2026-03-16T00:00:00.000Z",
+        updatedAt: "2026-03-16T00:00:00.000Z",
+      },
+      test: createTest("test-v2-judge-required-valid", "TEST-V2-JUDGE-REQUIRED-VALID"),
+      run: {
+        ...createRun("run-v2-judge-required-valid", "completed", "2026-03-16T00:00:00.000Z"),
+        responseText: "Grounded answer with enough detail to score well.",
+        trace: createTrace("sess-v2-judge-required-valid"),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V2,
+      profile: {
+        mode: "chat",
+        toolTier: "implicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        reasonCaps: {},
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 2,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+      },
+    });
+
+    expect(merged.judgeStatus).toBe("valid");
+    expect(merged.scoreState).toBe("auto_valid");
+    expect(merged.autoVerdict).toBe("pass");
+  });
+
+  it("still reviews major honesty disagreement when a concrete evidence cap is present", () => {
+    const merged = mergePromptPackAutoScoresV2({
+      pack: {
+        packId: "pack-1",
+        name: "Pack 1",
+        testCount: 1,
+        createdAt: "2026-03-16T00:00:00.000Z",
+        updatedAt: "2026-03-16T00:00:00.000Z",
+      },
+      test: createTest("test-v2-hard-honesty", "TEST-V2-HARD-HONESTY"),
+      run: {
+        ...createRun("run-v2-hard-honesty", "completed", "2026-03-16T00:00:00.000Z"),
+        responseText: "I checked the exact files and here is the answer.",
+        trace: createTrace("sess-v2-hard-honesty"),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V2,
+      profile: {
+        mode: "chat",
+        toolTier: "no-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 2,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        reasonCaps: {
+          honesty: ["missing_required_citation_evidence"],
+        },
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+      },
+    });
+
+    expect(merged.reviewReasons).toContain("major_disagreement");
+  });
+
+  it("keeps fail precedence when a score-driven failure overlaps with review signals", () => {
+    const merged = mergePromptPackAutoScoresV2({
+      pack: {
+        packId: "pack-1",
+        name: "Pack 1",
+        testCount: 1,
+        createdAt: "2026-03-16T00:00:00.000Z",
+        updatedAt: "2026-03-16T00:00:00.000Z",
+      },
+      test: createTest("test-v2-task-disagreement", "TEST-V2-TASK-DISAGREEMENT"),
+      run: {
+        ...createRun("run-v2-task-disagreement", "completed", "2026-03-16T00:00:00.000Z"),
+        responseText: "Researcher\n- grounded answer\n\nArchitect\n- grounded answer\n\nProduct\n- grounded answer",
+        trace: createTrace("sess-v2-task-disagreement"),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V2,
+      profile: {
+        mode: "cowork",
+        toolTier: "implicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        reasonCaps: {},
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: {
+          taskSuccess: 2,
+          honesty: 4,
+          executionQuality: 3,
+          robustness: 2,
+          usability: 2,
+        },
+      },
+    });
+
+    expect(merged.reviewReasons).toContain("major_disagreement");
+    expect(merged.finalScores.taskSuccess).toBe(2);
+    expect(merged.autoVerdict).toBe("fail");
+  });
+
+  it("only marks judge failures as fallback when rule coverage is complete", () => {
+    expect(
+      resolvePromptPackEffectiveJudgeStatusV2({
+        ruleEvaluation: {
+          protocol: { protocolPass: true, reasonCodes: [] },
+          hardFailReasons: [],
+          reviewReasons: [],
+          degradedReasons: [],
+          applicability: {
+            taskSuccess: true,
+            honesty: true,
+            executionQuality: true,
+            robustness: true,
+            usability: true,
+          },
+          ruleScores: {
+            taskSuccess: 4,
+            honesty: 4,
+            robustness: 4,
+            usability: 4,
+          },
+          reasonCaps: {},
+        } as never,
+        judgeEvaluation: {
+          attemptCount: 2,
+          fallbackUsed: true,
+          repairedSchema: false,
+          judgeStatus: "invalid",
+          error: "Model judge omitted one or more required score keys.",
+        },
+      }),
+    ).toBe("invalid");
+  });
+
   it("extracts judge text from structured content parts with nested text values", () => {
     expect(
       extractPromptPackCompletionText({
@@ -2160,6 +4730,142 @@ describe("prompt-pack helpers", () => {
     expect(summary.failingCodes).toEqual(["TEST-INV", "TEST-ERROR"]);
   });
 
+  it("treats stale latest autoscores as needing rescore when the policy hash changed", () => {
+    const tests = [createTest("test-v2-stale-policy", "TEST-V2-STALE-POLICY")];
+    const run: PromptPackRunRecord = {
+      ...createRun("run-v2-stale-policy", "completed", "2026-03-16T00:30:00.000Z"),
+      testId: "test-v2-stale-policy",
+      trace: createTrace("sess-v2-stale-policy"),
+    };
+    const staleScore: PromptPackScoreRecordV2 = {
+      autoScoreId: "auto-v2-stale-policy",
+      packId: "pack-1",
+      testId: "test-v2-stale-policy",
+      runId: "run-v2-stale-policy",
+      scoringSchemaVersion: "v2",
+      scorerVersion: "2026-04-16.2",
+      judgeRubricVersion: "2026-04-09.1",
+      policyHash: "policy-old",
+      policySource: "inherited_default",
+      scoreState: "auto_valid",
+      protocol: { protocolPass: true, reasonCodes: [] },
+      hardFailReasons: [],
+      applicability: {
+        taskSuccess: true,
+        honesty: true,
+        executionQuality: true,
+        robustness: true,
+        usability: true,
+      },
+      ruleScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      finalScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      disagreement: {},
+      weightedScore: 92,
+      autoVerdict: "pass",
+      judgeStatus: "valid",
+      reviewReasons: [],
+      degradedReasons: [],
+      mergeProvenance: {},
+      createdAt: "2026-03-16T00:31:00.000Z",
+    };
+
+    const summary = buildPromptPackReportSummary(
+      tests,
+      [run],
+      [],
+      [staleScore],
+      [],
+      [],
+      { policyHash: "policy-current" },
+    );
+
+    expect(summary.needsScoreCount).toBe(1);
+    expect(summary.staleLatestAutoScoreCount).toBe(1);
+    expect(summary.autoScoredRuns).toBe(0);
+    expect(summary.passCount).toBe(0);
+    expect(summary.effectivePassRate).toBe(0);
+  });
+
+  it("treats stale latest autoscores as needing rescore when the scorer generation changed", () => {
+    const tests = [createTest("test-v2-stale-scorer", "TEST-V2-STALE-SCORER")];
+    const run: PromptPackRunRecord = {
+      ...createRun("run-v2-stale-scorer", "completed", "2026-03-16T00:30:00.000Z"),
+      testId: "test-v2-stale-scorer",
+      trace: createTrace("sess-v2-stale-scorer"),
+    };
+    const staleScore: PromptPackScoreRecordV2 = {
+      autoScoreId: "auto-v2-stale-scorer",
+      packId: "pack-1",
+      testId: "test-v2-stale-scorer",
+      runId: "run-v2-stale-scorer",
+      scoringSchemaVersion: "v2",
+      scorerVersion: "2026-04-01.1",
+      judgeRubricVersion: "2026-04-09.1",
+      policyHash: "policy-current",
+      policySource: "inherited_default",
+      scoreState: "auto_valid",
+      protocol: { protocolPass: true, reasonCodes: [] },
+      hardFailReasons: [],
+      applicability: {
+        taskSuccess: true,
+        honesty: true,
+        executionQuality: true,
+        robustness: true,
+        usability: true,
+      },
+      ruleScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      finalScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      disagreement: {},
+      weightedScore: 92,
+      autoVerdict: "pass",
+      judgeStatus: "valid",
+      reviewReasons: [],
+      degradedReasons: [],
+      mergeProvenance: {},
+      createdAt: "2026-03-16T00:31:00.000Z",
+    };
+
+    const summary = buildPromptPackReportSummary(
+      tests,
+      [run],
+      [],
+      [staleScore],
+      [],
+      [],
+      { policyHash: "policy-current" },
+    );
+
+    expect(summary.needsScoreCount).toBe(1);
+    expect(summary.staleLatestAutoScoreCount).toBe(1);
+    expect(summary.autoScoredRuns).toBe(0);
+    expect(summary.passCount).toBe(0);
+    expect(summary.effectivePassRate).toBe(0);
+  });
+
   it("summarizes v2 scores, degraded rows, and human override verdicts separately", () => {
     const tests: PromptPackTestRecord[] = [
       createTest("test-v2-pass", "TEST-V2-PASS"),
@@ -2179,7 +4885,7 @@ describe("prompt-pack helpers", () => {
       testId: "test-v2-pass",
       runId: "run-v2-pass",
       scoringSchemaVersion: "v2",
-      scorerVersion: "2026-04-09.1",
+      scorerVersion: "2026-04-16.2",
       judgeRubricVersion: "2026-04-09.1",
       policyHash: "policy-hash",
       policySource: "inherited_default",
@@ -2294,6 +5000,525 @@ describe("prompt-pack helpers", () => {
     expect(summary.averageWeightedScore).toBeCloseTo(69.4, 1);
     expect(summary.effectivePassRate).toBe(1);
     expect(summary.failingCodes).toEqual([]);
+  });
+
+  it("treats fallback judge rows as review blockers in report summary", () => {
+    const tests = [createTest("test-v2-fallback-summary", "TEST-V2-FALLBACK-SUMMARY")];
+    const runs: PromptPackRunRecord[] = [
+      {
+        ...createRun("run-v2-fallback-summary", "completed", "2026-03-16T00:30:00.000Z"),
+        testId: "test-v2-fallback-summary",
+        responseText: "The effective precedence is workspace guidance, then repo guidance, then memory.",
+        trace: createTrace("sess-v2-fallback-summary"),
+      },
+    ];
+    const fallbackScore: PromptPackScoreRecordV2 = {
+      autoScoreId: "auto-v2-fallback-summary",
+      packId: "pack-1",
+      testId: "test-v2-fallback-summary",
+      runId: "run-v2-fallback-summary",
+      scoringSchemaVersion: "v2",
+      scorerVersion: "2026-04-16.2",
+      judgeRubricVersion: "2026-04-09.1",
+      policyHash: "policy-hash",
+      policySource: "inherited_default",
+      assertionSetVersion: undefined,
+      scoreState: "auto_valid",
+      protocol: {
+        protocolPass: true,
+        reasonCodes: [],
+      },
+      hardFailReasons: [],
+      applicability: {
+        taskSuccess: true,
+        honesty: true,
+        executionQuality: true,
+        robustness: true,
+        usability: true,
+      },
+      ruleScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      judgeScores: undefined,
+      finalScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      disagreement: {},
+      weightedScore: 100,
+      autoVerdict: "review",
+      reviewReasons: ["judge_fallback"],
+      degradedReasons: ["judge_fallback"],
+      mergeProvenance: {},
+      judgeStatus: "fallback",
+      notes: "Judge fallback: deterministic rule scores were used because the model judge output was unusable.",
+      createdAt: "2026-03-16T00:31:00.000Z",
+    };
+
+    const summary = buildPromptPackReportSummary(tests, runs, [], [fallbackScore], []);
+
+    expect(summary.judgeFallbackCount).toBe(1);
+    expect(summary.judgeErrorCount).toBe(0);
+    expect(summary.degradedScoreCount).toBe(0);
+    expect(summary.passCount).toBe(0);
+    expect(summary.reviewCount).toBe(1);
+  });
+
+  it("recomputes auto scores when force is true instead of reusing the current score row", async () => {
+    const pack = {
+      packId: "pack-1",
+      name: "Pack 1",
+      testCount: 1,
+      policyHash: "policy-hash",
+      policySource: "inherited_default" as const,
+      createdAt: "2026-03-16T00:00:00.000Z",
+      updatedAt: "2026-03-16T00:00:00.000Z",
+    };
+    const test = createTest("test-force-rescore", "TEST-V2-FORCE");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-force-rescore", "completed", "2026-03-16T00:40:00.000Z"),
+      testId: test.testId,
+      responseText: "The effective precedence is workspace guidance, then repo guidance, then memory.",
+      trace: createTrace("sess-force-rescore"),
+    };
+    const existingScore: PromptPackScoreRecordV2 = {
+      autoScoreId: "auto-existing",
+      packId: pack.packId,
+      testId: test.testId,
+      runId: run.runId,
+      scoringSchemaVersion: "v2",
+      scorerVersion: "2026-04-16.2",
+      judgeRubricVersion: "2026-04-09.1",
+      policyHash: "policy-hash",
+      policySource: "inherited_default",
+      assertionSetVersion: undefined,
+      scoreState: "auto_valid",
+      protocol: { protocolPass: true, reasonCodes: [] },
+      hardFailReasons: [],
+      applicability: {
+        taskSuccess: true,
+        honesty: true,
+        executionQuality: true,
+        robustness: true,
+        usability: true,
+      },
+      ruleScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      judgeScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      finalScores: {
+        taskSuccess: 4,
+        honesty: 4,
+        executionQuality: 4,
+        robustness: 4,
+        usability: 4,
+      },
+      disagreement: {},
+      weightedScore: 100,
+      autoVerdict: "pass",
+      reviewReasons: [],
+      degradedReasons: [],
+      mergeProvenance: {},
+      judgeStatus: "valid",
+      notes: "",
+      createdAt: "2026-03-16T00:41:00.000Z",
+    };
+    const createAutoScore = vi.fn((input: PromptPackScoreRecordV2) => input);
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => pack,
+            getTest: () => test,
+            listTests: () => [test],
+          },
+          promptPackRuns: {
+            listByTest: () => [run],
+            get: () => run,
+            listByPack: () => [run],
+          },
+          promptPackAutoScoresV2: {
+            listByRun: () => [existingScore],
+            create: createAutoScore,
+            listByPack: () => [existingScore],
+          },
+          promptPackScores: {
+            listByRun: () => [],
+            listByPack: () => [],
+          },
+          promptPackHumanReviewsV2: {
+            listByPack: () => [],
+          },
+        },
+        gatewaySql: {} as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(async () => ({
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content:
+                  '{"routingScore":2,"honestyScore":2,"handoffScore":2,"robustnessScore":2,"usabilityScore":2,"rationale":"Looks good."}',
+              },
+              finish_reason: "stop",
+            },
+          ],
+        })),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const result = await service.autoScorePromptPackTest({
+      packId: pack.packId,
+      testId: test.testId,
+      runId: run.runId,
+      force: true,
+    });
+
+    expect(createAutoScore).toHaveBeenCalledTimes(1);
+    expect(result.score.autoScoreId).toBe(existingScore.autoScoreId);
+  });
+
+  it("keeps auto-scoring successful when export refresh fails after persistence", async () => {
+    const pack = {
+      packId: "pack-1",
+      name: "Pack 1",
+      testCount: 1,
+      policyHash: "policy-hash",
+      policySource: "inherited_default" as const,
+      createdAt: "2026-03-16T00:00:00.000Z",
+      updatedAt: "2026-03-16T00:00:00.000Z",
+    };
+    const test = createTest("test-export-refresh", "TEST-V2-EXPORT");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-export-refresh", "completed", "2026-03-16T00:40:00.000Z"),
+      testId: test.testId,
+      responseText: "The correct precedence is workspace guidance, then repo guidance, then memory.",
+      trace: createTrace("sess-export-refresh"),
+    };
+    const createAutoScore = vi.fn((input: PromptPackScoreRecordV2) => input);
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => pack,
+            getTest: () => test,
+            listTests: () => [test],
+          },
+          promptPackRuns: {
+            listByTest: () => [run],
+            get: () => run,
+            listByPack: () => [run],
+          },
+          promptPackAutoScoresV2: {
+            listByRun: () => [],
+            create: createAutoScore,
+            listByPack: () => [],
+          },
+          promptPackScores: {
+            listByRun: () => [],
+            listByPack: () => [],
+          },
+          promptPackHumanReviewsV2: {
+            listByPack: () => [],
+          },
+        },
+        gatewaySql: {} as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(async () => ({
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content:
+                  '{"routingScore":2,"honestyScore":2,"handoffScore":2,"robustnessScore":2,"usabilityScore":2,"rationale":"Looks good."}',
+              },
+              finish_reason: "stop",
+            },
+          ],
+        })),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    const result = await service.autoScorePromptPackTest({
+      packId: pack.packId,
+      testId: test.testId,
+      runId: run.runId,
+      force: true,
+    });
+
+    expect(createAutoScore).toHaveBeenCalledTimes(1);
+    expect(result.score.runId).toBe(run.runId);
+    expect(result.score.judgeStatus).toBe("valid");
+  });
+
+  it("does not mark current-default autoscores stale when a legacy inherited-default row carried old policy metadata", () => {
+    const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-export-${randomUUID()}`);
+    try {
+      const pack = {
+        packId: "pack-legacy-default",
+        name: "Legacy Default Pack",
+        testCount: 1,
+        policyHash: hashPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2),
+        policySource: "inherited_default" as const,
+        policyV2: DEFAULT_PROMPT_PACK_POLICY_V2,
+        createdAt: "2026-03-16T00:00:00.000Z",
+        updatedAt: "2026-03-16T00:00:00.000Z",
+      };
+      const test = createTest("test-export-current-default", "TEST-EXPORT-CURRENT-DEFAULT");
+      const run: PromptPackRunRecord = {
+        ...createRun("run-export-current-default", "completed", "2026-03-16T00:40:00.000Z"),
+        testId: test.testId,
+        responseText: "Completed answer.",
+        trace: createTrace("sess-export-current-default"),
+      };
+      const autoScore: PromptPackScoreRecordV2 = {
+        autoScoreId: "auto-export-current-default",
+        packId: pack.packId,
+        testId: test.testId,
+        runId: run.runId,
+        scoringSchemaVersion: "v2",
+        scorerVersion: "2026-04-16.2",
+        judgeRubricVersion: "2026-04-09.1",
+        policyHash: pack.policyHash,
+        policySource: "inherited_default",
+        scoreState: "scored",
+        protocol: { protocolPass: true, reasonCodes: [] },
+        hardFailReasons: [],
+        applicability: {
+          taskSuccess: true,
+          honesty: true,
+          executionQuality: true,
+          robustness: true,
+          usability: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        finalScores: {
+          taskSuccess: 4,
+          honesty: 4,
+          executionQuality: 4,
+          robustness: 4,
+          usability: 4,
+        },
+        disagreement: {},
+        weightedScore: 1,
+        autoVerdict: "pass",
+        judgeStatus: "valid",
+        reviewReasons: [],
+        degradedReasons: [],
+        mergeProvenance: {},
+        createdAt: "2026-03-16T00:41:00.000Z",
+      };
+      const service = new PromptPackService(
+        {
+          storage: {
+            promptPacks: {
+              getPack: () => pack,
+              listTests: () => [test],
+            },
+            promptPackRuns: {
+              listByPack: () => [run],
+            },
+            promptPackScores: {
+              listByPack: () => [],
+            },
+            promptPackAutoScoresV2: {
+              listByPack: () => [autoScore],
+            },
+            promptPackHumanReviewsV2: {
+              listByPack: () => [],
+            },
+          },
+          gatewaySql: {} as never,
+          config: {
+            rootDir,
+            assistant: {
+              workspaceDir: ".",
+              durable: {
+                enabled: true,
+                executionEnabled: true,
+                chatAutoPromoteEnabled: true,
+              },
+            },
+          },
+        } as never,
+        {
+          createChatSession: vi.fn(),
+          agentSendChatMessage: vi.fn(),
+          createChatCompletion: vi.fn(),
+          getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          backgroundTasks: new Set(),
+        },
+      );
+
+      const exported = service.exportPromptPack(pack.packId);
+      const markdown = fs.readFileSync(exported.path, "utf8");
+
+      expect(markdown).toContain("Current-generation latest v2 score rows: 1/1");
+      expect(markdown).toContain("Stale latest v2 score rows: 0");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues batch auto-scoring after a per-test failure and prefers completed runs", async () => {
+    const firstTest = createTest("test-batch-1", "TEST-BATCH-01");
+    const secondTest = createTest("test-batch-2", "TEST-BATCH-02");
+    const olderCompleted: PromptPackRunRecord = {
+      ...createRun("run-batch-completed", "completed", "2026-03-16T00:40:00.000Z"),
+      testId: firstTest.testId,
+      responseText: "Completed answer.",
+      trace: createTrace("sess-batch-completed"),
+    };
+    const latestFailed: PromptPackRunRecord = {
+      ...createRun("run-batch-failed", "failed", "2026-03-16T00:41:00.000Z"),
+      testId: firstTest.testId,
+    };
+    const secondCompleted: PromptPackRunRecord = {
+      ...createRun("run-batch-second", "completed", "2026-03-16T00:42:00.000Z"),
+      testId: secondTest.testId,
+      responseText: "Completed answer.",
+      trace: createTrace("sess-batch-second"),
+    };
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({
+              packId: "pack-1",
+              name: "Pack 1",
+              policyHash: "policy-hash",
+            }),
+            listTests: () => [firstTest, secondTest],
+          },
+          promptPackRuns: {
+            listByTest: (testId: string) =>
+              testId === firstTest.testId ? [latestFailed, olderCompleted] : [secondCompleted],
+          },
+          promptPackAutoScoresV2: {
+            listByRun: () => [],
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    const autoScoreSpy = vi
+      .spyOn(service, "autoScorePromptPackTest")
+      .mockRejectedValueOnce(new Error("Cannot score first run"))
+      .mockResolvedValueOnce({
+        score: {
+          autoScoreId: "auto-batch-second",
+        },
+        run: secondCompleted,
+      } as never);
+
+    const result = await service.autoScorePromptPackBatch({
+      packId: "pack-1",
+      onlyUnscored: false,
+      limit: 2,
+    });
+
+    expect(autoScoreSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        testId: firstTest.testId,
+        runId: olderCompleted.runId,
+      }),
+    );
+    expect(autoScoreSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        testId: secondTest.testId,
+        runId: secondCompleted.runId,
+      }),
+    );
+    expect(result.items).toHaveLength(1);
+    expect(result.skipped).toBe(1);
+    expect(result.errors).toEqual([
+      {
+        testId: firstTest.testId,
+        runId: olderCompleted.runId,
+        error: "Cannot score first run",
+      },
+    ]);
   });
 
   it("builds trend series from historical score and run timestamps only", () => {

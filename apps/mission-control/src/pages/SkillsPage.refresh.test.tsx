@@ -11,6 +11,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchCapabilityCatalog: vi.fn(),
   fetchCapabilityProposal: vi.fn(),
   fetchCapabilityProposals: vi.fn(),
+  fetchHarnessAuditReport: vi.fn(),
   fetchSkillActivationPolicies: vi.fn(),
   fetchSkillImportHistory: vi.fn(),
   fetchSkillLookup: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("../api/client", () => ({
   fetchCapabilityCatalog: apiMocks.fetchCapabilityCatalog,
   fetchCapabilityProposal: apiMocks.fetchCapabilityProposal,
   fetchCapabilityProposals: apiMocks.fetchCapabilityProposals,
+  fetchHarnessAuditReport: apiMocks.fetchHarnessAuditReport,
   fetchSkillActivationPolicies: apiMocks.fetchSkillActivationPolicies,
   fetchSkillImportHistory: apiMocks.fetchSkillImportHistory,
   fetchSkillLookup: apiMocks.fetchSkillLookup,
@@ -155,6 +157,14 @@ describe("SkillsPage refresh discipline", () => {
       requireFirstUseConfirmation: true,
     });
     apiMocks.fetchSkillImportHistory.mockResolvedValue({ items: [] });
+    apiMocks.fetchHarnessAuditReport.mockResolvedValue({
+      generatedAt: new Date().toISOString(),
+      summary: "Harness audit summary",
+      overallScore: 82,
+      overallStatus: "strong",
+      pillars: [],
+      strategyGlossary: [],
+    });
     apiMocks.fetchSkillSources.mockResolvedValue({
       items: [],
       providers: [],

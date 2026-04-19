@@ -11,11 +11,14 @@ import {
   ToolPolicyConfigSchema,
   clampInt,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { DEFAULT_LLAMACPP_ALIAS } from "./services/llama-cpp-runtime-service.js";
+
+const configLog = logger.child("config");
 
 export interface AssistantConfig {
   environment: string;
@@ -726,6 +729,19 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
     walAutoCheckpointPages: clampInt(sqliteInput.walAutoCheckpointPages, 5_000, 1_000, 20_000),
   };
+  const durableBaselineDrift =
+    durableInput.enabled === false ||
+    durableInput.executionEnabled === false ||
+    durableInput.chatAutoPromoteEnabled === false ||
+    featuresInput.durableKernelV1Enabled === false;
+  if (durableBaselineDrift) {
+    configLog.warn("durable baseline drift detected in runtime config; coercing always-on durable execution", {
+      durableEnabled: durableInput.enabled,
+      durableExecutionEnabled: durableInput.executionEnabled,
+      durableChatAutoPromoteEnabled: durableInput.chatAutoPromoteEnabled,
+      durableKernelV1Enabled: featuresInput.durableKernelV1Enabled,
+    });
+  }
 
   return {
     environment: input.environment ?? "local",
@@ -911,15 +927,15 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     },
     sqlite,
     durable: {
-      enabled: durableInput.enabled ?? true,
+      enabled: true,
       diagnosticsEnabled: durableInput.diagnosticsEnabled ?? false,
-      executionEnabled: durableInput.executionEnabled ?? true,
-      chatAutoPromoteEnabled: durableInput.chatAutoPromoteEnabled ?? true,
+      executionEnabled: true,
+      chatAutoPromoteEnabled: true,
       maxAttemptsDefault: Math.max(1, Math.floor(durableInput.maxAttemptsDefault ?? 3)),
       workflowTimeoutMs: clampInt(durableInput.workflowTimeoutMs, 5 * 60_000, 10_000, 30 * 60_000),
     },
     features: {
-      durableKernelV1Enabled: featuresInput.durableKernelV1Enabled ?? true,
+      durableKernelV1Enabled: true,
       replayOverridesV1Enabled: featuresInput.replayOverridesV1Enabled ?? false,
       memoryLifecycleAdminV1Enabled: featuresInput.memoryLifecycleAdminV1Enabled ?? false,
       memoryMaintenanceV1Enabled: featuresInput.memoryMaintenanceV1Enabled ?? false,

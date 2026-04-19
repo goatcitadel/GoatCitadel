@@ -236,6 +236,7 @@ function createPromptPackReportBase(): PromptPackReportRecord {
       invalidLatestRuns: 0,
       scoreFailureCount: 0,
       needsScoreCount: 0,
+      staleLatestAutoScoreCount: 0,
       durableRuns: 0,
       approvalPausedRuns: 0,
       backgroundedRuns: 0,

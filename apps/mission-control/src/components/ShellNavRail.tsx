@@ -1,8 +1,6 @@
 import {
-  PAGE_META,
   SPACE_META,
   VISIBLE_SPACE_PAGES,
-  type OperatePage,
   type ResolvedRoute,
   type Space,
   type VisiblePage,
@@ -30,7 +28,6 @@ export function ShellNavRail({
   visiblePage,
   navMode,
   onSelectSpace,
-  onSelectOperatePage,
   onSelectVisiblePage,
   onCycleNavMode,
 }: {
@@ -38,22 +35,13 @@ export function ShellNavRail({
   visiblePage: VisiblePage;
   navMode: ShellNavMode;
   onSelectSpace: (space: Space) => void;
-  onSelectOperatePage: (page: OperatePage) => void;
   onSelectVisiblePage: (page: VisiblePage) => void;
   onCycleNavMode: () => void;
 }) {
   const showLabels = navMode !== "icon";
   const showDescriptions = navMode === "expanded";
-  const operatePageItems =
-    route.space === "operate"
-      ? (["surface", "tasks", "approvals"] as const).map((page) => ({
-          page,
-          label: PAGE_META[page].label,
-          note:
-            page === "surface" ? "Chat, Cowork, and Code stay in the mode switch above." : PAGE_META[page].description,
-          active: route.page === page,
-        }))
-      : [];
+  const workSurfaceItems = VISIBLE_SPACE_PAGES.operate.filter((item) => item.page === "chat" || item.page === "cowork" || item.page === "code");
+  const workSupportItems = VISIBLE_SPACE_PAGES.operate.filter((item) => item.page === "tasks" || item.page === "approvals");
 
   return (
     <aside
@@ -82,7 +70,7 @@ export function ShellNavRail({
       <Separator className="bg-border/60" />
       <ScrollArea className="mc-shell-nav-rail-scroll">
         <div className="shell-nav-rail-section">
-          <p className="shell-nav-rail-label">Spaces</p>
+          {showLabels ? <p className="shell-nav-rail-label">Spaces</p> : null}
           <div className="shell-nav-rail-list shell-nav-rail-space-list">
             {(Object.keys(SPACE_META) as Space[]).map((space) => {
               const meta = SPACE_META[space];
@@ -117,61 +105,96 @@ export function ShellNavRail({
         </div>
 
         <div className="shell-nav-rail-section">
-          <p className="shell-nav-rail-label">{SPACE_META[route.space].label}</p>
-          <div className="shell-nav-rail-list">
-            {route.space === "operate"
-              ? operatePageItems.map((item) => (
-                  <Button
-                    key={item.page}
-                    type="button"
-                    variant="ghost"
-                    className={cn(
-                      "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
-                      item.active && "active",
-                    )}
-                    onClick={() => onSelectOperatePage(item.page)}
-                    aria-current={item.active ? "page" : undefined}
-                    aria-label={item.label}
-                    title={item.label}
-                  >
-                    <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
-                      {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
-                    </Badge>
-                    {showLabels ? (
-                      <span className="shell-nav-rail-item-copy">
-                        <span className="shell-nav-rail-item-label">{item.label}</span>
-                        {showDescriptions && item.active ? (
-                          <span className="shell-nav-rail-item-note">{item.note}</span>
-                        ) : null}
-                      </span>
-                    ) : null}
-                  </Button>
-                ))
-              : VISIBLE_SPACE_PAGES[route.space].map((item) => (
-                  <Button
-                    key={item.page}
-                    type="button"
-                    variant="ghost"
-                    className={cn(
-                      "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
-                      visiblePage === item.page && "active",
-                    )}
-                    onClick={() => onSelectVisiblePage(item.page)}
-                    aria-current={visiblePage === item.page ? "page" : undefined}
-                    aria-label={item.label}
-                    title={item.label}
-                  >
-                    <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
-                      {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
-                    </Badge>
-                    {showLabels ? (
-                      <span className="shell-nav-rail-item-copy">
-                        <span className="shell-nav-rail-item-label">{item.label}</span>
-                      </span>
-                    ) : null}
-                  </Button>
-                ))}
-          </div>
+          {showLabels ? <p className="shell-nav-rail-label">{SPACE_META[route.space].label}</p> : null}
+          {route.space === "operate" ? (
+            <div className="shell-nav-rail-groups">
+              <div className="shell-nav-rail-group">
+                {showLabels ? <p className="shell-nav-rail-sublabel">Modes</p> : null}
+                <div className="shell-nav-rail-list">
+                  {workSurfaceItems.map((item) => (
+                    <Button
+                      key={item.page}
+                      type="button"
+                      variant="ghost"
+                      className={cn(
+                        "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
+                        visiblePage === item.page && "active",
+                      )}
+                      onClick={() => onSelectVisiblePage(item.page)}
+                      aria-current={visiblePage === item.page ? "page" : undefined}
+                      aria-label={item.label}
+                      title={item.label}
+                    >
+                      <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
+                        {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
+                      </Badge>
+                      {showLabels ? (
+                        <span className="shell-nav-rail-item-copy">
+                          <span className="shell-nav-rail-item-label">{item.label}</span>
+                        </span>
+                      ) : null}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div className="shell-nav-rail-group">
+                {showLabels ? <p className="shell-nav-rail-sublabel">Queue</p> : null}
+                <div className="shell-nav-rail-list">
+                  {workSupportItems.map((item) => (
+                    <Button
+                      key={item.page}
+                      type="button"
+                      variant="ghost"
+                      className={cn(
+                        "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
+                        visiblePage === item.page && "active",
+                      )}
+                      onClick={() => onSelectVisiblePage(item.page)}
+                      aria-current={visiblePage === item.page ? "page" : undefined}
+                      aria-label={item.label}
+                      title={item.label}
+                    >
+                      <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
+                        {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
+                      </Badge>
+                      {showLabels ? (
+                        <span className="shell-nav-rail-item-copy">
+                          <span className="shell-nav-rail-item-label">{item.label}</span>
+                        </span>
+                      ) : null}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="shell-nav-rail-list">
+              {VISIBLE_SPACE_PAGES[route.space].map((item) => (
+                <Button
+                  key={item.page}
+                  type="button"
+                  variant="ghost"
+                  className={cn(
+                    "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
+                    visiblePage === item.page && "active",
+                  )}
+                  onClick={() => onSelectVisiblePage(item.page)}
+                  aria-current={visiblePage === item.page ? "page" : undefined}
+                  aria-label={item.label}
+                  title={item.label}
+                >
+                  <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
+                    {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
+                  </Badge>
+                  {showLabels ? (
+                    <span className="shell-nav-rail-item-copy">
+                      <span className="shell-nav-rail-item-label">{item.label}</span>
+                    </span>
+                  ) : null}
+                </Button>
+              ))}
+            </div>
+          )}
         </div>
       </ScrollArea>
     </aside>

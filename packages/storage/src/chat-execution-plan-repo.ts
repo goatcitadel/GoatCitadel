@@ -43,6 +43,7 @@ interface ChatExecutionPlanStepRow {
   started_at: string | null;
   finished_at: string | null;
   child_run_id: string | null;
+  durable_run_id: string | null;
   child_session_id: string | null;
   child_turn_id: string | null;
 }
@@ -127,11 +128,11 @@ export class ChatExecutionPlanRepository {
       INSERT INTO chat_execution_plan_steps (
         plan_id, step_id, step_index, objective, success_criteria, suggested_tools_json, expected_output,
         parallelizable, depends_on_step_ids_json, delegated_role, status, summary, error, started_at, finished_at,
-        child_run_id, child_session_id, child_turn_id
+        child_run_id, durable_run_id, child_session_id, child_turn_id
       ) VALUES (
         @planId, @stepId, @index, @objective, @successCriteria, @suggestedToolsJson, @expectedOutput,
         @parallelizable, @dependsOnStepIdsJson, @delegatedRole, @status, @summary, @error, @startedAt, @finishedAt,
-        @childRunId, @childSessionId, @childTurnId
+        @childRunId, @durableRunId, @childSessionId, @childTurnId
       )
     `);
   }
@@ -227,6 +228,7 @@ export class ChatExecutionPlanRepository {
         startedAt: step.startedAt ?? null,
         finishedAt: step.finishedAt ?? null,
         childRunId: step.childRunId ?? null,
+        durableRunId: step.durableRunId ?? null,
         childSessionId: step.childSessionId ?? null,
         childTurnId: step.childTurnId ?? null,
       });
@@ -313,6 +315,7 @@ function isChatExecutionPlanStepRow(value: unknown): value is ChatExecutionPlanS
     && (typeof value.started_at === "string" || value.started_at === null)
     && (typeof value.finished_at === "string" || value.finished_at === null)
     && (typeof value.child_run_id === "string" || value.child_run_id === null)
+    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
     && (typeof value.child_session_id === "string" || value.child_session_id === null)
     && (typeof value.child_turn_id === "string" || value.child_turn_id === null);
 }
@@ -350,6 +353,7 @@ function mapStep(row: ChatExecutionPlanStepRow): ChatExecutionPlanStepRecord {
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     childRunId: row.child_run_id ?? undefined,
+    durableRunId: row.durable_run_id ?? undefined,
     childSessionId: row.child_session_id ?? undefined,
     childTurnId: row.child_turn_id ?? undefined,
   };

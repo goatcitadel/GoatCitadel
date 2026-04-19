@@ -317,6 +317,13 @@ export class MemoryLifecycleService {
     return this.deps.context.compose(input);
   }
 
+  public async prewarmContext(input: MemoryContextComposeRequest): Promise<void> {
+    await this.deps.context.compose({
+      ...input,
+      forceRefresh: input.forceRefresh ?? true,
+    });
+  }
+
   public getContext(contextId: string): MemoryContextPack {
     return this.deps.context.get(contextId);
   }
@@ -435,7 +442,10 @@ export class MemoryLifecycleService {
     this.deps.maintenance.syncFromDurableRun(run);
   }
 
-  public executeMaintenanceDurableRun(run: DurableRunRecord): Promise<Record<string, unknown>> {
-    return this.deps.maintenance.executeDurableRun(run);
+  public executeMaintenanceDurableRun(
+    run: DurableRunRecord,
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, unknown>> {
+    return this.deps.maintenance.executeDurableRun(run, options);
   }
 }

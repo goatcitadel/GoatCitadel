@@ -72,6 +72,28 @@ describe("ToolPolicyConfigSchema", () => {
     const result = ToolPolicyConfigSchema.parse(input);
     expect(result.sandbox.readAccessMode).toBe("roots_only");
   });
+
+  it("defaults loop detection to disabled with detector thresholds", () => {
+    const input = {
+      profiles: {},
+      tools: { profile: "standard", allow: [], deny: [] },
+      agents: {},
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    };
+    const result = ToolPolicyConfigSchema.parse(input);
+    expect(result.tools.loopDetection).toMatchObject({
+      enabled: false,
+      historySize: 8,
+      warningThreshold: 3,
+      criticalThreshold: 4,
+      globalThreshold: 6,
+      detectors: {
+        repeated_same_call: true,
+        no_progress_polling: true,
+        ping_pong: true,
+      },
+    });
+  });
 });
 
 describe("LlmConfigFileSchema", () => {

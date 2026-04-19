@@ -58,7 +58,7 @@ export interface IntegrationChannelHost {
   writeDiscordPairings(records: DiscordPairingRecord[]): void;
   discordRuntimeService: {
     reconnectConnection(connectionId: string): Promise<DiscordRuntimeStatus | undefined>;
-    sendTyping(connectionId: string, target: string, durationMs?: number): Promise<ChannelTypingResult>;
+    sendTyping(connectionId: string, target: string, durationMs?: number, signal?: AbortSignal): Promise<ChannelTypingResult>;
   };
   resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
@@ -412,6 +412,7 @@ export async function emitTelegramTypingImpl(
       chatId,
       threadId: input.threadId,
       durationMs: input.durationMs,
+      signal: input.signal,
       fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
     });
   } catch (error) {

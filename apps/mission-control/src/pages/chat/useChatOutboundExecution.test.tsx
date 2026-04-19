@@ -37,6 +37,7 @@ type HarnessState = {
   pendingApproval: unknown;
   error: string | null;
   thread: ChatThreadResponse | null;
+  loadSessionCoreStateMock: ReturnType<typeof vi.fn>;
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
   execute: (item: any) => Promise<void>;
   applyFetchedThread: (thread: ChatThreadResponse, requestVersion: number | null) => boolean;
@@ -102,6 +103,7 @@ function Harness(props: {
   const tryBeginOutboundExecutionRef = useRef(() => true);
   const applyFetchedThreadRef = useRef((_thread: ChatThreadResponse, _requestVersion: number | null) => false);
   const messageMutationVersionRef = useRef(0);
+  const loadSessionCoreStateMock = useMemo(() => vi.fn(async () => undefined), []);
 
   const messages = useMemo(() => {
     return (
@@ -147,7 +149,7 @@ function Harness(props: {
     setCapabilitySuggestions,
     setSpecialistSuggestions,
     loadSidebar: vi.fn(async () => undefined),
-    loadSessionCoreState: vi.fn(async () => undefined),
+    loadSessionCoreState: loadSessionCoreStateMock,
     ensureSession: vi.fn(async () => ({ sessionId: "session-1" }) as any),
     getCachedModels: vi.fn(() => ["gpt-5.4-mini"]),
     pushLocalNotice: vi.fn(),
@@ -165,6 +167,7 @@ function Harness(props: {
     pendingApproval: hook.pendingApproval,
     error,
     thread,
+    loadSessionCoreStateMock,
     setThread,
     execute: executeOutboundItemRef.current,
     applyFetchedThread: applyFetchedThreadRef.current,
@@ -323,6 +326,54 @@ describe("useChatOutboundExecution", () => {
     );
 
     expect(applied).toBe(false);
+  });
+
+  it("reconciles immediately when a stream ends after deltas without message_done", async () => {
+    vi.useFakeTimers();
+    streamAgentChatMessageMock.mockImplementation(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "delta",
+        eventId: "evt-1",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "partial",
+      });
+    });
+
+    create(<Harness streamEnabled />);
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Run the task",
+        attachments: [],
+        createdAt: "2026-04-08T00:00:00.000Z",
+      });
+    });
+
+    expect(latest?.thread?.turns.at(-1)?.assistantMessage?.content).toBe("partial");
+
+    await act(async () => {
+      vi.runAllTimers();
+      await Promise.resolve();
+    });
+
+    expect(latest?.loadSessionCoreStateMock).toHaveBeenCalledWith("session-1", {
+      background: true,
+      includeThread: true,
+    });
+    vi.useRealTimers();
   });
 
   it("merges backend-delivered approval prompts into the local pending approval state", async () => {

@@ -41,7 +41,7 @@ import type {
 } from "@goatcitadel/contracts";
 
 import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagnostics-store";
-import { API_BASE, buildGatewayHeaders, readGatewayAuthHeaders, request } from "./client-core.js";
+import { buildGatewayHeaders, buildGatewayUrl, readGatewayAuthHeaders, request } from "./client-core.js";
 import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
 
 export interface ChatProjectsResponse {
@@ -371,7 +371,7 @@ export async function streamAgentChatMessage(
     sessionId,
     route: path,
   });
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildGatewayUrl(path), {
     method: "POST",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
@@ -456,7 +456,7 @@ export async function streamRetryChatTurn(
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/retry/stream`;
   const correlationId = createCorrelationId();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildGatewayUrl(path), {
     method: "POST",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
@@ -494,7 +494,7 @@ export async function streamEditChatTurn(
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit/stream`;
   const correlationId = createCorrelationId();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildGatewayUrl(path), {
     method: "POST",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
@@ -521,7 +521,7 @@ export async function resumeChatTurnStream(
   }
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/stream${query.size > 0 ? `?${query.toString()}` : ""}`;
   const correlationId = createCorrelationId();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildGatewayUrl(path), {
     method: "GET",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "GET", correlationId, {
@@ -619,7 +619,7 @@ export async function downloadChatAttachment(
   const meta = await fetchChatAttachment(attachmentId);
   const authHeaders = readGatewayAuthHeaders(`/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content`);
   const response = await fetch(
-    `${API_BASE}/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content?disposition=attachment`,
+    buildGatewayUrl(`/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content?disposition=attachment`),
     {
       headers: authHeaders,
     },
@@ -897,7 +897,7 @@ export async function streamChatDelegation(
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/stream`;
   const correlationId = createCorrelationId();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(buildGatewayUrl(path), {
     method: "POST",
     headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,

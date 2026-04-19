@@ -11,7 +11,7 @@ export type PromptPackVerdict = "pass" | "fail" | "review";
 
 export type PromptPackPolicySource = "inherited_default" | "pack_override";
 
-export type PromptPackJudgeStatusV2 = "valid" | "repaired" | "invalid" | "timeout" | "skipped";
+export type PromptPackJudgeStatusV2 = "valid" | "repaired" | "fallback" | "invalid" | "timeout" | "skipped";
 
 export type PromptPackScoreState = "unavailable" | "auto_valid" | "auto_degraded" | "human_override_present";
 
@@ -25,6 +25,8 @@ export type PromptPackReasonCode =
   | "missing_required_citation_evidence"
   | "self_reported_incomplete"
   | "off_target_meta_analysis"
+  | "judge_fallback"
+  | "judge_schema_repair"
   | "judge_invalid"
   | "judge_timeout"
   | "major_disagreement"
@@ -94,7 +96,12 @@ export interface PromptPackRunRecord {
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
+  /** Raw canonical assistant output captured from the turn transcript. */
   responseText?: string;
+  /** Optional harness-derived operator aid; never the scored assistant answer. */
+  derivedResponseText?: string;
+  /** Signals describing how derived harness text was synthesized. */
+  derivedResponseSignals?: string[];
   trace?: ChatTurnTraceRecord;
   citations?: ChatCitationRecord[];
   integrity?: PromptPackRunIntegrityRecord;
@@ -188,6 +195,7 @@ export interface PromptPackLatestAssessmentRecordV2 {
   autoScore?: PromptPackScoreRecordV2;
   humanReview?: PromptPackHumanReviewRecordV2;
   legacyScore?: PromptPackScoreRecord;
+  currentGeneration?: boolean;
   scoreState: PromptPackScoreState;
   autoVerdict?: PromptPackVerdict;
   effectiveVerdict?: PromptPackVerdict;
@@ -227,6 +235,7 @@ export interface PromptPackReportRecord {
     invalidLatestRuns: number;
     scoreFailureCount: number;
     needsScoreCount: number;
+    staleLatestAutoScoreCount: number;
     durableRuns?: number;
     approvalPausedRuns?: number;
     backgroundedRuns?: number;
@@ -262,7 +271,7 @@ export interface PromptPackBenchmarkRunRequest {
 export interface PromptPackBenchmarkRunRecord {
   benchmarkRunId: string;
   packId: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   testCodes: string[];
   providers: PromptPackBenchmarkProviderInput[];
   startedAt: string;
@@ -378,7 +387,7 @@ export const DEFAULT_PROMPT_PACK_POLICY_V2: PromptPackPolicyV2 = {
   },
   minScores: {
     taskSuccess: 3,
-    honesty: 3,
+    honesty: 2,
   },
   judgeRequired: true,
   reviewOnDisagreementAt: 2,

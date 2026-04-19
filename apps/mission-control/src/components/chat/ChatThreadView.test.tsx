@@ -63,6 +63,7 @@ describe("ChatThreadView", () => {
         loading={false}
         thread={createThread("<img src=x onerror=alert(1) /> **safe**")}
         selectedTurnId="turn-1"
+        delegationRun={null}
         notices={[]}
         followOutput={false}
         onBottomStateChange={vi.fn()}
@@ -84,6 +85,7 @@ describe("ChatThreadView", () => {
         loading={false}
         thread={createThread("plain content")}
         selectedTurnId="turn-1"
+        delegationRun={null}
         notices={[]}
         followOutput={false}
         onBottomStateChange={vi.fn()}
@@ -137,6 +139,7 @@ describe("ChatThreadView", () => {
         loading={false}
         thread={thread}
         selectedTurnId="turn-1"
+        delegationRun={null}
         notices={[]}
         followOutput={false}
         onBottomStateChange={vi.fn()}
@@ -152,5 +155,90 @@ describe("ChatThreadView", () => {
       renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("") === "1 tool"),
     ).toHaveLength(1);
     expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Details")).toBe(true);
+  });
+
+  it("shows a repaired badge when the trace marks the assistant output as repaired", () => {
+    const thread = createThread("plain content");
+    (thread.turns[0] as any).trace.completion = {
+      status: "complete",
+      repaired: true,
+    };
+
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        loading={false}
+        thread={thread}
+        selectedTurnId="turn-1"
+        delegationRun={null}
+        notices={[]}
+        followOutput={false}
+        onBottomStateChange={vi.fn()}
+        onSelectTurn={vi.fn()}
+        onSwitchBranch={vi.fn()}
+        onRetryTurn={vi.fn()}
+        onEditTurn={vi.fn()}
+        onOpenRunDetails={vi.fn()}
+      />,
+    );
+
+    const repairedBadge = renderer.root.findAll(
+      (node) =>
+        node.props?.title === "The final answer was recovered after completion repair." &&
+        Array.isArray(node.children) &&
+        node.children.join("") === "Repaired",
+    );
+    expect(repairedBadge).toHaveLength(1);
+  });
+
+  it("renders attached delegation progress and stitched output", () => {
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        loading={false}
+        thread={createThread("plain content")}
+        selectedTurnId="turn-1"
+        delegationRun={{
+          runId: "run-1",
+          taskId: "task-1",
+          executionPlanId: "plan-1",
+          label: "Delegation",
+          objective: "Ship the patch",
+          mode: "parallel",
+          status: "partial",
+          steps: [
+            {
+              stepId: "step-1",
+              role: "Architect",
+              status: "completed",
+              index: 0,
+              durableRunId: "durable-child-1",
+              childSessionId: "child-session-1",
+              childTurnId: "child-turn-1",
+              output: "Design locked.",
+            },
+            {
+              stepId: "step-2",
+              role: "Coder",
+              status: "skipped",
+              index: 1,
+              error: "Skipped because dependency failed.",
+            },
+          ],
+          stitchedOutput: "### Architect\nDesign locked.",
+        }}
+        notices={[]}
+        followOutput={false}
+        onBottomStateChange={vi.fn()}
+        onSelectTurn={vi.fn()}
+        onSwitchBranch={vi.fn()}
+        onRetryTurn={vi.fn()}
+        onEditTurn={vi.fn()}
+        onOpenRunDetails={vi.fn()}
+      />,
+    );
+
+    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Delegation run"))).not.toHaveLength(0);
+    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Task task-1"))).not.toHaveLength(0);
+    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Durable durable-child-1"))).not.toHaveLength(0);
+    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Skipped because dependency failed."))).not.toHaveLength(0);
   });
 });

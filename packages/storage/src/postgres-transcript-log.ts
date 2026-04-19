@@ -20,6 +20,7 @@ interface TranscriptEventRow {
 
 export class PostgresTranscriptLog {
   private readonly nextSequenceStmt;
+  private readonly existingSequenceStmt;
   private readonly insertStmt;
   private readonly readStmt;
   private readonly deleteStmt;
@@ -29,6 +30,12 @@ export class PostgresTranscriptLog {
       SELECT COALESCE(MAX(event_sequence), 0) + 1 AS next_sequence
       FROM transcript_events
       WHERE session_id = ?
+    `);
+    this.existingSequenceStmt = db.prepare(`
+      SELECT event_sequence
+      FROM transcript_events
+      WHERE session_id = ?
+        AND event_id = ?
     `);
     this.insertStmt = db.prepare(`
       INSERT INTO transcript_events (
@@ -64,6 +71,7 @@ export class PostgresTranscriptLog {
         @tokenOutput,
         @costUsd
       )
+      ON CONFLICT (session_id, event_id) DO NOTHING
     `);
     this.readStmt = db.prepare(`
       SELECT
@@ -89,9 +97,17 @@ export class PostgresTranscriptLog {
 
   public async append(event: TranscriptEvent): Promise<number> {
     return this.db.transaction("immediate", () => {
+      const existing = this.existingSequenceStmt.get(
+        event.sessionId,
+        event.eventId,
+      ) as { event_sequence?: number } | undefined;
+      if (typeof existing?.event_sequence === "number") {
+        return existing.event_sequence;
+      }
+
       const nextSequenceRow = this.nextSequenceStmt.get(event.sessionId) as { next_sequence?: number } | undefined;
       const nextSequence = Number(nextSequenceRow?.next_sequence ?? 1);
-      this.insertStmt.run({
+      const insertResult = this.insertStmt.run({
         sessionId: event.sessionId,
         eventId: event.eventId,
         eventSequence: nextSequence,
@@ -102,11 +118,18 @@ export class PostgresTranscriptLog {
         eventType: event.type,
         actorType: event.actorType,
         actorId: event.actorId,
-        payload: JSON.stringify(event.payload),
+        payload: JSON.stringify(sanitizeJsonValueForJsonb(event.payload)),
         tokenInput: event.tokenInput ?? null,
         tokenOutput: event.tokenOutput ?? null,
         costUsd: event.costUsd ?? null,
       });
+      if (insertResult.changes === 0) {
+        const replayed = this.existingSequenceStmt.get(
+          event.sessionId,
+          event.eventId,
+        ) as { event_sequence?: number } | undefined;
+        return Number(replayed?.event_sequence ?? nextSequence);
+      }
       return nextSequence;
     });
   }
@@ -135,4 +158,53 @@ export class PostgresTranscriptLog {
   public async delete(sessionId: string): Promise<void> {
     this.deleteStmt.run(sessionId);
   }
+}
+
+function sanitizeJsonValueForJsonb(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeJsonbString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonValueForJsonb(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        sanitizeJsonbString(key),
+        sanitizeJsonValueForJsonb(item),
+      ]),
+    );
+  }
+  return value;
+}
+
+function sanitizeJsonbString(value: string): string {
+  let sanitized = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.charCodeAt(index);
+    if (codePoint === 0x0000) {
+      continue;
+    }
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
+      const nextCodePoint = value.charCodeAt(index + 1);
+      if (nextCodePoint >= 0xdc00 && nextCodePoint <= 0xdfff) {
+        sanitized += value.charAt(index) + value.charAt(index + 1);
+        index += 1;
+      }
+      continue;
+    }
+    if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
+      continue;
+    }
+    sanitized += value.charAt(index);
+  }
+  return sanitized;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

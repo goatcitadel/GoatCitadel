@@ -329,6 +329,45 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([first[0]?.durableRunId, first[0]?.durableRunId]);
   });
 
+  it("aborts durable hook delivery without dead-lettering the hook run", async () => {
+    const controller = new AbortController();
+    const { service, workspaceId } = createHarness({
+      fetchImpl: (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    });
+
+    service.createWorkspaceHook({
+      workspaceId,
+      label: "after-abort",
+      trigger: "tool.call.after",
+      mode: "observe",
+      action: {
+        type: "webhook",
+        webhook: {
+          url: "https://hooks.example.test/after-abort",
+        },
+      },
+    });
+
+    const queued = service.enqueueAfterHooks({
+      workspaceId,
+      trigger: "tool.call.after",
+      entityType: "tool_call",
+      entityId: "tool-after-abort",
+      payload: {
+        toolName: "shell.exec",
+      },
+    });
+
+    const runPromise = service.executeHookDelivery(queued[0]!.runId, 1, { signal: controller.signal });
+    controller.abort(new Error("lease lost"));
+
+    await expect(runPromise).rejects.toThrow("lease lost");
+    expect(service.listWorkspaceHookRuns(workspaceId)[0]?.status).toBe("running");
+  });
+
   it("rejects hook creation for unknown workspaces even in observe mode", () => {
     const { service } = createHarness();
 

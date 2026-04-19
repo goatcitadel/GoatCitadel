@@ -151,6 +151,15 @@ export async function fetchPromptPackBenchmark(benchmarkRunId: string): Promise<
   );
 }
 
+export async function cancelPromptPackBenchmark(benchmarkRunId: string): Promise<PromptPackBenchmarkStatusRecord> {
+  return request<PromptPackBenchmarkStatusRecord>(
+    `/api/v1/prompt-packs/benchmark/${encodeURIComponent(benchmarkRunId)}/cancel`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function runPromptPackReplayRegression(
   packId: string,
   input: {

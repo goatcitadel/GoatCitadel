@@ -1,4 +1,9 @@
 import type {
+  ChatDelegateRequest,
+  ChatDelegateResponse,
+  ChatDelegationRunStatus,
+  ChatDelegationStepRecord,
+  ChatDelegationStepStatus,
   ChatDelegationSuggestionRecord,
   ChatMessageRecord,
   ChatProactiveMode,
@@ -6,11 +11,14 @@ import type {
   ChatRetrievalMode,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
+  ChatThreadResponse,
+  ChatThreadTurnRecord,
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import { useCallback, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
 import {
+  fetchChatDelegationRun,
   runChatDelegation,
   runChatResearch,
   streamChatDelegation,
@@ -59,8 +67,144 @@ const CODE_DELEGATION_PRESETS = {
   },
 } as const;
 
+export interface ActiveChatDelegationStep {
+  stepId: string;
+  runId?: string;
+  role: string;
+  status: ChatDelegationStepStatus;
+  index: number;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  summary?: string;
+  output?: string;
+  error?: string;
+  durableRunId?: string;
+  childSessionId?: string;
+  childTurnId?: string;
+}
+
+export interface ActiveChatDelegationRun {
+  runId?: string;
+  taskId?: string;
+  executionPlanId?: string;
+  attachedTurnId?: string | null;
+  label: string;
+  objective: string;
+  mode: NonNullable<ChatDelegateRequest["mode"]>;
+  status: ChatDelegationRunStatus;
+  steps: ActiveChatDelegationStep[];
+  stitchedOutput?: string;
+}
+
+function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDelegationStep {
+  return {
+    stepId: step.stepId,
+    runId: step.runId,
+    role: step.role,
+    status: step.status,
+    index: step.index,
+    startedAt: step.startedAt,
+    finishedAt: step.finishedAt,
+    durationMs: step.durationMs,
+    summary: step.summary,
+    output: step.output,
+    error: step.error,
+    durableRunId: step.durableRunId,
+    childSessionId: step.childSessionId,
+    childTurnId: step.childTurnId,
+  };
+}
+
+function inferDelegationRunStatus(steps: ActiveChatDelegationStep[], fallback: ChatDelegationRunStatus = "running") {
+  if (steps.length === 0) {
+    return fallback;
+  }
+  if (steps.some((step) => step.status === "running" || step.status === "pending")) {
+    return "running";
+  }
+  const completedCount = steps.filter((step) => step.status === "completed").length;
+  const failedOrSkippedCount = steps.filter((step) => step.status === "failed" || step.status === "skipped").length;
+  if (completedCount === steps.length) {
+    return "completed";
+  }
+  if (completedCount > 0 && failedOrSkippedCount > 0) {
+    return "partial";
+  }
+  if (failedOrSkippedCount > 0) {
+    return "failed";
+  }
+  return fallback;
+}
+
+function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
+  if (request.steps?.length) {
+    return request.steps
+      .map((step, index) => ({
+        stepId: step.stepId ?? `delegation-step-${index + 1}`,
+        role: step.role,
+        status: "pending" as const,
+        index: step.index ?? index,
+      }))
+      .sort((left, right) => left.index - right.index);
+  }
+  return request.roles.map((role, index) => ({
+    stepId: `delegation-step-${index + 1}`,
+    role,
+    status: "pending" as const,
+    index,
+  }));
+}
+
+function mergeDelegationStep(
+  currentSteps: ActiveChatDelegationStep[],
+  nextStep: ActiveChatDelegationStep,
+): ActiveChatDelegationStep[] {
+  const matchingIndex = currentSteps.findIndex((step) =>
+    step.stepId === nextStep.stepId
+    || (!step.runId && step.index === nextStep.index && step.role.toLowerCase() === nextStep.role.toLowerCase()));
+  const nextSteps = matchingIndex >= 0
+    ? currentSteps.map((step, index) => (index === matchingIndex ? { ...step, ...nextStep } : step))
+    : [...currentSteps, nextStep];
+  return nextSteps.sort((left, right) => left.index - right.index);
+}
+
+function resolveSelectedTurn(thread: ChatThreadResponse | null, selectedTurnId: string | null): ChatThreadTurnRecord | null {
+  if (!thread) {
+    return null;
+  }
+  return thread.turns.find((turn) => turn.turnId === selectedTurnId) ?? thread.turns.at(-1) ?? null;
+}
+
+function buildDelegationGraph(
+  selectedTurn: ChatThreadTurnRecord | null,
+  fallbackRoles: string[],
+): Pick<ChatDelegateRequest, "roles" | "steps"> {
+  const plannedSteps = selectedTurn?.trace.executionPlan?.steps ?? [];
+  const delegatedSteps = plannedSteps
+    .filter((step) => typeof step.delegatedRole === "string" && step.delegatedRole.trim().length > 0)
+    .sort((left, right) => left.index - right.index);
+  if (delegatedSteps.length === 0) {
+    return { roles: [...fallbackRoles] };
+  }
+  const delegatedStepIds = new Set(delegatedSteps.map((step) => step.stepId));
+  const steps = delegatedSteps.map((step) => ({
+    stepId: step.stepId,
+    index: step.index,
+    role: step.delegatedRole!.trim(),
+    parallelizable: step.parallelizable,
+    dependsOnStepIds: step.dependsOnStepIds?.filter((dependency) => delegatedStepIds.has(dependency)),
+  }));
+  return {
+    roles: [...new Set(steps.map((step) => step.role))],
+    steps,
+  };
+}
+
 export function useChatDelegationPolicyActions(input: {
   selectedSession: ChatSessionRecord | null;
+  thread: ChatThreadResponse | null;
+  selectedTurnId: string | null;
   draft: string;
   messages: ChatMessageRecord[];
   prefs: ChatSessionPrefsRecord | null;
@@ -97,6 +241,62 @@ export function useChatDelegationPolicyActions(input: {
   } = input;
 
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
+  const [activeDelegationRun, setActiveDelegationRun] = useState<ActiveChatDelegationRun | null>(null);
+  const selectedTurn = useMemo(
+    () => resolveSelectedTurn(input.thread, input.selectedTurnId),
+    [input.selectedTurnId, input.thread],
+  );
+
+  useEffect(() => {
+    setActiveDelegationRun(null);
+  }, [selectedSession?.sessionId]);
+
+  useEffect(() => {
+    const runId = selectedTurn?.trace.orchestration?.runId;
+    const turnId = selectedTurn?.turnId ?? null;
+    const sessionId = selectedSession?.sessionId;
+    if (!runId || !turnId || !sessionId) {
+      return;
+    }
+    if (activeDelegationRun?.runId === runId && activeDelegationRun.attachedTurnId === turnId) {
+      return;
+    }
+    let cancelled = false;
+    void fetchChatDelegationRun(sessionId, runId)
+      .then(({ run, steps }) => {
+        if (cancelled) {
+          return;
+        }
+        setActiveDelegationRun((current) => {
+          if (current?.runId === runId && current.attachedTurnId === turnId && current.status === "running") {
+            return current;
+          }
+          return {
+            runId: run.runId,
+            taskId: run.taskId,
+            executionPlanId: run.executionPlanId,
+            attachedTurnId: turnId,
+            label: "Delegation",
+            objective: run.objective,
+            mode: run.mode,
+            status: run.status,
+            steps: steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
+            stitchedOutput: run.stitchedOutput,
+          };
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeDelegationRun?.attachedTurnId,
+    activeDelegationRun?.runId,
+    activeDelegationRun?.status,
+    selectedSession?.sessionId,
+    selectedTurn?.trace.orchestration?.runId,
+    selectedTurn?.turnId,
+  ]);
 
   const handleRunQuickResearch = useCallback(async () => {
     if (sending) return;
@@ -201,41 +401,147 @@ export function useChatDelegationPolicyActions(input: {
   }, [draft, messages, selectedSession, sending, setError, setSending]);
 
   const runDelegationAction = useCallback(
-    async (sessionId: string, request: Parameters<typeof runChatDelegation>[1], label: string) => {
+    async (sessionId: string, request: ChatDelegateRequest, label: string) => {
+      const attachedTurnId = selectedTurn?.turnId ?? null;
+      setActiveDelegationRun({
+        attachedTurnId,
+        label,
+        objective: request.objective,
+        mode: request.mode ?? "sequential",
+        status: "running",
+        steps: createSeedDelegationSteps(request),
+      });
+
       if (!streamEnabled) {
-        return runChatDelegation(sessionId, request);
+        const result = await runChatDelegation(sessionId, request);
+        setActiveDelegationRun({
+          runId: result.runId,
+          taskId: result.taskId,
+          executionPlanId: result.executionPlanId,
+          attachedTurnId,
+          label,
+          objective: request.objective,
+          mode: request.mode ?? "sequential",
+          status: inferDelegationRunStatus(result.steps.map(toActiveDelegationStep)),
+          steps: result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
+          stitchedOutput: result.stitchedOutput,
+        });
+        return result;
       }
 
-      let finalResult: Awaited<ReturnType<typeof runChatDelegation>> | null = null;
-      await streamChatDelegation(sessionId, request, (chunk) => {
-        if (chunk.type === "status" && chunk.message) {
-          pushLocalNotice(chunk.message);
-          return;
-        }
-        if (chunk.type === "step" && chunk.step) {
-          if (chunk.step.status === "completed") {
-            pushLocalNotice(
-              `${toTitleCase(chunk.step.role)} completed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}.`,
-            );
-          } else if (chunk.step.status === "failed") {
-            pushLocalNotice(
-              `${toTitleCase(chunk.step.role)} failed ${label.toLowerCase()} step ${chunk.step.index + 1}/${request.roles.length}: ${chunk.step.error ?? "Unknown failure."}`,
-              "warning",
-            );
+      let finalResult: ChatDelegateResponse | null = null;
+      const expectedSteps = request.steps?.length ?? request.roles.length;
+      try {
+        await streamChatDelegation(sessionId, request, (chunk) => {
+          if (chunk.type === "status") {
+            setActiveDelegationRun((current) => current
+              ? {
+                  ...current,
+                  runId: chunk.runId ?? current.runId,
+                  taskId: chunk.taskId ?? current.taskId,
+                }
+              : current);
+            if (chunk.message) {
+              pushLocalNotice(chunk.message);
+            }
+            return;
           }
-          return;
-        }
-        if (chunk.type === "done" && chunk.result) {
-          finalResult = chunk.result;
-        }
-      });
+          if (chunk.type === "step" && chunk.step) {
+            const nextStep: ActiveChatDelegationStep = {
+              stepId: chunk.step.stepId,
+              runId: chunk.step.runId,
+              role: chunk.step.role,
+              status: chunk.step.status as ChatDelegationStepStatus,
+              index: chunk.step.index,
+              startedAt: chunk.step.startedAt,
+              finishedAt: chunk.step.finishedAt,
+              durationMs: chunk.step.durationMs,
+              output: chunk.step.output,
+              error: chunk.step.error,
+            };
+            setActiveDelegationRun((current) => {
+              if (!current) {
+                return current;
+              }
+              const steps = mergeDelegationStep(current.steps, nextStep);
+              return {
+                ...current,
+                runId: chunk.runId ?? current.runId,
+                taskId: chunk.taskId ?? current.taskId,
+                steps,
+                status: inferDelegationRunStatus(steps, "running"),
+              };
+            });
+            if (chunk.step.status === "running") {
+              pushLocalNotice(
+                `${toTitleCase(chunk.step.role)} started ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}.`,
+              );
+            } else if (chunk.step.status === "completed") {
+              pushLocalNotice(
+                `${toTitleCase(chunk.step.role)} completed ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}.`,
+                "success",
+              );
+            } else if (chunk.step.status === "failed") {
+              pushLocalNotice(
+                `${toTitleCase(chunk.step.role)} failed ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}: ${chunk.step.error ?? "Unknown failure."}`,
+                "warning",
+              );
+            } else if (chunk.step.status === "skipped") {
+              pushLocalNotice(
+                `${toTitleCase(chunk.step.role)} skipped ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}: ${chunk.step.error ?? "Dependency did not settle successfully."}`,
+                "warning",
+              );
+            }
+            return;
+          }
+          if (chunk.type === "done" && chunk.result) {
+            finalResult = chunk.result;
+            const steps = chunk.result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index);
+            setActiveDelegationRun((current) => ({
+              runId: chunk.result!.runId,
+              taskId: chunk.result!.taskId,
+              executionPlanId: chunk.result!.executionPlanId,
+              attachedTurnId: current?.attachedTurnId ?? attachedTurnId,
+              label: current?.label ?? label,
+              objective: current?.objective ?? request.objective,
+              mode: current?.mode ?? request.mode ?? "sequential",
+              status: inferDelegationRunStatus(steps),
+              steps,
+              stitchedOutput: chunk.result!.stitchedOutput,
+            }));
+          }
+        });
+      } catch (error) {
+        setActiveDelegationRun((current) => current
+          ? {
+              ...current,
+              status: inferDelegationRunStatus(current.steps, current.steps.some((step) => step.status === "completed") ? "partial" : "failed"),
+            }
+          : current);
+        throw error;
+      }
 
       if (!finalResult) {
         throw new Error(`${label} finished without a final result payload.`);
       }
       return finalResult;
     },
-    [pushLocalNotice, streamEnabled],
+    [pushLocalNotice, selectedTurn?.turnId, streamEnabled],
+  );
+
+  const buildDelegationRequest = useCallback(
+    (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>) => {
+      const graph = buildDelegationGraph(selectedTurn, roles);
+      return {
+        objective,
+        roles: graph.roles,
+        mode,
+        providerId: prefs?.providerId,
+        model: prefs?.model,
+        ...(graph.steps?.length ? { steps: graph.steps } : {}),
+      } satisfies ChatDelegateRequest;
+    },
+    [prefs?.model, prefs?.providerId, selectedTurn],
   );
 
   const handleAcceptDelegation = useCallback(async () => {
@@ -244,13 +550,11 @@ export function useChatDelegationPolicyActions(input: {
     try {
       const accepted = await runDelegationAction(
         selectedSession.sessionId,
-        {
-          objective: delegationSuggestion.objective,
-          roles: delegationSuggestion.roles,
-          mode: delegationSuggestion.mode,
-          providerId: prefs?.providerId,
-          model: prefs?.model,
-        },
+        buildDelegationRequest(
+          delegationSuggestion.objective,
+          delegationSuggestion.roles,
+          delegationSuggestion.mode,
+        ),
         "Delegation",
       );
       pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
@@ -262,10 +566,9 @@ export function useChatDelegationPolicyActions(input: {
       setSending(false);
     }
   }, [
+    buildDelegationRequest,
     delegationSuggestion,
     loadSidebar,
-    prefs?.model,
-    prefs?.providerId,
     pushLocalNotice,
     runDelegationAction,
     selectedSession,
@@ -300,13 +603,7 @@ export function useChatDelegationPolicyActions(input: {
       try {
         const result = await runDelegationAction(
           selectedSession.sessionId,
-          {
-            objective: `${preset.prefix}${baseObjective}`,
-            roles: [...preset.roles],
-            mode: preset.mode,
-            providerId: prefs?.providerId,
-            model: prefs?.model,
-          },
+          buildDelegationRequest(`${preset.prefix}${baseObjective}`, [...preset.roles], preset.mode),
           preset.label,
         );
         pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
@@ -319,12 +616,11 @@ export function useChatDelegationPolicyActions(input: {
       }
     },
     [
+      buildDelegationRequest,
       codeModeNeedsProjectBinding,
       draft,
       loadSidebar,
       messages,
-      prefs?.model,
-      prefs?.providerId,
       pushLocalNotice,
       runDelegationAction,
       selectedSession,
@@ -335,6 +631,7 @@ export function useChatDelegationPolicyActions(input: {
   );
 
   return {
+    activeDelegationRun,
     delegationSuggestion,
     setDelegationSuggestion,
     handleRunQuickResearch,

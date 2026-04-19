@@ -22,6 +22,8 @@ interface PromptPackRunRow {
   memory_mode: PromptPackRunRecord["memoryMode"] | null;
   thinking_level: PromptPackRunRecord["thinkingLevel"] | null;
   response_text: string | null;
+  derived_response_text: string | null;
+  derived_response_signals_json: string | null;
   trace_json: string | null;
   citations_json: string | null;
   integrity_json: string | null;
@@ -44,11 +46,13 @@ export class PromptPackRunRepository {
       INSERT INTO prompt_pack_runs (
         run_id, pack_id, test_id, session_id, status, provider_id, model,
         mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
-        response_text, trace_json, citations_json, integrity_json, error, started_at, finished_at
+        response_text, derived_response_text, derived_response_signals_json,
+        trace_json, citations_json, integrity_json, error, started_at, finished_at
       ) VALUES (
         @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
         @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
-        @responseText, @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
+        @responseText, @derivedResponseText, @derivedResponseSignalsJson,
+        @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
       )
     `);
     this.patchStmt = db.prepare(`
@@ -62,6 +66,8 @@ export class PromptPackRunRepository {
         memory_mode = CASE WHEN @hasMemoryMode = 1 THEN @memoryMode ELSE memory_mode END,
         thinking_level = CASE WHEN @hasThinkingLevel = 1 THEN @thinkingLevel ELSE thinking_level END,
         response_text = CASE WHEN @hasResponseText = 1 THEN @responseText ELSE response_text END,
+        derived_response_text = CASE WHEN @hasDerivedResponseText = 1 THEN @derivedResponseText ELSE derived_response_text END,
+        derived_response_signals_json = CASE WHEN @hasDerivedResponseSignals = 1 THEN @derivedResponseSignalsJson ELSE derived_response_signals_json END,
         trace_json = CASE WHEN @hasTrace = 1 THEN @traceJson ELSE trace_json END,
         citations_json = CASE WHEN @hasCitations = 1 THEN @citationsJson ELSE citations_json END,
         integrity_json = CASE WHEN @hasIntegrity = 1 THEN @integrityJson ELSE integrity_json END,
@@ -107,6 +113,8 @@ export class PromptPackRunRepository {
     memoryMode?: PromptPackRunRecord["memoryMode"];
     thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
     responseText?: string;
+    derivedResponseText?: string;
+    derivedResponseSignals?: string[];
     trace?: ChatTurnTraceRecord;
     citations?: ChatCitationRecord[];
     integrity?: PromptPackRunIntegrityRecord;
@@ -129,6 +137,8 @@ export class PromptPackRunRepository {
       memoryMode: input.memoryMode ?? null,
       thinkingLevel: input.thinkingLevel ?? null,
       responseText: input.responseText ?? null,
+      derivedResponseText: input.derivedResponseText ?? null,
+      derivedResponseSignalsJson: input.derivedResponseSignals ? JSON.stringify(input.derivedResponseSignals) : null,
       traceJson: input.trace ? JSON.stringify(input.trace) : null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
       integrityJson: input.integrity ? JSON.stringify(input.integrity) : null,
@@ -150,6 +160,8 @@ export class PromptPackRunRepository {
       memoryMode?: PromptPackRunRecord["memoryMode"];
       thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
       responseText?: string;
+      derivedResponseText?: string;
+      derivedResponseSignals?: string[];
       trace?: ChatTurnTraceRecord;
       citations?: ChatCitationRecord[];
       integrity?: PromptPackRunIntegrityRecord;
@@ -174,6 +186,11 @@ export class PromptPackRunRepository {
       thinkingLevel: input.thinkingLevel ?? null,
       hasResponseText: input.responseText !== undefined ? 1 : 0,
       responseText: input.responseText ?? null,
+      hasDerivedResponseText: input.derivedResponseText !== undefined ? 1 : 0,
+      derivedResponseText: input.derivedResponseText ?? null,
+      hasDerivedResponseSignals: input.derivedResponseSignals !== undefined ? 1 : 0,
+      derivedResponseSignalsJson:
+        input.derivedResponseSignals !== undefined ? JSON.stringify(input.derivedResponseSignals) : null,
       hasTrace: input.trace !== undefined ? 1 : 0,
       traceJson: input.trace !== undefined ? JSON.stringify(input.trace) : null,
       hasCitations: input.citations !== undefined ? 1 : 0,
@@ -233,6 +250,10 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
     memoryMode: row.memory_mode ?? undefined,
     thinkingLevel: row.thinking_level ?? undefined,
     responseText: row.response_text ?? undefined,
+    derivedResponseText: row.derived_response_text ?? undefined,
+    derivedResponseSignals: row.derived_response_signals_json
+      ? safeJsonParse<string[] | undefined>(row.derived_response_signals_json, undefined)
+      : undefined,
     trace: row.trace_json ? safeJsonParse<ChatTurnTraceRecord | undefined>(row.trace_json, undefined) : undefined,
     citations: row.citations_json
       ? safeJsonParse<ChatCitationRecord[] | undefined>(row.citations_json, undefined)
@@ -279,6 +300,8 @@ function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
     (typeof value.memory_mode === "string" || value.memory_mode === null) &&
     (typeof value.thinking_level === "string" || value.thinking_level === null) &&
     (typeof value.response_text === "string" || value.response_text === null) &&
+    (typeof value.derived_response_text === "string" || value.derived_response_text === null) &&
+    (typeof value.derived_response_signals_json === "string" || value.derived_response_signals_json === null) &&
     (typeof value.trace_json === "string" || value.trace_json === null) &&
     (typeof value.citations_json === "string" || value.citations_json === null) &&
     (typeof value.integrity_json === "string" || value.integrity_json === null) &&

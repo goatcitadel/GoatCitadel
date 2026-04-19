@@ -63,6 +63,7 @@ describe("MemoryLifecycleService", () => {
     await expect(service.composeContext({ scope: "chat", prompt: "hello" })).resolves.toMatchObject({
       contextId: "ctx-1",
     });
+    await expect(service.prewarmContext({ scope: "chat", prompt: "hello again" })).resolves.toBeUndefined();
     expect(service.listSessionLearnedMemory("session-1")).toEqual({ items: [], conflicts: [] });
     await expect(service.rebuildSessionLearnedMemory("session-1")).resolves.toMatchObject({ rebuiltAt: "now" });
     expect(service.getMaintenancePolicy("default")).toMatchObject({ workspaceId: "default" });

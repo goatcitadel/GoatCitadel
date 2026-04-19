@@ -46,6 +46,7 @@ import type {
   ImprovementSignalOutcome,
   ImprovementSignalRecord,
   ImprovementSignalSeverity,
+  ImprovementStrategyTag,
   ImprovementAttemptManifestSummary,
   RepairCandidateRecord,
   RepairValidationStatus,
@@ -53,7 +54,9 @@ import type {
   ReplayOverrideDraft,
   ReplayOverrideStep,
   TranscriptEvent,
+  WeeklyImprovementProposalDraftRecord,
   WeeklyImprovementReportRecord,
+  WeeklyImprovementSpecialistSuggestionRecord,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway-service.js";
 
@@ -627,7 +630,7 @@ export class ImprovementService {
       previous_report_id: string | null;
       created_at: string;
     }>;
-    return rows.map((row) => mapImprovementReportRow(row));
+    return rows.map((row) => this.enrichWeeklyImprovementReport(mapImprovementReportRow(row)));
   }
 
   listDecisionReplayRuns(limit = 24): DecisionReplayRunRecord[] {
@@ -1628,7 +1631,7 @@ export class ImprovementService {
     if (!row) {
       throw new Error(`Improvement report ${reportId} not found`);
     }
-    return mapImprovementReportRow(row);
+    return this.enrichWeeklyImprovementReport(mapImprovementReportRow(row));
   }
 
   getDecisionReplayRun(runId: string): {
@@ -1644,6 +1647,263 @@ export class ImprovementService {
     const autoTunes = this.listDecisionAutoTunes(runId, 300);
     const report = run.reportId ? this.getImprovementReport(run.reportId) : undefined;
     return { run, items, findings, autoTunes, report };
+  }
+
+  private enrichWeeklyImprovementReport(report: WeeklyImprovementReportRecord): WeeklyImprovementReportRecord {
+    const routingGapSummary = this.buildWeeklyRoutingGapSummary(report.weekStart, report.weekEnd);
+    const specialistCandidateSuggestions = this.buildWeeklySpecialistSuggestions(report, routingGapSummary);
+    const strategyTags = this.buildWeeklyStrategyTags(report, routingGapSummary, specialistCandidateSuggestions);
+    const proposalDrafts = this.buildWeeklyProposalDrafts(report, routingGapSummary, specialistCandidateSuggestions);
+    return {
+      ...report,
+      strategyTags,
+      routingGapSummary,
+      proposalDrafts,
+      specialistCandidateSuggestions,
+    };
+  }
+
+  private buildWeeklyRoutingGapSummary(
+    weekStart: string,
+    weekEnd: string,
+  ): WeeklyImprovementReportRecord["routingGapSummary"] {
+    this.ensureCapabilityGapTables();
+    const rows = this.ctx.gatewaySql
+      .prepare(
+        `
+      SELECT cause_class, requested_tool, COUNT(*) AS event_count
+      FROM capability_gap_events
+      WHERE created_at >= @weekStart AND created_at <= @weekEnd
+      GROUP BY cause_class, requested_tool
+      ORDER BY event_count DESC, cause_class ASC
+      LIMIT 24
+    `,
+      )
+      .all({ weekStart, weekEnd }) as Array<{
+      cause_class: string;
+      requested_tool: string | null;
+      event_count: number;
+    }>;
+    if (rows.length === 0) {
+      return undefined;
+    }
+    const causeCounts = new Map<CapabilityGapCauseClass, number>();
+    const toolCounts = new Map<string, number>();
+    let totalEvents = 0;
+    for (const row of rows) {
+      const causeClass = normalizeCapabilityGapCauseClass(row.cause_class);
+      const eventCount = Math.max(0, row.event_count);
+      if (eventCount <= 0) {
+        continue;
+      }
+      totalEvents += eventCount;
+      causeCounts.set(causeClass, (causeCounts.get(causeClass) ?? 0) + eventCount);
+      const requestedTool = row.requested_tool?.trim();
+      if (requestedTool) {
+        toolCounts.set(requestedTool, (toolCounts.get(requestedTool) ?? 0) + eventCount);
+      }
+    }
+    return {
+      totalEvents,
+      topCauseClasses: Array.from(causeCounts.entries())
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 5)
+        .map(([causeClass, count]) => ({ causeClass, count })),
+      topRequestedTools: Array.from(toolCounts.entries())
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 5)
+        .map(([requestedTool]) => requestedTool),
+    };
+  }
+
+  private buildWeeklySpecialistSuggestions(
+    report: WeeklyImprovementReportRecord,
+    routingGapSummary: WeeklyImprovementReportRecord["routingGapSummary"],
+  ): WeeklyImprovementSpecialistSuggestionRecord[] {
+    const suggestions = new Map<string, WeeklyImprovementSpecialistSuggestionRecord>();
+    const suggestedTools = routingGapSummary?.topRequestedTools ?? [];
+    const addSuggestion = (candidate: WeeklyImprovementSpecialistSuggestionRecord) => {
+      const existing = suggestions.get(candidate.candidateId);
+      if (!existing || candidate.evidenceCount > existing.evidenceCount || candidate.confidence > existing.confidence) {
+        suggestions.set(candidate.candidateId, candidate);
+      }
+    };
+
+    const hasReplayCause = (causeClass: DecisionReplayCauseClass) =>
+      report.summary.topCauseClasses.some((entry) => entry.causeClass === causeClass);
+    const routingCount = routingGapSummary?.topCauseClasses.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
+
+    if (
+      routingGapSummary?.topCauseClasses.some(
+        (entry) =>
+          entry.causeClass === "routing_profile_mismatch" ||
+          entry.causeClass === "tool_exists_but_not_in_profile" ||
+          entry.causeClass === "provider_tool_mismatch",
+      )
+    ) {
+      addSuggestion({
+        candidateId: `routing-specialist-${report.reportId}`,
+        title: "Routing Harness Specialist",
+        role: "Researcher",
+        summary: "Review profile gaps, provider routing drift, and tool exposure mismatches before promoting new paths.",
+        reason: "Routing gaps repeated often enough to warrant a reusable operator-facing specialist candidate.",
+        source: "runtime_gap",
+        confidence: 0.86,
+        suggestedRoutingMode: "strong_match_only",
+        suggestedTools,
+        suggestedSkills: ["goatcitadel-native-safe-self-improvement"],
+        evidenceCount: Math.max(1, routingCount),
+      });
+    }
+
+    if (
+      hasReplayCause("retrieval_miss") ||
+      routingGapSummary?.topCauseClasses.some((entry) => entry.causeClass === "missing_required_tool_evidence")
+    ) {
+      addSuggestion({
+        candidateId: `context-specialist-${report.reportId}`,
+        title: "Context Recovery Specialist",
+        role: "Researcher",
+        summary: "Trace retrieval misses, missing evidence, and context-pack drift into inspectable recovery proposals.",
+        reason: "Repeated evidence misses suggest a focused review loop for context engineering and retrieval tuning.",
+        source: "replay",
+        confidence: 0.8,
+        suggestedRoutingMode: "manual_only",
+        suggestedTools: suggestedTools.slice(0, 3),
+        suggestedSkills: ["goatcitadel-native-safe-self-improvement"],
+        evidenceCount: Math.max(
+          1,
+          report.summary.topCauseClasses.find((entry) => entry.causeClass === "retrieval_miss")?.count ?? 0,
+        ),
+      });
+    }
+
+    if (
+      hasReplayCause("incomplete_retry_repair") ||
+      routingGapSummary?.topCauseClasses.some((entry) => entry.causeClass === "retryable_network_failure")
+    ) {
+      addSuggestion({
+        candidateId: `repair-specialist-${report.reportId}`,
+        title: "Repair Loop Specialist",
+        role: "QA",
+        summary: "Group recurring retry failures into bounded hardening proposals and replay checks.",
+        reason: "Repair loops are repeating across weekly replay data and runtime gap events.",
+        source: "runtime_gap",
+        confidence: 0.78,
+        suggestedRoutingMode: "manual_only",
+        suggestedTools,
+        suggestedSkills: ["goatcitadel-native-safe-self-improvement"],
+        evidenceCount: Math.max(
+          1,
+          report.summary.topCauseClasses.find((entry) => entry.causeClass === "incomplete_retry_repair")?.count ?? 0,
+        ),
+      });
+    }
+
+    if (hasReplayCause("false_refusal_tone") || hasReplayCause("weak_blocker_explanation")) {
+      addSuggestion({
+        candidateId: `trust-specialist-${report.reportId}`,
+        title: "Trust Calibration Specialist",
+        role: "Product",
+        summary: "Review refusal tone, blocker clarity, and operator-facing trust copy before activation policy changes.",
+        reason: "Trust posture issues are showing up in replay findings and should stay proposal-backed.",
+        source: "replay",
+        confidence: 0.74,
+        suggestedRoutingMode: "manual_only",
+        suggestedSkills: ["goatcitadel-native-safe-self-improvement"],
+        evidenceCount: Math.max(
+          1,
+          report.summary.topCauseClasses
+            .filter(
+              (entry) => entry.causeClass === "false_refusal_tone" || entry.causeClass === "weak_blocker_explanation",
+            )
+            .reduce((sum, entry) => sum + entry.count, 0),
+        ),
+      });
+    }
+
+    return Array.from(suggestions.values())
+      .sort((left, right) => right.evidenceCount - left.evidenceCount || right.confidence - left.confidence)
+      .slice(0, 4);
+  }
+
+  private buildWeeklyStrategyTags(
+    report: WeeklyImprovementReportRecord,
+    routingGapSummary: WeeklyImprovementReportRecord["routingGapSummary"],
+    specialistCandidateSuggestions: WeeklyImprovementSpecialistSuggestionRecord[],
+  ): WeeklyImprovementReportRecord["strategyTags"] {
+    const counts = new Map<ImprovementStrategyTag, number>([
+      ["repair", 0],
+      ["harden", 0],
+      ["stabilize", 0],
+    ]);
+    for (const finding of report.topFindings) {
+      const strategy = classifyReplayCauseStrategy(finding.causeClass);
+      counts.set(strategy, (counts.get(strategy) ?? 0) + Math.max(1, finding.recurrenceCount));
+    }
+    for (const gap of routingGapSummary?.topCauseClasses ?? []) {
+      const strategy = classifyCapabilityGapStrategy(gap.causeClass);
+      counts.set(strategy, (counts.get(strategy) ?? 0) + gap.count);
+    }
+    for (const suggestion of specialistCandidateSuggestions) {
+      const strategy = suggestion.source === "runtime_gap" ? "harden" : suggestion.source === "replay" ? "repair" : "stabilize";
+      counts.set(strategy, (counts.get(strategy) ?? 0) + Math.max(1, suggestion.evidenceCount));
+    }
+    return Array.from(counts.entries())
+      .filter(([, count]) => count > 0)
+      .sort((left, right) => right[1] - left[1])
+      .map(([tag, count]) => ({
+        tag,
+        count,
+        rationale: improvementStrategyRationale(tag),
+      }));
+  }
+
+  private buildWeeklyProposalDrafts(
+    report: WeeklyImprovementReportRecord,
+    routingGapSummary: WeeklyImprovementReportRecord["routingGapSummary"],
+    specialistCandidateSuggestions: WeeklyImprovementSpecialistSuggestionRecord[],
+  ): WeeklyImprovementProposalDraftRecord[] {
+    const drafts: WeeklyImprovementProposalDraftRecord[] = [];
+    const topRoutingGap = routingGapSummary?.topCauseClasses[0];
+    if (topRoutingGap) {
+      drafts.push({
+        draftId: `${report.reportId}:routing:${topRoutingGap.causeClass}`,
+        title: `Review routing gap: ${topRoutingGap.causeClass}`,
+        summary: `Observed ${topRoutingGap.count} routing gap events during this report window. Draft a proposal instead of widening runtime access directly.`,
+        kind: "routing_rule",
+        inspectable: true,
+        backingType: "report_only_draft",
+        nativeDestination: "Configure > Agents",
+        evidenceCount: topRoutingGap.count,
+      });
+    }
+    const topFinding = report.topFindings[0];
+    if (topFinding) {
+      drafts.push({
+        draftId: `${report.reportId}:finding:${topFinding.findingId}`,
+        title: `Capture replay lesson: ${topFinding.title}`,
+        summary: topFinding.recommendation ?? topFinding.summary,
+        kind: "playbook",
+        inspectable: true,
+        backingType: "report_only_draft",
+        nativeDestination: "Cowork > Replay Overrides",
+        evidenceCount: Math.max(1, topFinding.recurrenceCount),
+      });
+    }
+    for (const suggestion of specialistCandidateSuggestions.slice(0, 2)) {
+      drafts.push({
+        draftId: `${report.reportId}:specialist:${suggestion.candidateId}`,
+        title: `Review specialist candidate: ${suggestion.title}`,
+        summary: `${suggestion.summary} Route as ${suggestion.suggestedRoutingMode} until an operator promotes it.`,
+        kind: "specialist_candidate",
+        inspectable: true,
+        backingType: "report_only_draft",
+        nativeDestination: "Skills > Candidate Lifecycle",
+        evidenceCount: Math.max(1, suggestion.evidenceCount),
+      });
+    }
+    return drafts.slice(0, 4);
   }
 
   async runImprovementReplayManually(input: ImprovementReplayTriggerInput = {}): Promise<{
@@ -4492,9 +4752,7 @@ function mapCapabilityGapEventRow(row: CapabilityGapEventRow): CapabilityGapEven
     sessionId: row.session_id,
     turnId: row.turn_id ?? undefined,
     runId: row.run_id ?? undefined,
-    causeClass: CAPABILITY_GAP_CAUSE_CLASSES.has(row.cause_class as CapabilityGapCauseClass)
-      ? (row.cause_class as CapabilityGapCauseClass)
-      : "policy_denied_by_config",
+    causeClass: normalizeCapabilityGapCauseClass(row.cause_class),
     failureClass: row.failure_class ?? undefined,
     promptExcerpt: row.prompt_excerpt ?? undefined,
     promptRef: row.prompt_ref ?? undefined,
@@ -4521,9 +4779,7 @@ function mapRepairCandidateRow(row: RepairCandidateRow): RepairCandidateRecord {
   return {
     candidateId: row.candidate_id,
     fingerprint: row.fingerprint,
-    causeClass: CAPABILITY_GAP_CAUSE_CLASSES.has(row.cause_class as CapabilityGapCauseClass)
-      ? (row.cause_class as CapabilityGapCauseClass)
-      : "policy_denied_by_config",
+    causeClass: normalizeCapabilityGapCauseClass(row.cause_class),
     title: row.title,
     summary: row.summary,
     requestedTool: row.requested_tool ?? undefined,
@@ -4540,6 +4796,56 @@ function mapRepairCandidateRow(row: RepairCandidateRow): RepairCandidateRecord {
     updatedAt: row.updated_at,
     lastSeenAt: row.last_seen_at,
   };
+}
+
+function normalizeCapabilityGapCauseClass(value: string): CapabilityGapCauseClass {
+  return CAPABILITY_GAP_CAUSE_CLASSES.has(value as CapabilityGapCauseClass)
+    ? (value as CapabilityGapCauseClass)
+    : "policy_denied_by_config";
+}
+
+function classifyReplayCauseStrategy(causeClass: DecisionReplayCauseClass): ImprovementStrategyTag {
+  switch (causeClass) {
+    case "tool_mismatch":
+    case "incomplete_retry_repair":
+      return "repair";
+    case "retrieval_miss":
+    case "false_refusal_tone":
+    case "weak_blocker_explanation":
+      return "harden";
+    case "other":
+    default:
+      return "stabilize";
+  }
+}
+
+function classifyCapabilityGapStrategy(causeClass: CapabilityGapCauseClass): ImprovementStrategyTag {
+  switch (causeClass) {
+    case "retryable_network_failure":
+    case "skill_missing":
+      return "repair";
+    case "tool_exists_but_not_in_profile":
+    case "tool_requires_approval_but_not_exposed":
+    case "provider_tool_mismatch":
+    case "policy_denied_by_config":
+      return "harden";
+    case "missing_required_tool_evidence":
+    case "routing_profile_mismatch":
+    default:
+      return "stabilize";
+  }
+}
+
+function improvementStrategyRationale(tag: ImprovementStrategyTag): string {
+  switch (tag) {
+    case "repair":
+      return "Fix recurring failures with bounded proposal drafts and replay-backed follow-up checks.";
+    case "harden":
+      return "Tighten guardrails, routing rules, and trust posture before widening runtime behavior.";
+    case "stabilize":
+    default:
+      return "Turn repeated drift into inspectable review artifacts so operators can decide what becomes durable.";
+  }
 }
 
 function normalizeRecoveryOptions(values: string[] | undefined): CapabilityGapEventRecord["recoveryOptions"] {

@@ -23,6 +23,7 @@ import type {
   ChatToolRunRecord,
   ChatTurnTraceRecord,
   GatewayEventInput,
+  MemoryRelationScope,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -125,6 +126,11 @@ export interface ChatTurnStreamHost {
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): void;
+  scheduleChatMemoryContextPrewarm(input: {
+    sessionId: string;
+    prompt: string;
+    relationScope?: MemoryRelationScope;
+  }): void;
   scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void;
   recordCapabilityGapFromTrace(input: {
     sessionId: string;
@@ -551,7 +557,8 @@ export async function executeDelegatedPlanStep(
       failureGuidance,
       citations: response.citations ?? [],
       routing: response.routing,
-      childRunId: input.runId,
+      childRunId: undefined,
+      durableRunId: response.trace?.durable?.runId,
       childSessionId: childSession.sessionId,
       childTurnId: response.turnId,
     };
@@ -575,7 +582,8 @@ export async function executeDelegatedPlanStep(
       error: message,
       failureGuidance: buildDelegationFailureGuidance(message, delegatedRole),
       citations: [],
-      childRunId: input.runId,
+      childRunId: undefined,
+      durableRunId: undefined,
       childSessionId: childSession.sessionId,
     };
   }
@@ -764,6 +772,7 @@ export async function* streamPreparedAgentChatTurn(
         messageId: assistantMessageId,
         content: finalText,
         repaired: Boolean(hydratedTrace.completion?.repaired),
+        repair: hydratedTrace.completion?.repair,
       };
       const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
         sessionId,
@@ -823,6 +832,11 @@ export async function* streamPreparedAgentChatTurn(
         sourceRef: assistantMessageId,
         trace: hydratedTrace,
       });
+      host.scheduleChatMemoryContextPrewarm({
+        sessionId,
+        prompt: finalText,
+        relationScope: "self",
+      });
       host.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
       if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
         yield {
@@ -846,6 +860,15 @@ export async function* streamPreparedAgentChatTurn(
       | undefined;
     let hasStreamedDelta = false;
     let streamLayerRepaired = false;
+    let streamLayerRepair:
+      | {
+          applied: true;
+          kind: "deterministic_empty_output_synthesis";
+          source: "stream_layer";
+          preRepairContent: string;
+          postRepairContent: string;
+        }
+      | undefined;
     let approvalRequired = false;
     const streamCitations: ChatCitationRecord[] = [];
     for await (const chunk of host.turnRuntime.runStream({
@@ -863,6 +886,7 @@ export async function* streamPreparedAgentChatTurn(
       webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
       memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
       thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+      normalizationProfile: prepared.normalized.normalizationProfile,
       toolAutonomy: prepared.effectiveToolAutonomy,
       historyMessages: prepared.history,
       signal: controller.signal,
@@ -916,8 +940,16 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     if (!approvalRequired && !finalText.trim()) {
+      const preRepairContent = finalText;
       finalText = buildEmptyAssistantTurnFallbackText();
       streamLayerRepaired = true;
+      streamLayerRepair = {
+        applied: true,
+        kind: "deterministic_empty_output_synthesis",
+        source: "stream_layer",
+        preRepairContent,
+        postRepairContent: finalText,
+      };
       if (!hasStreamedDelta) {
         for (const slice of splitIntoChunks(finalText, 120)) {
           yield {
@@ -1028,6 +1060,7 @@ export async function* streamPreparedAgentChatTurn(
                 completion: {
                   status: "complete",
                   repaired: true,
+                  repair: streamLayerRepair,
                 },
               }
             : {}),
@@ -1060,6 +1093,7 @@ export async function* streamPreparedAgentChatTurn(
         messageId: assistantMessageId,
         content: finalText,
         repaired: streamLayerRepaired || Boolean(hydratedTrace.completion?.repaired),
+        repair: streamLayerRepair ?? hydratedTrace.completion?.repair,
       };
       const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
         sessionId,
@@ -1124,6 +1158,11 @@ export async function* streamPreparedAgentChatTurn(
         role: "assistant",
         sourceRef: assistantMessageId,
         trace: hydratedTrace,
+      });
+      host.scheduleChatMemoryContextPrewarm({
+        sessionId,
+        prompt: finalText,
+        relationScope: "self",
       });
       host.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
     }

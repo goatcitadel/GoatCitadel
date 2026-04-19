@@ -30,7 +30,7 @@ Last updated: 2026-04-13
 - [x] `/operate/tasks`
 - [x] `/operate/approvals`
 
-### Observe
+### Watch
 
 - [x] `/observe/activity?tab=activity`
 - [x] `/observe/activity?tab=scheduler`
@@ -42,7 +42,7 @@ Last updated: 2026-04-13
 - [x] `/observe/system`
 - [x] `/observe/quality`
 
-### Tune
+### Setup
 
 - [x] `/configure/settings?tab=general`
 - [x] `/configure/settings?tab=providers`
@@ -104,7 +104,7 @@ Last updated: 2026-04-13
 ## Operator surface parity
 
 - [x] Panels, tabs, empty states, selects, switches, dialogs, and segmented controls now route through the GoatCitadel wrapper layer.
-- [x] Observe and Tune hubs remain distinct instead of being collapsed into a single dashboard.
+- [x] Watch and Setup hubs remain distinct instead of being collapsed into a single dashboard.
 - [x] Runtime, integrations, tools, agents, memory, files, quality, and health remain first-class destinations.
 
 ## Validation gates

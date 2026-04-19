@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildGatewayUrl,
   persistGatewayAuthState,
   clearGatewayAuthState,
   consumeGatewayAccessBootstrapFromLocation,
   fetchOnboardingState,
   isApiRequestError,
+  normalizeGatewayBaseUrl,
   preflightGatewayAccess,
   readStoredGatewayAuthState,
   setGatewayAuthStorageMode,
@@ -279,6 +281,13 @@ describe("Mission Control remote access bootstrap", () => {
         status: "success",
       }),
     ]));
+  });
+
+  it("normalizes gateway base URLs before building request paths", () => {
+    expect(normalizeGatewayBaseUrl(" http://127.0.0.1:8787/ ")).toBe("http://127.0.0.1:8787");
+    expect(buildGatewayUrl("/api/v1/chat/projects?view=all", "http://127.0.0.1:8787 ")).toBe(
+      "http://127.0.0.1:8787/api/v1/chat/projects?view=all",
+    );
   });
 
   it("sanitizes access tokens out of dev diagnostics route state and emitted events", () => {

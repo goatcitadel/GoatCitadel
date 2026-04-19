@@ -161,4 +161,60 @@ describe("RealtimeEventRepository", () => {
       taskId: "task-9",
     });
   });
+
+  it("prunes only overflow rows and keeps the newest events intact", () => {
+    const repo = createRepo();
+    const first = repo.append("task_created", "tasks", { taskId: "a" }, undefined, "2026-02-27T10:00:00.000Z");
+    const second = repo.append("task_updated", "tasks", { taskId: "b" }, undefined, "2026-02-27T11:00:00.000Z");
+    const third = repo.append("task_updated", "tasks", { taskId: "c" }, undefined, "2026-02-27T12:00:00.000Z");
+    const fourth = repo.append("task_updated", "tasks", { taskId: "d" }, undefined, "2026-02-27T13:00:00.000Z");
+
+    const pruned = repo.pruneToMaxRows(2);
+
+    assert.equal(pruned, 2);
+    assert.deepEqual(
+      repo.list(10).map((event) => event.eventId),
+      [fourth.eventId, third.eventId],
+    );
+    assert.equal(repo.list(10).some((event) => event.eventId === second.eventId), false);
+    assert.equal(repo.list(10).some((event) => event.eventId === first.eventId), false);
+  });
+
+  it("does not prune when the table is already at the threshold", () => {
+    const repo = createRepo();
+    const first = repo.append("task_created", "tasks", { taskId: "a" }, undefined, "2026-02-27T10:00:00.000Z");
+    const second = repo.append("task_updated", "tasks", { taskId: "b" }, undefined, "2026-02-27T11:00:00.000Z");
+
+    const pruned = repo.pruneToMaxRows(2);
+
+    assert.equal(pruned, 0);
+    assert.deepEqual(
+      repo.list(10).map((event) => event.eventId),
+      [second.eventId, first.eventId],
+    );
+  });
+
+  it("does not prune when the table is smaller than the threshold", () => {
+    const repo = createRepo();
+    const first = repo.append("task_created", "tasks", { taskId: "a" }, undefined, "2026-02-27T10:00:00.000Z");
+
+    const pruned = repo.pruneToMaxRows(5);
+
+    assert.equal(pruned, 0);
+    assert.deepEqual(repo.list(10).map((event) => event.eventId), [first.eventId]);
+  });
+
+  it("supports maxRows=1 without negative-limit SQL behavior", () => {
+    const repo = createRepo();
+    const first = repo.append("task_created", "tasks", { taskId: "a" }, undefined, "2026-02-27T10:00:00.000Z");
+    const second = repo.append("task_updated", "tasks", { taskId: "b" }, undefined, "2026-02-27T11:00:00.000Z");
+    const third = repo.append("task_updated", "tasks", { taskId: "c" }, undefined, "2026-02-27T12:00:00.000Z");
+
+    const pruned = repo.pruneToMaxRows(1);
+
+    assert.equal(pruned, 2);
+    assert.deepEqual(repo.list(10).map((event) => event.eventId), [third.eventId]);
+    assert.equal(repo.list(10).some((event) => event.eventId === second.eventId), false);
+    assert.equal(repo.list(10).some((event) => event.eventId === first.eventId), false);
+  });
 });

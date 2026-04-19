@@ -1,7 +1,10 @@
 import type { ChatSessionPrefsRecord } from "@goatcitadel/contracts";
 
 const LIVE_DATA_KEYWORD_REGEX =
-  /\b(latest|today|right now|news|weather|coming out|opening|releasing|release schedule)\b/;
+  /\b(latest|today|news|weather|coming out|opening|releasing|release schedule)\b/;
+
+const RIGHT_NOW_EVENT_REGEX =
+  /\b(right now)\b.{0,30}\b(news|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic|events?|releases?|games?|shows?|movies?)\b|\b(news|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic|events?|releases?|games?|shows?|movies?)\b.{0,30}\b(right now)\b/i;
 
 const RECENCY_EVENT_REGEX =
   /\b(recent|recently|lately)\b.{0,30}\b(news|headlines?|events?|weather|forecast|release(?:s| schedule)?|price|prices|stock|stocks|market|markets|score|scores|traffic|deals?|sales?|benchmarks?|comparisons?)\b|\b(news|headlines?|events?|weather|forecast|release(?:s| schedule)?|price|prices|stock|stocks|market|markets|score|scores|traffic|deals?|sales?|benchmarks?|comparisons?)\b.{0,30}\b(recent|recently|lately)\b/i;
@@ -36,6 +39,7 @@ export { EXPLICIT_WEB_PHRASES };
 export function hasLiveDataKeywords(objective: string): boolean {
   return (
     LIVE_DATA_KEYWORD_REGEX.test(objective) ||
+    RIGHT_NOW_EVENT_REGEX.test(objective) ||
     RECENCY_EVENT_REGEX.test(objective) ||
     PRICE_LOOKUP_REGEX.test(objective) ||
     CURRENT_EVENT_REGEX.test(objective) ||

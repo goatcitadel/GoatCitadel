@@ -21,9 +21,28 @@ export type FilesystemReadAccessMode =
   | "approval_required"
   | "full_disk";
 
+export type ToolLoopDetectorKind =
+  | "repeated_same_call"
+  | "no_progress_polling"
+  | "ping_pong";
+
+export interface ToolLoopDetectionConfig {
+  enabled: boolean;
+  historySize: number;
+  warningThreshold: number;
+  criticalThreshold: number;
+  globalThreshold: number;
+  detectors: Record<ToolLoopDetectorKind, boolean>;
+}
+
 export interface ToolPolicyConfig {
   profiles: Record<string, string[]>;
-  tools: { profile: ToolProfile; allow: string[]; deny: string[] };
+  tools: {
+    profile: ToolProfile;
+    allow: string[];
+    deny: string[];
+    loopDetection?: ToolLoopDetectionConfig;
+  };
   agents: Record<string, { tools?: Partial<ToolPolicyConfig["tools"]> }>;
   sandbox: {
     writeJailRoots: string[];

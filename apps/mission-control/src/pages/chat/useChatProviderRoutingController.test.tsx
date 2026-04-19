@@ -90,4 +90,40 @@ describe("useChatProviderRoutingController", () => {
 
     expect(latest?.commandIndex).toBe(0);
   });
+
+  it("falls back cleanly when runtime settings are missing llm defaults", async () => {
+    function PartialSettingsHarness() {
+      latest = useChatProviderRoutingController({
+        runtimeLlmConfig: null,
+        runtimeProviderCatalog: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            defaultModel: "gpt-5.4-mini",
+            hasApiKey: true,
+            models: ["gpt-5.4-mini"],
+          },
+        ],
+        getCachedModels: vi.fn(() => ["gpt-5.4-mini"]),
+        loadModelsForProvider: vi.fn(async () => ["gpt-5.4-mini"]),
+        prefs: null,
+        settings: {} as any,
+        draft: "",
+        commandCatalog: [],
+        installedSkills: [],
+        mcpServers: [],
+        mcpTemplates: [],
+      });
+
+      return null;
+    }
+
+    await act(async () => {
+      create(<PartialSettingsHarness />);
+    });
+
+    expect(latest?.selectedProviderId).toBeUndefined();
+    expect(latest?.selectedProviderLabel).toBe("Provider auto");
+    expect(latest?.selectedModelLabel).toBe("Model auto");
+  });
 });

@@ -433,7 +433,7 @@ export function useChatOutboundExecution(input: {
   }, [refreshPendingApprovalQueue, selectedSession?.sessionId]);
 
   const scheduleStreamMessageReconciliation = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, options?: { immediate?: boolean }) => {
       if (streamReconcileTimeoutRef.current) {
         clearTimeout(streamReconcileTimeoutRef.current);
       }
@@ -451,7 +451,7 @@ export function useChatOutboundExecution(input: {
           background: true,
           includeThread: true,
         }).catch((err: Error) => setError(err.message));
-      }, 400);
+      }, options?.immediate ? 0 : 400);
     },
     [loadSessionCoreState, messageMutationVersionRef, setError],
   );
@@ -802,7 +802,12 @@ export function useChatOutboundExecution(input: {
               resumeAttempts += 1;
             }
           }
-          scheduleStreamMessageReconciliation(session.sessionId);
+          const finalizedStreamMessage = finalizedStreamMessageRef.current;
+          const missingFinalizedMessage =
+            !finalizedStreamMessage || finalizedStreamMessage.sessionId !== session.sessionId;
+          scheduleStreamMessageReconciliation(session.sessionId, {
+            immediate: missingFinalizedMessage,
+          });
         } else {
           const sent =
             item.action === "retry" && item.targetTurnId

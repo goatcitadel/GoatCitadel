@@ -194,6 +194,29 @@ describe("chat-thread-reducer", () => {
     expect(done?.turns[0]?.assistantMessage?.content).toBe("final answer");
   });
 
+  it("marks the turn trace as repaired when message_done carries a repair flag", () => {
+    const current = makeThread();
+    const next = updateThreadFromStreamChunk(
+      current,
+      makeChunk({
+        type: "message_done",
+        sessionId: "sess-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "final answer",
+        repaired: true,
+      }),
+      null,
+      "sess-1",
+      null,
+    );
+
+    expect(next?.turns[0]?.trace.completion).toMatchObject({
+      repaired: true,
+      status: "complete",
+    });
+  });
+
   it("applies tool, citation, capability, and trace updates", () => {
     const current = makeThread();
     const toolRun = makeToolRun();

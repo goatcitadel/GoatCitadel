@@ -1,5 +1,7 @@
 export type MemoryContextScope = "chat" | "orchestration";
 export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
+export type MemoryRelationScope = "self" | "peer" | "project";
+export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
 
 export interface MemoryContextComposeRequest {
   scope: MemoryContextScope;
@@ -9,8 +11,16 @@ export interface MemoryContextComposeRequest {
   runId?: string;
   phaseId?: string;
   workspace?: string;
+  relationScope?: MemoryRelationScope;
   maxContextTokens?: number;
   forceRefresh?: boolean;
+}
+
+export interface MemoryCitationProvenance {
+  relationScope: MemoryRelationScope;
+  freshness: MemoryFreshness;
+  selectionReason: string;
+  sourceTimestamp?: string;
 }
 
 export interface MemoryCitation {
@@ -19,6 +29,7 @@ export interface MemoryCitation {
   sourceRef: string;
   snippet?: string;
   score: number;
+  provenance?: MemoryCitationProvenance;
 }
 
 export interface MemoryContextPack {
@@ -28,6 +39,7 @@ export interface MemoryContextPack {
   taskId?: string;
   runId?: string;
   phaseId?: string;
+  relationScope?: MemoryRelationScope;
   queryHash: string;
   sourcesHash: string;
   contextText: string;

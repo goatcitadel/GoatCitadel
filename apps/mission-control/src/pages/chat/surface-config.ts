@@ -36,9 +36,9 @@ export interface MissionControlSurfaceConfig {
 
 const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | "label">> = {
   chat: {
-    shellEyebrow: "Conversation lane",
-    stageTitle: "Conversation stays primary",
-    stageSummary: "Read the thread, answer quickly, and only surface extra context when it changes the next move.",
+    shellEyebrow: "Chat",
+    stageTitle: "Keep context nearby",
+    stageSummary: "Answer quickly and pull in extra context only when it helps.",
     emptyTitle: "Start with the thing you actually need",
     emptyBody:
       "Chat is the lightest Mission Control surface: fast questions, drafting, synthesis, and follow-ups without orchestration overload.",
@@ -72,10 +72,9 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
     },
   },
   cowork: {
-    shellEyebrow: "Workflow lane",
-    stageTitle: "Orchestration leads the surface",
-    stageSummary:
-      "Cowork should read like active coordination: what is running, what is blocked, and what the operator should steer next.",
+    shellEyebrow: "Cowork",
+    stageTitle: "Track coordination",
+    stageSummary: "Keep the workflow legible: what is running, blocked, and next.",
     emptyTitle: "Frame the work and move it forward",
     emptyBody:
       "Cowork is for multi-step runs, orchestration, research, and active collaboration with visible state instead of vague progress.",
@@ -110,10 +109,9 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
     },
   },
   code: {
-    shellEyebrow: "Implementation lane",
-    stageTitle: "Execution posture stays exact",
-    stageSummary:
-      "Code should feel denser and more deliberate, with project binding, artifact handling, and review posture kept close at hand.",
+    shellEyebrow: "Code",
+    stageTitle: "Keep execution precise",
+    stageSummary: "Keep project context and execution controls close at hand.",
     emptyTitle: "Anchor the implementation before you execute",
     emptyBody:
       "Code is for serious implementation help: long prompts, code-heavy output, planning, review, and project-aware execution.",

@@ -220,6 +220,9 @@ export function classifyTestResultCategory(
     }
     return assessment.legacyScore.totalScore >= 7 ? "passing" : "score_failed";
   }
+  if (assessment.currentGeneration === false) {
+    return "needs_score";
+  }
   if (assessment.effectiveVerdict === "review") {
     return "review";
   }

@@ -38,10 +38,12 @@ export async function commsSend(
   host: CommsHost,
   input: ChannelSendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
+  throwIfCommsAborted(input.signal);
   const attachments = await resolveChannelSendAttachments(
     { attachments: input.attachments, attachmentIds: input.attachmentIds },
     { readChatAttachmentContent: (attachmentId) => host.readChatAttachmentContent(attachmentId) },
   );
+  throwIfCommsAborted(input.signal);
   return host.invokeAndUnwrap(
     {
       toolName: "channel.send",
@@ -60,6 +62,7 @@ export async function commsSend(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      signal: input.signal,
     },
     "comms_send",
   );
@@ -69,6 +72,7 @@ export async function commsReply(
   host: CommsHost,
   input: ChannelReplyInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
+  throwIfCommsAborted(input.signal);
   if (!input.replyToMessageId?.trim()) {
     throw new Error("replyToMessageId is required for channel replies.");
   }
@@ -79,6 +83,7 @@ export async function commsReact(
   host: CommsHost,
   input: ChannelReactInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
+  throwIfCommsAborted(input.signal);
   return host.invokeAndUnwrap(
     {
       toolName: "channel.react",
@@ -93,6 +98,7 @@ export async function commsReact(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      signal: input.signal,
     },
     "comms_react",
   );
@@ -102,6 +108,7 @@ export async function commsUnsend(
   host: CommsHost,
   input: ChannelUnsendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
+  throwIfCommsAborted(input.signal);
   return host.invokeAndUnwrap(
     {
       toolName: "channel.unsend",
@@ -114,12 +121,14 @@ export async function commsUnsend(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      signal: input.signal,
     },
     "comms_unsend",
   );
 }
 
 export async function commsTyping(host: CommsHost, input: ChannelTypingInput): Promise<ChannelTypingResult> {
+  throwIfCommsAborted(input.signal);
   const connection = host.getIntegrationConnection(input.connectionId);
   if (connection.kind !== "channel") {
     throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
@@ -151,6 +160,15 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
     status: "unsupported",
     reason: `${connection.label} has not wired a typing adapter yet.`,
   };
+}
+
+function throwIfCommsAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error(typeof signal.reason === "string" ? signal.reason : "Comms delivery aborted.");
 }
 
 export async function commsGmailRead(

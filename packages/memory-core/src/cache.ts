@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { MemoryContextScope } from "@goatcitadel/contracts";
+import type { MemoryContextScope, MemoryRelationScope } from "@goatcitadel/contracts";
 import type { RankedMemoryCandidate } from "./types.js";
 
 export interface CacheKeyInput {
@@ -9,6 +9,7 @@ export interface CacheKeyInput {
   taskId?: string;
   runId?: string;
   phaseId?: string;
+  relationScope?: MemoryRelationScope;
   maxContextTokens: number;
   candidates: RankedMemoryCandidate[];
 }
@@ -35,6 +36,7 @@ export function buildCacheKey(input: CacheKeyInput): string {
     input.taskId ?? "",
     input.runId ?? "",
     input.phaseId ?? "",
+    input.relationScope ?? "",
     String(input.maxContextTokens),
     buildQueryHash(input.prompt),
     buildSourcesHash(input.candidates),

@@ -7,9 +7,6 @@ import type {
   ChatMode,
   ChatOrchestrationSpecialistSelection,
   ChatOrchestrationIntensity,
-  ChatOrchestrationParallelism,
-  ChatOrchestrationProviderPreference,
-  ChatOrchestrationReviewDepth,
   ChatOrchestrationRouteDecision,
   ChatOrchestrationVisibility,
   ChatSessionPrefsRecord,
@@ -111,6 +108,7 @@ export interface OrchestrationStepExecutionResult {
   error?: string;
   failureGuidance?: string;
   childRunId?: string;
+  durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
   citations: ChatCitationRecord[];

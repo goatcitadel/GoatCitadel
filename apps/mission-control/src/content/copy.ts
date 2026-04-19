@@ -77,7 +77,7 @@ export const appCopy = {
   navItems: [
     { id: "addons", label: "Add-ons", code: "ADD" },
     { id: "onboarding", label: "Launch Wizard", code: "NEW" },
-    { id: "dashboard", label: "Surface", code: "SUM" },
+    { id: "dashboard", label: "Work", code: "SUM" },
     { id: "system", label: "System", code: "ENG" },
     { id: "files", label: "Files", code: "FS" },
     { id: "memory", label: "Memory", code: "MEM" },
@@ -105,14 +105,14 @@ export const appCopy = {
   ] satisfies NavItemCopy[],
   navSections: [
     { label: "Setup", items: ["onboarding", "settings", "workspaces", "integrations", "tools", "addons"] },
-    { label: "Operate", items: ["dashboard", "chat", "assembly", "promptLab", "improvement", "tasks", "agents", "office", "officeLab", "approvals", "sessions"] },
-    { label: "Observe", items: ["activity", "system", "memory", "files", "costs", "mesh", "npu", "cron"] },
+    { label: "Work", items: ["dashboard", "chat", "assembly", "promptLab", "improvement", "tasks", "agents", "office", "officeLab", "approvals", "sessions"] },
+    { label: "Watch", items: ["activity", "system", "memory", "files", "costs", "mesh", "npu", "cron"] },
     { label: "Admin", items: ["skills", "mcp"] },
   ] satisfies NavSectionCopy[],
   nextStepByTab: {
     addons: "Install optional extras only after reviewing trust, source, and runtime notes.",
     onboarding: "Finish setup once, then move into Summit or Chat.",
-    dashboard: "Start on Surface when you want the fastest path into Chat, Cowork, or Code.",
+    dashboard: "Start in Work when you want the fastest path into Chat, Cowork, or Code.",
     system: "If anything feels slow, check vitals here first.",
     files: "Create or update a file, then review path and risk hints before saving.",
     memory: "Use this when replies feel off-context or forgetful.",
@@ -142,11 +142,11 @@ export const appCopy = {
 
 export const pageCopy: Record<PageId, PageCopy> = {
   dashboard: {
-    title: "Surface",
-    subtitle: "Choose the right work surface for fast chat, structured orchestration, or focused implementation.",
+    title: "Work",
+    subtitle: "Choose the right mode for fast chat, structured orchestration, or focused implementation.",
     guide: {
-      what: "Surface is the main entry point into Chat, Cowork, and Code.",
-      when: "Open this first when you want to choose the right execution mode before diving into the work.",
+      what: "Work is the main entry point into Chat, Cowork, and Code.",
+      when: "Open this first when you want to choose the right mode before diving into the work.",
       actions: [
         "Jump into Chat for a fast answer or drafting loop.",
         "Switch to Cowork when the task needs orchestration, checkpoints, or multiple roles.",

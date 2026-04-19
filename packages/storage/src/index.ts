@@ -517,6 +517,7 @@ export * from "./chat-delegation-step-repo.js";
 export * from "./system-settings-repo.js";
 export * from "./research-run-repo.js";
 export * from "./research-source-repo.js";
+export * from "./prompt-pack-policy.js";
 export * from "./prompt-pack-repo.js";
 export * from "./prompt-pack-run-repo.js";
 export * from "./prompt-pack-auto-score-v2-repo.js";

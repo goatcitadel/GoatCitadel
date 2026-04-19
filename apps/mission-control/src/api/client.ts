@@ -182,7 +182,7 @@ import type {
 } from "./types.js";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
 import { iterateSsePayloads, parseSseJson } from "./streaming.js";
-import { API_BASE, readStoredGatewayAuthState } from "./client-core.js";
+import { buildGatewayUrl, readStoredGatewayAuthState } from "./client-core.js";
 import { computeReconnectDelay, issueSseBridgeToken } from "./sse-bridge.js";
 
 export type { GuidanceDocumentRecord };
@@ -207,10 +207,12 @@ export type {
   GatewayStartupTiming,
 } from "./client-core.js";
 export {
+  buildGatewayUrl,
   clearGatewayAuthState,
   consumeGatewayAccessBootstrapFromLocation,
   getGatewayApiBaseUrl,
   getGatewayAuthStorageMode,
+  normalizeGatewayBaseUrl,
   persistGatewayAuthState,
   preflightGatewayAccess,
   readStoredGatewayAuthState,
@@ -416,6 +418,7 @@ export {
 export {
   autoScorePromptPackBatch,
   autoScorePromptPackTest,
+  cancelPromptPackBenchmark,
   exportPromptPackReport,
   fetchPromptPackBenchmark,
   fetchPromptPackExport,
@@ -437,6 +440,7 @@ export {
   executeReplayOverride,
   fetchCapabilityGapEvents,
   fetchImprovementActivation,
+  fetchHarnessAuditReport,
   fetchImprovementCandidate,
   fetchImprovementCandidates,
   fetchImprovementReport,
@@ -710,7 +714,7 @@ export function connectEventStream(
 }
 
 async function buildEventStreamUrl(): Promise<string> {
-  const url = new URL(`${API_BASE}/api/v1/events/stream`);
+  const url = new URL(buildGatewayUrl("/api/v1/events/stream"));
   const clientId = getOrCreateRealtimeClientId();
   activeEventStreamClientId = clientId;
   url.searchParams.set("clientId", clientId);

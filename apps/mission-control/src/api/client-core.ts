@@ -24,7 +24,8 @@ import {
   unwrapApiResponse,
 } from "./http-internal";
 
-export const API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
+const RAW_API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBaseUrl();
+export const API_BASE = normalizeGatewayBaseUrl(RAW_API_BASE);
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 
@@ -73,6 +74,17 @@ export interface GatewayStartupTiming {
   phases: GatewayStartupPhaseTiming[];
 }
 
+export function normalizeGatewayBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  return trimmed.replace(/\/+$/u, "");
+}
+
+export function buildGatewayUrl(path: string, baseUrl = API_BASE): string {
+  const normalizedBaseUrl = normalizeGatewayBaseUrl(baseUrl);
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return new URL(normalizedPath, `${normalizedBaseUrl}/`).toString();
+}
+
 export function getGatewayApiBaseUrl(): string {
   return API_BASE;
 }
@@ -110,7 +122,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let lastError: ApiRequestError | null = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      const res = await fetch(`${API_BASE}${path}`, {
+      const res = await fetch(buildGatewayUrl(path), {
         headers: {
           ...headers,
         },

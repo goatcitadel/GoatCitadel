@@ -653,10 +653,11 @@ describe("App gateway access gate", () => {
     const text = renderTreeText(renderer!);
     expect(text).toContain("chat-ready:chat:locked");
     expect(text).toContain("Work");
-    expect(text).toContain("Observe");
-    expect(text).toContain("Tune");
+    expect(text).toContain("Watch");
+    expect(text).toContain("Setup");
     expect(text).toContain("Cowork");
     expect(text).toContain("Code");
+    expect(text).not.toContain("Surface");
     expect(text).not.toContain("More");
   });
 
@@ -900,7 +901,7 @@ describe("App gateway access gate", () => {
     expect(text.split("OpenAI / gpt-5.4").length - 1).toBe(1);
   });
 
-  it("keeps workload detail collapsed by default and stages it from shell band 2", async () => {
+  it("keeps workload detail collapsed by default while the shell stays compact", async () => {
     const { App } = await import("./App");
 
     let renderer: ReactTestRenderer;
@@ -910,7 +911,8 @@ describe("App gateway access gate", () => {
     await flush();
 
     const text = await waitForTreeText(renderer!, "chat-ready:chat:locked");
-    expect(text).toContain("Workload clear");
+    expect(text).toContain("Approvals clear");
+    expect(text).toContain("No runtime");
     expect(text).not.toContain("Operator status");
   });
 
@@ -932,10 +934,35 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const text = await waitForTreeText(renderer!, "2 decisions");
-    expect(text).toContain("2 decisions");
-    expect(text).toContain("2 approvals waiting");
+    const text = await waitForTreeText(renderer!, "2 approvals");
+    expect(text).toContain("2 approvals");
     expect(text).not.toContain("Operator status");
+  });
+
+  it("lets the runtime summary chip expand workload detail on demand", async () => {
+    const { App } = await import("./App");
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = mount(<App />);
+    });
+    await flush();
+
+    expect(renderTreeText(renderer!)).not.toContain("Pending decisions");
+
+    const statusToggle = renderer!.root.find(
+      (node) =>
+        typeof node.props.className === "string" && node.props.className.includes("shell-status-toggle"),
+    );
+
+    await act(async () => {
+      statusToggle.props.onClick?.();
+    });
+    await flush();
+
+    const expandedText = renderTreeText(renderer!);
+    expect(expandedText).toContain("Pending decisions");
+    expect(expandedText).toContain("Active agents");
   });
 
   it("surfaces remote approval action prompts from realtime events and resolves them with the delivered token", async () => {

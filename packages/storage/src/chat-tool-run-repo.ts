@@ -12,6 +12,9 @@ interface ChatToolRunRow {
   approval_id: string | null;
   args_json: string | null;
   result_json: string | null;
+  reused: number | null;
+  reused_from_tool_run_id: string | null;
+  reuse_reason: string | null;
   error: string | null;
   failure_guidance: string | null;
   started_at: string;
@@ -27,6 +30,9 @@ export interface ChatToolRunCreateInput {
   approvalId?: string;
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
+  reused?: boolean;
+  reusedFromToolRunId?: string;
+  reuseReason?: string;
   error?: string;
   failureGuidance?: string;
   startedAt?: string;
@@ -37,6 +43,9 @@ export interface ChatToolRunPatchInput {
   status?: ChatToolRunRecord["status"];
   approvalId?: string;
   result?: Record<string, unknown>;
+  reused?: boolean;
+  reusedFromToolRunId?: string;
+  reuseReason?: string;
   error?: string;
   failureGuidance?: string;
   finishedAt?: string;
@@ -55,10 +64,10 @@ export class ChatToolRunRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO chat_tool_runs (
         tool_run_id, turn_id, session_id, tool_name, status, approval_id, args_json,
-        result_json, error, failure_guidance, started_at, finished_at
+        result_json, reused, reused_from_tool_run_id, reuse_reason, error, failure_guidance, started_at, finished_at
       ) VALUES (
         @toolRunId, @turnId, @sessionId, @toolName, @status, @approvalId, @argsJson,
-        @resultJson, @error, @failureGuidance, @startedAt, @finishedAt
+        @resultJson, @reused, @reusedFromToolRunId, @reuseReason, @error, @failureGuidance, @startedAt, @finishedAt
       )
     `);
     this.patchStmt = db.prepare(`
@@ -67,6 +76,9 @@ export class ChatToolRunRepository {
         status = @status,
         approval_id = @approvalId,
         result_json = @resultJson,
+        reused = @reused,
+        reused_from_tool_run_id = @reusedFromToolRunId,
+        reuse_reason = @reuseReason,
         error = @error,
         failure_guidance = @failureGuidance,
         finished_at = @finishedAt
@@ -103,6 +115,9 @@ export class ChatToolRunRepository {
       approvalId: input.approvalId ?? null,
       argsJson: input.args ? JSON.stringify(input.args) : null,
       resultJson: input.result ? JSON.stringify(input.result) : null,
+      reused: input.reused === undefined ? null : (input.reused ? 1 : 0),
+      reusedFromToolRunId: input.reusedFromToolRunId ?? null,
+      reuseReason: input.reuseReason ?? null,
       error: input.error ?? null,
       failureGuidance: input.failureGuidance ?? null,
       startedAt: input.startedAt ?? new Date().toISOString(),
@@ -118,6 +133,10 @@ export class ChatToolRunRepository {
       status: input.status ?? current.status,
       approvalId: input.approvalId !== undefined ? input.approvalId : (current.approvalId ?? null),
       resultJson: input.result !== undefined ? JSON.stringify(input.result) : (current.result ? JSON.stringify(current.result) : null),
+      reused: input.reused !== undefined ? (input.reused ? 1 : 0) : current.reused === undefined ? null : (current.reused ? 1 : 0),
+      reusedFromToolRunId:
+        input.reusedFromToolRunId !== undefined ? input.reusedFromToolRunId : (current.reusedFromToolRunId ?? null),
+      reuseReason: input.reuseReason !== undefined ? input.reuseReason : (current.reuseReason ?? null),
       error: input.error !== undefined ? input.error : (current.error ?? null),
       failureGuidance: input.failureGuidance !== undefined ? input.failureGuidance : (current.failureGuidance ?? null),
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
@@ -204,6 +223,9 @@ function isChatToolRunRow(value: unknown): value is ChatToolRunRow {
     && (typeof value.approval_id === "string" || value.approval_id === null)
     && (typeof value.args_json === "string" || value.args_json === null)
     && (typeof value.result_json === "string" || value.result_json === null)
+    && (typeof value.reused === "number" || value.reused === null)
+    && (typeof value.reused_from_tool_run_id === "string" || value.reused_from_tool_run_id === null)
+    && (typeof value.reuse_reason === "string" || value.reuse_reason === null)
     && (typeof value.error === "string" || value.error === null)
     && (typeof value.failure_guidance === "string" || value.failure_guidance === null)
     && typeof value.started_at === "string"
@@ -236,6 +258,9 @@ function mapRow(row: ChatToolRunRow): ChatToolRunRecord {
     approvalId: row.approval_id ?? undefined,
     args: parseOptionalRecord(row.args_json),
     result: parseOptionalRecord(row.result_json),
+    reused: row.reused === null ? undefined : row.reused !== 0,
+    reusedFromToolRunId: row.reused_from_tool_run_id ?? undefined,
+    reuseReason: row.reuse_reason ?? undefined,
     error: row.error ?? undefined,
     failureGuidance: row.failure_guidance ?? undefined,
     startedAt: row.started_at,

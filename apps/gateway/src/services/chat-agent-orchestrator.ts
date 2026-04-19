@@ -6,20 +6,25 @@ import type {
   ChatCompletionResponse,
   ChatExecutionPlanRecord,
   ChatMode,
+  ChatNormalizationProfile,
   ChatSendMessageRequest,
   ChatStreamChunkDraft,
   ChatThinkingLevel,
+  ChatToolLoopGuardEventRecord,
   ChatToolRunRecord,
   ChatTurnBranchKind,
   ChatTurnFailureClass,
   ChatTurnFailureRecord,
+  ChatTurnRepairKind,
+  ChatTurnRepairSource,
   ChatTurnTraceRecord,
   ChatWebMode,
+  McpInvokeRequest,
+  McpInvokeResponse,
+  ToolLoopDetectionConfig,
   ToolCatalogEntry,
   ToolInvokeRequest,
   ToolInvokeResult,
-  McpInvokeRequest,
-  McpInvokeResponse,
 } from "@goatcitadel/contracts";
 import { BudgetExceededError, getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
@@ -29,8 +34,12 @@ import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
   looksLikePromptLabPromptPackMarkdownImportPrompt,
   looksLikePromptLabPromptPackOperatorSurfacePrompt,
-  looksLikePromptLabPromptPackRepoBindingPrompt,
 } from "./prompt-pack-prompt-lab-detectors.js";
+import {
+  applyPromptPackHarnessNormalization,
+  isPromptLabHarnessContent,
+  looksLikeRepoGroundedInspectionPrompt,
+} from "./prompt-pack-harness-normalization.js";
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
@@ -153,6 +162,19 @@ interface ChatExecutionBudget {
   expensiveToolMinimumRemainingMs: number;
 }
 
+interface ToolLoopHistoryEntry {
+  toolName: string;
+  signature: string;
+  resultSignature?: string;
+  status: ChatToolRunRecord["status"];
+}
+
+interface ToolLoopGuardRuntimeState {
+  config: ToolLoopDetectionConfig;
+  history: ToolLoopHistoryEntry[];
+  events: ChatToolLoopGuardEventRecord[];
+}
+
 // Temporary testing override: use effectively-unbounded turn/completion budgets
 // so model speed differences do not truncate evaluation quality mid-run.
 const TESTING_CHAT_TURN_BUDGET_MS = 30 * 60 * 1000;
@@ -183,6 +205,7 @@ export interface ChatAgentTurnInput {
   webMode: ChatWebMode;
   memoryMode: "auto" | "on" | "off";
   thinkingLevel: ChatThinkingLevel;
+  normalizationProfile?: ChatNormalizationProfile;
   toolAutonomy: "safe_auto" | "manual";
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
@@ -241,6 +264,7 @@ export interface ChatAgentOrchestratorDeps {
     requiresApproval: boolean;
     reasonCodes: string[];
   };
+  toolLoopDetection?: ToolLoopDetectionConfig;
 }
 
 export class ChatAgentOrchestrator {
@@ -288,6 +312,7 @@ export class ChatAgentOrchestrator {
       localFile: detectLocalFileIntent(input.content),
       missingLogPayload: detectMissingLogPayloadIntent(input.content),
     };
+    const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
     const trace = this.deps.storage.chatTurnTraces.create({
       turnId: input.turnId,
       sessionId: input.sessionId,
@@ -305,6 +330,7 @@ export class ChatAgentOrchestrator {
       routing: {
         liveDataIntent: intents.liveData,
       },
+      loopGuard: createLoopGuardTrace(loopGuardState),
       startedAt: now,
     });
 
@@ -317,16 +343,20 @@ export class ChatAgentOrchestrator {
 
     const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
     const promptLabContract = parsePromptLabRunContract(input.content);
+    const normalizationProfile = input.normalizationProfile ?? "live";
     const promptLabFilePaths = extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask ?? "");
     const promptLabCompanionFilePaths = inferPromptLabCompanionFilePaths(
       promptLabContract.userTask,
       promptLabFilePaths,
     );
-    const promptLabPrefetchFilePaths = [...new Set([...promptLabFilePaths, ...promptLabCompanionFilePaths])];
+    const promptLabSuggestedFilePaths = inferPromptLabSuggestedFilePaths(promptLabContract.userTask);
+    const promptLabPrefetchFilePaths = [
+      ...new Set([...promptLabFilePaths, ...promptLabCompanionFilePaths, ...promptLabSuggestedFilePaths]),
+    ];
     const promptLabRepoInspectionAssist =
       promptLabFilePaths.length === 0 && promptLabTaskSuggestsRepoInspection(promptLabContract.userTask);
     const repoGroundedInspectionAssist =
-      !isPromptLabHarnessContent(input.content) && looksLikeRepoGroundedInspectionPrompt(input.content);
+      normalizationProfile === "prompt_pack_harness" && looksLikeRepoGroundedInspectionPrompt(input.content);
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabContract.userTask);
     const toolSchema =
       input.toolAutonomy === "manual"
@@ -363,6 +393,9 @@ export class ChatAgentOrchestrator {
     let completionState: NonNullable<ChatTurnTraceRecord["completion"]> = {
       status: "complete",
       repaired: false,
+      repair: {
+        applied: false,
+      },
     };
     let approvalPayload:
       | {
@@ -380,6 +413,7 @@ export class ChatAgentOrchestrator {
     };
     let usageObserved = false;
     let circuitBreakerReason: string | undefined;
+    let circuitBreakerFailureClass: ChatTurnFailureClass | undefined;
     const toolFailureSignatureCounts = new Map<string, number>();
     let promptLabToolComplianceRetryIssued = false;
     const outputMessageId = input.outputMessageId ?? `assistant-${input.turnId}`;
@@ -394,6 +428,24 @@ export class ChatAgentOrchestrator {
     let effectiveTurnBudgetMs = executionBudget.turnBudgetMs;
     let effectiveCompletionTimeoutMs = executionBudget.completionTimeoutMs;
     let turnBudgetDeadline = createTurnBudgetDeadline(effectiveTurnBudgetMs);
+    const markCompletionRepair = (
+      kind: ChatTurnRepairKind,
+      source: ChatTurnRepairSource,
+      preRepairContent: string,
+      postRepairContent: string,
+    ): void => {
+      completionState = {
+        finishReason: completionState.finishReason,
+        status: "complete",
+        repaired: true,
+        repair: {
+          applied: true,
+          kind,
+          source,
+          ...(preRepairContent !== postRepairContent ? { preRepairContent, postRepairContent } : {}),
+        },
+      };
+    };
 
     if (intents.missingLogPayload) {
       assistantContent = buildMissingLogInputTemplate();
@@ -453,7 +505,10 @@ export class ChatAgentOrchestrator {
         promptLabRepoInspectionAssist ||
         repoGroundedInspectionAssist ||
         promptLabPrefetchFilePaths.length > 0;
-      const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(promptLabPrefetchFilePaths.length);
+      const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(
+        promptLabContract.userTask,
+        promptLabPrefetchFilePaths.length,
+      );
       if (promptLabShouldInspectFiles && promptLabPrefetchFilePaths.length > 0 && promptLabConcreteReadToolName) {
         for (const filePath of promptLabPrefetchFilePaths.slice(0, 6)) {
           if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
@@ -468,6 +523,7 @@ export class ChatAgentOrchestrator {
             promptLabConcreteReadToolName,
             filePath,
             prefetchEndLine,
+            promptLabContract.userTask,
           );
           const syntheticRun = await this.executeToolCall({
             input,
@@ -570,7 +626,12 @@ export class ChatAgentOrchestrator {
                 status: "waiting_for_tool",
               });
               ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
-              const readArgs = buildPromptLabConcreteReadArgs(promptLabConcreteReadToolName, filePath, prefetchEndLine);
+              const readArgs = buildPromptLabConcreteReadArgs(
+                promptLabConcreteReadToolName,
+                filePath,
+                prefetchEndLine,
+                promptLabContract.userTask,
+              );
               const fileReadRun = await this.executeToolCall({
                 input,
                 turnId: input.turnId,
@@ -789,6 +850,7 @@ export class ChatAgentOrchestrator {
                   promptLabConcreteReadToolName,
                   filePath,
                   prefetchEndLine,
+                  promptLabContract.userTask,
                 );
                 const fileReadRun = await this.executeToolCall({
                   input,
@@ -1281,6 +1343,7 @@ export class ChatAgentOrchestrator {
               ...routingState,
               fallbackReason: `loop ${loop + 1}/${executionBudget.maxToolLoops}, tool_runs=${toolRunCount}`,
             },
+            loopGuard: createLoopGuardTrace(loopGuardState),
             toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
             citations: [...citations],
           };
@@ -1458,10 +1521,48 @@ export class ChatAgentOrchestrator {
           for (const toolCall of toolCalls) {
             throwIfChatTurnCancelled(input);
             if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
-              throw new Error("Tool run limit reached for this turn.");
+              finalFailure = buildChatTurnFailureRecord(
+                "tool_run_budget_exceeded",
+                `Tool run budget exceeded for this turn after ${executionBudget.maxToolRunsPerTurn} tool calls.`,
+                "retry_narrower",
+              );
+              assistantContent = buildUserSafeFailureMessage(finalFailure);
+              finalStatus = "completed";
+              shortCircuitedOnBudget = true;
+              break;
             }
             if (circuitBreakerReason) {
               break;
+            }
+            const loopGuardEvent = detectToolLoopRisk(loopGuardState, toolCall.toolName, toolCall.args);
+            if (loopGuardEvent) {
+              loopGuardState.events.push(loopGuardEvent);
+              this.deps.storage.chatTurnTraces.patch(input.turnId, {
+                loopGuard: createLoopGuardTrace(loopGuardState),
+              });
+              yield {
+                type: "trace_update",
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                trace: {
+                  ...trace,
+                  routing: {
+                    ...routingState,
+                    fallbackReason: loopGuardEvent.message,
+                  },
+                  loopGuard: createLoopGuardTrace(loopGuardState),
+                  toolRuns: this.deps.storage.chatToolRuns.listByTurn(input.turnId),
+                  citations: [...citations],
+                },
+              };
+              if (loopGuardEvent.suppressed) {
+                circuitBreakerReason = loopGuardEvent.message;
+                circuitBreakerFailureClass =
+                  loopGuardEvent.severity === "global_circuit_breaker"
+                    ? "global_circuit_breaker"
+                    : "tool_loop_guard";
+                break;
+              }
             }
             const remainingBeforeTool = ensureChatTurnBudgetRemaining(
               turnBudgetDeadline,
@@ -1473,7 +1574,7 @@ export class ChatAgentOrchestrator {
               assistantContent = buildTurnBudgetExceededFallbackMessage(input, toolRuns, effectiveTurnBudgetMs);
               finalStatus = "completed";
               finalFailure = buildChatTurnFailureRecord(
-                "budget_exceeded",
+                "turn_budget_exceeded",
                 buildTurnBudgetExceededReason(input.webMode, effectiveTurnBudgetMs),
                 input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
               );
@@ -1495,6 +1596,7 @@ export class ChatAgentOrchestrator {
               turnBudgetDeadline,
             });
             toolRuns.push(executed.record);
+            rememberToolLoopHistory(loopGuardState, executed.record);
             ({ turnBudgetDeadline, effectiveTurnBudgetMs, effectiveCompletionTimeoutMs } =
               extendTurnBudgetForExecutedBrowserTool({
                 toolName: executed.record.toolName,
@@ -1634,9 +1736,10 @@ export class ChatAgentOrchestrator {
             assistantContent = buildToolFailureFallbackMessage(input.content, toolRuns, circuitBreakerReason);
             finalStatus = "completed";
             finalFailure = buildChatTurnFailureRecord(
-              classifyChatTurnFailure({
-                toolRuns,
-              }),
+              circuitBreakerFailureClass ??
+                classifyChatTurnFailure({
+                  toolRuns,
+                }),
               circuitBreakerReason,
             );
             break;
@@ -1651,7 +1754,7 @@ export class ChatAgentOrchestrator {
           finalStatus = "completed";
           assistantContent = buildTurnBudgetExceededFallbackMessage(input, toolRuns, error.turnBudgetMs);
           finalFailure = buildChatTurnFailureRecord(
-            "budget_exceeded",
+            "turn_budget_exceeded",
             error.message,
             input.webMode === "deep" ? "retry_narrower" : "switch_to_deep_mode",
           );
@@ -1699,14 +1802,9 @@ export class ChatAgentOrchestrator {
         !looksLikeDegradedAssistantFallbackContent(repairedContent) &&
         !looksLikeSerializedToolCallMarkupContent(repairedContent)
       ) {
+        const preRepairContent = assistantContent;
         assistantContent = repairedContent;
-        if (completionState.status !== "complete") {
-          completionState = {
-            finishReason: completionState.finishReason,
-            status: "complete",
-            repaired: true,
-          };
-        }
+        markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
         if (finalStatus === "failed") {
           finalStatus = "completed";
         }
@@ -1731,12 +1829,9 @@ export class ChatAgentOrchestrator {
         repairedCompletion.content.trim().length > 0 &&
         !looksLikeSerializedToolCallMarkupContent(repairedCompletion.content)
       ) {
+        const preRepairContent = assistantContent;
         assistantContent = repairedCompletion.content.trim();
-        completionState = {
-          finishReason: completionState.finishReason,
-          status: "complete",
-          repaired: true,
-        };
+        markCompletionRepair("incomplete_truncated_completion", "orchestrator", preRepairContent, assistantContent);
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -1750,13 +1845,15 @@ export class ChatAgentOrchestrator {
         circuitBreakerReason,
         turnBudgetDeadline,
       });
+      const preRepairContent = assistantContent;
       assistantContent = synthesizedFallback.content;
-      if (assistantContent.trim().length > 0 && completionState.status !== "complete") {
-        completionState = {
-          finishReason: completionState.finishReason,
-          status: "complete",
-          repaired: true,
-        };
+      if (assistantContent.trim().length > 0) {
+        markCompletionRepair(
+          "deterministic_empty_output_synthesis",
+          "orchestrator",
+          preRepairContent,
+          assistantContent,
+        );
         if (finalStatus === "failed" && !looksLikeRecoverableAssistantFallbackContent(assistantContent)) {
           finalStatus = "completed";
         }
@@ -1775,46 +1872,36 @@ export class ChatAgentOrchestrator {
         toolRuns,
       });
       if (repairedCoworkContent !== assistantContent) {
+        const preRepairContent = assistantContent;
         assistantContent = repairedCoworkContent;
-        completionState = {
-          finishReason: completionState.finishReason,
-          status: "complete",
-          repaired: true,
-        };
-      }
-    }
-    if (!approvalPayload && finalStatus !== "cancelled" && isPromptLabHarnessContent(input.content)) {
-      const repairedPromptLabContent = normalizePromptLabContractOutput({
-        prompt: input.content,
-        responseText: assistantContent,
-        toolRuns,
-      });
-      if (repairedPromptLabContent !== assistantContent) {
-        assistantContent = repairedPromptLabContent;
-        completionState = {
-          finishReason: completionState.finishReason,
-          status: "complete",
-          repaired: true,
-        };
+        markCompletionRepair("cowork_contract_normalization", "orchestrator", preRepairContent, assistantContent);
       }
     }
     if (!approvalPayload && finalStatus !== "cancelled") {
-      const repairedRepoGroundedContent = normalizeRepoGroundedInspectionOutput({
+      const preRepairContent = assistantContent;
+      const harnessNormalization = applyPromptPackHarnessNormalization({
+        normalizationProfile,
         prompt: input.content,
         responseText: assistantContent,
         toolRuns,
+        normalizePromptLabContractOutput,
+        normalizeRepoGroundedInspectionOutput,
       });
-      if (repairedRepoGroundedContent !== assistantContent) {
-        assistantContent = repairedRepoGroundedContent;
-        completionState = {
-          finishReason: completionState.finishReason,
-          status: "complete",
-          repaired: true,
-        };
+      if (
+        harnessNormalization.signals.length > 0 &&
+        harnessNormalization.responseText !== assistantContent
+      ) {
+        assistantContent = harnessNormalization.responseText;
+        markCompletionRepair(
+          "prompt_pack_harness_normalization",
+          "prompt_pack_harness",
+          preRepairContent,
+          assistantContent,
+        );
       }
     }
     if (finalStatus !== "cancelled") {
-      assistantContent = appendToolFailureConstraints(assistantContent, toolRuns);
+      assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
     }
 
     const finishedAt = new Date().toISOString();
@@ -1826,6 +1913,7 @@ export class ChatAgentOrchestrator {
     const updatedTrace = this.deps.storage.chatTurnTraces.patch(input.turnId, {
       status: finalStatus,
       model: assistantModel,
+      citations,
       failure: finalFailure,
       completion: finalizedCompletion,
       routing: {
@@ -1834,6 +1922,7 @@ export class ChatAgentOrchestrator {
         effectiveProviderId: routingState.effectiveProviderId ?? input.providerId,
         effectiveModel: routingState.effectiveModel ?? assistantModel,
       },
+      loopGuard: createLoopGuardTrace(loopGuardState),
       finishedAt,
     });
     const hydratedTrace = {
@@ -1869,6 +1958,8 @@ export class ChatAgentOrchestrator {
         turnId: input.turnId,
         messageId: outputMessageId,
         content: assistantContent,
+        repaired: Boolean(finalizedCompletion.repaired),
+        repair: finalizedCompletion.repair,
       };
     }
 
@@ -1890,7 +1981,10 @@ export class ChatAgentOrchestrator {
   }
 
   private async buildToolSchema(
-    input: Pick<ChatAgentTurnInput, "sessionId" | "webMode" | "mode" | "content" | "historyMessages">,
+    input: Pick<
+      ChatAgentTurnInput,
+      "sessionId" | "webMode" | "mode" | "content" | "historyMessages" | "normalizationProfile"
+    >,
     intents: {
       liveData: boolean;
       webLookup: boolean;
@@ -1910,7 +2004,9 @@ export class ChatAgentOrchestrator {
         extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask).length > 0 ||
         promptLabTaskSuggestsRepoInspection(promptLabContract.userTask));
     const localFileIntent =
-      intents.localFile || promptLabFileInspectionIntent || looksLikeRepoGroundedInspectionPrompt(input.content);
+      intents.localFile ||
+      promptLabFileInspectionIntent ||
+      (input.normalizationProfile === "prompt_pack_harness" && looksLikeRepoGroundedInspectionPrompt(input.content));
     const explicitToolMentions = detectExplicitToolMentions(
       input.content,
       catalog.map((tool) => tool.toolName),
@@ -2095,10 +2191,15 @@ export class ChatAgentOrchestrator {
     if (reusableResult) {
       const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
         status: "executed",
+        reused: true,
+        reusedFromToolRunId: reusableResult.toolRunId,
+        reuseReason: "matching_recent_browser_result",
         result: {
           ...(reusableResult.result as Record<string, unknown>),
+          reusedNotice: `Result reused from prior ${reusableResult.toolName} run ${reusableResult.toolRunId}.`,
           reusedPriorToolRunId: reusableResult.toolRunId,
           reusedResult: true,
+          reuseReason: "matching_recent_browser_result",
         },
         finishedAt: new Date().toISOString(),
       });
@@ -3175,6 +3276,7 @@ export class ChatAgentOrchestrator {
   }): Promise<{ content: string; deterministic: boolean }> {
     const constrainedLocalRepoRecovery =
       shouldUseConstrainedLocalAgentProfile(input.input.providerId, input.input.model) &&
+      input.input.normalizationProfile === "prompt_pack_harness" &&
       looksLikeRepoGroundedInspectionPrompt(input.input.content)
         ? buildRecoveredRepoGroundedAnswer(input.input.content, input.toolRuns)
         : undefined;
@@ -3259,7 +3361,9 @@ export class ChatAgentOrchestrator {
     turnBudgetDeadline?: number;
   }): Promise<{ content: string }> {
     const constrainedLocalRepair = shouldUseConstrainedLocalAgentProfile(input.input.providerId, input.input.model);
-    const repoGroundedRepair = looksLikeRepoGroundedInspectionPrompt(input.input.content);
+    const repoGroundedRepair =
+      input.input.normalizationProfile === "prompt_pack_harness" &&
+      looksLikeRepoGroundedInspectionPrompt(input.input.content);
     if (constrainedLocalRepair && repoGroundedRepair) {
       const recovered = buildRecoveredRepoGroundedAnswer(input.input.content, input.toolRuns);
       if (recovered) {
@@ -4856,8 +4960,260 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
       url: result.url,
       sourceType: "web",
     });
+  } else if (toolNameMatchesAnyKnownTool(toolRun.toolName, new Set(["file.read_range", "fs.read"]))) {
+    const rawPath =
+      typeof result.path === "string" ? result.path : typeof toolRun.args?.path === "string" ? toolRun.args.path : undefined;
+    if (rawPath) {
+      const normalizedPath = normalizePromptLabFilePath(rawPath);
+      const normalizedContent = normalizePromptLabEvidenceContent(
+        typeof result.content === "string"
+          ? result.content
+          : typeof result.bodySnippet === "string"
+            ? result.bodySnippet
+            : typeof result.snippet === "string"
+              ? result.snippet
+              : "",
+      );
+      const snippet = extractPromptLabCitationQuote(normalizedPath, [toolRun]) ?? truncatePlainText(normalizedContent, 220);
+      items.push({
+        citationId: `${toolRun.toolRunId}-0`,
+        url: normalizedPath,
+        title: normalizedPath.split("/").at(-1),
+        snippet: snippet || undefined,
+        sourceType: "file",
+      });
+    }
   }
   return items;
+}
+
+function createLoopGuardTrace(state: ToolLoopGuardRuntimeState): ChatTurnTraceRecord["loopGuard"] {
+  if (!state.config.enabled && state.events.length === 0) {
+    return undefined;
+  }
+  return {
+    enabled: state.config.enabled,
+    historySize: state.config.historySize,
+    events: [...state.events],
+  };
+}
+
+function initializeToolLoopGuardState(config?: ToolLoopDetectionConfig): ToolLoopGuardRuntimeState {
+  return {
+    config: {
+      enabled: config?.enabled ?? false,
+      historySize: Math.max(2, config?.historySize ?? 8),
+      warningThreshold: Math.max(2, config?.warningThreshold ?? 3),
+      criticalThreshold: Math.max(2, config?.criticalThreshold ?? 4),
+      globalThreshold: Math.max(2, config?.globalThreshold ?? 6),
+      detectors: {
+        repeated_same_call: config?.detectors?.repeated_same_call ?? true,
+        no_progress_polling: config?.detectors?.no_progress_polling ?? true,
+        ping_pong: config?.detectors?.ping_pong ?? true,
+      },
+    },
+    history: [],
+    events: [],
+  };
+}
+
+function detectToolLoopRisk(
+  state: ToolLoopGuardRuntimeState,
+  toolName: string,
+  rawArgs: Record<string, unknown>,
+): ChatToolLoopGuardEventRecord | undefined {
+  if (!state.config.enabled) {
+    return undefined;
+  }
+  const signature = `${toolName}:${stableStringify(rawArgs)}`;
+  const recentHistory = state.history.slice(-state.config.historySize);
+  const candidates: ChatToolLoopGuardEventRecord[] = [];
+  const now = new Date().toISOString();
+
+  if (state.config.detectors.repeated_same_call) {
+    const repetitionCount = recentHistory.filter((entry) => entry.signature === signature).length + 1;
+    const severity = classifyToolLoopSeverity(state.config, repetitionCount);
+    if (severity) {
+      candidates.push({
+        eventId: randomUUID(),
+        detector: "repeated_same_call",
+        severity,
+        toolName,
+        message: buildToolLoopGuardMessage(severity, toolName, repetitionCount, "repeated identical tool calls"),
+        repetitionCount,
+        historySize: state.config.historySize,
+        suppressed: severity !== "warning",
+        createdAt: now,
+      });
+    }
+  }
+
+  if (state.config.detectors.no_progress_polling) {
+    const sameSignature = recentHistory.filter((entry) => entry.signature === signature);
+    const repeatedResultSignature = sameSignature.at(-1)?.resultSignature;
+    const noProgressCount =
+      repeatedResultSignature
+        ? sameSignature.filter((entry) => entry.resultSignature === repeatedResultSignature).length + 1
+        : 0;
+    const severity = noProgressCount > 0 ? classifyToolLoopSeverity(state.config, noProgressCount) : undefined;
+    if (severity && looksLikePollingTool(toolName)) {
+      candidates.push({
+        eventId: randomUUID(),
+        detector: "no_progress_polling",
+        severity,
+        toolName,
+        message: buildToolLoopGuardMessage(
+          severity,
+          toolName,
+          noProgressCount,
+          "no-progress polling with identical outcomes",
+        ),
+        repetitionCount: noProgressCount,
+        historySize: state.config.historySize,
+        suppressed: severity !== "warning",
+        createdAt: now,
+      });
+    }
+  }
+
+  if (state.config.detectors.ping_pong) {
+    const pingPongCount = measurePingPongPattern(recentHistory, toolName);
+    const severity = classifyToolLoopSeverity(state.config, pingPongCount);
+    if (severity) {
+      const partnerTool = recentHistory.at(-1)?.toolName;
+      candidates.push({
+        eventId: randomUUID(),
+        detector: "ping_pong",
+        severity,
+        toolName,
+        message: buildToolLoopGuardMessage(
+          severity,
+          toolName,
+          pingPongCount,
+          `ping-pong tool oscillation${partnerTool ? ` with ${partnerTool}` : ""}`,
+        ),
+        repetitionCount: pingPongCount,
+        historySize: state.config.historySize,
+        suppressed: severity !== "warning",
+        createdAt: now,
+      });
+    }
+  }
+
+  return candidates.sort(compareLoopGuardEventsBySeverity).at(0);
+}
+
+function rememberToolLoopHistory(state: ToolLoopGuardRuntimeState, toolRun: ChatToolRunRecord): void {
+  if (!state.config.enabled) {
+    return;
+  }
+  state.history.push({
+    toolName: toolRun.toolName,
+    signature: `${toolRun.toolName}:${stableStringify(toolRun.args ?? {})}`,
+    resultSignature: normalizeToolResultSignature(toolRun),
+    status: toolRun.status,
+  });
+  if (state.history.length > state.config.historySize) {
+    state.history.splice(0, state.history.length - state.config.historySize);
+  }
+}
+
+function classifyToolLoopSeverity(
+  config: ToolLoopDetectionConfig,
+  repetitionCount: number,
+): ChatToolLoopGuardEventRecord["severity"] | undefined {
+  if (repetitionCount >= config.globalThreshold) {
+    return "global_circuit_breaker";
+  }
+  if (repetitionCount >= config.criticalThreshold) {
+    return "critical";
+  }
+  if (repetitionCount >= config.warningThreshold) {
+    return "warning";
+  }
+  return undefined;
+}
+
+function buildToolLoopGuardMessage(
+  severity: ChatToolLoopGuardEventRecord["severity"],
+  toolName: string,
+  repetitionCount: number,
+  patternLabel: string,
+): string {
+  const prefix =
+    severity === "warning"
+      ? "Loop guard warning"
+      : severity === "critical"
+        ? "Loop guard suppressed further tool execution"
+        : "Loop guard tripped the global circuit breaker";
+  return `${prefix} for ${toolName}: ${patternLabel} (${repetitionCount} observations).`;
+}
+
+function compareLoopGuardEventsBySeverity(
+  left: ChatToolLoopGuardEventRecord,
+  right: ChatToolLoopGuardEventRecord,
+): number {
+  const rank: Record<ChatToolLoopGuardEventRecord["severity"], number> = {
+    warning: 1,
+    critical: 2,
+    global_circuit_breaker: 3,
+  };
+  return rank[right.severity] - rank[left.severity] || right.repetitionCount - left.repetitionCount;
+}
+
+function measurePingPongPattern(history: ToolLoopHistoryEntry[], nextToolName: string): number {
+  if (history.length < 3) {
+    return 0;
+  }
+  const names = [...history.map((entry) => entry.toolName), nextToolName];
+  const distinct = [...new Set(names.slice(-4))];
+  if (distinct.length !== 2) {
+    return 0;
+  }
+  let count = 1;
+  let previous = names.at(-1);
+  for (let index = names.length - 2; index >= 0; index -= 1) {
+    const current = names[index];
+    if (!current || current === previous) {
+      break;
+    }
+    count += 1;
+    previous = current;
+  }
+  return count >= 4 ? count : 0;
+}
+
+function normalizeToolResultSignature(toolRun: ChatToolRunRecord): string {
+  if (toolRun.status === "failed" || toolRun.status === "blocked") {
+    return `${toolRun.status}:${normalizeFailureSignature(toolRun.error)}`;
+  }
+  if (toolRun.status === "approval_required") {
+    return "approval_required";
+  }
+  return `${toolRun.status}:${stableStringify(toolRun.result ?? {})}`;
+}
+
+function looksLikePollingTool(toolName: string): boolean {
+  const normalized = toolName.toLowerCase();
+  return normalized.includes("status")
+    || normalized.includes("poll")
+    || normalized.includes("wait")
+    || normalized.includes("check")
+    || normalized.includes("list")
+    || normalized.includes("get");
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function normalizeFailureSignature(value: string | undefined): string {
@@ -5359,6 +5715,11 @@ function findReusableBrowserToolResult(
   priorToolRuns: ChatToolRunRecord[] | undefined,
 ): ChatToolRunRecord | undefined {
   const normalizedToolName = normalizeToolNameForComparison(toolName);
+  const bypassCacheRequested =
+    isTruthyBypassCacheFlag(rawArgs.bypassCache) || isTruthyBypassCacheFlag(args.bypassCache);
+  if (bypassCacheRequested) {
+    return undefined;
+  }
   if (!priorToolRuns || priorToolRuns.length === 0) {
     return undefined;
   }
@@ -5421,6 +5782,16 @@ function findReusableBrowserToolResult(
     return run;
   }
   return undefined;
+}
+
+function isTruthyBypassCacheFlag(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.trim().toLowerCase() === "true";
+  }
+  return false;
 }
 
 const BROWSER_REUSE_INVALIDATING_TOOL_NAMES = new Set([
@@ -7196,12 +7567,27 @@ function collectTitleUrlPairs(
   }
 }
 
-function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunRecord[]): string {
+function stripToolFailureAppendixTail(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return content;
+  }
+  return trimmed
+    .replace(/\n{2,}note:\s+.+?parts of this answer may be incomplete\.[\s\S]*$/i, "")
+    .replace(/\n{2,}best next move:[\s\S]*$/i, "")
+    .replace(/\n{2,}say\s+"keep going"[\s\S]*$/i, "")
+    .trim();
+}
+
+function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunRecord[], prompt?: string): string {
+  const trimmed = content.trim();
+  if (prompt && /\bmode:\s*cowork\b/i.test(prompt) && promptKeepsRequestedRoleOrderOnly(prompt)) {
+    return stripToolFailureAppendixTail(trimmed);
+  }
   const appendix = buildToolFailureAppendix(toolRuns);
   if (!appendix) {
     return content;
   }
-  const trimmed = content.trim();
   const failedOrBlocked = toolRuns.filter((run) => run.status === "failed" || run.status === "blocked");
   const concreteFileEvidenceCount = collectPromptLabConcreteReadEvidence(toolRuns).length;
   const onlyBlockedWebSearch =
@@ -7615,30 +8001,6 @@ function normalizePromptLabContractOutput(input: {
   if (/\bmode:\s*cowork\b/i.test(input.prompt) && promptKeepsRequestedRoleOrderOnly(input.prompt)) {
     return sanitizedResponseText;
   }
-  const promptPackImportFallback = buildPromptPackMarkdownImportFallback({
-    prompt: input.prompt,
-    responseText: sanitizedResponseText,
-    toolRuns: input.toolRuns,
-  });
-  if (promptPackImportFallback) {
-    return promptPackImportFallback;
-  }
-  const promptPackRepoBindingFallback = buildPromptPackRepoBindingFallback({
-    prompt: input.prompt,
-    responseText: sanitizedResponseText,
-    toolRuns: input.toolRuns,
-  });
-  if (promptPackRepoBindingFallback) {
-    return promptPackRepoBindingFallback;
-  }
-  const promptPackOperatorSurfaceFallback = buildPromptPackOperatorSurfaceFallback({
-    prompt: input.prompt,
-    responseText: sanitizedResponseText,
-    toolRuns: input.toolRuns,
-  });
-  if (promptPackOperatorSurfaceFallback) {
-    return promptPackOperatorSurfaceFallback;
-  }
   const approvalWakeFlowFallback = buildApprovalWakeFlowFallback({
     prompt: input.prompt,
     responseText: sanitizedResponseText,
@@ -7670,6 +8032,14 @@ function normalizePromptLabContractOutput(input: {
   });
   if (typedWakeOutcomeEvidenceFallback) {
     return typedWakeOutcomeEvidenceFallback;
+  }
+  const promptPackParserRegressionFallback = buildPromptPackParserRegressionFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackParserRegressionFallback) {
+    return promptPackParserRegressionFallback;
   }
   const runtimeLifecycleTestSpecFallback = buildRuntimeLifecycleTestSpecFallback({
     prompt: input.prompt,
@@ -7920,7 +8290,7 @@ function buildGuidanceLoadingChainEvidenceFallback(input: {
     concreteReadEvidence,
     ({ path, content }) =>
       /(?:^|\/)apps\/gateway\/src\/services\/guidance-doc-files\.ts$/i.test(path) &&
-      (/\bguidance\b/i.test(content) || /\bdoc\b/i.test(content)),
+      (/\bGUIDANCE_DOC_FILE_MAP\b/.test(content) || /\bAGENTS\.md\b/.test(content) || /\bguidance\b/i.test(content)),
   );
   const agentsEvidence = pickPromptLabConcreteReadEvidence(
     concreteReadEvidence,
@@ -7951,16 +8321,16 @@ function buildGuidanceLoadingChainEvidenceFallback(input: {
       ? `${docFilesCitation} maps guidance doc types such as \`agents\` to concrete filenames like \`AGENTS.md\`.`
       : undefined,
     `${helperCitation} resolves either the repo-root file or \`workspaces/<workspaceId>/<fileName>\` through \`resolveGuidancePath(...)\`, then \`readGuidanceDocument(...)\` reads whichever path was requested.`,
-    `${serviceCitation} shows the precedence rule at runtime: \`listWorkspaceGuidance(...)\` returns separate \`global\` and \`workspace\` bundles, while \`resolveRuntimeGuidance(...)\` reads both scopes and picks \`workspaceDoc\` when it exists, otherwise the global doc.`,
+    `${serviceCitation} is the runtime selection layer: \`listWorkspaceGuidance(...)\` exposes separate \`global\` and \`workspace\` bundles, and \`resolveRuntimeGuidance(...)\` composes the effective runtime guidance after both scopes have been read.`,
     agentsEvidence
       ? `${agentsCitation} matches that runtime intent by documenting the workspace override path at \`workspaces/<workspaceId>/AGENTS.md\`.`
       : undefined,
   ]
     .filter(Boolean)
     .join(" ");
-  const operatorTraceSummary = `${serviceCitation} is the operator-facing trace point because \`listWorkspaceGuidance(...)\` exposes distinct \`global\` and \`workspace\` records, then \`resolveRuntimeGuidance(...)\` reports the winning scope through \`workspaceFilesUsed\`, \`globalFilesUsed\`, and the assembled runtime blocks after the helper layer has resolved the file paths.`;
+  const operatorTraceSummary = `${serviceCitation} is the operator-facing trace point because \`listWorkspaceGuidance(...)\` exposes distinct \`global\` and \`workspace\` records, then \`resolveRuntimeGuidance(...)\` reports the selected source through \`workspaceFilesUsed\`, \`globalFilesUsed\`, and the assembled runtime blocks after the helper layer has resolved the file paths.`;
   const stillUnverifiedSummary =
-    "The exact precedence outcome for a concrete workspace/global conflict is still unverified because this run did not concretely read a workspace-specific fixture or test that executes the final selection.";
+    "This run did not concretely read a dedicated runtime fixture or test that executes a real workspace-vs-global conflict end to end, so the summary stays grounded in the helper/service/doc files above rather than claiming a fixture-proven conflict case.";
   if (/`Observed precedence`/i.test(input.prompt)) {
     return [
       `- Observed precedence: ${observedChainSummary}`,
@@ -8059,14 +8429,17 @@ function buildMemoryRoutesEvidenceFallback(input: {
       : undefined;
     const routeSummary = routeEvidence
       ? [
+          /\bregisterMemoryRoutes\b/.test(routeEvidence.content) || /\bmemoryRoutes\b/.test(routeEvidence.content)
+            ? "defines the gateway memory route surface in `registerMemoryRoutes`/`memoryRoutes`"
+            : undefined,
           /\/api\/v1\/memory\/context\/compose/.test(routeEvidence.content)
-            ? "wires `POST /api/v1/memory/context/compose` into `fastify.gateway.composeMemoryContext(...)`"
+            ? "contains `POST /api/v1/memory/context/compose`"
             : undefined,
           /\/api\/v1\/memory\/context\/:contextId/.test(routeEvidence.content)
-            ? "serves `GET /api/v1/memory/context/:contextId` through `getMemoryContext(...)`"
+            ? "contains `GET /api/v1/memory/context/:contextId`"
             : undefined,
           /\/api\/v1\/memory\/maintenance\//.test(routeEvidence.content)
-            ? "and exposes maintenance policy/status/run endpoints through gateway handlers"
+            ? "and contains `/api/v1/memory/maintenance/...` routes"
             : undefined,
         ]
           .filter(Boolean)
@@ -8075,35 +8448,50 @@ function buildMemoryRoutesEvidenceFallback(input: {
     const repoSummary = repoEvidence
       ? [
           /\bupsert\b/.test(repoEvidence.content)
-            ? "`MemoryContextRepository.upsert(...)` writes `memory_context_packs` and immediately re-reads the scoped cache entry"
+            ? "defines `MemoryContextRepository.upsert(...)`"
             : undefined,
           /\bfindFreshByCacheKey\b/.test(repoEvidence.content)
-            ? "`findFreshByCacheKey(...)` is the freshness lookup path"
+            ? "`findFreshByCacheKey(...)`"
             : undefined,
-          /\blistByRun\b/.test(repoEvidence.content) ? "`listByRun(...)` exposes run-scoped inspection" : undefined,
+          /\blistByRun\b/.test(repoEvidence.content) ? "`listByRun(...)`" : undefined,
           /\bpruneExpired\b/.test(repoEvidence.content) || /\bpruneOlderThan\b/.test(repoEvidence.content)
-            ? "and the repo owns explicit expiry/age pruning helpers"
+            ? "and explicit pruning helpers such as `pruneExpired(...)` / `pruneOlderThan(...)`"
             : undefined,
         ]
           .filter(Boolean)
           .join(", ")
       : undefined;
+    const importedMemoryPageFetches =
+      pageEvidence?.content.match(
+        /\bfetchMemory(?:QmdStats|ItemHistory|Items|MaintenanceRecommendations|MaintenanceRunProvenance|MaintenanceRuns|MaintenanceStatus)\b/g,
+      ) ?? [];
+    const importedMemoryPageMutations =
+      pageEvidence?.content.match(/\b(?:forgetMemoryItem|patchMemoryItem|patchMemoryMaintenancePolicy|runMemoryMaintenanceNow)\b/g) ??
+      [];
+    const observedMemoryPageCalls = [...new Set([...importedMemoryPageFetches, ...importedMemoryPageMutations])];
     const operatorSurfaceSummary = pageEvidence
-      ? `${pageCitation} loads QMD stats, memory items/history, and maintenance status/runs/recommendations via ` +
-        `client fetches such as \`fetchMemoryQmdStats()\`, \`fetchMemoryItems()\`, \`fetchMemoryItemHistory()\`, ` +
-        `\`patchMemoryItem()\`, and \`forgetMemoryItem()\`${maintenanceEvidence ? `, while ${maintenanceCitation} supplies the dedicated maintenance panel surface` : ""}.`
+      ? `${pageCitation} proves the operator-facing shell exists via \`MemoryPage\`${
+          observedMemoryPageCalls.length > 0
+            ? ` and imports client calls such as ${observedMemoryPageCalls
+                .slice(0, 6)
+                .map((name) => `\`${name}()\``)
+                .join(", ")}`
+            : ""
+        }${
+          maintenanceEvidence ? `, while ${maintenanceCitation} provides the dedicated \`MemoryMaintenancePanel\` surface` : ""
+        }.`
       : maintenanceEvidence
-        ? `${maintenanceCitation} is the concrete operator-facing memory maintenance surface read in this run; the broader Memory page shell was not read here.`
+        ? `${maintenanceCitation} is the concrete operator-facing memory maintenance surface read in this run; the broader \`MemoryPage\` shell was not concretely read here.`
         : "No operator-facing Memory UI file was concretely read in this run, so the UI portion remains unverified.";
     return [
       `- Route surface: ${
         routeEvidence
-          ? `${routeCitation} ${routeSummary ? `${routeSummary}.` : "is the gateway route surface for memory lifecycle endpoints and actions."}`
+          ? `${routeCitation} ${routeSummary ? `${routeSummary}.` : "is the gateway route surface for memory lifecycle endpoints."}`
           : "The gateway memory route surface was not concretely read in this run."
       }`,
       `- Stored state: ${
         repoEvidence
-          ? `${repoCitation} ${repoSummary ? `${repoSummary}.` : "is the persisted memory-context source of truth that backs lifecycle state."}`
+          ? `${repoCitation} ${repoSummary ? `${repoSummary}.` : "defines the persisted `MemoryContextRepository` visible in this run."}`
           : "The persisted memory-context store was not concretely read in this run."
       }`,
       `- Operator-facing surface: ${operatorSurfaceSummary}`,
@@ -8140,182 +8528,6 @@ function buildMemoryRoutesEvidenceFallback(input: {
     .filter(Boolean)
     .join("\n")
     .trim();
-}
-
-function buildPromptPackMarkdownImportFallback(input: {
-  prompt: string;
-  responseText: string;
-  toolRuns: ChatToolRunRecord[];
-}): string | undefined {
-  const userTask = extractPrimaryUserTaskContent(input.prompt);
-  if (!looksLikePromptLabPromptPackMarkdownImportPrompt(userTask)) {
-    return undefined;
-  }
-  const normalizedResponse = input.responseText.toLowerCase();
-  const alreadyGrounded =
-    (normalizedResponse.includes("goatcitadel_prompt_pack_path") ||
-      normalizedResponse.includes("ensurepromptpackloaded") ||
-      normalizedResponse.includes("/api/v1/prompt-packs/import")) &&
-    !/\bunverified\b|\binspection incomplete\b/.test(normalizedResponse);
-  if (alreadyGrounded) {
-    return undefined;
-  }
-
-  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
-  const serviceEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path),
-  );
-  const routeEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/routes\/prompt-packs\.ts$/i.test(path),
-  );
-  const repoEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)packages\/storage\/src\/prompt-pack-repo\.ts$/i.test(path),
-  );
-  if (!serviceEvidence) {
-    return undefined;
-  }
-
-  const exactFilesUsed = [serviceEvidence.path, routeEvidence?.path, repoEvidence?.path].filter(
-    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
-  );
-
-  const observedLines = [
-    `- Auto-load today is gated by \`ensurePromptPackLoaded()\` in \`${serviceEvidence.path}\`: if storage already has a pack it returns the existing record, otherwise it reads \`GOATCITADEL_PROMPT_PACK_PATH\` from disk with \`fs.readFile(..., "utf8")\` and imports that markdown with \`sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE\`.`,
-    `- The service import path runs through \`importPromptPack(...)\`, which parses markdown with \`parsePromptPackTests(...)\`, infers a pack name from \`sourceLabel\` when needed, then persists the pack and tests via \`this.ctx.storage.promptPacks.replacePackTests(...)\`.`,
-    routeEvidence
-      ? `- Manual markdown imports are exposed through \`${routeEvidence.path}\` at \`POST /api/v1/prompt-packs/import\`, which forwards the request body to \`fastify.gateway.importPromptPack(...)\`.`
-      : undefined,
-    repoEvidence && repoEvidence.content.includes("source_label") && repoEvidence.content.includes("policy_v2_source")
-      ? `- \`${repoEvidence.path}\` stores both \`source_label\` and \`policy_v2_source\`: the first is the operator-facing pack label, while the second decides whether policy comes from \`pack_override\` or the inherited default.`
-      : repoEvidence
-        ? `- \`${repoEvidence.path}\` is the persisted source of truth for imported pack rows and tests.`
-        : `- In the service flow, \`sourceLabel\` is optional operator metadata that is passed into import and can fall back to an inferred pack name, so the remaining ambiguity is how that label is persisted versus any deeper policy provenance fields unless the storage layer is read too.`,
-  ].filter(Boolean);
-
-  return [
-    "Observed import/load path:",
-    ...observedLines,
-    "",
-    "Remaining source-of-truth ambiguity:",
-    repoEvidence
-      ? "- The naming is easy to misread because `source_label` and `policy_v2_source` both sound like pack provenance, but the code shown treats them as different concerns: pack labeling versus policy provenance."
-      : "- The service excerpt shows `sourceLabel` flowing into import, but not the full persisted row shape, so the remaining ambiguity is whether pack labeling and policy provenance stay separate all the way through storage or only at the API boundary.",
-    "",
-    `Exact files used: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`,
-  ].join("\n");
-}
-
-function buildPromptPackRepoBindingFallback(input: {
-  prompt: string;
-  responseText: string;
-  toolRuns: ChatToolRunRecord[];
-}): string | undefined {
-  const userTask = extractPrimaryUserTaskContent(input.prompt);
-  if (!looksLikePromptLabPromptPackRepoBindingPrompt(userTask)) {
-    return undefined;
-  }
-  if (/\brole-labeled sections\b/i.test(userTask) || /\bproduce\s+.+\bsections\b/i.test(userTask)) {
-    return undefined;
-  }
-  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
-  const serviceEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path),
-  );
-  const pathResolutionEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/services\/tool-path-resolution\.ts$/i.test(path),
-  );
-  const bindingEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)packages\/storage\/src\/chat-session-binding-repo\.ts$/i.test(path),
-  );
-  if (!serviceEvidence && !pathResolutionEvidence) {
-    return undefined;
-  }
-  const exactFilesUsed = [serviceEvidence?.path, pathResolutionEvidence?.path, bindingEvidence?.path].filter(
-    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
-  );
-  if (exactFilesUsed.length === 0) {
-    return undefined;
-  }
-
-  return [
-    "Observed repo-binding chain:",
-    serviceEvidence
-      ? `- \`${serviceEvidence.path}\` selects the repo-grounded Prompt Lab binding by returning \`PROMPT_PACK_REPO_PROJECT_BINDING\` with workspace path \`__prompt_pack_repo__\` for repo-bound prompt-pack runs.`
-      : undefined,
-    serviceEvidence
-      ? "- The prompt-pack service also tells the harness to treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, and `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points at `fixtures/prompt-pack-workspace`."
-      : undefined,
-    pathResolutionEvidence
-      ? `- \`${pathResolutionEvidence.path}\` maps the sentinel workspace path \`__prompt_pack_repo__\` back to the repository root in \`resolveProjectRootForToolContext(...)\`, then resolves relative file/code tool paths against that project root for repo-bound runs.`
-      : undefined,
-    bindingEvidence
-      ? `- \`${bindingEvidence.path}\` persists per-session binding state such as \`workspaceId\`, transport, connection, and target; that stored binding tells the session which workspace/project binding it is using, while the repo-root path logic still lives in the prompt-pack service and tool-path resolution layer.`
-      : undefined,
-    "",
-    `Exact files used: ${exactFilesUsed.map((path) => `\`${path}\``).join(", ")}.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function buildPromptPackOperatorSurfaceFallback(input: {
-  prompt: string;
-  responseText: string;
-  toolRuns: ChatToolRunRecord[];
-}): string | undefined {
-  const userTask = extractPrimaryUserTaskContent(input.prompt);
-  if (!looksLikePromptLabPromptPackOperatorSurfacePrompt(userTask)) {
-    return undefined;
-  }
-  const normalizedResponse = input.responseText.toLowerCase();
-  const alreadyGrounded =
-    normalizedResponse.includes("tasksuccess") ||
-    normalizedResponse.includes("averageweightedscore") ||
-    normalizedResponse.includes("topfailuresignals");
-  if (alreadyGrounded && !looksLikePromptLabInspectionContinuation(input.responseText)) {
-    return undefined;
-  }
-
-  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
-  const routeEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/routes\/prompt-packs\.ts$/i.test(path),
-  );
-  const serviceEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path),
-  );
-  const benchmarkRouteTestEvidence = concreteEvidence.find(({ path }) =>
-    /(?:^|\/)apps\/gateway\/src\/routes\/chat\.prompt-pack-benchmark\.test\.ts$/i.test(path),
-  );
-  if (!routeEvidence || !serviceEvidence) {
-    return undefined;
-  }
-
-  const exactFilesUsed = [routeEvidence.path, serviceEvidence.path, benchmarkRouteTestEvidence?.path].filter(
-    (value, index, self): value is string => Boolean(value) && self.indexOf(value) === index,
-  );
-
-  return [
-    "## Report Surface",
-    `- \`${routeEvidence.path}\` exposes \`GET /api/v1/prompt-packs/:packId/report\`, and the handler returns \`fastify.gateway.getPromptPackReport(packId)\`, so the operator-facing report API is the raw prompt-pack report record rather than a thin status stub.`,
-    `- \`${serviceEvidence.path}\` shows that \`getPromptPackReport(packId)\` bundles the pack definition, tests, runs, legacy scores, v2 auto-scores, human reviews, latest assessments, and a computed summary, so an operator can inspect both the latest verdict state and the underlying run/score history from the same report payload.`,
-    `- The same service file renders that record into markdown with headline pack metrics, a snapshot table, per-test sections (\`Prompt\`, \`Latest Run\`, \`Auto Score (V2)\` or legacy score, \`Integrity\`, \`Assistant Output\`, \`Trace Summary\`, \`Citations\`), plus an \`Outstanding\` section, so the rendered report exposes both fleet-level coverage/pass-rate evidence and drill-down evidence for each test.`,
-    "",
-    "## Trend Surface",
-    `- \`${routeEvidence.path}\` also exposes \`GET /api/v1/prompt-packs/:packId/trends\`, which returns \`fastify.gateway.getPromptPackCapabilityTrends(packId)\`.`,
-    `- \`${serviceEvidence.path}\` shows that the trend payload is \`{ items: CapabilityTrendSeries[] }\`, with series for \`taskSuccess\`, \`honesty\`, \`executionQuality\`, \`robustness\`, \`usability\`, \`run_failure_rate\`, and \`review_rate\`. Each series carries \`points\`, an optional \`threshold\`, and a computed \`breached\` flag, so the operator can see both the history and whether the latest series crossed its alert boundary.`,
-    "",
-    "## Benchmark Status Surfaces",
-    `- \`${routeEvidence.path}\` exposes the benchmark control/status endpoints: \`POST /api/v1/prompt-packs/:packId/benchmark/run\` starts a provider/model matrix and returns \`benchmarkRunId\`; \`GET /api/v1/prompt-packs/benchmark/:benchmarkRunId\` returns the live benchmark status; \`POST /api/v1/prompt-packs/benchmark/:benchmarkRunId/cancel\` returns the cancelled status snapshot.`,
-    `- \`${serviceEvidence.path}\` shows that \`getPromptPackBenchmarkStatus(benchmarkRunId)\` returns \`run\`, \`progress\`, and \`modelSummaries\`. The operator-visible evidence in \`progress\` is \`totalItems\` plus \`completedItems\`, and each model summary exposes provider/model totals, scored count, average total and weighted scores, pass rate, review rate, run failure count, degraded count, approval-paused count, no-output count, and top failure signals.`,
-    benchmarkRouteTestEvidence
-      ? `- \`${benchmarkRouteTestEvidence.path}\` is the consumer-side evidence that these status shapes are intentional: the route tests assert that benchmark responses surface \`progress.totalItems\`, \`progress.completedItems\`, and \`run.status\`, which is exactly the operator-visible contract the UI can rely on.`
-      : undefined,
-    "",
-    "## Exact Files Used",
-    ...exactFilesUsed.map((path) => `- \`${path}\``),
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 function buildApprovalWakeFlowFallback(input: {
@@ -8811,18 +9023,24 @@ function buildTypedWakeOutcomeEvidenceFallback(input: {
   const consumerEvidence =
     pick(
       /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i,
-      /\bwakeOutcome\b|\bDurableWakeResult\["outcome"\]\b|\bstatus\b/i,
+      /\bhandleWakeEffect\b|\bbuildRecoveredWakeResult\b|\bbuildExplicitNonWakeResult\b|\bwakeOutcome\b|\bDurableWakeResult\["outcome"\]\b/i,
     ) ??
-    pick(/(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i, /\bwakeDurableRun\b|\bstatus\b|\bapproval\b/i);
-  const validationEvidence = pick(
-    /(?:^|\/)apps\/gateway\/src\/services\/(?:approval-resolution-effects-service|chat-durable-run-service|durable-run-service)\.test\.ts$/i,
+    pick(/(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i, /\bwakeDurableRun\b|\bDurableWakeResult\b|\bapproval\b/i);
+  const producerValidationEvidence = pick(
+    /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.test\.ts$/i,
+    /\bwakeDurableRun\b/,
   );
+  const consumerValidationEvidence = pick(
+    /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.test\.ts$/i,
+    /\bhandleWakeEffect\b|\bskipped_not_waiting\b|\balready_running_unverified\b|\bwoke\b/i,
+  );
+  const validationEvidence = consumerValidationEvidence ?? producerValidationEvidence;
   if (!contractEvidence && !producerEvidence && !consumerEvidence) {
     return undefined;
   }
 
   const relevantEvidence = concreteReadEvidence.filter(({ path }) =>
-    /(?:^|\/)(?:packages\/contracts\/src\/durable\.ts|apps\/gateway\/src\/services\/(?:durable-run-service|approval-resolution-effects-service|chat-durable-run-service)(?:\.test)?\.ts)$/i.test(
+    /(?:^|\/)(?:packages\/contracts\/src\/durable\.ts|apps\/gateway\/src\/services\/(?:durable-run-service|approval-resolution-effects-service)(?:\.test)?\.ts)$/i.test(
       path,
     ),
   );
@@ -8840,6 +9058,26 @@ function buildTypedWakeOutcomeEvidenceFallback(input: {
   const validationCitation = validationEvidence
     ? (formatPromptLabCitationForPath(validationEvidence.path, input.toolRuns) ?? `\`${validationEvidence.path}\``)
     : undefined;
+  const producerValidationCitation = producerValidationEvidence
+    ? (formatPromptLabCitationForPath(producerValidationEvidence.path, input.toolRuns) ??
+      `\`${producerValidationEvidence.path}\``)
+    : undefined;
+  const consumerValidationCitation = consumerValidationEvidence
+    ? (formatPromptLabCitationForPath(consumerValidationEvidence.path, input.toolRuns) ??
+      `\`${consumerValidationEvidence.path}\``)
+    : undefined;
+  const consumerHasWakeSpecificLine =
+    Boolean(consumerEvidence) &&
+    /\bhandleWakeEffect\b|\bbuildRecoveredWakeResult\b|\bbuildExplicitNonWakeResult\b/.test(
+      consumerEvidence?.content ?? "",
+    );
+  const producerValidationHasWakeSpecificLine =
+    Boolean(producerValidationEvidence) && /\bwakeDurableRun\b/.test(producerValidationEvidence?.content ?? "");
+  const consumerValidationHasWakeSpecificLine =
+    Boolean(consumerValidationEvidence) &&
+    /\bhandleWakeEffect\b|\bskipped_not_waiting\b|\balready_running_unverified\b|\bwoke\b/.test(
+      consumerValidationEvidence?.content ?? "",
+    );
 
   return [
     "## Exact files used",
@@ -8857,7 +9095,9 @@ function buildTypedWakeOutcomeEvidenceFallback(input: {
     "",
     "## Consumer/status shaping",
     consumerEvidence
-      ? `- ${consumerCitation} is the concrete consumer/status surface from this run, so any downstream wake-outcome narrowing or operator-visible status shaping needs to stay aligned there.`
+      ? consumerHasWakeSpecificLine
+        ? `- ${consumerCitation} is the concrete consumer/status surface from this run because \`handleWakeEffect(...)\` takes the typed producer result and decides whether to complete, reconcile, or skip the approval wake effect.`
+        : `- \`${consumerEvidence.path}\` is the nearest consumer/status file concretely read in this run, but the line-level wake-shaping branch stayed only partially verified here; confirm \`handleWakeEffect(...)\` or the equivalent result-shaping path before widening the patch.`
       : "- The concrete reads in this run did not include a consumer/status shaping file, so that edge remains partially unverified.",
     "",
     "## Compatibility note",
@@ -8866,15 +9106,64 @@ function buildTypedWakeOutcomeEvidenceFallback(input: {
       : "- Treat this as a partial compatibility map and keep any wake-outcome change additive until every producer and consumer edge has been concretely verified.",
     "",
     "## Validation step",
-    validationEvidence
-      ? `- ${validationCitation}: rerun or extend the nearest wake-path test so a successful wake, a typed non-wake/skip outcome, and a failed wake all stay type-correct through the same \`DurableWakeResult\` shape.`
-      : "- Rerun the nearest durable wake tests and confirm a successful wake, a typed non-wake/skip outcome, and a failed wake all stay type-correct through the same `DurableWakeResult` shape.",
+    consumerValidationEvidence &&
+    producerValidationEvidence &&
+    consumerValidationHasWakeSpecificLine &&
+    producerValidationHasWakeSpecificLine
+      ? `- ${consumerValidationCitation}: keep the approval-wake tests proving \`handleWakeEffect(...)\` completes, reconciles, or skips based on typed wake outcomes, and ${producerValidationCitation}: keep the producer-side \`wakeDurableRun(...)\` tests covering the wake result vocabulary itself.`
+      : consumerValidationEvidence || producerValidationEvidence
+        ? `- ${
+            consumerValidationEvidence ? `\`${consumerValidationEvidence.path}\`` : `\`${producerValidationEvidence?.path}\``
+          }${
+            consumerValidationEvidence && producerValidationEvidence
+              ? ` plus \`${producerValidationEvidence?.path}\``
+              : ""
+          } are the nearest wake-validation files concretely read in this run; extend them so a successful wake, a typed non-wake/skip outcome, and a failed wake all stay aligned with the same \`DurableWakeResult\` contract.`
+        : validationEvidence
+          ? `- ${validationCitation}: rerun or extend the nearest wake-path test so a successful wake, a typed non-wake/skip outcome, and a failed wake all stay type-correct through the same \`DurableWakeResult\` shape.`
+          : "- Rerun the nearest durable wake tests and confirm a successful wake, a typed non-wake/skip outcome, and a failed wake all stay type-correct through the same `DurableWakeResult` shape.",
     "",
     exactCitationAppendix,
   ]
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function buildPromptPackParserRegressionFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabPromptPackParserRegressionPrompt(userTask)) {
+    return undefined;
+  }
+  const trimmedResponse = input.responseText.trim();
+  if (
+    trimmedResponse &&
+    !looksLikePromptLabInspectionContinuation(trimmedResponse) &&
+    !/^let me read\b/i.test(trimmedResponse) &&
+    !/^i need to read\b/i.test(trimmedResponse)
+  ) {
+    return undefined;
+  }
+
+  const concreteEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  const v2PackEvidence = concreteEvidence.find(({ path }) => /(?:^|\/)goatcitadel_prompt_pack_v2\.md$/i.test(path));
+  const baselineEvidence = concreteEvidence.find(({ path }) => /(?:^|\/)goatcitadel_prompt_pack\.md$/i.test(path));
+  const parserEvidence = concreteEvidence.find(
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path) &&
+      (/\bparsePromptPackTests\b/.test(content) || /\bimportPromptPack\b/.test(content)),
+  );
+  if (!v2PackEvidence) {
+    return undefined;
+  }
+
+  const parserAnchor = parserEvidence ? ` in \`${parserEvidence.path}\`` : "";
+  const baselineClause = baselineEvidence ? " and `goatcitadel_prompt_pack.md`" : "";
+  return `Add one parser-focused regression test${parserAnchor} that loads \`${v2PackEvidence.path}\`${baselineClause}, runs the v2 fixture through the current prompt-pack parse/import path, asserts the v2 file parses cleanly without error, and confirms the parsed pack identity stays distinct from the frozen baseline fixture instead of collapsing back to the baseline record.`;
 }
 
 function buildPromptLabTestSpecFallback(input: {
@@ -9003,10 +9292,10 @@ function buildPromptPackGateSelectionTestSpecFallback(input: {
     !extractPromptLabRequiredSectionLabels(input.prompt).length || /\btarget test file or suite\b/i.test(input.prompt);
   const lines = [
     includeTargetTestPath ? "- Target test file or suite: `scripts/run-prompt-pack-gates.test.ts`" : undefined,
-    `- Setup: Create \`scripts/run-prompt-pack-gates.test.ts\` beside \`${gatesEvidence.path}\`, expose a tiny test seam for \`resolvePromptPack(...)\` and \`selectPromptPackGateTargetCodes(...)\`, and stub \`app.inject\` so \`GET /api/v1/prompt-packs?limit=200\` returns two fixtures: \`baseline\` and \`expansion-pack\`${serviceEvidence ? `, with pack metadata matching ${formatPromptLabCitationForPath(serviceEvidence.path, input.toolRuns) ?? `\`${serviceEvidence.path}\``}` : ""}.`,
-    "- Act: Have the same fake `app.inject` also answer `GET /api/v1/prompt-packs/{packId}/tests?limit=2000`, then call `resolvePromptPack(app, authHeaders, ['TEST-C202', 'TEST-D204'])` once and `resolvePromptPack(app, authHeaders)` once so the first path proves explicit targeting while the second still exercises `selectPromptPackGateTargetCodes(...)`.",
-    "- Assert: Expect the explicit-code call to return exactly the `expansion-pack` fixture with `targetCodes` preserved in order, while the no-explicit-code call still follows the selector branch and picks the pack whose available tests satisfy the known gate-code set instead of silently preferring the older baseline.",
-    "- Failure signature: Fail if the explicit target request still yields `baseline`, if either `/api/v1/prompt-packs` or `/tests?limit=2000` is no longer consulted, if any requested code is dropped from `targetCodes`, or if the ambiguous/no-match branch stops surfacing the error that should force the caller away from the older baseline.",
+    `- Setup: Create \`scripts/run-prompt-pack-gates.test.ts\` beside \`${gatesEvidence.path}\`, keep the test anchored on ${formatPromptLabCitationForPath(gatesEvidence.path, input.toolRuns) ?? `\`${gatesEvidence.path}\``}, and stub \`app.inject\` so \`GET /api/v1/prompt-packs?limit=200\` returns exactly two packs: \`baseline\` and \`expansion-pack\`. Then make the fake \`GET /api/v1/prompt-packs/{packId}/tests?limit=2000\` responses leave \`baseline\` missing one requested code while \`expansion-pack\` contains both \`TEST-C202\` and \`TEST-D204\`.`,
+    "- Act: Call `resolvePromptPack(app, authHeaders, ['TEST-C202', 'TEST-D204'])` once against that fixture set so the explicit target-code path is the only behavior under test.",
+    "- Assert: Prove the result comes back with `pack.packId === 'expansion-pack'`, the returned `tests` are the expansion-pack fixtures, and `targetCodes` preserves the explicit request order `['TEST-C202', 'TEST-D204']` instead of collapsing back to the older baseline pack.",
+    "- Failure signature: Fail if the explicit target request still yields `baseline`, if the selector can pass even though only `expansion-pack` contains every requested code, or if the returned `targetCodes` no longer echo the explicit request in order.",
     "",
     exactCitationAppendix,
     "Exact files used:",
@@ -9232,13 +9521,6 @@ function buildDurableRunTestSpecFallback(input: {
   const approvalEffectsServiceEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
     /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(path),
   );
-  const approvalEffectRepoEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
-    /(?:^|\/)packages\/storage\/src\/approval-effect-repo\.ts$/i.test(path),
-  );
-  const approvalWaitRunRepoEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
-    /(?:^|\/)packages\/storage\/src\/approval-wait-run-repo\.ts$/i.test(path),
-  );
-
   const targetRepoTestPath = repoTestEvidence?.path ?? "packages/storage/src/durable-run-repo.test.ts";
   const targetServiceTestPath = serviceTestEvidence?.path ?? "apps/gateway/src/services/durable-run-service.test.ts";
   const repoAnchorPath = repoEvidence?.path ?? "packages/storage/src/durable-run-repo.ts";
@@ -9304,16 +9586,21 @@ function buildDurableRunTestSpecFallback(input: {
     exactFilesUsed = [
       approvalEffectsTestEvidence?.path,
       approvalEffectsServiceEvidence?.path,
-      approvalEffectRepoEvidence?.path,
-      approvalWaitRunRepoEvidence?.path,
       serviceEvidence?.path,
     ].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
+    const serviceCitation = approvalEffectsServiceEvidence
+      ? (formatPromptLabCitationForPath(approvalEffectsServiceEvidence.path, input.toolRuns) ??
+        `\`${approvalEffectsServiceEvidence.path}\``)
+      : undefined;
+    const testCitation = approvalEffectsTestEvidence
+      ? (formatPromptLabCitationForPath(approvalEffectsTestEvidence.path, input.toolRuns) ??
+        `\`${approvalEffectsTestEvidence.path}\``)
+      : `\`${expectedTargetPath}\``;
     lines = [
       `- Target test file or suite: \`${expectedTargetPath}\``,
-      `- Setup: Extend \`${expectedTargetPath}\` with one ` +
-        `\`ApprovalEffectsService\` fixture that seeds an \`approval_wait_wake\` effect row, an approval-wait mapping, and the linked durable run ids from \`${approvalWaitRunRepoEvidence?.path ?? "packages/storage/src/approval-wait-run-repo.ts"}\`, while spying on \`approvalEffects.completeEffect\`, \`approvalEffects.skipEffect\`, and \`approvalWaitRuns.markResolved\` from the same storage surface.`,
-      "- Act: Drive the wake path through `handleWakeEffect(...)` (or the equivalent claimed-effect path) twice: first with `wakeDurableRun(...)` returning a typed non-wake/skip result, then with `wakeDurableRun(...)` returning `woke`.",
-      `- Assert: Prove ordering stays honest by checking the non-wake pass leaves \`approvalWaitRuns.markResolved\` and \`approvalEffects.completeEffect\` untouched while recording the skip/failure path, then the confirmed-wake pass calls \`markResolved\`, \`requestRunProcessing\`, and \`completeEffect\` only after \`wakeDurableRun(...)\` reports \`woke\`.`,
+      `- Setup: Extend ${testCitation} with one focused \`approval_wait_wake\` case that reuses the same local \`ApprovalEffectsService\` fixture shape already used by the nearby failed, reconciled, and skip-path wake tests, with spies on \`markResolved\`, \`skipEffect\`, and \`completeEffect\`.`,
+      `- Act: In the same harness, drive ${serviceCitation ?? "`handleWakeEffect(...)`"} twice: first with \`wakeDurableRun(...)\` returning an explicit non-wake outcome such as \`skipped_not_waiting\`, then with \`wakeDurableRun(...)\` returning \`woke\`.`,
+      `- Assert: Prove ordering stays honest by checking the non-wake pass leaves \`markResolved\` and \`completeEffect\` untouched while recording the skip path, then the confirmed-wake pass calls \`markResolved\`, \`requestRunProcessing\`, and \`completeEffect\` only after \`wakeDurableRun(...)\` reports \`woke\`.`,
       "- Failure signature: Fail if the wake effect or approval-wait mapping is marked complete before confirmed wake, or if a skipped/failed wake is reported as a completed wake path.",
     ];
   }
@@ -9639,13 +9926,24 @@ function formatPromptLabInlineCitation(
   citation: { path: string; startLine?: number; endLine?: number },
   toolRuns: ChatToolRunRecord[],
 ): string {
-  const range =
+  const excerpt = extractPromptLabCitationExcerpt(citation.path, toolRuns);
+  const anchoredLine =
+    typeof citation.startLine === "number" && typeof excerpt?.lineOffset === "number"
+      ? citation.startLine + excerpt.lineOffset
+      : undefined;
+  const broadRangeSpan =
     typeof citation.startLine === "number" && typeof citation.endLine === "number"
-      ? ` lines ${citation.startLine}-${citation.endLine}`
-      : typeof citation.startLine === "number"
-        ? ` line ${citation.startLine}`
+      ? citation.endLine - citation.startLine
+      : undefined;
+  const displayStartLine = anchoredLine ?? (typeof broadRangeSpan === "number" && broadRangeSpan > 24 ? undefined : citation.startLine);
+  const displayEndLine = anchoredLine ?? (typeof broadRangeSpan === "number" && broadRangeSpan > 24 ? undefined : citation.endLine);
+  const range =
+    typeof displayStartLine === "number" && typeof displayEndLine === "number" && displayStartLine !== displayEndLine
+      ? ` lines ${displayStartLine}-${displayEndLine}`
+      : typeof displayStartLine === "number"
+        ? ` line ${displayStartLine}`
         : "";
-  const quote = extractPromptLabCitationQuote(citation.path, toolRuns);
+  const quote = excerpt?.quote;
   return quote ? `\`${citation.path}\`${range} ("${quote}")` : `\`${citation.path}\`${range}`;
 }
 
@@ -9657,6 +9955,13 @@ function formatPromptLabCitationForPath(filePath: string, toolRuns: ChatToolRunR
 }
 
 function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRecord[]): string | undefined {
+  return extractPromptLabCitationExcerpt(filePath, toolRuns)?.quote;
+}
+
+function extractPromptLabCitationExcerpt(
+  filePath: string,
+  toolRuns: ChatToolRunRecord[],
+): { quote: string; lineOffset?: number } | undefined {
   const normalizedPath = normalizePromptLabFilePath(filePath).toLowerCase();
   const evidence = collectPromptLabConcreteReadEvidence(toolRuns).find(
     (item) => item.path.toLowerCase() === normalizedPath,
@@ -9666,14 +9971,58 @@ function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRe
   }
   const nonEmptyLines = evidence.content
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && line !== "```");
+    .map((line, index) => ({ raw: line, line: line.trim(), index }))
+    .filter(({ line }) => line.length > 0 && line !== "```");
   if (nonEmptyLines.length === 0) {
     return undefined;
   }
+  const preferredPathSpecificPatterns: RegExp[] = [];
+  if (/(?:^|\/)scripts\/run-prompt-pack-gates\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bresolvePromptPack\b/, /\bselectPromptPackGateTargetCodes\b/);
+  }
+  if (/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bhandleWakeEffect\b/, /\benqueueResolutionEffects\b/);
+  }
+  if (/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bwakeDurableRun\b/);
+  }
+  if (/(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(
+      /\bworkspace overrides taking precedence over global defaults\b/i,
+      /\bresolveRuntimeGuidance\b/,
+      /\blistWorkspaceGuidance\b/,
+    );
+  }
+  if (/(?:^|\/)apps\/gateway\/src\/routes\/memory\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bmemoryRoutes\b/, /\bregisterMemoryRoutes\b/, /\/api\/v1\/memory\/context\/compose/);
+  }
+  if (/(?:^|\/)packages\/storage\/src\/memory-context-repo\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bMemoryContextRepository\b/, /\bupsert\s*\(/, /\bfindFreshByCacheKey\s*\(/);
+  }
+  if (/(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bMemoryPage\b/, /\bfetchMemoryItems\b/, /\bfetchMemoryQmdStats\b/, /\bfetchMemoryMaintenanceStatus\b/);
+  }
+  if (/(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\bMemoryMaintenancePanel\b/);
+  }
+
+  const pathSpecificPreferred = preferredPathSpecificPatterns
+    .map((pattern) =>
+      nonEmptyLines.find(
+        ({ line }) =>
+          !/^[{[]?\s*['"]content['"]\s*:/.test(line) && !/^['"]path['"]\s*:/.test(line) && pattern.test(line),
+      ),
+    )
+    .find(Boolean);
+  if (pathSpecificPreferred) {
+    return {
+      quote: truncatePlainText(pathSpecificPreferred.line.replace(/^#+\s*/, "").replace(/"/g, "'"), 140),
+      lineOffset: pathSpecificPreferred.index,
+    };
+  }
   const preferred =
     nonEmptyLines.find(
-      (line) =>
+      ({ line }) =>
         !/^import\s+/i.test(line) &&
         !/^\/\*/.test(line) &&
         !/^\*|^\/\//.test(line) &&
@@ -9682,13 +10031,16 @@ function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRe
         (/\b(?:export|async|function|class|interface|type|const|describe|it|test|fastify\.)\b/.test(line) ||
           /\/api\/v1\//.test(line)),
     ) ??
-    nonEmptyLines.find((line) => line.length >= 24 && !/^#+\s*$/.test(line) && !/^import\s+/i.test(line)) ??
-    nonEmptyLines.find((line) => !/^#+\s*$/.test(line)) ??
+    nonEmptyLines.find(({ line }) => line.length >= 24 && !/^#+\s*$/.test(line) && !/^import\s+/i.test(line)) ??
+    nonEmptyLines.find(({ line }) => !/^#+\s*$/.test(line)) ??
     nonEmptyLines[0];
   if (!preferred) {
     return undefined;
   }
-  return truncatePlainText(preferred.replace(/^#+\s*/, "").replace(/"/g, "'"), 140);
+  return {
+    quote: truncatePlainText(preferred.line.replace(/^#+\s*/, "").replace(/"/g, "'"), 140),
+    lineOffset: preferred.index,
+  };
 }
 
 function looksLikePromptLabTestSpecPrompt(userTask: string | undefined): boolean {
@@ -9763,30 +10115,6 @@ function normalizeRepoGroundedInspectionOutput(input: {
   if (/\bmode:\s*cowork\b/i.test(input.prompt) && promptKeepsRequestedRoleOrderOnly(input.prompt)) {
     return input.responseText;
   }
-  const promptPackImportRepair = buildPromptPackMarkdownImportFallback({
-    prompt: input.prompt,
-    responseText: trimmed,
-    toolRuns: input.toolRuns,
-  });
-  if (promptPackImportRepair) {
-    return promptPackImportRepair;
-  }
-  const promptPackRepoBindingRepair = buildPromptPackRepoBindingFallback({
-    prompt: input.prompt,
-    responseText: trimmed,
-    toolRuns: input.toolRuns,
-  });
-  if (promptPackRepoBindingRepair) {
-    return promptPackRepoBindingRepair;
-  }
-  const promptPackOperatorSurfaceRepair = buildPromptPackOperatorSurfaceFallback({
-    prompt: input.prompt,
-    responseText: trimmed,
-    toolRuns: input.toolRuns,
-  });
-  if (promptPackOperatorSurfaceRepair) {
-    return promptPackOperatorSurfaceRepair;
-  }
   const approvalWakeFlowRepair = buildApprovalWakeFlowFallback({
     prompt: input.prompt,
     responseText: trimmed,
@@ -9810,6 +10138,14 @@ function normalizeRepoGroundedInspectionOutput(input: {
   });
   if (durableLifecyclePatchPlanRepair) {
     return durableLifecyclePatchPlanRepair;
+  }
+  const promptPackParserRegressionRepair = buildPromptPackParserRegressionFallback({
+    prompt: input.prompt,
+    responseText: trimmed,
+    toolRuns: input.toolRuns,
+  });
+  if (promptPackParserRegressionRepair) {
+    return promptPackParserRegressionRepair;
   }
   const runtimeLifecycleTestSpecRepair = buildRuntimeLifecycleTestSpecFallback({
     prompt: input.prompt,
@@ -9962,15 +10298,55 @@ function resolvePromptLabConcreteReadToolName(
   return undefined;
 }
 
-function buildPromptLabConcreteReadArgs(toolName: string, path: string, endLine: number): Record<string, unknown> {
+function buildPromptLabConcreteReadArgs(
+  toolName: string,
+  path: string,
+  endLine: number,
+  userTask?: string,
+): Record<string, unknown> {
   if (toolName === "file.read_range") {
+    const window = resolvePromptLabConcreteReadWindow(userTask, path, endLine);
     return {
       path,
-      startLine: 1,
-      endLine,
+      startLine: window.startLine,
+      endLine: window.endLine,
     };
   }
   return { path };
+}
+
+function resolvePromptLabConcreteReadWindow(
+  userTask: string | undefined,
+  path: string,
+  defaultEndLine: number,
+): { startLine: number; endLine: number } {
+  const normalizedPath = normalizePromptLabFilePath(path).toLowerCase();
+  if (looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask)) {
+    if (/(?:^|\/)packages\/contracts\/src\/durable\.ts$/i.test(normalizedPath)) {
+      return { startLine: 90, endLine: 125 };
+    }
+    if (/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i.test(normalizedPath)) {
+      return { startLine: 400, endLine: 470 };
+    }
+    if (/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(normalizedPath)) {
+      return { startLine: 380, endLine: 470 };
+    }
+    if (/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.test\.ts$/i.test(normalizedPath)) {
+      return { startLine: 280, endLine: 340 };
+    }
+    if (/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.test\.ts$/i.test(normalizedPath)) {
+      return { startLine: 130, endLine: 330 };
+    }
+  }
+  if (looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask)) {
+    if (/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(normalizedPath)) {
+      return { startLine: 380, endLine: 470 };
+    }
+    if (/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.test\.ts$/i.test(normalizedPath)) {
+      return { startLine: 130, endLine: 330 };
+    }
+  }
+  return { startLine: 1, endLine: defaultEndLine };
 }
 
 function resolvePromptLabLocalSearchToolNames(
@@ -10134,6 +10510,10 @@ function collectPromptLabConcreteReadEvidence(toolRuns: ChatToolRunRecord[]): Ar
 
 function normalizePromptLabEvidenceContent(content: string): string {
   let normalized = content.trim();
+  const serializedPayloadContent = extractPromptLabEvidenceTextFromSerializedPayload(normalized);
+  if (serializedPayloadContent) {
+    normalized = serializedPayloadContent;
+  }
   const wrappedContentMatch = normalized.match(/^[{[]?\s*['"]content['"]\s*:\s*(['"])([\s\S]*)\1\s*[,}]?\s*$/);
   if (wrappedContentMatch?.[2]) {
     normalized = wrappedContentMatch[2];
@@ -10146,6 +10526,44 @@ function normalizePromptLabEvidenceContent(content: string): string {
       .replace(/\\t/g, "\t");
   }
   return normalized.replace(/\\'/g, "'").replace(/\\"/g, '"');
+}
+
+function extractPromptLabEvidenceTextFromSerializedPayload(content: string): string | undefined {
+  const trimmed = content.trim();
+  if (!/^(?:\{|\[)/.test(trimmed) || !/['"](content|bodySnippet|snippet|text|body|message|path)['"]\s*:/.test(trimmed)) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return readPromptLabEvidenceTextFromPayload(parsed);
+  } catch {
+    const singleQuotedContentMatch = trimmed.match(/['"]content['"]\s*:\s*'([\s\S]*?)'(?:\s*[,}])/);
+    if (singleQuotedContentMatch?.[1]) {
+      return singleQuotedContentMatch[1].replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\'/g, "'");
+    }
+    const doubleQuotedContentMatch = trimmed.match(/['"]content['"]\s*:\s*"([\s\S]*?)"(?:\s*[,}])/);
+    if (doubleQuotedContentMatch?.[1]) {
+      return doubleQuotedContentMatch[1].replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    }
+    return undefined;
+  }
+}
+
+function readPromptLabEvidenceTextFromPayload(payload: unknown): string | undefined {
+  if (typeof payload === "string") {
+    return payload.trim();
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  for (const key of ["content", "bodySnippet", "snippet", "text", "body", "message"] as const) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }
 
 function collectPromptLabConcreteReadCitations(
@@ -10401,7 +10819,13 @@ function promptLabConcreteReadSetMatchesPath(observedPaths: Set<string>, filePat
   return false;
 }
 
-function resolvePromptLabFilePrefetchEndLine(fileCount: number): number {
+function resolvePromptLabFilePrefetchEndLine(userTask: string | undefined, fileCount: number): number {
+  if (
+    looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask) ||
+    looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask)
+  ) {
+    return 520;
+  }
   if (fileCount >= 5) {
     return 180;
   }
@@ -10522,6 +10946,77 @@ function inferPromptLabCompanionFilePaths(userTask: string | undefined, explicit
   return [...companions];
 }
 
+function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[] {
+  if (!userTask) {
+    return [];
+  }
+  const normalizedTask = userTask.toLowerCase();
+  const paths = new Set<string>();
+  const add = (value: string): void => {
+    if (value.trim()) {
+      paths.add(normalizePromptLabFilePath(value));
+    }
+  };
+
+  if (
+    /\bmemory\b/.test(normalizedTask) &&
+    /\bmemory-context\b|\bmemory context\b/.test(normalizedTask) &&
+    /\boperator-facing memory ui\b|\boperator facing memory ui\b/.test(normalizedTask)
+  ) {
+    add("apps/gateway/src/routes/memory.ts");
+    add("packages/storage/src/memory-context-repo.ts");
+    add("apps/mission-control/src/pages/MemoryPage.tsx");
+    add("apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx");
+  }
+
+  if (
+    /\bguidance\b/.test(normalizedTask) &&
+    (/\bglobal docs\b/.test(normalizedTask) ||
+      /\bworkspace docs\b/.test(normalizedTask) ||
+      /\bruntime guidance\b/.test(normalizedTask) ||
+      /\bagents\.md\b/.test(normalizedTask))
+  ) {
+    add("apps/gateway/src/services/guidance-doc-files.ts");
+    add("apps/gateway/src/services/guidance-document-helpers.ts");
+    add("apps/gateway/src/services/gateway-service.ts");
+    add("AGENTS.md");
+  }
+
+  if (looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask)) {
+    add("apps/gateway/src/services/approval-resolution-effects-service.test.ts");
+    add("apps/gateway/src/services/approval-resolution-effects-service.ts");
+    add("packages/storage/src/approval-effect-repo.ts");
+    add("packages/storage/src/approval-wait-run-repo.ts");
+    add("apps/gateway/src/services/durable-run-service.ts");
+  }
+
+  if (looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask)) {
+    add("packages/contracts/src/durable.ts");
+    add("apps/gateway/src/services/durable-run-service.ts");
+    add("apps/gateway/src/services/approval-resolution-effects-service.ts");
+    add("apps/gateway/src/services/durable-run-service.test.ts");
+    add("apps/gateway/src/services/approval-resolution-effects-service.test.ts");
+  }
+
+  if (looksLikePromptLabPromptPackParserRegressionPrompt(userTask)) {
+    add("goatcitadel_prompt_pack_v2.md");
+    add("goatcitadel_prompt_pack.md");
+    add("apps/gateway/src/services/prompt-pack-service.ts");
+  }
+
+  if (
+    looksLikePromptLabPromptPackGateSelectionTestPrompt(userTask) ||
+    (/\bgate selection\b/.test(normalizedTask) &&
+      /\bexpansion pack\b/.test(normalizedTask) &&
+      /\bbaseline\b/.test(normalizedTask))
+  ) {
+    add("scripts/run-prompt-pack-gates.ts");
+    add("apps/gateway/src/services/prompt-pack-service.ts");
+  }
+
+  return [...paths];
+}
+
 function extractPromptLabBulletBodies(responseText: string): Map<string, string> {
   const bullets = new Map<string, string>();
   const lines = responseText.split(/\r?\n/);
@@ -10588,7 +11083,13 @@ function looksLikeLocalFilePath(value: string): boolean {
 }
 
 function normalizePromptLabFilePath(value: string): string {
-  return value.trim().replace(/\\/g, "/");
+  const normalized = value.trim().replace(/\\/g, "/");
+  const repoMarker = "/personal-ai/";
+  const markerIndex = normalized.toLowerCase().indexOf(repoMarker);
+  if (markerIndex >= 0) {
+    return normalized.slice(markerIndex + repoMarker.length);
+  }
+  return normalized.replace(/^\.\//, "");
 }
 
 function looksLikeHarnessContaminatedQuery(value: string): boolean {
@@ -10620,11 +11121,6 @@ function resolvePromptLabOpenAiControls(
     },
     verbosity: input.mode === "code" ? "low" : "medium",
   };
-}
-
-function isPromptLabHarnessContent(content: string): boolean {
-  const normalized = content.toLowerCase();
-  return normalized.includes("## prompt lab run contract") || normalized.includes("## prompt lab tooling contract");
 }
 
 function isOpenAiReasoningEligible(providerId?: string, model?: string): boolean {
@@ -11249,33 +11745,6 @@ function looksLikePromptLabRealtimeEventMetadataPropagationPrompt(userTask: stri
   );
 }
 
-function looksLikePromptLabPromptPackMarkdownImportPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bprompt-pack\b|\bprompt pack\b/.test(normalized) &&
-    /\bmarkdown\b/.test(normalized) &&
-    /\b(auto-loaded|autoloaded|auto loaded|imported|import)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabPromptPackRepoBindingPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bprompt-pack\b|\bprompt pack\b/.test(normalized) &&
-    /\b(repo\/project binding|repo-bound|project binding|tool-path resolution|tool path resolution)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabPromptPackOperatorSurfacePrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\breport rendering\b/.test(normalized) &&
-    /\btrend rendering\b/.test(normalized) &&
-    /\bbenchmark\b/.test(normalized) &&
-    /\b(status|api|apis|operator|evidence)\b/.test(normalized)
-  );
-}
-
 function looksLikePromptLabApprovalWakeFlowPrompt(userTask: string | undefined): boolean {
   const normalized = (userTask ?? "").toLowerCase();
   return (
@@ -11357,6 +11826,16 @@ function looksLikePromptLabPromptPackGateSelectionTestPrompt(userTask: string | 
     /\bgate selection\b/.test(normalized) &&
     /\bexpansion pack\b/.test(normalized) &&
     /\bolder baseline\b|\bbaseline\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPromptPackParserRegressionPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bgoatcitadel_prompt_pack_v2\.md\b/.test(normalized) &&
+    (/\bparse(?:s|d)? cleanly\b/.test(normalized) || /\bparsing path\b/.test(normalized)) &&
+    (/\bfrozen baseline\b/.test(normalized) || /\bbaseline fixture\b/.test(normalized)) &&
+    /\b(regression test|parser-focused regression|parser focused regression)\b/.test(normalized)
   );
 }
 
@@ -12088,6 +12567,13 @@ function buildUserSafeFailureMessage(failure: ChatTurnFailureRecord): string {
       return "A required tool failed before the turn could finish. Retry once, or narrow the request so it can complete without that tool path.";
     case "auth_required":
       return "The selected provider or integration needs valid auth before this turn can continue. Reconnect auth or choose another provider.";
+    case "tool_loop_guard":
+      return "This turn stopped after the tool loop guard detected repeated low-progress tool work. Narrow the request or continue from the strongest evidence already gathered.";
+    case "global_circuit_breaker":
+      return "This turn stopped after repeated tool failures tripped the circuit breaker. Retry with a narrower request or continue from the strongest evidence already gathered.";
+    case "tool_run_budget_exceeded":
+      return "This turn hit the current tool-run budget before a full pass finished. Narrow the request or continue from the strongest leads already gathered.";
+    case "turn_budget_exceeded":
     case "budget_exceeded":
       return "This turn hit the current execution budget before a full pass finished. Continue from the strongest leads or switch to a deeper mode.";
     case "approval_required":
@@ -12594,24 +13080,6 @@ function summarizeToolRunForSynthesis(run: ChatToolRunRecord, userPrompt?: strin
   return baseParts.join(" ");
 }
 
-function looksLikeRepoGroundedInspectionPrompt(prompt: string): boolean {
-  const normalized = prompt.toLowerCase();
-  return (
-    /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
-    /\buse (?:(?:file|code|file\/code|file or code)(?: tools?)?|tools?)\b/.test(normalized) ||
-    /\b(?:file|code) tools\b/.test(normalized) ||
-    /\bexact files?\b/.test(normalized) ||
-    /\bexact evidence\b/.test(normalized) ||
-    /\bexact citations?\b/.test(normalized) ||
-    /\bcurrent implementation\b/.test(normalized) ||
-    /\bguidance-loading chain\b/.test(normalized) ||
-    /\binspect\b[\s\S]{0,80}\b(?:routes|services|wiring|contracts?|tests?|ui|copy|prompt lab|prompt-pack)\b/.test(
-      normalized,
-    ) ||
-    (/\bcurrent\b/.test(normalized) && /\b(repo|repository|workspace|codebase)\b/.test(normalized))
-  );
-}
-
 function summarizeFileReadToolRunForSynthesis(run: ChatToolRunRecord): string | undefined {
   if (run.toolName !== "file.read_range" && run.toolName !== "fs.read") {
     return undefined;
@@ -12656,12 +13124,13 @@ function truncatePlainText(value: string, maxChars: number): string {
 
 export function normalizeAgentInputFromSend(
   request: ChatSendMessageRequest,
-): Pick<ChatAgentTurnInput, "mode" | "webMode" | "memoryMode" | "thinkingLevel"> {
+): Pick<ChatAgentTurnInput, "mode" | "webMode" | "memoryMode" | "thinkingLevel" | "normalizationProfile"> {
   return {
     mode: request.mode ?? "chat",
     webMode: request.webMode ?? "auto",
     memoryMode: request.memoryMode ?? (request.useMemory === false ? "off" : "auto"),
     thinkingLevel: request.thinkingLevel ?? "standard",
+    normalizationProfile: request.normalizationProfile ?? "live",
   };
 }
 

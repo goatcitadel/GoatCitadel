@@ -62,6 +62,34 @@ describe("dispatchConnectorDelivery", () => {
     });
   });
 
+  it("passes abort signals through integration channel sends and rejects on lease-loss abort", async () => {
+    const signal = AbortSignal.abort(new Error("lease lost"));
+    const commsSend = vi.fn(async (input: ChannelSendInput): Promise<ToolInvokeResult> => {
+      expect(input.signal).toBe(signal);
+      throw input.signal?.reason;
+    });
+
+    await expect(
+      dispatchConnectorDelivery(
+        createConnector("integration_connection", "integration:channel-1", "channel-1", ["outbound_messages"]),
+        createPayload("channel.send", {
+          target: "#ops",
+          message: "hello from durable delivery",
+        }),
+        {
+          commsSend,
+          commsReply: vi.fn(async () => ({})),
+          commsReact: vi.fn(),
+          commsUnsend: vi.fn(),
+          commsTyping: vi.fn(async () => createTypingResult()),
+          invokeMcpTool: vi.fn(),
+          publishRealtime: vi.fn(),
+          signal,
+        },
+      ),
+    ).rejects.toThrow("lease lost");
+  });
+
   it("normalizes Discord connector targets before dispatch", async () => {
     const commsSend = vi.fn(
       async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({

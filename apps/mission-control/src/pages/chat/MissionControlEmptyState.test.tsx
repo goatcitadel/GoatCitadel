@@ -20,7 +20,7 @@ describe("MissionControlEmptyState", () => {
       />,
     );
 
-    expect(markup).toContain("Conversation lane");
+    expect(markup).toContain("Chat");
     expect(markup).toContain("Start with the thing you actually need");
     expect(markup).toContain("Start chat session");
     expect(markup).toContain("Draft a launch update from my notes");
@@ -46,7 +46,7 @@ describe("MissionControlEmptyState", () => {
       />,
     );
 
-    expect(markup).toContain("Implementation lane");
+    expect(markup).toContain("Code");
     expect(markup).toContain("Anchor the implementation before you execute");
     expect(markup).toContain("Start code session");
     expect(markup).toContain("4 projects");
