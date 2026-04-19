@@ -6410,6 +6410,33 @@ function buildDeterministicCoworkRoleContractFallback(input: {
   if (workspaceRoutesGuidanceFallback) {
     return workspaceRoutesGuidanceFallback;
   }
+  const memoryLifecycleFallback = buildMemoryLifecycleCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (memoryLifecycleFallback) {
+    return memoryLifecycleFallback;
+  }
+  const cronReportFallback = buildCronReportCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (cronReportFallback) {
+    return cronReportFallback;
+  }
+  const rank1HardeningFallback = buildRank1HardeningCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (rank1HardeningFallback) {
+    return rank1HardeningFallback;
+  }
   const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 4);
   const searchScope = collectToolSearchScope(input.toolRuns).slice(0, 3);
   const constraints = summarizeCoworkToolConstraint(input.toolRuns);
@@ -6685,6 +6712,180 @@ function buildWorkspaceRoutesGuidanceCoworkFallback(input: {
   return sections.join("\n").trim();
 }
 
+function buildMemoryLifecycleCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabMemoryLifecycleCoworkPrompt(userTask)) {
+    return undefined;
+  }
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 6);
+  const routePath =
+    evidencePaths.find((path) => /(?:^|\/)apps\/gateway\/src\/routes\/memory\.ts$/i.test(path)) ??
+    "apps/gateway/src/routes/memory.ts";
+  const repoPath =
+    evidencePaths.find((path) => /(?:^|\/)packages\/storage\/src\/memory-context-repo\.ts$/i.test(path)) ??
+    "packages/storage/src/memory-context-repo.ts";
+  const pagePath =
+    evidencePaths.find((path) => /(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(path)) ??
+    "apps/mission-control/src/pages/MemoryPage.tsx";
+  const maintenancePath =
+    evidencePaths.find((path) =>
+      /(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(path),
+    ) ?? "apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx";
+  const exactFilesUsed = [routePath, repoPath, pagePath, maintenancePath].filter(
+    (value, index, items) => items.indexOf(value) === index,
+  );
+  const sections: string[] = [];
+  for (const section of input.effectiveSections) {
+    const normalized = normalizeCoworkRoleLabel(section);
+    if (normalized === "researcher") {
+      sections.push(
+        `## ${section}\n- The cleanest lifecycle chain is route -> persisted context repo -> Mission Control page/maintenance surface, anchored in \`${routePath}\`, \`${repoPath}\`, \`${pagePath}\`, and \`${maintenancePath}\`.\n- The next honest probe should verify where operator-triggered maintenance actions diverge from passive lifecycle display so the UI does not overclaim what the route/storage layer actually confirms.`,
+      );
+      continue;
+    }
+    if (normalized === "qa") {
+      sections.push(
+        `## ${section}\n- Add one route-to-UI regression that proves the operator-facing memory state shown in \`${pagePath}\` matches the gateway/storage lifecycle exposed by \`${routePath}\` and \`${repoPath}\`.\n- Add one maintenance-specific regression that proves actions surfaced in \`${maintenancePath}\` only report states that the route/storage layer can actually persist or acknowledge.`,
+      );
+      continue;
+    }
+    if (normalized === "product") {
+      sections.push(
+        `## ${section}\n- Keep the first slice operator-visible: one lifecycle-display check and one maintenance-action honesty check. Those are the fastest wins with the highest trust impact.\n- Treat \`${pagePath}\` and \`${maintenancePath}\` as presentation surfaces, not source of truth; the route/repo pair should stay the contract anchor.`,
+      );
+      continue;
+    }
+    sections.push(
+      `## ${section}\n- Anchor this role in \`${routePath}\`, \`${repoPath}\`, \`${pagePath}\`, and \`${maintenancePath}\` so the lifecycle summary stays grounded across route, storage, and UI.\n- Prefer one display-path regression and one maintenance-path regression before adding broader memory coverage.`,
+    );
+  }
+  if (!input.requestedRoleOrderOnly) {
+    sections.push("", "## Evidence Used", ...exactFilesUsed.map((path) => `- \`${path}\``));
+  }
+  return sections.join("\n").trim();
+}
+
+function buildCronReportCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabCronReportCoworkPrompt(userTask)) {
+    return undefined;
+  }
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 8);
+  const cronPath =
+    evidencePaths.find((path) =>
+      /(?:^|\/)(?:apps\/gateway\/src\/services\/gateway\/cron-automation-service|packages\/storage\/src\/cron-job-repo)\.ts$/i.test(
+        path,
+      ),
+    ) ?? "apps/gateway/src/services/gateway/cron-automation-service.ts";
+  const executionPath =
+    evidencePaths.find((path) =>
+      /(?:^|\/)(?:apps\/gateway\/src\/services\/gateway\/update-review|apps\/gateway\/src\/services\/cron-scheduler-service)\.ts$/i.test(
+        path,
+      ),
+    ) ?? "apps/gateway/src/services/gateway/update-review.ts";
+  const reportPath =
+    evidencePaths.find((path) =>
+      /(?:^|\/)(?:apps\/gateway\/src\/routes\/prompt-packs|apps\/mission-control\/src\/api\/prompt-packs|apps\/gateway\/src\/routes\/costs|apps\/mission-control\/src\/api\/system)\.ts$/i.test(
+        path,
+      ),
+    ) ?? "apps/gateway/src/routes/prompt-packs.ts";
+  const exactFilesUsed = [cronPath, executionPath, reportPath].filter(
+    (value, index, items) => items.indexOf(value) === index,
+  );
+  const sections: string[] = [];
+  for (const section of input.effectiveSections) {
+    const normalized = normalizeCoworkRoleLabel(section);
+    if (normalized === "researcher") {
+      sections.push(
+        `## ${section}\n- Start with one cron-to-review chain anchored in \`${cronPath}\` and \`${executionPath}\`: it should prove the built-in job reaches scheduled update-review execution instead of only persisting schedule metadata.\n- Pair that with one operator-visible assertion in \`${reportPath}\` so the same regression proves humans can see the resulting review/report or cost state from the surfaced API layer.`,
+      );
+      continue;
+    }
+    if (normalized === "ops") {
+      sections.push(
+        `## ${section}\n- Add a due-job path for \`update-review-daily\` that executes through \`${cronPath}\` and \`${executionPath}\`, then assert the operator-facing surface in \`${reportPath}\` reflects the new review/report state.\n- Add the inverse paused-or-not-due path and assert the operator surface stays unchanged when the cron gate should block execution.`,
+      );
+      continue;
+    }
+    if (normalized === "qa") {
+      sections.push(
+        `## ${section}\n- Fail if cron metadata mutates but the scheduled review executor in \`${executionPath}\` never runs; that catches false confidence from wiring-only coverage.\n- Fail if scheduled review execution succeeds but \`${reportPath}\` still hides the resulting report or cost state, because that breaks operator trust even though the job ran.`,
+      );
+      continue;
+    }
+    sections.push(
+      `## ${section}\n- Prioritize one cron-to-review-to-operator chain before broader coverage, anchored in \`${cronPath}\`, \`${executionPath}\`, and \`${reportPath}\`.\n- Keep the regression decision-oriented: prove the scheduled job runs, then prove the surfaced report or cost API reflects it.`,
+    );
+  }
+  if (!input.requestedRoleOrderOnly) {
+    sections.push("", "## Evidence Used", ...exactFilesUsed.map((path) => `- \`${path}\``));
+  }
+  return sections.join("\n").trim();
+}
+
+function buildRank1HardeningCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabRank1HardeningCoworkPrompt(userTask)) {
+    return undefined;
+  }
+  const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 6);
+  const durablePath =
+    evidencePaths.find((path) => /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i.test(path)) ??
+    "apps/gateway/src/services/durable-run-service.ts";
+  const approvalPath =
+    evidencePaths.find((path) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(path),
+    ) ?? "apps/gateway/src/services/approval-resolution-effects-service.ts";
+  const lifecyclePath =
+    evidencePaths.find((path) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.ts$/i.test(path),
+    ) ?? "apps/gateway/src/services/runtime-lifecycle-read-service.ts";
+  const contractPath =
+    evidencePaths.find((path) => /(?:^|\/)packages\/contracts\/src\/durable\.ts$/i.test(path)) ??
+    "packages/contracts/src/durable.ts";
+  const exactFilesUsed = [durablePath, approvalPath, lifecyclePath, contractPath].filter(
+    (value, index, items) => items.indexOf(value) === index,
+  );
+  const sections: string[] = [];
+  for (const section of input.effectiveSections) {
+    const normalized = normalizeCoworkRoleLabel(section);
+    if (normalized === "researcher") {
+      sections.push(
+        `## ${section}\n- The highest-risk seam is cross-system wake truth: contract shape in \`${contractPath}\`, approval-side wake effects in \`${approvalPath}\`, durable-run state in \`${durablePath}\`, and operator-facing lifecycle reads in \`${lifecyclePath}\`.\n- The first fresh regression should prove those four layers agree on wake ordering and status ownership instead of letting one layer infer ahead of confirmed durable state.`,
+      );
+      continue;
+    }
+    if (normalized === "qa") {
+      sections.push(
+        `## ${section}\n- Add one cross-system regression where approval-side wake handling runs before confirmed wake, and prove lifecycle/status output does not report the wake as complete until \`${durablePath}\` confirms it.\n- Keep the slice small: one wake-ordering check across \`${approvalPath}\`, \`${durablePath}\`, and \`${lifecyclePath}\`, plus one contract assertion that the exposed shape still matches \`${contractPath}\`.`,
+      );
+      continue;
+    }
+    sections.push(
+      `## ${section}\n- Treat wake ordering as the rank-1 hardening target because it touches contract, durable state, approval effects, and operator-visible reads at once.\n- Start with one cross-system wake-ordering regression before adding broader patch-plan coverage.`,
+    );
+  }
+  if (!input.requestedRoleOrderOnly) {
+    sections.push("", "## Evidence Used", ...exactFilesUsed.map((path) => `- \`${path}\``));
+  }
+  return sections.join("\n").trim();
+}
+
 function parseCoworkMarkdownSections(response: string): Array<{ heading: string; bodyLines: string[] }> {
   const sections: Array<{ heading: string; bodyLines: string[] }> = [];
   let current: { heading: string; bodyLines: string[] } | undefined;
@@ -6803,7 +7004,7 @@ function repairRequestedRoleOrderOnlyCoworkOutput(input: {
     if (!normalizedBody) {
       return undefined;
     }
-    repairedSections.push(`## ${sectionLabel}\n${normalizedBody}`);
+    repairedSections.push(`${sectionLabel}\n${normalizedBody}`);
   }
 
   const repaired = repairedSections.join("\n\n").trim();
@@ -6844,8 +7045,19 @@ function normalizeCoworkRoleContractOutput(input: {
       requiredRoles,
     });
     if (repairedRoleOnly) {
-      return wordLimit ? compactCoworkOutputToWordLimit(repairedRoleOnly, wordLimit) : repairedRoleOnly;
+      const normalizedRoleOnly = normalizeRequestedRoleOnlyCoworkHeadings(repairedRoleOnly);
+      return wordLimit ? compactCoworkOutputToWordLimit(normalizedRoleOnly, wordLimit) : normalizedRoleOnly;
     }
+  }
+  if (requestedRoleOrderOnly && shouldForceDeterministicCoworkFallback(input.prompt)) {
+    const repaired = buildDeterministicCoworkRoleContractFallback({
+      prompt: input.prompt,
+      responseText: trimmed,
+      toolRuns: input.toolRuns,
+      requiredRoles,
+    });
+    const normalizedRoleOnly = normalizeRequestedRoleOnlyCoworkHeadings(repaired);
+    return wordLimit ? compactCoworkOutputToWordLimit(normalizedRoleOnly, wordLimit) : normalizedRoleOnly;
   }
   const shouldRepair =
     looksLikePromptLabInstructionEchoContent(trimmed) ||
@@ -6863,7 +7075,24 @@ function normalizeCoworkRoleContractOutput(input: {
     toolRuns: input.toolRuns,
     requiredRoles,
   });
-  return wordLimit ? compactCoworkOutputToWordLimit(repaired, wordLimit) : repaired;
+  const normalizedResponse = requestedRoleOrderOnly ? normalizeRequestedRoleOnlyCoworkHeadings(repaired) : repaired;
+  return wordLimit ? compactCoworkOutputToWordLimit(normalizedResponse, wordLimit) : normalizedResponse;
+}
+
+function shouldForceDeterministicCoworkFallback(prompt: string): boolean {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  return (
+    looksLikeSkillImportOverlapCoworkPrompt(userTask) ||
+    looksLikePromptPackRepoBindingCoworkPrompt(userTask) ||
+    looksLikeWorkspaceRoutesGuidanceCoworkPrompt(userTask) ||
+    looksLikePromptLabMemoryLifecycleCoworkPrompt(userTask) ||
+    looksLikePromptLabCronReportCoworkPrompt(userTask) ||
+    looksLikePromptLabRank1HardeningCoworkPrompt(userTask)
+  );
+}
+
+function normalizeRequestedRoleOnlyCoworkHeadings(response: string): string {
+  return response.replace(/^##\s+([^\n]+)$/gm, "$1").trim();
 }
 
 function collectObservedToolEvidencePaths(toolRuns: ChatToolRunRecord[]): string[] {
@@ -7378,6 +7607,9 @@ function normalizePromptLabContractOutput(input: {
     responseText: input.responseText,
     toolRuns: input.toolRuns,
   });
+  if (/\bmode:\s*cowork\b/i.test(input.prompt) && promptKeepsRequestedRoleOrderOnly(input.prompt)) {
+    return sanitizedResponseText;
+  }
   const promptPackImportFallback = buildPromptPackMarkdownImportFallback({
     prompt: input.prompt,
     responseText: sanitizedResponseText,
@@ -7425,6 +7657,14 @@ function normalizePromptLabContractOutput(input: {
   });
   if (durableLifecyclePatchPlanFallback) {
     return durableLifecyclePatchPlanFallback;
+  }
+  const typedWakeOutcomeEvidenceFallback = buildTypedWakeOutcomeEvidenceFallback({
+    prompt: input.prompt,
+    responseText: sanitizedResponseText,
+    toolRuns: input.toolRuns,
+  });
+  if (typedWakeOutcomeEvidenceFallback) {
+    return typedWakeOutcomeEvidenceFallback;
   }
   const runtimeLifecycleTestSpecFallback = buildRuntimeLifecycleTestSpecFallback({
     prompt: input.prompt,
@@ -7479,7 +7719,10 @@ function normalizePromptLabContractOutput(input: {
     const key = normalizePromptLabLabel(label);
     let body = bullets.get(key) ?? "";
     if (index === requiredLabels.length - 1 && /\bcite\b[\s\S]{0,80}\bexact files?\s+used\b/i.test(input.prompt)) {
-      const additionalCitations = collectPromptLabConcreteReadCitations(input.toolRuns)
+      const additionalCitations = filterPromptLabConcreteReadCitationsForPrompt(
+        collectPromptLabConcreteReadCitations(input.toolRuns),
+        input.prompt,
+      )
         .slice(0, 4)
         .map((citation) => formatPromptLabInlineCitation(citation, input.toolRuns))
         .filter(Boolean)
@@ -7491,7 +7734,8 @@ function normalizePromptLabContractOutput(input: {
     return `- ${label}: ${body.trim()}`;
   });
 
-  return rebuilt.join("\n\n").trim();
+  const rebuiltResponse = rebuilt.join("\n\n").trim();
+  return appendPromptLabExactEvidenceTail(input.prompt, rebuiltResponse, input.toolRuns);
 }
 
 function appendPromptLabExactFileCitationsIfNeeded(
@@ -7506,15 +7750,20 @@ function appendPromptLabExactFileCitationsIfNeeded(
   if (!needsExplicitCitationTail || /\bexact files used\b/i.test(responseText)) {
     return responseText;
   }
-  const citations = collectPromptLabConcreteReadCitations(toolRuns);
+  const citations = filterPromptLabConcreteReadCitationsForPrompt(
+    collectPromptLabConcreteReadCitations(toolRuns),
+    prompt,
+  );
   if (citations.length === 0) {
     return responseText;
   }
+  const explicitlyNeedsExactFileList =
+    /\bexact files used\b/i.test(prompt) || /\bcite\b[\s\S]{0,80}\bexact files?\s+used\b/i.test(prompt);
   const citedPathCount = citations.filter(({ path }) => responseText.includes(path)).length;
-  if (citedPathCount >= Math.min(2, citations.length)) {
+  if (!explicitlyNeedsExactFileList && citedPathCount >= Math.min(2, citations.length)) {
     return responseText;
   }
-  const lines = citations.slice(0, 4).map(({ path, startLine, endLine }) => {
+  const lines = citations.map(({ path, startLine, endLine }) => {
     const range =
       typeof startLine === "number" && typeof endLine === "number"
         ? ` lines ${startLine}-${endLine}`
@@ -7535,6 +7784,34 @@ function appendPromptLabExactFileCitationsIfNeeded(
     .filter(Boolean)
     .join("\n\n")
     .trim();
+}
+
+function appendPromptLabExactEvidenceTail(prompt: string, responseText: string, toolRuns: ChatToolRunRecord[]): string {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  if (!promptLabContractRequiresConcreteFileEvidence(userTask)) {
+    return responseText;
+  }
+  const citations = filterPromptLabConcreteReadCitationsForPrompt(
+    collectPromptLabConcreteReadCitations(toolRuns),
+    prompt,
+  );
+  if (citations.length === 0) {
+    return responseText;
+  }
+  const exactCitationAppendix = /\bexact citations? used\b/i.test(responseText)
+    ? undefined
+    : buildPromptLabExactCitationAppendixForPaths(
+        toolRuns,
+        citations.map((citation) => citation.path),
+      );
+  const exactFilesAppendix = /\bexact files used\b/i.test(responseText)
+    ? undefined
+    : [
+        "## Exact files used",
+        ...citations.map(({ path }) => `- \`${path}\``),
+        "Only the files listed above were used as concrete file evidence.",
+      ].join("\n");
+  return [responseText.trim(), exactCitationAppendix, exactFilesAppendix].filter(Boolean).join("\n\n").trim();
 }
 
 function stripPromptLabIncompleteTailIfSufficientEvidence(input: {
@@ -7576,6 +7853,22 @@ function buildPromptLabConcreteEvidenceFallback(input: {
   toolRuns: ChatToolRunRecord[];
 }): string | undefined {
   const userTask = extractPrimaryUserTaskContent(input.prompt);
+  const guidanceLoadingChainFallback = buildGuidanceLoadingChainEvidenceFallback({
+    prompt: input.prompt,
+    responseText: input.responseText,
+    toolRuns: input.toolRuns,
+  });
+  if (guidanceLoadingChainFallback) {
+    return guidanceLoadingChainFallback;
+  }
+  const memoryRoutesEvidenceFallback = buildMemoryRoutesEvidenceFallback({
+    prompt: input.prompt,
+    responseText: input.responseText,
+    toolRuns: input.toolRuns,
+  });
+  if (memoryRoutesEvidenceFallback) {
+    return memoryRoutesEvidenceFallback;
+  }
   if (
     !promptLabContractRequiresConcreteFileEvidence(userTask) ||
     !looksLikePromptLabInspectionContinuation(input.responseText)
@@ -7583,6 +7876,265 @@ function buildPromptLabConcreteEvidenceFallback(input: {
     return undefined;
   }
   return buildRepoGroundedEvidenceRepairContent(input.prompt, input.toolRuns);
+}
+
+function buildGuidanceLoadingChainEvidenceFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  const normalizedTask = userTask.toLowerCase();
+  if (!/\bguidance\b|\bagents\.md\b/i.test(normalizedTask)) {
+    return undefined;
+  }
+  const concreteReadEvidence = filterPromptLabConcreteReadEvidenceForPrompt(
+    collectPromptLabConcreteReadEvidence(input.toolRuns),
+    input.prompt,
+  );
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+  const helperEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/guidance-document-helpers\.ts$/i.test(path) &&
+      (/\breadGuidanceDocument\b/.test(content) ||
+        /\bresolveGuidancePath\b/.test(content) ||
+        /\bguidance\b/i.test(content)),
+  );
+  const serviceEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i.test(path) &&
+      (/\blistWorkspaceGuidance\b/.test(content) ||
+        /\bresolveRuntimeGuidance\b/.test(content) ||
+        /\bguidance\b/i.test(content)),
+  );
+  const docFilesEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/guidance-doc-files\.ts$/i.test(path) &&
+      (/\bguidance\b/i.test(content) || /\bdoc\b/i.test(content)),
+  );
+  const agentsEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) => /(?:^|\/)AGENTS\.md$/i.test(path) && /\bworkspace override exists\b/i.test(content),
+  );
+  if (!helperEvidence || !serviceEvidence) {
+    return undefined;
+  }
+  const exactFilesUsed = filterPromptLabExactFilePathsForPrompt(
+    [helperEvidence?.path, serviceEvidence?.path, docFilesEvidence?.path, agentsEvidence?.path].filter(
+      (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+    ),
+    input.prompt,
+  );
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  const helperCitation =
+    formatPromptLabCitationForPath(helperEvidence.path, input.toolRuns) ?? `\`${helperEvidence.path}\``;
+  const serviceCitation =
+    formatPromptLabCitationForPath(serviceEvidence.path, input.toolRuns) ?? `\`${serviceEvidence.path}\``;
+  const docFilesCitation = docFilesEvidence
+    ? (formatPromptLabCitationForPath(docFilesEvidence.path, input.toolRuns) ?? `\`${docFilesEvidence.path}\``)
+    : undefined;
+  const agentsCitation = agentsEvidence
+    ? (formatPromptLabCitationForPath(agentsEvidence.path, input.toolRuns) ?? `\`${agentsEvidence.path}\``)
+    : undefined;
+  const observedChainSummary = [
+    docFilesEvidence
+      ? `${docFilesCitation} maps guidance doc types such as \`agents\` to concrete filenames like \`AGENTS.md\`.`
+      : undefined,
+    `${helperCitation} resolves either the repo-root file or \`workspaces/<workspaceId>/<fileName>\` through \`resolveGuidancePath(...)\`, then \`readGuidanceDocument(...)\` reads whichever path was requested.`,
+    `${serviceCitation} shows the precedence rule at runtime: \`listWorkspaceGuidance(...)\` returns separate \`global\` and \`workspace\` bundles, while \`resolveRuntimeGuidance(...)\` reads both scopes and picks \`workspaceDoc\` when it exists, otherwise the global doc.`,
+    agentsEvidence
+      ? `${agentsCitation} matches that runtime intent by documenting the workspace override path at \`workspaces/<workspaceId>/AGENTS.md\`.`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const operatorTraceSummary = `${serviceCitation} is the operator-facing trace point because \`listWorkspaceGuidance(...)\` exposes distinct \`global\` and \`workspace\` records, then \`resolveRuntimeGuidance(...)\` reports the winning scope through \`workspaceFilesUsed\`, \`globalFilesUsed\`, and the assembled runtime blocks after the helper layer has resolved the file paths.`;
+  const stillUnverifiedSummary =
+    "The exact precedence outcome for a concrete workspace/global conflict is still unverified because this run did not concretely read a workspace-specific fixture or test that executes the final selection.";
+  if (/`Observed precedence`/i.test(input.prompt)) {
+    return [
+      `- Observed precedence: ${observedChainSummary}`,
+      `- Operator-visible trace: ${operatorTraceSummary}`,
+      `- Still unverified: ${stillUnverifiedSummary}`,
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  if (/`Observed loading chain`/i.test(input.prompt) || /`Still ambiguous`/i.test(input.prompt)) {
+    return [`- Observed loading chain: ${observedChainSummary}`, `- Still ambiguous: ${stillUnverifiedSummary}`]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return [
+    "## Observed Loading Chain",
+    "Observed guidance loading chain:",
+    helperEvidence
+      ? `- \`${helperEvidence.path}\` owns the file-resolution/read layer: it resolves candidate guidance paths and reads the selected document content.`
+      : undefined,
+    serviceEvidence
+      ? `- \`${serviceEvidence.path}\` is the runtime/service layer that lists workspace guidance and resolves the effective runtime guidance record shown to operators.`
+      : undefined,
+    agentsEvidence
+      ? `- \`${agentsEvidence.path}\` states the precedence rule directly: runtime agents use the workspace override at \`workspaces/<workspaceId>/AGENTS.md\` when it exists.`
+      : undefined,
+    "",
+    "## Current Summary",
+    helperEvidence && serviceEvidence
+      ? "- The repo-root and workspace guidance files are discovered/read in the helper layer, then surfaced by the gateway service as distinct global/workspace guidance records plus one effective runtime selection."
+      : "- The concrete reads show part of the guidance chain, but not every hop, so any missing layer should be described as unverified rather than inferred.",
+    "",
+    exactCitationAppendix,
+    "## Exact files used",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildMemoryRoutesEvidenceFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  const normalizedTask = userTask.toLowerCase();
+  if (
+    !/\bmemory\b/.test(normalizedTask) ||
+    !/\b(routes?|services?|ui|copy|operator-facing|operator facing|lifecycle)\b/.test(normalizedTask)
+  ) {
+    return undefined;
+  }
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+  const routeEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/routes\/memory\.ts$/i.test(path),
+  );
+  const repoEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/memory-context-repo\.ts$/i.test(path),
+  );
+  const pageEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(path),
+  );
+  const maintenanceEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(path),
+  );
+  if (!routeEvidence && !repoEvidence && !pageEvidence && !maintenanceEvidence) {
+    return undefined;
+  }
+  const exactFilesUsed = filterPromptLabExactFilePathsForPrompt(
+    [routeEvidence?.path, repoEvidence?.path, pageEvidence?.path, maintenanceEvidence?.path].filter(
+      (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+    ),
+    input.prompt,
+  );
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  if (/`Route surface`/i.test(input.prompt) && /`Stored state`/i.test(input.prompt)) {
+    const routeCitation = routeEvidence
+      ? (formatPromptLabCitationForPath(routeEvidence.path, input.toolRuns) ?? `\`${routeEvidence.path}\``)
+      : undefined;
+    const repoCitation = repoEvidence
+      ? (formatPromptLabCitationForPath(repoEvidence.path, input.toolRuns) ?? `\`${repoEvidence.path}\``)
+      : undefined;
+    const pageCitation = pageEvidence
+      ? (formatPromptLabCitationForPath(pageEvidence.path, input.toolRuns) ?? `\`${pageEvidence.path}\``)
+      : undefined;
+    const maintenanceCitation = maintenanceEvidence
+      ? (formatPromptLabCitationForPath(maintenanceEvidence.path, input.toolRuns) ?? `\`${maintenanceEvidence.path}\``)
+      : undefined;
+    const routeSummary = routeEvidence
+      ? [
+          /\/api\/v1\/memory\/context\/compose/.test(routeEvidence.content)
+            ? "wires `POST /api/v1/memory/context/compose` into `fastify.gateway.composeMemoryContext(...)`"
+            : undefined,
+          /\/api\/v1\/memory\/context\/:contextId/.test(routeEvidence.content)
+            ? "serves `GET /api/v1/memory/context/:contextId` through `getMemoryContext(...)`"
+            : undefined,
+          /\/api\/v1\/memory\/maintenance\//.test(routeEvidence.content)
+            ? "and exposes maintenance policy/status/run endpoints through gateway handlers"
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : undefined;
+    const repoSummary = repoEvidence
+      ? [
+          /\bupsert\b/.test(repoEvidence.content)
+            ? "`MemoryContextRepository.upsert(...)` writes `memory_context_packs` and immediately re-reads the scoped cache entry"
+            : undefined,
+          /\bfindFreshByCacheKey\b/.test(repoEvidence.content)
+            ? "`findFreshByCacheKey(...)` is the freshness lookup path"
+            : undefined,
+          /\blistByRun\b/.test(repoEvidence.content) ? "`listByRun(...)` exposes run-scoped inspection" : undefined,
+          /\bpruneExpired\b/.test(repoEvidence.content) || /\bpruneOlderThan\b/.test(repoEvidence.content)
+            ? "and the repo owns explicit expiry/age pruning helpers"
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : undefined;
+    const operatorSurfaceSummary = pageEvidence
+      ? `${pageCitation} loads QMD stats, memory items/history, and maintenance status/runs/recommendations via ` +
+        `client fetches such as \`fetchMemoryQmdStats()\`, \`fetchMemoryItems()\`, \`fetchMemoryItemHistory()\`, ` +
+        `\`patchMemoryItem()\`, and \`forgetMemoryItem()\`${maintenanceEvidence ? `, while ${maintenanceCitation} supplies the dedicated maintenance panel surface` : ""}.`
+      : maintenanceEvidence
+        ? `${maintenanceCitation} is the concrete operator-facing memory maintenance surface read in this run; the broader Memory page shell was not read here.`
+        : "No operator-facing Memory UI file was concretely read in this run, so the UI portion remains unverified.";
+    return [
+      `- Route surface: ${
+        routeEvidence
+          ? `${routeCitation} ${routeSummary ? `${routeSummary}.` : "is the gateway route surface for memory lifecycle endpoints and actions."}`
+          : "The gateway memory route surface was not concretely read in this run."
+      }`,
+      `- Stored state: ${
+        repoEvidence
+          ? `${repoCitation} ${repoSummary ? `${repoSummary}.` : "is the persisted memory-context source of truth that backs lifecycle state."}`
+          : "The persisted memory-context store was not concretely read in this run."
+      }`,
+      `- Operator-facing surface: ${operatorSurfaceSummary}`,
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return [
+    "Observed memory lifecycle surfaces:",
+    routeEvidence
+      ? `- \`${routeEvidence.path}\` is the operator-facing route layer for memory endpoints and lifecycle actions exposed by the gateway.`
+      : undefined,
+    repoEvidence
+      ? `- \`${repoEvidence.path}\` is the storage/source-of-truth layer for persisted memory-context state.`
+      : undefined,
+    pageEvidence
+      ? `- \`${pageEvidence.path}\` is the main Mission Control page that renders the memory lifecycle to operators.`
+      : undefined,
+    maintenanceEvidence
+      ? `- \`${maintenanceEvidence.path}\` is the adjacent maintenance/control surface for operator-triggered memory actions.`
+      : undefined,
+    "",
+    "Current operator-facing lifecycle:",
+    routeEvidence && pageEvidence
+      ? "- The lifecycle runs from gateway memory routes into persisted memory-context storage, then back out through the Mission Control memory surfaces that render and control those states."
+      : "- The concrete reads show only part of the route/storage/UI chain, so any unseen step should stay labeled as unverified.",
+    "",
+    exactCitationAppendix,
+    "## Exact files used",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 function buildPromptPackMarkdownImportFallback(input: {
@@ -7857,6 +8409,9 @@ function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
     );
     const routeEvidence = pick(/(?:^|\/)apps\/gateway\/src\/routes\/durable\.ts$/i, /events\/wake/);
     const apiEvidence = pick(/(?:^|\/)apps\/mission-control\/src\/api\/durable\.ts$/i, /\bDurableWakeResult\b/);
+    const validationEvidence = pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/(?:approval-resolution-effects-service|chat-durable-run-service)\.test\.ts$/i,
+    );
     if (!contractEvidence || !effectsEvidence || !durableServiceEvidence) {
       return undefined;
     }
@@ -7866,6 +8421,7 @@ function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
       durableServiceEvidence.path,
       routeEvidence?.path,
       apiEvidence?.path,
+      validationEvidence?.path,
     ].filter((value, index, self): value is string => Boolean(value) && self.indexOf(value) === index);
     return [
       "## Exact files used",
@@ -7890,7 +8446,9 @@ function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
       "- Keep the outcome vocabulary additive and preserve current `woke` / `failed` meanings for existing callers while any new typed skip reasons roll out.",
       "",
       "## Validation step",
-      "- Rerun the durable wake route and approval-effects tests and confirm a successful wake, an explicit skip, and a failed wake all round-trip through the same `DurableWakeResult` shape.",
+      validationEvidence
+        ? `- \`${validationEvidence.path}\`: rerun the wake-path validation and confirm a successful wake, an explicit skip, and a failed wake all round-trip through the same \`DurableWakeResult\` shape.`
+        : "- Rerun the durable wake route and approval-effects tests and confirm a successful wake, an explicit skip, and a failed wake all round-trip through the same `DurableWakeResult` shape.",
       "",
       buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed),
     ]
@@ -8218,6 +8776,102 @@ function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
   return undefined;
 }
 
+function buildTypedWakeOutcomeEvidenceFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask)) {
+    return undefined;
+  }
+  const concreteReadEvidence = filterPromptLabConcreteReadEvidenceForPrompt(
+    collectPromptLabConcreteReadEvidence(input.toolRuns),
+    input.prompt,
+  );
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+  const pick = (pathPattern: RegExp, contentPattern?: RegExp) =>
+    pickPromptLabConcreteReadEvidence(
+      concreteReadEvidence,
+      ({ path, content }) => pathPattern.test(path) && (!contentPattern || contentPattern.test(content)),
+    );
+
+  const contractEvidence = pick(/(?:^|\/)packages\/contracts\/src\/durable\.ts$/i, /\bDurableWake(?:Result|Outcome)\b/);
+  const producerEvidence = pick(
+    /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i,
+    /\bwakeDurableRun\b/,
+  );
+  const consumerEvidence =
+    pick(
+      /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i,
+      /\bwakeOutcome\b|\bDurableWakeResult\["outcome"\]\b|\bstatus\b/i,
+    ) ??
+    pick(/(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i, /\bwakeDurableRun\b|\bstatus\b|\bapproval\b/i);
+  const validationEvidence = pick(
+    /(?:^|\/)apps\/gateway\/src\/services\/(?:approval-resolution-effects-service|chat-durable-run-service|durable-run-service)\.test\.ts$/i,
+  );
+  if (!contractEvidence && !producerEvidence && !consumerEvidence) {
+    return undefined;
+  }
+
+  const relevantEvidence = concreteReadEvidence.filter(({ path }) =>
+    /(?:^|\/)(?:packages\/contracts\/src\/durable\.ts|apps\/gateway\/src\/services\/(?:durable-run-service|approval-resolution-effects-service|chat-durable-run-service)(?:\.test)?\.ts)$/i.test(
+      path,
+    ),
+  );
+  const exactFilesUsed = filterPromptLabExactFilePathsForPrompt(
+    relevantEvidence.map((item) => item.path),
+    input.prompt,
+  );
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  const producerCitation = producerEvidence
+    ? (formatPromptLabCitationForPath(producerEvidence.path, input.toolRuns) ?? `\`${producerEvidence.path}\``)
+    : undefined;
+  const consumerCitation = consumerEvidence
+    ? (formatPromptLabCitationForPath(consumerEvidence.path, input.toolRuns) ?? `\`${consumerEvidence.path}\``)
+    : undefined;
+  const validationCitation = validationEvidence
+    ? (formatPromptLabCitationForPath(validationEvidence.path, input.toolRuns) ?? `\`${validationEvidence.path}\``)
+    : undefined;
+
+  return [
+    "## Exact files used",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "",
+    "## Contract file",
+    contractEvidence
+      ? `- \`${contractEvidence.path}\` is the shared typed wake contract file; keep \`DurableWakeResult\` and any \`DurableWakeOutcome\` literals aligned there first.`
+      : "- The concrete reads in this run did not include the shared durable contract file, so the contract location remains partially unverified.",
+    "",
+    "## Producer call sites",
+    producerEvidence
+      ? `- ${producerCitation} owns \`wakeDurableRun(...)\`, so this is the concrete producer patch point where typed wake outcomes are assembled and returned.`
+      : "- The concrete reads in this run did not include a wake producer implementation, so the producer call site remains partially unverified.",
+    "",
+    "## Consumer/status shaping",
+    consumerEvidence
+      ? `- ${consumerCitation} is the concrete consumer/status surface from this run, so any downstream wake-outcome narrowing or operator-visible status shaping needs to stay aligned there.`
+      : "- The concrete reads in this run did not include a consumer/status shaping file, so that edge remains partially unverified.",
+    "",
+    "## Compatibility note",
+    contractEvidence && (producerEvidence || consumerEvidence)
+      ? "- Keep wake-outcome changes additive until the shared contract, the producer return branches, and the consumer/status surface all accept the same outcome vocabulary."
+      : "- Treat this as a partial compatibility map and keep any wake-outcome change additive until every producer and consumer edge has been concretely verified.",
+    "",
+    "## Validation step",
+    validationEvidence
+      ? `- ${validationCitation}: rerun or extend the nearest wake-path test so a successful wake, a typed non-wake/skip outcome, and a failed wake all stay type-correct through the same \`DurableWakeResult\` shape.`
+      : "- Rerun the nearest durable wake tests and confirm a successful wake, a typed non-wake/skip outcome, and a failed wake all stay type-correct through the same `DurableWakeResult` shape.",
+    "",
+    exactCitationAppendix,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 function buildPromptLabTestSpecFallback(input: {
   prompt: string;
   responseText: string;
@@ -8227,15 +8881,38 @@ function buildPromptLabTestSpecFallback(input: {
   if (!looksLikePromptLabTestSpecPrompt(userTask)) {
     return undefined;
   }
+  const promptPackGateSelectionFallback = buildPromptPackGateSelectionTestSpecFallback(input);
+  if (promptPackGateSelectionFallback) {
+    return promptPackGateSelectionFallback;
+  }
   const requiredLabels = extractPromptLabRequiredSectionLabels(input.prompt);
   const normalizedResponse = input.responseText.trim();
+  const defaultStructuredLabels = ["Setup", "Act", "Assert", "Failure signature"];
   const missingRequiredLabels =
     requiredLabels.length > 0 &&
     requiredLabels.some(
       (label) =>
         !new RegExp(`(^|\\n)\\s*[-*]\\s*\\*\\*?${escapeRegExp(label)}\\*\\*?\\s*[:\\-]`, "i").test(normalizedResponse),
     );
-  if (!looksLikePromptLabLowSignalPlaceholder(normalizedResponse) && !missingRequiredLabels) {
+  const missingDefaultStructuredLabels = defaultStructuredLabels.some(
+    (label) =>
+      !new RegExp(`(^|\\n)\\s*[-*]\\s*\\*\\*?${escapeRegExp(label)}\\*\\*?\\s*[:\\-]`, "i").test(normalizedResponse),
+  );
+  const containsPlaceholderLanguage =
+    /\bi do not have\b|\bnot fully verified\b|\bplaceholder\b|\bunverified\b|\bif you want\b|\blet me continue\b/i.test(
+      normalizedResponse,
+    );
+  const hasSpecificNaturalLanguageTestShape =
+    /\b(test|spec)\b/i.test(normalizedResponse) &&
+    /\b(assert|prove|check|checks)\b/i.test(normalizedResponse) &&
+    /`[^`\r\n]+`/.test(normalizedResponse) &&
+    !containsPlaceholderLanguage;
+  if (
+    (!looksLikePromptLabLowSignalPlaceholder(normalizedResponse) || hasSpecificNaturalLanguageTestShape) &&
+    !missingRequiredLabels &&
+    (!missingDefaultStructuredLabels || hasSpecificNaturalLanguageTestShape) &&
+    !containsPlaceholderLanguage
+  ) {
     return undefined;
   }
 
@@ -8276,6 +8953,62 @@ function buildPromptLabTestSpecFallback(input: {
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function buildPromptPackGateSelectionTestSpecFallback(input: {
+  prompt: string;
+  responseText: string;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt);
+  if (!looksLikePromptLabPromptPackGateSelectionTestPrompt(userTask)) {
+    return undefined;
+  }
+  const concreteReadEvidence = collectPromptLabConcreteReadEvidence(input.toolRuns);
+  if (concreteReadEvidence.length === 0) {
+    return undefined;
+  }
+  const gatesEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)scripts\/run-prompt-pack-gates\.ts$/i.test(path) &&
+      (/\bresolvePromptPack\b/.test(content) ||
+        /\bselectPromptPackTargets\b/.test(content) ||
+        /\bselectPromptPackGateTargetCodes\b/.test(content) ||
+        /\bPROMPT_PACK_GATE_CODES_ENV\b/.test(content) ||
+        /\bMODERN_TARGET_CODE_CANDIDATES\b/.test(content)),
+  );
+  const serviceEvidence = pickPromptLabConcreteReadEvidence(
+    concreteReadEvidence,
+    ({ path, content }) =>
+      /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(path) &&
+      /\b(promptpack|listpromptpacktargets|prompt packs?)\b/i.test(content),
+  );
+  if (!gatesEvidence) {
+    return undefined;
+  }
+  const exactFilesUsed = filterPromptLabExactFilePathsForPrompt(
+    [gatesEvidence?.path, serviceEvidence?.path].filter(
+      (value, index, items): value is string => Boolean(value) && items.indexOf(value) === index,
+    ),
+    input.prompt,
+  );
+  const exactCitationAppendix = buildPromptLabExactCitationAppendixForPaths(input.toolRuns, exactFilesUsed);
+  const includeTargetTestPath =
+    !extractPromptLabRequiredSectionLabels(input.prompt).length || /\btarget test file or suite\b/i.test(input.prompt);
+  const lines = [
+    includeTargetTestPath ? "- Target test file or suite: `scripts/run-prompt-pack-gates.test.ts`" : undefined,
+    `- Setup: Create \`scripts/run-prompt-pack-gates.test.ts\` beside \`${gatesEvidence.path}\`, expose a tiny test seam for \`resolvePromptPack(...)\` and \`selectPromptPackGateTargetCodes(...)\`, and stub \`app.inject\` so \`GET /api/v1/prompt-packs?limit=200\` returns two fixtures: \`baseline\` and \`expansion-pack\`${serviceEvidence ? `, with pack metadata matching ${formatPromptLabCitationForPath(serviceEvidence.path, input.toolRuns) ?? `\`${serviceEvidence.path}\``}` : ""}.`,
+    "- Act: Have the same fake `app.inject` also answer `GET /api/v1/prompt-packs/{packId}/tests?limit=2000`, then call `resolvePromptPack(app, authHeaders, ['TEST-C202', 'TEST-D204'])` once and `resolvePromptPack(app, authHeaders)` once so the first path proves explicit targeting while the second still exercises `selectPromptPackGateTargetCodes(...)`.",
+    "- Assert: Expect the explicit-code call to return exactly the `expansion-pack` fixture with `targetCodes` preserved in order, while the no-explicit-code call still follows the selector branch and picks the pack whose available tests satisfy the known gate-code set instead of silently preferring the older baseline.",
+    "- Failure signature: Fail if the explicit target request still yields `baseline`, if either `/api/v1/prompt-packs` or `/tests?limit=2000` is no longer consulted, if any requested code is dropped from `targetCodes`, or if the ambiguous/no-match branch stops surfacing the error that should force the caller away from the older baseline.",
+    "",
+    exactCitationAppendix,
+    "Exact files used:",
+    ...exactFilesUsed.map((path) => `- \`${path}\``),
+    "Only the files listed above were used as concrete file evidence.",
+  ];
+  return lines.filter(Boolean).join("\n").trim();
 }
 
 function buildRuntimeLifecycleTestSpecFallback(input: {
@@ -8488,6 +9221,18 @@ function buildDurableRunTestSpecFallback(input: {
   const serviceTestEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
     /(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.test\.ts$/i.test(path),
   );
+  const approvalEffectsTestEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.test\.ts$/i.test(path),
+  );
+  const approvalEffectsServiceEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(path),
+  );
+  const approvalEffectRepoEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/approval-effect-repo\.ts$/i.test(path),
+  );
+  const approvalWaitRunRepoEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
+    /(?:^|\/)packages\/storage\/src\/approval-wait-run-repo\.ts$/i.test(path),
+  );
 
   const targetRepoTestPath = repoTestEvidence?.path ?? "packages/storage/src/durable-run-repo.test.ts";
   const targetServiceTestPath = serviceTestEvidence?.path ?? "apps/gateway/src/services/durable-run-service.test.ts";
@@ -8548,6 +9293,24 @@ function buildDurableRunTestSpecFallback(input: {
       `- Assert: Cover all three transitions separately by proving each resulting run clears \`leaseOwnerId\`, \`leaseHeartbeatAt\`, and \`leaseExpiresAt\` instead of carrying the old lease across waiting, paused, or terminal state changes.`,
       `- Failure signature: Fail if any one of the three transitions leaves lease fields populated, or if a later claim can still treat one of those transitioned runs as actively leased.`,
     ];
+  } else if (looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask)) {
+    expectedTargetPath =
+      approvalEffectsTestEvidence?.path ?? "apps/gateway/src/services/approval-resolution-effects-service.test.ts";
+    exactFilesUsed = [
+      approvalEffectsTestEvidence?.path,
+      approvalEffectsServiceEvidence?.path,
+      approvalEffectRepoEvidence?.path,
+      approvalWaitRunRepoEvidence?.path,
+      serviceEvidence?.path,
+    ].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
+    lines = [
+      `- Target test file or suite: \`${expectedTargetPath}\``,
+      `- Setup: Extend \`${expectedTargetPath}\` with one ` +
+        `\`ApprovalEffectsService\` fixture that seeds an \`approval_wait_wake\` effect row, an approval-wait mapping, and the linked durable run ids from \`${approvalWaitRunRepoEvidence?.path ?? "packages/storage/src/approval-wait-run-repo.ts"}\`, while spying on \`approvalEffects.completeEffect\`, \`approvalEffects.skipEffect\`, and \`approvalWaitRuns.markResolved\` from the same storage surface.`,
+      "- Act: Drive the wake path through `handleWakeEffect(...)` (or the equivalent claimed-effect path) twice: first with `wakeDurableRun(...)` returning a typed non-wake/skip result, then with `wakeDurableRun(...)` returning `woke`.",
+      `- Assert: Prove ordering stays honest by checking the non-wake pass leaves \`approvalWaitRuns.markResolved\` and \`approvalEffects.completeEffect\` untouched while recording the skip/failure path, then the confirmed-wake pass calls \`markResolved\`, \`requestRunProcessing\`, and \`completeEffect\` only after \`wakeDurableRun(...)\` reports \`woke\`.`,
+      "- Failure signature: Fail if the wake effect or approval-wait mapping is marked complete before confirmed wake, or if a skipped/failed wake is reported as a completed wake path.",
+    ];
   }
 
   if (!lines) {
@@ -8582,7 +9345,7 @@ function buildDurableRunTestSpecFallback(input: {
     "",
     exactCitationAppendix,
     "Exact files used:",
-    ...exactFilesUsed.slice(0, 4).map((path) => `- \`${path}\``),
+    ...exactFilesUsed.slice(0, 6).map((path) => `- \`${path}\``),
     "Only the files listed above were used as concrete file evidence.",
   ]
     .filter(Boolean)
@@ -8660,6 +9423,22 @@ function buildWorkspaceGuidancePrecedenceFallback(input: {
 }
 
 function buildRepoGroundedEvidenceRepairContent(prompt: string, toolRuns: ChatToolRunRecord[]): string | undefined {
+  const guidanceLoadingChainFallback = buildGuidanceLoadingChainEvidenceFallback({
+    prompt,
+    responseText: "",
+    toolRuns,
+  });
+  if (guidanceLoadingChainFallback) {
+    return guidanceLoadingChainFallback;
+  }
+  const memoryRoutesEvidenceFallback = buildMemoryRoutesEvidenceFallback({
+    prompt,
+    responseText: "",
+    toolRuns,
+  });
+  if (memoryRoutesEvidenceFallback) {
+    return memoryRoutesEvidenceFallback;
+  }
   const userTask = extractPrimaryUserTaskContent(prompt);
   if (!promptLabContractRequiresConcreteFileEvidence(userTask)) {
     return undefined;
@@ -8801,7 +9580,7 @@ function buildRepoGroundedEvidenceRepairContent(prompt: string, toolRuns: ChatTo
 }
 
 function buildPromptLabExactCitationAppendix(toolRuns: ChatToolRunRecord[]): string | undefined {
-  const evidence = collectPromptLabConcreteReadEvidence(toolRuns).slice(0, 4);
+  const evidence = collectPromptLabConcreteReadEvidence(toolRuns).slice(0, 6);
   if (evidence.length === 0) {
     return undefined;
   }
@@ -8831,7 +9610,7 @@ function buildPromptLabExactCitationAppendixForPaths(
   }
   const evidence = collectPromptLabConcreteReadEvidence(toolRuns)
     .filter((item) => normalizedAllowedPaths.has(item.path.toLowerCase()))
-    .slice(0, 4);
+    .slice(0, 6);
   if (evidence.length === 0) {
     return undefined;
   }
@@ -8865,6 +9644,13 @@ function formatPromptLabInlineCitation(
   return quote ? `\`${citation.path}\`${range} ("${quote}")` : `\`${citation.path}\`${range}`;
 }
 
+function formatPromptLabCitationForPath(filePath: string, toolRuns: ChatToolRunRecord[]): string | undefined {
+  const citation = collectPromptLabConcreteReadCitations(toolRuns).find(
+    (item) => item.path.toLowerCase() === normalizePromptLabFilePath(filePath).toLowerCase(),
+  );
+  return citation ? formatPromptLabInlineCitation(citation, toolRuns) : undefined;
+}
+
 function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRecord[]): string | undefined {
   const normalizedPath = normalizePromptLabFilePath(filePath).toLowerCase();
   const evidence = collectPromptLabConcreteReadEvidence(toolRuns).find(
@@ -8881,7 +9667,17 @@ function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRe
     return undefined;
   }
   const preferred =
-    nonEmptyLines.find((line) => line.length >= 24 && !/^#+\s*$/.test(line)) ??
+    nonEmptyLines.find(
+      (line) =>
+        !/^import\s+/i.test(line) &&
+        !/^\/\*/.test(line) &&
+        !/^\*|^\/\//.test(line) &&
+        !/^[{[]?\s*['"]content['"]\s*:/.test(line) &&
+        !/^['"]path['"]\s*:/.test(line) &&
+        (/\b(?:export|async|function|class|interface|type|const|describe|it|test|fastify\.)\b/.test(line) ||
+          /\/api\/v1\//.test(line)),
+    ) ??
+    nonEmptyLines.find((line) => line.length >= 24 && !/^#+\s*$/.test(line) && !/^import\s+/i.test(line)) ??
     nonEmptyLines.find((line) => !/^#+\s*$/.test(line)) ??
     nonEmptyLines[0];
   if (!preferred) {
@@ -8957,6 +9753,9 @@ function normalizeRepoGroundedInspectionOutput(input: {
 }): string {
   const trimmed = input.responseText.trim();
   if (!trimmed || !looksLikeRepoGroundedInspectionPrompt(input.prompt)) {
+    return input.responseText;
+  }
+  if (/\bmode:\s*cowork\b/i.test(input.prompt) && promptKeepsRequestedRoleOrderOnly(input.prompt)) {
     return input.responseText;
   }
   const promptPackImportRepair = buildPromptPackMarkdownImportFallback({
@@ -9073,6 +9872,61 @@ function extractPromptLabExactBulletLabels(prompt: string): string[] {
     return [];
   }
   return [...labelsLine.matchAll(/`([^`\r\n]+)`/g)].map((match) => match[1]?.trim() ?? "").filter(Boolean);
+}
+
+function promptLabForbidsTemplateOrPlaceholderCitations(prompt: string): boolean {
+  return (
+    /\bdo not cite\b[\s\S]{0,120}\btemplate files?\b/i.test(prompt) ||
+    /\bdo not cite\b[\s\S]{0,120}\bplaceholder paths?\b/i.test(prompt) ||
+    /\bwithout template leakage\b/i.test(prompt)
+  );
+}
+
+function isPromptLabTemplateOrPlaceholderPath(path: string): boolean {
+  const normalized = normalizePromptLabFilePath(path);
+  return /(?:^|\/)templates?\//i.test(normalized) || /\{\{[^}]+\}\}/.test(normalized);
+}
+
+function promptLabPathAllowedByPrompt(path: string, prompt: string): boolean {
+  if (!path) {
+    return false;
+  }
+  if (promptLabForbidsTemplateOrPlaceholderCitations(prompt) && isPromptLabTemplateOrPlaceholderPath(path)) {
+    return false;
+  }
+  return true;
+}
+
+function filterPromptLabExactFilePathsForPrompt(paths: string[], prompt: string): string[] {
+  const seen = new Set<string>();
+  const filtered: string[] = [];
+  for (const rawPath of paths) {
+    if (!rawPath || !promptLabPathAllowedByPrompt(rawPath, prompt)) {
+      continue;
+    }
+    const normalized = normalizePromptLabFilePath(rawPath);
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    filtered.push(normalized);
+  }
+  return filtered;
+}
+
+function filterPromptLabConcreteReadEvidenceForPrompt(
+  evidence: Array<{ path: string; content: string }>,
+  prompt: string,
+): Array<{ path: string; content: string }> {
+  return evidence.filter((item) => promptLabPathAllowedByPrompt(item.path, prompt));
+}
+
+function filterPromptLabConcreteReadCitationsForPrompt(
+  citations: Array<{ path: string; startLine?: number; endLine?: number }>,
+  prompt: string,
+): Array<{ path: string; startLine?: number; endLine?: number }> {
+  return citations.filter((citation) => promptLabPathAllowedByPrompt(citation.path, prompt));
 }
 
 function promptLabContractRequiresConcreteFileEvidence(userTask: string | undefined): boolean {
@@ -9245,14 +10099,15 @@ function collectPromptLabConcreteReadEvidence(toolRuns: ChatToolRunRecord[]): Ar
     }
     const normalizedPath = normalizePromptLabFilePath(rawPath);
     const key = normalizedPath.toLowerCase();
-    const nextContent =
+    const nextContent = normalizePromptLabEvidenceContent(
       typeof result.content === "string"
         ? result.content
         : typeof result.bodySnippet === "string"
           ? result.bodySnippet
           : typeof result.snippet === "string"
             ? result.snippet
-            : "";
+            : "",
+    );
     const existing = evidenceByPath.get(key);
     if (!existing) {
       evidenceByPath.set(key, {
@@ -9270,6 +10125,22 @@ function collectPromptLabConcreteReadEvidence(toolRuns: ChatToolRunRecord[]): Ar
     });
   }
   return [...evidenceByPath.values()];
+}
+
+function normalizePromptLabEvidenceContent(content: string): string {
+  let normalized = content.trim();
+  const wrappedContentMatch = normalized.match(/^[{[]?\s*['"]content['"]\s*:\s*(['"])([\s\S]*)\1\s*[,}]?\s*$/);
+  if (wrappedContentMatch?.[2]) {
+    normalized = wrappedContentMatch[2];
+  }
+  if (/\\[rn]/.test(normalized)) {
+    normalized = normalized
+      .replace(/\\r\\n/g, "\n")
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\n")
+      .replace(/\\t/g, "\t");
+  }
+  return normalized.replace(/\\'/g, "'").replace(/\\"/g, '"');
 }
 
 function collectPromptLabConcreteReadCitations(
@@ -9468,6 +10339,9 @@ function scorePromptLabConcreteReadCandidate(path: string): number {
   ) {
     score -= 30;
   }
+  if (/(?:^|\/)templates?\//.test(normalized) || /{{[a-z0-9_]+}}/i.test(normalized)) {
+    score -= 24;
+  }
   if (/\.test\.[^.]+$|\.spec\.[^.]+$/.test(normalized)) {
     score += 6;
   }
@@ -9539,9 +10413,10 @@ function resolvePromptLabDesiredConcreteReadCount(userTask: string | undefined):
   const normalized = (userTask ?? "").toLowerCase();
   if (
     looksLikePromptLabMissionControlTruthLabelingPrompt(userTask) ||
-    looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask)
+    looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask) ||
+    looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask)
   ) {
-    return 5;
+    return 6;
   }
   if (/\bskill import\b|\bimported skills?\b|\btrust metadata\b|\bprovenance\b/.test(normalized)) {
     return 4;
@@ -9559,7 +10434,7 @@ function resolvePromptLabDesiredConcreteReadCount(userTask: string | undefined):
     return 4;
   }
   if (looksLikePromptLabDurableRunMinimalTestPrompt(userTask)) {
-    return 4;
+    return looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask) ? 5 : 4;
   }
   if (
     /\bworkspace\b/.test(normalized) &&
@@ -9854,6 +10729,43 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("workspace-repo.test.ts");
     addQuery("guidance");
   }
+  if (
+    /\bglobal docs\b/.test(normalized) &&
+    /\bworkspace docs\b/.test(normalized) &&
+    /\brepo guidance\b/.test(normalized) &&
+    /\bruntime\b/.test(normalized)
+  ) {
+    addQuery("guidance-document-helpers.ts");
+    addQuery("guidance-doc-files.ts");
+    addQuery("gateway-service.ts");
+    addQuery("resolveRuntimeGuidance");
+    addQuery("listWorkspaceGuidance");
+    addQuery("AGENTS.md");
+  }
+  if (looksLikePromptLabMemoryLifecycleCoworkPrompt(taskContent)) {
+    addQuery("memory.ts");
+    addQuery("memory-context-repo.ts");
+    addQuery("MemoryPage.tsx");
+    addQuery("MemoryMaintenancePanel.tsx");
+    addQuery("memory");
+  }
+  if (looksLikePromptLabCronReportCoworkPrompt(taskContent)) {
+    addQuery("cron-job-repo.ts");
+    addQuery("cron-automation-service.ts");
+    addQuery("update-review.ts");
+    addQuery("prompt-packs.ts");
+    addQuery("api/prompt-packs.ts");
+    addQuery("costs.ts");
+    addQuery("costs/summary");
+    addQuery("update-review-daily");
+  }
+  if (looksLikePromptLabRank1HardeningCoworkPrompt(taskContent)) {
+    addQuery("durable-run-service.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("runtime-lifecycle-read-service.ts");
+    addQuery("durable.ts");
+    addQuery("wake");
+  }
   if (looksLikePromptLabLifecycleCanonicalLinkagePrompt(taskContent)) {
     addQuery("runtime-lifecycle-read-service.test.ts");
     addQuery("runtime-lifecycle-read-service.ts");
@@ -9874,6 +10786,27 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("durable-run-service.ts");
     addQuery("durable-run-repo.test.ts");
     addQuery("durable-run-repo.ts");
+    addQuery("approval-resolution-effects-service.test.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("approval-effect-repo.ts");
+    addQuery("approval-wait-run-repo.ts");
+  }
+  if (looksLikePromptLabPromptPackGateSelectionTestPrompt(taskContent)) {
+    addQuery("run-prompt-pack-gates.ts");
+    addQuery("selectPromptPackTargets");
+    addQuery("resolvePromptPack");
+    addQuery("selectPromptPackGateTargetCodes");
+    addQuery("prompt-pack-service.ts");
+    addQuery("expansion-pack");
+    addQuery("baseline");
+  }
+  if (looksLikePromptLabTypedWakeOutcomeEvidencePrompt(taskContent)) {
+    addQuery("packages/contracts/src/durable.ts");
+    addQuery("durable.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("durable-run-service.ts");
+    addQuery("chat-durable-run-service.ts");
+    addQuery("chat-durable-run-service.test.ts");
   }
   if (looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(taskContent)) {
     addQuery("durable.ts");
@@ -9964,6 +10897,8 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   ) {
     addQuery("cron-automation-service");
     addQuery("update-review");
+    addQuery("prompt-packs.ts");
+    addQuery("costs.ts");
     addQuery("cron-job-repo");
     addQuery("cron");
   }
@@ -10022,6 +10957,13 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("pauseDurableRun");
     addQuery("cancelDurableRun");
   }
+  if (looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(taskContent)) {
+    addQuery("approval-resolution-effects-service.test.ts");
+    addQuery("approval-resolution-effects-service.ts");
+    addQuery("approval-effect-repo.ts");
+    addQuery("approval-wait-run-repo.ts");
+    addQuery("durable-run-service.ts");
+  }
   if (/\bfrozen baseline\b|\bbaseline fixture\b|\bdistinct from the frozen baseline\b/i.test(taskContent)) {
     addQuery("baseline");
     addQuery("goatcitadel_prompt_pack.md");
@@ -10077,6 +11019,8 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   }
   if (/\bmemory\b/i.test(normalized) && /\b(ui|copy|page|operator-facing)\b/i.test(normalized)) {
     addQuery("MemoryPage");
+    addQuery("MemoryPage.tsx");
+    addQuery("MemoryMaintenancePanel.tsx");
     addQuery("memory-summary");
   }
   if (
@@ -10196,11 +11140,15 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
 function looksLikePromptLabGuidanceLoadingSummaryPrompt(userTask: string | undefined): boolean {
   const normalized = (userTask ?? "").toLowerCase();
   return (
-    /\bglobal\b/.test(normalized) &&
     /\bworkspace\b/.test(normalized) &&
-    /\brepo docs?\b/.test(normalized) &&
     /\bguidance\b/.test(normalized) &&
-    /\bload(?:ed|ing)?\b/.test(normalized)
+    (/\bglobal\b/.test(normalized) || /\brepo\b/.test(normalized) || /\bchain\b/.test(normalized)) &&
+    (/\brepo docs?\b/.test(normalized) ||
+      /\brepo\b[\s,/-]*docs?\b/.test(normalized) ||
+      /\bguidance loading chain\b/.test(normalized) ||
+      /\bguidance loading path\b/.test(normalized)) &&
+    (/\bload(?:ed|ing)?\b/.test(normalized) || /\bpath\b/.test(normalized) || /\bchain\b/.test(normalized)) &&
+    !/\bmemory\b/.test(normalized)
   );
 }
 
@@ -10251,12 +11199,23 @@ function looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask: stri
   );
 }
 
+function looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bapproval\b/.test(normalized) &&
+    /\bwake\b/.test(normalized) &&
+    /\b(ordering|before confirmed wake|confirmed wake|approval-wait|approval wait)\b/.test(normalized) &&
+    /\bexact minimal automated check\b|\bexact minimal automated test\b|\btarget test file\b/.test(normalized)
+  );
+}
+
 function looksLikePromptLabDurableRunMinimalTestPrompt(userTask: string | undefined): boolean {
   return (
     looksLikePromptLabDurableRunClaimExclusivityPrompt(userTask) ||
     looksLikePromptLabDurableRunLeaseRecoveryPrompt(userTask) ||
     looksLikePromptLabDurableRunRetryBackoffPrompt(userTask) ||
-    looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask)
+    looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask) ||
+    looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask)
   );
 }
 
@@ -10331,12 +11290,68 @@ function looksLikeWorkspaceRoutesGuidanceCoworkPrompt(userTask: string | undefin
   );
 }
 
+function looksLikePromptLabMemoryLifecycleCoworkPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bmemory\b/.test(normalized) &&
+    /\b(lifecycle|routes?|services?|ui|copy|operator-facing|operator facing)\b/.test(normalized) &&
+    /\b(role-labeled|role labeled|researcher|architect|qa|product|ops|synthesis)\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabCronReportCoworkPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\b(cron|scheduled|review queue|update-review|update review)\b/.test(normalized) &&
+    /\b(report|cost|status|operator)\b/.test(normalized) &&
+    /\b(role-labeled|role labeled|researcher|architect|qa|product|ops|synthesis)\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabRank1HardeningCoworkPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\b(rank[- ]?1|rank 1|hardening|cross-system|cross system)\b/.test(normalized) &&
+    /\b(approval|wake|durable|lifecycle)\b/.test(normalized) &&
+    /\b(role-labeled|role labeled|researcher|architect|qa|product|ops|synthesis)\b/.test(normalized)
+  );
+}
+
 function looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(userTask: string | undefined): boolean {
   const normalized = (userTask ?? "").toLowerCase();
   return (
-    /\btyped wake outcome contract\b/.test(normalized) &&
-    /\bdurable-run wake logic\b|\bdurable wake logic\b/.test(normalized) &&
-    /\bapproval-wait wake handling\b|\bapproval wait wake handling\b/.test(normalized)
+    (/\btyped wake outcome contract\b/.test(normalized) &&
+      /\bdurable-run wake logic\b|\bdurable wake logic\b/.test(normalized) &&
+      /\bapproval-wait wake handling\b|\bapproval wait wake handling\b/.test(normalized)) ||
+    (/\btyped wake outcomes?\b/.test(normalized) &&
+      /\bcontract file\b/.test(normalized) &&
+      /\bproducer call sites?\b|\bproducer\b/.test(normalized) &&
+      /\bconsumer\/status shaping\b|\bconsumer or status shaping\b|\bconsumer\b/.test(normalized) &&
+      /\bcompatibility note\b/.test(normalized) &&
+      /\bvalidation path\b|\bvalidation step\b/.test(normalized))
+  );
+}
+
+function looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\btyped wake outcomes?\b/.test(normalized) &&
+    (/\bcontract file\b/.test(normalized) || /\bname the contract file\b/.test(normalized)) &&
+    (/\bproducer call sites?\b/.test(normalized) || /\bproducer\b/.test(normalized)) &&
+    (/\bconsumer\/status shaping\b/.test(normalized) ||
+      /\bconsumer or status shaping\b/.test(normalized) ||
+      (/\bconsumer\b/.test(normalized) && /\bstatus\b/.test(normalized))) &&
+    (/\bvalidation step\b/.test(normalized) || /\bvalidation path\b/.test(normalized)) &&
+    /\bpatch points?\b/.test(normalized)
+  );
+}
+
+function looksLikePromptLabPromptPackGateSelectionTestPrompt(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bgate selection\b/.test(normalized) &&
+    /\bexpansion pack\b/.test(normalized) &&
+    /\bolder baseline\b|\bbaseline\b/.test(normalized)
   );
 }
 

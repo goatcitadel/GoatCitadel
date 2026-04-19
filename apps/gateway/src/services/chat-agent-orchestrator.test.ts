@@ -9932,6 +9932,127 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("approval-resolution-effects-service.test.ts");
   });
 
+  it("repairs approval wake-ordering minimal test prompts toward the approval effects harness", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect the approval wake ordering path and name the exact minimal automated test needed. Include: Target test file or suite, Setup, Act, Assert, Failure signature.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "I would add a small durable-run test around wake handling, but I need to keep investigating before I can verify the target.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d139-search-1",
+        result: {
+          matches: [
+            {
+              path: "apps/gateway/src/services/approval-resolution-effects-service.test.ts",
+              name: "approval-resolution-effects-service.test.ts",
+              type: "file",
+            },
+            {
+              path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+              name: "approval-resolution-effects-service.ts",
+              type: "file",
+            },
+            { path: "packages/storage/src/approval-effect-repo.ts", name: "approval-effect-repo.ts", type: "file" },
+            {
+              path: "packages/storage/src/approval-wait-run-repo.ts",
+              name: "approval-wait-run-repo.ts",
+              type: "file",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d139-read-1",
+        result: {
+          path: "apps/gateway/src/services/approval-resolution-effects-service.test.ts",
+          content:
+            "describe('approval wake ordering', () => { it('does not complete before wake', async () => {}); });",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d139-read-2",
+        result: {
+          path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+          content: "async function handleWakeEffect() { await wakeDurableRun(); }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d139-read-3",
+        result: {
+          path: "packages/storage/src/approval-effect-repo.ts",
+          content: "export class ApprovalEffectRepository {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d139-read-4",
+        result: {
+          path: "packages/storage/src/approval-wait-run-repo.ts",
+          content: "export class ApprovalWaitRunRepository {}",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-d139-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-d139-repair-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("approval-resolution-effects-service.test.ts");
+    expect(result.assistantContent).toContain("approvalWaitRuns.markResolved");
+    expect(result.assistantContent).toContain("approvalEffects.completeEffect");
+    expect(result.assistantContent).toContain("wakeDurableRun");
+    expect(result.assistantContent).toContain("Setup:");
+    expect(result.assistantContent).toContain("Act:");
+    expect(result.assistantContent).toContain("Assert:");
+    expect(result.assistantContent).toContain("Failure signature:");
+    expect(result.assistantContent).not.toContain("need to keep investigating");
+  });
+
   it("repairs cowork workspace-route regression prompts into grounded route and repo checks", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -10065,6 +10186,208 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("archive-view filtering");
     expect(result.assistantContent).toContain("guidance doc-type divergence");
     expect(result.assistantContent).not.toContain('Say "keep going"');
+  });
+
+  it("does not let repo-grounded repair overwrite strict cowork memory role sections", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect memory routes, memory context services, and any related Memory UI surfaces. Create role-labeled sections for the first fresh regression checks to add.",
+      "",
+      "Answer contract:",
+      "- Keep exactly these sections in order: `Researcher`, `QA`.",
+      "- Do not add any intro, recap, synthesis, evidence appendix, or citation appendix.",
+      "- Each section must contain exactly two bullets.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Observed memory lifecycle surfaces:\n- route layer exists.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-memory-search-1",
+        result: {
+          matches: [
+            { path: "apps/gateway/src/routes/memory.ts", name: "memory.ts", type: "file" },
+            { path: "packages/storage/src/memory-context-repo.ts", name: "memory-context-repo.ts", type: "file" },
+            { path: "apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx", type: "file" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-memory-read-1",
+        result: {
+          path: "apps/gateway/src/routes/memory.ts",
+          content: "export async function registerMemoryRoutes() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-memory-read-2",
+        result: {
+          path: "packages/storage/src/memory-context-repo.ts",
+          content: "export class MemoryContextRepository {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-memory-read-3",
+        result: {
+          path: "apps/mission-control/src/pages/MemoryPage.tsx",
+          content: "export function MemoryPage() { return null; }",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-memory-role-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-memory-role-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Researcher");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).not.toContain("Observed memory lifecycle surfaces");
+    expect(result.assistantContent).not.toContain("## Exact files used");
+  });
+
+  it("forces the cron cowork repair onto wiring, scheduled review execution, and operator report surfaces", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect built-in cron wiring, scheduled review execution, and the operator-visible report or cost surface. Create role-labeled sections for the first fresh trust-preserving regression checks to add.",
+      "",
+      "Answer contract:",
+      "- Keep exactly these sections in order: `Researcher`, `Ops`, `QA`.",
+      "- Do not add any extra headings.",
+      "- Keep each section compact and decision-oriented.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Researcher\n- I only verified cron storage.\n\nOps\n- Add a cron test.\n\nQA\n- Add a report test.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-cron-search-1",
+        result: {
+          matches: [
+            {
+              path: "apps/gateway/src/services/gateway/cron-automation-service.ts",
+              name: "cron-automation-service.ts",
+            },
+            { path: "apps/gateway/src/services/gateway/update-review.ts", name: "update-review.ts" },
+            { path: "apps/gateway/src/routes/prompt-packs.ts", name: "prompt-packs.ts" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-cron-read-1",
+        result: {
+          path: "apps/gateway/src/services/gateway/cron-automation-service.ts",
+          content:
+            "export const UPDATE_REVIEW_DAILY_JOB_ID = 'update-review-daily';\nexport class CronAutomationService {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-cron-read-2",
+        result: {
+          path: "apps/gateway/src/services/gateway/update-review.ts",
+          content: "export interface UpdateReviewReport {}\nexport async function collectWorkspaceDependencyDrift() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-cowork-cron-read-3",
+        result: {
+          path: "apps/gateway/src/routes/prompt-packs.ts",
+          content: 'fastify.get("/api/v1/prompt-packs/:packId/report", async (request, reply) => {});',
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-cron-role-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-cron-role-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Researcher");
+    expect(result.assistantContent).toContain("Ops");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).toContain("cron-automation-service.ts");
+    expect(result.assistantContent).toContain("update-review.ts");
+    expect(result.assistantContent).toContain("prompt-packs.ts");
+    expect(result.assistantContent).not.toContain("## Evidence Used");
   });
 
   it("exposes repo inspection file tools for prompt-lab chat runs even without explicit file paths", async () => {
@@ -10745,6 +11068,416 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("Let me continue investigating");
   });
 
+  it("repairs guidance loading summaries with exact helper, service, and AGENTS evidence", async () => {
+    const prompt =
+      "Use file or code tools to inspect the global, workspace, and repo docs guidance loading chain. Explain the current guidance loading path with exact citations from the files you used.";
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "I found some hints about guidance files, but I need to continue gathering exact file evidence.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-chain-search-1",
+        result: {
+          matches: [
+            {
+              path: "F:/code/personal-ai/apps/gateway/src/services/guidance-document-helpers.ts",
+              name: "guidance-document-helpers.ts",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-chain-read-1",
+        result: {
+          path: "F:/code/personal-ai/apps/gateway/src/services/guidance-document-helpers.ts",
+          content: "export async function readGuidanceDocument() {}\nexport function resolveGuidancePath() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-chain-search-2",
+        result: {
+          matches: [
+            { path: "F:/code/personal-ai/apps/gateway/src/services/gateway-service.ts", name: "gateway-service.ts" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-chain-read-2",
+        result: {
+          path: "F:/code/personal-ai/apps/gateway/src/services/gateway-service.ts",
+          content: "async function listWorkspaceGuidance() {}\nasync function resolveRuntimeGuidance() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-chain-search-3",
+        result: {
+          matches: [{ path: "F:/code/personal-ai/AGENTS.md", name: "AGENTS.md" }],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-chain-read-3",
+        result: {
+          path: "F:/code/personal-ai/AGENTS.md",
+          content:
+            "Applies to all runtime agents unless a workspace override exists in `workspaces/<workspaceId>/AGENTS.md`.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-guidance-chain-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-guidance-chain-repair-1",
+      content: prompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.assistantContent).toContain("Observed guidance loading chain");
+    expect(result.assistantContent).toContain("guidance-document-helpers.ts");
+    expect(result.assistantContent).toContain("gateway-service.ts");
+    expect(result.assistantContent).toContain("Exact citations used:");
+    expect(result.assistantContent).not.toContain("continue gathering exact file evidence");
+  });
+
+  it("filters template and placeholder paths out of exact-bullet guidance answers when the prompt forbids them", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect these files:",
+      "- `apps/gateway/src/services/guidance-document-helpers.ts`",
+      "- `apps/gateway/src/services/gateway-service.ts`",
+      "- `AGENTS.md`",
+      "- `templates/obsidian/ai-info-template/System/Agents/{{SYSTEM_NAME}} Agents.md`",
+      "",
+      "Answer contract:",
+      "- Cite the exact files used.",
+      "- Use exactly three bullets labeled `Observed precedence`, `Operator-visible trace`, and `Still unverified`.",
+      "- Do not cite template files or placeholder paths.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "- **Observed precedence** — The workspace override wins.",
+              "",
+              "- **Operator-visible trace** — The loader and runtime service both participate.",
+              "",
+              "- **Still unverified** — The template path hints at intended behavior.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-template-read-1",
+        result: {
+          path: "F:/code/personal-ai/apps/gateway/src/services/guidance-document-helpers.ts",
+          content: "export function resolveGuidancePath() {}\nexport async function readGuidanceDocument() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-template-read-2",
+        result: {
+          path: "F:/code/personal-ai/apps/gateway/src/services/gateway-service.ts",
+          content: "async function listWorkspaceGuidance() {}\nasync function resolveRuntimeGuidance() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-template-read-3",
+        result: {
+          path: "F:/code/personal-ai/AGENTS.md",
+          content:
+            "Applies to all runtime agents unless a workspace override exists in `workspaces/<workspaceId>/AGENTS.md`.",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-guidance-template-read-4",
+        result: {
+          path: "F:/code/personal-ai/templates/obsidian/ai-info-template/System/Agents/{{SYSTEM_NAME}} Agents.md",
+          content: "Workspace overrides go here.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-guidance-template-filter-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-guidance-template-filter-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("- Observed precedence:");
+    expect(result.assistantContent).toContain("- Operator-visible trace:");
+    expect(result.assistantContent).toContain("- Still unverified:");
+    expect(result.assistantContent).not.toContain("templates/obsidian");
+    expect(result.assistantContent).not.toContain("{{SYSTEM_NAME}}");
+    expect(result.assistantContent).toContain("guidance-document-helpers.ts");
+    expect(result.assistantContent).toContain("gateway-service.ts");
+    expect(result.assistantContent).toContain("workspaceFilesUsed");
+    expect(result.assistantContent).toContain("globalFilesUsed");
+    expect(result.assistantContent).not.toContain("Exact citations used:");
+    expect(result.assistantContent).not.toContain("## Exact files used");
+  });
+
+  it("formats memory lifecycle exact-evidence prompts with the requested three bullet labels", async () => {
+    const prompt = [
+      "Use file or code tools to inspect memory routes, memory-context storage, and the operator-facing Memory UI. Explain the current operator-facing lifecycle with exact citations from the files you used.",
+      "",
+      "Answer contract:",
+      "- Cite the exact files used.",
+      "- Use exactly three bullets labeled `Route surface`, `Stored state`, and `Operator-facing surface`.",
+      "- Do not guess unseen maintenance behavior.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "I have partial evidence from route and storage files, but I need more UI inspection before I can fully answer.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-shape-search-1",
+        result: { matches: [{ path: "F:/code/personal-ai/apps/gateway/src/routes/memory.ts", name: "memory.ts" }] },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-shape-read-1",
+        result: {
+          path: "F:/code/personal-ai/apps/gateway/src/routes/memory.ts",
+          content: "export async function registerMemoryRoutes() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-shape-search-2",
+        result: {
+          matches: [
+            { path: "F:/code/personal-ai/packages/storage/src/memory-context-repo.ts", name: "memory-context-repo.ts" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-shape-read-2",
+        result: {
+          path: "F:/code/personal-ai/packages/storage/src/memory-context-repo.ts",
+          content: "export class MemoryContextRepository {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-shape-search-3",
+        result: {
+          matches: [
+            { path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-shape-read-3",
+        result: {
+          path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx",
+          content: "export function MemoryPage() { return null; }",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-memory-shape-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-memory-shape-repair-1",
+      content: prompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.assistantContent).toContain("- Route surface:");
+    expect(result.assistantContent).toContain("- Stored state:");
+    expect(result.assistantContent).toContain("- Operator-facing surface:");
+    expect(result.assistantContent).not.toContain("Observed memory lifecycle surfaces:");
+    expect(result.assistantContent).toContain("registerMemoryRoutes");
+    expect(result.assistantContent).toContain("MemoryContextRepository");
+    expect(result.assistantContent).not.toContain("'content': 'import");
+    expect(result.assistantContent).not.toContain("Exact citations used:");
+    expect(result.assistantContent).not.toContain("## Exact files used");
+    expect(result.assistantContent.match(/^- (Route surface|Stored state|Operator-facing surface):/gm)).toHaveLength(3);
+  });
+
+  it("treats MemoryMaintenancePanel as concrete operator-facing UI evidence for exact three-bullet prompts", async () => {
+    const prompt = [
+      "Use file or code tools to inspect these files:",
+      "- `apps/gateway/src/routes/memory.ts`",
+      "- `packages/storage/src/memory-context-repo.ts`",
+      "- `apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx`",
+      "",
+      "Answer contract:",
+      "- Cite the exact files used.",
+      "- Use exactly three bullets labeled `Route surface`, `Stored state`, and `Operator-facing surface`.",
+      "- Do not guess unseen maintenance behavior.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "I still need the main Memory page before I can answer the operator-facing surface.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-maintenance-read-1",
+        result: {
+          path: "F:/code/personal-ai/apps/gateway/src/routes/memory.ts",
+          content: "export async function registerMemoryRoutes() {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-maintenance-read-2",
+        result: {
+          path: "F:/code/personal-ai/packages/storage/src/memory-context-repo.ts",
+          content: "export class MemoryContextRepository {}",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-memory-maintenance-read-3",
+        result: {
+          path: "F:/code/personal-ai/apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx",
+          content: "export function MemoryMaintenancePanel() { return null; }",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-memory-maintenance-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-memory-maintenance-repair-1",
+      content: prompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.assistantContent).toContain("MemoryMaintenancePanel.tsx");
+    expect(result.assistantContent).not.toContain("No operator-facing Memory UI file was concretely read");
+    expect(result.assistantContent).toContain("MemoryMaintenancePanel");
+    expect(result.assistantContent).not.toContain("Exact citations used:");
+    expect(result.assistantContent).not.toContain("## Exact files used");
+    expect(result.assistantContent.match(/^- (Route surface|Stored state|Operator-facing surface):/gm)).toHaveLength(3);
+  });
+
   it("replaces prompt-lab meta continuation replies with deterministic exact-evidence fallback sections", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -10800,8 +11533,8 @@ describe("ChatAgentOrchestrator", () => {
         policyReason: "allowed",
         auditEventId: "audit-prompt-lab-meta-fallback-read-2",
         result: {
-          path: "apps/gateway/src/services/gateway-service.ts",
-          content: "export function shapeOperatorStatus() { return 'approval-wait'; }",
+          path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+          content: "export interface ApprovalChatTurnResumeResult { wakeOutcome?: DurableWakeResult['outcome']; }",
         },
       })
       .mockResolvedValueOnce({
@@ -10811,6 +11544,25 @@ describe("ChatAgentOrchestrator", () => {
         result: {
           path: "packages/contracts/src/durable.ts",
           content: "export interface DurableWakeResult { outcome: 'woke' | 'waiting'; }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prompt-lab-meta-fallback-read-4",
+        result: {
+          path: "apps/gateway/src/services/chat-durable-run-service.test.ts",
+          content:
+            "import { DurableRunRecord } from '@goatcitadel/contracts';\ndescribe('chat durable run', () => {});",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prompt-lab-meta-fallback-read-5",
+        result: {
+          path: ".github/workflows/publish-contracts.yml",
+          content: "name: Publish @goatcitadel/contracts",
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -10839,8 +11591,127 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("## Exact files used");
     expect(result.assistantContent).toContain("## Contract file");
     expect(result.assistantContent).toContain("packages/contracts/src/durable.ts");
+    expect(result.assistantContent).toContain("approval-resolution-effects-service.ts");
     expect(result.assistantContent).toContain("## Compatibility note");
     expect(result.assistantContent).toContain("## Validation step");
+  });
+
+  it("keeps every exact file in the typed wake evidence list when more than four concrete reads were used", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect these files for typed wake outcomes:",
+      "- `packages/contracts/src/durable.ts`",
+      "- `apps/gateway/src/services/durable-run-service.ts`",
+      "- `apps/gateway/src/services/approval-resolution-effects-service.ts`",
+      "- `apps/gateway/src/services/chat-durable-run-service.test.ts`",
+      "- `.github/workflows/publish-contracts.yml`",
+      "- `apps/gateway/src/services/gateway-service.ts`",
+      "",
+      "Answer contract:",
+      "- Cite the exact files used.",
+      "- Name the contract file, producer call sites, consumer/status shaping, compatibility note, and validation step.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "I can answer this from the file/code evidence already gathered, but I need to organize the wake contract notes.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-typed-wake-exact-1",
+        result: {
+          path: "packages/contracts/src/durable.ts",
+          content: "export interface DurableWakeResult { outcome: 'woke' | 'waiting'; }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-typed-wake-exact-2",
+        result: {
+          path: "apps/gateway/src/services/durable-run-service.ts",
+          content: "export function wakeDurableRun() { return { outcome: 'woke' }; }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-typed-wake-exact-3",
+        result: {
+          path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+          content: "export interface ApprovalChatTurnResumeResult { wakeOutcome?: DurableWakeResult['outcome']; }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-typed-wake-exact-4",
+        result: {
+          path: "apps/gateway/src/services/chat-durable-run-service.test.ts",
+          content: "describe('chat durable run', () => {});",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-typed-wake-exact-5",
+        result: {
+          path: ".github/workflows/publish-contracts.yml",
+          content: "name: Publish @goatcitadel/contracts",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-typed-wake-exact-6",
+        result: {
+          path: "apps/gateway/src/services/gateway-service.ts",
+          content: "export function shapeOperatorStatus() { return 'approval-wait'; }",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-typed-wake-exact-files-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-typed-wake-exact-files-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("chat-durable-run-service.test.ts");
+    expect(result.assistantContent).toContain(".github/workflows/publish-contracts.yml");
+    expect(result.assistantContent).toContain("gateway-service.ts");
+    expect(result.assistantContent).toContain("Exact files used:");
+    expect(result.assistantContent).toContain("Only the files listed above");
   });
 
   it("does not misread prose like trend/report wiring as a local search path", async () => {
@@ -11452,8 +12323,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(result.assistantContent).toContain("## Product");
-    expect(result.assistantContent).toContain("## QA");
+    expect(result.assistantContent).toContain("Product");
+    expect(result.assistantContent).toContain("QA");
     expect(result.assistantContent).not.toContain("## Synthesis");
   });
 
@@ -11516,8 +12387,8 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(result.assistantContent).toContain("## Product");
-    expect(result.assistantContent).toContain("## Ops");
+    expect(result.assistantContent).toContain("Product");
+    expect(result.assistantContent).toContain("Ops");
     expect(result.assistantContent).not.toContain("## Synthesis");
     expect(result.assistantContent).not.toContain("## Evidence Used");
     expect(result.assistantContent).not.toContain("## Required Citations");
@@ -11590,9 +12461,9 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(result.assistantContent).toContain("## Product");
-    expect(result.assistantContent).toContain("## Architect");
-    expect(result.assistantContent).toContain("## QA");
+    expect(result.assistantContent).toContain("Product");
+    expect(result.assistantContent).toContain("Architect");
+    expect(result.assistantContent).toContain("QA");
     expect(result.assistantContent).not.toContain("## Synthesis");
     expect(result.assistantContent).not.toContain("## Evidence Used");
     expect(result.assistantContent.match(/^- /gm) ?? []).toHaveLength(6);
@@ -12204,7 +13075,12 @@ describe("ChatAgentOrchestrator", () => {
         auditEventId: "audit-raw-test-spec-read-1",
         result: {
           path: "scripts/run-prompt-pack-gates.ts",
-          content: "export function selectPromptPackTargets() { return ['expansion-pack']; }",
+          content: [
+            "const PROMPT_PACK_GATE_CODES_ENV = 'PROMPT_PACK_GATE_CODES';",
+            "async function resolvePromptPack(app, authHeaders, explicitTargetCodes) { return explicitTargetCodes; }",
+            "function selectPromptPackGateTargetCodes(tests) { return tests; }",
+            "const MODERN_TARGET_CODE_CANDIDATES = ['TEST-C101'];",
+          ].join("\n"),
         },
       })
       .mockResolvedValueOnce({
@@ -12239,10 +13115,86 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(result.assistantContent).toContain("Target test file or suite");
+    expect(result.assistantContent).toContain("scripts/run-prompt-pack-gates.test.ts");
+    expect(result.assistantContent).toContain("resolvePromptPack");
+    expect(result.assistantContent).toContain("selectPromptPackGateTargetCodes");
+    expect(result.assistantContent).toContain("/api/v1/prompt-packs?limit=200");
+    expect(result.assistantContent).toContain("/tests?limit=2000");
     expect(result.assistantContent).toContain("Setup:");
     expect(result.assistantContent).toContain("Act:");
     expect(result.assistantContent).toContain("Assert:");
     expect(result.assistantContent).toContain("Failure signature:");
+    expect(result.assistantContent).not.toContain("ChatExternalBindingPanel");
+  });
+  it("omits an invented target-test heading when the gate-selection prompt only requires setup-act-assert-failure bullets", async () => {
+    const prompt = [
+      "Inspect the repo if needed and propose the exact minimal automated test that proves gate selection can intentionally target an expansion pack without silently preferring the older baseline.",
+      "",
+      "Answer contract:",
+      "- Provide `Setup`, `Act`, `Assert`, and `Failure signature` bullets.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Need more repo inspection before I can name the exact test scaffold.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-gate-selection-contract-search",
+        result: {
+          matches: [{ path: "scripts/run-prompt-pack-gates.ts", name: "run-prompt-pack-gates.ts" }],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-gate-selection-contract-read",
+        result: {
+          path: "scripts/run-prompt-pack-gates.ts",
+          content: [
+            "const PROMPT_PACK_GATE_CODES_ENV = 'PROMPT_PACK_GATE_CODES';",
+            "async function resolvePromptPack(app, authHeaders, explicitTargetCodes) { return explicitTargetCodes; }",
+            "function selectPromptPackGateTargetCodes(tests) { return tests; }",
+          ].join("\n"),
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-gate-selection-contract-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-gate-selection-contract-repair-1",
+      content: prompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(result.assistantContent).not.toContain("Target test file or suite");
+    expect(result.assistantContent).toContain("- Setup:");
+    expect(result.assistantContent).toContain("- Act:");
+    expect(result.assistantContent).toContain("- Assert:");
+    expect(result.assistantContent).toContain("- Failure signature:");
   });
   it("treats underscore-named required Prompt Lab tools as satisfied after approval-gated attempts", async () => {
     const wrappedPrompt = [
