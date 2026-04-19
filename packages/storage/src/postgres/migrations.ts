@@ -447,4 +447,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON orchestration_runs(durable_run_id);
     `,
   },
+  {
+    version: 10,
+    name: "chat_user_input_prompt_repairs",
+    sql: `
+      ALTER TABLE chat_turn_traces
+        ADD COLUMN IF NOT EXISTS pending_user_input_json TEXT;
+    `,
+  },
 ];

@@ -10,6 +10,7 @@ import type {
   ChatThinkingLevel,
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
+  ChatUserInputPromptRecord,
   ChatWebMode,
   ChatMemoryMode,
 } from "@goatcitadel/contracts";
@@ -38,6 +39,7 @@ interface ChatTurnTraceRow {
   orchestration_json: string | null;
   guidance_json: string | null;
   loop_guard_json: string | null;
+  pending_user_input_json: string | null;
   citations_json: string | null;
   capability_upgrade_suggestions_json: string | null;
   specialist_candidate_suggestions_json: string | null;
@@ -71,6 +73,7 @@ export interface ChatTurnTraceCreateInput {
   orchestration?: ChatOrchestrationSummary;
   guidance?: ChatTurnTraceRecord["guidance"];
   loopGuard?: ChatTurnTraceRecord["loopGuard"];
+  pendingUserInput?: ChatUserInputPromptRecord | null;
   citations?: ChatCitationRecord[];
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
   specialistCandidateSuggestions?: ChatSpecialistCandidateSuggestionRecord[];
@@ -97,6 +100,7 @@ export interface ChatTurnTracePatchInput {
   orchestration?: ChatOrchestrationSummary;
   guidance?: ChatTurnTraceRecord["guidance"];
   loopGuard?: ChatTurnTraceRecord["loopGuard"];
+  pendingUserInput?: ChatUserInputPromptRecord | null;
   citations?: ChatCitationRecord[];
   capabilityUpgradeSuggestions?: ChatCapabilityUpgradeSuggestion[];
   specialistCandidateSuggestions?: ChatSpecialistCandidateSuggestionRecord[];
@@ -117,14 +121,14 @@ export class ChatTurnTraceRepository {
         turn_id, session_id, user_message_id, parent_turn_id, branch_kind, source_turn_id,
         assistant_message_id, execution_plan_id, status, mode, model, web_mode, memory_mode, thinking_level,
         routing_json, retrieval_json, reflection_json, proactive_json, completion_json, durable_json,
-        orchestration_json, guidance_json, loop_guard_json, citations_json,
+        orchestration_json, guidance_json, loop_guard_json, pending_user_input_json, citations_json,
         failure_json,
         capability_upgrade_suggestions_json, specialist_candidate_suggestions_json, started_at, finished_at
       ) VALUES (
         @turnId, @sessionId, @userMessageId, @parentTurnId, @branchKind, @sourceTurnId,
         @assistantMessageId, @executionPlanId, @status, @mode, @model, @webMode, @memoryMode, @thinkingLevel,
         @routingJson, @retrievalJson, @reflectionJson, @proactiveJson, @completionJson, @durableJson,
-        @orchestrationJson, @guidanceJson, @loopGuardJson, @citationsJson,
+        @orchestrationJson, @guidanceJson, @loopGuardJson, @pendingUserInputJson, @citationsJson,
         @failureJson,
         @capabilityUpgradeSuggestionsJson, @specialistCandidateSuggestionsJson, @startedAt, @finishedAt
       )
@@ -148,6 +152,7 @@ export class ChatTurnTraceRepository {
         orchestration_json = @orchestrationJson,
         guidance_json = @guidanceJson,
         loop_guard_json = @loopGuardJson,
+        pending_user_input_json = @pendingUserInputJson,
         citations_json = @citationsJson,
         failure_json = @failureJson,
         capability_upgrade_suggestions_json = @capabilityUpgradeSuggestionsJson,
@@ -196,6 +201,7 @@ export class ChatTurnTraceRepository {
       orchestrationJson: input.orchestration ? JSON.stringify(input.orchestration) : null,
       guidanceJson: input.guidance ? JSON.stringify(input.guidance) : null,
       loopGuardJson: input.loopGuard ? JSON.stringify(input.loopGuard) : null,
+      pendingUserInputJson: input.pendingUserInput ? JSON.stringify(input.pendingUserInput) : null,
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
       failureJson: input.failure ? JSON.stringify(input.failure) : null,
       capabilityUpgradeSuggestionsJson: input.capabilityUpgradeSuggestions
@@ -213,6 +219,7 @@ export class ChatTurnTraceRepository {
   public patch(turnId: string, input: ChatTurnTracePatchInput): ChatTurnTraceRecord {
     const current = this.get(turnId);
     const hasFailure = Object.prototype.hasOwnProperty.call(input, "failure");
+    const hasPendingUserInput = Object.prototype.hasOwnProperty.call(input, "pendingUserInput");
     this.patchStmt.run({
       turnId,
       parentTurnId: input.parentTurnId !== undefined ? input.parentTurnId : (current.parentTurnId ?? null),
@@ -238,6 +245,7 @@ export class ChatTurnTraceRepository {
       orchestrationJson: JSON.stringify(input.orchestration ?? current.orchestration ?? null),
       guidanceJson: JSON.stringify(input.guidance ?? current.guidance ?? null),
       loopGuardJson: JSON.stringify(input.loopGuard ?? current.loopGuard ?? null),
+      pendingUserInputJson: JSON.stringify(hasPendingUserInput ? input.pendingUserInput ?? null : current.pendingUserInput ?? null),
       citationsJson: JSON.stringify(input.citations ?? current.citations ?? []),
       failureJson: JSON.stringify(hasFailure ? input.failure ?? null : current.failure ?? null),
       capabilityUpgradeSuggestionsJson: JSON.stringify(
@@ -292,6 +300,7 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     orchestration: safeJsonParse<ChatOrchestrationSummary | undefined>(row.orchestration_json ?? "", undefined),
     guidance: safeJsonParse<ChatTurnTraceRecord["guidance"] | undefined>(row.guidance_json ?? "", undefined),
     loopGuard: safeJsonParse<ChatTurnTraceRecord["loopGuard"] | undefined>(row.loop_guard_json ?? "", undefined),
+    pendingUserInput: safeJsonParse<ChatUserInputPromptRecord | undefined>(row.pending_user_input_json ?? "", undefined),
     capabilityUpgradeSuggestions: safeJsonParse<ChatCapabilityUpgradeSuggestion[] | undefined>(
       row.capability_upgrade_suggestions_json ?? "",
       undefined,
@@ -388,6 +397,7 @@ function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
     && (typeof value.orchestration_json === "string" || value.orchestration_json === null)
     && (typeof value.guidance_json === "string" || value.guidance_json === null)
     && (typeof value.loop_guard_json === "string" || value.loop_guard_json === null)
+    && (typeof value.pending_user_input_json === "string" || value.pending_user_input_json === null)
     && (typeof value.citations_json === "string" || value.citations_json === null)
     && (typeof value.capability_upgrade_suggestions_json === "string" || value.capability_upgrade_suggestions_json === null)
     && (typeof value.specialist_candidate_suggestions_json === "string" || value.specialist_candidate_suggestions_json === null)

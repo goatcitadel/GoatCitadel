@@ -96,6 +96,7 @@ export function CoworkCanvasPanel({
   const delegationSteps = delegationRun?.steps ?? [];
   const toolRuns = selectedTurn?.toolRuns?.length ?? 0;
   const waitingForApproval = selectedTurn?.trace?.status === "waiting_for_approval";
+  const waitingForUserInput = selectedTurn?.trace?.status === "waiting_for_user_input";
   const executionTruthRun = orchestrationRun ?? null;
   const approvalState = formatApprovalState({ orchestrationRun: executionTruthRun, waitingForApproval });
   const checkpointTimeline = orchestrationCheckpoints ?? [];
@@ -139,7 +140,7 @@ export function CoworkCanvasPanel({
           </div>
           <div className="chat-cowork-stage-card">
             <span>Approval</span>
-            <strong>{approvalState}</strong>
+            <strong>{waitingForUserInput ? "answer needed" : approvalState}</strong>
           </div>
           <div className="chat-cowork-stage-card">
             <span>Worktree</span>

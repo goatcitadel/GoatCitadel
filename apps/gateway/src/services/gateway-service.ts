@@ -178,6 +178,8 @@ import type {
   ChatStreamUsageRecord,
   ChatThreadResponse,
   ChatThinkingLevel,
+  ChatUserInputPromptAnswerResponse,
+  ChatUserInputPromptResponse,
   CapabilityCatalogScope,
   CapabilityCatalogSnapshotRecord,
   CapabilityGapEventRecord,
@@ -1283,6 +1285,21 @@ export interface DurableChatTurnExecutionPayload {
   sourceTurnId?: string;
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited";
   request: ChatSendMessageRequest;
+  userInputResponses?: DurableChatTurnUserInputResumeRecord[];
+}
+
+export interface DurableChatTurnUserInputResumeRecord {
+  promptId: string;
+  kind: "single_select" | "text";
+  title?: string;
+  question: string;
+  answeredAt: string;
+  response: ChatUserInputPromptResponse;
+  selectedOption?: {
+    optionId: string;
+    label: string;
+    description?: string;
+  };
 }
 
 export interface RemoteApprovalActionTokenIssueResult extends RemoteActionTokenRecord {
@@ -4032,13 +4049,21 @@ export class GatewayService {
         );
         const traceStatus = response.trace?.status;
         const waitingForApproval = traceStatus === "waiting_for_approval";
+        const waitingForUserInput = traceStatus === "waiting_for_user_input";
         const stillActive = traceStatus === "waiting_for_tool";
-        const failed = traceStatus === "failed" || traceStatus === "cancelled" || waitingForApproval || stillActive;
+        const failed =
+          traceStatus === "failed" ||
+          traceStatus === "cancelled" ||
+          waitingForApproval ||
+          waitingForUserInput ||
+          stillActive;
         const output =
           response.assistantMessage?.content?.trim() ||
           response.trace?.failure?.message?.trim() ||
           (waitingForApproval
             ? response.trace?.pendingApprovalSummary?.reason?.trim() || "Delegate is waiting for approval."
+            : waitingForUserInput
+              ? response.trace?.pendingUserInput?.question?.trim() || "Delegate is waiting for user input."
             : stillActive
               ? "Delegate is still waiting on a tool result."
               : "(delegate returned no output)");
@@ -5148,6 +5173,156 @@ export class GatewayService {
     resumedRunId?: string;
   }> {
     return this.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options);
+  }
+
+  public async answerChatUserInputPrompt(
+    sessionId: string,
+    turnId: string,
+    promptId: string,
+    response: ChatUserInputPromptResponse,
+  ): Promise<ChatUserInputPromptAnswerResponse> {
+    this.getSession(sessionId);
+    const trace = this.storage.chatTurnTraces.get(turnId);
+    if (trace.sessionId !== sessionId) {
+      throw new Error(`Chat turn ${turnId} does not belong to session ${sessionId}`);
+    }
+    if (trace.status !== "waiting_for_user_input") {
+      throw new ValidationError({ message: `Chat turn ${turnId} is not waiting for user input.` });
+    }
+    const prompt = trace.pendingUserInput;
+    if (!prompt || prompt.promptId !== promptId) {
+      throw new ValidationError({ message: `Prompt ${promptId} is not active for chat turn ${turnId}.` });
+    }
+    if (prompt.kind !== response.kind) {
+      throw new ValidationError({ message: `Prompt ${promptId} expects a ${prompt.kind} response.` });
+    }
+    if (response.kind === "single_select") {
+      const validOptionIds = new Set((prompt.options ?? []).map((option) => option.optionId));
+      if (!validOptionIds.has(response.optionId)) {
+        throw new ValidationError({ message: `Option ${response.optionId} is not valid for prompt ${promptId}.` });
+      }
+    } else if (response.text.trim().length === 0) {
+      throw new ValidationError({ message: `Prompt ${promptId} requires non-empty text.` });
+    }
+
+    const durableRunId = trace.durable?.runId;
+    if (!durableRunId) {
+      throw new ConflictError({
+        message: `Chat turn ${turnId} cannot be resumed because it is not linked to a durable run.`,
+      });
+    }
+    const durableRun = this.getDurableRun(durableRunId);
+    const durablePayload = this.parseDurableChatTurnPayload(durableRun);
+    if (!durablePayload) {
+      throw new ConflictError({
+        message: `Durable run ${durableRunId} is missing a valid chat turn payload.`,
+      });
+    }
+
+    const answeredAt = new Date().toISOString();
+    const selectedOption =
+      response.kind === "single_select"
+        ? (prompt.options ?? []).find((option) => option.optionId === response.optionId)
+        : undefined;
+    const resumeRecord: DurableChatTurnUserInputResumeRecord = {
+      promptId,
+      kind: prompt.kind,
+      title: prompt.title,
+      question: prompt.question,
+      answeredAt,
+      response: response.kind === "text" ? { kind: "text", text: response.text.trim() } : response,
+      ...(selectedOption
+        ? {
+            selectedOption: {
+              optionId: selectedOption.optionId,
+              label: selectedOption.label,
+              description: selectedOption.description,
+            },
+          }
+        : {}),
+    };
+
+    const updatedDurableRun = this.storage.durableRuns.updateRun({
+      runId: durableRunId,
+      status: durableRun.status,
+      payload: durableChatTurnPayloadToRecord({
+        ...durablePayload,
+        userInputResponses: [
+          ...(durablePayload.userInputResponses ?? []).filter((entry) => entry.promptId !== promptId),
+          resumeRecord,
+        ],
+      }),
+      expectedVersion: durableRun.version,
+    });
+    const wake = this.wakeDurableRun(durableRunId, {
+      eventKey: "chat.user_input.resolved",
+      correlationId: promptId,
+      payload: {
+        sessionId,
+        turnId,
+        promptId,
+        answeredAt,
+        response: userInputPromptResponseToRecord(resumeRecord.response),
+      },
+    });
+    const resumed =
+      wake.outcome === "woke" ||
+      wake.run?.status === "queued" ||
+      wake.run?.status === "running" ||
+      updatedDurableRun.status === "queued" ||
+      updatedDurableRun.status === "running";
+    if (!resumed) {
+      throw new ConflictError({
+        message:
+          wake.detail ??
+          `Durable run ${durableRunId} could not be resumed from ${wake.run?.status ?? updatedDurableRun.status}.`,
+      });
+    }
+
+    this.storage.chatTurnTraces.patch(turnId, {
+      status: "running",
+      pendingUserInput: null,
+    });
+    this.recordDevDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "chat.user_input_prompt.answered",
+      message: "Resolved pending chat user-input prompt",
+      sessionId,
+      turnId,
+      context: {
+        promptId,
+        promptKind: prompt.kind,
+        responseKind: response.kind,
+      },
+    });
+    this.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_user_input_answered",
+        sessionId,
+        turnId,
+        promptId,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId,
+          turnId,
+        },
+      },
+    );
+    return {
+      ok: true,
+      sessionId,
+      turnId,
+      promptId,
+      resumed,
+      resumedTurnId: turnId,
+      resumedRunId: durableRunId,
+    };
   }
 
   /** @internal */ public async requireChatTurnContext(
@@ -14526,6 +14701,12 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
 
 function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload): Record<string, unknown> {
   return { ...payload };
+}
+
+function userInputPromptResponseToRecord(response: ChatUserInputPromptResponse): Record<string, unknown> {
+  return response.kind === "text"
+    ? { kind: "text", text: response.text }
+    : { kind: "single_select", optionId: response.optionId };
 }
 
 function toSkillStateRows(value: unknown): SkillStateRecord[] {

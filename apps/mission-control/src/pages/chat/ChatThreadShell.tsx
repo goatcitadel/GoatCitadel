@@ -3,11 +3,13 @@ import {
   ChatPendingApprovalPanel,
   type ChatPendingApprovalState,
 } from "../../components/chat/ChatPendingApprovalPanel";
+import { ChatPendingUserInputPanel } from "../../components/chat/ChatPendingUserInputPanel";
 import { SurfaceReconnectBanner } from "../../components/chat/SurfaceReconnectBanner";
 import { ChatThreadView, type ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import type { EventStreamStatus } from "../../api/shell-client";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
+import type { PendingUserInputState } from "./useChatOutboundExecution";
 
 export function ChatThreadShell(props: {
   mode: ChatMode;
@@ -21,8 +23,10 @@ export function ChatThreadShell(props: {
   queuedCount: number;
   streamError: string | null;
   pendingApproval: ChatPendingApprovalState | null;
+  pendingUserInput: PendingUserInputState | null;
   workspaceId?: string;
   approvalPending: boolean;
+  userInputPending: boolean;
   eventStreamStatus: EventStreamStatus;
   onBottomStateChange: (atBottom: boolean) => void;
   onSelectTurn: (turnId: string | null) => void;
@@ -32,6 +36,9 @@ export function ChatThreadShell(props: {
   onOpenRunDetails: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
+  onSubmitUserInput: (
+    response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string },
+  ) => void;
   onRefresh: () => void;
 }) {
   const {
@@ -46,8 +53,10 @@ export function ChatThreadShell(props: {
     queuedCount,
     streamError,
     pendingApproval,
+    pendingUserInput,
     workspaceId,
     approvalPending,
+    userInputPending,
     eventStreamStatus,
     onBottomStateChange,
     onSelectTurn,
@@ -57,6 +66,7 @@ export function ChatThreadShell(props: {
     onOpenRunDetails,
     onApprovePending,
     onDenyPending,
+    onSubmitUserInput,
     onRefresh,
   } = props;
 
@@ -86,13 +96,21 @@ export function ChatThreadShell(props: {
         />
       </div>
 
-      <ChatPendingApprovalPanel
-        pendingApproval={pendingApproval}
-        workspaceId={workspaceId}
-        pending={approvalPending}
-        onApprove={onApprovePending}
-        onDeny={onDenyPending}
-      />
+      {pendingApproval ? (
+        <ChatPendingApprovalPanel
+          pendingApproval={pendingApproval}
+          workspaceId={workspaceId}
+          pending={approvalPending}
+          onApprove={onApprovePending}
+          onDeny={onDenyPending}
+        />
+      ) : (
+        <ChatPendingUserInputPanel
+          pendingUserInput={pendingUserInput}
+          pending={userInputPending}
+          onSubmit={onSubmitUserInput}
+        />
+      )}
     </div>
   );
 }

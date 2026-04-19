@@ -290,6 +290,52 @@ describe("chat-thread-reducer", () => {
     expect(withTrace?.turns[0]?.trace.capabilityUpgradeSuggestions).toHaveLength(1);
   });
 
+  it("marks the selected turn as waiting for user input when a prompt arrives", () => {
+    const current = makeThread();
+    const next = updateThreadFromStreamChunk(
+      current,
+      makeChunk({
+        type: "user_input_required",
+        sessionId: "sess-1",
+        turnId: "turn-1",
+        prompt: {
+          promptId: "prompt-1",
+          turnId: "turn-1",
+          kind: "single_select",
+          title: "Pick a path",
+          question: "Which path should GoatCitadel take?",
+          required: true,
+          options: [
+            {
+              optionId: "safe",
+              label: "Safe",
+              description: "Stay conservative.",
+            },
+          ],
+        },
+      }),
+      null,
+      "sess-1",
+      null,
+    );
+
+    expect(isThreadMutatingStreamChunk(makeChunk({
+      type: "user_input_required",
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      prompt: {
+        promptId: "prompt-1",
+        turnId: "turn-1",
+        kind: "text",
+        title: "Need detail",
+        question: "Explain the missing detail.",
+        required: true,
+      },
+    }))).toBe(true);
+    expect(next?.turns[0]?.trace.status).toBe("waiting_for_user_input");
+    expect(next?.turns[0]?.trace.pendingUserInput?.promptId).toBe("prompt-1");
+  });
+
   it("dedupes repeated citations by URL", () => {
     const current = makeThread();
     const citation = makeCitation();

@@ -70,6 +70,8 @@ function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
       return "Using tools...";
     case "waiting_for_approval":
       return "Waiting for approval.";
+    case "waiting_for_user_input":
+      return "Waiting for your answer.";
     case "cancelled":
       return "Turn cancelled.";
     case "failed":

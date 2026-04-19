@@ -290,7 +290,10 @@ export function useMissionControlSurfaceState(input: {
     showSuggestionsPanel,
     showLearnedMemoryPanel,
     hasExternalBindingSection: input.selectedSession?.scope === "external",
-    hasBlockingContext: Boolean(selectedTurnRecovery) || selectedTurn?.trace.status === "waiting_for_approval",
+    hasBlockingContext:
+      Boolean(selectedTurnRecovery) ||
+      selectedTurn?.trace.status === "waiting_for_approval" ||
+      selectedTurn?.trace.status === "waiting_for_user_input",
     hasDelegationSuggestion: input.hasDelegationSuggestion,
     codeModeNeedsProjectBinding,
   }), [

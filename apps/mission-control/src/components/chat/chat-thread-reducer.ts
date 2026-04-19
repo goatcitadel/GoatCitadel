@@ -21,6 +21,7 @@ export function isThreadMutatingStreamChunk(chunk: ChatStreamChunk): boolean {
     case "message_done":
     case "tool_start":
     case "tool_result":
+    case "user_input_required":
     case "trace_update":
     case "capability_upgrade_suggestion":
     case "citation":
@@ -241,6 +242,15 @@ function updateTurnFromStreamChunk(
         trace: {
           ...turn.trace,
           capabilityUpgradeSuggestions: chunk.capabilityUpgradeSuggestions,
+        },
+      };
+    case "user_input_required":
+      return {
+        ...turn,
+        trace: {
+          ...turn.trace,
+          status: "waiting_for_user_input",
+          pendingUserInput: chunk.prompt,
         },
       };
     case "trace_update":

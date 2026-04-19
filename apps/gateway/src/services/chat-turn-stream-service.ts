@@ -870,6 +870,8 @@ export async function* streamPreparedAgentChatTurn(
         }
       | undefined;
     let approvalRequired = false;
+    let userInputRequired = false;
+    let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
     const streamCitations: ChatCitationRecord[] = [];
     for await (const chunk of host.turnRuntime.runStream({
       sessionId,
@@ -895,7 +897,18 @@ export async function* streamPreparedAgentChatTurn(
         finalText = chunk.content;
       }
       if (chunk.type === "approval_required") {
+        if (userInputRequired) {
+          throw new Error(`Chat turn ${turnId} emitted both user input and approval interrupts.`);
+        }
         approvalRequired = true;
+        yield chunk;
+      }
+      if (chunk.type === "user_input_required") {
+        if (approvalRequired) {
+          throw new Error(`Chat turn ${turnId} emitted both approval and user-input interrupts.`);
+        }
+        userInputRequired = true;
+        pendingUserInput = chunk.prompt;
         yield chunk;
       }
       if (chunk.type === "usage") {
@@ -939,7 +952,7 @@ export async function* streamPreparedAgentChatTurn(
       }
     }
 
-    if (!approvalRequired && !finalText.trim()) {
+    if (!approvalRequired && !userInputRequired && !finalText.trim()) {
       const preRepairContent = finalText;
       finalText = buildEmptyAssistantTurnFallbackText();
       streamLayerRepaired = true;
@@ -1033,6 +1046,53 @@ export async function* streamPreparedAgentChatTurn(
         sessionId,
         turnId,
         trace: approvalTrace,
+      };
+      return;
+    }
+
+    if (userInputRequired && pendingUserInput) {
+      host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+      host.publishRealtime(
+        "chat_thread_updated",
+        "chat",
+        {
+          type: threadEventType,
+          sessionId,
+          turnId,
+          activeLeafTurnId: turnId,
+        },
+        buildChatTurnRealtimeOptions({ sessionId, turnId }),
+      );
+      const traceWithMeta = host.storage.chatTurnTraces.patch(turnId, {
+        status: "waiting_for_user_input",
+        pendingUserInput,
+        retrieval: prepared.retrievalTrace,
+        reflection: {
+          attempted: false,
+          attemptCount: 0,
+          outcome: "not_needed",
+        },
+        proactive: {
+          runId: prepared.autonomy.lastProactiveRunId,
+          mode: prepared.autonomy.proactiveMode,
+        },
+        guidance: {
+          workspaceId: prepared.workspaceId,
+          globalFilesUsed: prepared.resolvedGuidance.globalFilesUsed,
+          workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
+          truncated: prepared.resolvedGuidance.truncated,
+        },
+        citations: dedupeChatCitations(streamCitations),
+      });
+      const userInputTrace: ChatTurnTraceRecord = {
+        ...traceWithMeta,
+        toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+      };
+      yield {
+        type: "trace_update",
+        sessionId,
+        turnId,
+        trace: userInputTrace,
       };
       return;
     }

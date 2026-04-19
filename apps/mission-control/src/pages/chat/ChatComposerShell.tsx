@@ -143,7 +143,10 @@ export function ChatComposerShell(props: {
           </button>
         </div>
       ) : null}
-      {selectedTurnRecovery && selectedTurn && selectedTurn.trace.status !== "waiting_for_approval" ? (
+      {selectedTurnRecovery &&
+      selectedTurn &&
+      selectedTurn.trace.status !== "waiting_for_approval" &&
+      selectedTurn.trace.status !== "waiting_for_user_input" ? (
         <div className="chat-v11-composer-banner recovery">
           <div className="chat-v11-recovery-copy">
             <div className="chat-v11-recovery-head">

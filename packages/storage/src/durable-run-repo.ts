@@ -94,6 +94,7 @@ export class DurableRunRepository {
         status = @status,
         attempt_count = @attemptCount,
         max_attempts = @maxAttempts,
+        payload_json = @payloadJson,
         metadata_json = @metadataJson,
         started_at = @startedAt,
         finished_at = @finishedAt,
@@ -270,6 +271,7 @@ export class DurableRunRepository {
     status: DurableRunStatus;
     attemptCount?: number;
     maxAttempts?: number;
+    payload?: Record<string, unknown>;
     metadata?: Record<string, unknown>;
     startedAt?: string;
     finishedAt?: string;
@@ -288,6 +290,7 @@ export class DurableRunRepository {
       status: next.status,
       attemptCount: next.attemptCount,
       maxAttempts: next.maxAttempts,
+      payloadJson: JSON.stringify(next.payload),
       metadataJson: next.metadata ? JSON.stringify(next.metadata) : null,
       startedAt: next.startedAt ?? null,
       finishedAt: next.finishedAt ?? null,
@@ -332,6 +335,7 @@ export class DurableRunRepository {
       status: next.status,
       attemptCount: next.attemptCount,
       maxAttempts: next.maxAttempts,
+      payloadJson: JSON.stringify(next.payload),
       metadataJson: next.metadata ? JSON.stringify(next.metadata) : null,
       startedAt: next.startedAt ?? null,
       finishedAt: next.finishedAt ?? null,
@@ -581,6 +585,7 @@ export class DurableRunRepository {
       status: DurableRunStatus;
       attemptCount?: number;
       maxAttempts?: number;
+      payload?: Record<string, unknown>;
       metadata?: Record<string, unknown>;
       startedAt?: string;
       finishedAt?: string;
@@ -599,6 +604,7 @@ export class DurableRunRepository {
       attemptCount:
         input.attemptCount !== undefined ? Math.max(0, Math.floor(input.attemptCount)) : current.attemptCount,
       maxAttempts: input.maxAttempts !== undefined ? Math.max(1, Math.floor(input.maxAttempts)) : current.maxAttempts,
+      payload: input.payload !== undefined ? normalizeObject(input.payload) : current.payload,
       metadata: input.metadata !== undefined ? normalizeOptionalObject(input.metadata) : current.metadata,
       startedAt: input.startedAt !== undefined ? input.startedAt : current.startedAt,
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finishedAt,

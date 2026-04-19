@@ -5,6 +5,7 @@ import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import { useChatOutboundExecution, type ActiveChatStreamState } from "./useChatOutboundExecution";
 
 const approveChatToolMock = vi.fn();
+const answerChatUserInputPromptMock = vi.fn();
 const denyChatToolMock = vi.fn();
 const editChatTurnMock = vi.fn();
 const fetchChatPendingApprovalsMock = vi.fn();
@@ -17,6 +18,7 @@ const streamEditChatTurnMock = vi.fn();
 const streamRetryChatTurnMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
+  answerChatUserInputPrompt: (...args: unknown[]) => answerChatUserInputPromptMock(...args),
   approveChatTool: (...args: unknown[]) => approveChatToolMock(...args),
   denyChatTool: (...args: unknown[]) => denyChatToolMock(...args),
   editChatTurn: (...args: unknown[]) => editChatTurnMock(...args),
@@ -35,6 +37,7 @@ type HarnessState = {
   capabilitySuggestions: unknown[];
   specialistSuggestions: unknown[];
   pendingApproval: unknown;
+  pendingUserInput: unknown;
   error: string | null;
   thread: ChatThreadResponse | null;
   loadSessionCoreStateMock: ReturnType<typeof vi.fn>;
@@ -42,8 +45,10 @@ type HarnessState = {
   execute: (item: any) => Promise<void>;
   applyFetchedThread: (thread: ChatThreadResponse, requestVersion: number | null) => boolean;
   setPendingApproval: (value: any) => void;
+  setPendingUserInput: (value: any) => void;
   approvePending: (allowScope?: "once" | "session" | "workspace") => Promise<void>;
   denyPending: () => Promise<void>;
+  submitUserInput: (response: any) => Promise<void>;
 };
 
 let latest: HarnessState | null = null;
@@ -165,6 +170,7 @@ function Harness(props: {
     capabilitySuggestions,
     specialistSuggestions,
     pendingApproval: hook.pendingApproval,
+    pendingUserInput: hook.pendingUserInput,
     error,
     thread,
     loadSessionCoreStateMock,
@@ -172,8 +178,10 @@ function Harness(props: {
     execute: executeOutboundItemRef.current,
     applyFetchedThread: applyFetchedThreadRef.current,
     setPendingApproval: hook.setPendingApproval,
+    setPendingUserInput: hook.setPendingUserInput,
     approvePending: hook.handleApprovePending,
     denyPending: hook.handleDenyPending,
+    submitUserInput: hook.handleSubmitUserInput,
   };
   return null;
 }
@@ -182,6 +190,7 @@ describe("useChatOutboundExecution", () => {
   beforeEach(() => {
     latest = null;
     approveChatToolMock.mockReset();
+    answerChatUserInputPromptMock.mockReset();
     denyChatToolMock.mockReset();
     editChatTurnMock.mockReset();
     fetchChatPendingApprovalsMock.mockReset();
@@ -197,6 +206,13 @@ describe("useChatOutboundExecution", () => {
       approvalId: "approval-default",
       allowScope: "once",
       resumed: true,
+    });
+    answerChatUserInputPromptMock.mockResolvedValue({
+      ok: true,
+      sessionId: "session-1",
+      turnId: "turn-input",
+      promptId: "prompt-1",
+      resumed: false,
     });
     fetchChatPendingApprovalsMock.mockResolvedValue({
       items: [],
@@ -439,6 +455,43 @@ describe("useChatOutboundExecution", () => {
       toolName: "shell_command",
       reason: "Operator confirmation required.",
       remainingCount: 0,
+    });
+  });
+
+  it("submits pending user-input prompts and clears local prompt state", async () => {
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    act(() => {
+      latest?.setPendingUserInput({
+        promptId: "prompt-1",
+        turnId: "turn-input",
+        kind: "text",
+        title: "Need detail",
+        question: "Share the missing detail.",
+        required: true,
+      });
+    });
+
+    await act(async () => {
+      await latest?.submitUserInput({
+        kind: "text",
+        text: "final answer",
+      });
+    });
+
+    expect(answerChatUserInputPromptMock).toHaveBeenCalledWith("session-1", "turn-input", "prompt-1", {
+      response: {
+        kind: "text",
+        text: "final answer",
+      },
+    });
+    expect(latest?.pendingUserInput).toBeNull();
+
+    await act(async () => {
+      renderer!.unmount();
     });
   });
 });

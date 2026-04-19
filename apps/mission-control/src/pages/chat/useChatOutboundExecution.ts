@@ -7,9 +7,11 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatThreadResponse,
+  ChatUserInputPromptResponse,
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
+  answerChatUserInputPrompt,
   approveChatTool,
   denyChatTool,
   editChatTurn,
@@ -39,9 +41,11 @@ import {
   type FinalizedStreamMessageState,
 } from "./chat-page-pure-helpers";
 import { deriveThreadPendingApproval, mergePendingApproval, type PendingApprovalRecord } from "./chat-pending-approval";
+import { deriveThreadPendingUserInput, mergePendingUserInput, type PendingUserInputRecord } from "./chat-pending-user-input";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
 export type PendingApprovalState = PendingApprovalRecord;
+export type PendingUserInputState = PendingUserInputRecord;
 
 export interface ActiveChatStreamState {
   sessionId: string;
@@ -139,6 +143,8 @@ export function useChatOutboundExecution(input: {
 
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
   const [approvalPending, setApprovalPending] = useState(false);
+  const [pendingUserInput, setPendingUserInput] = useState<PendingUserInputState | null>(null);
+  const [userInputPending, setUserInputPending] = useState(false);
   const selectedSessionIdRef = useRef<string | null>(selectedSessionId);
   const latestMessagesRef = useRef<ChatMessageRecord[]>(messages);
   const finalizedStreamMessageRef = useRef<FinalizedStreamMessageState | null>(null);
@@ -400,29 +406,42 @@ export function useChatOutboundExecution(input: {
 
   useEffect(() => {
     const threadApproval = deriveThreadPendingApproval(thread);
-    if (!threadApproval || !selectedSessionId) {
+    if (!selectedSessionId) {
+      setPendingApproval(null);
+      setPendingUserInput(null);
       return;
     }
-    setPendingApproval((current) => {
-      const merged = mergePendingApproval(current, threadApproval);
-      if (
-        merged &&
-        (!current ||
-          current.approvalId !== merged.approvalId ||
-          current.toolName !== merged.toolName ||
-          current.reason !== merged.reason)
-      ) {
-        recordChatApprovalPhase({
-          phase: "prompt_merged",
-          sessionId: selectedSessionId,
-          turnId: thread?.selectedTurnId ?? thread?.activeLeafTurnId,
-          approval: merged,
-          source: "thread",
-          level: "info",
-        });
-      }
-      return merged;
-    });
+    if (threadApproval) {
+      setPendingApproval((current) => {
+        const merged = mergePendingApproval(current, threadApproval);
+        if (
+          merged &&
+          (!current ||
+            current.approvalId !== merged.approvalId ||
+            current.toolName !== merged.toolName ||
+            current.reason !== merged.reason)
+        ) {
+          recordChatApprovalPhase({
+            phase: "prompt_merged",
+            sessionId: selectedSessionId,
+            turnId: thread?.selectedTurnId ?? thread?.activeLeafTurnId,
+            approval: merged,
+            source: "thread",
+            level: "info",
+          });
+        }
+        return merged;
+      });
+    } else {
+      setPendingApproval(null);
+    }
+
+    const threadUserInput = deriveThreadPendingUserInput(thread);
+    if (threadUserInput) {
+      setPendingUserInput((current) => mergePendingUserInput(current, threadUserInput));
+    } else {
+      setPendingUserInput(null);
+    }
   }, [selectedSessionId, thread]);
 
   useEffect(() => {
@@ -641,6 +660,7 @@ export function useChatOutboundExecution(input: {
               setCapabilitySuggestions(chunk.capabilityUpgradeSuggestions ?? []);
             }
             if (chunk.type === "approval_required") {
+              setPendingUserInput(null);
               const approval = {
                 approvalId: chunk.approval.approvalId,
                 kind: chunk.approval.kind,
@@ -676,6 +696,10 @@ export function useChatOutboundExecution(input: {
                 },
                 source: "stream",
               });
+            }
+            if (chunk.type === "user_input_required") {
+              setPendingApproval(null);
+              setPendingUserInput(chunk.prompt);
             }
             if (chunk.type === "error") {
               setError(chunk.error || "Streaming request failed.");
@@ -1072,6 +1096,34 @@ export function useChatOutboundExecution(input: {
     }
   }, [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
 
+  const handleSubmitUserInput = useCallback(
+    async (response: ChatUserInputPromptResponse) => {
+      if (!selectedSession || !pendingUserInput) return;
+      setUserInputPending(true);
+      try {
+        const result = await answerChatUserInputPrompt(selectedSession.sessionId, pendingUserInput.turnId, pendingUserInput.promptId, {
+          response,
+        });
+        setPendingUserInput(null);
+        pushLocalNotice(
+          result.resumed
+            ? `Submitted response for ${pendingUserInput.promptId}. The turn resumed immediately.`
+            : `Submitted response for ${pendingUserInput.promptId}. Refresh the thread or resume the run when the runtime is ready.`,
+          "success",
+        );
+        await loadSessionCoreState(selectedSession.sessionId, {
+          background: true,
+          includeThread: true,
+        });
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setUserInputPending(false);
+      }
+    },
+    [loadSessionCoreState, pendingUserInput, pushLocalNotice, selectedSession, setError],
+  );
+
   const streamStatus: ChatStreamStatus = useMemo(() => {
     if (error) return "error";
     if (sending && activeStreamRef.current) return "streaming";
@@ -1096,9 +1148,13 @@ export function useChatOutboundExecution(input: {
     activeStreamRef,
     pendingApproval,
     setPendingApproval,
+    pendingUserInput,
+    setPendingUserInput,
     approvalPending,
+    userInputPending,
     handleApprovePending,
     handleDenyPending,
+    handleSubmitUserInput,
     handleSelectBranchTurn,
     streamStatus,
     prefsRef,

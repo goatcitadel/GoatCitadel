@@ -525,7 +525,8 @@ export class PromptPackService {
       const missingOutput = rawResponseText.length === 0;
       const failedByTrace = traceStatus === "failed";
       const approvalPending = traceStatus === "waiting_for_approval";
-      const status: PromptPackRunRecord["status"] = approvalPending
+      const userInputPending = traceStatus === "waiting_for_user_input";
+      const status: PromptPackRunRecord["status"] = approvalPending || userInputPending
         ? "approval_paused"
         : missingOutput || failedByTrace
           ? "failed"
@@ -534,6 +535,8 @@ export class PromptPackService {
         status === "failed" || status === "approval_paused"
           ? approvalPending
             ? "Turn paused for approval."
+            : userInputPending
+              ? "Turn paused for user input."
             : missingOutput
               ? "No assistant output generated."
               : failedByTrace
@@ -5295,7 +5298,10 @@ export function buildPromptPackReportSummary(
     if (latestRun?.trace?.durable?.runId) {
       durableRuns += 1;
     }
-    if (latestRun?.trace?.status === "waiting_for_approval") {
+    if (
+      latestRun?.trace?.status === "waiting_for_approval" ||
+      latestRun?.trace?.status === "waiting_for_user_input"
+    ) {
       approvalPausedRuns += 1;
     }
     if (latestRun?.trace?.durable?.status === "backgrounded") {

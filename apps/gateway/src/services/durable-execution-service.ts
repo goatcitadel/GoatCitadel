@@ -39,7 +39,10 @@ import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
-import type { DurableChatTurnExecutionPayload } from "./gateway-service.js";
+import type {
+  DurableChatTurnExecutionPayload,
+  DurableChatTurnUserInputResumeRecord,
+} from "./gateway-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -258,6 +261,18 @@ export function parseDurableChatTurnPayload(run: DurableRunRecord): DurableChatT
     return undefined;
   }
   return payload as DurableChatTurnExecutionPayload;
+}
+
+export function buildDurableChatTurnResumeContent(
+  baseContent: string,
+  responses?: DurableChatTurnUserInputResumeRecord[],
+): string {
+  const normalizedBase = baseContent.trim();
+  if (!responses || responses.length === 0) {
+    return normalizedBase;
+  }
+  const entries = responses.map((response, index) => formatDurableChatTurnResumeEntry(response, index + 1));
+  return `${normalizedBase}\n\nResume context from answered blocking prompts:\n${entries.join("\n\n")}`;
 }
 
 export function parseApprovalWaitWorkflowPayload(run: DurableRunRecord): ApprovalWaitWorkflowPayload | undefined {
@@ -702,15 +717,18 @@ export async function executeDurableChatTurnRun(
   if (!userMessage) {
     throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
   }
+  const resumedContent = buildDurableChatTurnResumeContent(userMessage.content, payload.userInputResponses);
+  const resumedUserMessage = resumedContent === userMessage.content ? userMessage : { ...userMessage, content: resumedContent };
   const request = {
     ...payload.request,
+    content: resumedContent,
     signal: context?.signal,
   };
   const prepared = await host.prepareAgentChatTurn(payload.sessionId, request, {
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,
     parentTurnId: payload.parentTurnId,
-    existingUserMessage: userMessage,
+    existingUserMessage: resumedUserMessage,
     ingestUserMessage: false,
     turnId: payload.turnId,
     assistantMessageId: payload.assistantMessageId,
@@ -878,6 +896,25 @@ function markDurableChatTurnUnrecoverable(
     },
     run.runId,
   );
+}
+
+function formatDurableChatTurnResumeEntry(
+  response: DurableChatTurnUserInputResumeRecord,
+  index: number,
+): string {
+  const lines = [
+    `${index}. ${response.title?.trim() || response.question.trim()}`,
+    `Question: ${response.question.trim()}`,
+  ];
+  if (response.response.kind === "single_select") {
+    lines.push(`Answer: ${response.selectedOption?.label ?? response.response.optionId}`);
+    if (response.selectedOption?.description?.trim()) {
+      lines.push(`Option detail: ${response.selectedOption.description.trim()}`);
+    }
+  } else {
+    lines.push(`Answer: ${response.response.text.trim()}`);
+  }
+  return lines.join("\n");
 }
 
 export async function executeDurableWorkflowRun(host: DurableExecutionHost, run: DurableRunRecord): Promise<void> {

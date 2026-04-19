@@ -26,8 +26,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   queuedCount: number;
   streamError: string | null;
   pendingApproval: Parameters<typeof ChatThreadShell>[0]["pendingApproval"];
+  pendingUserInput: Parameters<typeof ChatThreadShell>[0]["pendingUserInput"];
   workspaceId: string;
   approvalPending: boolean;
+  userInputPending: boolean;
   eventStreamStatus: EventStreamStatus;
   onBottomStateChange: (next: boolean) => void;
   onSelectTurn: (turnId: string | null) => void;
@@ -37,6 +39,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onOpenRunDetails: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
+  onSubmitUserInput: Parameters<typeof ChatThreadShell>[0]["onSubmitUserInput"];
   onRefreshThread: () => void;
   isDragActive: boolean;
   queueItems: Parameters<typeof ChatComposerShell>[0]["queueItems"];
@@ -96,8 +99,10 @@ export function MissionControlActiveSessionSurface({
   queuedCount,
   streamError,
   pendingApproval,
+  pendingUserInput,
   workspaceId,
   approvalPending,
+  userInputPending,
   eventStreamStatus,
   onBottomStateChange,
   onSelectTurn,
@@ -107,6 +112,7 @@ export function MissionControlActiveSessionSurface({
   onOpenRunDetails,
   onApprovePending,
   onDenyPending,
+  onSubmitUserInput,
   onRefreshThread,
   isDragActive,
   queueItems,
@@ -176,8 +182,10 @@ export function MissionControlActiveSessionSurface({
           queuedCount={queuedCount}
           streamError={streamError}
           pendingApproval={pendingApproval}
+          pendingUserInput={pendingUserInput}
           workspaceId={workspaceId}
           approvalPending={approvalPending}
+          userInputPending={userInputPending}
           eventStreamStatus={eventStreamStatus}
           onBottomStateChange={onBottomStateChange}
           onSelectTurn={onSelectTurn}
@@ -187,6 +195,7 @@ export function MissionControlActiveSessionSurface({
           onOpenRunDetails={onOpenRunDetails}
           onApprovePending={onApprovePending}
           onDenyPending={onDenyPending}
+          onSubmitUserInput={onSubmitUserInput}
           onRefresh={onRefreshThread}
         />
         <ChatComposerShell

@@ -505,6 +505,7 @@ export type ChatTurnLifecycleStatus =
   | "running"
   | "waiting_for_tool"
   | "waiting_for_approval"
+  | "waiting_for_user_input"
   | "completed"
   | "failed"
   | "cancelled";
@@ -638,6 +639,7 @@ export const CHAT_TURN_ACTIVE_STATUSES = [
   "running",
   "waiting_for_tool",
   "waiting_for_approval",
+  "waiting_for_user_input",
 ] as const satisfies ChatTurnLifecycleStatus[];
 
 export const CHAT_TURN_TERMINAL_STATUSES = [
@@ -827,6 +829,7 @@ export interface ChatTurnTraceRecord {
   capabilitySnapshotId?: string;
   codeModeRunId?: string;
   pendingApprovalSummary?: ChatStreamApprovalRecord;
+  pendingUserInput?: ChatUserInputPromptRecord;
   toolRuns: ChatToolRunRecord[];
   citations: ChatCitationRecord[];
   routing: {
@@ -1182,6 +1185,54 @@ export interface ChatStreamApprovalRecord {
   expiresAt?: string;
 }
 
+export type ChatUserInputPromptKind = "single_select" | "text";
+
+export interface ChatUserInputPromptOptionRecord {
+  optionId: string;
+  label: string;
+  description: string;
+  helpText?: string;
+}
+
+export interface ChatUserInputPromptRecord {
+  promptId: string;
+  turnId: string;
+  kind: ChatUserInputPromptKind;
+  title: string;
+  question: string;
+  required: boolean;
+  dismissible?: boolean;
+  expiresAt?: string;
+  options?: ChatUserInputPromptOptionRecord[];
+  placeholder?: string;
+  submitLabel?: string;
+  multiline?: boolean;
+}
+
+export type ChatUserInputPromptResponse =
+  | {
+      kind: "single_select";
+      optionId: string;
+    }
+  | {
+      kind: "text";
+      text: string;
+    };
+
+export interface ChatUserInputPromptAnswerRequest {
+  response: ChatUserInputPromptResponse;
+}
+
+export interface ChatUserInputPromptAnswerResponse {
+  ok: true;
+  sessionId: string;
+  turnId: string;
+  promptId: string;
+  resumed: boolean;
+  resumedTurnId?: string;
+  resumedRunId?: string;
+}
+
 export interface ChatStreamChunkBase {
   sessionId: string;
   eventId: string;
@@ -1239,6 +1290,12 @@ export interface ChatStreamApprovalRequiredChunk extends ChatStreamChunkBase {
   approval: ChatStreamApprovalRecord;
 }
 
+export interface ChatStreamUserInputRequiredChunk extends ChatStreamChunkBase {
+  type: "user_input_required";
+  turnId: string;
+  prompt: ChatUserInputPromptRecord;
+}
+
 export interface ChatStreamTraceUpdateChunk extends ChatStreamChunkBase {
   type: "trace_update";
   turnId: string;
@@ -1278,6 +1335,7 @@ export type ChatStreamChunk =
   | ChatStreamToolStartChunk
   | ChatStreamToolResultChunk
   | ChatStreamApprovalRequiredChunk
+  | ChatStreamUserInputRequiredChunk
   | ChatStreamTraceUpdateChunk
   | ChatStreamCitationChunk
   | ChatStreamCapabilitySuggestionChunk

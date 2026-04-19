@@ -3,6 +3,7 @@ import type { DurableRunRecord } from "@goatcitadel/contracts";
 vi.mock("@goatcitadel/storage", () => ({}));
 vi.mock("sqlite", () => ({}));
 import {
+  buildDurableChatTurnResumeContent,
   buildDurableWorkflowExecutors,
   createDurableWorkflowExecutorRegistry,
   type DurableWorkflowExecutorHosts,
@@ -103,6 +104,61 @@ function createHosts(outcome: "paused" | "completed"): {
 }
 
 describe("durable-execution-service orchestration workflow", () => {
+  it("merges answered user-input prompts into resumed chat content", () => {
+    expect(
+      buildDurableChatTurnResumeContent("Ship it", [
+        {
+          promptId: "prompt-1",
+          kind: "single_select",
+          title: "Choose target",
+          question: "Which environment should we deploy to?",
+          answeredAt: "2026-04-19T00:00:00.000Z",
+          response: { kind: "single_select", optionId: "prod" },
+          selectedOption: {
+            optionId: "prod",
+            label: "Production",
+            description: "Deploy to the live environment.",
+          },
+        },
+        {
+          promptId: "prompt-2",
+          kind: "text",
+          question: "Anything else to keep in mind?",
+          answeredAt: "2026-04-19T00:00:01.000Z",
+          response: { kind: "text", text: "Hold until the migration window opens." },
+        },
+      ]),
+    ).toContain("Resume context from answered blocking prompts:");
+    expect(
+      buildDurableChatTurnResumeContent("Ship it", [
+        {
+          promptId: "prompt-1",
+          kind: "single_select",
+          title: "Choose target",
+          question: "Which environment should we deploy to?",
+          answeredAt: "2026-04-19T00:00:00.000Z",
+          response: { kind: "single_select", optionId: "prod" },
+          selectedOption: {
+            optionId: "prod",
+            label: "Production",
+            description: "Deploy to the live environment.",
+          },
+        },
+      ]),
+    ).toContain("Answer: Production");
+    expect(
+      buildDurableChatTurnResumeContent("Ship it", [
+        {
+          promptId: "prompt-2",
+          kind: "text",
+          question: "Anything else to keep in mind?",
+          answeredAt: "2026-04-19T00:00:01.000Z",
+          response: { kind: "text", text: "Hold until the migration window opens." },
+        },
+      ]),
+    ).toContain("Answer: Hold until the migration window opens.");
+  });
+
   it("registers orchestration.plan.execute and leaves paused runs open", async () => {
     const { hosts, durableRuns, executeDurableOrchestrationRun } = createHosts("paused");
     const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));

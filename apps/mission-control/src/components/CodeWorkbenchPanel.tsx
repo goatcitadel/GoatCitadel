@@ -126,6 +126,7 @@ export function CodeWorkbenchPanel({
 
   const activeDraft = drafts[activeBlockIndex] ?? "";
   const approvalBlocked = selectedTurn?.trace?.status === "waiting_for_approval";
+  const userInputBlocked = selectedTurn?.trace?.status === "waiting_for_user_input";
   const primaryPath = selectedFile?.path ?? changedFiles[0];
   const fileList = workbenchTree?.items.filter((item) => item.kind === "file") ?? [];
 
@@ -149,6 +150,7 @@ export function CodeWorkbenchPanel({
           <StatusChip tone={readyForRepoOps ? "success" : "warning"}>
             {workbenchState?.worktreeStatus ?? "uninitialized"}
           </StatusChip>
+          {userInputBlocked ? <StatusChip tone="warning">Answer needed</StatusChip> : null}
           <StatusChip
             tone={
               workbenchState?.validationStatus === "passed"
@@ -202,6 +204,11 @@ export function CodeWorkbenchPanel({
             <div className="chat-code-workbench-empty">
               <p>Project binding is required before repo operations can start.</p>
               <p>Draft snippets remain available as a secondary helper lane.</p>
+            </div>
+          ) : userInputBlocked ? (
+            <div className="chat-code-workbench-empty">
+              <p>The selected turn is waiting for your answer in the thread lane.</p>
+              <p>Reply there to continue this run.</p>
             </div>
           ) : !readyForRepoOps ? (
             <div className="chat-code-workbench-empty">

@@ -518,9 +518,13 @@ export function ChatPage({
   const {
     pendingApproval,
     setPendingApproval,
+    pendingUserInput,
+    setPendingUserInput,
     approvalPending,
+    userInputPending,
     handleApprovePending,
     handleDenyPending,
+    handleSubmitUserInput,
     handleSelectBranchTurn,
     streamStatus,
     prefsRef,
@@ -532,6 +536,7 @@ export function ChatPage({
     setPendingAttachments,
     setEditingTurnId,
     setPendingApproval,
+    setPendingUserInput,
     setDelegationSuggestion,
     setCapabilitySuggestions,
     setSpecialistSuggestions,
@@ -703,7 +708,8 @@ export function ChatPage({
   const canSend =
     Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
     !sending &&
-    !pendingApproval;
+    !pendingApproval &&
+    !pendingUserInput;
 
   const handleRunCodeHelper = useCallback(
     async (language: string, source: string) => {
@@ -1008,8 +1014,10 @@ export function ChatPage({
             queuedCount={queuedOutbound.length}
             streamError={error}
             pendingApproval={pendingApproval}
+            pendingUserInput={pendingUserInput}
             workspaceId={selectedSession.workspaceId ?? workspaceId}
             approvalPending={approvalPending}
+            userInputPending={userInputPending}
             eventStreamStatus={eventStreamStatus}
             onBottomStateChange={setFollowThreadOutput}
             onSelectTurn={(turnId) => {
@@ -1024,6 +1032,7 @@ export function ChatPage({
             }}
             onApprovePending={(allowScope) => void handleApprovePending(allowScope)}
             onDenyPending={() => void handleDenyPending()}
+            onSubmitUserInput={(response) => void handleSubmitUserInput(response)}
             onRefreshThread={() => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true })}
             isDragActive={isDragActive}
             queueItems={queuedOutbound.map((item) => ({

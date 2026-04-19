@@ -378,6 +378,50 @@
   gap: 8px;
 }
 
+.chat-user-input-card {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-user-input-options {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-user-input-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.chat-user-input-option-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.chat-user-input-option-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-user-input-option-description {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  opacity: 0.82;
+}
+
+.chat-user-input-input,
+.chat-user-input-textarea {
+  width: 100%;
+}
+
+.chat-user-input-help-hint {
+  min-width: 22px;
+  min-height: 22px;
+}
+
 .chat-v11-composer {
   gap: 8px;
   padding: 12px;

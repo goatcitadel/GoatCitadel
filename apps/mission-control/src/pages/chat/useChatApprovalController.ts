@@ -10,6 +10,7 @@ import {
   abortActiveChatStream,
   type ActiveChatStreamState,
   type PendingApprovalState,
+  type PendingUserInputState,
 } from "./useChatOutboundExecution";
 
 export function useChatApprovalController(input: {
@@ -18,6 +19,7 @@ export function useChatApprovalController(input: {
   setPendingAttachments: Dispatch<SetStateAction<ChatAttachmentRecord[]>>;
   setEditingTurnId: (value: string | null) => void;
   setPendingApproval: (value: PendingApprovalState | null) => void;
+  setPendingUserInput: (value: PendingUserInputState | null) => void;
   setDelegationSuggestion: (value: ChatDelegationSuggestionRecord | null) => void;
   setCapabilitySuggestions: (value: ChatCapabilityUpgradeSuggestion[]) => void;
   setSpecialistSuggestions: (value: ChatSpecialistCandidateSuggestionRecord[]) => void;
@@ -38,6 +40,7 @@ export function useChatApprovalController(input: {
       input.setCapabilitySuggestions([]);
       input.setSpecialistSuggestions([]);
       input.setPendingApproval(null);
+      input.setPendingUserInput(null);
       lastLoadedShellSessionIdRef.current = null;
       return;
     }
@@ -56,6 +59,7 @@ export function useChatApprovalController(input: {
       input.setEditingTurnId(null);
       input.setLocalNotices([]);
       input.setPendingApproval(null);
+      input.setPendingUserInput(null);
       input.setDelegationSuggestion(null);
       input.setCapabilitySuggestions([]);
       input.setSpecialistSuggestions([]);
@@ -70,6 +74,7 @@ export function useChatApprovalController(input: {
     input.setEditingTurnId,
     input.setLocalNotices,
     input.setPendingApproval,
+    input.setPendingUserInput,
     input.setPendingAttachments,
     input.setSelectedTurnId,
     input.setSpecialistSuggestions,

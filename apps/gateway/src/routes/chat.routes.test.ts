@@ -674,6 +674,38 @@ describe("chat routes additional coverage", () => {
     expect(updateChatSessionPrefs).toHaveBeenCalledWith("sess-1", { planningMode: "advisory" });
   });
 
+  it("answers pending user-input prompts through the gateway", async () => {
+    const answerChatUserInputPrompt = vi.fn(async () => ({
+      ok: true,
+      sessionId: "sess-1",
+      turnId: "turn-2",
+      promptId: "prompt-1",
+      resumed: false,
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      answerChatUserInputPrompt,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/user-input/prompt-1/respond",
+      payload: {
+        response: {
+          kind: "single_select",
+          optionId: "opt-1",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(answerChatUserInputPrompt).toHaveBeenCalledWith("sess-1", "turn-2", "prompt-1", {
+      kind: "single_select",
+      optionId: "opt-1",
+    });
+  });
+
   it("lists, creates, and updates specialist candidates through the gateway", async () => {
     const listChatSessionSpecialistCandidates = vi.fn(() => ({
       items: [

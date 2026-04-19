@@ -42,4 +42,12 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS claim_expires_at TEXT/);
     assert.match(repairMigration?.sql ?? "", /CREATE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_runs_claim/);
   });
+
+  it("repairs chat user-input prompt columns for older Postgres chat trace tables", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 10);
+
+    assert.equal(repairMigration?.name, "chat_user_input_prompt_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_turn_traces/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS pending_user_input_json TEXT/);
+  });
 });

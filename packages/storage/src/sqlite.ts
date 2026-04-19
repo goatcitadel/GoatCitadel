@@ -1183,6 +1183,7 @@ function createChatBranchingAndPlanningSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "source_turn_id", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "citations_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "loop_guard_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "pending_user_input_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "capability_upgrade_suggestions_json", "TEXT");
 
   db.exec(`
@@ -1312,6 +1313,7 @@ function repairChatTurnTraceShape(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "orchestration_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "guidance_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "loop_guard_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "pending_user_input_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "citations_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "failure_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "capability_upgrade_suggestions_json", "TEXT");
@@ -1893,6 +1895,7 @@ function createAgenticChatSchema(db: DatabaseSync): void {
       orchestration_json TEXT,
       guidance_json TEXT,
       loop_guard_json TEXT,
+      pending_user_input_json TEXT,
       citations_json TEXT,
       failure_json TEXT,
       capability_upgrade_suggestions_json TEXT,
@@ -2151,6 +2154,7 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
 function createRobustAgentExecutionSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "completion_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "durable_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "pending_user_input_json", "TEXT");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_stream_events (
@@ -2519,6 +2523,7 @@ function createAgenticDepthSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "reflection_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "proactive_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "failure_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "pending_user_input_json", "TEXT");
 }
 
 function createWeeklyDecisionReplaySchema(db: DatabaseSync): void {
@@ -3314,6 +3319,7 @@ function createWorkspaceIsolationSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "guidance_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "loop_guard_json", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "failure_json", "TEXT");
+  addColumnIfMissing(db, "chat_turn_traces", "pending_user_input_json", "TEXT");
   addColumnIfMissing(db, "tasks", "workspace_id", "TEXT NOT NULL DEFAULT 'default'");
 
   db.exec(`

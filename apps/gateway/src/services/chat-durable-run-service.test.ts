@@ -148,6 +148,35 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("marks user-input waits as durable waiting checkpoints", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_user_input",
+      failure: {
+        failureClass: "needs_input",
+        message: "Waiting for deployment target",
+        retryable: true,
+        recommendedAction: "answer_prompt",
+      },
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    expect(state.runs.get("run-waiting")?.status).toBe("waiting");
+    expect(state.checkpoints).toEqual([
+      expect.objectContaining({
+        runId: "run-waiting",
+        checkpointKind: "run_waiting",
+        state: expect.objectContaining({
+          currentStep: "waiting_for_user_input",
+          blocker: "Waiting for deployment target",
+          nextAction: "answer_prompt",
+        }),
+      }),
+    ]);
+  });
+
   it("records completed checkpoints with tool and artifact summaries", () => {
     const prepared = createPreparedTurn({ content: "Ship the patch" });
     const trace = createTrace({

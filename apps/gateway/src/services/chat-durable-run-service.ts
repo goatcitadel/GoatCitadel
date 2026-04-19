@@ -133,7 +133,7 @@ export function finalizeDurableChatRun(
 ): void {
   const now = new Date().toISOString();
   const checkpointState = buildDurableCheckpointState(deps, prepared, trace);
-  if (trace.status === "waiting_for_approval") {
+  if (trace.status === "waiting_for_approval" || trace.status === "waiting_for_user_input") {
     deps.durableRuns.updateRun({
       runId,
       status: "waiting",

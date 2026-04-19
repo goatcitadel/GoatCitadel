@@ -267,6 +267,7 @@ export type {
 } from "./chat.js";
 export {
   acceptChatDelegation,
+  answerChatUserInputPrompt,
   approveChatTool,
   archiveChatProject,
   archiveChatSession,

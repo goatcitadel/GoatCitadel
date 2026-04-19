@@ -29,6 +29,32 @@ function createRepo(): DurableRunRepository {
 }
 
 describe("DurableRunRepository", () => {
+  it("persists payload updates when runs are patched", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      workflowKey: "chat.turn.execute",
+      payload: { version: "chat.turn.execute.v1", step: "waiting" },
+    });
+
+    const updated = repo.updateRun({
+      runId: run.runId,
+      status: "waiting",
+      payload: {
+        version: "chat.turn.execute.v1",
+        step: "queued",
+        userInputResponses: [{ promptId: "prompt-1", kind: "text" }],
+      },
+      expectedVersion: run.version,
+    });
+
+    assert.deepEqual(updated.payload, {
+      version: "chat.turn.execute.v1",
+      step: "queued",
+      userInputResponses: [{ promptId: "prompt-1", kind: "text" }],
+    });
+    assert.deepEqual(repo.getRun(run.runId).payload, updated.payload);
+  });
+
   it("serializes checkpoint state payloads safely", () => {
     const repo = createRepo();
     const run = repo.createRun({

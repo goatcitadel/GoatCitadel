@@ -51,7 +51,11 @@
       "Bash(cd F:/code/personal-ai && npx tsc --noEmit -p packages/storage/tsconfig.json 2>&1 | tail -5)",
       "Bash(cd:*)",
       "Bash(find:*)",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "Bash(awk '/^[[:space:]]*private|^[[:space:]]*async|^[[:space:]]*function/ { line=NR; content=$0; getline; while \\(NF==0 || /^[[:space:]]+/\\) { if \\(/^[[:space:]]*private|^[[:space:]]*async|^[[:space:]]*function/\\) break; getline; line++ } print line-NR+1 \" lines: \" content }' /f/code/personal-ai/apps/gateway/src/services/chat-agent-orchestrator.ts)",
+      "Bash(awk -F: '$1 > 200 {print}')",
+      "Bash(python3 *)",
+      "Bash(awk '/^\\\\s*\\(async\\\\s+\\\\*|private\\\\s+async|private\\\\s|function\\\\s\\)\\\\w+\\\\s*\\\\\\(/ { *)"
     ]
   },
   "hooks": {

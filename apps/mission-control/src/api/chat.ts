@@ -30,6 +30,8 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatThreadResponse,
+  ChatUserInputPromptAnswerRequest,
+  ChatUserInputPromptAnswerResponse,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
@@ -323,6 +325,21 @@ export async function fetchChatMessages(
 
 export async function fetchChatThread(sessionId: string): Promise<ChatThreadResponse> {
   return request<ChatThreadResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
+}
+
+export async function answerChatUserInputPrompt(
+  sessionId: string,
+  turnId: string,
+  promptId: string,
+  input: ChatUserInputPromptAnswerRequest,
+): Promise<ChatUserInputPromptAnswerResponse> {
+  return request<ChatUserInputPromptAnswerResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/user-input/${encodeURIComponent(promptId)}/respond`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function fetchChatPendingApprovals(sessionId: string): Promise<{
