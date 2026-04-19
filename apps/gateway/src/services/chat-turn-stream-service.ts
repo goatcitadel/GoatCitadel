@@ -763,6 +763,7 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         messageId: assistantMessageId,
         content: finalText,
+        repaired: Boolean(hydratedTrace.completion?.repaired),
       };
       const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
         sessionId,
@@ -844,6 +845,7 @@ export async function* streamPreparedAgentChatTurn(
         }
       | undefined;
     let hasStreamedDelta = false;
+    let streamLayerRepaired = false;
     let approvalRequired = false;
     const streamCitations: ChatCitationRecord[] = [];
     for await (const chunk of host.turnRuntime.runStream({
@@ -915,6 +917,7 @@ export async function* streamPreparedAgentChatTurn(
 
     if (!approvalRequired && !finalText.trim()) {
       finalText = buildEmptyAssistantTurnFallbackText();
+      streamLayerRepaired = true;
       if (!hasStreamedDelta) {
         for (const slice of splitIntoChunks(finalText, 120)) {
           yield {
@@ -1020,6 +1023,14 @@ export async function* streamPreparedAgentChatTurn(
         ...host.storage.chatTurnTraces.patch(turnId, {
           assistantMessageId,
           status: "completed",
+          ...(streamLayerRepaired
+            ? {
+                completion: {
+                  status: "complete",
+                  repaired: true,
+                },
+              }
+            : {}),
           finishedAt: new Date().toISOString(),
           retrieval: prepared.retrievalTrace,
           reflection: {
@@ -1048,6 +1059,7 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         messageId: assistantMessageId,
         content: finalText,
+        repaired: streamLayerRepaired || Boolean(hydratedTrace.completion?.repaired),
       };
       const capabilityUpgradeSuggestions = await host.collectCapabilityUpgradeSuggestions({
         sessionId,

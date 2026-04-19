@@ -26,6 +26,11 @@ import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
 import { hasLiveDataKeywords, EXPLICIT_WEB_PHRASES } from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
+import {
+  looksLikePromptLabPromptPackMarkdownImportPrompt,
+  looksLikePromptLabPromptPackOperatorSurfacePrompt,
+  looksLikePromptLabPromptPackRepoBindingPrompt,
+} from "./prompt-pack-prompt-lab-detectors.js";
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;

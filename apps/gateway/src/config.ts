@@ -983,7 +983,7 @@ function defaultLlmConfig(): string {
         label: "OpenAI",
         baseUrl: "https://api.openai.com/v1",
         apiStyle: "openai-responses",
-        defaultModel: "gpt-5.4-mini",
+        defaultModel: "gpt-5.4",
         apiKeyEnv: "OPENAI_API_KEY",
       },
       {
@@ -1015,7 +1015,7 @@ function defaultLlmConfig(): string {
         label: "OpenRouter",
         baseUrl: "https://openrouter.ai/api/v1",
         apiStyle: "openai-chat-completions",
-        defaultModel: "openai/gpt-5.4-mini",
+        defaultModel: "openai/gpt-5.4",
         apiKeyEnv: "OPENROUTER_API_KEY",
       },
       {

@@ -191,9 +191,9 @@ describe("renderUpdateReviewMarkdown", () => {
             configuredApiStyle: "openai-chat-completions",
             defaultModel: "gpt-4.1-mini",
             preferredApiStyle: "openai-responses",
-            preferredModel: "gpt-5.4-mini",
+            preferredModel: "gpt-5.4",
             status: "stale",
-            message: "Configured default is gpt-4.1-mini on openai-chat-completions; preferred is gpt-5.4-mini on openai-responses.",
+            message: "Configured default is gpt-4.1-mini on openai-chat-completions; preferred is gpt-5.4 on openai-responses.",
           },
         ],
         warnings: ["openai: stale default"],
@@ -212,7 +212,7 @@ describe("renderUpdateReviewMarkdown", () => {
     expect(markdown).toContain("| nanoid | 5.1.6 | 5.1.7 | @goatcitadel/gateway-core |");
     expect(markdown).toContain("| cloudflare-api | changed | abc123 | def456 |");
     expect(markdown).toContain("| openai | ok | - | March 17, 2026 |");
-    expect(markdown).toContain("| openai | stale | gpt-4.1-mini / openai-chat-completions | gpt-5.4-mini / openai-responses |");
+    expect(markdown).toContain("| openai | stale | gpt-4.1-mini / openai-chat-completions | gpt-5.4 / openai-responses |");
     expect(markdown).toContain("## Warnings");
   });
 });

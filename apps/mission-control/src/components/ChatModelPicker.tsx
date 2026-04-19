@@ -61,24 +61,14 @@ export function ChatModelPicker({
         aria-label="Provider"
         options={providerOptions}
       />
-      {models.length > 12 ? (
-        <GCCombobox
-          value={modelLoading ? "" : (model ?? models[0] ?? "")}
-          disabled={disabled || modelLoading || !activeProvider || models.length === 0}
-          onChange={onChangeModel}
-          aria-label="Model"
-          placeholder={modelLoading ? "Loading models..." : "Search model..."}
-          options={modelOptions}
-        />
-      ) : (
-        <GCSelect
-          value={modelLoading ? "" : (model ?? models[0] ?? "")}
-          disabled={disabled || modelLoading || !activeProvider || models.length === 0}
-          onChange={onChangeModel}
-          aria-label="Model"
-          options={modelOptions}
-        />
-      )}
+      <GCCombobox
+        value={modelLoading ? "" : (model ?? models[0] ?? "")}
+        disabled={disabled || modelLoading || !activeProvider || models.length === 0}
+        onChange={onChangeModel}
+        aria-label="Model"
+        placeholder={modelLoading ? "Loading models..." : "Search model..."}
+        options={modelOptions}
+      />
       {availabilityMessage ? <p className="chat-model-picker-note">{availabilityMessage}</p> : null}
     </div>
   );

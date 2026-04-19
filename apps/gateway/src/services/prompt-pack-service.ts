@@ -62,6 +62,7 @@ import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway-service.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
+import { applyPromptPackPromptLabFallbacks } from "./prompt-pack-empty-output-fallbacks.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
 // ── constants ────────────────────────────────────────────────────────

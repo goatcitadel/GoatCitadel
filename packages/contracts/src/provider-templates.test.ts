@@ -2,26 +2,26 @@ import { describe, expect, it } from "vitest";
 import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "./provider-templates.js";
 
 describe("provider templates", () => {
-  it("uses GPT-5.4-mini defaults for OpenAI-family templates", () => {
-    expect(findProviderTemplate("openai")?.defaultModel).toBe("gpt-5.4-mini");
+  it("uses GPT-5.4 defaults for OpenAI-family templates", () => {
+    expect(findProviderTemplate("openai")?.defaultModel).toBe("gpt-5.4");
     expect(findProviderTemplate("openai")?.apiStyle).toBe("openai-responses");
     expect(findProviderTemplate("openai")?.knownModels).toEqual([
-      "gpt-5.4-mini",
       "gpt-5.4",
+      "gpt-5.4-mini",
       "gpt-5-mini",
       "gpt-4.1-mini",
       "gpt-4o-mini",
     ]);
-    expect(findProviderTemplate("openrouter")?.defaultModel).toBe("openai/gpt-5.4-mini");
+    expect(findProviderTemplate("openrouter")?.defaultModel).toBe("openai/gpt-5.4");
     expect(findProviderTemplate("openrouter")?.apiStyle).toBe("openai-chat-completions");
     expect(findProviderTemplate("openrouter")?.knownModels).toEqual([
-      "openai/gpt-5.4-mini",
       "openai/gpt-5.4",
+      "openai/gpt-5.4-mini",
       "anthropic/claude-sonnet-4",
       "google/gemini-2.5-flash",
       "zai/glm-5v-turbo",
     ]);
-    expect(findProviderTemplate("vercel")?.defaultModel).toBe("openai/gpt-5.4-mini");
+    expect(findProviderTemplate("vercel")?.defaultModel).toBe("openai/gpt-5.4");
   });
 
   it("marks Anthropic as a native messages provider", () => {

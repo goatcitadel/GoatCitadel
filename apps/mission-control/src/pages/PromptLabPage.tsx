@@ -45,6 +45,7 @@ import {
   normalizePromptPlaceholderKey,
   parseBenchmarkProviders,
   parseBenchmarkTestCodes,
+  resolvePromptLabActiveProvider,
   resolvePromptPackRunModelUsage,
   type TestResultFilter,
 } from "./prompt-lab/prompt-lab-helpers";
@@ -355,10 +356,10 @@ export function PromptLabPage({ workspaceId }: { workspaceId?: string }) {
       setSelectedModel("");
       return;
     }
-    const activeProvider =
-      providerOptions.find((item) => item.providerId === selectedProviderId) ??
-      providerOptions.find((item) => item.providerId === runtimeLlmConfig?.activeProviderId) ??
-      providerOptions[0];
+    const activeProvider = resolvePromptLabActiveProvider(providerOptions, {
+      selectedProviderId,
+      runtimeActiveProviderId: runtimeLlmConfig?.activeProviderId,
+    });
     if (!activeProvider) {
       setSelectedModel("");
       return;

@@ -7,6 +7,7 @@
  */
 
 import type { PromptPackLatestAssessmentRecordV2, PromptPackRunRecord } from "@goatcitadel/contracts";
+import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 
 export type TestResultFilter =
   | "all"
@@ -30,6 +31,37 @@ export function dedupeStrings(values: Array<string | undefined>): string[] {
     out.push(normalized);
   }
   return out;
+}
+
+export function resolvePromptLabActiveProvider(
+  providerOptions: ChatModelProviderOption[],
+  input: {
+    selectedProviderId?: string;
+    runtimeActiveProviderId?: string | null;
+    preferredProviderId?: string;
+  },
+): ChatModelProviderOption | undefined {
+  if (providerOptions.length === 0) {
+    return undefined;
+  }
+
+  const preferredProviderId = input.preferredProviderId?.trim() || "openai";
+  const candidateProviderIds = [
+    input.selectedProviderId,
+    preferredProviderId,
+    input.runtimeActiveProviderId ?? undefined,
+  ];
+  for (const providerId of candidateProviderIds) {
+    const normalizedProviderId = providerId?.trim();
+    if (!normalizedProviderId) {
+      continue;
+    }
+    const match = providerOptions.find((provider) => provider.providerId === normalizedProviderId);
+    if (match) {
+      return match;
+    }
+  }
+  return providerOptions[0];
 }
 
 export function extractPromptPlaceholders(prompt: string): string[] {

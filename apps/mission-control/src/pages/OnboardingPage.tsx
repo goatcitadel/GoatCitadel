@@ -222,11 +222,11 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   const [basicPassword, setBasicPassword] = useState("");
 
   const [activeProviderId, setActiveProviderId] = useState("openai");
-  const [activeModel, setActiveModel] = useState("gpt-5.4-mini");
+  const [activeModel, setActiveModel] = useState("gpt-5.4");
   const [providerLabel, setProviderLabel] = useState("OpenAI");
   const [providerBaseUrl, setProviderBaseUrl] = useState("https://api.openai.com/v1");
   const [providerApiStyle, setProviderApiStyle] = useState<ProviderApiStyle>("openai-responses");
-  const [providerDefaultModel, setProviderDefaultModel] = useState("gpt-5.4-mini");
+  const [providerDefaultModel, setProviderDefaultModel] = useState("gpt-5.4");
   const [providerApiKey, setProviderApiKey] = useState("");
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
   const [providerRequestDraft, setProviderRequestDraft] = useState(createEmptyLlmTransportDraft);

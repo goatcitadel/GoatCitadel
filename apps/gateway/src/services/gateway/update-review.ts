@@ -354,7 +354,7 @@ export async function collectProviderModelStaleness(
     {
       providerId: "openai" as const,
       preferredApiStyle: "openai-responses" as const,
-      preferredModel: "gpt-5.4-mini",
+      preferredModel: "gpt-5.4",
     },
     {
       providerId: "anthropic" as const,

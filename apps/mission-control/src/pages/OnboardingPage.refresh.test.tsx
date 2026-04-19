@@ -42,7 +42,7 @@ vi.mock("../hooks/useProviderModelCatalog", () => ({
         label: "OpenAI",
         baseUrl: "https://api.openai.com/v1",
         apiStyle: "openai-responses",
-        defaultModel: "gpt-5.4-mini",
+        defaultModel: "gpt-5.4",
       },
     ],
     reload: providerCatalogMocks.reloadProviderCatalog,
@@ -114,14 +114,14 @@ function makeOnboardingState() {
       networkAllowlist: ["127.0.0.1", "localhost"],
       llm: {
         activeProviderId: "openai",
-        activeModel: "gpt-5.4-mini",
+        activeModel: "gpt-5.4",
         providers: [
           {
             providerId: "openai",
             label: "OpenAI",
             baseUrl: "https://api.openai.com/v1",
             apiStyle: "openai-responses",
-            defaultModel: "gpt-5.4-mini",
+            defaultModel: "gpt-5.4",
           },
         ],
       },
@@ -176,7 +176,7 @@ describe("OnboardingPage refresh discipline", () => {
       items: [],
     });
     providerCatalogMocks.previewProviderModels.mockResolvedValue({
-      items: ["gpt-5.4-mini"],
+      items: ["gpt-5.4"],
       source: "remote",
       warning: undefined,
     });
