@@ -1,170 +1,51 @@
 import React from "react";
-import { act, create } from "react-test-renderer";
+import { create } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 
-const refreshState = vi.hoisted(() => ({
-  callback: null as null | ((signal: unknown) => Promise<void> | void),
+vi.mock("./ActivityPage", () => ({
+  ActivityPage: () => <div>activity-page</div>,
 }));
 
-const streamState = vi.hoisted(() => ({
-  onEvent: null as null | ((event: unknown) => void),
+vi.mock("./CronPage", () => ({
+  CronPage: () => <div>cron-page</div>,
 }));
 
-const apiMocks = vi.hoisted(() => ({
-  fetchTimelineSummary: vi.fn(),
-  connectEventStream: vi.fn(),
+vi.mock("./ImprovementPage", () => ({
+  ImprovementPage: ({ workspaceId }: { workspaceId?: string }) => <div>improvement-page:{workspaceId ?? "none"}</div>,
 }));
 
-vi.mock("../api/client", async () => {
-  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
-  return {
-    ...actual,
-    fetchTimelineSummary: apiMocks.fetchTimelineSummary,
-    connectEventStream: apiMocks.connectEventStream,
-  };
-});
-
-vi.mock("../hooks/useRefreshSubscription", () => ({
-  useRefreshSubscription: (_topic: string, callback: (signal: unknown) => Promise<void> | void) => {
-    refreshState.callback = callback;
-  },
+vi.mock("./SessionsPage", () => ({
+  SessionsPage: () => <div>sessions-page</div>,
 }));
 
 import { TimelinePage } from "./TimelinePage";
 
 describe("TimelinePage", () => {
-  it("renders one focused timeline panel without the secondary summary panel", async () => {
-    apiMocks.connectEventStream.mockImplementation((onEvent: (event: unknown) => void) => {
-      streamState.onEvent = onEvent;
-      return () => {
-        streamState.onEvent = null;
-      };
-    });
-    apiMocks.fetchTimelineSummary.mockResolvedValue({
-      generatedAt: "2026-04-10T10:00:00.000Z",
-      events: {
-        items: [
-          {
-            eventId: "evt-1",
-            sequence: 1,
-            eventType: "runtime.ready",
-            source: "gateway",
-            timestamp: "2026-04-10T10:00:00.000Z",
-            payload: {},
-          },
-        ],
-      },
-      sessions: {
-        items: [
-          {
-            sessionId: "session-1",
-            title: "Operator Session",
-            lifecycleStatus: "active",
-            updatedAt: "2026-04-10T10:00:00.000Z",
-          },
-        ],
-      },
-      scheduler: {
-        jobs: [{ jobId: "job-1", name: "Nightly", enabled: true, schedule: "0 2 * * *" }],
-        reviewQueue: [{ itemId: "review-1", reason: "Needs operator review", status: "pending" }],
-      },
-      improvement: {
-        reports: [{ reportId: "report-1", title: "Weekly report", runId: "run-1" }],
-        replayRuns: [{ runId: "run-1", status: "completed" }],
-      },
-    });
-
-    let renderer = create(<div />);
-    await act(async () => {
-      renderer = create(<TimelinePage activeTab="sessions" workspaceId="default" onTabChange={() => undefined} />);
-    });
-
-    await act(async () => {
-      streamState.onEvent?.({
-        eventId: "evt-2",
-        sequence: 2,
-        eventType: "runtime.warning",
-        source: "gateway",
-        timestamp: "2026-04-10T10:05:00.000Z",
-        payload: {},
-      });
-    });
-
-    apiMocks.fetchTimelineSummary.mockResolvedValueOnce({
-      generatedAt: "2026-04-10T10:06:00.000Z",
-      events: {
-        items: [
-          {
-            eventId: "evt-3",
-            sequence: 3,
-            eventType: "runtime.recovered",
-            source: "gateway",
-            timestamp: "2026-04-10T10:06:00.000Z",
-            payload: {},
-          },
-        ],
-      },
-      sessions: {
-        items: [
-          {
-            sessionId: "session-1",
-            title: "Operator Session",
-            lifecycleStatus: "recovered",
-            updatedAt: "2026-04-10T10:06:00.000Z",
-          },
-        ],
-      },
-      scheduler: {
-        jobs: [{ jobId: "job-1", name: "Nightly", enabled: true, schedule: "0 2 * * *" }],
-        reviewQueue: [{ itemId: "review-1", reason: "Needs operator review", status: "pending" }],
-      },
-      improvement: {
-        reports: [{ reportId: "report-1", title: "Weekly report", runId: "run-1" }],
-        replayRuns: [{ runId: "run-1", status: "completed" }],
-      },
-    });
-    await act(async () => {
-      await refreshState.callback?.({
-        topic: "dashboard",
-        timestamp: Date.now(),
-        reason: "test-refresh",
-      });
-    });
+  it("renders the interactive sessions surface for the sessions tab", () => {
+    const renderer = create(<TimelinePage activeTab="sessions" workspaceId="default" onTabChange={() => undefined} />);
 
     const text = JSON.stringify(renderer.toJSON());
-    expect(text).toContain("Timeline");
-    expect(text).toContain("Live feed");
-    expect(text).toContain("Operator Session");
-    expect(text).toContain("1 scheduler items waiting");
-    expect(text).toContain("1 reports");
-    expect(text).toContain("Recovered and progressing");
-    expect(text).not.toContain("Other lanes");
+    expect(text).toContain("Sessions");
+    expect(text).toContain("sessions-page");
+    expect(text).not.toContain("cron-page");
   });
 
-  it("hides scheduler diagnostics unless technical details are enabled", async () => {
-    apiMocks.connectEventStream.mockImplementation(() => () => undefined);
-    apiMocks.fetchTimelineSummary.mockResolvedValue({
-      generatedAt: "2026-04-10T10:00:00.000Z",
-      events: { items: [] },
-      sessions: { items: [] },
-      scheduler: {
-        jobs: [],
-        reviewQueue: [{ itemId: "diag-1", reason: "cronReviewQueueV1Enabled disabled", status: "pending" }],
-      },
-      improvement: { reports: [], replayRuns: [] },
-    });
+  it("renders the cron workspace for the scheduler tab", () => {
+    const renderer = create(<TimelinePage activeTab="scheduler" workspaceId="default" onTabChange={() => undefined} />);
 
-    let renderer = create(<div />);
-    await act(async () => {
-      renderer = create(<TimelinePage activeTab="scheduler" onTabChange={() => undefined} />);
-    });
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain("Scheduler");
+    expect(text).toContain("cron-page");
+    expect(text).not.toContain("activity-page");
+  });
 
-    expect(JSON.stringify(renderer.toJSON())).not.toContain("cronReviewQueueV1Enabled disabled");
+  it("passes the workspace to the improvement surface", () => {
+    const renderer = create(
+      <TimelinePage activeTab="improvement" workspaceId="workspace-1" onTabChange={() => undefined} />,
+    );
 
-    await act(async () => {
-      renderer.update(<TimelinePage activeTab="scheduler" showTechnicalDetails onTabChange={() => undefined} />);
-    });
-
-    expect(JSON.stringify(renderer.toJSON())).toContain("cronReviewQueueV1Enabled disabled");
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain("improvement-page:");
+    expect(text).toContain("workspace-1");
   });
 });

@@ -33,6 +33,13 @@ vi.mock("./chat-turn-entry-service.js", () => ({
       status: "cancelled",
     },
   })),
+  routePreflight: vi.fn(async () => ({
+    selectionSource: "global",
+    fallbackPolicy: "off",
+    fallbackResult: "not_applicable",
+    runtimeReachability: "not_checked",
+    runtimeClass: "cloud",
+  })),
   resumeAgentChatTurnStream: vi.fn(async function* () {
     yield {
       type: "status",
@@ -52,12 +59,16 @@ describe("ChatTurnRuntimeService", () => {
 
     await runtime.agentSendChatMessage("session-1", { content: "hello" });
     await runtime.retryChatTurn("session-1", "turn-1", { content: "retry" });
+    await runtime.routePreflight("session-1", { action: "send" });
 
     expect(chatTurnEntryService.agentSendChatMessage).toHaveBeenCalledWith(expect.anything(), "session-1", {
       content: "hello",
     });
     expect(chatTurnEntryService.retryChatTurn).toHaveBeenCalledWith(expect.anything(), "session-1", "turn-1", {
       content: "retry",
+    });
+    expect(chatTurnEntryService.routePreflight).toHaveBeenCalledWith(expect.anything(), "session-1", {
+      action: "send",
     });
   });
 

@@ -69,6 +69,11 @@
         "responses": ["200"]
       }
     },
+    "/api/v1/chat/sessions/{sessionId}/route-preflight": {
+      "post": {
+        "responses": ["200"]
+      }
+    },
     "/api/v1/chat/sessions/{sessionId}/agent-send/stream": {
       "post": {
         "responses": ["200"]

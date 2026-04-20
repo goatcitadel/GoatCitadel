@@ -34,8 +34,11 @@ describe("CronJobRepository", () => {
     const job = {
       jobId: "cost-report-hourly",
       name: "Cost Report Hourly",
+      action: "cost_report" as const,
+      description: undefined,
       schedule: "0 * * * * America/Los_Angeles",
       enabled: true,
+      endAt: undefined,
       lastRunAt: "2026-03-29T10:00:00.000Z",
       nextRunAt: "2026-03-29T11:00:00.000Z",
     };

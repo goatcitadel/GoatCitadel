@@ -1,20 +1,19 @@
+import type { ChatMode } from "@goatcitadel/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventStreamStatus } from "../../api/client";
 
 const RECONNECTED_BANNER_MS = 4000;
 
-export function SurfaceReconnectBanner(props: {
-  status: EventStreamStatus;
-  onRefresh: () => void;
-}) {
+export function SurfaceReconnectBanner(props: { mode?: ChatMode; status: EventStreamStatus; onRefresh: () => void }) {
   const previousStateRef = useRef<EventStreamStatus["state"]>(props.status.state);
   const [reconnectedAt, setReconnectedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     const previousState = previousStateRef.current;
-    const recovered = props.status.state === "open"
-      && (previousState === "retrying" || previousState === "connecting" || previousState === "error");
+    const recovered =
+      props.status.state === "open" &&
+      (previousState === "retrying" || previousState === "connecting" || previousState === "error");
     previousStateRef.current = props.status.state;
     if (recovered) {
       const recoveredAt = Date.now();
@@ -35,16 +34,33 @@ export function SurfaceReconnectBanner(props: {
 
   const banner = useMemo(() => {
     if (props.status.state === "connecting" || props.status.state === "retrying") {
+      if (props.mode === "cowork") {
+        return {
+          tone: "pending",
+          title: "Run events reconnecting",
+          message: "The run may still be executing.",
+          actionable: false,
+        } as const;
+      }
       return {
         tone: "pending",
         title: "Reconnecting live updates",
-        message: props.status.reconnectAttempts > 0
-          ? `Retry ${props.status.reconnectAttempts} is in progress. New events will resume here automatically.`
-          : "Opening the live event stream for this surface.",
+        message:
+          props.status.reconnectAttempts > 0
+            ? `Retry ${props.status.reconnectAttempts} is in progress. New events will resume here automatically.`
+            : "Opening the live event stream for this surface.",
         actionable: false,
       } as const;
     }
     if (props.status.state === "error") {
+      if (props.mode === "cowork") {
+        return {
+          tone: "warning",
+          title: "Live run events interrupted",
+          message: "The run may still be executing; refresh to resync run state.",
+          actionable: true,
+        } as const;
+      }
       return {
         tone: "warning",
         title: "Live updates interrupted",
@@ -53,6 +69,14 @@ export function SurfaceReconnectBanner(props: {
       } as const;
     }
     if (reconnectedAt !== null && now - reconnectedAt < RECONNECTED_BANNER_MS) {
+      if (props.mode === "cowork") {
+        return {
+          tone: "success",
+          title: "Run events restored",
+          message: "Live run events are back.",
+          actionable: false,
+        } as const;
+      }
       return {
         tone: "success",
         title: "Live updates restored",
@@ -61,7 +85,7 @@ export function SurfaceReconnectBanner(props: {
       } as const;
     }
     return null;
-  }, [now, props.status.reconnectAttempts, props.status.state, reconnectedAt]);
+  }, [now, props.mode, props.status.reconnectAttempts, props.status.state, reconnectedAt]);
 
   if (!banner) {
     return null;

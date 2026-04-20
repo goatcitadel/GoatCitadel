@@ -81,8 +81,11 @@ export interface DashboardState {
 export interface CronJobRecord {
   jobId: string;
   name: string;
+  action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  description?: string;
   schedule: string;
   enabled: boolean;
+  endAt?: string;
   lastRunAt?: string;
   nextRunAt?: string;
   updatedAt?: string;

@@ -95,9 +95,8 @@ function makeThread(): ChatThreadResponse {
 function Harness(props: {
   streamEnabled?: boolean;
   onCommand?: (sessionId: string, command: string) => Promise<void>;
-  providerOptions?: any[];
-  selectedProviderId?: string;
-  selectedModel?: string;
+  ensureFreshRoutePreflight?: ReturnType<typeof vi.fn>;
+  isRoutePreflightAcknowledged?: (hash: string) => boolean;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(makeThread());
   const [draft, setDraft] = useState("");
@@ -112,6 +111,22 @@ function Harness(props: {
   const applyFetchedThreadRef = useRef((_thread: ChatThreadResponse, _requestVersion: number | null) => false);
   const messageMutationVersionRef = useRef(0);
   const loadSessionCoreStateMock = useMemo(() => vi.fn(async () => undefined), []);
+  const ensureFreshRoutePreflight = useMemo(
+    () =>
+      props.ensureFreshRoutePreflight ??
+      vi.fn(async () => ({
+        requestedProviderId: "openai",
+        requestedModel: "gpt-5.4-mini",
+        effectiveProviderId: "openai",
+        effectiveModel: "gpt-5.4-mini",
+        selectionSource: "session",
+        fallbackPolicy: "off",
+        fallbackResult: "not_applicable",
+        runtimeReachability: "not_checked",
+        runtimeClass: "cloud",
+      })),
+    [props.ensureFreshRoutePreflight],
+  );
 
   const messages = useMemo(() => {
     return (
@@ -129,11 +144,6 @@ function Harness(props: {
       lifecycleStatus: "active",
       scope: "mission",
     } as any,
-    providerOptions: (props.providerOptions ?? [
-      { providerId: "openai", label: "OpenAI", models: ["gpt-5.4-mini"] },
-    ]) as any,
-    selectedProviderId: props.selectedProviderId ?? "openai",
-    selectedModel: props.selectedModel ?? "gpt-5.4-mini",
     streamEnabled: props.streamEnabled ?? false,
     sending,
     error,
@@ -161,13 +171,14 @@ function Harness(props: {
     loadSidebar: vi.fn(async () => undefined),
     loadSessionCoreState: loadSessionCoreStateMock,
     ensureSession: vi.fn(async () => ({ sessionId: "session-1" }) as any),
-    getCachedModels: vi.fn(() => ["gpt-5.4-mini"]),
     pushLocalNotice: vi.fn(),
     handleCommandExecution: props.onCommand ?? vi.fn(async () => undefined),
     executeOutboundItemRef,
     tryBeginOutboundExecutionRef,
     applyFetchedThreadRef,
     messageMutationVersionRef,
+    ensureFreshRoutePreflight,
+    isRoutePreflightAcknowledged: props.isRoutePreflightAcknowledged ?? (() => false),
   });
 
   latest = {
@@ -544,7 +555,22 @@ describe("useChatOutboundExecution", () => {
       activeApprovalId: "approval-keep-1",
       remainingCount: 0,
     });
-    create(<Harness providerOptions={[]} selectedProviderId={undefined} selectedModel={undefined} />);
+    create(
+      <Harness
+        ensureFreshRoutePreflight={vi.fn(async () => ({
+          requestedProviderId: undefined,
+          requestedModel: undefined,
+          effectiveProviderId: undefined,
+          effectiveModel: undefined,
+          selectionSource: "global",
+          fallbackPolicy: "off",
+          fallbackResult: "not_applicable",
+          runtimeReachability: "not_checked",
+          runtimeClass: "unknown",
+          blockedReason: "No model provider is configured yet. Open Configure and connect a provider first.",
+        }))}
+      />,
+    );
 
     act(() => {
       latest?.setPendingApproval({

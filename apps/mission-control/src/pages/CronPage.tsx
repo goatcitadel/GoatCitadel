@@ -21,11 +21,63 @@ import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
-import { GCSwitch } from "../components/ui";
+import { GCSelect, GCSwitch, Textarea } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
-const DEFAULT_SCHEDULE = "0 2 * * * America/Los_Angeles";
+type CronAction = "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+type ScheduleFrequency = "hourly" | "daily" | "weekly";
+
+interface CronScheduleDraft {
+  frequency: ScheduleFrequency;
+  intervalHours: number;
+  hour: number;
+  minute: number;
+  weekdays: number[];
+  timeZone: string;
+  endDate: string;
+}
+
+const DEFAULT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+
+const DEFAULT_SCHEDULE_DRAFT: CronScheduleDraft = {
+  frequency: "daily",
+  intervalHours: 6,
+  hour: 2,
+  minute: 0,
+  weekdays: [1],
+  timeZone: DEFAULT_TIME_ZONE,
+  endDate: "",
+};
+
+const ACTION_LABELS: Record<CronAction, string> = {
+  task: "Creates an Observe task",
+  improvement: "Runs the improvement replay",
+  backup: "Creates a backup snapshot",
+  memory_flush: "Flushes stale memory data",
+  cost_report: "Writes the cost report",
+  update_review: "Runs the update review",
+};
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, short: "Sun", label: "Sunday" },
+  { value: 1, short: "Mon", label: "Monday" },
+  { value: 2, short: "Tue", label: "Tuesday" },
+  { value: 3, short: "Wed", label: "Wednesday" },
+  { value: 4, short: "Thu", label: "Thursday" },
+  { value: 5, short: "Fri", label: "Friday" },
+  { value: 6, short: "Sat", label: "Saturday" },
+] as const;
+
+const INTERVAL_OPTIONS = [
+  { value: "1", label: "Every hour" },
+  { value: "2", label: "Every 2 hours" },
+  { value: "3", label: "Every 3 hours" },
+  { value: "4", label: "Every 4 hours" },
+  { value: "6", label: "Every 6 hours" },
+  { value: "8", label: "Every 8 hours" },
+  { value: "12", label: "Every 12 hours" },
+] as const;
 
 export function CronPage() {
   const [data, setData] = useState<CronJobsResponse | null>(null);
@@ -33,15 +85,21 @@ export function CronPage() {
   const [selectedJobDetail, setSelectedJobDetail] = useState<{
     jobId: string;
     name: string;
+    action: CronAction;
+    description?: string;
     schedule: string;
     enabled: boolean;
+    endAt?: string;
     lastRunAt?: string;
     nextRunAt?: string;
     updatedAt?: string;
   } | null>(null);
-  const [jobIdInput, setJobIdInput] = useState("");
   const [nameInput, setNameInput] = useState("");
-  const [scheduleInput, setScheduleInput] = useState(DEFAULT_SCHEDULE);
+  const [jobIdInput, setJobIdInput] = useState("");
+  const [jobIdDirty, setJobIdDirty] = useState(false);
+  const [actionInput, setActionInput] = useState<CronAction>("task");
+  const [descriptionInput, setDescriptionInput] = useState("");
+  const [scheduleDraft, setScheduleDraft] = useState<CronScheduleDraft>(DEFAULT_SCHEDULE_DRAFT);
   const [enabledInput, setEnabledInput] = useState(true);
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
@@ -52,15 +110,17 @@ export function CronPage() {
   const [error, setError] = useState<string | null>(null);
   const [reviewQueueEnabled, setReviewQueueEnabled] = useState(true);
   const [reviewQueueError, setReviewQueueError] = useState<string | null>(null);
-  const [reviewQueue, setReviewQueue] = useState<Array<{
-    itemId: string;
-    jobId: string;
-    runId: string;
-    severity: "low" | "medium" | "high" | "critical";
-    status: "open" | "resolved" | "retrying" | "ignored";
-    createdAt: string;
-    updatedAt: string;
-  }>>([]);
+  const [reviewQueue, setReviewQueue] = useState<
+    Array<{
+      itemId: string;
+      jobId: string;
+      runId: string;
+      severity: "low" | "medium" | "high" | "critical";
+      status: "open" | "resolved" | "retrying" | "ignored";
+      createdAt: string;
+      updatedAt: string;
+    }>
+  >([]);
   const [selectedRunDiff, setSelectedRunDiff] = useState<{ runId: string; diff: Record<string, unknown> } | null>(null);
   const reviewQueueEnabledRef = useRef(reviewQueueEnabled);
 
@@ -79,10 +139,7 @@ export function CronPage() {
       const settingsPromise = background
         ? Promise.resolve<Awaited<ReturnType<typeof fetchSettings>> | null>(null)
         : fetchSettings();
-      const [response, settings] = await Promise.all([
-        fetchCronJobs(),
-        settingsPromise,
-      ]);
+      const [response, settings] = await Promise.all([fetchCronJobs(), settingsPromise]);
       const nextReviewQueueEnabled = settings?.features.cronReviewQueueV1Enabled ?? reviewQueueEnabledRef.current;
       if (settings) {
         setReviewQueueEnabled(nextReviewQueueEnabled);
@@ -163,58 +220,104 @@ export function CronPage() {
     [data?.items, selectedJobId],
   );
 
+  const generatedSchedule = useMemo(() => buildScheduleExpression(scheduleDraft), [scheduleDraft]);
   const isBusy = busyJobId !== null;
 
   const resetForm = useCallback(() => {
     setEditingJobId(null);
-    setJobIdInput("");
     setNameInput("");
-    setScheduleInput(DEFAULT_SCHEDULE);
+    setJobIdInput("");
+    setJobIdDirty(false);
+    setActionInput("task");
+    setDescriptionInput("");
+    setScheduleDraft(DEFAULT_SCHEDULE_DRAFT);
     setEnabledInput(true);
   }, []);
 
-  const handleEdit = useCallback((jobId: string) => {
-    const job = data?.items.find((item) => item.jobId === jobId);
-    if (!job) {
-      return;
-    }
-    setEditingJobId(jobId);
-    setJobIdInput(job.jobId);
-    setNameInput(job.name);
-    setScheduleInput(job.schedule);
-    setEnabledInput(job.enabled);
-    setStatus(`Editing ${job.jobId}`);
-    setError(null);
-  }, [data?.items]);
+  const handleEdit = useCallback(
+    (jobId: string) => {
+      const job = data?.items.find((item) => item.jobId === jobId);
+      if (!job) {
+        return;
+      }
+      setEditingJobId(jobId);
+      setNameInput(job.name);
+      setJobIdInput(job.jobId);
+      setJobIdDirty(true);
+      setActionInput(job.action);
+      setDescriptionInput(job.description ?? "");
+      setScheduleDraft(parseScheduleExpression(job.schedule, job.endAt));
+      setEnabledInput(job.enabled);
+      setStatus(`Editing ${job.jobId}`);
+      setError(null);
+    },
+    [data?.items],
+  );
+
+  const handleNameChange = useCallback(
+    (value: string) => {
+      setNameInput(value);
+      if (!editingJobId && !jobIdDirty) {
+        setJobIdInput(slugifyJobId(value));
+      }
+    },
+    [editingJobId, jobIdDirty],
+  );
 
   const handleCreateOrUpdate = useCallback(async () => {
-    const normalizedJobId = jobIdInput.trim();
     const normalizedName = nameInput.trim();
-    const normalizedSchedule = scheduleInput.trim();
-    if (!normalizedJobId || !normalizedName || !normalizedSchedule) {
-      setError("Job ID, name, and schedule are required.");
+    const normalizedJobId = jobIdInput.trim();
+    const normalizedDescription = descriptionInput.trim();
+    if (!normalizedName) {
+      setError("Job name is required.");
       return;
     }
+    if (!editingJobId && !normalizedJobId) {
+      setError("Job ID is required.");
+      return;
+    }
+    if (actionInput === "task" && !normalizedDescription) {
+      setError("Add what this scheduled job should do.");
+      return;
+    }
+    if (scheduleDraft.frequency === "weekly" && scheduleDraft.weekdays.length === 0) {
+      setError("Pick at least one day for a weekly schedule.");
+      return;
+    }
+    if (!scheduleDraft.timeZone.trim()) {
+      setError("Time zone is required.");
+      return;
+    }
+
+    const normalizedSchedule = buildScheduleExpression(scheduleDraft);
+    const endAt = scheduleDraft.endDate ? endDateToIso(scheduleDraft.endDate) : undefined;
+
     setBusyJobId(editingJobId ?? "__create__");
     try {
       if (editingJobId) {
         await updateCronJob(editingJobId, {
           name: normalizedName,
+          action: actionInput,
+          description: normalizedDescription || undefined,
           schedule: normalizedSchedule,
           enabled: enabledInput,
+          endAt: endAt ?? null,
         });
         setStatus(`Updated ${editingJobId}`);
       } else {
         await createCronJob({
           jobId: normalizedJobId,
           name: normalizedName,
+          action: actionInput,
+          description: normalizedDescription || undefined,
           schedule: normalizedSchedule,
           enabled: enabledInput,
+          endAt,
         });
         setStatus(`Created ${normalizedJobId}`);
       }
       await load();
-      setSelectedJobId(normalizedJobId);
+      setSelectedJobId(editingJobId ?? normalizedJobId);
       resetForm();
       setError(null);
     } catch (err) {
@@ -222,65 +325,84 @@ export function CronPage() {
     } finally {
       setBusyJobId(null);
     }
-  }, [editingJobId, enabledInput, jobIdInput, load, nameInput, resetForm, scheduleInput]);
+  }, [
+    actionInput,
+    descriptionInput,
+    editingJobId,
+    enabledInput,
+    jobIdInput,
+    load,
+    nameInput,
+    resetForm,
+    scheduleDraft,
+  ]);
 
-  const handleToggle = useCallback(async (jobId: string, enabled: boolean) => {
-    setBusyJobId(jobId);
-    try {
-      if (enabled) {
-        await pauseCronJob(jobId);
-        setStatus(`Paused ${jobId}`);
-      } else {
-        await startCronJob(jobId);
-        setStatus(`Started ${jobId}`);
+  const handleToggle = useCallback(
+    async (jobId: string, enabled: boolean) => {
+      setBusyJobId(jobId);
+      try {
+        if (enabled) {
+          await pauseCronJob(jobId);
+          setStatus(`Paused ${jobId}`);
+        } else {
+          await startCronJob(jobId);
+          setStatus(`Started ${jobId}`);
+        }
+        await load();
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyJobId(null);
       }
-      await load();
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyJobId(null);
-    }
-  }, [load]);
+    },
+    [load],
+  );
 
-  const handleRunNow = useCallback(async (jobId: string) => {
-    setBusyJobId(jobId);
-    try {
-      await runCronJobNow(jobId);
-      setStatus(`Ran ${jobId} manually`);
-      await load();
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyJobId(null);
-    }
-  }, [load]);
+  const handleRunNow = useCallback(
+    async (jobId: string) => {
+      setBusyJobId(jobId);
+      try {
+        await runCronJobNow(jobId);
+        setStatus(`Ran ${jobId} manually`);
+        await load();
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyJobId(null);
+      }
+    },
+    [load],
+  );
 
-  const handleDelete = useCallback(async (jobId: string) => {
-    const confirmed = window.confirm(`Delete cron job ${jobId}?`);
-    if (!confirmed) {
-      return;
-    }
-    setBusyJobId(jobId);
-    try {
-      await deleteCronJob(jobId);
-      setStatus(`Deleted ${jobId}`);
-      if (selectedJobId === jobId) {
-        setSelectedJobId(null);
-        setSelectedJobDetail(null);
+  const handleDelete = useCallback(
+    async (jobId: string) => {
+      const confirmed = window.confirm(`Delete cron job ${jobId}?`);
+      if (!confirmed) {
+        return;
       }
-      if (editingJobId === jobId) {
-        resetForm();
+      setBusyJobId(jobId);
+      try {
+        await deleteCronJob(jobId);
+        setStatus(`Deleted ${jobId}`);
+        if (selectedJobId === jobId) {
+          setSelectedJobId(null);
+          setSelectedJobDetail(null);
+        }
+        if (editingJobId === jobId) {
+          resetForm();
+        }
+        await load();
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyJobId(null);
       }
-      await load();
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyJobId(null);
-    }
-  }, [editingJobId, load, resetForm, selectedJobId]);
+    },
+    [editingJobId, load, resetForm, selectedJobId],
+  );
 
   const handleRefresh = useCallback(async () => {
     setBusyJobId("__refresh__");
@@ -295,19 +417,22 @@ export function CronPage() {
     }
   }, [load]);
 
-  const handleRetryReviewItem = useCallback(async (itemId: string) => {
-    setBusyJobId(itemId);
-    try {
-      const updated = await retryCronReviewQueueItem(itemId);
-      setStatus(`Retried queue item ${updated.itemId.slice(0, 8)}`);
-      await load({ background: true });
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusyJobId(null);
-    }
-  }, [load]);
+  const handleRetryReviewItem = useCallback(
+    async (itemId: string) => {
+      setBusyJobId(itemId);
+      try {
+        const updated = await retryCronReviewQueueItem(itemId);
+        setStatus(`Retried queue item ${updated.itemId.slice(0, 8)}`);
+        await load({ background: true });
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusyJobId(null);
+      }
+    },
+    [load],
+  );
 
   const handleOpenDiff = useCallback(async (runId: string) => {
     setBusyJobId(runId);
@@ -345,16 +470,20 @@ export function CronPage() {
         eyebrow="Automation"
         title={pageCopy.cron.title}
         subtitle={pageCopy.cron.subtitle}
-        hint="Use cron for scheduled operational jobs, then handle notable outputs through the review queue instead of chasing them across multiple pages."
-        actions={(
+        hint="Use scheduled jobs to create repeatable operational work, then handle notable outputs through the review queue."
+        actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="muted">{data.items.length} jobs</StatusChip>
             <StatusChip tone={!reviewQueueEnabled ? "muted" : reviewQueue.length > 0 ? "warning" : "success"}>
               {reviewQueueEnabled ? `${reviewQueue.length} review items` : "Review queue off"}
             </StatusChip>
-            {selectedJob ? <StatusChip tone={selectedJob.enabled ? "success" : "muted"}>{selectedJob.jobId}</StatusChip> : null}
+            {selectedJob ? (
+              <StatusChip tone={selectedJob.enabled ? "success" : "muted"}>
+                {ACTION_LABELS[selectedJob.action]}
+              </StatusChip>
+            ) : null}
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="cron"
@@ -370,42 +499,200 @@ export function CronPage() {
         {error ? <p className="error">{error}</p> : null}
         {status ? <p className="status-banner">{status}</p> : null}
         <FieldHelp>
-          Keep job definitions stable and use the review queue for human follow-up. The queue is where diffs, retries, and notable background outputs should converge.
+          Custom jobs create Observe tasks on schedule. Built-in jobs keep their existing runtime behavior, but you can
+          still control timing and notes here.
         </FieldHelp>
       </div>
 
       <div className="split-grid">
-        <Panel title={editingJobId ? `Edit Job: ${editingJobId}` : "Create Job"} subtitle="Define the job identity, schedule, and whether it should be enabled automatically.">
-          <div className="controls-row">
-            <label htmlFor="cronJobId">Job ID</label>
-            <input
-              id="cronJobId"
-              value={jobIdInput}
-              onChange={(event) => setJobIdInput(event.target.value)}
-              disabled={Boolean(editingJobId) || isBusy}
-              placeholder="nightly-maintenance"
-            />
-          </div>
+        <Panel
+          title={editingJobId ? `Edit Job: ${editingJobId}` : "Create Job"}
+          subtitle="Define what should happen first, then set how often and when it should run."
+        >
           <div className="controls-row">
             <label htmlFor="cronJobName">Name</label>
             <input
               id="cronJobName"
               value={nameInput}
-              onChange={(event) => setNameInput(event.target.value)}
+              onChange={(event) => handleNameChange(event.target.value)}
               disabled={isBusy}
-              placeholder="Nightly Maintenance"
+              placeholder="Weekly release checklist"
             />
           </div>
           <div className="controls-row">
-            <label htmlFor="cronJobSchedule">Schedule</label>
+            <label htmlFor="cronJobId">Job ID</label>
             <input
-              id="cronJobSchedule"
-              value={scheduleInput}
-              onChange={(event) => setScheduleInput(event.target.value)}
-              disabled={isBusy}
-              placeholder={DEFAULT_SCHEDULE}
+              id="cronJobId"
+              value={jobIdInput}
+              onChange={(event) => {
+                setJobIdDirty(true);
+                setJobIdInput(event.target.value);
+              }}
+              disabled={Boolean(editingJobId) || isBusy}
+              placeholder="weekly-release-checklist"
             />
           </div>
+          {editingJobId ? (
+            <FieldHelp>Job IDs stay fixed after creation so schedule history and references do not drift.</FieldHelp>
+          ) : (
+            <FieldHelp>We auto-fill the ID from the name, but you can edit it before saving.</FieldHelp>
+          )}
+
+          <div className="controls-row">
+            <label htmlFor="cronJobAction">What happens</label>
+            <input id="cronJobAction" value={ACTION_LABELS[actionInput]} disabled readOnly />
+          </div>
+          <div className="controls-row">
+            <label htmlFor="cronJobDescription">Instructions</label>
+            <Textarea
+              id="cronJobDescription"
+              value={descriptionInput}
+              onChange={(event) => setDescriptionInput(event.target.value)}
+              disabled={isBusy}
+              placeholder={
+                actionInput === "task"
+                  ? "Create a task to review deployment health, check the release notes, and confirm the incident queue is clear."
+                  : "Optional operator notes for this built-in job."
+              }
+              className="min-h-24"
+            />
+          </div>
+
+          <div className="cron-schedule-builder">
+            <div className="controls-row">
+              <label htmlFor="cronFrequency">Runs</label>
+              <GCSelect
+                id="cronFrequency"
+                value={scheduleDraft.frequency}
+                onChange={(value) =>
+                  setScheduleDraft((current) => ({
+                    ...current,
+                    frequency: value as ScheduleFrequency,
+                    weekdays: value === "weekly" ? current.weekdays : DEFAULT_SCHEDULE_DRAFT.weekdays,
+                  }))
+                }
+                options={[
+                  { value: "hourly", label: "Every few hours" },
+                  { value: "daily", label: "Every day" },
+                  { value: "weekly", label: "Specific days" },
+                ]}
+                disabled={isBusy}
+              />
+              {scheduleDraft.frequency === "hourly" ? (
+                <label>
+                  Interval
+                  <GCSelect
+                    value={String(scheduleDraft.intervalHours)}
+                    onChange={(value) =>
+                      setScheduleDraft((current) => ({
+                        ...current,
+                        intervalHours: clampNumber(value, 1, 23, current.intervalHours),
+                      }))
+                    }
+                    options={INTERVAL_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                    disabled={isBusy}
+                  />
+                </label>
+              ) : (
+                <label>
+                  Time
+                  <input
+                    type="time"
+                    value={toTimeInputValue(scheduleDraft.hour, scheduleDraft.minute)}
+                    disabled={isBusy}
+                    onChange={(event) => {
+                      const [rawHour = "", rawMinute = ""] = event.target.value.split(":");
+                      const nextHour = Number.parseInt(rawHour, 10);
+                      const nextMinute = Number.parseInt(rawMinute, 10);
+                      if (!Number.isFinite(nextHour) || !Number.isFinite(nextMinute)) {
+                        return;
+                      }
+                      setScheduleDraft((current) => ({ ...current, hour: nextHour, minute: nextMinute }));
+                    }}
+                  />
+                </label>
+              )}
+              {scheduleDraft.frequency === "hourly" ? (
+                <label>
+                  Minute
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={scheduleDraft.minute}
+                    disabled={isBusy}
+                    onChange={(event) =>
+                      setScheduleDraft((current) => ({
+                        ...current,
+                        minute: clampNumber(event.target.value, 0, 59, current.minute),
+                      }))
+                    }
+                  />
+                </label>
+              ) : null}
+              <label>
+                Time zone
+                <input
+                  value={scheduleDraft.timeZone}
+                  disabled={isBusy}
+                  onChange={(event) => setScheduleDraft((current) => ({ ...current, timeZone: event.target.value }))}
+                  placeholder="America/Los_Angeles"
+                />
+              </label>
+            </div>
+
+            {scheduleDraft.frequency === "weekly" ? (
+              <div className="cron-weekday-grid">
+                {WEEKDAY_OPTIONS.map((option) => {
+                  const checked = scheduleDraft.weekdays.includes(option.value);
+                  return (
+                    <label key={option.value} className="cron-weekday-option">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={isBusy}
+                        onChange={() =>
+                          setScheduleDraft((current) => ({
+                            ...current,
+                            weekdays: checked
+                              ? current.weekdays.filter((weekday) => weekday !== option.value)
+                              : [...current.weekdays, option.value].sort((left, right) => left - right),
+                          }))
+                        }
+                      />
+                      <span>{option.short}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            <div className="controls-row">
+              <label>
+                Runs until
+                <input
+                  type="date"
+                  value={scheduleDraft.endDate}
+                  disabled={isBusy}
+                  onChange={(event) => setScheduleDraft((current) => ({ ...current, endDate: event.target.value }))}
+                />
+              </label>
+              <FieldHelp>Leave blank to keep running. End dates stop future scheduled runs automatically.</FieldHelp>
+            </div>
+            <FieldHelp>
+              {describeScheduleExpression(generatedSchedule, scheduleDraft.endDate)}
+              <br />
+              Generated schedule: <code>{generatedSchedule}</code>
+            </FieldHelp>
+          </div>
+
+          {editingJobId && actionInput !== "task" ? (
+            <FieldHelp>
+              This is a built-in automation. You can adjust timing and notes here, but the underlying behavior is fixed
+              by the runtime.
+            </FieldHelp>
+          ) : null}
+
           <div className="controls-row">
             <GCSwitch
               id="cronJobEnabled"
@@ -421,15 +708,8 @@ export function CronPage() {
               onClick={handleCreateOrUpdate}
               disabled={isBusy}
             />
-            <ActionButton
-              label="Clear"
-              onClick={resetForm}
-              disabled={isBusy}
-            />
+            <ActionButton label="Clear" onClick={resetForm} disabled={isBusy} />
           </div>
-          <p className="office-subtitle">
-            Supported schedule format: <code>M H * * * [Timezone]</code> or <code>M H * * DOW [Timezone]</code>.
-          </p>
         </Panel>
 
         <Panel title="Job Details" subtitle="Current status for the selected job.">
@@ -437,14 +717,24 @@ export function CronPage() {
             <p>Select a job to view details.</p>
           ) : (
             <dl className="cron-job-details">
-              <dt>Job ID</dt>
-              <dd>{selectedJobDetail.jobId}</dd>
               <dt>Name</dt>
               <dd>{selectedJobDetail.name}</dd>
+              <dt>Job ID</dt>
+              <dd>{selectedJobDetail.jobId}</dd>
+              <dt>What happens</dt>
+              <dd>{ACTION_LABELS[selectedJobDetail.action]}</dd>
+              <dt>Instructions</dt>
+              <dd>{selectedJobDetail.description?.trim() || "-"}</dd>
               <dt>Schedule</dt>
-              <dd>{selectedJobDetail.schedule}</dd>
+              <dd>{describeScheduleExpression(selectedJobDetail.schedule, selectedJobDetail.endAt)}</dd>
+              <dt>Raw schedule</dt>
+              <dd>
+                <code>{selectedJobDetail.schedule}</code>
+              </dd>
               <dt>Enabled</dt>
               <dd>{selectedJobDetail.enabled ? "yes" : "no"}</dd>
+              <dt>Runs until</dt>
+              <dd>{selectedJobDetail.endAt ? new Date(selectedJobDetail.endAt).toLocaleString() : "No end date"}</dd>
               <dt>Last Run</dt>
               <dd>{selectedJobDetail.lastRunAt ? new Date(selectedJobDetail.lastRunAt).toLocaleString() : "-"}</dd>
               <dt>Next Run</dt>
@@ -466,6 +756,7 @@ export function CronPage() {
             <tr>
               <th>Name</th>
               <th>Job ID</th>
+              <th>What happens</th>
               <th>Schedule</th>
               <th>Enabled</th>
               <th>Last Run</th>
@@ -481,8 +772,11 @@ export function CronPage() {
                 onClick={() => setSelectedJobId(job.jobId)}
               >
                 <td>{job.name}</td>
-                <td><code>{job.jobId}</code></td>
-                <td><code>{job.schedule}</code></td>
+                <td>
+                  <code>{job.jobId}</code>
+                </td>
+                <td>{ACTION_LABELS[job.action]}</td>
+                <td>{describeScheduleExpression(job.schedule, job.endAt)}</td>
                 <td>{job.enabled ? "yes" : "no"}</td>
                 <td>{job.lastRunAt ? new Date(job.lastRunAt).toLocaleString() : "-"}</td>
                 <td>{job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : "-"}</td>
@@ -511,12 +805,17 @@ export function CronPage() {
         </table>
       </Panel>
 
-      <Panel title="Review Queue" subtitle="Flagged or notable cron outputs that need operator review, diff check, or retry.">
+      <Panel
+        title="Review Queue"
+        subtitle="Flagged or notable cron outputs that need operator review, diff check, or retry."
+      >
         {!reviewQueueEnabled ? (
           <p className="office-subtitle">
             Review queue is disabled right now. Scheduled jobs still appear above and can be run or edited normally.
           </p>
-        ) : reviewQueueError ? <p className="error">{reviewQueueError}</p> : reviewQueue.length === 0 ? (
+        ) : reviewQueueError ? (
+          <p className="error">{reviewQueueError}</p>
+        ) : reviewQueue.length === 0 ? (
           <p className="office-subtitle">No review items recorded yet.</p>
         ) : (
           <table className="gc-data-table">
@@ -534,7 +833,9 @@ export function CronPage() {
               {reviewQueue.map((item) => (
                 <tr key={item.itemId}>
                   <td>{item.jobId}</td>
-                  <td><code>{item.runId.slice(0, 8)}</code></td>
+                  <td>
+                    <code>{item.runId.slice(0, 8)}</code>
+                  </td>
                   <td>{item.severity}</td>
                   <td>{item.status}</td>
                   <td>{new Date(item.updatedAt).toLocaleString()}</td>
@@ -566,3 +867,119 @@ export function CronPage() {
   );
 }
 
+function slugifyJobId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
+function parseScheduleExpression(schedule: string, endAt?: string): CronScheduleDraft {
+  const parts = schedule.trim().split(/\s+/).filter(Boolean);
+  const minute = clampNumber(parts[0] ?? "0", 0, 59, DEFAULT_SCHEDULE_DRAFT.minute);
+  const hourToken = parts[1] ?? "2";
+  const weekdayToken = parts[4] ?? "*";
+  const timeZone = parts.slice(5).join(" ") || DEFAULT_TIME_ZONE;
+  const draft: CronScheduleDraft = {
+    ...DEFAULT_SCHEDULE_DRAFT,
+    minute,
+    timeZone,
+    endDate: endAt ? toDateInputValue(endAt) : "",
+  };
+
+  if (hourToken === "*") {
+    return {
+      ...draft,
+      frequency: "hourly",
+      intervalHours: 1,
+    };
+  }
+  if (/^\*\/\d+$/.test(hourToken)) {
+    return {
+      ...draft,
+      frequency: "hourly",
+      intervalHours: clampNumber(hourToken.slice(2), 1, 23, DEFAULT_SCHEDULE_DRAFT.intervalHours),
+    };
+  }
+
+  draft.hour = clampNumber(hourToken, 0, 23, DEFAULT_SCHEDULE_DRAFT.hour);
+  if (weekdayToken !== "*") {
+    return {
+      ...draft,
+      frequency: "weekly",
+      weekdays: weekdayToken
+        .split(",")
+        .map((token) => clampNumber(token, 0, 6, 1))
+        .sort((left, right) => left - right),
+    };
+  }
+
+  return {
+    ...draft,
+    frequency: "daily",
+  };
+}
+
+function buildScheduleExpression(draft: CronScheduleDraft): string {
+  const timeZone = draft.timeZone.trim() || DEFAULT_TIME_ZONE;
+  if (draft.frequency === "hourly") {
+    const hourToken = draft.intervalHours <= 1 ? "*" : `*/${draft.intervalHours}`;
+    return `${draft.minute} ${hourToken} * * * ${timeZone}`;
+  }
+  if (draft.frequency === "weekly") {
+    const weekdays = draft.weekdays.length > 0 ? draft.weekdays.join(",") : "1";
+    return `${draft.minute} ${draft.hour} * * ${weekdays} ${timeZone}`;
+  }
+  return `${draft.minute} ${draft.hour} * * * ${timeZone}`;
+}
+
+function describeScheduleExpression(schedule: string, endDate?: string): string {
+  const draft = parseScheduleExpression(schedule, endDate);
+  const timeText =
+    draft.frequency === "hourly"
+      ? `at ${String(draft.minute).padStart(2, "0")} past the hour`
+      : `at ${String(draft.hour).padStart(2, "0")}:${String(draft.minute).padStart(2, "0")}`;
+
+  const summary =
+    draft.frequency === "hourly"
+      ? draft.intervalHours <= 1
+        ? `Every hour ${timeText}`
+        : `Every ${draft.intervalHours} hours ${timeText}`
+      : draft.frequency === "weekly"
+        ? `${draft.weekdays
+            .map((weekday) => WEEKDAY_OPTIONS.find((option) => option.value === weekday)?.label)
+            .filter(Boolean)
+            .join(", ")} ${timeText}`
+        : `Every day ${timeText}`;
+
+  if (draft.endDate) {
+    return `${summary} (${draft.timeZone}) until ${draft.endDate}`;
+  }
+  return `${summary} (${draft.timeZone})`;
+}
+
+function toTimeInputValue(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function clampNumber(rawValue: string, min: number, max: number, fallback: number): number {
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function endDateToIso(value: string): string {
+  return new Date(`${value}T23:59:59`).toISOString();
+}
+
+function toDateInputValue(value: string): string {
+  const parsed = new Date(value);
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}

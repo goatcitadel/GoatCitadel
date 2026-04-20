@@ -26,6 +26,7 @@ import {
   triggerChatProactive,
   updateChatProactivePolicy,
 } from "../../api/client";
+import { resolveActiveWorkflowTurn } from "../../components/cowork-view-model";
 import { toTitleCase } from "./chat-page-normalizers";
 
 export interface ChatProactivePolicyPatch {
@@ -160,16 +161,22 @@ function mergeDelegationStep(
   currentSteps: ActiveChatDelegationStep[],
   nextStep: ActiveChatDelegationStep,
 ): ActiveChatDelegationStep[] {
-  const matchingIndex = currentSteps.findIndex((step) =>
-    step.stepId === nextStep.stepId
-    || (!step.runId && step.index === nextStep.index && step.role.toLowerCase() === nextStep.role.toLowerCase()));
-  const nextSteps = matchingIndex >= 0
-    ? currentSteps.map((step, index) => (index === matchingIndex ? { ...step, ...nextStep } : step))
-    : [...currentSteps, nextStep];
+  const matchingIndex = currentSteps.findIndex(
+    (step) =>
+      step.stepId === nextStep.stepId ||
+      (!step.runId && step.index === nextStep.index && step.role.toLowerCase() === nextStep.role.toLowerCase()),
+  );
+  const nextSteps =
+    matchingIndex >= 0
+      ? currentSteps.map((step, index) => (index === matchingIndex ? { ...step, ...nextStep } : step))
+      : [...currentSteps, nextStep];
   return nextSteps.sort((left, right) => left.index - right.index);
 }
 
-function resolveSelectedTurn(thread: ChatThreadResponse | null, selectedTurnId: string | null): ChatThreadTurnRecord | null {
+function resolveSelectedTurn(
+  thread: ChatThreadResponse | null,
+  selectedTurnId: string | null,
+): ChatThreadTurnRecord | null {
   if (!thread) {
     return null;
   }
@@ -246,14 +253,15 @@ export function useChatDelegationPolicyActions(input: {
     () => resolveSelectedTurn(input.thread, input.selectedTurnId),
     [input.selectedTurnId, input.thread],
   );
+  const activeWorkflowTurn = useMemo(() => resolveActiveWorkflowTurn(input.thread), [input.thread]);
 
   useEffect(() => {
     setActiveDelegationRun(null);
   }, [selectedSession?.sessionId]);
 
   useEffect(() => {
-    const runId = selectedTurn?.trace.orchestration?.runId;
-    const turnId = selectedTurn?.turnId ?? null;
+    const runId = activeWorkflowTurn?.trace.orchestration?.runId;
+    const turnId = activeWorkflowTurn?.turnId ?? null;
     const sessionId = selectedSession?.sessionId;
     if (!runId || !turnId || !sessionId) {
       return;
@@ -293,9 +301,9 @@ export function useChatDelegationPolicyActions(input: {
     activeDelegationRun?.attachedTurnId,
     activeDelegationRun?.runId,
     activeDelegationRun?.status,
+    activeWorkflowTurn?.trace.orchestration?.runId,
+    activeWorkflowTurn?.turnId,
     selectedSession?.sessionId,
-    selectedTurn?.trace.orchestration?.runId,
-    selectedTurn?.turnId,
   ]);
 
   const handleRunQuickResearch = useCallback(async () => {
@@ -434,13 +442,15 @@ export function useChatDelegationPolicyActions(input: {
       try {
         await streamChatDelegation(sessionId, request, (chunk) => {
           if (chunk.type === "status") {
-            setActiveDelegationRun((current) => current
-              ? {
-                  ...current,
-                  runId: chunk.runId ?? current.runId,
-                  taskId: chunk.taskId ?? current.taskId,
-                }
-              : current);
+            setActiveDelegationRun((current) =>
+              current
+                ? {
+                    ...current,
+                    runId: chunk.runId ?? current.runId,
+                    taskId: chunk.taskId ?? current.taskId,
+                  }
+                : current,
+            );
             if (chunk.message) {
               pushLocalNotice(chunk.message);
             }
@@ -496,7 +506,9 @@ export function useChatDelegationPolicyActions(input: {
           }
           if (chunk.type === "done" && chunk.result) {
             finalResult = chunk.result;
-            const steps = chunk.result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index);
+            const steps = chunk.result.steps
+              .map(toActiveDelegationStep)
+              .sort((left, right) => left.index - right.index);
             setActiveDelegationRun((current) => ({
               runId: chunk.result!.runId,
               taskId: chunk.result!.taskId,
@@ -512,12 +524,17 @@ export function useChatDelegationPolicyActions(input: {
           }
         });
       } catch (error) {
-        setActiveDelegationRun((current) => current
-          ? {
-              ...current,
-              status: inferDelegationRunStatus(current.steps, current.steps.some((step) => step.status === "completed") ? "partial" : "failed"),
-            }
-          : current);
+        setActiveDelegationRun((current) =>
+          current
+            ? {
+                ...current,
+                status: inferDelegationRunStatus(
+                  current.steps,
+                  current.steps.some((step) => step.status === "completed") ? "partial" : "failed",
+                ),
+              }
+            : current,
+        );
         throw error;
       }
 
@@ -550,11 +567,7 @@ export function useChatDelegationPolicyActions(input: {
     try {
       const accepted = await runDelegationAction(
         selectedSession.sessionId,
-        buildDelegationRequest(
-          delegationSuggestion.objective,
-          delegationSuggestion.roles,
-          delegationSuggestion.mode,
-        ),
+        buildDelegationRequest(delegationSuggestion.objective, delegationSuggestion.roles, delegationSuggestion.mode),
         "Delegation",
       );
       pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");

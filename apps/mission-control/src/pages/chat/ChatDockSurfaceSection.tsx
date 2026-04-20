@@ -5,6 +5,7 @@ import type {
   ChatThinkingLevel,
   ChatWebMode,
 } from "@goatcitadel/contracts";
+import { useState } from "react";
 import { ChatPlanningPill } from "../../components/chat/ChatPlanningPill";
 import { ChatModelPicker } from "../../components/ChatModelPicker";
 import { DataToolbar } from "../../components/DataToolbar";
@@ -31,6 +32,25 @@ function toRetrievalMode(value: string): ChatRetrievalMode {
 
 function toReflectionMode(value: string): ChatReflectionMode {
   return value as ChatReflectionMode;
+}
+
+function describeProviderRuntime(provider: ChatContextDockPanelsProps["providerOptions"][number] | undefined): string {
+  if (!provider) {
+    return "Runtime not checked";
+  }
+  if (provider.disabled) {
+    return "Provider setup required";
+  }
+  switch (provider.modelProbeState) {
+    case "ready":
+      return provider.isLocalRuntime ? "Runtime reachable" : "Provider reachable";
+    case "empty":
+      return provider.isLocalRuntime ? "Runtime degraded" : "Models unavailable";
+    case "error":
+      return provider.isLocalRuntime ? "Runtime unreachable" : "Provider unreachable";
+    default:
+      return "Runtime not checked";
+  }
 }
 
 export function ChatDockSurfaceSection(
@@ -96,6 +116,10 @@ export function ChatDockSurfaceSection(
     onRunCodeDelegation,
     onAssignProject,
   } = props;
+  const [coworkSettingsExpanded, setCoworkSettingsExpanded] = useState(false);
+  const selectedProvider = providerOptions.find((item) => item.providerId === selectedProviderId);
+  const coworkRouteSummary = `${selectedProvider?.label ?? "Provider auto"} / ${selectedModel ?? "Model auto"}`;
+  const coworkRuntimeSummary = describeProviderRuntime(selectedProvider);
 
   return (
     <Panel
@@ -256,125 +280,144 @@ export function ChatDockSurfaceSection(
           </div>
         </div>
       ) : isCoworkSurface ? (
-        <div className="chat-v11-settings-grid">
-          <div className="chat-v11-setting-row chat-v11-setting-row-stack chat-v11-setting-row-wide">
-            <div className="chat-v11-setting-copy">
-              <span className="chat-v11-setting-label">Model</span>
+        <>
+          <div className="chat-v11-cowork-settings-summary">
+            <div className="chat-v11-cowork-settings-copy">
+              <span className="chat-v11-setting-label">Route</span>
+              <strong>{coworkRouteSummary}</strong>
             </div>
-            <div className="chat-v11-setting-control">
-              <ChatModelPicker
-                providers={providerOptions}
-                providerId={selectedProviderId}
-                model={selectedModel}
-                disabled={!selectedSessionId || sending}
-                onChangeProvider={(providerId) => {
-                  const provider = providerOptions.find((item) => item.providerId === providerId);
-                  const selection = resolveProviderModelSelection({
-                    provider,
-                    loadedModels: providerId ? getCachedModels(providerId) : [],
-                    selectedModel: undefined,
-                  });
-                  void loadModelsForProvider(providerId);
-                  void onPrefPatch({ providerId, model: selection.model ?? "" });
-                }}
-                onChangeModel={(model) => void onPrefPatch({ model })}
-              />
+            <div className="chat-v11-cowork-settings-copy">
+              <span className="chat-v11-setting-label">Runtime</span>
+              <strong>{coworkRuntimeSummary}</strong>
+            </div>
+            <div className="chat-v11-row-actions">
+              <button type="button" className="gc-button" onClick={() => setCoworkSettingsExpanded((value) => !value)}>
+                {coworkSettingsExpanded ? "Hide run settings" : "Adjust run settings"}
+              </button>
             </div>
           </div>
-          <div className="chat-v11-setting-row">
-            <span className="chat-v11-setting-label">Thinking</span>
-            <div className="chat-v11-setting-control">
-              <GCSelect
-                value={prefs?.thinkingLevel ?? "standard"}
-                disabled={!selectedSessionId || sending}
-                onChange={(value) => void onPrefPatch({ thinkingLevel: toThinkingLevel(value) })}
-                options={[
-                  { value: "minimal", label: "Minimal" },
-                  { value: "standard", label: "Standard" },
-                  { value: "extended", label: "Extended" },
-                ]}
-              />
+          {coworkSettingsExpanded ? (
+            <div className="chat-v11-settings-grid">
+              <div className="chat-v11-setting-row chat-v11-setting-row-stack chat-v11-setting-row-wide">
+                <div className="chat-v11-setting-copy">
+                  <span className="chat-v11-setting-label">Model</span>
+                </div>
+                <div className="chat-v11-setting-control">
+                  <ChatModelPicker
+                    providers={providerOptions}
+                    providerId={selectedProviderId}
+                    model={selectedModel}
+                    disabled={!selectedSessionId || sending}
+                    onChangeProvider={(providerId) => {
+                      const provider = providerOptions.find((item) => item.providerId === providerId);
+                      const selection = resolveProviderModelSelection({
+                        provider,
+                        loadedModels: providerId ? getCachedModels(providerId) : [],
+                        selectedModel: undefined,
+                      });
+                      void loadModelsForProvider(providerId);
+                      void onPrefPatch({ providerId, model: selection.model ?? "" });
+                    }}
+                    onChangeModel={(model) => void onPrefPatch({ model })}
+                  />
+                </div>
+              </div>
+              <div className="chat-v11-setting-row">
+                <span className="chat-v11-setting-label">Thinking</span>
+                <div className="chat-v11-setting-control">
+                  <GCSelect
+                    value={prefs?.thinkingLevel ?? "standard"}
+                    disabled={!selectedSessionId || sending}
+                    onChange={(value) => void onPrefPatch({ thinkingLevel: toThinkingLevel(value) })}
+                    options={[
+                      { value: "minimal", label: "Minimal" },
+                      { value: "standard", label: "Standard" },
+                      { value: "extended", label: "Extended" },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="chat-v11-setting-row">
+                <span className="chat-v11-setting-label">Web</span>
+                <div className="chat-v11-setting-control">
+                  <GCSelect
+                    value={prefs?.webMode ?? "auto"}
+                    disabled={!selectedSessionId || sending}
+                    onChange={(value) => void onPrefPatch({ webMode: toWebMode(value) })}
+                    options={[
+                      { value: "auto", label: "Auto" },
+                      { value: "off", label: "Off" },
+                      { value: "quick", label: "Quick" },
+                      { value: "deep", label: "Deep" },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="chat-v11-setting-row">
+                <span className="chat-v11-setting-label">Proactive</span>
+                <div className="chat-v11-setting-control">
+                  <GCSelect
+                    value={proactiveStatus?.mode ?? prefs?.proactiveMode ?? "off"}
+                    disabled={!selectedSessionId || sending}
+                    onChange={(value) => void onProactivePolicyPatch({ proactiveMode: toProactiveMode(value) })}
+                    options={[
+                      { value: "off", label: "Off" },
+                      { value: "suggest", label: "Suggest" },
+                      { value: "auto_safe", label: "Auto-safe" },
+                      { value: "auto_full", label: "Auto-full" },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="chat-v11-setting-row">
+                <span className="chat-v11-setting-label">Retrieval</span>
+                <div className="chat-v11-setting-control">
+                  <GCSelect
+                    value={proactiveStatus?.retrievalMode ?? prefs?.retrievalMode ?? "standard"}
+                    disabled={!selectedSessionId || sending}
+                    onChange={(value) => void onProactivePolicyPatch({ retrievalMode: toRetrievalMode(value) })}
+                    options={[
+                      { value: "standard", label: "Standard" },
+                      { value: "layered", label: "Layered" },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="chat-v11-setting-row">
+                <span className="chat-v11-setting-label">Reflection</span>
+                <div className="chat-v11-setting-control">
+                  <GCSelect
+                    value={proactiveStatus?.reflectionMode ?? prefs?.reflectionMode ?? "off"}
+                    disabled={!selectedSessionId || sending}
+                    onChange={(value) => void onProactivePolicyPatch({ reflectionMode: toReflectionMode(value) })}
+                    options={[
+                      { value: "off", label: "Off" },
+                      { value: "on", label: "On" },
+                    ]}
+                  />
+                </div>
+              </div>
+              <div className="chat-v11-row-actions">
+                <button
+                  type="button"
+                  disabled={!selectedSessionId || sending}
+                  onClick={() => void onSuggestDelegation()}
+                  className="gc-button"
+                >
+                  Suggest delegation
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedSessionId || sending}
+                  onClick={() => void onTriggerProactive()}
+                  className="gc-button"
+                >
+                  Run proactive
+                </button>
+              </div>
             </div>
-          </div>
-          <div className="chat-v11-setting-row">
-            <span className="chat-v11-setting-label">Web</span>
-            <div className="chat-v11-setting-control">
-              <GCSelect
-                value={prefs?.webMode ?? "auto"}
-                disabled={!selectedSessionId || sending}
-                onChange={(value) => void onPrefPatch({ webMode: toWebMode(value) })}
-                options={[
-                  { value: "auto", label: "Auto" },
-                  { value: "off", label: "Off" },
-                  { value: "quick", label: "Quick" },
-                  { value: "deep", label: "Deep" },
-                ]}
-              />
-            </div>
-          </div>
-          <div className="chat-v11-setting-row">
-            <span className="chat-v11-setting-label">Proactive</span>
-            <div className="chat-v11-setting-control">
-              <GCSelect
-                value={proactiveStatus?.mode ?? prefs?.proactiveMode ?? "off"}
-                disabled={!selectedSessionId || sending}
-                onChange={(value) => void onProactivePolicyPatch({ proactiveMode: toProactiveMode(value) })}
-                options={[
-                  { value: "off", label: "Off" },
-                  { value: "suggest", label: "Suggest" },
-                  { value: "auto_safe", label: "Auto-safe" },
-                  { value: "auto_full", label: "Auto-full" },
-                ]}
-              />
-            </div>
-          </div>
-          <div className="chat-v11-setting-row">
-            <span className="chat-v11-setting-label">Retrieval</span>
-            <div className="chat-v11-setting-control">
-              <GCSelect
-                value={proactiveStatus?.retrievalMode ?? prefs?.retrievalMode ?? "standard"}
-                disabled={!selectedSessionId || sending}
-                onChange={(value) => void onProactivePolicyPatch({ retrievalMode: toRetrievalMode(value) })}
-                options={[
-                  { value: "standard", label: "Standard" },
-                  { value: "layered", label: "Layered" },
-                ]}
-              />
-            </div>
-          </div>
-          <div className="chat-v11-setting-row">
-            <span className="chat-v11-setting-label">Reflection</span>
-            <div className="chat-v11-setting-control">
-              <GCSelect
-                value={proactiveStatus?.reflectionMode ?? prefs?.reflectionMode ?? "off"}
-                disabled={!selectedSessionId || sending}
-                onChange={(value) => void onProactivePolicyPatch({ reflectionMode: toReflectionMode(value) })}
-                options={[
-                  { value: "off", label: "Off" },
-                  { value: "on", label: "On" },
-                ]}
-              />
-            </div>
-          </div>
-          <div className="chat-v11-row-actions">
-            <button
-              type="button"
-              disabled={!selectedSessionId || sending}
-              onClick={() => void onSuggestDelegation()}
-              className="gc-button"
-            >
-              Suggest delegation
-            </button>
-            <button
-              type="button"
-              disabled={!selectedSessionId || sending}
-              onClick={() => void onTriggerProactive()}
-              className="gc-button"
-            >
-              Run proactive
-            </button>
-          </div>
-        </div>
+          ) : null}
+        </>
       ) : (
         <DataToolbar
           primary={

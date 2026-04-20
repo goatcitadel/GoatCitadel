@@ -628,6 +628,35 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 64,
+    name: "imported_agent_catalog_schema",
+    up: createImportedAgentCatalogSchema,
+  },
+  {
+    version: 65,
+    name: "cron_jobs_action_description_end_at",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "action", "TEXT NOT NULL DEFAULT 'task'");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "description", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "end_at", "TEXT");
+      if (tableExists(db, "cron_jobs")) {
+        db.exec(`
+          UPDATE cron_jobs
+          SET action = CASE job_id
+            WHEN 'self_improvement_weekly_replay' THEN 'improvement'
+            WHEN 'improvement_weekly' THEN 'improvement'
+            WHEN 'private_beta_backup_daily' THEN 'backup'
+            WHEN 'memory-flush-daily' THEN 'memory_flush'
+            WHEN 'cost-report-hourly' THEN 'cost_report'
+            WHEN 'update-review-daily' THEN 'update_review'
+            ELSE COALESCE(NULLIF(action, ''), 'task')
+          END
+          WHERE action IS NULL OR TRIM(action) = '' OR action = 'task';
+        `);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -952,8 +981,11 @@ function createBaseSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS cron_jobs (
       job_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      action TEXT NOT NULL DEFAULT 'task',
+      description TEXT,
       schedule TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
+      end_at TEXT,
       last_run_at TEXT,
       next_run_at TEXT,
       updated_at TEXT NOT NULL
@@ -1542,6 +1574,49 @@ function createAgentProfilesSchema(db: DatabaseSync): void {
       ON agent_profiles(lifecycle_status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_agent_profiles_role_id
       ON agent_profiles(role_id);
+  `);
+}
+
+function createImportedAgentCatalogSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS imported_agent_catalog (
+      entry_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      division TEXT NOT NULL,
+      state TEXT NOT NULL,
+      definition_id TEXT NOT NULL UNIQUE,
+      slug TEXT NOT NULL,
+      frontmatter_json TEXT NOT NULL,
+      raw_markdown TEXT NOT NULL,
+      body_markdown TEXT NOT NULL,
+      section_order_json TEXT NOT NULL,
+      section_map_json TEXT NOT NULL,
+      parse_status TEXT NOT NULL,
+      parse_warnings_json TEXT NOT NULL,
+      provenance_provider TEXT NOT NULL,
+      provenance_repo_url TEXT,
+      provenance_ref TEXT,
+      provenance_commit TEXT,
+      provenance_path TEXT NOT NULL,
+      provenance_sha256 TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      activated_at TEXT,
+      retired_at TEXT,
+      search_text TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace
+      ON imported_agent_catalog(workspace_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace_division
+      ON imported_agent_catalog(workspace_id, division, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace_state
+      ON imported_agent_catalog(workspace_id, state, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace_parse
+      ON imported_agent_catalog(workspace_id, parse_status, updated_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_agent_catalog_source_path
+      ON imported_agent_catalog(workspace_id, provenance_provider, COALESCE(provenance_repo_url, ''), provenance_path);
   `);
 }
 

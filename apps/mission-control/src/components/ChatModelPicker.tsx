@@ -3,11 +3,15 @@ import { GCCombobox, GCSelect } from "./ui";
 export interface ChatModelProviderOption {
   providerId: string;
   label: string;
+  baseUrl?: string;
   defaultModel?: string;
   models: string[];
   disabled?: boolean;
   availabilityLabel?: string;
   availabilityHint?: string;
+  isLocalRuntime?: boolean;
+  modelProbeState?: "not_checked" | "ready" | "empty" | "error";
+  modelProbeCheckedAt?: string;
 }
 
 export function ChatModelPicker({
@@ -44,13 +48,13 @@ export function ChatModelPicker({
     ? [{ value: "", label: "Loading models...", disabled: true }]
     : !activeProvider
       ? [{ value: "", label: "Select provider first", disabled: true }]
-    : models.map((item) => ({ value: item, label: item }));
+      : models.map((item) => ({ value: item, label: item }));
   const availabilityMessage = !activeProvider
     ? "No provider selected yet. Connect a provider in Configure, then choose a model."
     : modelLoading
-    ? `Loading models for ${activeProvider?.label ?? "provider"}...`
-    : activeProvider?.availabilityHint
-      ?? (models.length === 0 ? `No models available for ${activeProvider?.label ?? "this provider"} yet.` : null);
+      ? `Loading models for ${activeProvider?.label ?? "provider"}...`
+      : (activeProvider?.availabilityHint ??
+        (models.length === 0 ? `No models available for ${activeProvider?.label ?? "this provider"} yet.` : null));
 
   return (
     <div className="chat-model-picker">

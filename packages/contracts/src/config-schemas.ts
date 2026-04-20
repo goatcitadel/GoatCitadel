@@ -4,37 +4,41 @@ import { z } from "zod";
 // Tool Policy
 // ---------------------------------------------------------------------------
 
-const ToolLoopDetectionConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  historySize: z.number().int().min(2).max(50).default(8),
-  warningThreshold: z.number().int().min(2).max(50).default(3),
-  criticalThreshold: z.number().int().min(2).max(50).default(4),
-  globalThreshold: z.number().int().min(2).max(100).default(6),
-  detectors: z.object({
-    repeated_same_call: z.boolean().default(true),
-    no_progress_polling: z.boolean().default(true),
-    ping_pong: z.boolean().default(true),
-  }).default({
-    repeated_same_call: true,
-    no_progress_polling: true,
-    ping_pong: true,
-  }),
-}).superRefine((value, ctx) => {
-  if (value.warningThreshold > value.criticalThreshold) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "warningThreshold must be less than or equal to criticalThreshold.",
-      path: ["warningThreshold"],
-    });
-  }
-  if (value.criticalThreshold > value.globalThreshold) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "criticalThreshold must be less than or equal to globalThreshold.",
-      path: ["criticalThreshold"],
-    });
-  }
-});
+const ToolLoopDetectionConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    historySize: z.number().int().min(2).max(50).default(8),
+    warningThreshold: z.number().int().min(2).max(50).default(3),
+    criticalThreshold: z.number().int().min(2).max(50).default(4),
+    globalThreshold: z.number().int().min(2).max(100).default(6),
+    detectors: z
+      .object({
+        repeated_same_call: z.boolean().default(true),
+        no_progress_polling: z.boolean().default(true),
+        ping_pong: z.boolean().default(true),
+      })
+      .default({
+        repeated_same_call: true,
+        no_progress_polling: true,
+        ping_pong: true,
+      }),
+  })
+  .superRefine((value, ctx) => {
+    if (value.warningThreshold > value.criticalThreshold) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "warningThreshold must be less than or equal to criticalThreshold.",
+        path: ["warningThreshold"],
+      });
+    }
+    if (value.criticalThreshold > value.globalThreshold) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "criticalThreshold must be less than or equal to globalThreshold.",
+        path: ["criticalThreshold"],
+      });
+    }
+  });
 
 export const ToolPolicyConfigSchema = z
   .object({
@@ -541,8 +545,11 @@ export const CronJobSchema = z
   .object({
     jobId: z.string(),
     name: z.string(),
+    action: z.enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review"]).default("task"),
+    description: z.string().optional(),
     schedule: z.string(),
     enabled: z.boolean(),
+    endAt: z.string().optional(),
   })
   .passthrough();
 

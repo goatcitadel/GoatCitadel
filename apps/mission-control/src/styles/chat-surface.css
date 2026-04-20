@@ -145,6 +145,36 @@
   justify-content: flex-end;
 }
 
+.mission-surface-trust-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mission-surface-trust-chip {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-elevated) 82%, transparent);
+}
+
+.mission-surface-trust-chip span {
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mission-surface-trust-chip strong {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .mission-surface-dock-toggle {
   padding-inline: 12px;
 }

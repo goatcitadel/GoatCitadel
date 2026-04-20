@@ -21,7 +21,7 @@ export type SettingsTab =
   | "addons"
   | "onboarding";
 export type IntegrationsTab = "overview" | "channels" | "mcp";
-export type AgentsTab = "overview" | "herd-live" | "herd-lab" | "skills";
+export type AgentsTab = "overview" | "board" | "skills" | "catalog";
 
 export type NestedHostTab = ActivityTab | ArtifactsTab | SettingsTab | IntegrationsTab | AgentsTab;
 
@@ -134,7 +134,7 @@ export const PAGE_META: Record<SpacePage, RouteInfo> = {
     space: "configure",
     page: "agents",
     label: "Agents",
-    description: "Roster, herd views, and skills.",
+    description: "Roster, board visibility, and skills.",
   },
 };
 
@@ -217,8 +217,9 @@ const LEGACY_TAB_REDIRECTS: Record<string, ResolvedRoute> = {
   tools: { space: "configure", page: "tools" },
   agents: { space: "configure", page: "agents", tab: "overview" },
   skills: { space: "configure", page: "agents", tab: "skills" },
-  office: { space: "configure", page: "agents", tab: "herd-live" },
-  officeLab: { space: "configure", page: "agents", tab: "herd-lab" },
+  catalog: { space: "configure", page: "agents", tab: "catalog" },
+  office: { space: "configure", page: "agents", tab: "board" },
+  officeLab: { space: "configure", page: "agents", tab: "board" },
 };
 
 function isSpace(value: string | null): value is Space {
@@ -275,8 +276,11 @@ function normalizeTab(page: SpacePage, tab: string | null): NestedHostTab | unde
   if (page === "integrations" && (tab === "overview" || tab === "channels" || tab === "mcp")) {
     return tab;
   }
-  if (page === "agents" && (tab === "overview" || tab === "herd-live" || tab === "herd-lab" || tab === "skills")) {
+  if (page === "agents" && (tab === "overview" || tab === "board" || tab === "skills" || tab === "catalog")) {
     return tab;
+  }
+  if (page === "agents" && (tab === "herd-live" || tab === "herd-lab")) {
+    return "board";
   }
 
   return undefined;
@@ -328,6 +332,9 @@ export function readRouteFromLocation(): ResolvedRoute {
   }
 
   const url = new URL(window.location.href);
+  const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
+  const turnId = url.searchParams.get("turnId")?.trim() || undefined;
+  const approvalId = url.searchParams.get("approvalId")?.trim() || undefined;
   const legacyTab = url.searchParams.get("tab");
   if (legacyTab && legacyTab in LEGACY_TAB_REDIRECTS) {
     const legacyRoute = LEGACY_TAB_REDIRECTS[legacyTab]!;
@@ -341,6 +348,9 @@ export function readRouteFromLocation(): ResolvedRoute {
     return normalizeResolvedRoute({
       ...legacyRoute,
       surface: nextSurface,
+      sessionId,
+      turnId,
+      approvalId,
     });
   }
 
@@ -348,9 +358,6 @@ export function readRouteFromLocation(): ResolvedRoute {
   const page = url.searchParams.get("page");
   const surface = url.searchParams.get("surface");
   const nestedTab = url.searchParams.get("tab");
-  const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
-  const turnId = url.searchParams.get("turnId")?.trim() || undefined;
-  const approvalId = url.searchParams.get("approvalId")?.trim() || undefined;
 
   if (isSpace(space)) {
     if (space === "operate" && isOperatePage(page)) {
@@ -368,6 +375,7 @@ export function readRouteFromLocation(): ResolvedRoute {
         space,
         page,
         tab: normalizeTab(page, nestedTab),
+        sessionId,
       });
     }
     if (space === "configure" && isConfigurePage(page)) {
@@ -375,6 +383,7 @@ export function readRouteFromLocation(): ResolvedRoute {
         space,
         page,
         tab: normalizeTab(page, nestedTab),
+        sessionId,
       });
     }
   }

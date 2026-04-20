@@ -2,6 +2,7 @@ import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "rea
 import { getChatTurnRecoveryActionLabel, isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
+  ChatMode,
   ChatThreadResponse,
   ChatThreadTurnRecord,
   ChatTurnTraceRecord,
@@ -182,6 +183,7 @@ function ChatTurnRunStrip({ turn }: { turn: ChatThreadTurnRecord }) {
 }
 
 function ChatTurnActions({
+  mode,
   turn,
   selected,
   onSwitchBranch,
@@ -189,6 +191,7 @@ function ChatTurnActions({
   onEditTurn,
   onOpenRunDetails,
 }: {
+  mode: ChatMode;
   turn: ChatThreadTurnRecord;
   selected: boolean;
   onSwitchBranch: (turnId: string) => void;
@@ -209,7 +212,7 @@ function ChatTurnActions({
           onClick={() => onOpenRunDetails(turn.turnId)}
           className="gc-button"
         >
-          Open details
+          {mode === "cowork" ? "Open run details" : "Open details"}
         </button>
         {turn.assistantMessage ? (
           <button
@@ -218,7 +221,7 @@ function ChatTurnActions({
             onClick={() => onRetryTurn(turn.turnId)}
             className="gc-button"
           >
-            Retry answer
+            {mode === "cowork" ? "Retry run step" : "Retry answer"}
           </button>
         ) : null}
         <button
@@ -237,6 +240,7 @@ function ChatTurnActions({
 }
 
 function ChatTurnCard({
+  mode,
   turn,
   selected,
   onSelect,
@@ -245,6 +249,7 @@ function ChatTurnCard({
   onEditTurn,
   onOpenRunDetails,
 }: {
+  mode: ChatMode;
   turn: ChatThreadTurnRecord;
   selected: boolean;
   onSelect: (turnId: string) => void;
@@ -317,10 +322,11 @@ function ChatTurnCard({
           className="gc-button chat-v11-execution-open"
           onClick={() => onOpenRunDetails(turn.turnId)}
         >
-          Details
+          {mode === "cowork" ? "Run details" : "Details"}
         </button>
       </div>
       <ChatTurnActions
+        mode={mode}
         turn={turn}
         selected={selected}
         onSwitchBranch={onSwitchBranch}
@@ -350,7 +356,13 @@ function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) {
   );
 }
 
-function ChatDelegationRunSummary({ delegationRun }: { delegationRun: ActiveChatDelegationRun | null }) {
+function ChatDelegationRunSummary({
+  delegationRun,
+  mode,
+}: {
+  delegationRun: ActiveChatDelegationRun | null;
+  mode: ChatMode;
+}) {
   if (!delegationRun) {
     return null;
   }
@@ -375,9 +387,9 @@ function ChatDelegationRunSummary({ delegationRun }: { delegationRun: ActiveChat
           {delegationRun.status}
         </StatusChip>
         <span>Delegation run</span>
-        {delegationRun.runId ? <span>{delegationRun.runId}</span> : null}
-        {delegationRun.executionPlanId ? <span>Plan {delegationRun.executionPlanId}</span> : null}
-        {delegationRun.taskId ? <span>Task {delegationRun.taskId}</span> : null}
+        {mode !== "cowork" && delegationRun.runId ? <span>{delegationRun.runId}</span> : null}
+        {mode !== "cowork" && delegationRun.executionPlanId ? <span>Plan {delegationRun.executionPlanId}</span> : null}
+        {mode !== "cowork" && delegationRun.taskId ? <span>Task {delegationRun.taskId}</span> : null}
       </div>
       <div className="chat-v11-turn-bubble assistant">
         <p className="chat-v11-message-meta">
@@ -394,9 +406,9 @@ function ChatDelegationRunSummary({ delegationRun }: { delegationRun: ActiveChat
                 <strong>{toTitleCase(step.role)}</strong>
                 <span>{step.status}</span>
               </div>
-              {step.durableRunId ? <p>Durable {step.durableRunId}</p> : null}
-              {step.childSessionId ? <p>Child session {step.childSessionId}</p> : null}
-              {step.childTurnId ? <p>Child turn {step.childTurnId}</p> : null}
+              {mode !== "cowork" && step.durableRunId ? <p>Durable {step.durableRunId}</p> : null}
+              {mode !== "cowork" && step.childSessionId ? <p>Child session {step.childSessionId}</p> : null}
+              {mode !== "cowork" && step.childTurnId ? <p>Child turn {step.childTurnId}</p> : null}
               {step.output ? <p>{step.output}</p> : null}
               {step.error ? <p>{step.error}</p> : null}
             </li>
@@ -416,6 +428,7 @@ function ChatDelegationRunSummary({ delegationRun }: { delegationRun: ActiveChat
 }
 
 export function ChatThreadView({
+  mode,
   loading,
   thread,
   selectedTurnId,
@@ -432,6 +445,7 @@ export function ChatThreadView({
   onEditTurn,
   onOpenRunDetails,
 }: {
+  mode: ChatMode;
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
@@ -472,7 +486,9 @@ export function ChatThreadView({
           <strong>GoatCitadel</strong>
         </p>
         <p>
-          Start with a plain request, or type <code>/help</code> to see commands.
+          {mode === "cowork"
+            ? "Describe the objective, constraints, and desired output. Cowork will create a visible run plan here."
+            : "Start with a plain request, or type /help to see commands."}
         </p>
       </div>
     );
@@ -480,12 +496,13 @@ export function ChatThreadView({
 
   return (
     <div className="chat-v11-thread-view">
-      <ChatStreamStatusBar status={streamStatus} queuedCount={queuedCount} error={streamError} />
+      <ChatStreamStatusBar mode={mode} status={streamStatus} queuedCount={queuedCount} error={streamError} />
       <div className="chat-v11-thread-list chat-v11-thread-virtuoso">
-        <ChatDelegationRunSummary delegationRun={delegationRun ?? null} />
+        <ChatDelegationRunSummary delegationRun={delegationRun ?? null} mode={mode} />
         {thread.turns.map((turn) => (
           <ChatTurnCard
             key={turn.turnId}
+            mode={mode}
             turn={turn}
             selected={selectedTurnId === turn.turnId}
             onSelect={onSelectTurn}

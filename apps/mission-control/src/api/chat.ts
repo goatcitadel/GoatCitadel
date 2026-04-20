@@ -28,6 +28,8 @@ import type {
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
+  RoutingPreflightRequest,
+  RoutingPreflightResult,
   ChatStreamChunk,
   ChatThreadResponse,
   ChatUserInputPromptAnswerRequest,
@@ -366,6 +368,16 @@ export async function sendAgentChatMessage(
   input: ChatSendMessageRequest,
 ): Promise<ChatSendMessageResponse> {
   return request<ChatSendMessageResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function preflightChatRoute(
+  sessionId: string,
+  input: RoutingPreflightRequest,
+): Promise<RoutingPreflightResult> {
+  return request<RoutingPreflightResult>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/route-preflight`, {
     method: "POST",
     body: JSON.stringify(input),
   });

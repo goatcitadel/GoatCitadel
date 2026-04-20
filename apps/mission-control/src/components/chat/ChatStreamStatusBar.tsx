@@ -1,23 +1,32 @@
 export type ChatStreamStatus = "idle" | "connecting" | "streaming" | "queued" | "error";
 
 interface ChatStreamStatusBarProps {
+  mode?: "chat" | "cowork" | "code";
   status: ChatStreamStatus;
   queuedCount: number;
   error: string | null;
 }
 
-function statusLabel(status: ChatStreamStatus, queuedCount: number): string {
+function statusLabel(status: ChatStreamStatus, queuedCount: number, mode: "chat" | "cowork" | "code"): string {
   switch (status) {
     case "idle":
       return "Ready";
     case "connecting":
-      return "Connecting...";
+      return mode === "cowork" ? "Connecting run response..." : "Connecting...";
     case "streaming":
-      return queuedCount > 0 ? `Streaming (${queuedCount} queued)` : "Streaming...";
+      return mode === "cowork"
+        ? queuedCount > 0
+          ? `Run response streaming (${queuedCount} queued messages)`
+          : "Run response streaming..."
+        : queuedCount > 0
+          ? `Streaming (${queuedCount} queued)`
+          : "Streaming...";
     case "queued":
-      return `${queuedCount} message${queuedCount === 1 ? "" : "s"} queued`;
+      return mode === "cowork"
+        ? `${queuedCount} queued message${queuedCount === 1 ? "" : "s"}`
+        : `${queuedCount} message${queuedCount === 1 ? "" : "s"} queued`;
     case "error":
-      return "Error";
+      return mode === "cowork" ? "Run response error" : "Error";
   }
 }
 
@@ -35,21 +44,19 @@ function statusTone(status: ChatStreamStatus): string {
   }
 }
 
-export function ChatStreamStatusBar({ status, queuedCount, error }: ChatStreamStatusBarProps) {
+export function ChatStreamStatusBar({ mode = "chat", status, queuedCount, error }: ChatStreamStatusBarProps) {
   if (status === "idle" && queuedCount === 0 && !error) {
     return null;
   }
 
   const tone = statusTone(status);
-  const label = statusLabel(status, queuedCount);
+  const label = statusLabel(status, queuedCount, mode);
 
   return (
     <div className={`chat-stream-status-bar tone-${tone}`} role="status" aria-live="polite">
       <span className="chat-stream-status-indicator" />
       <span className="chat-stream-status-label">{label}</span>
-      {error && status === "error" ? (
-        <span className="chat-stream-status-error">{error}</span>
-      ) : null}
+      {error && status === "error" ? <span className="chat-stream-status-error">{error}</span> : null}
     </div>
   );
 }

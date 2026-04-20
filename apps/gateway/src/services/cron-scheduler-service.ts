@@ -20,7 +20,15 @@ export function getCronJob(host: CronSchedulerHost, jobId: string): CronJobRecor
 
 export function createCronJob(
   host: CronSchedulerHost,
-  input: { jobId: string; name: string; schedule: string; enabled?: boolean },
+  input: {
+    jobId: string;
+    name: string;
+    action?: CronJobRecord["action"];
+    description?: string;
+    schedule: string;
+    enabled?: boolean;
+    endAt?: string;
+  },
 ): CronJobRecord {
   return host.cronAutomationService.createCronJob(input);
 }
@@ -28,7 +36,14 @@ export function createCronJob(
 export function updateCronJob(
   host: CronSchedulerHost,
   jobId: string,
-  input: { name?: string; schedule?: string; enabled?: boolean },
+  input: {
+    name?: string;
+    action?: CronJobRecord["action"];
+    description?: string;
+    schedule?: string;
+    enabled?: boolean;
+    endAt?: string | null;
+  },
 ): CronJobRecord {
   return host.cronAutomationService.updateCronJob(jobId, input);
 }

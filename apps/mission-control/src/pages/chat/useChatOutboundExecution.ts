@@ -3,6 +3,7 @@ import type {
   ChatAttachmentRecord,
   ChatCapabilityUpgradeSuggestion,
   ChatMessageRecord,
+  RoutingPreflightResult,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatSpecialistCandidateSuggestionRecord,
@@ -25,7 +26,6 @@ import {
   streamEditChatTurn,
   streamRetryChatTurn,
 } from "../../api/client";
-import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 import {
   isThreadMutatingStreamChunk,
   type PendingStreamTurnSeed,
@@ -34,7 +34,7 @@ import {
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import { recordClientDiagnostic } from "../../state/dev-diagnostics-store";
 import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOutboundPhase } from "./chat-causality";
-import { resolveProviderModelSelection } from "./chat-page-helpers";
+import { formatChatUiError } from "./chat-error-copy";
 import { isAbortError } from "./chat-page-derivations";
 import {
   shouldApplyFetchedMessagesAfterStream,
@@ -71,9 +71,6 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
 export function useChatOutboundExecution(input: {
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
-  providerOptions: ChatModelProviderOption[];
-  selectedProviderId: string | undefined;
-  selectedModel: string | undefined;
   streamEnabled: boolean;
   sending: boolean;
   error: string | null;
@@ -104,20 +101,22 @@ export function useChatOutboundExecution(input: {
     options?: { background?: boolean; includeThread?: boolean },
   ) => Promise<void>;
   ensureSession: () => Promise<ChatSessionRecord>;
-  getCachedModels: (providerId: string) => string[];
   pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
   handleCommandExecution: (sessionId: string, commandText: string) => Promise<void>;
   executeOutboundItemRef: MutableRefObject<(item: OutboundQueueItem) => Promise<void>>;
   tryBeginOutboundExecutionRef: MutableRefObject<() => boolean>;
   applyFetchedThreadRef: MutableRefObject<(thread: ChatThreadResponse, requestVersion: number | null) => boolean>;
   messageMutationVersionRef: MutableRefObject<number>;
+  ensureFreshRoutePreflight: (input: {
+    sessionId?: string | null;
+    action: OutboundQueueItem["action"];
+    turnId?: string | null;
+  }) => Promise<RoutingPreflightResult | null>;
+  isRoutePreflightAcknowledged: (hash: string) => boolean;
 }) {
   const {
     selectedSessionId,
     selectedSession,
-    providerOptions,
-    selectedProviderId,
-    selectedModel,
     streamEnabled,
     sending,
     error,
@@ -137,13 +136,14 @@ export function useChatOutboundExecution(input: {
     loadSidebar,
     loadSessionCoreState,
     ensureSession,
-    getCachedModels,
     pushLocalNotice,
     handleCommandExecution,
     executeOutboundItemRef,
     tryBeginOutboundExecutionRef,
     applyFetchedThreadRef,
     messageMutationVersionRef,
+    ensureFreshRoutePreflight,
+    isRoutePreflightAcknowledged,
   } = input;
 
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
@@ -475,7 +475,7 @@ export function useChatOutboundExecution(input: {
           void loadSessionCoreState(sessionId, {
             background: true,
             includeThread: true,
-          }).catch((err: Error) => setError(err.message));
+          }).catch((err: Error) => setError(formatChatUiError(err.message)));
         },
         options?.immediate ? 0 : 400,
       );
@@ -501,20 +501,12 @@ export function useChatOutboundExecution(input: {
 
   const executeOutboundItem = useCallback(
     async (item: OutboundQueueItem) => {
+      const preflightHash = (value: RoutingPreflightResult | null) => (value ? JSON.stringify(value) : null);
       const executionCorrelationId = createChatExecutionCorrelationId();
       const trimmedContent = item.content.trim();
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       const currentPrefs = prefsRef.current;
-      const currentProviderId = currentPrefs?.providerId ?? selectedProviderId;
-      const currentProvider = providerOptions.find((provider) => provider.providerId === currentProviderId);
-      const currentProviderSelection = resolveProviderModelSelection({
-        provider: currentProvider,
-        loadedModels: currentProviderId ? getCachedModels(currentProviderId) : [],
-        selectedModel: currentPrefs?.model ?? selectedModel,
-      });
-      const effectiveProviderId = currentProvider?.providerId;
-      const effectiveModel = currentProviderSelection.model;
       const localAttachments = attachmentsSnapshot.map((entry) => ({
         attachmentId: entry.attachmentId,
         fileName: entry.fileName,
@@ -559,17 +551,19 @@ export function useChatOutboundExecution(input: {
           await loadSidebar();
           return;
         }
-        if (!effectiveProviderId) {
-          throw new Error("No model provider is configured yet. Open Configure and connect a provider first.");
+        const routePreflight = await ensureFreshRoutePreflight({
+          sessionId: session.sessionId,
+          action: item.action,
+          turnId: item.targetTurnId,
+        });
+        if (routePreflight?.blockedReason) {
+          throw new Error(routePreflight.blockedReason);
         }
-        if (currentProviderSelection.blockedMessage) {
-          throw new Error(currentProviderSelection.blockedMessage);
-        }
-        if (!effectiveModel) {
-          throw new Error(
-            currentProviderSelection.missingModelMessage ??
-              `No model is selected for ${currentProvider?.label ?? effectiveProviderId}. Choose a model and try again.`,
-          );
+        const routeHash = preflightHash(routePreflight);
+        const requiresRouteAck =
+          routePreflight?.fallbackResult === "local_to_cloud" || routePreflight?.fallbackResult === "cloud_to_local";
+        if (routeHash && requiresRouteAck && !isRoutePreflightAcknowledged(routeHash)) {
+          throw new Error("Acknowledge the predicted fallback route boundary before continuing.");
         }
         recordChatOutboundPhase({
           phase: "provider_selected",
@@ -577,11 +571,13 @@ export function useChatOutboundExecution(input: {
           correlationId: executionCorrelationId,
           sessionId: session.sessionId,
           turnId: item.targetTurnId,
-          message: `Selected ${effectiveProviderId}:${effectiveModel} for ${item.action}`,
+          message: `Resolved route for ${item.action}`,
           level: "debug",
           context: {
-            providerId: effectiveProviderId,
-            model: effectiveModel,
+            providerId: routePreflight?.effectiveProviderId,
+            model: routePreflight?.effectiveModel,
+            selectionSource: routePreflight?.selectionSource,
+            fallbackPolicy: routePreflight?.fallbackPolicy,
           },
         });
         const targetTurn = item.targetTurnId
@@ -711,7 +707,7 @@ export function useChatOutboundExecution(input: {
               setPendingUserInput(chunk.prompt);
             }
             if (chunk.type === "error") {
-              setError(chunk.error || "Streaming request failed.");
+              setError(formatChatUiError(chunk.error || "Streaming request failed."));
               recordClientDiagnostic({
                 level: "error",
                 category: "chat",
@@ -771,8 +767,8 @@ export function useChatOutboundExecution(input: {
                   session.sessionId,
                   item.targetTurnId,
                   {
-                    providerId: effectiveProviderId,
-                    model: effectiveModel,
+                    providerId: currentPrefs?.providerId,
+                    model: currentPrefs?.model,
                     mode: currentPrefs?.mode,
                     webMode: currentPrefs?.webMode,
                     memoryMode: currentPrefs?.memoryMode,
@@ -790,8 +786,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: effectiveProviderId,
-                    model: effectiveModel,
+                    providerId: currentPrefs?.providerId,
+                    model: currentPrefs?.model,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -807,8 +803,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: effectiveProviderId,
-                    model: effectiveModel,
+                    providerId: currentPrefs?.providerId,
+                    model: currentPrefs?.model,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -846,8 +842,8 @@ export function useChatOutboundExecution(input: {
           const sent =
             item.action === "retry" && item.targetTurnId
               ? await retryChatTurn(session.sessionId, item.targetTurnId, {
-                  providerId: effectiveProviderId,
-                  model: effectiveModel,
+                  providerId: currentPrefs?.providerId,
+                  model: currentPrefs?.model,
                   mode: currentPrefs?.mode,
                   webMode: currentPrefs?.webMode,
                   memoryMode: currentPrefs?.memoryMode,
@@ -859,8 +855,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: effectiveProviderId,
-                    model: effectiveModel,
+                    providerId: currentPrefs?.providerId,
+                    model: currentPrefs?.model,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -870,8 +866,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: effectiveProviderId,
-                    model: effectiveModel,
+                    providerId: currentPrefs?.providerId,
+                    model: currentPrefs?.model,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -921,7 +917,7 @@ export function useChatOutboundExecution(input: {
             setEditingTurnId(item.targetTurnId);
           }
         }
-        setError((err as Error).message);
+        setError(formatChatUiError((err as Error).message));
         recordChatOutboundPhase({
           phase: "failed",
           action: item.action,
@@ -945,15 +941,13 @@ export function useChatOutboundExecution(input: {
     [
       commitThreadUpdate,
       ensureSession,
+      ensureFreshRoutePreflight,
       finishOutboundExecution,
-      getCachedModels,
       handleCommandExecution,
+      isRoutePreflightAcknowledged,
       loadSessionCoreState,
-      providerOptions,
       loadSidebar,
       scheduleStreamMessageReconciliation,
-      selectedModel,
-      selectedProviderId,
       setCapabilitySuggestions,
       setSpecialistSuggestions,
       setDraft,
@@ -984,7 +978,7 @@ export function useChatOutboundExecution(input: {
         commitThreadUpdate(nextThread);
         return nextThread;
       } catch (err) {
-        setError((err as Error).message);
+        setError(formatChatUiError((err as Error).message));
         return null;
       }
     },
@@ -1052,7 +1046,7 @@ export function useChatOutboundExecution(input: {
           },
         });
       } catch (err) {
-        setError((err as Error).message);
+        setError(formatChatUiError((err as Error).message));
       } finally {
         setApprovalPending(false);
       }
@@ -1100,7 +1094,7 @@ export function useChatOutboundExecution(input: {
         source: "operator",
       });
     } catch (err) {
-      setError((err as Error).message);
+      setError(formatChatUiError((err as Error).message));
     } finally {
       setApprovalPending(false);
     }
@@ -1131,7 +1125,7 @@ export function useChatOutboundExecution(input: {
           includeThread: true,
         });
       } catch (err) {
-        setError((err as Error).message);
+        setError(formatChatUiError((err as Error).message));
       } finally {
         setUserInputPending(false);
       }

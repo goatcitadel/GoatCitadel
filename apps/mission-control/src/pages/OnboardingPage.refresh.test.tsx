@@ -3,7 +3,9 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshState = vi.hoisted(() => ({
-  callback: null as null | ((signal: { reason?: string; eventType?: string; source?: string; timestamp: number }) => Promise<void> | void),
+  callback: null as
+    | null
+    | ((signal: { reason?: string; eventType?: string; source?: string; timestamp: number }) => Promise<void> | void),
   options: null as null | Record<string, unknown>,
 }));
 
@@ -38,6 +40,13 @@ vi.mock("../hooks/useProviderModelCatalog", () => ({
     config: null,
     providers: [
       {
+        providerId: "llamacpp",
+        label: "llama.cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        apiStyle: "openai-chat-completions",
+        defaultModel: "gemma-4-local",
+      },
+      {
         providerId: "openai",
         label: "OpenAI",
         baseUrl: "https://api.openai.com/v1",
@@ -52,7 +61,12 @@ vi.mock("../hooks/useProviderModelCatalog", () => ({
 vi.mock("../hooks/useRefreshSubscription", () => ({
   useRefreshSubscription: (
     _topic: string,
-    callback: (signal: { reason?: string; eventType?: string; source?: string; timestamp: number }) => Promise<void> | void,
+    callback: (signal: {
+      reason?: string;
+      eventType?: string;
+      source?: string;
+      timestamp: number;
+    }) => Promise<void> | void,
     options?: Record<string, unknown>,
   ) => {
     refreshState.callback = callback;
@@ -91,7 +105,38 @@ vi.mock("../components/SelectOrCustom", () => ({
 
 import { OnboardingPage } from "./OnboardingPage";
 
-function makeOnboardingState() {
+function makeProvider(input: {
+  providerId: string;
+  label: string;
+  baseUrl: string;
+  apiStyle: "openai-chat-completions" | "openai-responses";
+  defaultModel: string;
+}) {
+  return {
+    providerId: input.providerId,
+    label: input.label,
+    baseUrl: input.baseUrl,
+    apiStyle: input.apiStyle,
+    defaultModel: input.defaultModel,
+  };
+}
+
+function makeOnboardingState(
+  overrides: {
+    activeProviderId?: string;
+    activeModel?: string;
+    providers?: Array<ReturnType<typeof makeProvider>>;
+  } = {},
+) {
+  const providers = overrides.providers ?? [
+    makeProvider({
+      providerId: "openai",
+      label: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      apiStyle: "openai-responses",
+      defaultModel: "gpt-5.4",
+    }),
+  ];
   return {
     completed: false,
     completedAt: undefined,
@@ -113,17 +158,9 @@ function makeOnboardingState() {
       budgetMode: "balanced",
       networkAllowlist: ["127.0.0.1", "localhost"],
       llm: {
-        activeProviderId: "openai",
-        activeModel: "gpt-5.4",
-        providers: [
-          {
-            providerId: "openai",
-            label: "OpenAI",
-            baseUrl: "https://api.openai.com/v1",
-            apiStyle: "openai-responses",
-            defaultModel: "gpt-5.4",
-          },
-        ],
+        activeProviderId: overrides.activeProviderId ?? providers[0]?.providerId ?? "openai",
+        activeModel: overrides.activeModel ?? providers[0]?.defaultModel ?? "gpt-5.4",
+        providers,
       },
       mesh: {
         enabled: false,
@@ -236,6 +273,68 @@ describe("OnboardingPage refresh discipline", () => {
       expect(apiMocks.fetchOnboardingState).toHaveBeenCalledTimes(2);
       expect(renderer.root.findByProps({ id: "wizard-auth-mode" }).props.value).toBe("token");
       expect(renderer.root.findByProps({ id: "wizard-token" }).props.value).toBe("draft-token");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("preserves provider selection when a refresh lands right after the operator switches providers", async () => {
+    const runtimeState = makeOnboardingState({
+      activeProviderId: "llamacpp",
+      activeModel: "gemma-4-local",
+      providers: [
+        makeProvider({
+          providerId: "llamacpp",
+          label: "llama.cpp",
+          baseUrl: "http://127.0.0.1:8080/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gemma-4-local",
+        }),
+        makeProvider({
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4",
+        }),
+      ],
+    });
+    apiMocks.fetchOnboardingState.mockResolvedValue(runtimeState);
+    providerCatalogMocks.previewProviderModels.mockResolvedValue({
+      items: ["gpt-5.4"],
+      source: "remote",
+      warning: undefined,
+    });
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      const nextButton = renderer.root.findAllByType("button").find((node) => node.props.children === "Next");
+      expect(nextButton).toBeDefined();
+      await act(async () => {
+        nextButton?.props.onClick();
+      });
+
+      const providerSelect = renderer.root.findByProps({ id: "wizard-provider-id" });
+      expect(providerSelect.props.value).toBe("llamacpp");
+
+      await act(async () => {
+        providerSelect.props.onChange("openai");
+        await refreshState.callback?.({
+          topic: "system",
+          timestamp: Date.now(),
+          reason: "settings-updated",
+          source: "test",
+        } as never);
+      });
+      await flush();
+
+      expect(apiMocks.fetchOnboardingState).toHaveBeenCalledTimes(2);
+      expect(renderer.root.findByProps({ id: "wizard-provider-id" }).props.value).toBe("openai");
     } finally {
       renderer.unmount();
     }

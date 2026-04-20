@@ -21,6 +21,9 @@ function buildComposerMarkup(overrides: Partial<Parameters<typeof ChatComposerSh
       selectedTurn={null}
       selectedSessionId="session-1"
       currentWebMode="auto"
+      routePreflight={null}
+      routeBoundaryAckRequired={false}
+      routeBoundaryAcknowledged={false}
       sending={false}
       canSend
       hasActiveStream={false}
@@ -35,6 +38,7 @@ function buildComposerMarkup(overrides: Partial<Parameters<typeof ChatComposerSh
       onRemoveQueuedItem={vi.fn()}
       onCancelEdit={vi.fn()}
       onDismissError={vi.fn()}
+      onAcknowledgeRouteBoundary={vi.fn()}
       onRetryTurn={vi.fn()}
       onSetDeepMode={vi.fn()}
       onReviewRunDetails={vi.fn()}
@@ -92,5 +96,20 @@ describe("ChatComposerShell", () => {
     expect(markup).toContain("Retry with narrower scope");
     expect(markup).toContain("Retry turn");
     expect(markup).toContain("Review run details");
+  });
+
+  it("renders Cowork preflight warnings and fallback acknowledgement", () => {
+    const markup = buildComposerMarkup({
+      mode: "cowork",
+      routePreflight: {
+        normalizationReason: "Model changed from gpt-4.1 to llama3.2 because provider Ollama cannot run gpt-4.1.",
+        degradedReason: "Fallback may move this run from local to cloud if the primary route fails.",
+      } as any,
+      routeBoundaryAckRequired: true,
+    });
+
+    expect(markup).toContain("Model normalized before execution");
+    expect(markup).toContain("Fallback can cross the current runtime boundary");
+    expect(markup).toContain("Acknowledge fallback");
   });
 });

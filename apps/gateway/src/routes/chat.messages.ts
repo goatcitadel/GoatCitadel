@@ -92,6 +92,17 @@ const retryTurnSchema = sendMessageSchema.partial().extend({
 
 const editTurnSchema = sendMessageSchema;
 
+const routePreflightSchema = z.object({
+  action: z.enum(["send", "retry", "edit"]),
+  turnId: z.string().optional(),
+  providerId: z.string().optional(),
+  model: z.string().optional(),
+  mode: z.enum(["chat", "cowork", "code"]).optional(),
+  webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
+  thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
+  prefsOverride: sendMessageSchema.shape.prefsOverride,
+});
+
 const cancelTurnSchema = z.object({
   cancelledBy: z.string().min(1).optional(),
 });
@@ -176,6 +187,25 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     }
   });
 
+  fastify.post("/api/v1/chat/sessions/:sessionId/route-preflight", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = routePreflightSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      const result = await fastify.gateway.routePreflight(params.data.sessionId, body.data);
+      return reply.send(result);
+    } catch (error) {
+      return sendChatWriteError(reply, error);
+    }
+  });
+
   fastify.post("/api/v1/chat/sessions/:sessionId/messages/stream", async (request, reply) => {
     const params = sessionParamsSchema.safeParse(request.params);
     const body = sendMessageSchema.safeParse(request.body);
@@ -244,36 +274,39 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     }
   });
 
-  fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/respond", async (request, reply) => {
-    const params = z
-      .object({
-        sessionId: z.string().min(1),
-        turnId: z.string().min(1),
-        promptId: z.string().min(1),
-      })
-      .safeParse(request.params);
-    const body = answerUserInputPromptSchema.safeParse(request.body);
-    if (!params.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
-    }
-    try {
-      return reply.send(
-        await fastify.gateway.answerChatUserInputPrompt(
-          params.data.sessionId,
-          params.data.turnId,
-          params.data.promptId,
-          body.data.response,
-        ),
-      );
-    } catch (error) {
-      return sendChatWriteError(reply, error);
-    }
-  });
+  fastify.post(
+    "/api/v1/chat/sessions/:sessionId/turns/:turnId/user-input/:promptId/respond",
+    async (request, reply) => {
+      const params = z
+        .object({
+          sessionId: z.string().min(1),
+          turnId: z.string().min(1),
+          promptId: z.string().min(1),
+        })
+        .safeParse(request.params);
+      const body = answerUserInputPromptSchema.safeParse(request.body);
+      if (!params.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        });
+      }
+      try {
+        return reply.send(
+          await fastify.gateway.answerChatUserInputPrompt(
+            params.data.sessionId,
+            params.data.turnId,
+            params.data.promptId,
+            body.data.response,
+          ),
+        );
+      } catch (error) {
+        return sendChatWriteError(reply, error);
+      }
+    },
+  );
 
   fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/select", async (request, reply) => {
     const params = turnParamsSchema.safeParse(request.params);

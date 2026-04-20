@@ -524,4 +524,26 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS durable_run_id TEXT;
     `,
   },
+  {
+    version: 16,
+    name: "cron_jobs_action_description_end_at",
+    sql: `
+      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'task',
+        ADD COLUMN IF NOT EXISTS description TEXT,
+        ADD COLUMN IF NOT EXISTS end_at TEXT;
+
+      UPDATE cron_jobs
+      SET action = CASE job_id
+        WHEN 'self_improvement_weekly_replay' THEN 'improvement'
+        WHEN 'improvement_weekly' THEN 'improvement'
+        WHEN 'private_beta_backup_daily' THEN 'backup'
+        WHEN 'memory-flush-daily' THEN 'memory_flush'
+        WHEN 'cost-report-hourly' THEN 'cost_report'
+        WHEN 'update-review-daily' THEN 'update_review'
+        ELSE COALESCE(NULLIF(action, ''), 'task')
+      END
+      WHERE action IS NULL OR BTRIM(action) = '' OR action = 'task';
+    `,
+  },
 ];

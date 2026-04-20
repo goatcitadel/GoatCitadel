@@ -77,6 +77,7 @@ function buildProps(overrides: Partial<Parameters<typeof ChatContextDockPanels>[
     onRunCodeDelegation: vi.fn(async () => undefined),
     onCapabilitySuggestionAction: vi.fn(),
     onCreateSpecialistDraft: vi.fn(async () => undefined),
+    onActivateCatalogSpecialist: vi.fn(async () => undefined),
     onSpecialistCandidatePatch: vi.fn(async () => undefined),
     onAcceptDelegation: vi.fn(async () => undefined),
     onRebuildLearnedMemory: vi.fn(async () => undefined),
@@ -110,6 +111,7 @@ describe("ChatContextDockPanels", () => {
   it("routes suggestion actions through the composed dock sections", async () => {
     const onCapabilitySuggestionAction = vi.fn();
     const onCreateSpecialistDraft = vi.fn(async () => undefined);
+    const onActivateCatalogSpecialist = vi.fn(async () => undefined);
     const onAcceptDelegation = vi.fn(async () => undefined);
     const renderer = create(
       <ChatContextDockPanels
@@ -135,6 +137,14 @@ describe("ChatContextDockPanels", () => {
               role: "Researcher",
               summary: "Handles web research",
             } as any,
+            {
+              candidateId: "catalog-frontend",
+              title: "Frontend Developer",
+              role: "frontend-developer",
+              summary: "Imported Agency specialist",
+              reason: "Imported Agency specialist from engineering.",
+              source: "catalog",
+            } as any,
           ],
           delegationSuggestion: {
             suggestionId: "suggestion-1",
@@ -149,6 +159,7 @@ describe("ChatContextDockPanels", () => {
           },
           onCapabilitySuggestionAction,
           onCreateSpecialistDraft,
+          onActivateCatalogSpecialist,
           onAcceptDelegation,
         })}
       />,
@@ -168,10 +179,12 @@ describe("ChatContextDockPanels", () => {
 
     await clickButton("Enable skill");
     await clickButton("Draft dormant specialist");
+    await clickButton("Activate for session");
     await clickButton("Accept plan");
 
     expect(onCapabilitySuggestionAction).toHaveBeenCalledTimes(1);
     expect(onCreateSpecialistDraft).toHaveBeenCalledTimes(1);
+    expect(onActivateCatalogSpecialist).toHaveBeenCalledTimes(1);
     expect(onAcceptDelegation).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(renderer.toJSON())).not.toContain("Cowork Canvas");
   });

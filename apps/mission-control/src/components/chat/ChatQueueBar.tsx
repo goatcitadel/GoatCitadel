@@ -35,17 +35,17 @@ function summarizeOverflowItems(items: ChatQueueItemView[]): ChatQueueItemView |
 
 export function buildVisibleQueueItems(items: ChatQueueItemView[]): ChatQueueItemView[] {
   const overflowItem = summarizeOverflowItems(items);
-  return overflowItem
-    ? [...items.slice(0, MAX_VISIBLE_QUEUE_ITEMS - 1), overflowItem]
-    : items;
+  return overflowItem ? [...items.slice(0, MAX_VISIBLE_QUEUE_ITEMS - 1), overflowItem] : items;
 }
 
 export function ChatQueueBar({
   items,
+  title = "Queue",
   onResumeAll,
   onRemove,
 }: {
   items: ChatQueueItemView[];
+  title?: string;
   onResumeAll: () => void;
   onRemove: (id: string) => void;
 }) {
@@ -57,10 +57,12 @@ export function ChatQueueBar({
   return (
     <div className="chat-v11-queue-bar">
       <div className="chat-v11-queue-header">
-        <strong>Queue</strong>
+        <strong>{title}</strong>
         <span>{items.length} pending</span>
         {pausedCount > 0 ? (
-          <button type="button" onClick={onResumeAll} className="gc-button">Resume queue</button>
+          <button type="button" onClick={onResumeAll} className="gc-button">
+            {title === "Queued messages" ? "Resume queued messages" : "Resume queue"}
+          </button>
         ) : null}
       </div>
       <ul className="chat-v11-queue-list">
@@ -75,7 +77,9 @@ export function ChatQueueBar({
               </p>
             </div>
             {item.id === "__overflow__" ? null : (
-              <button type="button" onClick={() => onRemove(item.id)} className="gc-button">Remove</button>
+              <button type="button" onClick={() => onRemove(item.id)} className="gc-button">
+                Remove
+              </button>
             )}
           </li>
         ))}

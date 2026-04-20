@@ -8,6 +8,12 @@ export interface WorkTrustDescriptor {
   activeModeLabel: string;
   providerModelSummary: string;
   runtimeSummary: string;
+  requestedProviderModelSummary?: string;
+  effectiveProviderModelSummary?: string;
+  selectionSourceSummary?: string;
+  fallbackSummary?: string;
+  fallbackTone?: WorkTrustTone;
+  runtimeTone?: WorkTrustTone;
 }
 
 export interface WorkloadSummaryDescriptor {

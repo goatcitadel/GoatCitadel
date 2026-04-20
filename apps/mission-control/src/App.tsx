@@ -1336,6 +1336,8 @@ export function App() {
       return (
         <AgentsHubPage
           activeTab={configureAgentsTab}
+          workspaceId={activeWorkspaceId}
+          sessionId={route.sessionId}
           onTabChange={(tab: AgentsTab) => navigate({ space: "configure", page: "agents", tab })}
         />
       );
@@ -1362,6 +1364,7 @@ export function App() {
     workspacesTab,
     workTrustDescriptor,
     route.page,
+    route.sessionId,
     route.space,
     route.surface,
     showTechnicalDetails,
@@ -1547,7 +1550,7 @@ export function App() {
                     placement="attached"
                     onToggleVariant={(next) => setOperateStatusStripExpanded(next === "expanded")}
                     onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
-                    onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "herd-live" })}
+                    onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "board" })}
                     onOpenCosts={() => handleSelectVisiblePage("health")}
                     onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
                   />

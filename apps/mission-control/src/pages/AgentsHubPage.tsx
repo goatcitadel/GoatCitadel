@@ -2,42 +2,50 @@ import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
 import { TuneHubLayout } from "../components/TuneHubLayout";
 import type { AgentsTab } from "../content/page-registry";
 import { AgentsPage } from "./AgentsPage";
-import { OfficeLabPage } from "./OfficeLabPage";
-import { OfficePage } from "./OfficePage";
+import { AgentsBoardPage } from "./AgentsBoardPage";
+import { AgentsCatalogPage } from "./AgentsCatalogPage";
 import { SkillsPage } from "./SkillsPage";
 
 interface AgentsHubPageProps {
   activeTab: AgentsTab;
+  workspaceId?: string;
+  sessionId?: string;
   onTabChange: (tab: AgentsTab) => void;
 }
 
 const ITEMS: Array<{ id: AgentsTab; label: string }> = [
   { id: "overview", label: "Overview" },
-  { id: "herd-live", label: "Herd Live" },
-  { id: "herd-lab", label: "Herd Lab" },
+  { id: "board", label: "Board" },
   { id: "skills", label: "Skills" },
+  { id: "catalog", label: "Catalog" },
 ];
 
-export function AgentsHubPage({ activeTab, onTabChange }: AgentsHubPageProps) {
+export function AgentsHubPage({ activeTab, workspaceId, sessionId, onTabChange }: AgentsHubPageProps) {
   const activeLabel = ITEMS.find((item) => item.id === activeTab)?.label ?? "Overview";
   const operatorNote =
     activeTab === "skills"
       ? "Keep reusable behavior visible without forcing skill catalog chrome above the work."
-      : activeTab === "herd-lab"
-        ? "Lab mode should feel experimental but still structured."
-        : activeTab === "herd-live"
-          ? "Live rooms should foreground current posture, not onboarding copy."
+      : activeTab === "catalog"
+        ? "Imported specialists stay searchable and inspectable until the operator activates them for a session."
+        : activeTab === "board"
+          ? "The board should make workload and trace state legible at a glance."
           : "Overview stays focused on roster posture and availability.";
 
   return (
     <TuneHubLayout
+      className={activeTab === "board" ? "agents-hub-layout-board" : undefined}
       title="Agents"
-      subtitle="Roster posture, special herd rooms, and reusable skills should feel like one control surface instead of separate products."
+      subtitle="Roster, board visibility, and reusable skills in one control surface."
       summaries={[
         { label: "Current lane", value: activeLabel, note: "Active agent space", tone: "accent" },
         {
           label: "Roster posture",
-          value: activeTab === "skills" ? "Behavior shaping" : "Agent availability",
+          value:
+            activeTab === "skills"
+              ? "Behavior shaping"
+              : activeTab === "catalog"
+                ? "Dormant specialists"
+                : "Agent availability",
           note: operatorNote,
         },
         {
@@ -45,9 +53,11 @@ export function AgentsHubPage({ activeTab, onTabChange }: AgentsHubPageProps) {
           value:
             activeTab === "skills"
               ? "Reusable skills"
-              : activeTab === "herd-lab"
-                ? "Experiment safely"
-                : "Watch the roster",
+              : activeTab === "catalog"
+                ? "Dormant imports"
+                : activeTab === "board"
+                  ? "Watch the board"
+                  : "Watch the roster",
           note: "Agent controls should stay compact and inspectable.",
         },
       ]}
@@ -61,9 +71,9 @@ export function AgentsHubPage({ activeTab, onTabChange }: AgentsHubPageProps) {
     >
       <EmbeddedPageChromeProvider>
         {activeTab === "overview" ? <AgentsPage /> : null}
-        {activeTab === "herd-live" ? <OfficePage onOpenLab={() => onTabChange("herd-lab")} /> : null}
-        {activeTab === "herd-lab" ? <OfficeLabPage onOpenImmersive={() => onTabChange("herd-live")} /> : null}
+        {activeTab === "board" ? <AgentsBoardPage /> : null}
         {activeTab === "skills" ? <SkillsPage /> : null}
+        {activeTab === "catalog" ? <AgentsCatalogPage workspaceId={workspaceId} sessionId={sessionId} /> : null}
       </EmbeddedPageChromeProvider>
     </TuneHubLayout>
   );

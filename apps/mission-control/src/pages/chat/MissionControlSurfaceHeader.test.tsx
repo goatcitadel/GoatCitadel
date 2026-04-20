@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MissionControlSurfaceHeader } from "./MissionControlSurfaceHeader";
 
 describe("MissionControlSurfaceHeader", () => {
-  it("keeps provider and runtime trust out of the local header chrome", () => {
+  it("renders the operator trust strip inside the local header chrome", () => {
     const markup = renderToStaticMarkup(
       <MissionControlSurfaceHeader
         mode="code"
@@ -17,7 +17,13 @@ describe("MissionControlSurfaceHeader", () => {
           approvalsSummary: "2 decisions",
           activeModeLabel: "Code",
           providerModelSummary: "OpenAI / gpt-5.4",
+          requestedProviderModelSummary: "OpenAI / gpt-5.4",
+          effectiveProviderModelSummary: "local / llama-3.2",
+          selectionSourceSummary: "Selection: session",
+          fallbackSummary: "Fallback armed",
+          fallbackTone: "warning",
           runtimeSummary: "3 active runtimes",
+          runtimeTone: "warning",
         }}
         dockOpen
         onToggleDock={() => undefined}
@@ -26,8 +32,14 @@ describe("MissionControlSurfaceHeader", () => {
 
     expect(markup).toContain("Patch queue");
     expect(markup).toContain("Review the diff and move the run forward.");
-    expect(markup).not.toContain("OpenAI / gpt-5.4");
-    expect(markup).not.toContain("3 active runtimes");
-    expect(markup).not.toContain("Gateway healthy");
+    expect(markup).toContain("Gateway healthy");
+    expect(markup).toContain("2 decisions");
+    expect(markup).toContain("Requested");
+    expect(markup).toContain("OpenAI / gpt-5.4");
+    expect(markup).toContain("Effective");
+    expect(markup).toContain("local / llama-3.2");
+    expect(markup).toContain("Selection: session");
+    expect(markup).toContain("Fallback armed");
+    expect(markup).toContain("3 active runtimes");
   });
 });

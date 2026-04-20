@@ -11,11 +11,13 @@ import type {
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
   ChatThreadTurnRecord,
+  RoutingPreflightResult,
   LearnedMemoryItemRecord,
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import type { CoworkTaskItem } from "../../components/CoworkCanvasPanel";
+import type { CoworkTaskItem } from "../../components/cowork-types";
+import type { CoworkRunViewModel } from "../../components/cowork-view-model";
 import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 import type { ChatProactivePolicyPatch } from "./useChatDelegationPolicyActions";
 import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
@@ -46,10 +48,13 @@ export interface ChatContextDockPanelsProps {
   selectedSessionId: string | null;
   showTracePanel: boolean;
   selectedTurn: ChatThreadTurnRecord | null;
+  routePreflight?: RoutingPreflightResult | null;
+  providerLabelById?: Map<string, string>;
   showSuggestionsPanel: boolean;
   showLearnedMemoryPanel: boolean;
   latestOrchestration: ChatOrchestrationSummary | null | undefined;
   coworkItems: CoworkTaskItem[];
+  coworkViewModel?: CoworkRunViewModel | null;
   proactiveStatus: ProactivePolicy | null;
   proactiveRuns: ProactiveRunRecord[];
   proactiveSuggestionCount: number;
@@ -78,6 +83,7 @@ export interface ChatContextDockPanelsProps {
   onRunCodeDelegation: (presetKey: "implement" | "review" | "test" | "ship") => Promise<void>;
   onCapabilitySuggestionAction: (suggestion: ChatCapabilityUpgradeSuggestion) => void;
   onCreateSpecialistDraft: (suggestion: ChatSpecialistCandidateSuggestionRecord) => Promise<void>;
+  onActivateCatalogSpecialist: (suggestion: ChatSpecialistCandidateSuggestionRecord) => Promise<void>;
   onSpecialistCandidatePatch: (
     candidateId: string,
     patch: ChatSpecialistCandidatePatchInput,

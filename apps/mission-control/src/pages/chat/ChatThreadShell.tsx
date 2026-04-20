@@ -36,9 +36,7 @@ export function ChatThreadShell(props: {
   onOpenRunDetails: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
-  onSubmitUserInput: (
-    response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string },
-  ) => void;
+  onSubmitUserInput: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
   onRefresh: () => void;
 }) {
   const {
@@ -73,11 +71,12 @@ export function ChatThreadShell(props: {
   return (
     <div className={`chat-v11-thread-shell mode-${mode}`}>
       <div className="chat-v11-thread-status-lane">
-        <SurfaceReconnectBanner status={eventStreamStatus} onRefresh={onRefresh} />
+        <SurfaceReconnectBanner mode={mode} status={eventStreamStatus} onRefresh={onRefresh} />
       </div>
 
       <div className="chat-v11-thread-scroll">
         <ChatThreadView
+          mode={mode}
           loading={loading}
           thread={thread}
           selectedTurnId={selectedTurnId}

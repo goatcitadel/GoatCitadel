@@ -1,4 +1,4 @@
-import type { ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
+import type { ChatMode, ChatThreadResponse, RoutingPreflightResult } from "@goatcitadel/contracts";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
@@ -54,6 +54,9 @@ export interface MissionControlActiveSessionSurfaceProps {
   selectedTurn: Parameters<typeof ChatComposerShell>[0]["selectedTurn"];
   selectedSessionId: string | null;
   currentWebMode: Parameters<typeof ChatComposerShell>[0]["currentWebMode"];
+  routePreflight: RoutingPreflightResult | null;
+  routeBoundaryAckRequired: boolean;
+  routeBoundaryAcknowledged: boolean;
   sending: boolean;
   canSend: boolean;
   hasActiveStream: boolean;
@@ -68,6 +71,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onRemoveQueuedItem: (id: string) => void;
   onCancelEdit: () => void;
   onDismissError: () => void;
+  onAcknowledgeRouteBoundary: () => void;
   onSetDeepMode: () => void;
   onReviewRunDetails: () => void;
   onDraftChange: (next: string) => void;
@@ -127,6 +131,9 @@ export function MissionControlActiveSessionSurface({
   selectedTurn,
   selectedSessionId,
   currentWebMode,
+  routePreflight,
+  routeBoundaryAckRequired,
+  routeBoundaryAcknowledged,
   sending,
   canSend,
   hasActiveStream,
@@ -141,6 +148,7 @@ export function MissionControlActiveSessionSurface({
   onRemoveQueuedItem,
   onCancelEdit,
   onDismissError,
+  onAcknowledgeRouteBoundary,
   onSetDeepMode,
   onReviewRunDetails,
   onDraftChange,
@@ -205,7 +213,7 @@ export function MissionControlActiveSessionSurface({
           editingTurnId={editingTurnId}
           planningMode={planningMode}
           effectiveToolAutonomy={effectiveToolAutonomy}
-          error={null}
+          error={streamError}
           draft={draft}
           commandSuggestions={commandSuggestions}
           commandIndex={commandIndex}
@@ -214,6 +222,9 @@ export function MissionControlActiveSessionSurface({
           selectedTurn={selectedTurn}
           selectedSessionId={selectedSessionId}
           currentWebMode={currentWebMode}
+          routePreflight={routePreflight}
+          routeBoundaryAckRequired={routeBoundaryAckRequired}
+          routeBoundaryAcknowledged={routeBoundaryAcknowledged}
           sending={sending}
           canSend={canSend}
           hasActiveStream={hasActiveStream}
@@ -228,6 +239,7 @@ export function MissionControlActiveSessionSurface({
           onRemoveQueuedItem={onRemoveQueuedItem}
           onCancelEdit={onCancelEdit}
           onDismissError={onDismissError}
+          onAcknowledgeRouteBoundary={onAcknowledgeRouteBoundary}
           onRetryTurn={onRetryTurn}
           onSetDeepMode={onSetDeepMode}
           onReviewRunDetails={onReviewRunDetails}

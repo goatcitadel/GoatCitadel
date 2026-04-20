@@ -22,6 +22,7 @@ import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { SelectOrCustom, type SelectOption } from "../components/SelectOrCustom";
 import { StatusChip } from "../components/StatusChip";
+import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
@@ -371,74 +372,77 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     [providerConfigMap],
   );
 
+  const hasUnsavedDraft = useMemo(
+    () =>
+      hasUnsavedOnboardingDraft({
+        state,
+        authMode,
+        allowLoopbackBypass,
+        authToken,
+        basicUsername,
+        basicPassword,
+        activeProviderId,
+        activeModel,
+        providerLabel,
+        providerBaseUrl,
+        providerApiStyle,
+        providerDefaultModel,
+        providerApiKey,
+        providerApiKeyEnv,
+        currentProviderTransportDraftJson: JSON.stringify(providerRequestDraft),
+        savedProviderTransportDraftJson,
+        defaultToolProfile,
+        budgetMode,
+        networkAllowlistText,
+        meshEnabled,
+        meshMode,
+        meshNodeId,
+        meshMdns,
+        meshStaticPeers,
+        meshRequireMtls,
+        meshTailnetEnabled,
+        markComplete,
+      }),
+    [
+      activeModel,
+      activeProviderId,
+      allowLoopbackBypass,
+      authMode,
+      authToken,
+      basicPassword,
+      basicUsername,
+      budgetMode,
+      defaultToolProfile,
+      markComplete,
+      meshEnabled,
+      meshMdns,
+      meshMode,
+      meshNodeId,
+      meshRequireMtls,
+      meshStaticPeers,
+      meshTailnetEnabled,
+      networkAllowlistText,
+      providerApiKey,
+      providerApiKeyEnv,
+      providerRequestDraft,
+      providerApiStyle,
+      providerBaseUrl,
+      providerDefaultModel,
+      providerLabel,
+      savedProviderTransportDraftJson,
+      state,
+    ],
+  );
+  hasUnsavedDraftRef.current = hasUnsavedDraft;
+
   useEffect(() => {
-    if (!state || hasUnsavedDraftRef.current) {
+    if (!state || hasUnsavedDraft) {
       return;
     }
     const nextTransportDraft = draftFromRequestConfig(providerConfigMap.get(activeProviderId.trim())?.request);
     setProviderRequestDraft(nextTransportDraft);
     setSavedProviderTransportDraftJson(JSON.stringify(nextTransportDraft));
-  }, [activeProviderId, providerConfigMap, state]);
-
-  useEffect(() => {
-    hasUnsavedDraftRef.current = hasUnsavedOnboardingDraft({
-      state,
-      authMode,
-      allowLoopbackBypass,
-      authToken,
-      basicUsername,
-      basicPassword,
-      activeProviderId,
-      activeModel,
-      providerLabel,
-      providerBaseUrl,
-      providerApiStyle,
-      providerDefaultModel,
-      providerApiKey,
-      providerApiKeyEnv,
-      currentProviderTransportDraftJson: JSON.stringify(providerRequestDraft),
-      savedProviderTransportDraftJson,
-      defaultToolProfile,
-      budgetMode,
-      networkAllowlistText,
-      meshEnabled,
-      meshMode,
-      meshNodeId,
-      meshMdns,
-      meshStaticPeers,
-      meshRequireMtls,
-      meshTailnetEnabled,
-      markComplete,
-    });
-  }, [
-    activeModel,
-    activeProviderId,
-    allowLoopbackBypass,
-    authMode,
-    authToken,
-    basicPassword,
-    basicUsername,
-    budgetMode,
-    defaultToolProfile,
-    markComplete,
-    meshEnabled,
-    meshMdns,
-    meshMode,
-    meshNodeId,
-    meshRequireMtls,
-    meshStaticPeers,
-    meshTailnetEnabled,
-    networkAllowlistText,
-    providerApiKey,
-    providerApiKeyEnv,
-    providerRequestDraft,
-    providerApiStyle,
-    providerBaseUrl,
-    providerDefaultModel,
-    providerLabel,
-    savedProviderTransportDraftJson,
-    state,
-  ]);
+  }, [activeProviderId, hasUnsavedDraft, providerConfigMap, state]);
 
   const load = useCallback(
     async (options: { preserveDrafts?: boolean } = {}) => {
@@ -685,6 +689,12 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
     }
   };
 
+  const handleProviderSelectionChange = (nextProviderId: string) => {
+    hasUnsavedDraftRef.current = true;
+    setActiveProviderId(nextProviderId);
+    applyProviderTemplate(nextProviderId);
+  };
+
   const applyAllowlistPreset = (presetId: string) => {
     setAllowlistPreset(presetId);
     const preset = ALLOWLIST_PRESETS.find((item) => item.id === presetId);
@@ -872,422 +882,424 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
         main={
           <>
             {step === 0 ? (
-        <article className="card">
-          <h3>Step 1: Gateway Access</h3>
-          <p className="office-subtitle">
-            Choose how this GoatCitadel node should protect access. For a single local machine, <strong>none</strong> is
-            the simplest starting point.
-          </p>
-          <div className="controls-row">
-            <label htmlFor="wizard-auth-mode">
-              Auth mode{" "}
-              <HelpHint
-                label="Auth mode help"
-                text="Use none for trusted local-only testing. Use token or basic before exposing GoatCitadel on a non-loopback host."
-              />
-            </label>
-            <select
-              id="wizard-auth-mode"
-              value={authMode}
-              onChange={(event) => setAuthMode(event.target.value as "none" | "token" | "basic")}
-            >
-              <option value="none">none (local trusted)</option>
-              <option value="token">token</option>
-              <option value="basic">basic</option>
-            </select>
-          </div>
-          <div className="controls-row">
-            <label htmlFor="wizard-loopback">
-              Allow loopback bypass{" "}
-              <HelpHint
-                label="Loopback bypass help"
-                text="When enabled, localhost access can stay friction-free even if stronger auth is configured for remote access."
-              />
-            </label>
-            <input
-              id="wizard-loopback"
-              type="checkbox"
-              checked={allowLoopbackBypass}
-              onChange={(event) => setAllowLoopbackBypass(event.target.checked)}
-            />
-          </div>
-          {authMode === "token" ? (
-            <>
-              <div className="controls-row">
-                <label htmlFor="wizard-token">Gateway token</label>
-                <input
-                  id="wizard-token"
-                  type="password"
-                  value={authToken}
-                  onChange={(event) => setAuthToken(event.target.value)}
-                />
-                <button type="button" onClick={() => void handleResolveInstallToken()} disabled={installTokenBusy} className="gc-button">
-                  {installTokenBusy ? "Resolving..." : "Generate install token"}
-                </button>
-              </div>
-              {installTokenInfo ? (
-                <div className="card">
-                  <p>
-                    <strong>Install token source:</strong> {installTokenInfo.source}
-                  </p>
-                  {installTokenInfo.token ? (
-                    <p>
-                      <code>{installTokenInfo.token}</code>
-                    </p>
-                  ) : null}
-                  {installTokenInfo.warnings.length > 0 ? (
-                    <ul className="compact-list">
-                      {installTokenInfo.warnings.map((warning) => (
-                        <li key={warning}>{warning}</li>
-                      ))}
-                    </ul>
-                  ) : null}
+              <article className="card">
+                <h3>Step 1: Gateway Access</h3>
+                <p className="office-subtitle">
+                  Choose how this GoatCitadel node should protect access. For a single local machine,{" "}
+                  <strong>none</strong> is the simplest starting point.
+                </p>
+                <div className="controls-row">
+                  <label htmlFor="wizard-auth-mode">
+                    Auth mode{" "}
+                    <HelpHint
+                      label="Auth mode help"
+                      text="Use none for trusted local-only testing. Use token or basic before exposing GoatCitadel on a non-loopback host."
+                    />
+                  </label>
+                  <select
+                    id="wizard-auth-mode"
+                    value={authMode}
+                    onChange={(event) => setAuthMode(event.target.value as "none" | "token" | "basic")}
+                  >
+                    <option value="none">none (local trusted)</option>
+                    <option value="token">token</option>
+                    <option value="basic">basic</option>
+                  </select>
                 </div>
-              ) : null}
-            </>
-          ) : null}
-          {authMode === "basic" ? (
-            <>
-              <div className="controls-row">
-                <label htmlFor="wizard-basic-username">Username</label>
-                <input
-                  id="wizard-basic-username"
-                  value={basicUsername}
-                  onChange={(event) => setBasicUsername(event.target.value)}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="wizard-basic-password">Password</label>
-                <input
-                  id="wizard-basic-password"
-                  type="password"
-                  value={basicPassword}
-                  onChange={(event) => setBasicPassword(event.target.value)}
-                />
-              </div>
-            </>
-          ) : null}
-        </article>
-      ) : null}
+                <div className="controls-row">
+                  <label htmlFor="wizard-loopback">
+                    Allow loopback bypass{" "}
+                    <HelpHint
+                      label="Loopback bypass help"
+                      text="When enabled, localhost access can stay friction-free even if stronger auth is configured for remote access."
+                    />
+                  </label>
+                  <input
+                    id="wizard-loopback"
+                    type="checkbox"
+                    checked={allowLoopbackBypass}
+                    onChange={(event) => setAllowLoopbackBypass(event.target.checked)}
+                  />
+                </div>
+                {authMode === "token" ? (
+                  <>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-token">Gateway token</label>
+                      <input
+                        id="wizard-token"
+                        type="password"
+                        value={authToken}
+                        onChange={(event) => setAuthToken(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleResolveInstallToken()}
+                        disabled={installTokenBusy}
+                        className="gc-button"
+                      >
+                        {installTokenBusy ? "Resolving..." : "Generate install token"}
+                      </button>
+                    </div>
+                    {installTokenInfo ? (
+                      <div className="card">
+                        <p>
+                          <strong>Install token source:</strong> {installTokenInfo.source}
+                        </p>
+                        {installTokenInfo.token ? (
+                          <p>
+                            <code>{installTokenInfo.token}</code>
+                          </p>
+                        ) : null}
+                        {installTokenInfo.warnings.length > 0 ? (
+                          <ul className="compact-list">
+                            {installTokenInfo.warnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+                {authMode === "basic" ? (
+                  <>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-basic-username">Username</label>
+                      <input
+                        id="wizard-basic-username"
+                        value={basicUsername}
+                        onChange={(event) => setBasicUsername(event.target.value)}
+                      />
+                    </div>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-basic-password">Password</label>
+                      <input
+                        id="wizard-basic-password"
+                        type="password"
+                        value={basicPassword}
+                        onChange={(event) => setBasicPassword(event.target.value)}
+                      />
+                    </div>
+                  </>
+                ) : null}
+              </article>
+            ) : null}
 
             {step === 1 ? (
-        <article className="card">
-          <h3>Step 2: LLM Provider</h3>
-          <p className="office-subtitle">
-            Pick the company or endpoint GoatCitadel should use, then choose from a live-discovered model list when
-            possible instead of guessing model names.
-          </p>
-          <div className="controls-row">
-            <label htmlFor="wizard-provider-id">
-              Provider{" "}
-              <HelpHint
-                label="Provider help"
-                text="Provider is the endpoint family GoatCitadel will talk to, such as glm, moonshot, openai, or a local server like ollama."
-              />
-            </label>
-            <SelectOrCustom
-              id="wizard-provider-id"
-              value={activeProviderId}
-              onChange={(nextProviderId) => {
-                setActiveProviderId(nextProviderId);
-                applyProviderTemplate(nextProviderId);
-              }}
-              options={providerOptions}
-              customPlaceholder="Custom provider id"
-              customLabel="Custom provider"
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="wizard-provider-label">
-              Label{" "}
-              <HelpHint
-                label="Provider label help"
-                text="Label is the display name shown in the UI. It is human-facing and can be friendlier than the provider ID."
-              />
-            </label>
-            <SelectOrCustom
-              id="wizard-provider-label"
-              value={providerLabel}
-              onChange={setProviderLabel}
-              options={providerLabelOptions}
-              customPlaceholder="Provider label"
-              customLabel="Custom label"
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="wizard-provider-url">
-              Base URL{" "}
-              <HelpHint
-                label="Base URL help"
-                text="Base URL is the API root GoatCitadel will call. For GLM the recommended base URL is https://api.z.ai/api/paas/v4."
-              />
-            </label>
-            <SelectOrCustom
-              id="wizard-provider-url"
-              value={providerBaseUrl}
-              onChange={setProviderBaseUrl}
-              options={providerTemplates.map((template) => ({
-                value: template.baseUrl,
-                label: template.baseUrl,
-              }))}
-              customPlaceholder="https://host/v1"
-              customLabel="Custom base URL"
-            />
-          </div>
-          <p className="office-subtitle">Upstream API style: {providerApiStyle}</p>
-          <div className="controls-row">
-            <label htmlFor="wizard-model">
-              Active model{" "}
-              <HelpHint
-                label="Active model help"
-                text="This is the model GoatCitadel will use immediately after onboarding. The list is discovered live when the provider supports it."
-              />
-            </label>
-            <SelectOrCustom
-              id="wizard-model"
-              value={activeModel}
-              onChange={setActiveModel}
-              options={modelOptions}
-              customPlaceholder="Model id"
-              customLabel="Custom model"
-            />
-          </div>
-          {modelDiscoverySource ? (
-            <p className="office-subtitle">
-              Model discovery:{" "}
-              {loadingModels
-                ? "loading..."
-                : modelDiscoverySource === "remote"
-                  ? "live provider list"
-                  : "fallback/default list"}
-              {modelDiscoveryWarning ? ` · ${modelDiscoveryWarning}` : ""}
-            </p>
-          ) : null}
-          <div className="controls-row">
-            <label htmlFor="wizard-provider-default-model">
-              Provider default model{" "}
-              <HelpHint
-                label="Provider default model help"
-                text="Default model is the model GoatCitadel will prefer for this provider when a page or session has not pinned another one yet."
-              />
-            </label>
-            <SelectOrCustom
-              id="wizard-provider-default-model"
-              value={providerDefaultModel}
-              onChange={setProviderDefaultModel}
-              options={modelOptions}
-              customPlaceholder="Default model id"
-              customLabel="Custom default model"
-            />
-          </div>
-          <details className="advanced-panel">
-            <summary>Advanced provider auth</summary>
-            <p className="office-subtitle">
-              Use secure-store or env-based auth when possible. If you enter an env var name, it should be the variable
-              name itself, for example <code>GLM_API_KEY</code>.
-            </p>
-            <div className="controls-row">
-              <label htmlFor="wizard-provider-api-key">API key (optional)</label>
-              <input
-                id="wizard-provider-api-key"
-                type="password"
-                value={providerApiKey}
-                onChange={(event) => setProviderApiKey(event.target.value)}
-              />
-            </div>
-            <div className="controls-row">
-              <label htmlFor="wizard-provider-api-key-env">
-                API key env var (optional){" "}
-                <HelpHint
-                  label="Provider env var help"
-                  text="This is the environment variable name GoatCitadel should read at runtime, not the secret value itself."
-                />
-              </label>
-              <input
-                id="wizard-provider-api-key-env"
-                value={providerApiKeyEnv}
-                onChange={(event) => setProviderApiKeyEnv(event.target.value)}
-              />
-            </div>
-            <LlmTransportFields
-              idPrefix="wizard-provider-transport"
-              draft={providerRequestDraft}
-              onChange={setProviderRequestDraft}
-              error={providerRequestValidation.error}
-            />
-          </details>
-        </article>
-      ) : null}
+              <article className="card">
+                <h3>Step 2: LLM Provider</h3>
+                <p className="office-subtitle">
+                  Pick the company or endpoint GoatCitadel should use, then choose from a live-discovered model list
+                  when possible instead of guessing model names.
+                </p>
+                <div className="controls-row">
+                  <label htmlFor="wizard-provider-id">
+                    Provider{" "}
+                    <HelpHint
+                      label="Provider help"
+                      text="Provider is the endpoint family GoatCitadel will talk to, such as glm, moonshot, openai, or a local server like ollama."
+                    />
+                  </label>
+                  <SelectOrCustom
+                    id="wizard-provider-id"
+                    value={activeProviderId}
+                    onChange={handleProviderSelectionChange}
+                    options={providerOptions}
+                    customPlaceholder="Custom provider id"
+                    customLabel="Custom provider"
+                  />
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="wizard-provider-label">
+                    Label{" "}
+                    <HelpHint
+                      label="Provider label help"
+                      text="Label is the display name shown in the UI. It is human-facing and can be friendlier than the provider ID."
+                    />
+                  </label>
+                  <SelectOrCustom
+                    id="wizard-provider-label"
+                    value={providerLabel}
+                    onChange={setProviderLabel}
+                    options={providerLabelOptions}
+                    customPlaceholder="Provider label"
+                    customLabel="Custom label"
+                  />
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="wizard-provider-url">
+                    Base URL{" "}
+                    <HelpHint
+                      label="Base URL help"
+                      text="Base URL is the API root GoatCitadel will call. For GLM the recommended base URL is https://api.z.ai/api/paas/v4."
+                    />
+                  </label>
+                  <SelectOrCustom
+                    id="wizard-provider-url"
+                    value={providerBaseUrl}
+                    onChange={setProviderBaseUrl}
+                    options={providerTemplates.map((template) => ({
+                      value: template.baseUrl,
+                      label: template.baseUrl,
+                    }))}
+                    customPlaceholder="https://host/v1"
+                    customLabel="Custom base URL"
+                  />
+                </div>
+                <p className="office-subtitle">Upstream API style: {providerApiStyle}</p>
+                <div className="controls-row">
+                  <label htmlFor="wizard-model">
+                    Active model{" "}
+                    <HelpHint
+                      label="Active model help"
+                      text="This is the model GoatCitadel will use immediately after onboarding. The list is discovered live when the provider supports it."
+                    />
+                  </label>
+                  <SelectOrCustom
+                    id="wizard-model"
+                    value={activeModel}
+                    onChange={setActiveModel}
+                    options={modelOptions}
+                    customPlaceholder="Model id"
+                    customLabel="Custom model"
+                  />
+                </div>
+                {modelDiscoverySource ? (
+                  <p className="office-subtitle">
+                    Model discovery:{" "}
+                    {loadingModels
+                      ? "loading..."
+                      : modelDiscoverySource === "remote"
+                        ? "live provider list"
+                        : "fallback/default list"}
+                    {modelDiscoveryWarning ? ` · ${modelDiscoveryWarning}` : ""}
+                  </p>
+                ) : null}
+                <div className="controls-row">
+                  <label htmlFor="wizard-provider-default-model">
+                    Provider default model{" "}
+                    <HelpHint
+                      label="Provider default model help"
+                      text="Default model is the model GoatCitadel will prefer for this provider when a page or session has not pinned another one yet."
+                    />
+                  </label>
+                  <SelectOrCustom
+                    id="wizard-provider-default-model"
+                    value={providerDefaultModel}
+                    onChange={setProviderDefaultModel}
+                    options={modelOptions}
+                    customPlaceholder="Default model id"
+                    customLabel="Custom default model"
+                  />
+                </div>
+                <details className="advanced-panel">
+                  <summary>Advanced provider auth</summary>
+                  <p className="office-subtitle">
+                    Use secure-store or env-based auth when possible. If you enter an env var name, it should be the
+                    variable name itself, for example <code>GLM_API_KEY</code>.
+                  </p>
+                  <div className="controls-row">
+                    <label htmlFor="wizard-provider-api-key">API key (optional)</label>
+                    <input
+                      id="wizard-provider-api-key"
+                      type="password"
+                      value={providerApiKey}
+                      onChange={(event) => setProviderApiKey(event.target.value)}
+                    />
+                  </div>
+                  <div className="controls-row">
+                    <label htmlFor="wizard-provider-api-key-env">
+                      API key env var (optional){" "}
+                      <HelpHint
+                        label="Provider env var help"
+                        text="This is the environment variable name GoatCitadel should read at runtime, not the secret value itself."
+                      />
+                    </label>
+                    <input
+                      id="wizard-provider-api-key-env"
+                      value={providerApiKeyEnv}
+                      onChange={(event) => setProviderApiKeyEnv(event.target.value)}
+                    />
+                  </div>
+                  <LlmTransportFields
+                    idPrefix="wizard-provider-transport"
+                    draft={providerRequestDraft}
+                    onChange={setProviderRequestDraft}
+                    error={providerRequestValidation.error}
+                  />
+                </details>
+              </article>
+            ) : null}
 
             {step === 2 ? (
-        <article className="card">
-          <h3>Step 3: Runtime Defaults</h3>
-          <p className="office-subtitle">
-            These defaults shape how aggressively GoatCitadel can act and which outbound hosts it may contact.
-          </p>
-          <div className="controls-row">
-            <label htmlFor="wizard-tool-profile">Tool profile</label>
-            <SelectOrCustom
-              id="wizard-tool-profile"
-              value={defaultToolProfile}
-              onChange={setDefaultToolProfile}
-              options={TOOL_PROFILE_OPTIONS}
-              customPlaceholder="Custom profile"
-              customLabel="Custom profile"
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="wizard-budget">Budget mode</label>
-            <select
-              id="wizard-budget"
-              value={budgetMode}
-              onChange={(event) => setBudgetMode(event.target.value as RuntimeSettingsResponse["budgetMode"])}
-            >
-              {BUDGET_OPTIONS.map((mode) => (
-                <option key={mode} value={mode}>
-                  {mode}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="controls-row">
-            <label htmlFor="wizard-allowlist-preset">
-              Network allowlist preset{" "}
-              <HelpHint
-                label="Network allowlist help"
-                text="The network allowlist controls outbound hosts GoatCitadel may contact. It is not your desktop IP. Include localhost for local services and provider domains such as api.z.ai for cloud models."
-              />
-            </label>
-            <select
-              id="wizard-allowlist-preset"
-              value={allowlistPreset}
-              onChange={(event) => applyAllowlistPreset(event.target.value)}
-            >
-              {ALLOWLIST_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-              <option value="custom">custom</option>
-            </select>
-          </div>
-          <label htmlFor="wizard-allowlist">Network allowlist (one host per line)</label>
-          <textarea
-            id="wizard-allowlist"
-            rows={6}
-            className="full-textarea"
-            value={networkAllowlistText}
-            onChange={(event) => {
-              setAllowlistPreset("custom");
-              setNetworkAllowlistText(event.target.value);
-            }}
-          />
-        </article>
-      ) : null}
+              <article className="card">
+                <h3>Step 3: Runtime Defaults</h3>
+                <p className="office-subtitle">
+                  These defaults shape how aggressively GoatCitadel can act and which outbound hosts it may contact.
+                </p>
+                <div className="controls-row">
+                  <label htmlFor="wizard-tool-profile">Tool profile</label>
+                  <SelectOrCustom
+                    id="wizard-tool-profile"
+                    value={defaultToolProfile}
+                    onChange={setDefaultToolProfile}
+                    options={TOOL_PROFILE_OPTIONS}
+                    customPlaceholder="Custom profile"
+                    customLabel="Custom profile"
+                  />
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="wizard-budget">Budget mode</label>
+                  <GCSelect
+                    id="wizard-budget"
+                    value={budgetMode}
+                    onChange={(value) => setBudgetMode(value as RuntimeSettingsResponse["budgetMode"])}
+                    options={BUDGET_OPTIONS.map((mode) => ({
+                      value: mode,
+                      label: mode,
+                    }))}
+                  />
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="wizard-allowlist-preset">
+                    Network allowlist preset{" "}
+                    <HelpHint
+                      label="Network allowlist help"
+                      text="The network allowlist controls outbound hosts GoatCitadel may contact. It is not your desktop IP. Include localhost for local services and provider domains such as api.z.ai for cloud models."
+                    />
+                  </label>
+                  <GCSelect
+                    id="wizard-allowlist-preset"
+                    value={allowlistPreset}
+                    onChange={applyAllowlistPreset}
+                    options={[
+                      ...ALLOWLIST_PRESETS.map((preset) => ({
+                        value: preset.id,
+                        label: preset.label,
+                      })),
+                      { value: "custom", label: "custom" },
+                    ]}
+                  />
+                </div>
+                <label htmlFor="wizard-allowlist">Network allowlist (one host per line)</label>
+                <textarea
+                  id="wizard-allowlist"
+                  rows={6}
+                  className="full-textarea"
+                  value={networkAllowlistText}
+                  onChange={(event) => {
+                    setAllowlistPreset("custom");
+                    setNetworkAllowlistText(event.target.value);
+                  }}
+                />
+              </article>
+            ) : null}
 
             {step === 3 ? (
-        <article className="card">
-          <h3>Step 4: Mesh (Optional)</h3>
-          <p className="office-subtitle">
-            Mesh is only needed when you want multiple GoatCitadel nodes to cooperate. For a single-machine setup,
-            leaving it off is correct.
-          </p>
-          <div className="controls-row">
-            <label htmlFor="wizard-mesh-enabled">Enable mesh</label>
-            <input
-              id="wizard-mesh-enabled"
-              type="checkbox"
-              checked={meshEnabled}
-              onChange={(event) => setMeshEnabled(event.target.checked)}
-            />
-          </div>
-          {meshEnabled ? (
-            <>
-              <div className="controls-row">
-                <label htmlFor="wizard-mesh-mode">
-                  Mode{" "}
-                  <HelpHint
-                    label="Mesh mode help"
-                    text="LAN is for local-network discovery, WAN is for explicitly reachable remote nodes, and tailnet is for Tailscale-style private networking."
+              <article className="card">
+                <h3>Step 4: Mesh (Optional)</h3>
+                <p className="office-subtitle">
+                  Mesh is only needed when you want multiple GoatCitadel nodes to cooperate. For a single-machine setup,
+                  leaving it off is correct.
+                </p>
+                <div className="controls-row">
+                  <label htmlFor="wizard-mesh-enabled">Enable mesh</label>
+                  <input
+                    id="wizard-mesh-enabled"
+                    type="checkbox"
+                    checked={meshEnabled}
+                    onChange={(event) => setMeshEnabled(event.target.checked)}
                   />
-                </label>
-                <select
-                  id="wizard-mesh-mode"
-                  value={meshMode}
-                  onChange={(event) => setMeshMode(event.target.value as "lan" | "wan" | "tailnet")}
-                >
-                  <option value="lan">LAN</option>
-                  <option value="wan">WAN</option>
-                  <option value="tailnet">Tailnet</option>
-                </select>
-              </div>
-              <div className="controls-row">
-                <label htmlFor="wizard-mesh-node-id">
-                  Node ID{" "}
-                  <HelpHint
-                    label="Mesh node ID help"
-                    text="Node ID is this GoatCitadel node's stable identity inside the mesh. It should be unique enough to distinguish this machine from other nodes."
-                  />
-                </label>
-                <input
-                  id="wizard-mesh-node-id"
-                  value={meshNodeId}
-                  onChange={(event) => setMeshNodeId(event.target.value)}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="wizard-mesh-mdns">
-                  mDNS discovery{" "}
-                  <HelpHint
-                    label="mDNS discovery help"
-                    text="mDNS lets local-network GoatCitadel nodes find each other automatically. Leave it on for simple LAN testing."
-                  />
-                </label>
-                <input
-                  id="wizard-mesh-mdns"
-                  type="checkbox"
-                  checked={meshMdns}
-                  onChange={(event) => setMeshMdns(event.target.checked)}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="wizard-mesh-mtls">Require mTLS</label>
-                <input
-                  id="wizard-mesh-mtls"
-                  type="checkbox"
-                  checked={meshRequireMtls}
-                  onChange={(event) => setMeshRequireMtls(event.target.checked)}
-                />
-              </div>
-              <div className="controls-row">
-                <label htmlFor="wizard-mesh-tailnet">Tailnet mode enabled</label>
-                <input
-                  id="wizard-mesh-tailnet"
-                  type="checkbox"
-                  checked={meshTailnetEnabled}
-                  onChange={(event) => setMeshTailnetEnabled(event.target.checked)}
-                />
-              </div>
-              <label htmlFor="wizard-mesh-peers">
-                Static peers (one per line){" "}
-                <HelpHint
-                  label="Static peers help"
-                  text="Static peers are other GoatCitadel nodes you want to connect to directly. Leave this blank unless you are intentionally linking to another machine."
-                />
-              </label>
-              <textarea
-                id="wizard-mesh-peers"
-                rows={4}
-                className="full-textarea"
-                value={meshStaticPeers}
-                onChange={(event) => setMeshStaticPeers(event.target.value)}
-              />
-            </>
-          ) : (
-            <p className="office-subtitle">Mesh stays disabled for single-machine mode. You can enable it later.</p>
-          )}
-        </article>
-      ) : null}
+                </div>
+                {meshEnabled ? (
+                  <>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-mesh-mode">
+                        Mode{" "}
+                        <HelpHint
+                          label="Mesh mode help"
+                          text="LAN is for local-network discovery, WAN is for explicitly reachable remote nodes, and tailnet is for Tailscale-style private networking."
+                        />
+                      </label>
+                      <select
+                        id="wizard-mesh-mode"
+                        value={meshMode}
+                        onChange={(event) => setMeshMode(event.target.value as "lan" | "wan" | "tailnet")}
+                      >
+                        <option value="lan">LAN</option>
+                        <option value="wan">WAN</option>
+                        <option value="tailnet">Tailnet</option>
+                      </select>
+                    </div>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-mesh-node-id">
+                        Node ID{" "}
+                        <HelpHint
+                          label="Mesh node ID help"
+                          text="Node ID is this GoatCitadel node's stable identity inside the mesh. It should be unique enough to distinguish this machine from other nodes."
+                        />
+                      </label>
+                      <input
+                        id="wizard-mesh-node-id"
+                        value={meshNodeId}
+                        onChange={(event) => setMeshNodeId(event.target.value)}
+                      />
+                    </div>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-mesh-mdns">
+                        mDNS discovery{" "}
+                        <HelpHint
+                          label="mDNS discovery help"
+                          text="mDNS lets local-network GoatCitadel nodes find each other automatically. Leave it on for simple LAN testing."
+                        />
+                      </label>
+                      <input
+                        id="wizard-mesh-mdns"
+                        type="checkbox"
+                        checked={meshMdns}
+                        onChange={(event) => setMeshMdns(event.target.checked)}
+                      />
+                    </div>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-mesh-mtls">Require mTLS</label>
+                      <input
+                        id="wizard-mesh-mtls"
+                        type="checkbox"
+                        checked={meshRequireMtls}
+                        onChange={(event) => setMeshRequireMtls(event.target.checked)}
+                      />
+                    </div>
+                    <div className="controls-row">
+                      <label htmlFor="wizard-mesh-tailnet">Tailnet mode enabled</label>
+                      <input
+                        id="wizard-mesh-tailnet"
+                        type="checkbox"
+                        checked={meshTailnetEnabled}
+                        onChange={(event) => setMeshTailnetEnabled(event.target.checked)}
+                      />
+                    </div>
+                    <label htmlFor="wizard-mesh-peers">
+                      Static peers (one per line){" "}
+                      <HelpHint
+                        label="Static peers help"
+                        text="Static peers are other GoatCitadel nodes you want to connect to directly. Leave this blank unless you are intentionally linking to another machine."
+                      />
+                    </label>
+                    <textarea
+                      id="wizard-mesh-peers"
+                      rows={4}
+                      className="full-textarea"
+                      value={meshStaticPeers}
+                      onChange={(event) => setMeshStaticPeers(event.target.value)}
+                    />
+                  </>
+                ) : (
+                  <p className="office-subtitle">
+                    Mesh stays disabled for single-machine mode. You can enable it later.
+                  </p>
+                )}
+              </article>
+            ) : null}
 
             {step === 4 ? (
               <OnboardingReviewApplyPanel

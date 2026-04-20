@@ -26,7 +26,14 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
 
       {showTracePanel && selectedTurn ? (
         <div className="mission-dock-section" style={dockSectionStyle("trace")}>
-          <ChatDockRunTraceSection isChatSurface={props.isChatSurface} selectedTurn={selectedTurn} />
+          <ChatDockRunTraceSection
+            isChatSurface={props.isChatSurface}
+            isCoworkSurface={props.isCoworkSurface}
+            selectedTurn={selectedTurn}
+            coworkViewModel={props.coworkViewModel ?? null}
+            routePreflight={props.routePreflight ?? null}
+            providerLabelById={props.providerLabelById}
+          />
         </div>
       ) : null}
 
@@ -36,6 +43,7 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
             isChatSurface={props.isChatSurface}
             isCoworkSurface={props.isCoworkSurface}
             sending={props.sending}
+            selectedSessionId={props.selectedSessionId}
             proactiveRuns={props.proactiveRuns}
             proactiveSuggestionCount={props.proactiveSuggestionCount}
             capabilitySuggestions={props.capabilitySuggestions}
@@ -44,6 +52,7 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
             delegationSuggestion={props.delegationSuggestion}
             onCapabilitySuggestionAction={props.onCapabilitySuggestionAction}
             onCreateSpecialistDraft={props.onCreateSpecialistDraft}
+            onActivateCatalogSpecialist={props.onActivateCatalogSpecialist}
             onSpecialistCandidatePatch={props.onSpecialistCandidatePatch}
             onAcceptDelegation={props.onAcceptDelegation}
           />

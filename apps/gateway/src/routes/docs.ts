@@ -68,6 +68,12 @@ function buildOpenApiSpec(): Record<string, unknown> {
           responses: { "200": { description: "Message sent" } },
         },
       },
+      "/api/v1/chat/sessions/{sessionId}/route-preflight": {
+        post: {
+          summary: "Preview the requested/effective route and runtime posture for the next chat action",
+          responses: { "200": { description: "Route preflight result" } },
+        },
+      },
       "/api/v1/chat/sessions/{sessionId}/agent-send/stream": {
         post: {
           summary: "Send chat message with streamed branch-aware response",

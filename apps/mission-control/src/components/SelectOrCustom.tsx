@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { globalCopy } from "../content/copy";
+import { GCSelect } from "./ui";
 
 export interface SelectOption {
   value: string;
@@ -47,6 +48,15 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
   const autoSelectFirstOption = autoSelectFirstOptionProp ?? false;
   const [isCustomMode, setIsCustomMode] = useState<boolean>(Boolean(forceCustomMode));
   const hasUnknownValue = Boolean(value) && !isKnownValue;
+  const selectOptions = useMemo(() => {
+    const placeholderLabel = customPlaceholder ?? globalCopy.selectOrCustom.selectValue;
+
+    if (isKnownValue || autoSelectFirstOption) {
+      return dedupedOptions;
+    }
+
+    return [{ value: "", label: placeholderLabel, disabled: true }, ...dedupedOptions];
+  }, [autoSelectFirstOption, customPlaceholder, dedupedOptions, isKnownValue]);
 
   const selectValue = isKnownValue ? value : autoSelectFirstOption ? (dedupedOptions[0]?.value ?? "") : "";
 
@@ -98,23 +108,17 @@ export function SelectOrCustom(props: SelectOrCustomProps) {
           </button>
         </div>
       ) : null}
-      <select
+      <GCSelect
         id={id}
         value={isCustomMode ? (isKnownValue ? value : (dedupedOptions[0]?.value ?? "")) : selectValue}
         disabled={disabled}
-        onChange={(event) => {
+        options={selectOptions}
+        onChange={(nextValue) => {
           setIsCustomMode(false);
           onCustomModeChange?.(false);
-          onChange(event.target.value);
+          onChange(nextValue);
         }}
-      >
-        {!isKnownValue ? <option value="">{customPlaceholder ?? globalCopy.selectOrCustom.selectValue}</option> : null}
-        {dedupedOptions.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+      />
 
       {hasUnknownValue && !isCustomMode && allowCustom ? (
         <p className="office-subtitle">{globalCopy.selectOrCustom.customValueHint}</p>

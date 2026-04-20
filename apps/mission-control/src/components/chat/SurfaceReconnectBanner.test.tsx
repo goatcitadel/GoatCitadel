@@ -60,4 +60,34 @@ describe("SurfaceReconnectBanner", () => {
       renderer.unmount();
     }
   });
+
+  it("uses Cowork-specific event stream copy", async () => {
+    let renderer: ReactTestRenderer = create(<div />);
+
+    try {
+      await act(async () => {
+        renderer = create(
+          <SurfaceReconnectBanner
+            mode="cowork"
+            status={{ state: "retrying", reconnectAttempts: 1, lastErrorAt: "2026-03-22T11:59:58.000Z" }}
+            onRefresh={() => undefined}
+          />,
+        );
+      });
+      expect(JSON.stringify(renderer.toJSON())).toContain("Run events reconnecting");
+
+      await act(async () => {
+        renderer.update(
+          <SurfaceReconnectBanner
+            mode="cowork"
+            status={{ state: "error", reconnectAttempts: 2, lastErrorAt: "2026-03-22T12:00:07.000Z" }}
+            onRefresh={() => undefined}
+          />,
+        );
+      });
+      expect(JSON.stringify(renderer.toJSON())).toContain("Live run events interrupted");
+    } finally {
+      renderer.unmount();
+    }
+  });
 });

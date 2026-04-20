@@ -1,11 +1,95 @@
-import type { ChatSessionPrefsRecord, McpServerRecord, McpServerTemplateRecord, SkillListItem } from "@goatcitadel/contracts";
+import type {
+  ChatSessionPrefsRecord,
+  McpServerRecord,
+  McpServerTemplateRecord,
+  SkillListItem,
+} from "@goatcitadel/contracts";
 import { useEffect, useMemo, useState } from "react";
 import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 import type { RuntimeSettingsResponse } from "../../api/client";
 import { buildModelCommandSuggestions, type CommandSuggestionItem } from "../chat-command-suggestions";
 import { dedupeStrings } from "./chat-page-derivations";
 import { isLikelyLocalProviderUrl, resolveProviderModelSelection } from "./chat-page-helpers";
+import type { WorkTrustTone } from "./work-trust";
 import type { CommandCatalogItem } from "./useChatSessionData";
+
+type RoutingSelectionSource = "manual" | "session" | "global";
+type RuntimeHealthState = "not_checked" | "reachable" | "unreachable" | "degraded";
+
+function describeSelectionSource(input: {
+  prefsProviderId?: string | null;
+  prefsModel?: string | null;
+  runtimeProviderId?: string | null;
+  runtimeModel?: string | null;
+  settingsProviderId?: string | null;
+  settingsModel?: string | null;
+}): RoutingSelectionSource {
+  if (input.prefsProviderId || input.prefsModel) {
+    return "session";
+  }
+  if (input.runtimeProviderId || input.runtimeModel || input.settingsProviderId || input.settingsModel) {
+    return "global";
+  }
+  return "manual";
+}
+
+function formatSelectionSourceLabel(source: RoutingSelectionSource): string {
+  switch (source) {
+    case "session":
+      return "Selection: session";
+    case "global":
+      return "Selection: global";
+    default:
+      return "Selection: manual";
+  }
+}
+
+function describeRuntimeStatus(provider: ChatModelProviderOption | undefined): {
+  status: RuntimeHealthState;
+  summary: string;
+  tone: WorkTrustTone;
+} {
+  if (!provider) {
+    return {
+      status: "not_checked",
+      summary: "Runtime not checked",
+      tone: "muted",
+    };
+  }
+  if (provider.disabled) {
+    return {
+      status: "degraded",
+      summary: "Provider setup required",
+      tone: "critical",
+    };
+  }
+  switch (provider.modelProbeState) {
+    case "ready":
+      return {
+        status: "reachable",
+        summary: provider.isLocalRuntime ? "Runtime reachable" : "Provider reachable",
+        tone: "success",
+      };
+    case "empty":
+      return {
+        status: "degraded",
+        summary: provider.isLocalRuntime ? "Runtime degraded" : "Models unavailable",
+        tone: "warning",
+      };
+    case "error":
+      return {
+        status: "unreachable",
+        summary: provider.isLocalRuntime ? "Runtime unreachable" : "Provider unreachable",
+        tone: "critical",
+      };
+    default:
+      return {
+        status: "not_checked",
+        summary: "Runtime not checked",
+        tone: "muted",
+      };
+  }
+}
 
 export function useChatProviderRoutingController(input: {
   runtimeLlmConfig: RuntimeSettingsResponse["llm"] | null;
@@ -16,6 +100,8 @@ export function useChatProviderRoutingController(input: {
     hasApiKey?: boolean;
     baseUrl?: string;
     models: string[];
+    modelProbeState?: "not_checked" | "ready" | "empty" | "error";
+    modelProbeCheckedAt?: string;
   }>;
   getCachedModels: (providerId: string) => string[];
   loadModelsForProvider: (providerId: string) => Promise<string[]>;
@@ -33,25 +119,29 @@ export function useChatProviderRoutingController(input: {
     const settingsLlm = input.settings?.llm;
     const activeProviderId = input.runtimeLlmConfig?.activeProviderId ?? settingsLlm?.activeProviderId;
     const activeModel = input.runtimeLlmConfig?.activeModel ?? settingsLlm?.activeModel;
-    return input.runtimeProviderCatalog.map((provider) => ({
-      providerId: provider.providerId,
-      label: provider.label,
-      defaultModel: provider.defaultModel,
-      disabled: !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl),
-      availabilityLabel:
-        !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
-          ? `${provider.label} · setup required`
-          : undefined,
-      availabilityHint:
-        !provider.hasApiKey && !isLikelyLocalProviderUrl(provider.baseUrl)
-          ? `${provider.label} is not configured yet. Add an API key before using it.`
-          : undefined,
-      models: dedupeStrings([
-        ...provider.models,
-        provider.providerId === activeProviderId ? activeModel : undefined,
-        input.prefs?.providerId === provider.providerId ? input.prefs.model : undefined,
-      ]),
-    }));
+    return input.runtimeProviderCatalog.map((provider) => {
+      const isLocalRuntime = isLikelyLocalProviderUrl(provider.baseUrl);
+      return {
+        providerId: provider.providerId,
+        label: provider.label,
+        baseUrl: provider.baseUrl,
+        defaultModel: provider.defaultModel,
+        isLocalRuntime,
+        disabled: !provider.hasApiKey && !isLocalRuntime,
+        availabilityLabel: !provider.hasApiKey && !isLocalRuntime ? `${provider.label} · setup required` : undefined,
+        availabilityHint:
+          !provider.hasApiKey && !isLocalRuntime
+            ? `${provider.label} is not configured yet. Add an API key before using it.`
+            : undefined,
+        models: dedupeStrings([
+          ...provider.models,
+          provider.providerId === activeProviderId ? activeModel : undefined,
+          input.prefs?.providerId === provider.providerId ? input.prefs.model : undefined,
+        ]),
+        modelProbeState: provider.modelProbeState,
+        modelProbeCheckedAt: provider.modelProbeCheckedAt,
+      };
+    });
   }, [
     input.prefs?.model,
     input.prefs?.providerId,
@@ -62,34 +152,43 @@ export function useChatProviderRoutingController(input: {
     input.settings?.llm?.activeProviderId,
   ]);
 
-  const selectedProviderId = useMemo(() => {
-    const preferredProviderId =
-      input.prefs?.providerId ?? input.runtimeLlmConfig?.activeProviderId ?? input.settings?.llm?.activeProviderId;
-    return providerOptions.find((provider) => provider.providerId === preferredProviderId)?.providerId;
-  }, [input.prefs?.providerId, input.runtimeLlmConfig?.activeProviderId, input.settings?.llm?.activeProviderId, providerOptions]);
+  const requestedProviderId =
+    input.prefs?.providerId ?? input.runtimeLlmConfig?.activeProviderId ?? input.settings?.llm?.activeProviderId;
+  const requestedModelId =
+    input.prefs?.model ?? input.runtimeLlmConfig?.activeModel ?? input.settings?.llm?.activeModel;
 
-  const selectedProviderSelection = useMemo(() => {
-    const provider = providerOptions.find((item) => item.providerId === selectedProviderId);
-    return resolveProviderModelSelection({
-      provider,
-      loadedModels: selectedProviderId ? input.getCachedModels(selectedProviderId) : [],
-      selectedModel: input.prefs?.model ?? input.runtimeLlmConfig?.activeModel ?? input.settings?.llm?.activeModel,
-    });
-  }, [
-    input.getCachedModels,
-    input.prefs?.model,
-    input.runtimeLlmConfig?.activeModel,
-    input.settings?.llm?.activeModel,
-    providerOptions,
-    selectedProviderId,
-  ]);
-  const selectedModel = selectedProviderSelection.model;
-  const selectedProviderLabel = useMemo(
-    () => providerOptions.find((item) => item.providerId === selectedProviderId)?.label ?? "Provider auto",
+  const selectedProviderId = useMemo(
+    () => providerOptions.find((provider) => provider.providerId === requestedProviderId)?.providerId,
+    [providerOptions, requestedProviderId],
+  );
+  const selectedProviderOption = useMemo(
+    () => providerOptions.find((item) => item.providerId === selectedProviderId),
     [providerOptions, selectedProviderId],
   );
-  const selectedModelLabel = selectedModel ?? "Model auto";
 
+  const selectedProviderSelection = useMemo(() => {
+    return resolveProviderModelSelection({
+      provider: selectedProviderOption,
+      loadedModels: selectedProviderId ? input.getCachedModels(selectedProviderId) : [],
+      selectedModel: requestedModelId,
+    });
+  }, [input.getCachedModels, requestedModelId, selectedProviderId, selectedProviderOption]);
+
+  const selectedModel = selectedProviderSelection.model;
+  const selectedProviderLabel = selectedProviderOption?.label ?? "Provider auto";
+  const selectedModelLabel = selectedModel ?? "Model auto";
+  const requestedProviderLabel = selectedProviderOption?.label ?? "Provider auto";
+  const requestedModelLabel = requestedModelId ?? "Model auto";
+  const selectionSource = describeSelectionSource({
+    prefsProviderId: input.prefs?.providerId,
+    prefsModel: input.prefs?.model,
+    runtimeProviderId: input.runtimeLlmConfig?.activeProviderId,
+    runtimeModel: input.runtimeLlmConfig?.activeModel,
+    settingsProviderId: input.settings?.llm?.activeProviderId,
+    settingsModel: input.settings?.llm?.activeModel,
+  });
+  const selectionSourceLabel = formatSelectionSourceLabel(selectionSource);
+  const runtimeDescriptor = useMemo(() => describeRuntimeStatus(selectedProviderOption), [selectedProviderOption]);
   useEffect(() => {
     if (!selectedProviderId) {
       return;
@@ -204,8 +303,16 @@ export function useChatProviderRoutingController(input: {
     commandSuggestions,
     providerOptions,
     selectedProviderId,
+    selectedProviderOption,
     selectedModel,
     selectedProviderLabel,
     selectedModelLabel,
+    requestedProviderLabel,
+    requestedModelLabel,
+    selectionSource,
+    selectionSourceLabel,
+    runtimeStatus: runtimeDescriptor.status,
+    runtimeSummary: runtimeDescriptor.summary,
+    runtimeTone: runtimeDescriptor.tone,
   };
 }

@@ -2,6 +2,7 @@ import type { ChatMessageRecord, ChatMode, ChatThreadResponse } from "@goatcitad
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import { fetchOrchestrationRun, fetchOrchestrationRunCheckpoints } from "../../api/platform";
+import { resolveActiveWorkflowTurn } from "../../components/cowork-view-model";
 import { useRefreshSubscription } from "../../hooks/useRefreshSubscription";
 import { deriveCoworkItems } from "./chat-page-derivations";
 import { defaultDockOpenForMode } from "./surface-config";
@@ -55,9 +56,10 @@ export function useChatDockWorkbenchController(input: {
     setDockOpen(defaultDockOpenForMode(input.messageMode, getViewportWidth()));
   }, [input.messageMode]);
 
+  const activeWorkflowTurn = useMemo(() => resolveActiveWorkflowTurn(input.thread), [input.thread]);
   const latestOrchestration = useMemo(
-    () => input.selectedTurn?.trace.orchestration ?? input.thread?.turns.at(-1)?.trace.orchestration,
-    [input.selectedTurn, input.thread],
+    () => activeWorkflowTurn?.trace.orchestration ?? input.thread?.turns.at(-1)?.trace.orchestration,
+    [activeWorkflowTurn, input.thread],
   );
   const canonicalOrchestrationRunId = latestOrchestration?.runId?.trim() || undefined;
 
@@ -139,6 +141,7 @@ export function useChatDockWorkbenchController(input: {
   return {
     dockOpen,
     setDockOpen,
+    activeWorkflowTurn,
     workbenchState,
     workbenchTree,
     selectedWorkbenchFile,
@@ -155,6 +158,7 @@ export function useChatDockWorkbenchController(input: {
     orchestrationCheckpoints,
     orchestrationLoading,
     orchestrationError,
+    refreshOrchestrationRun,
     coworkItems,
     selectedSessionProjectValue,
     dockSectionStyle,

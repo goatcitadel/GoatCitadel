@@ -11,7 +11,6 @@ import {
   type SessionsResponse,
 } from "../api/client";
 import { DataToolbar } from "../components/DataToolbar";
-import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
 import { Panel } from "../components/Panel";
 import { SelectOrCustom } from "../components/SelectOrCustom";
@@ -70,6 +69,16 @@ export function SessionsPage() {
   }, [healthFilter, items, search]);
 
   useEffect(() => {
+    if (filtered.length === 0) {
+      setSelectedSessionId(null);
+      return;
+    }
+    if (!selectedSessionId || !filtered.some((session) => session.sessionId === selectedSessionId)) {
+      setSelectedSessionId(filtered[0]?.sessionId ?? null);
+    }
+  }, [filtered, selectedSessionId]);
+
+  useEffect(() => {
     if (!selectedSessionId) {
       setSummary(null);
       setTimeline([]);
@@ -105,6 +114,9 @@ export function SessionsPage() {
 
   const totalTokens = filtered.reduce((sum, session) => sum + session.tokenTotal, 0);
   const totalCost = filtered.reduce((sum, session) => sum + session.costUsdTotal, 0);
+  const healthyCount = filtered.filter((session) => session.health === "healthy").length;
+  const degradedCount = filtered.filter((session) => session.health === "degraded").length;
+  const blockedCount = filtered.filter((session) => session.health === "blocked").length;
 
   const searchOptions = useMemo(() => {
     const values = new Set<string>([
@@ -142,43 +154,17 @@ export function SessionsPage() {
         actions={
           <div className="workflow-summary-strip">
             <StatusChip tone="live">{filtered.length} visible</StatusChip>
-            <StatusChip tone={filtered.some((session) => session.health === "blocked") ? "warning" : "muted"}>
-              {filtered.filter((session) => session.health === "blocked").length} blocked
-            </StatusChip>
+            <StatusChip tone={blockedCount > 0 ? "warning" : "muted"}>{blockedCount} blocked</StatusChip>
             <StatusChip>${totalCost.toFixed(4)} visible cost</StatusChip>
           </div>
         }
       />
-      <PageGuideCard
-        pageId="sessions"
-        what={pageCopy.sessions.guide?.what ?? ""}
-        when={pageCopy.sessions.guide?.when ?? ""}
-        actions={pageCopy.sessions.guide?.actions ?? []}
-        terms={pageCopy.sessions.guide?.terms}
-      />
       <div className="workflow-status-stack">{error ? <p className="error">{error}</p> : null}</div>
-
-      <div className="office-kpi-grid">
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Visible sessions</p>
-          <p className="office-kpi-value">{filtered.length}</p>
-          <p className="office-kpi-note">After current filters</p>
-        </article>
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Total tokens</p>
-          <p className="office-kpi-value">{totalTokens}</p>
-          <p className="office-kpi-note">For visible sessions</p>
-        </article>
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Total cost</p>
-          <p className="office-kpi-value">${totalCost.toFixed(4)}</p>
-          <p className="office-kpi-note">USD aggregate</p>
-        </article>
-        <article className="office-kpi-card">
-          <p className="office-kpi-label">Blocked sessions</p>
-          <p className="office-kpi-value">{filtered.filter((session) => session.health === "blocked").length}</p>
-          <p className="office-kpi-note">Needs intervention</p>
-        </article>
+      <div className="workflow-summary-strip sessions-summary-strip">
+        <StatusChip tone="success">{healthyCount} healthy</StatusChip>
+        <StatusChip tone={degradedCount > 0 ? "warning" : "muted"}>{degradedCount} degraded</StatusChip>
+        <StatusChip tone={blockedCount > 0 ? "critical" : "muted"}>{blockedCount} blocked</StatusChip>
+        <StatusChip tone="muted">{totalTokens.toLocaleString()} tokens</StatusChip>
       </div>
 
       <DataToolbar
@@ -204,7 +190,11 @@ export function SessionsPage() {
           </>
         }
         secondary={
-          <button type="button" onClick={() => setViewMode((current) => (current === "split" ? "table" : "split"))} className="gc-button">
+          <button
+            type="button"
+            onClick={() => setViewMode((current) => (current === "split" ? "table" : "split"))}
+            className="gc-button"
+          >
             {viewMode === "split" ? "Switch to table view" : "Switch to split view"}
           </button>
         }
@@ -246,11 +236,18 @@ export function SessionsPage() {
           )}
         </Panel>
       ) : (
-        <div className="split-grid">
+        <div className="sessions-shell">
           <Panel
-            title="Session List"
-            subtitle="Pick a session from the rail to inspect transcript health and recent events."
+            title="Sessions"
+            subtitle="Filter the rail, then step through recent work without losing runtime posture."
+            actions={
+              <div className="workflow-summary-strip">
+                <StatusChip tone="muted">{filtered.length} shown</StatusChip>
+                <StatusChip tone="muted">{selected ? selected.kind : "none selected"}</StatusChip>
+              </div>
+            }
           >
+            {filtered.length === 0 ? <p className="office-subtitle">No sessions match the current filter.</p> : null}
             <div className="virtual-list-shell">
               <Virtuoso
                 data={filtered}
@@ -258,15 +255,22 @@ export function SessionsPage() {
                   <div className="virtual-list-item">
                     <button
                       type="button"
-                      className={["gc-button", (`session-list-button ${session.sessionId === selected?.sessionId ? "active" : ""}`)].filter(Boolean).join(" ")}
+                      className={["session-rail-item", session.sessionId === selected?.sessionId ? "active" : ""]
+                        .filter(Boolean)
+                        .join(" ")}
                       onClick={() => setSelectedSessionId(session.sessionId)}
                     >
-                      {session.sessionKey}
+                      <span className="session-rail-head">
+                        <strong>{session.sessionKey}</strong>
+                        <span className="session-rail-time">{new Date(session.updatedAt).toLocaleString()}</span>
+                      </span>
+                      <span className="session-rail-meta">
+                        <StatusChip tone={sessionHealthTone(session.health)}>{session.health}</StatusChip>
+                        <span>{session.kind}</span>
+                        <span>{session.tokenTotal.toLocaleString()} tokens</span>
+                        <span>${session.costUsdTotal.toFixed(4)}</span>
+                      </span>
                     </button>
-                    <p className="office-subtitle session-detail-copy">
-                      {session.health} | {new Date(session.updatedAt).toLocaleString()} | $
-                      {session.costUsdTotal.toFixed(4)}
-                    </p>
                   </div>
                 )}
               />
@@ -274,41 +278,86 @@ export function SessionsPage() {
           </Panel>
 
           <Panel
-            title="Session Detail"
-            subtitle="The selected session shows its identity, last message, event count, and recent timeline."
+            title={selected ? selected.sessionKey : "Session detail"}
+            subtitle={
+              selected
+                ? `${selected.sessionId} · ${selected.channel}/${selected.account}`
+                : "Select a session to inspect details."
+            }
+            actions={
+              selected ? (
+                <div className="workflow-summary-strip">
+                  <StatusChip tone={sessionHealthTone(selected.health)}>{selected.health}</StatusChip>
+                  <StatusChip tone={sessionBudgetTone(selected.budgetState)}>{selected.budgetState}</StatusChip>
+                  <StatusChip tone="muted">{selected.kind}</StatusChip>
+                </div>
+              ) : null
+            }
           >
             {!selected ? <p className="office-subtitle">Select a session to inspect details.</p> : null}
             {detailsLoading ? <CardSkeleton lines={7} /> : null}
             {selected && !detailsLoading ? (
               <>
-                <p>
-                  <strong>{selected.sessionKey}</strong>
-                </p>
-                <p className="office-subtitle session-detail-copy">Session ID: {selected.sessionId}</p>
-                <p className="office-subtitle session-detail-copy">
-                  Last message: {summary?.lastMessagePreview ?? "(none yet)"}
-                </p>
-                <p className="office-subtitle session-detail-copy">
-                  Timeline events: {summary?.transcriptEventCount ?? 0}
-                </p>
+                <div className="sessions-detail-summary">
+                  <p className="office-subtitle session-detail-copy">
+                    {summary?.lastMessagePreview ?? "No assistant or user message recorded yet."}
+                  </p>
+                  <div className="sessions-detail-grid">
+                    <div className="sessions-detail-metric">
+                      <span>Updated</span>
+                      <strong>{new Date(selected.updatedAt).toLocaleString()}</strong>
+                    </div>
+                    <div className="sessions-detail-metric">
+                      <span>Last activity</span>
+                      <strong>{new Date(selected.lastActivityAt).toLocaleString()}</strong>
+                    </div>
+                    <div className="sessions-detail-metric">
+                      <span>Timeline events</span>
+                      <strong>{summary?.transcriptEventCount ?? 0}</strong>
+                    </div>
+                    <div className="sessions-detail-metric">
+                      <span>Latest event</span>
+                      <strong>{summary?.latestEventType ?? "unknown"}</strong>
+                    </div>
+                    <div className="sessions-detail-metric">
+                      <span>Tokens</span>
+                      <strong>{selected.tokenTotal.toLocaleString()}</strong>
+                    </div>
+                    <div className="sessions-detail-metric">
+                      <span>Spend</span>
+                      <strong>${selected.costUsdTotal.toFixed(4)}</strong>
+                    </div>
+                  </div>
+                </div>
                 {lifecycle ? (
-                  <div className="replay-box">
-                    <h4>Canonical linkage</h4>
-                    <p className="office-subtitle session-detail-copy">
-                      Turns: {lifecycle.linked.turnIds.length}
-                      {" | "}
-                      Approvals: {lifecycle.linked.approvalIds.length}
-                      {" | "}
-                      Runs: {lifecycle.linked.runIds.length}
-                      {" | "}
-                      Execution plans: {lifecycle.executionPlans?.length ?? 0}
-                      {" | "}
-                      Delegation runs: {lifecycle.delegationRuns?.length ?? 0}
-                      {" | "}
-                      Delegation steps: {lifecycle.delegationSteps?.length ?? 0}
-                      {" | "}
-                      Tasks: {lifecycle.linked.taskIds.length}
-                    </p>
+                  <details className="advanced-panel sessions-runtime-details">
+                    <summary>Linked runtime context</summary>
+                    <div className="sessions-detail-grid sessions-detail-grid-compact">
+                      <div className="sessions-detail-metric">
+                        <span>Turns</span>
+                        <strong>{lifecycle.linked.turnIds.length}</strong>
+                      </div>
+                      <div className="sessions-detail-metric">
+                        <span>Approvals</span>
+                        <strong>{lifecycle.linked.approvalIds.length}</strong>
+                      </div>
+                      <div className="sessions-detail-metric">
+                        <span>Runs</span>
+                        <strong>{lifecycle.linked.runIds.length}</strong>
+                      </div>
+                      <div className="sessions-detail-metric">
+                        <span>Tasks</span>
+                        <strong>{lifecycle.linked.taskIds.length}</strong>
+                      </div>
+                      <div className="sessions-detail-metric">
+                        <span>Execution plans</span>
+                        <strong>{lifecycle.executionPlans?.length ?? 0}</strong>
+                      </div>
+                      <div className="sessions-detail-metric">
+                        <span>Delegation runs</span>
+                        <strong>{lifecycle.delegationRuns?.length ?? 0}</strong>
+                      </div>
+                    </div>
                     <p className="office-subtitle session-detail-copy">
                       Proactive durable run: {lifecycle.proactiveDurableRun?.runId ?? "none"}
                       {" | "}
@@ -343,9 +392,12 @@ export function SessionsPage() {
                         ))}
                       </ul>
                     ) : null}
-                  </div>
+                  </details>
                 ) : null}
-                <h4>Recent Timeline</h4>
+                <div className="sessions-section-heading">
+                  <h4>Recent timeline</h4>
+                  <span>{timeline.length} events</span>
+                </div>
                 {timeline.length === 0 ? (
                   <p className="office-subtitle">No transcript events yet.</p>
                 ) : (
@@ -368,4 +420,32 @@ export function SessionsPage() {
       )}
     </section>
   );
+}
+
+function sessionHealthTone(health: SessionsResponse["items"][number]["health"]): "success" | "warning" | "critical" {
+  switch (health) {
+    case "healthy":
+      return "success";
+    case "degraded":
+      return "warning";
+    case "blocked":
+      return "critical";
+    default:
+      return "warning";
+  }
+}
+
+function sessionBudgetTone(
+  budgetState: SessionsResponse["items"][number]["budgetState"],
+): "muted" | "warning" | "critical" {
+  switch (budgetState) {
+    case "ok":
+      return "muted";
+    case "warning":
+      return "warning";
+    case "hard_cap":
+      return "critical";
+    default:
+      return "warning";
+  }
 }

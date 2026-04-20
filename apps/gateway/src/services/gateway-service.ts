@@ -54,6 +54,11 @@ import {
 import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
+import {
+  importAgencyCatalog,
+  suggestImportedCatalogEntries,
+  buildCatalogSpecialistSuggestion,
+} from "./agency-agent-catalog-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type {
@@ -74,6 +79,8 @@ import type {
   BankrActionPreviewResponse,
   BankrSafetyPolicy,
   AgentProfileArchiveInput,
+  AgencyCatalogImportRequest,
+  AgencyCatalogImportResponse,
   AgentProfileCreateInput,
   AgentProfileRecord,
   AgentProfileUpdateInput,
@@ -173,6 +180,8 @@ import type {
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
+  RoutingPreflightRequest,
+  RoutingPreflightResult,
   ChatStreamChunk,
   ChatStreamChunkDraft,
   ChatStreamUsageRecord,
@@ -218,6 +227,9 @@ import type {
   GatewayEventInput,
   GatewayEventResult,
   IntegrationCatalogEntry,
+  ImportedAgentCatalogListInput,
+  ImportedAgentCatalogRecord,
+  ImportedAgentCatalogStatePatchInput,
   IntegrationFormSchema,
   IntegrationPluginInstallInput,
   IntegrationPluginRecord,
@@ -1649,6 +1661,21 @@ export class GatewayService {
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
+        task: async (job) => {
+          const task = this.createTask({
+            title: job.name,
+            description: [
+              job.description?.trim() || "Scheduled task created by cron job.",
+              "",
+              `Cron job: ${job.jobId}`,
+              `Triggered at: ${new Date().toISOString()}`,
+            ].join("\n"),
+            status: "inbox",
+            priority: "normal",
+            createdBy: "scheduler",
+          });
+          return { taskId: task.taskId };
+        },
         improvement: async () => {
           await this.improvementService.runWeeklyImprovementSchedulerIfDue({ force: true });
         },
@@ -2894,6 +2921,7 @@ export class GatewayService {
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
     await this.runUpdateReviewSchedulerIfDue();
+    await this.cronAutomationService.runDueTaskCronJobs();
     await this.memoryLifecycleService.runDueEvaluation();
   }
 
@@ -3554,6 +3582,20 @@ export class GatewayService {
           objectiveKeywords,
         }),
       );
+    }
+
+    const sessionWorkspaceId = this.normalizeWorkspaceId(
+      this.storage.chatSessionMeta.ensure(input.sessionId).workspaceId,
+    );
+    for (const suggestion of suggestImportedCatalogEntries({
+      entries: this.storage.importedAgentCatalog.list({
+        workspaceId: sessionWorkspaceId,
+        limit: 500,
+      }),
+      content: input.content,
+      mode: input.mode,
+    })) {
+      addSuggestion(suggestion);
     }
 
     if (suggested.size === 0 && input.trace.orchestration) {
@@ -5564,6 +5606,10 @@ export class GatewayService {
     yield* this.chatTurnRuntime.agentSendChatMessageStream(sessionId, input);
   }
 
+  public async routePreflight(sessionId: string, input: RoutingPreflightRequest): Promise<RoutingPreflightResult> {
+    return this.chatTurnRuntime.routePreflight(sessionId, input);
+  }
+
   public async retryChatTurn(
     sessionId: string,
     turnId: string,
@@ -7225,7 +7271,15 @@ export class GatewayService {
     return cronSchedulerService.getCronJob(this, jobId);
   }
 
-  public createCronJob(input: { jobId: string; name: string; schedule: string; enabled?: boolean }): CronJobRecord {
+  public createCronJob(input: {
+    jobId: string;
+    name: string;
+    action?: CronJobRecord["action"];
+    description?: string;
+    schedule: string;
+    enabled?: boolean;
+    endAt?: string;
+  }): CronJobRecord {
     return cronSchedulerService.createCronJob(this, input);
   }
 
@@ -7233,8 +7287,11 @@ export class GatewayService {
     jobId: string,
     input: {
       name?: string;
+      action?: CronJobRecord["action"];
+      description?: string;
       schedule?: string;
       enabled?: boolean;
+      endAt?: string | null;
     },
   ): CronJobRecord {
     return cronSchedulerService.updateCronJob(this, jobId, input);
@@ -7718,6 +7775,103 @@ export class GatewayService {
       });
     }
     return deleted;
+  }
+
+  public listImportedAgentCatalog(input: ImportedAgentCatalogListInput = {}): {
+    workspaceId: string;
+    divisions: string[];
+    items: ImportedAgentCatalogRecord[];
+  } {
+    const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
+    return {
+      workspaceId,
+      divisions: this.storage.importedAgentCatalog.listDivisions(workspaceId),
+      items: this.storage.importedAgentCatalog.list({
+        ...input,
+        workspaceId,
+      }),
+    };
+  }
+
+  public getImportedAgentCatalogEntry(entryId: string): ImportedAgentCatalogRecord {
+    return this.storage.importedAgentCatalog.get(entryId);
+  }
+
+  public patchImportedAgentCatalogEntryState(
+    entryId: string,
+    input: ImportedAgentCatalogStatePatchInput,
+  ): ImportedAgentCatalogRecord {
+    const updated = this.storage.importedAgentCatalog.patchState(entryId, input);
+    this.publishRealtime("system", "agents", {
+      type: "imported_agent_catalog_updated",
+      entryId: updated.entryId,
+      workspaceId: updated.workspaceId,
+      state: updated.state,
+    });
+    return updated;
+  }
+
+  public async importAgencyAgentCatalog(input: AgencyCatalogImportRequest = {}): Promise<AgencyCatalogImportResponse> {
+    const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
+    const imported = await importAgencyCatalog({
+      storage: this.storage,
+      workspaceId,
+      repoUrl: input.repoUrl,
+      ref: input.ref,
+    });
+    this.publishRealtime("system", "agents", {
+      type: "imported_agent_catalog_imported",
+      workspaceId,
+      importedCount: imported.importedCount,
+      ref: imported.ref,
+      repoUrl: imported.repoUrl,
+    });
+    return imported;
+  }
+
+  public activateImportedAgentCatalogEntryForSession(
+    sessionId: string,
+    entryId: string,
+  ): {
+    catalogEntry: ImportedAgentCatalogRecord;
+    specialist: ChatSpecialistCandidateRecord;
+  } {
+    this.getSession(sessionId);
+    const sessionWorkspaceId = this.normalizeWorkspaceId(this.storage.chatSessionMeta.ensure(sessionId).workspaceId);
+    const entry = this.storage.importedAgentCatalog.get(entryId);
+    if (entry.workspaceId !== sessionWorkspaceId) {
+      throw new Error("Imported catalog entry belongs to a different workspace.");
+    }
+
+    const prefs = this.getChatSessionPrefs(sessionId);
+    const draft = this.createChatSessionSpecialistCandidate(sessionId, {
+      suggestion: buildCatalogSpecialistSuggestion(
+        entry,
+        prefs.mode,
+        extractSpecialistObjectiveKeywords(entry.definition.frontmatter.description),
+      ),
+    });
+    const specialist = this.storage.chatSpecialistCandidates.patch(draft.candidateId, {
+      status: "active",
+      routingMode: "manual_only",
+    });
+    const catalogEntry =
+      entry.state === "active"
+        ? entry
+        : this.storage.importedAgentCatalog.patchState(entryId, {
+            state: "active",
+          });
+    this.publishRealtime("system", "agents", {
+      type: "imported_agent_catalog_activated",
+      entryId,
+      workspaceId: catalogEntry.workspaceId,
+      sessionId,
+      candidateId: specialist.candidateId,
+    });
+    return {
+      catalogEntry,
+      specialist,
+    };
   }
 
   public getSettings(): RuntimeSettings {
@@ -13872,22 +14026,35 @@ function isCronJobDueNow(
     defaultTimeZone: string;
   },
 ): boolean {
+  if (job.endAt) {
+    const endAt = Date.parse(job.endAt);
+    if (Number.isFinite(endAt) && endAt < now.getTime()) {
+      return false;
+    }
+  }
   const parsed = parseSimpleCronSchedule(job.schedule);
   const minute = parsed?.minute ?? defaults.defaultMinute;
   const hour = parsed?.hour ?? defaults.defaultHour;
+  const hourStep = parsed?.hourStep;
   const wildcardMinute = parsed?.wildcardMinute ?? false;
   const wildcardHour = parsed?.wildcardHour ?? false;
   const wildcardWeekday = parsed?.wildcardWeekday ?? false;
-  const weekday = parsed?.weekday ?? defaults.defaultWeekday;
+  const weekdays = parsed?.weekdays ?? (defaults.defaultWeekday === undefined ? undefined : [defaults.defaultWeekday]);
   const timeZone = parsed?.timeZone ?? defaults.defaultTimeZone;
   const window = getZonedDateParts(now, timeZone);
-  if (!wildcardHour && window.hour !== hour) {
-    return false;
+  if (!wildcardHour) {
+    if (hourStep !== undefined) {
+      if (window.hour % hourStep !== 0) {
+        return false;
+      }
+    } else if (window.hour !== hour) {
+      return false;
+    }
   }
   if (!wildcardMinute && (window.minute < minute || window.minute >= minute + 5)) {
     return false;
   }
-  if (!wildcardWeekday && weekday !== undefined && window.weekday !== weekday) {
+  if (!wildcardWeekday && weekdays?.length && !weekdays.includes(window.weekday)) {
     return false;
   }
   return true;
@@ -13896,7 +14063,8 @@ function isCronJobDueNow(
 function parseSimpleCronSchedule(value: string): {
   minute?: number;
   hour?: number;
-  weekday?: number;
+  hourStep?: number;
+  weekdays?: number[];
   timeZone?: string;
   wildcardMinute: boolean;
   wildcardHour: boolean;
@@ -13920,6 +14088,7 @@ function parseSimpleCronSchedule(value: string): {
   }
   let minute: number | undefined;
   let hour: number | undefined;
+  let hourStep: number | undefined;
   const wildcardMinute = minuteRaw === "*";
   const wildcardHour = hourRaw === "*";
   if (!wildcardMinute) {
@@ -13932,25 +14101,31 @@ function parseSimpleCronSchedule(value: string): {
     }
   }
   if (!wildcardHour) {
-    if (!/^\d+$/.test(hourRaw)) {
+    if (/^\*\/\d+$/.test(hourRaw)) {
+      hourStep = Number.parseInt(hourRaw.slice(2), 10);
+      if (!Number.isFinite(hourStep) || hourStep < 1 || hourStep > 23) {
+        return null;
+      }
+    } else if (!/^\d+$/.test(hourRaw)) {
       return null;
-    }
-    hour = Number.parseInt(hourRaw, 10);
-    if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
-      return null;
+    } else {
+      hour = Number.parseInt(hourRaw, 10);
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23) {
+        return null;
+      }
     }
   }
-  let weekday: number | undefined;
+  let weekdays: number[] | undefined;
   const wildcardWeekday = dayOfWeekRaw === "*";
   if (!wildcardWeekday) {
-    if (!/^\d+$/.test(dayOfWeekRaw)) {
+    const parsedWeekdays = [...new Set(dayOfWeekRaw.split(",").map((token) => Number.parseInt(token, 10)))];
+    if (
+      parsedWeekdays.length === 0 ||
+      parsedWeekdays.some((weekday) => !Number.isFinite(weekday) || weekday < 0 || weekday > 6)
+    ) {
       return null;
     }
-    const parsedWeekday = Number.parseInt(dayOfWeekRaw, 10);
-    if (!Number.isFinite(parsedWeekday) || parsedWeekday < 0 || parsedWeekday > 6) {
-      return null;
-    }
-    weekday = parsedWeekday;
+    weekdays = parsedWeekdays.sort((left, right) => left - right);
   }
   const timeZone = timezoneParts.length > 0 ? timezoneParts.join(" ") : undefined;
   if (timeZone) {
@@ -13964,7 +14139,8 @@ function parseSimpleCronSchedule(value: string): {
   return {
     minute,
     hour,
-    weekday,
+    hourStep,
+    weekdays,
     timeZone,
     wildcardMinute,
     wildcardHour,

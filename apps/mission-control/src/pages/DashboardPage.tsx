@@ -168,7 +168,7 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
 
   const heroSecondaryAction =
     state.activeSubagents > 0
-      ? { label: "Open Herd HQ", action: () => onNavigate?.("office") }
+      ? { label: "Open agent board", action: () => onNavigate?.("office") }
       : { label: "Open settings", action: () => onNavigate?.("settings") };
 
   const activeOperatorSessions = operators.items.reduce((sum, operator) => sum + operator.activeSessions, 0);
@@ -190,7 +190,11 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
                 <button type="button" className="gc-button dashboard-hero-primary" onClick={heroPrimaryAction.action}>
                   {heroPrimaryAction.label}
                 </button>
-                <button type="button" className="gc-button dashboard-hero-secondary" onClick={heroSecondaryAction.action}>
+                <button
+                  type="button"
+                  className="gc-button dashboard-hero-secondary"
+                  onClick={heroSecondaryAction.action}
+                >
                   {heroSecondaryAction.label}
                 </button>
               </div>
@@ -312,7 +316,7 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
               Inspect runs
             </button>
             <button type="button" onClick={() => onNavigate?.("office")} className="gc-button">
-              Open Herd HQ
+              Open agent board
             </button>
             <button type="button" onClick={() => onNavigate?.("settings")} className="gc-button">
               Tune Forge
@@ -405,5 +409,3 @@ function formatBytes(bytes: number): string {
   }
   return `${bytes} B`;
 }
-
-

@@ -21,6 +21,8 @@ export interface ProviderModelCatalogOption {
   apiKeySource?: string;
   hasApiKey?: boolean;
   models: string[];
+  modelProbeState?: "not_checked" | "ready" | "empty" | "error";
+  modelProbeCheckedAt?: string;
 }
 
 export interface ProviderModelPreviewResult {
@@ -32,6 +34,8 @@ export interface ProviderModelPreviewResult {
 interface ProviderModelCacheEntry {
   items: string[];
   expiresAt: number;
+  state: "not_checked" | "ready" | "empty" | "error";
+  checkedAt?: string;
 }
 
 export function dedupeProviderModels(values: Array<string | undefined | null>): string[] {
@@ -88,31 +92,39 @@ function buildProviderCatalog(
         ...(template?.knownModels ?? []),
         ...(cached?.items ?? []),
       ]),
+      modelProbeState: cached?.state ?? "not_checked",
+      modelProbeCheckedAt: cached?.checkedAt,
     } satisfies ProviderModelCatalogOption;
   });
 }
 
-export async function previewProviderModels(input: {
-  providerId: string;
-  baseUrl: string;
-  apiStyle?: RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
-  apiKey?: string;
-  apiKeyEnv?: string;
-  request?: LlmProviderRequestConfig;
-  headers?: Record<string, string>;
-  fallbackModel?: string;
-}, options?: { signal?: AbortSignal }): Promise<ProviderModelPreviewResult> {
-  const response = await previewLlmModels({
-    providerId: input.providerId,
-    baseUrl: input.baseUrl,
-    apiStyle: input.apiStyle,
-    apiKey: input.apiKey,
-    apiKeyEnv: input.apiKeyEnv,
-    request: input.request,
-    headers: input.headers,
-  }, {
-    signal: options?.signal,
-  });
+export async function previewProviderModels(
+  input: {
+    providerId: string;
+    baseUrl: string;
+    apiStyle?: RuntimeSettingsResponse["llm"]["providers"][number]["apiStyle"];
+    apiKey?: string;
+    apiKeyEnv?: string;
+    request?: LlmProviderRequestConfig;
+    headers?: Record<string, string>;
+    fallbackModel?: string;
+  },
+  options?: { signal?: AbortSignal },
+): Promise<ProviderModelPreviewResult> {
+  const response = await previewLlmModels(
+    {
+      providerId: input.providerId,
+      baseUrl: input.baseUrl,
+      apiStyle: input.apiStyle,
+      apiKey: input.apiKey,
+      apiKeyEnv: input.apiKeyEnv,
+      request: input.request,
+      headers: input.headers,
+    },
+    {
+      signal: options?.signal,
+    },
+  );
   const template = findProviderTemplate(input.providerId);
   return {
     items: dedupeProviderModels([
@@ -156,52 +168,56 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     }
   }, [syncProviderState]);
 
-  const loadModelsForProvider = useCallback(async (
-    providerId: string,
-    options: { force?: boolean } = {},
-  ): Promise<string[]> => {
-    const normalized = providerId.trim();
-    if (!normalized) {
-      return [];
-    }
-
-    const now = Date.now();
-    const cached = !options.force
-      ? getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, now)
-      : undefined;
-    if (cached) {
-      return cached.items;
-    }
-
-    const inFlight = sharedProviderModelRequests.get(normalized);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const request = (async () => {
-      try {
-        const response = await fetchLlmModels(normalized);
-        const items = dedupeProviderModels(response.items.map((item) => item.id));
-        sharedProviderModelCache.set(normalized, {
-          items,
-          expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
-        });
-        return items;
-      } catch {
-        sharedProviderModelCache.set(normalized, {
-          items: [],
-          expiresAt: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
-        });
+  const loadModelsForProvider = useCallback(
+    async (providerId: string, options: { force?: boolean } = {}): Promise<string[]> => {
+      const normalized = providerId.trim();
+      if (!normalized) {
         return [];
-      } finally {
-        sharedProviderModelRequests.delete(normalized);
-        syncProviderState();
       }
-    })();
 
-    sharedProviderModelRequests.set(normalized, request);
-    return request;
-  }, [syncProviderState]);
+      const now = Date.now();
+      const cached = !options.force
+        ? getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, now)
+        : undefined;
+      if (cached) {
+        return cached.items;
+      }
+
+      const inFlight = sharedProviderModelRequests.get(normalized);
+      if (inFlight) {
+        return inFlight;
+      }
+
+      const request = (async () => {
+        try {
+          const response = await fetchLlmModels(normalized);
+          const items = dedupeProviderModels(response.items.map((item) => item.id));
+          sharedProviderModelCache.set(normalized, {
+            items,
+            expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
+            state: items.length > 0 ? "ready" : "empty",
+            checkedAt: new Date().toISOString(),
+          });
+          return items;
+        } catch {
+          sharedProviderModelCache.set(normalized, {
+            items: [],
+            expiresAt: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
+            state: "error",
+            checkedAt: new Date().toISOString(),
+          });
+          return [];
+        } finally {
+          sharedProviderModelRequests.delete(normalized);
+          syncProviderState();
+        }
+      })();
+
+      sharedProviderModelRequests.set(normalized, request);
+      return request;
+    },
+    [syncProviderState],
+  );
 
   const getCachedModels = useCallback((providerId: string): string[] => {
     const normalized = providerId.trim();

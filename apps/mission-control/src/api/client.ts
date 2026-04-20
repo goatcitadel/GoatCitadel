@@ -300,6 +300,7 @@ export {
   fetchChatThread,
   hardDeleteChatProject,
   pinChatSession,
+  preflightChatRoute,
   rebuildChatLearnedMemory,
   restoreChatProject,
   restoreChatSession,
@@ -416,6 +417,13 @@ export {
   updateAgentProfile,
   uploadFile,
 } from "./operators-agents-files.js";
+export {
+  activateImportedAgentCatalogEntry,
+  fetchImportedAgentCatalog,
+  fetchImportedAgentCatalogEntry,
+  importAgencyAgentCatalog,
+  patchImportedAgentCatalogState,
+} from "./agent-catalog.js";
 export {
   autoScorePromptPackBatch,
   autoScorePromptPackTest,

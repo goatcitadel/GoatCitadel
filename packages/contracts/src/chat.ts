@@ -976,7 +976,7 @@ export type ChatSpecialistCandidateStatus = "suggested" | "drafted" | "disabled"
 
 export type ChatSpecialistCandidateRoutingMode = "disabled" | "manual_only" | "strong_match_only";
 
-export type ChatSpecialistCandidateSource = "manual" | "runtime_gap" | "replay";
+export type ChatSpecialistCandidateSource = "manual" | "runtime_gap" | "replay" | "catalog";
 
 export type ChatSpecialistCandidateEvidenceKind = "role_gap" | "tool_gap" | "skill_gap" | "successful_workaround";
 
@@ -1109,6 +1109,39 @@ export interface ChatSendMessageRequest {
   normalizationProfile?: ChatNormalizationProfile;
   commandText?: string;
   prefsOverride?: ChatSessionPrefsPatch;
+}
+
+export type RoutingPreflightAction = "send" | "retry" | "edit";
+export type RoutingPreflightSelectionSource = "manual" | "session" | "global";
+export type RoutingPreflightFallbackPolicy = "off" | "armed";
+export type RoutingPreflightFallbackResult = "not_applicable" | "same_boundary" | "local_to_cloud" | "cloud_to_local";
+export type RoutingPreflightRuntimeReachability = "not_checked" | "reachable" | "unreachable" | "models_unavailable";
+export type RoutingPreflightRuntimeClass = "local" | "cloud" | "unknown";
+
+export interface RoutingPreflightRequest {
+  action: RoutingPreflightAction;
+  turnId?: string;
+  providerId?: string;
+  model?: string;
+  mode?: ChatMode;
+  webMode?: ChatWebMode;
+  thinkingLevel?: ChatThinkingLevel;
+  prefsOverride?: ChatSessionPrefsPatch;
+}
+
+export interface RoutingPreflightResult {
+  requestedProviderId?: string;
+  requestedModel?: string;
+  effectiveProviderId?: string;
+  effectiveModel?: string;
+  selectionSource: RoutingPreflightSelectionSource;
+  normalizationReason?: string;
+  fallbackPolicy: RoutingPreflightFallbackPolicy;
+  fallbackResult: RoutingPreflightFallbackResult;
+  runtimeReachability: RoutingPreflightRuntimeReachability;
+  runtimeClass: RoutingPreflightRuntimeClass;
+  blockedReason?: string;
+  degradedReason?: string;
 }
 
 export interface ChatSendMessageResponse {

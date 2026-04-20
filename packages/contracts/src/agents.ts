@@ -1,5 +1,9 @@
 export type AgentRuntimeStatus = "active" | "idle";
 export type AgentLifecycleStatus = "active" | "archived";
+export type RichAgentSourceProvider = "agency_agents" | "manual" | "workspace";
+export type RichAgentParseSupportStatus = "supported" | "supported_with_warnings" | "unsupported";
+export type ImportedAgentCatalogLifecycleStatus = "disabled" | "approved" | "active" | "retired";
+export type RichAgentSectionKind = "persona" | "operations" | "reference" | "other";
 
 export interface AgentProfileRecord {
   agentId: string;
@@ -16,6 +20,9 @@ export interface AgentProfileRecord {
   archivedAt?: string;
   archivedBy?: string;
   archiveReason?: string;
+  richDefinitionId?: string;
+  richDefinitionParseStatus?: RichAgentParseSupportStatus;
+  richDefinitionSource?: RichAgentSourceProvider;
   status: AgentRuntimeStatus;
   sessionCount: number;
   activeSessions: number;
@@ -57,6 +64,97 @@ export interface BuiltinAgentProfileSeed {
   specialties: string[];
   defaultTools: string[];
   aliases: string[];
+}
+
+export interface RichAgentFrontmatter {
+  name: string;
+  description: string;
+  color?: string;
+  services?: string[];
+  presentation?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+}
+
+export interface RichAgentSectionRecord {
+  key: string;
+  slug: string;
+  heading: string;
+  level: number;
+  kind: RichAgentSectionKind;
+  content: string;
+  canonicalKey?: string;
+}
+
+export type RichAgentSectionMap = Record<string, RichAgentSectionRecord>;
+
+export interface RichAgentSourceProvenance {
+  provider: RichAgentSourceProvider;
+  repoUrl?: string;
+  ref?: string;
+  commit?: string;
+  path: string;
+  sha256: string;
+  importedAt: string;
+}
+
+export interface RichAgentDefinitionRecord {
+  definitionId: string;
+  slug: string;
+  frontmatter: RichAgentFrontmatter;
+  rawMarkdown: string;
+  bodyMarkdown: string;
+  sectionOrder: string[];
+  sectionMap: RichAgentSectionMap;
+  parseStatus: RichAgentParseSupportStatus;
+  parseWarnings: string[];
+  provenance: RichAgentSourceProvenance;
+}
+
+export interface ImportedAgentCatalogRecord {
+  entryId: string;
+  workspaceId: string;
+  division: string;
+  state: ImportedAgentCatalogLifecycleStatus;
+  createdAt: string;
+  updatedAt: string;
+  activatedAt?: string;
+  retiredAt?: string;
+  definition: RichAgentDefinitionRecord;
+}
+
+export interface ImportedAgentCatalogListInput {
+  workspaceId?: string;
+  division?: string;
+  search?: string;
+  state?: ImportedAgentCatalogLifecycleStatus | "all";
+  parseStatus?: RichAgentParseSupportStatus | "all";
+  limit?: number;
+}
+
+export interface ImportedAgentCatalogStatePatchInput {
+  state: ImportedAgentCatalogLifecycleStatus;
+}
+
+export interface AgencyCatalogImportRequest {
+  workspaceId?: string;
+  repoUrl?: string;
+  ref?: string;
+}
+
+export interface AgencyCatalogImportResponse {
+  workspaceId: string;
+  repoUrl: string;
+  ref: string;
+  commit?: string;
+  importedAt: string;
+  importedCount: number;
+  divisions: string[];
+  parseCounts: Record<RichAgentParseSupportStatus, number>;
+}
+
+export interface CatalogSessionActivationRequest {
+  sessionId: string;
 }
 
 export const BUILTIN_AGENT_PROFILES: BuiltinAgentProfileSeed[] = [

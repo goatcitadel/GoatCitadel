@@ -19,7 +19,11 @@ vi.mock("./useRefreshSubscription", () => ({
   useRefreshSubscription: vi.fn(),
 }));
 
-import { previewProviderModels, resetProviderModelCatalogCacheForTests, useProviderModelCatalog } from "./useProviderModelCatalog";
+import {
+  previewProviderModels,
+  resetProviderModelCatalogCacheForTests,
+  useProviderModelCatalog,
+} from "./useProviderModelCatalog";
 
 const baseConfig: RuntimeSettingsResponse["llm"] = {
   activeProviderId: "openai",
@@ -82,7 +86,7 @@ const baseConfig: RuntimeSettingsResponse["llm"] = {
   ],
 };
 
-interface HarnessValue extends ReturnType<typeof useProviderModelCatalog> {}
+type HarnessValue = ReturnType<typeof useProviderModelCatalog>;
 
 function Harness({ onValue }: { onValue: (value: HarnessValue) => void }) {
   const value = useProviderModelCatalog("system");
@@ -107,9 +111,8 @@ describe("useProviderModelCatalog", () => {
     resetProviderModelCatalogCacheForTests();
     apiMocks.fetchLlmConfig.mockResolvedValue(baseConfig);
     apiMocks.fetchLlmModels.mockImplementation(async (providerId?: string) => ({
-      items: providerId === "glm"
-        ? [{ id: "glm-5" }, { id: "glm-5-air" }]
-        : [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+      items:
+        providerId === "glm" ? [{ id: "glm-5" }, { id: "glm-5-air" }] : [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
     }));
     latest = null;
   });
@@ -122,7 +125,13 @@ describe("useProviderModelCatalog", () => {
 
   it("loads runtime config without eagerly fetching models for every provider", async () => {
     await act(async () => {
-      renderer = create(<Harness onValue={(value) => { latest = value; }} />);
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
     });
     await flush();
 
@@ -135,6 +144,7 @@ describe("useProviderModelCatalog", () => {
       "glm-5-turbo",
       "glm-5v-turbo",
     ]);
+    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.modelProbeState).toBe("not_checked");
     expect(latest?.providers.find((provider) => provider.providerId === "google")?.models).toEqual([
       "models/gemini-2.5-flash",
       "models/gemini-2.5-flash-lite",
@@ -145,7 +155,13 @@ describe("useProviderModelCatalog", () => {
 
   it("loads selected provider models lazily and reuses cached results", async () => {
     await act(async () => {
-      renderer = create(<Harness onValue={(value) => { latest = value; }} />);
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
     });
     await flush();
 
@@ -163,6 +179,7 @@ describe("useProviderModelCatalog", () => {
       "glm-5-turbo",
       "glm-5v-turbo",
     ]);
+    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.modelProbeState).toBe("ready");
 
     await act(async () => {
       await latest?.loadModelsForProvider("glm");
@@ -176,7 +193,13 @@ describe("useProviderModelCatalog", () => {
     apiMocks.fetchLlmModels.mockRejectedValueOnce(new Error("provider offline"));
 
     await act(async () => {
-      renderer = create(<Harness onValue={(value) => { latest = value; }} />);
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
     });
     await flush();
 
@@ -191,6 +214,7 @@ describe("useProviderModelCatalog", () => {
 
     expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
     expect(latest?.getCachedModels("glm")).toEqual([]);
+    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.modelProbeState).toBe("error");
   });
 
   it("merges known Google fallback models into preview results", async () => {
@@ -200,11 +224,13 @@ describe("useProviderModelCatalog", () => {
       warning: "preview unavailable",
     });
 
-    await expect(previewProviderModels({
-      providerId: "google",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      fallbackModel: "models/gemini-2.5-flash",
-    })).resolves.toEqual({
+    await expect(
+      previewProviderModels({
+        providerId: "google",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        fallbackModel: "models/gemini-2.5-flash",
+      }),
+    ).resolves.toEqual({
       items: [
         "models/gemini-2.5-flash",
         "models/gemini-2.5-flash-lite",
@@ -223,11 +249,13 @@ describe("useProviderModelCatalog", () => {
       warning: "preview unavailable",
     });
 
-    await expect(previewProviderModels({
-      providerId: "minimax",
-      baseUrl: "https://api.minimax.io/v1",
-      fallbackModel: "MiniMax-M2.7",
-    })).resolves.toEqual({
+    await expect(
+      previewProviderModels({
+        providerId: "minimax",
+        baseUrl: "https://api.minimax.io/v1",
+        fallbackModel: "MiniMax-M2.7",
+      }),
+    ).resolves.toEqual({
       items: [
         "MiniMax-M2.7",
         "MiniMax-M2.7-highspeed",

@@ -12,6 +12,8 @@ import type {
   ChatStreamChunkDraft,
   ChatTurnBranchKind,
   ChatMessageRecord,
+  RoutingPreflightRequest,
+  RoutingPreflightResult,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSpecialistCandidateSuggestionRecord,
@@ -21,6 +23,11 @@ import type {
 } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
+import {
+  preflightChatRoute,
+  resolveChatRouteDescriptor,
+  type ChatRouteResolutionHost,
+} from "./chat-route-resolution.js";
 import {
   buildEmptyAssistantTurnFallbackText,
   ChatTurnCancelledError,
@@ -140,12 +147,23 @@ export interface ChatTurnResumeHost {
   ): AsyncGenerator<ChatStreamChunk>;
 }
 
+export type ChatTurnPreflightHost = ChatTurnEntryHost & ChatRouteResolutionHost;
+
 export async function agentSendChatMessage(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
+    const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+      action: "send",
+      providerId: input.providerId,
+      model: input.model,
+      mode: input.mode,
+      webMode: input.webMode,
+      thinkingLevel: input.thinkingLevel,
+      prefsOverride: input.prefsOverride,
+    });
     host.recordDevDiagnostic({
       level: "info",
       category: "chat",
@@ -158,6 +176,14 @@ export async function agentSendChatMessage(
         mode: input.mode,
         webMode: input.webMode,
         thinkingLevel: input.thinkingLevel,
+        routePreflight: {
+          requestedProviderId: routeDescriptor.requestedProviderId,
+          requestedModel: routeDescriptor.requestedModel,
+          effectiveProviderId: routeDescriptor.effectiveProviderId,
+          effectiveModel: routeDescriptor.effectiveModel,
+          selectionSource: routeDescriptor.selectionSource,
+          fallbackPolicy: routeDescriptor.fallbackPolicy,
+        },
       },
     });
     const prepared = await host.prepareAgentChatTurn(sessionId, input, {
@@ -538,6 +564,28 @@ export async function* agentSendChatMessageStream(
           thinkingLevel: input.thinkingLevel,
         },
       });
+      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        action: "send",
+        providerId: input.providerId,
+        model: input.model,
+        mode: input.mode,
+        webMode: input.webMode,
+        thinkingLevel: input.thinkingLevel,
+        prefsOverride: input.prefsOverride,
+      });
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.stream.preflight",
+        message: "Resolved streamed send routing before execution",
+        sessionId,
+        providerId: routeDescriptor.effectiveProviderId,
+        modelId: routeDescriptor.effectiveModel,
+        context: {
+          selectionSource: routeDescriptor.selectionSource,
+          fallbackPolicy: routeDescriptor.fallbackPolicy,
+        },
+      });
       const prepared = await host.prepareAgentChatTurn(sessionId, input, {
         branchKind: "append",
       });
@@ -594,6 +642,30 @@ export async function retryChatTurn(
       commandText: overrides.commandText,
       prefsOverride: overrides.prefsOverride,
     };
+    const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+      action: "retry",
+      turnId,
+      providerId: request.providerId,
+      model: request.model,
+      mode: request.mode,
+      webMode: request.webMode,
+      thinkingLevel: request.thinkingLevel,
+      prefsOverride: request.prefsOverride,
+    });
+    host.recordDevDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "chat.turn.retry_preflight",
+      message: "Resolved retry routing before execution",
+      sessionId,
+      turnId,
+      providerId: routeDescriptor.effectiveProviderId,
+      modelId: routeDescriptor.effectiveModel,
+      context: {
+        selectionSource: routeDescriptor.selectionSource,
+        fallbackPolicy: routeDescriptor.fallbackPolicy,
+      },
+    });
     const prepared = await host.prepareAgentChatTurn(sessionId, request, {
       branchKind: "retry",
       sourceTurnId: turnId,
@@ -650,6 +722,30 @@ export async function* retryChatTurnStream(
         commandText: overrides.commandText,
         prefsOverride: overrides.prefsOverride,
       };
+      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        action: "retry",
+        turnId,
+        providerId: request.providerId,
+        model: request.model,
+        mode: request.mode,
+        webMode: request.webMode,
+        thinkingLevel: request.thinkingLevel,
+        prefsOverride: request.prefsOverride,
+      });
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.turn.retry_stream_preflight",
+        message: "Resolved streamed retry routing before execution",
+        sessionId,
+        turnId,
+        providerId: routeDescriptor.effectiveProviderId,
+        modelId: routeDescriptor.effectiveModel,
+        context: {
+          selectionSource: routeDescriptor.selectionSource,
+          fallbackPolicy: routeDescriptor.fallbackPolicy,
+        },
+      });
       const prepared = await host.prepareAgentChatTurn(sessionId, request, {
         branchKind: "retry",
         sourceTurnId: turnId,
@@ -701,6 +797,30 @@ export async function editChatTurn(
       ...input,
       attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
     };
+    const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+      action: "edit",
+      turnId,
+      providerId: request.providerId,
+      model: request.model,
+      mode: request.mode,
+      webMode: request.webMode,
+      thinkingLevel: request.thinkingLevel,
+      prefsOverride: request.prefsOverride,
+    });
+    host.recordDevDiagnostic({
+      level: "info",
+      category: "chat",
+      event: "chat.turn.edit_preflight",
+      message: "Resolved edit routing before execution",
+      sessionId,
+      turnId,
+      providerId: routeDescriptor.effectiveProviderId,
+      modelId: routeDescriptor.effectiveModel,
+      context: {
+        selectionSource: routeDescriptor.selectionSource,
+        fallbackPolicy: routeDescriptor.fallbackPolicy,
+      },
+    });
     const prepared = await host.prepareAgentChatTurn(sessionId, request, {
       branchKind: "edit",
       sourceTurnId: turnId,
@@ -746,6 +866,30 @@ export async function* editChatTurnStream(
         ...input,
         attachments: input.attachments ?? current.userMessage.attachments?.map((item) => item.attachmentId),
       };
+      const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
+        action: "edit",
+        turnId,
+        providerId: request.providerId,
+        model: request.model,
+        mode: request.mode,
+        webMode: request.webMode,
+        thinkingLevel: request.thinkingLevel,
+        prefsOverride: request.prefsOverride,
+      });
+      host.recordDevDiagnostic({
+        level: "info",
+        category: "chat",
+        event: "chat.turn.edit_stream_preflight",
+        message: "Resolved streamed edit routing before execution",
+        sessionId,
+        turnId,
+        providerId: routeDescriptor.effectiveProviderId,
+        modelId: routeDescriptor.effectiveModel,
+        context: {
+          selectionSource: routeDescriptor.selectionSource,
+          fallbackPolicy: routeDescriptor.fallbackPolicy,
+        },
+      });
       const prepared = await host.prepareAgentChatTurn(sessionId, request, {
         branchKind: "edit",
         sourceTurnId: turnId,
@@ -804,6 +948,14 @@ export async function cancelChatTurn(
     cancelled: trace.status === "cancelled",
     trace,
   };
+}
+
+export async function routePreflight(
+  host: ChatTurnPreflightHost,
+  sessionId: string,
+  input: RoutingPreflightRequest,
+): Promise<RoutingPreflightResult> {
+  return preflightChatRoute(host, sessionId, input);
 }
 
 export async function* resumeAgentChatTurnStream(

@@ -1,9 +1,38 @@
-import type { ChatAttachmentRecord, ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
+import type {
+  ChatAttachmentRecord,
+  ChatMode,
+  ChatThreadResponse,
+  RoutingPreflightResult,
+} from "@goatcitadel/contracts";
 import type { ClipboardEvent, DragEvent, KeyboardEvent, RefObject } from "react";
 import { ChatComposerPlusMenu } from "../../components/ChatComposerPlusMenu";
 import { ChatQueueBar, type ChatQueueItemView } from "../../components/chat/ChatQueueBar";
 import { StatusChip } from "../../components/StatusChip";
+import { describeChatUiError } from "./chat-error-copy";
 import { getMissionControlSurfaceConfig } from "./surface-config";
+
+function getCoworkComposerLabel(input: {
+  selectedTurn: ChatThreadResponse["turns"][number] | null;
+  editingTurnId: string | null;
+  sending: boolean;
+}): string {
+  if (input.sending) {
+    return "Sending...";
+  }
+  if (input.editingTurnId) {
+    return "Edit and resend";
+  }
+  if (
+    input.selectedTurn?.trace.status === "waiting_for_approval" ||
+    input.selectedTurn?.trace.status === "waiting_for_user_input"
+  ) {
+    return "Resolve blocker";
+  }
+  if (!input.selectedTurn?.trace.orchestration && !input.selectedTurn?.trace.executionPlan) {
+    return "Start Cowork run";
+  }
+  return "Send instruction";
+}
 
 export function ChatComposerShell(props: {
   mode: ChatMode;
@@ -25,6 +54,9 @@ export function ChatComposerShell(props: {
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   selectedSessionId: string | null;
   currentWebMode: "auto" | "off" | "quick" | "deep";
+  routePreflight: RoutingPreflightResult | null;
+  routeBoundaryAckRequired: boolean;
+  routeBoundaryAcknowledged: boolean;
   sending: boolean;
   canSend: boolean;
   hasActiveStream: boolean;
@@ -39,6 +71,7 @@ export function ChatComposerShell(props: {
   onRemoveQueuedItem: (id: string) => void;
   onCancelEdit: () => void;
   onDismissError: () => void;
+  onAcknowledgeRouteBoundary: () => void;
   onRetryTurn: (turnId: string) => void;
   onSetDeepMode: () => void;
   onReviewRunDetails?: () => void;
@@ -69,6 +102,9 @@ export function ChatComposerShell(props: {
     selectedTurn,
     selectedSessionId,
     currentWebMode,
+    routePreflight,
+    routeBoundaryAckRequired,
+    routeBoundaryAcknowledged,
     sending,
     canSend,
     hasActiveStream,
@@ -83,6 +119,7 @@ export function ChatComposerShell(props: {
     onRemoveQueuedItem,
     onCancelEdit,
     onDismissError,
+    onAcknowledgeRouteBoundary,
     onRetryTurn,
     onSetDeepMode,
     onReviewRunDetails,
@@ -110,6 +147,10 @@ export function ChatComposerShell(props: {
       : mode === "cowork"
         ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
         : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
+  const mappedError = describeChatUiError(error);
+  const currentRouteLabel = routePreflight
+    ? [routePreflight.effectiveProviderId, routePreflight.effectiveModel].filter(Boolean).join(" / ")
+    : null;
 
   return (
     <div
@@ -120,7 +161,12 @@ export function ChatComposerShell(props: {
       onDrop={onDrop}
     >
       {isDragActive ? <div className="chat-drop-overlay">Drop files to attach</div> : null}
-      <ChatQueueBar items={queueItems} onResumeAll={onResumeAll} onRemove={onRemoveQueuedItem} />
+      <ChatQueueBar
+        items={queueItems}
+        title={mode === "cowork" ? "Queued messages" : "Queue"}
+        onResumeAll={onResumeAll}
+        onRemove={onRemoveQueuedItem}
+      />
       {editingTurnId ? (
         <div className="chat-v11-composer-banner">
           Editing branch from turn {editingTurnId.slice(-6)}.
@@ -137,10 +183,66 @@ export function ChatComposerShell(props: {
       ) : null}
       {error ? (
         <div className="chat-v11-composer-banner error" role="alert">
-          {error}
+          <div className="chat-v11-recovery-copy">
+            <strong>{mappedError?.summary ?? error}</strong>
+            {mappedError?.raw ? (
+              <details>
+                <summary>Raw details</summary>
+                <p>{mappedError.raw}</p>
+              </details>
+            ) : null}
+          </div>
           <button type="button" onClick={onDismissError} className="gc-button">
             Dismiss
           </button>
+        </div>
+      ) : null}
+      {mode === "cowork" && routePreflight?.normalizationReason ? (
+        <div className="chat-v11-composer-banner recovery">
+          <div className="chat-v11-recovery-copy">
+            <div className="chat-v11-recovery-head">
+              <StatusChip tone="warning">routing</StatusChip>
+              <strong>Model normalized before execution</strong>
+            </div>
+            <p>{routePreflight.normalizationReason}</p>
+          </div>
+        </div>
+      ) : null}
+      {mode === "cowork" && routePreflight?.blockedReason ? (
+        <div className="chat-v11-composer-banner error" role="alert">
+          <div className="chat-v11-recovery-copy">
+            <strong>{routePreflight.blockedReason}</strong>
+          </div>
+        </div>
+      ) : null}
+      {mode === "cowork" && routePreflight?.degradedReason && !routePreflight.blockedReason ? (
+        <div className="chat-v11-composer-banner recovery">
+          <div className="chat-v11-recovery-copy">
+            <div className="chat-v11-recovery-head">
+              <StatusChip tone="warning">degraded</StatusChip>
+              <strong>{currentRouteLabel ? `Will use ${currentRouteLabel}` : "Route preflight warning"}</strong>
+            </div>
+            <p>{routePreflight.degradedReason}</p>
+          </div>
+        </div>
+      ) : null}
+      {mode === "cowork" && routeBoundaryAckRequired && !routeBoundaryAcknowledged ? (
+        <div className="chat-v11-composer-banner recovery">
+          <div className="chat-v11-recovery-copy">
+            <div className="chat-v11-recovery-head">
+              <StatusChip tone="warning">confirm</StatusChip>
+              <strong>Fallback can cross the current runtime boundary</strong>
+            </div>
+            <p>
+              If the primary route fails, Cowork may continue on a different runtime boundary. Acknowledge that fallback
+              before continuing.
+            </p>
+          </div>
+          <div className="chat-v11-recovery-actions">
+            <button type="button" onClick={onAcknowledgeRouteBoundary} className="gc-button">
+              Acknowledge fallback
+            </button>
+          </div>
         </div>
       ) : null}
       {selectedTurnRecovery &&
@@ -165,7 +267,7 @@ export function ChatComposerShell(props: {
                 onClick={() => onRetryTurn(selectedTurn.turnId)}
                 className="gc-button"
               >
-                Retry turn
+                {mode === "cowork" ? "Retry run step" : "Retry turn"}
               </button>
             ) : null}
             {selectedTurnRecovery.action === "switch_to_deep_mode" && currentWebMode !== "deep" ? (
@@ -180,7 +282,7 @@ export function ChatComposerShell(props: {
             ) : null}
             {onReviewRunDetails ? (
               <button type="button" onClick={onReviewRunDetails} className="gc-button">
-                Review run details
+                {mode === "cowork" ? "Open run details" : "Review run details"}
               </button>
             ) : null}
           </div>
@@ -248,7 +350,13 @@ export function ChatComposerShell(props: {
           </button>
         ) : (
           <button type="button" disabled={!canSend} onClick={onSend} className="gc-button">
-            {sending ? "Sending..." : editingTurnId ? "Edit and resend" : "Send message"}
+            {mode === "cowork"
+              ? getCoworkComposerLabel({ selectedTurn, editingTurnId, sending })
+              : sending
+                ? "Sending..."
+                : editingTurnId
+                  ? "Edit and resend"
+                  : "Send message"}
           </button>
         )}
       </div>

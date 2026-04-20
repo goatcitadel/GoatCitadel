@@ -13,8 +13,11 @@ export async function fetchCronJob(jobId: string): Promise<CronJobRecordResponse
 export async function createCronJob(input: {
   jobId: string;
   name: string;
+  action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  description?: string;
   schedule: string;
   enabled?: boolean;
+  endAt?: string;
 }): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>("/api/v1/cron/jobs", {
     method: "POST",
@@ -26,8 +29,11 @@ export async function updateCronJob(
   jobId: string,
   input: {
     name?: string;
+    action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+    description?: string;
     schedule?: string;
     enabled?: boolean;
+    endAt?: string | null;
   },
 ): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, {

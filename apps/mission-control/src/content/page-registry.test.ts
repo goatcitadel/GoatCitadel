@@ -57,6 +57,43 @@ describe("page-registry route links", () => {
     });
   });
 
+  it("normalizes legacy herd routes into the agent board tab", () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: {
+        location: {
+          href: "http://localhost:5173/?space=configure&page=agents&tab=herd-live",
+        },
+      },
+    });
+
+    expect(readRouteFromLocation()).toMatchObject({
+      space: "configure",
+      page: "agents",
+      tab: "board",
+    });
+  });
+
+  it("supports the agents catalog tab in route parsing", () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: {
+        location: {
+          href: "http://localhost:5173/?space=configure&page=agents&tab=catalog&sessionId=sess-1",
+        },
+      },
+    });
+
+    expect(readRouteFromLocation()).toMatchObject({
+      space: "configure",
+      page: "agents",
+      tab: "catalog",
+      sessionId: "sess-1",
+    });
+  });
+
   it("normalizes legacy observe and tune routes into visible page labels", () => {
     expect(getVisiblePage({ space: "observe", page: "sessions" })).toBe("timeline");
     expect(getVisiblePageLabel({ space: "observe", page: "system" })).toBe("Health");

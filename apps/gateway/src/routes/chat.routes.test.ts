@@ -297,6 +297,54 @@ describe("chat routes additional coverage", () => {
     );
   });
 
+  it("exposes chat route preflight through the gateway route stack", async () => {
+    const routePreflight = vi.fn(async () => ({
+      requestedProviderId: "ollama",
+      requestedModel: "llama3.2",
+      effectiveProviderId: "ollama",
+      effectiveModel: "llama3.2",
+      selectionSource: "global",
+      fallbackPolicy: "armed",
+      fallbackResult: "local_to_cloud",
+      runtimeReachability: "reachable",
+      runtimeClass: "local",
+      degradedReason: "Fallback may move this run from local to cloud if the primary route fails.",
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      routePreflight,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/route-preflight",
+      payload: {
+        action: "send",
+        prefsOverride: {
+          mode: "cowork",
+          webMode: "auto",
+          thinkingLevel: "extended",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledWith("sess-1", {
+      action: "send",
+      prefsOverride: {
+        mode: "cowork",
+        webMode: "auto",
+        thinkingLevel: "extended",
+      },
+    });
+    expect(response.json()).toMatchObject({
+      selectionSource: "global",
+      fallbackResult: "local_to_cloud",
+      runtimeReachability: "reachable",
+    });
+  });
+
   it("emits an error chunk without a fabricated done chunk when SSE streaming fails", async () => {
     const agentSendChatMessageStream = vi.fn(async function* () {
       yield* [];

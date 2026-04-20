@@ -109,6 +109,7 @@ function createService(db: FakeDb, publishRealtime = vi.fn()): CronAutomationSer
     requireFeatureEnabled: () => {},
     isFeatureEnabled: () => true,
     runHandlers: {
+      task: async () => ({ taskId: "task-1" }),
       improvement: async () => {},
       backup: async () => {},
       memoryFlush: async () => {},

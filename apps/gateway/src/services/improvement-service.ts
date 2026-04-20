@@ -566,8 +566,11 @@ export class ImprovementService {
       {
         jobId: "improvement_weekly",
         name: "Self-Improvement Weekly Replay",
+        action: "improvement",
+        description: existing?.description ?? "Run the weekly self-improvement replay cycle.",
         schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
         enabled: existing?.enabled ?? true,
+        endAt: existing?.endAt,
         lastRunAt: existing?.lastRunAt,
         nextRunAt: existing?.nextRunAt,
       },
@@ -1745,7 +1748,8 @@ export class ImprovementService {
         candidateId: `routing-specialist-${report.reportId}`,
         title: "Routing Harness Specialist",
         role: "Researcher",
-        summary: "Review profile gaps, provider routing drift, and tool exposure mismatches before promoting new paths.",
+        summary:
+          "Review profile gaps, provider routing drift, and tool exposure mismatches before promoting new paths.",
         reason: "Routing gaps repeated often enough to warrant a reusable operator-facing specialist candidate.",
         source: "runtime_gap",
         confidence: 0.86,
@@ -1764,7 +1768,8 @@ export class ImprovementService {
         candidateId: `context-specialist-${report.reportId}`,
         title: "Context Recovery Specialist",
         role: "Researcher",
-        summary: "Trace retrieval misses, missing evidence, and context-pack drift into inspectable recovery proposals.",
+        summary:
+          "Trace retrieval misses, missing evidence, and context-pack drift into inspectable recovery proposals.",
         reason: "Repeated evidence misses suggest a focused review loop for context engineering and retrieval tuning.",
         source: "replay",
         confidence: 0.8,
@@ -1805,7 +1810,8 @@ export class ImprovementService {
         candidateId: `trust-specialist-${report.reportId}`,
         title: "Trust Calibration Specialist",
         role: "Product",
-        summary: "Review refusal tone, blocker clarity, and operator-facing trust copy before activation policy changes.",
+        summary:
+          "Review refusal tone, blocker clarity, and operator-facing trust copy before activation policy changes.",
         reason: "Trust posture issues are showing up in replay findings and should stay proposal-backed.",
         source: "replay",
         confidence: 0.74,
@@ -1846,7 +1852,8 @@ export class ImprovementService {
       counts.set(strategy, (counts.get(strategy) ?? 0) + gap.count);
     }
     for (const suggestion of specialistCandidateSuggestions) {
-      const strategy = suggestion.source === "runtime_gap" ? "harden" : suggestion.source === "replay" ? "repair" : "stabilize";
+      const strategy =
+        suggestion.source === "runtime_gap" ? "harden" : suggestion.source === "replay" ? "repair" : "stabilize";
       counts.set(strategy, (counts.get(strategy) ?? 0) + Math.max(1, suggestion.evidenceCount));
     }
     return Array.from(counts.entries())

@@ -400,7 +400,7 @@ export function AgentsPage() {
         eyebrow="Crew"
         title={pageCopy.agents.title}
         subtitle={pageCopy.agents.subtitle}
-        hint="Use Herd HQ to manage built-in and custom goat profiles, adjust role posture, and keep assignment-ready agents easy to inspect."
+        hint="Use the agent board to manage built-in and custom goat profiles, adjust role posture, and keep assignment-ready agents easy to inspect."
         density="compact"
         actions={
           <div className="workflow-summary-strip">
@@ -449,9 +449,7 @@ export function AgentsPage() {
             <StatusChip tone="muted">
               {agentsResponse.items.filter((item) => item.lifecycleStatus === "archived").length} archived
             </StatusChip>
-            <StatusChip tone="muted">
-              {agentsResponse.items.filter((item) => !item.isBuiltin).length} custom
-            </StatusChip>
+            <StatusChip tone="muted">{agentsResponse.items.filter((item) => !item.isBuiltin).length} custom</StatusChip>
           </div>
         }
         secondary={
@@ -487,30 +485,30 @@ export function AgentsPage() {
               </thead>
               <tbody>
                 {directory.map((agent) => (
-                    <tr
-                      key={agent.agentId}
-                      className={agent.agentId === selectedAgentId && !creating ? "row-selected" : ""}
-                      role="button"
-                      tabIndex={0}
-                      aria-pressed={agent.agentId === selectedAgentId && !creating}
-                      onClick={() => {
-                        setCreating(false);
-                        setSelectedAgentId(agent.agentId);
-                      }}
-                      onKeyDown={(event) => handleDirectoryRowKeyDown(event, agent.agentId)}
-                    >
-                      <td>{agent.name}</td>
-                      <td>
-                        {agent.roleId}
-                        {agent.isBuiltin ? <span className="token-chip">built-in</span> : null}
-                      </td>
-                      <td>{agent.lifecycleStatus}</td>
-                      <td>{agent.status}</td>
-                      <td>
-                        {agent.activeSessions}/{agent.sessionCount}
-                      </td>
-                    </tr>
-                  ))}
+                  <tr
+                    key={agent.agentId}
+                    className={agent.agentId === selectedAgentId && !creating ? "row-selected" : ""}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={agent.agentId === selectedAgentId && !creating}
+                    onClick={() => {
+                      setCreating(false);
+                      setSelectedAgentId(agent.agentId);
+                    }}
+                    onKeyDown={(event) => handleDirectoryRowKeyDown(event, agent.agentId)}
+                  >
+                    <td>{agent.name}</td>
+                    <td>
+                      {agent.roleId}
+                      {agent.isBuiltin ? <span className="token-chip">built-in</span> : null}
+                    </td>
+                    <td>{agent.lifecycleStatus}</td>
+                    <td>{agent.status}</td>
+                    <td>
+                      {agent.activeSessions}/{agent.sessionCount}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </Panel>
@@ -524,166 +522,166 @@ export function AgentsPage() {
                 : "Use the editor to adjust titles, summaries, specialties, and lifecycle posture."
             }
           >
-          {creating || selected ? (
-            <>
-              <FieldHelp>
-                Built-in roles stay protected. Custom roles are safe to create, archive, restore, and permanently delete
-                from here.
-              </FieldHelp>
-              <div className="controls-row">
-                <label htmlFor="agentRoleId">Role ID</label>
+            {creating || selected ? (
+              <>
+                <FieldHelp>
+                  Built-in roles stay protected. Custom roles are safe to create, archive, restore, and permanently
+                  delete from here.
+                </FieldHelp>
+                <div className="controls-row">
+                  <label htmlFor="agentRoleId">Role ID</label>
+                  {creating ? (
+                    <input
+                      id="agentRoleId"
+                      value={form.roleId}
+                      onChange={(event) => setForm((prev) => ({ ...prev, roleId: event.target.value }))}
+                      placeholder="writer-goat"
+                      autoComplete="off"
+                    />
+                  ) : (
+                    <SelectOrCustom
+                      id="agentRoleId"
+                      value={form.roleId}
+                      onChange={() => undefined}
+                      options={roleOptions}
+                      customPlaceholder="role-id"
+                      customLabel="Role ID"
+                      allowCustom={false}
+                      disabled
+                    />
+                  )}
+                </div>
                 {creating ? (
-                  <input
-                    id="agentRoleId"
-                    value={form.roleId}
-                    onChange={(event) => setForm((prev) => ({ ...prev, roleId: event.target.value }))}
-                    placeholder="writer-goat"
-                    autoComplete="off"
-                  />
-                ) : (
-                  <SelectOrCustom
-                    id="agentRoleId"
-                    value={form.roleId}
-                    onChange={() => undefined}
-                    options={roleOptions}
-                    customPlaceholder="role-id"
-                    customLabel="Role ID"
-                    allowCustom={false}
-                    disabled
-                  />
-                )}
-              </div>
-              {creating ? (
-                <p className="office-subtitle">
-                  Role ID must be unique. Creating a custom agent never modifies built-in roles.
-                </p>
-              ) : null}
-              {creating ? (
-                <p className={`office-subtitle ${roleIdAvailability === "taken" ? "error" : ""}`}>
-                  {roleIdAvailability === "available"
-                    ? `Role ID is available: ${normalizedRoleIdCandidate}`
-                    : roleIdAvailability === "taken"
-                      ? "That Role ID is already used. Choose a new one."
-                      : "Enter a Role ID using letters, numbers, hyphens, or underscores."}
-                </p>
-              ) : null}
-
-              <div className="controls-row">
-                <label htmlFor="agentName">Name</label>
-                <input
-                  id="agentName"
-                  value={form.name}
-                  onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                  placeholder="Agent display name"
-                />
-              </div>
-
-              <div className="controls-row">
-                <label htmlFor="agentTitle">Title</label>
-                <SelectOrCustom
-                  id="agentTitle"
-                  value={form.title}
-                  onChange={(value) => setForm((prev) => ({ ...prev, title: value }))}
-                  options={TITLE_OPTIONS}
-                  customPlaceholder="Custom title"
-                  customLabel="Title"
-                />
-              </div>
-
-              <div className="controls-row">
-                <label htmlFor="agentSummary">Summary</label>
-                <textarea
-                  id="agentSummary"
-                  value={form.summary}
-                  onChange={(event) => setForm((prev) => ({ ...prev, summary: event.target.value }))}
-                  placeholder="What this agent does"
-                  rows={3}
-                />
-              </div>
-
-              <div className="controls-row">
-                <label htmlFor="agentSpecialties">Specialties (one per line)</label>
-                <textarea
-                  id="agentSpecialties"
-                  value={form.specialtiesText}
-                  onChange={(event) => setForm((prev) => ({ ...prev, specialtiesText: event.target.value }))}
-                  rows={3}
-                />
-              </div>
-
-              <div className="controls-row">
-                <label htmlFor="agentDefaultTools">Default tools (one per line)</label>
-                <textarea
-                  id="agentDefaultTools"
-                  value={form.defaultToolsText}
-                  onChange={(event) => setForm((prev) => ({ ...prev, defaultToolsText: event.target.value }))}
-                  rows={3}
-                />
-              </div>
-
-              <div className="controls-row">
-                <label htmlFor="agentAliases">Aliases (one per line)</label>
-                <textarea
-                  id="agentAliases"
-                  value={form.aliasesText}
-                  onChange={(event) => setForm((prev) => ({ ...prev, aliasesText: event.target.value }))}
-                  rows={3}
-                />
-              </div>
-
-              <ChangeReviewPanel
-                title="Agent Change Review"
-                overall={risk.overall}
-                items={risk.items}
-                requireCriticalConfirm
-                criticalConfirmed={criticalConfirmed}
-                onCriticalConfirmChange={setCriticalConfirmed}
-              />
-
-              <div className="controls-row">
-                <button
-                  type="button"
-                  onClick={() => void onSave()}
-                  disabled={saving || Boolean(createDisabledReason)}
-                  title={createDisabledReason ?? undefined}
-                  className="gc-button"
-                >
-                  {saving ? "Saving..." : creating ? "Create Agent" : "Save Changes"}
-                </button>
-                {creating && createDisabledReason ? (
-                  <span className="office-subtitle">{createDisabledReason}</span>
+                  <p className="office-subtitle">
+                    Role ID must be unique. Creating a custom agent never modifies built-in roles.
+                  </p>
                 ) : null}
-                {!creating && selected && selected.lifecycleStatus === "active" ? (
+                {creating ? (
+                  <p className={`office-subtitle ${roleIdAvailability === "taken" ? "error" : ""}`}>
+                    {roleIdAvailability === "available"
+                      ? `Role ID is available: ${normalizedRoleIdCandidate}`
+                      : roleIdAvailability === "taken"
+                        ? "That Role ID is already used. Choose a new one."
+                        : "Enter a Role ID using letters, numbers, hyphens, or underscores."}
+                  </p>
+                ) : null}
+
+                <div className="controls-row">
+                  <label htmlFor="agentName">Name</label>
+                  <input
+                    id="agentName"
+                    value={form.name}
+                    onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                    placeholder="Agent display name"
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentTitle">Title</label>
+                  <SelectOrCustom
+                    id="agentTitle"
+                    value={form.title}
+                    onChange={(value) => setForm((prev) => ({ ...prev, title: value }))}
+                    options={TITLE_OPTIONS}
+                    customPlaceholder="Custom title"
+                    customLabel="Title"
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentSummary">Summary</label>
+                  <textarea
+                    id="agentSummary"
+                    value={form.summary}
+                    onChange={(event) => setForm((prev) => ({ ...prev, summary: event.target.value }))}
+                    placeholder="What this agent does"
+                    rows={3}
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentSpecialties">Specialties (one per line)</label>
+                  <textarea
+                    id="agentSpecialties"
+                    value={form.specialtiesText}
+                    onChange={(event) => setForm((prev) => ({ ...prev, specialtiesText: event.target.value }))}
+                    rows={3}
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentDefaultTools">Default tools (one per line)</label>
+                  <textarea
+                    id="agentDefaultTools"
+                    value={form.defaultToolsText}
+                    onChange={(event) => setForm((prev) => ({ ...prev, defaultToolsText: event.target.value }))}
+                    rows={3}
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentAliases">Aliases (one per line)</label>
+                  <textarea
+                    id="agentAliases"
+                    value={form.aliasesText}
+                    onChange={(event) => setForm((prev) => ({ ...prev, aliasesText: event.target.value }))}
+                    rows={3}
+                  />
+                </div>
+
+                <ChangeReviewPanel
+                  title="Agent Change Review"
+                  overall={risk.overall}
+                  items={risk.items}
+                  requireCriticalConfirm
+                  criticalConfirmed={criticalConfirmed}
+                  onCriticalConfirmChange={setCriticalConfirmed}
+                />
+
+                <div className="controls-row">
                   <button
                     type="button"
-                    onClick={() => setConfirmAction({ type: "archive", name: selected.name })}
+                    onClick={() => void onSave()}
+                    disabled={saving || Boolean(createDisabledReason)}
+                    title={createDisabledReason ?? undefined}
                     className="gc-button"
                   >
-                    {globalCopy.common.archive}
+                    {saving ? "Saving..." : creating ? "Create Agent" : "Save Changes"}
                   </button>
-                ) : null}
-                {!creating && selected && selected.lifecycleStatus === "archived" ? (
-                  <button type="button" onClick={() => void onRestore()} className="gc-button">
-                    {globalCopy.common.restore}
-                  </button>
-                ) : null}
-                {!creating && selected && !selected.isBuiltin ? (
-                  <button
-                    type="button"
-                    className="gc-button danger"
-                    onClick={() => setConfirmAction({ type: "hardDelete", name: selected.name })}
-                  >
-                    {globalCopy.common.deletePermanently}
-                  </button>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <GCEmptyState
-              title="Select an agent"
-              subtitle="Choose a role from the directory to inspect or edit its posture."
-            />
-          )}
+                  {creating && createDisabledReason ? (
+                    <span className="office-subtitle">{createDisabledReason}</span>
+                  ) : null}
+                  {!creating && selected && selected.lifecycleStatus === "active" ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmAction({ type: "archive", name: selected.name })}
+                      className="gc-button"
+                    >
+                      {globalCopy.common.archive}
+                    </button>
+                  ) : null}
+                  {!creating && selected && selected.lifecycleStatus === "archived" ? (
+                    <button type="button" onClick={() => void onRestore()} className="gc-button">
+                      {globalCopy.common.restore}
+                    </button>
+                  ) : null}
+                  {!creating && selected && !selected.isBuiltin ? (
+                    <button
+                      type="button"
+                      className="gc-button danger"
+                      onClick={() => setConfirmAction({ type: "hardDelete", name: selected.name })}
+                    >
+                      {globalCopy.common.deletePermanently}
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <GCEmptyState
+                title="Select an agent"
+                subtitle="Choose a role from the directory to inspect or edit its posture."
+              />
+            )}
           </Panel>
         }
       />

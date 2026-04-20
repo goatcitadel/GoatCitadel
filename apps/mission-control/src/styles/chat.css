@@ -1017,6 +1017,26 @@
   gap: 8px;
 }
 
+.chat-cowork-board-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: start;
+}
+
+.chat-cowork-board-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-cowork-board-note {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .chat-cowork-panel > header h4,
 .chat-code-workbench-head h4 {
   margin: 0;
@@ -1040,6 +1060,16 @@
 .chat-code-workbench-posture-row {
   display: grid;
   gap: 10px;
+}
+
+.chat-cowork-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .chat-cowork-stage-strip {
@@ -1080,6 +1110,24 @@
 .chat-cowork-section {
   display: grid;
   gap: 8px;
+}
+
+.chat-cowork-progress-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-cowork-progress-group {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-cowork-subsection-label {
+  margin: 0;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .chat-cowork-section-callout {
@@ -1253,6 +1301,75 @@
 
 .chat-cowork-overflow-note {
   margin: 0;
+}
+
+.chat-cowork-blocker .gc-button {
+  flex: 0 0 auto;
+}
+
+.chat-cowork-raw-details {
+  display: grid;
+  gap: 6px;
+}
+
+.chat-cowork-raw-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.chat-run-details-tabs,
+.chat-run-details-content {
+  display: grid;
+  gap: 12px;
+}
+
+.chat-run-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.chat-run-details-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-inset) 86%, transparent);
+}
+
+.chat-run-details-card span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-run-details-card strong {
+  font-size: 0.88rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-run-details-raw {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-inset) 88%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-v11-cowork-settings-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-v11-cowork-settings-copy {
+  display: grid;
+  gap: 4px;
 }
 
 .chat-trace-card,

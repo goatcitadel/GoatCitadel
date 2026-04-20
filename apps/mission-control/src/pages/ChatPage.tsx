@@ -1,9 +1,10 @@
 /* eslint-disable max-lines -- ChatPage remains the top-level orchestration entrypoint while behavior lives in focused hooks and dock sections. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatAttachmentRecord,
   ChatMode,
   ChatModePresetRecord,
+  RoutingPreflightResult,
   ChatSessionPrefsPatch,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
@@ -21,6 +22,7 @@ import { PageHeader } from "../components/PageHeader";
 import { StatusChip } from "../components/StatusChip";
 import type { ChatStreamStatus } from "../components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "../components/chat/ChatThreadView";
+import { deriveCoworkRunViewModel } from "../components/cowork-view-model";
 import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { pageCopy } from "../content/copy";
@@ -64,6 +66,7 @@ import { useChatSessionData } from "./chat/useChatSessionData";
 import { useChatSessionControls } from "./chat/useChatSessionControls";
 import { useChatDockWorkbenchController } from "./chat/useChatDockWorkbenchController";
 import { useChatProviderRoutingController } from "./chat/useChatProviderRoutingController";
+import { useChatRoutePreflight } from "./chat/useChatRoutePreflight";
 import type { ActiveChatDelegationRun } from "./chat/useChatDelegationPolicyActions";
 import {
   resolveOutboundDraftContent,
@@ -100,6 +103,84 @@ export {
 };
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
+
+function formatSelectionSourceSummary(source?: RoutingPreflightResult["selectionSource"]): string {
+  switch (source) {
+    case "session":
+      return "Selection: session";
+    case "global":
+      return "Selection: global";
+    case "manual":
+      return "Selection: manual";
+    default:
+      return "Selection: pending";
+  }
+}
+
+function formatRoutingTargetSummary(labels: Map<string, string>, providerId?: string, model?: string): string {
+  return formatWorkProviderModelSummary(providerId ? (labels.get(providerId) ?? providerId) : undefined, model);
+}
+
+function formatFallbackSummary(preflight: RoutingPreflightResult | null): {
+  summary: string;
+  tone: WorkTrustDescriptor["fallbackTone"];
+} {
+  if (!preflight || preflight.fallbackPolicy === "off") {
+    return {
+      summary: "Fallback off",
+      tone: "muted",
+    };
+  }
+  if (preflight.fallbackResult === "local_to_cloud") {
+    return {
+      summary: "Fallback armed · local to cloud",
+      tone: "warning",
+    };
+  }
+  if (preflight.fallbackResult === "cloud_to_local") {
+    return {
+      summary: "Fallback armed · cloud to local",
+      tone: "warning",
+    };
+  }
+  return {
+    summary: "Fallback armed",
+    tone: "warning",
+  };
+}
+
+function formatRuntimeSummary(preflight: RoutingPreflightResult | null): {
+  summary: string;
+  tone: WorkTrustDescriptor["runtimeTone"];
+} {
+  switch (preflight?.runtimeReachability) {
+    case "reachable":
+      return {
+        summary: preflight.runtimeClass === "local" ? "Runtime reachable" : "Provider reachable",
+        tone: "success",
+      };
+    case "unreachable":
+      return {
+        summary: preflight.runtimeClass === "local" ? "Runtime unreachable" : "Provider unreachable",
+        tone: "critical",
+      };
+    case "models_unavailable":
+      return {
+        summary: preflight.runtimeClass === "local" ? "Models unavailable" : "Provider degraded",
+        tone: "warning",
+      };
+    case "not_checked":
+    default:
+      return {
+        summary: "Runtime not checked",
+        tone: "muted",
+      };
+  }
+}
+
+function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null): boolean {
+  return preflight?.fallbackResult === "local_to_cloud" || preflight?.fallbackResult === "cloud_to_local";
+}
 
 export function ChatPage({
   workspaceId = "default",
@@ -358,6 +439,11 @@ export function ChatPage({
     selectedModel,
     selectedProviderLabel,
     selectedModelLabel,
+    requestedProviderLabel,
+    requestedModelLabel,
+    selectionSourceLabel,
+    runtimeSummary,
+    runtimeTone,
     providerOptions,
   } = useChatProviderRoutingController({
     runtimeLlmConfig,
@@ -372,6 +458,28 @@ export function ChatPage({
     mcpServers,
     mcpTemplates,
   });
+  const routePreflight = useChatRoutePreflight({
+    sessionId: selectedSessionId,
+    prefs,
+    displayAction: editingTurnId ? "edit" : "send",
+    displayTurnId: editingTurnId,
+    enabled: Boolean(selectedSessionId),
+  });
+  const [acknowledgedRoutePreflightHashes, setAcknowledgedRoutePreflightHashes] = useState<Record<string, true>>({});
+  const currentRoutePreflight = routePreflight.result;
+  const currentRoutePreflightHash = routePreflight.resultHash;
+  const currentRouteBoundaryAcknowledged = Boolean(
+    currentRoutePreflightHash && acknowledgedRoutePreflightHashes[currentRoutePreflightHash],
+  );
+  const acknowledgeCurrentRouteBoundary = useCallback(() => {
+    if (!currentRoutePreflightHash) {
+      return;
+    }
+    setAcknowledgedRoutePreflightHashes((current) => ({
+      ...current,
+      [currentRoutePreflightHash]: true,
+    }));
+  }, [currentRoutePreflightHash]);
 
   useEffect(() => {
     if (!lockSurface) {
@@ -477,6 +585,7 @@ export function ChatPage({
     handleMemoryStatusUpdate,
     handleRebuildLearnedMemory,
     handleCreateSpecialistDraft,
+    handleActivateCatalogSpecialist,
     handleSpecialistCandidatePatch,
     handleCapabilitySuggestionAction,
     confirmCapabilitySuggestionAction,
@@ -485,9 +594,6 @@ export function ChatPage({
   const outbound = useChatOutboundExecution({
     selectedSessionId,
     selectedSession,
-    providerOptions,
-    selectedProviderId,
-    selectedModel,
     streamEnabled,
     sending,
     error,
@@ -507,13 +613,14 @@ export function ChatPage({
     loadSidebar,
     loadSessionCoreState,
     ensureSession,
-    getCachedModels,
     pushLocalNotice,
     handleCommandExecution,
     executeOutboundItemRef,
     tryBeginOutboundExecutionRef,
     applyFetchedThreadRef,
     messageMutationVersionRef,
+    ensureFreshRoutePreflight: (next) => routePreflight.ensureFreshPreflight(next),
+    isRoutePreflightAcknowledged: (hash) => Boolean(acknowledgedRoutePreflightHashes[hash]),
   });
   const {
     pendingApproval,
@@ -676,6 +783,7 @@ export function ChatPage({
   const {
     dockOpen,
     setDockOpen,
+    activeWorkflowTurn,
     workbenchState,
     workbenchTree,
     selectedWorkbenchFile,
@@ -692,6 +800,7 @@ export function ChatPage({
     orchestrationCheckpoints,
     orchestrationLoading,
     orchestrationError,
+    refreshOrchestrationRun,
     coworkItems,
     selectedSessionProjectValue,
     dockSectionStyle,
@@ -705,11 +814,124 @@ export function ChatPage({
     localNotices,
     dockSectionOrder,
   });
+  const providerLabelById = useMemo(
+    () => new Map(providerOptions.map((provider) => [provider.providerId, provider.label])),
+    [providerOptions],
+  );
+  const activeRouting = activeWorkflowTurn?.trace.routing;
+  const requestedProviderModelSummary = activeRouting
+    ? formatRoutingTargetSummary(providerLabelById, activeRouting.primaryProviderId, activeRouting.primaryModel)
+    : currentRoutePreflight
+      ? formatRoutingTargetSummary(
+          providerLabelById,
+          currentRoutePreflight.requestedProviderId,
+          currentRoutePreflight.requestedModel,
+        )
+      : formatWorkProviderModelSummary(requestedProviderLabel, requestedModelLabel);
+  const effectiveProviderModelSummary = activeRouting
+    ? formatRoutingTargetSummary(
+        providerLabelById,
+        activeRouting.effectiveProviderId ?? activeRouting.primaryProviderId,
+        activeRouting.effectiveModel ?? activeWorkflowTurn?.trace.model ?? activeRouting.primaryModel,
+      )
+    : currentRoutePreflight
+      ? formatRoutingTargetSummary(
+          providerLabelById,
+          currentRoutePreflight.effectiveProviderId ?? currentRoutePreflight.requestedProviderId,
+          currentRoutePreflight.effectiveModel ?? currentRoutePreflight.requestedModel,
+        )
+      : formatWorkProviderModelSummary(selectedProviderLabel, selectedModelLabel);
+  const preflightFallback = formatFallbackSummary(currentRoutePreflight);
+  const fallbackSummary = activeRouting?.fallbackUsed
+    ? activeRouting.fallbackReason
+      ? `Fallback used · ${activeRouting.fallbackReason}`
+      : "Fallback used"
+    : activeRouting?.fallbackProviderId || activeRouting?.fallbackModel || activeRouting?.fallbackReason
+      ? activeRouting?.fallbackReason
+        ? `Fallback armed · ${activeRouting.fallbackReason}`
+        : "Fallback armed"
+      : preflightFallback.summary;
+  const fallbackTone = activeRouting?.fallbackUsed
+    ? "warning"
+    : activeRouting?.fallbackProviderId || activeRouting?.fallbackModel || activeRouting?.fallbackReason
+      ? "warning"
+      : preflightFallback.tone;
+  const preflightRuntime = formatRuntimeSummary(currentRoutePreflight);
+  const selectionSourceSummary = currentRoutePreflight
+    ? formatSelectionSourceSummary(currentRoutePreflight.selectionSource)
+    : selectionSourceLabel;
+  const coworkViewModel = useMemo(
+    () =>
+      deriveCoworkRunViewModel({
+        items: coworkItems,
+        orchestration: latestOrchestration ?? undefined,
+        orchestrationRun,
+        orchestrationCheckpoints,
+        orchestrationLoading,
+        orchestrationError,
+        executionPlan: activeWorkflowTurn?.trace.executionPlan,
+        delegationRun: activeDelegationRun,
+        activeTurn: activeWorkflowTurn,
+        selectedTurn,
+        workbenchState,
+      }),
+    [
+      activeDelegationRun,
+      activeWorkflowTurn,
+      coworkItems,
+      latestOrchestration,
+      orchestrationCheckpoints,
+      orchestrationError,
+      orchestrationLoading,
+      orchestrationRun,
+      selectedTurn,
+      workbenchState,
+    ],
+  );
+  const sessionTrust = useMemo<WorkTrustDescriptor>(
+    () =>
+      workTrust ?? {
+        workspaceLabel: workspaceName,
+        gatewayTone: "muted",
+        gatewayLabel: "Gateway state unavailable",
+        approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
+        activeModeLabel: activeModePreset.label,
+        providerModelSummary: effectiveProviderModelSummary,
+        requestedProviderModelSummary,
+        effectiveProviderModelSummary,
+        selectionSourceSummary,
+        fallbackSummary,
+        fallbackTone,
+        runtimeSummary: currentRoutePreflight ? preflightRuntime.summary : runtimeSummary,
+        runtimeTone: currentRoutePreflight ? preflightRuntime.tone : runtimeTone,
+      },
+    [
+      activeModePreset.label,
+      approvalsCount,
+      currentRoutePreflight,
+      effectiveProviderModelSummary,
+      fallbackSummary,
+      fallbackTone,
+      preflightRuntime.summary,
+      preflightRuntime.tone,
+      requestedProviderModelSummary,
+      runtimeSummary,
+      runtimeTone,
+      selectionSourceSummary,
+      workTrust,
+      workspaceName,
+    ],
+  );
+  const coworkRouteBlocked = messageMode === "cowork" ? currentRoutePreflight?.blockedReason : undefined;
+  const coworkRouteBoundaryAckRequired =
+    messageMode === "cowork" && requiresBoundaryAcknowledgment(currentRoutePreflight);
   const canSend =
     Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
     !sending &&
     !pendingApproval &&
-    !pendingUserInput;
+    !pendingUserInput &&
+    !coworkRouteBlocked &&
+    (!coworkRouteBoundaryAckRequired || currentRouteBoundaryAcknowledged);
 
   const handleRunCodeHelper = useCallback(
     async (language: string, source: string) => {
@@ -808,6 +1030,14 @@ export function ChatPage({
     setSelectedTurnId(selectedTurn.turnId);
     setDockOpen(true);
   }, [selectedTurn, setDockOpen]);
+  const handleRevealActiveTurnDetails = useCallback(() => {
+    const nextTurn = activeWorkflowTurn ?? selectedTurn;
+    if (!nextTurn) {
+      return;
+    }
+    setSelectedTurnId(nextTurn.turnId);
+    setDockOpen(true);
+  }, [activeWorkflowTurn, selectedTurn, setDockOpen]);
 
   const handleSelectBranchTurnAndSync = useCallback(
     async (turnId: string) => {
@@ -874,7 +1104,9 @@ export function ChatPage({
 
   const rootClassName = `chat-v11 mode-${messageMode}${lockSurface ? " shell-owned-surface" : ""}`;
   const visibleDelegationRun =
-    activeDelegationRun?.attachedTurnId && selectedTurn && activeDelegationRun.attachedTurnId !== selectedTurn.turnId
+    activeDelegationRun?.attachedTurnId &&
+    activeWorkflowTurn &&
+    activeDelegationRun.attachedTurnId !== activeWorkflowTurn.turnId
       ? null
       : activeDelegationRun;
   if (loading) {
@@ -928,6 +1160,7 @@ export function ChatPage({
         messageMode,
         selectedSession,
         selectedTurn,
+        activeWorkflowTurn,
         selectedProject,
         isCoworkSurface,
         isCodeSurface,
@@ -950,11 +1183,14 @@ export function ChatPage({
         orchestrationCheckpoints,
         orchestrationLoading,
         orchestrationError,
-        coworkItems,
+        coworkViewModel,
         activeDelegationRun: visibleDelegationRun,
         onOpenTasks,
         handleRetryTurn,
         handleStopActiveTurn,
+        refreshOrchestrationRun,
+        onFocusComposer: () => composerRef.current?.focus(),
+        onOpenRunDetails: () => handleRevealActiveTurnDetails(),
         sessionRail: (
           <ChatSessionSidebar
             mode={messageMode}
@@ -991,17 +1227,7 @@ export function ChatPage({
             mode={messageMode}
             sessionTitle={selectedSessionLabel}
             summary={workspaceSummaryText}
-            trust={
-              workTrust ?? {
-                workspaceLabel: workspaceName,
-                gatewayTone: "muted",
-                gatewayLabel: "Gateway state unavailable",
-                approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
-                activeModeLabel: activeModePreset.label,
-                providerModelSummary: formatWorkProviderModelSummary(selectedProviderLabel, selectedModelLabel),
-                runtimeSummary: "Runtime summary unavailable",
-              }
-            }
+            trust={sessionTrust}
             dockOpen={dockOpen}
             onToggleDock={handleToggleDock}
             loading={messagesLoading}
@@ -1055,6 +1281,9 @@ export function ChatPage({
             selectedTurn={selectedTurn}
             selectedSessionId={selectedSessionId}
             currentWebMode={prefs?.webMode ?? "auto"}
+            routePreflight={currentRoutePreflight}
+            routeBoundaryAckRequired={Boolean(coworkRouteBoundaryAckRequired)}
+            routeBoundaryAcknowledged={currentRouteBoundaryAcknowledged}
             sending={sending}
             canSend={canSend}
             hasActiveStream={Boolean(activeStreamRef.current)}
@@ -1069,6 +1298,7 @@ export function ChatPage({
             onRemoveQueuedItem={handleRemoveQueuedItem}
             onCancelEdit={handleCancelEdit}
             onDismissError={handleDismissError}
+            onAcknowledgeRouteBoundary={acknowledgeCurrentRouteBoundary}
             onSetDeepMode={() => handleSetDeepMode()}
             onReviewRunDetails={handleRevealSelectedTurnDetails}
             onDraftChange={setDraft}
@@ -1123,10 +1353,13 @@ export function ChatPage({
             selectedSessionId={selectedSessionId}
             showTracePanel={showTracePanel}
             selectedTurn={selectedTurn}
+            routePreflight={currentRoutePreflight}
+            providerLabelById={providerLabelById}
             showSuggestionsPanel={showSuggestionsPanel}
             showLearnedMemoryPanel={showLearnedMemoryPanel}
             latestOrchestration={latestOrchestration}
             coworkItems={coworkItems}
+            coworkViewModel={coworkViewModel}
             proactiveStatus={proactiveStatus}
             proactiveRuns={proactiveRuns}
             proactiveSuggestionCount={proactiveSuggestionCount}
@@ -1156,6 +1389,7 @@ export function ChatPage({
             onRunCodeDelegation={handleRunCodeDelegation}
             onCapabilitySuggestionAction={handleCapabilitySuggestionAction}
             onCreateSpecialistDraft={handleCreateSpecialistDraft}
+            onActivateCatalogSpecialist={handleActivateCatalogSpecialist}
             onSpecialistCandidatePatch={handleSpecialistCandidatePatch}
             onAcceptDelegation={handleAcceptDelegation}
             onRebuildLearnedMemory={handleRebuildLearnedMemory}
@@ -1221,6 +1455,7 @@ function renderWorkSurface(input: {
   messageMode: ChatMode;
   selectedSession: ReturnType<typeof useChatThreadController>["selectedSession"];
   selectedTurn: ReturnType<typeof useMissionControlSurfaceState>["selectedTurn"];
+  activeWorkflowTurn: ReturnType<typeof useChatDockWorkbenchController>["activeWorkflowTurn"];
   selectedProject: ReturnType<typeof useChatThreadController>["selectedProject"];
   isCoworkSurface: boolean;
   isCodeSurface: boolean;
@@ -1243,11 +1478,14 @@ function renderWorkSurface(input: {
   orchestrationCheckpoints: ReturnType<typeof useChatDockWorkbenchController>["orchestrationCheckpoints"];
   orchestrationLoading: ReturnType<typeof useChatDockWorkbenchController>["orchestrationLoading"];
   orchestrationError: ReturnType<typeof useChatDockWorkbenchController>["orchestrationError"];
-  coworkItems: ReturnType<typeof useChatDockWorkbenchController>["coworkItems"];
+  coworkViewModel: ReturnType<typeof deriveCoworkRunViewModel>;
   activeDelegationRun: ActiveChatDelegationRun | null;
   onOpenTasks: () => void;
   handleRetryTurn: (turnId: string) => Promise<void>;
   handleStopActiveTurn: () => Promise<void>;
+  refreshOrchestrationRun: () => Promise<void>;
+  onFocusComposer: () => void;
+  onOpenRunDetails: () => void;
   sessionRail: React.ReactNode;
   primaryColumn: React.ReactNode;
   contextDock: React.ReactNode;
@@ -1262,27 +1500,21 @@ function renderWorkSurface(input: {
   };
 
   if (input.selectedSession && input.isCoworkSurface) {
-    const selectedTurn = input.selectedTurn;
+    const activeWorkflowTurn = input.activeWorkflowTurn;
     return (
       <CoworkWorkSurface
         {...baseProps}
         coworkPanel={{
-          items: input.coworkItems,
-          orchestration: input.latestOrchestration ?? undefined,
-          orchestrationRun: input.orchestrationRun,
-          orchestrationCheckpoints: input.orchestrationCheckpoints,
-          orchestrationLoading: input.orchestrationLoading,
-          orchestrationError: input.orchestrationError,
-          executionPlan: selectedTurn?.trace.executionPlan,
-          delegationRun: input.activeDelegationRun,
-          selectedTurn,
-          workbenchState: input.workbenchState,
-          onRetryTurn: selectedTurn ? () => void input.handleRetryTurn(selectedTurn.turnId) : undefined,
+          viewModel: input.coworkViewModel,
+          onRetryTurn: activeWorkflowTurn ? () => void input.handleRetryTurn(activeWorkflowTurn.turnId) : undefined,
           onStopTurn:
-            selectedTurn && isChatTurnActiveStatus(selectedTurn.trace.status)
+            activeWorkflowTurn && isChatTurnActiveStatus(activeWorkflowTurn.trace.status)
               ? () => void input.handleStopActiveTurn()
               : undefined,
           onOpenTasks: input.onOpenTasks,
+          onOpenDetails: input.onOpenRunDetails,
+          onFocusComposer: input.onFocusComposer,
+          onRefreshRunState: () => void input.refreshOrchestrationRun(),
         }}
       />
     );

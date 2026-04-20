@@ -113,7 +113,7 @@ const specialistCandidateSuggestionSchema = z.object({
   role: z.string().min(1),
   summary: z.string().min(1),
   reason: z.string().min(1),
-  source: z.enum(["manual", "runtime_gap", "replay"]),
+  source: z.enum(["manual", "runtime_gap", "replay", "catalog"]),
   confidence: z.coerce.number().min(0).max(1),
   suggestedStatus: z.enum(["suggested", "drafted", "disabled"]),
   suggestedRoutingMode: z.enum(["disabled", "manual_only", "strong_match_only"]),

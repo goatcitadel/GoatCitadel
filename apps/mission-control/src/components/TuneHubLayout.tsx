@@ -15,6 +15,7 @@ interface TuneHubSummaryItem {
 }
 
 interface TuneHubLayoutProps<TTab extends string> {
+  className?: string;
   title: string;
   subtitle: ReactNode;
   summaries?: TuneHubSummaryItem[];
@@ -30,6 +31,7 @@ interface TuneHubLayoutProps<TTab extends string> {
 }
 
 export function TuneHubLayout<TTab extends string>({
+  className,
   title,
   subtitle,
   summaries,
@@ -62,7 +64,7 @@ export function TuneHubLayout<TTab extends string>({
   }, [detailBody, guideBody, guideTitle, registerEntry, subtitle, title]);
 
   return (
-    <section className="space-page stack-lg tune-hub-layout">
+    <section className={`space-page stack-lg tune-hub-layout${className ? ` ${className}` : ""}`}>
       <SectionTitle title={title} subtitle={subtitle} density="compact" />
       {visibleSummaries.length > 0 ? (
         summaryMode === "posture" ? (

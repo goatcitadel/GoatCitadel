@@ -4,8 +4,11 @@ import type { DatabaseClient } from "./db.js";
 interface CronJobRow {
   job_id: string;
   name: string;
+  action: string;
+  description: string | null;
   schedule: string;
   enabled: number;
+  end_at: string | null;
   last_run_at: string | null;
   next_run_at: string | null;
   updated_at: string;
@@ -20,14 +23,17 @@ export class CronJobRepository {
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO cron_jobs (
-        job_id, name, schedule, enabled, last_run_at, next_run_at, updated_at
+        job_id, name, action, description, schedule, enabled, end_at, last_run_at, next_run_at, updated_at
       ) VALUES (
-        @jobId, @name, @schedule, @enabled, @lastRunAt, @nextRunAt, @updatedAt
+        @jobId, @name, @action, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @updatedAt
       )
       ON CONFLICT(job_id) DO UPDATE SET
         name = excluded.name,
+        action = excluded.action,
+        description = excluded.description,
         schedule = excluded.schedule,
         enabled = excluded.enabled,
+        end_at = excluded.end_at,
         last_run_at = excluded.last_run_at,
         next_run_at = excluded.next_run_at,
         updated_at = excluded.updated_at
@@ -42,8 +48,11 @@ export class CronJobRepository {
     this.upsertStmt.run({
       jobId: job.jobId,
       name: job.name,
+      action: job.action,
+      description: job.description ?? null,
       schedule: job.schedule,
       enabled: job.enabled ? 1 : 0,
+      endAt: job.endAt ?? null,
       lastRunAt: job.lastRunAt ?? null,
       nextRunAt: job.nextRunAt ?? null,
       updatedAt: now,
@@ -89,8 +98,11 @@ function mapRow(row: CronJobRow): CronJobRecord {
   return {
     jobId: row.job_id,
     name: row.name,
+    action: row.action as CronJobRecord["action"],
+    description: row.description ?? undefined,
     schedule: row.schedule,
     enabled: Boolean(row.enabled),
+    endAt: row.end_at ?? undefined,
     lastRunAt: row.last_run_at ?? undefined,
     nextRunAt: row.next_run_at ?? undefined,
     updatedAt: row.updated_at,
@@ -98,12 +110,17 @@ function mapRow(row: CronJobRow): CronJobRecord {
 }
 
 function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
-  return existing.jobId === next.jobId
-    && existing.name === next.name
-    && existing.schedule === next.schedule
-    && existing.enabled === next.enabled
-    && existing.lastRunAt === next.lastRunAt
-    && existing.nextRunAt === next.nextRunAt;
+  return (
+    existing.jobId === next.jobId &&
+    existing.name === next.name &&
+    existing.action === next.action &&
+    existing.description === next.description &&
+    existing.schedule === next.schedule &&
+    existing.enabled === next.enabled &&
+    existing.endAt === next.endAt &&
+    existing.lastRunAt === next.lastRunAt &&
+    existing.nextRunAt === next.nextRunAt
+  );
 }
 
 function assertCronJobRows(rows: unknown[]): asserts rows is CronJobRow[] {
@@ -122,17 +139,20 @@ function isCronJobRow(row: unknown): row is CronJobRow {
   if (!isRecord(row)) {
     return false;
   }
-  return typeof row.job_id === "string"
-    && typeof row.name === "string"
-    && typeof row.schedule === "string"
-    && typeof row.enabled === "number"
-    && (typeof row.last_run_at === "string" || row.last_run_at === null)
-    && (typeof row.next_run_at === "string" || row.next_run_at === null)
-    && typeof row.updated_at === "string";
+  return (
+    typeof row.job_id === "string" &&
+    typeof row.name === "string" &&
+    typeof row.action === "string" &&
+    (typeof row.description === "string" || row.description === null) &&
+    typeof row.schedule === "string" &&
+    typeof row.enabled === "number" &&
+    (typeof row.end_at === "string" || row.end_at === null) &&
+    (typeof row.last_run_at === "string" || row.last_run_at === null) &&
+    (typeof row.next_run_at === "string" || row.next_run_at === null) &&
+    typeof row.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

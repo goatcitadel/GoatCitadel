@@ -60,6 +60,7 @@ describe("ChatThreadView", () => {
   it("skips raw HTML in assistant markdown output", () => {
     const renderer = TestRenderer.create(
       <ChatThreadView
+        mode="chat"
         loading={false}
         thread={createThread("<img src=x onerror=alert(1) /> **safe**")}
         selectedTurnId="turn-1"
@@ -82,6 +83,7 @@ describe("ChatThreadView", () => {
   it("adds accessible labels to branch and turn actions", () => {
     const renderer = TestRenderer.create(
       <ChatThreadView
+        mode="chat"
         loading={false}
         thread={createThread("plain content")}
         selectedTurnId="turn-1"
@@ -136,6 +138,7 @@ describe("ChatThreadView", () => {
 
     const renderer = TestRenderer.create(
       <ChatThreadView
+        mode="chat"
         loading={false}
         thread={thread}
         selectedTurnId="turn-1"
@@ -172,6 +175,7 @@ describe("ChatThreadView", () => {
 
     const renderer = TestRenderer.create(
       <ChatThreadView
+        mode="chat"
         loading={false}
         thread={thread}
         selectedTurnId="turn-1"
@@ -206,6 +210,7 @@ describe("ChatThreadView", () => {
 
     const renderer = TestRenderer.create(
       <ChatThreadView
+        mode="chat"
         loading={false}
         thread={thread}
         selectedTurnId="turn-1"
@@ -233,6 +238,7 @@ describe("ChatThreadView", () => {
   it("renders attached delegation progress and stitched output", () => {
     const renderer = TestRenderer.create(
       <ChatThreadView
+        mode="chat"
         loading={false}
         thread={createThread("plain content")}
         selectedTurnId="turn-1"

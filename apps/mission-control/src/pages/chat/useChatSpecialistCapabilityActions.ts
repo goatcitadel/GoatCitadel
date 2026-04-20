@@ -10,6 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { useCallback, useMemo, useState, type MutableRefObject } from "react";
 import {
+  activateImportedAgentCatalogEntry,
   createChatSpecialistCandidate,
   fetchMcpServers,
   fetchMcpTemplates,
@@ -105,6 +106,38 @@ export function useChatSpecialistCapabilityActions(input: {
           current.map((item) => (item.candidateId === updated.candidateId ? updated : item)),
         );
         pushLocalNotice(notice, "success");
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setSending(false);
+      }
+    },
+    [pushLocalNotice, selectedSession, sending, setError, setSending, setSpecialistCandidates],
+  );
+
+  const handleActivateCatalogSpecialist = useCallback(
+    async (suggestion: ChatSpecialistCandidateSuggestionRecord) => {
+      if (!selectedSession || sending) {
+        return;
+      }
+      if (!suggestion.candidateId) {
+        setError("Catalog suggestion is missing its entry identifier.");
+        return;
+      }
+      setSending(true);
+      try {
+        const activated = await activateImportedAgentCatalogEntry(suggestion.candidateId, {
+          sessionId: selectedSession.sessionId,
+        });
+        setSpecialistCandidates((current) => {
+          const withoutCurrent = current.filter((item) => item.candidateId !== activated.specialist.candidateId);
+          return [activated.specialist, ...withoutCurrent];
+        });
+        setSpecialistSuggestions((current) => current.filter((item) => item.candidateId !== suggestion.candidateId));
+        pushLocalNotice(
+          `Activated ${activated.catalogEntry.definition.frontmatter.name} for this session as a manual-only specialist.`,
+          "success",
+        );
       } catch (err) {
         setError((err as Error).message);
       } finally {
@@ -301,6 +334,7 @@ export function useChatSpecialistCapabilityActions(input: {
     capabilitySuggestionPending,
     capabilityConfirmationCopy,
     handleCreateSpecialistDraft,
+    handleActivateCatalogSpecialist,
     handleSpecialistCandidatePatch,
     handleCapabilitySuggestionAction,
     confirmCapabilitySuggestionAction,

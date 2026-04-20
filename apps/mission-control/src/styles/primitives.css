@@ -1487,6 +1487,168 @@
   margin: 0;
 }
 
+.sessions-summary-strip {
+  margin-bottom: var(--space-2);
+}
+
+.sessions-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: calc(var(--space-4) * var(--density-scale));
+  align-items: start;
+}
+
+.sessions-shell .virtual-list-shell {
+  min-height: 480px;
+}
+
+.sessions-shell .virtual-list-shell.compact {
+  min-height: 260px;
+}
+
+.session-rail-item {
+  width: 100%;
+  display: grid;
+  gap: calc(var(--space-2) * var(--density-scale));
+  padding: calc(var(--space-3) * var(--density-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.session-rail-item:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-emphasis);
+}
+
+.session-rail-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.session-rail-item.active {
+  border-color: color-mix(in srgb, var(--accent-primary) 44%, var(--border-default));
+  background: color-mix(in srgb, var(--accent-primary) 10%, var(--surface-2));
+  box-shadow: var(--shadow-1);
+}
+
+.session-rail-head,
+.session-rail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.session-rail-head {
+  justify-content: space-between;
+}
+
+.session-rail-time {
+  color: var(--text-secondary);
+  font: 500 0.78rem/1.4 var(--font-body);
+}
+
+.session-rail-meta {
+  color: var(--text-secondary);
+  font: 500 0.8rem/1.45 var(--font-body);
+}
+
+.sessions-detail-summary {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+}
+
+.sessions-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.sessions-detail-grid-compact {
+  margin-top: calc(var(--space-3) * var(--density-scale));
+}
+
+.sessions-detail-metric {
+  display: grid;
+  gap: 4px;
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+}
+
+.sessions-detail-metric span {
+  color: var(--text-secondary);
+  font: 600 0.72rem/1.35 var(--font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sessions-detail-metric strong {
+  color: var(--text-primary);
+  font: 650 0.94rem/1.3 var(--font-body);
+}
+
+.sessions-runtime-details {
+  margin-top: calc(var(--space-3) * var(--density-scale));
+}
+
+.sessions-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: calc(var(--space-3) * var(--density-scale));
+}
+
+.sessions-section-heading h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font: 650 0.98rem/1.25 var(--font-body);
+}
+
+.sessions-section-heading span {
+  color: var(--text-secondary);
+  font: 500 0.8rem/1.4 var(--font-body);
+}
+
+.cron-schedule-builder {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+  margin-top: calc(var(--space-2) * var(--density-scale));
+}
+
+.cron-weekday-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.cron-weekday-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--space-1) * var(--density-scale));
+  min-height: 2.5rem;
+  padding: 0 calc(var(--space-2) * var(--density-scale));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+  color: var(--text-secondary);
+  font: 600 0.82rem/1.2 var(--font-body);
+}
+
+.cron-weekday-option input {
+  margin: 0;
+}
+
 @media (max-width: 767px) {
   .action-bar-primary,
   .data-toolbar-primary,
@@ -1520,5 +1682,24 @@
 
   .gateway-access-row label {
     min-width: 0;
+  }
+
+  .sessions-shell,
+  .sessions-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-rail-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .sessions-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .cron-weekday-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }

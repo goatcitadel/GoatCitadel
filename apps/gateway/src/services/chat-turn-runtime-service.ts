@@ -1,11 +1,13 @@
 import type {
   ChatCancelTurnResponse,
+  RoutingPreflightRequest,
+  RoutingPreflightResult,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatStreamChunk,
 } from "@goatcitadel/contracts";
 import * as chatTurnEntryService from "./chat-turn-entry-service.js";
-import type { ChatTurnEntryHost, ChatTurnResumeHost } from "./chat-turn-entry-service.js";
+import type { ChatTurnPreflightHost, ChatTurnResumeHost } from "./chat-turn-entry-service.js";
 
 export interface ChatTurnRuntime {
   agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
@@ -24,10 +26,11 @@ export interface ChatTurnRuntime {
   editChatTurnStream(sessionId: string, turnId: string, input: ChatSendMessageRequest): AsyncGenerator<ChatStreamChunk>;
   cancelChatTurn(sessionId: string, turnId: string, cancelledBy?: string): Promise<ChatCancelTurnResponse>;
   resumeAgentChatTurnStream(sessionId: string, turnId: string, sinceEventId?: string): AsyncGenerator<ChatStreamChunk>;
+  routePreflight(sessionId: string, input: RoutingPreflightRequest): Promise<RoutingPreflightResult>;
 }
 
 export class ChatTurnRuntimeService implements ChatTurnRuntime {
-  public constructor(private readonly host: ChatTurnEntryHost & ChatTurnResumeHost) {}
+  public constructor(private readonly host: ChatTurnPreflightHost & ChatTurnResumeHost) {}
 
   public agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse> {
     return chatTurnEntryService.agentSendChatMessage(this.host, sessionId, input);
@@ -71,6 +74,10 @@ export class ChatTurnRuntimeService implements ChatTurnRuntime {
 
   public cancelChatTurn(sessionId: string, turnId: string, cancelledBy?: string): Promise<ChatCancelTurnResponse> {
     return chatTurnEntryService.cancelChatTurn(this.host, sessionId, turnId, cancelledBy);
+  }
+
+  public routePreflight(sessionId: string, input: RoutingPreflightRequest): Promise<RoutingPreflightResult> {
+    return chatTurnEntryService.routePreflight(this.host, sessionId, input);
   }
 
   public resumeAgentChatTurnStream(

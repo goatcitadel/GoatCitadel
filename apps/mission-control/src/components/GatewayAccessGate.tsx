@@ -16,11 +16,11 @@ import { GCSelect, GCSwitch } from "./ui";
 type GatewayAccessView =
   | GatewayAccessPreflightResult
   | {
-    status: "checking";
-    message: string;
-    healthDetail?: string;
-    authMode?: GatewayAuthState["mode"];
-  };
+      status: "checking";
+      message: string;
+      healthDetail?: string;
+      authMode?: GatewayAuthState["mode"];
+    };
 
 interface GatewayAccessGateProps {
   gatewayBaseUrl: string;
@@ -41,6 +41,17 @@ interface PendingDeviceApprovalRequest {
 }
 
 type AccessAuthMode = "token" | "basic";
+
+function resolveGatewayAccessThemeClass(): "theme-signal-noir" | "theme-citadel-light" {
+  if (typeof window === "undefined") {
+    return "theme-signal-noir";
+  }
+  const value = new URLSearchParams(window.location.search).get("theme")?.trim().toLowerCase();
+  if (value === "light" || value === "citadel-light" || value === "theme-citadel-light") {
+    return "theme-citadel-light";
+  }
+  return "theme-signal-noir";
+}
 
 export function GatewayAccessGate({
   gatewayBaseUrl,
@@ -90,19 +101,26 @@ export function GatewayAccessGate({
           return;
         }
 
-        setPendingDeviceApproval((current) => current ? {
-          ...current,
-          status: status.status,
-          expiresAt: status.expiresAt,
-          message: status.message,
-        } : current);
+        setPendingDeviceApproval((current) =>
+          current
+            ? {
+                ...current,
+                status: status.status,
+                expiresAt: status.expiresAt,
+                message: status.message,
+              }
+            : current,
+        );
 
         if (status.status === "approved" && status.deviceToken) {
-          persistGatewayAuthState({
-            mode: "token",
-            token: status.deviceToken,
-            tokenQueryParam: "access_token",
-          }, "session");
+          persistGatewayAuthState(
+            {
+              mode: "token",
+              token: status.deviceToken,
+              tokenQueryParam: "access_token",
+            },
+            "session",
+          );
           await onRetry();
           return;
         }
@@ -118,9 +136,12 @@ export function GatewayAccessGate({
     };
 
     void poll();
-    const intervalId = window.setInterval(() => {
-      void poll();
-    }, Math.max(1500, pendingDeviceApproval.pollAfterMs));
+    const intervalId = window.setInterval(
+      () => {
+        void poll();
+      },
+      Math.max(1500, pendingDeviceApproval.pollAfterMs),
+    );
 
     return () => {
       cancelled = true;
@@ -139,6 +160,7 @@ export function GatewayAccessGate({
   const needsAuth = access.status === "needs-auth";
   const headerKicker = isChecking ? "Mission Control startup" : "Remote gateway handshake";
   const headerTitle = isChecking ? "Starting Mission Control" : "Mission Control access gate";
+  const themeClass = resolveGatewayAccessThemeClass();
   const headerSubtitle = isChecking
     ? "Connecting to the gateway, validating access, and warming up live control surfaces."
     : "Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.";
@@ -150,11 +172,14 @@ export function GatewayAccessGate({
         setFormError("Enter the gateway token before retrying.");
         return;
       }
-      persistGatewayAuthState({
-        mode: "token",
-        token,
-        tokenQueryParam: "access_token",
-      }, remember ? "persistent" : "session");
+      persistGatewayAuthState(
+        {
+          mode: "token",
+          token,
+          tokenQueryParam: "access_token",
+        },
+        remember ? "persistent" : "session",
+      );
       await onRetry();
       return;
     }
@@ -164,11 +189,14 @@ export function GatewayAccessGate({
       return;
     }
 
-    persistGatewayAuthState({
-      mode: "basic",
-      username,
-      password,
-    }, remember ? "persistent" : "session");
+    persistGatewayAuthState(
+      {
+        mode: "basic",
+        username,
+        password,
+      },
+      remember ? "persistent" : "session",
+    );
     await onRetry();
   };
 
@@ -194,15 +222,13 @@ export function GatewayAccessGate({
   };
 
   return (
-    <section className="gateway-access-shell theme-citadel-light" aria-live="polite">
+    <section className={`gateway-access-shell ${themeClass}`} aria-live="polite">
       <div className="panel panel-pad-spacious panel-accent gateway-access-card">
         <div className="gateway-access-header">
           <div className="gateway-access-copy">
             <p className="shell-topbar-kicker">{headerKicker}</p>
             <h1 className="gateway-access-title">{headerTitle}</h1>
-            <p className="office-subtitle gateway-access-subtitle">
-              {headerSubtitle}
-            </p>
+            <p className="office-subtitle gateway-access-subtitle">{headerSubtitle}</p>
           </div>
           <StatusChip tone={shellState.tone}>{shellState.label}</StatusChip>
         </div>
@@ -215,14 +241,18 @@ export function GatewayAccessGate({
           {!isChecking ? (
             <div>
               <span className="gc-meta-label">Stored credentials</span>
-              <p className="gateway-access-note">{storedAuthPresent ? "Present on this browser." : "None stored yet."}</p>
+              <p className="gateway-access-note">
+                {storedAuthPresent ? "Present on this browser." : "None stored yet."}
+              </p>
             </div>
           ) : null}
         </div>
 
         <div className="gateway-access-status">
           <p>{shellState.summary}</p>
-          <p className="gateway-access-note"><strong>Next:</strong> {shellState.nextStep}</p>
+          <p className="gateway-access-note">
+            <strong>Next:</strong> {shellState.nextStep}
+          </p>
           {access.status === "unreachable" && autoRetryPending ? (
             <p className="gateway-access-note">Mission Control will retry the gateway handshake automatically.</p>
           ) : null}
@@ -326,7 +356,12 @@ export function GatewayAccessGate({
         <div className="gateway-access-actions">
           {needsAuth ? (
             <>
-              <button type="button" className="gc-button" onClick={() => void handleConnect()} disabled={busy || deviceApprovalBusy}>
+              <button
+                type="button"
+                className="gc-button"
+                onClick={() => void handleConnect()}
+                disabled={busy || deviceApprovalBusy}
+              >
                 {busy ? "Connecting..." : "Connect to gateway"}
               </button>
               <button

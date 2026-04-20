@@ -1,4 +1,5 @@
 import { Panel } from "../../components/Panel";
+import { buildRouteSearch } from "../../content/page-registry";
 import type { ChatContextDockPanelsProps } from "./ChatContextDockPanels.types";
 
 export function ChatDockSuggestionsSection(
@@ -7,6 +8,7 @@ export function ChatDockSuggestionsSection(
     | "isChatSurface"
     | "isCoworkSurface"
     | "sending"
+    | "selectedSessionId"
     | "proactiveRuns"
     | "proactiveSuggestionCount"
     | "capabilitySuggestions"
@@ -15,6 +17,7 @@ export function ChatDockSuggestionsSection(
     | "delegationSuggestion"
     | "onCapabilitySuggestionAction"
     | "onCreateSpecialistDraft"
+    | "onActivateCatalogSpecialist"
     | "onSpecialistCandidatePatch"
     | "onAcceptDelegation"
   >,
@@ -23,6 +26,7 @@ export function ChatDockSuggestionsSection(
     isChatSurface,
     isCoworkSurface,
     sending,
+    selectedSessionId,
     proactiveRuns,
     proactiveSuggestionCount,
     capabilitySuggestions,
@@ -31,6 +35,7 @@ export function ChatDockSuggestionsSection(
     delegationSuggestion,
     onCapabilitySuggestionAction,
     onCreateSpecialistDraft,
+    onActivateCatalogSpecialist,
     onSpecialistCandidatePatch,
     onAcceptDelegation,
   } = props;
@@ -90,15 +95,35 @@ export function ChatDockSuggestionsSection(
                   <strong>{suggestion.title}</strong> · {suggestion.role}
                 </p>
                 <p>{suggestion.summary}</p>
+                {suggestion.source === "catalog" ? <p className="chat-v11-muted">{suggestion.reason}</p> : null}
                 <div className="chat-v11-row-actions">
-                  <button
-                    type="button"
-                    disabled={sending}
-                    onClick={() => void onCreateSpecialistDraft(suggestion)}
-                    className="gc-button"
-                  >
-                    Draft dormant specialist
-                  </button>
+                  {suggestion.source === "catalog" && suggestion.candidateId ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={sending}
+                        onClick={() => void onActivateCatalogSpecialist(suggestion)}
+                        className="gc-button"
+                      >
+                        Activate for session
+                      </button>
+                      <a
+                        className="gc-button"
+                        href={`${buildRouteSearch({ space: "configure", page: "agents", tab: "catalog", sessionId: selectedSessionId ?? undefined })}&catalogEntryId=${encodeURIComponent(suggestion.candidateId)}`}
+                      >
+                        Open catalog
+                      </a>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={sending}
+                      onClick={() => void onCreateSpecialistDraft(suggestion)}
+                      className="gc-button"
+                    >
+                      Draft dormant specialist
+                    </button>
+                  )}
                 </div>
               </li>
             ))}
