@@ -46,21 +46,20 @@ export function formatSessionLabel(session: ChatSessionRecord): string {
   return `Mission chat - ${session.sessionId.slice(-6)}`;
 }
 
-export function shouldShowTracePanel(
-  mode: ChatMode,
-  turn: ChatThreadResponse["turns"][number] | null,
-): boolean {
+export function shouldShowTracePanel(mode: ChatMode, turn: ChatThreadResponse["turns"][number] | null): boolean {
   if (!turn) {
     return false;
   }
   if (mode !== "chat") {
     return true;
   }
-  return turn.trace.status !== "completed"
-    || Boolean(turn.trace.failure)
-    || turn.trace.toolRuns.length > 0
-    || Boolean(turn.trace.routing.fallbackUsed)
-    || Boolean(turn.trace.orchestration);
+  return (
+    turn.trace.status !== "completed" ||
+    Boolean(turn.trace.failure) ||
+    turn.trace.toolRuns.length > 0 ||
+    Boolean(turn.trace.routing.fallbackUsed) ||
+    Boolean(turn.trace.orchestration)
+  );
 }
 
 export function shouldShowSuggestionsPanel(
@@ -73,19 +72,13 @@ export function shouldShowSuggestionsPanel(
     hasDelegationSuggestion: boolean;
   },
 ): boolean {
-  if (mode === "cowork") {
-    return true;
-  }
-  if (mode === "code") {
-    return input.capabilitySuggestionCount > 0
-      || input.specialistSuggestionCount > 0
-      || input.specialistCandidateCount > 0;
-  }
-  return input.capabilitySuggestionCount > 0
-    || input.specialistSuggestionCount > 0
-    || input.specialistCandidateCount > 0
-    || input.proactiveSuggestionCount > 0
-    || input.hasDelegationSuggestion;
+  return (
+    input.capabilitySuggestionCount > 0 ||
+    input.specialistSuggestionCount > 0 ||
+    input.specialistCandidateCount > 0 ||
+    input.proactiveSuggestionCount > 0 ||
+    input.hasDelegationSuggestion
+  );
 }
 
 export function shouldShowLearnedMemoryPanel(mode: ChatMode, learnedMemoryCount: number): boolean {
@@ -105,11 +98,12 @@ export function resolveMissionControlDockSectionOrder(input: {
   hasDelegationSuggestion: boolean;
   codeModeNeedsProjectBinding: boolean;
 }): MissionControlDockSectionId[] {
-  const baseOrder: MissionControlDockSectionId[] = input.mode === "chat"
-    ? ["surface", "trace", "memory", "session", "suggestions"]
-    : input.mode === "cowork"
-      ? ["workflow", "suggestions", "trace", "surface", "memory", "session"]
-      : ["workflow", "surface", "session", "trace"];
+  const baseOrder: MissionControlDockSectionId[] =
+    input.mode === "chat"
+      ? ["surface", "trace", "memory", "session", "suggestions"]
+      : input.mode === "cowork"
+        ? ["workflow", "suggestions", "trace", "surface", "memory", "session"]
+        : ["workflow", "surface", "session", "trace"];
 
   const sections = [...baseOrder];
   if (input.hasExternalBindingSection) {
@@ -128,21 +122,23 @@ export function resolveMissionControlDockSectionOrder(input: {
     priority.set("surface", -2);
   }
 
-  return sections.filter((section) => {
-    if (section === "trace") {
-      return input.showTracePanel;
-    }
-    if (section === "suggestions") {
-      return input.showSuggestionsPanel;
-    }
-    if (section === "memory") {
-      return input.showLearnedMemoryPanel;
-    }
-    if (section === "external") {
-      return input.hasExternalBindingSection;
-    }
-    return true;
-  }).sort((left, right) => (priority.get(left) ?? 0) - (priority.get(right) ?? 0));
+  return sections
+    .filter((section) => {
+      if (section === "trace") {
+        return input.showTracePanel;
+      }
+      if (section === "suggestions") {
+        return input.showSuggestionsPanel;
+      }
+      if (section === "memory") {
+        return input.showLearnedMemoryPanel;
+      }
+      if (section === "external") {
+        return input.hasExternalBindingSection;
+      }
+      return true;
+    })
+    .sort((left, right) => (priority.get(left) ?? 0) - (priority.get(right) ?? 0));
 }
 
 function buildWorkspaceSummaryCards(input: {
@@ -180,7 +176,9 @@ export function useMissionControlSurfaceState(input: {
   prefs: ChatSessionPrefsRecord | null;
   selectedTurnId: string | null;
   thread: ChatThreadResponse | null;
-  selectedSession: (ChatSessionRecord & { projectName?: string | null; channel?: string | null; account?: string | null }) | null;
+  selectedSession:
+    | (ChatSessionRecord & { projectName?: string | null; channel?: string | null; account?: string | null })
+    | null;
   selectedProjectId: string;
   projects: Array<{ projectId: string; name: string }>;
   projectsCount: number;
@@ -227,7 +225,8 @@ export function useMissionControlSurfaceState(input: {
   const isCodeSurface = messageMode === "code";
 
   const selectedTurn = useMemo(
-    () => input.thread?.turns.find((turn) => turn.turnId === input.selectedTurnId) ?? input.thread?.turns.at(-1) ?? null,
+    () =>
+      input.thread?.turns.find((turn) => turn.turnId === input.selectedTurnId) ?? input.thread?.turns.at(-1) ?? null,
     [input.selectedTurnId, input.thread],
   );
 
@@ -243,29 +242,33 @@ export function useMissionControlSurfaceState(input: {
     };
   }, [selectedTurn]);
 
-  const effectiveToolAutonomy = selectedTurn?.trace.effectiveToolAutonomy
-    ?? (input.planningMode === "advisory" ? "manual" : input.prefs?.toolAutonomy);
+  const effectiveToolAutonomy =
+    selectedTurn?.trace.effectiveToolAutonomy ??
+    (input.planningMode === "advisory" ? "manual" : input.prefs?.toolAutonomy);
 
-  const workspaceSummaryCards = useMemo(() => buildWorkspaceSummaryCards({
-    mode: messageMode,
-    projectsCount: input.projectsCount,
-    missionSessionCount: input.missionSessionCount,
-    externalSessionCount: input.externalSessionCount,
-    boundMissionSessionCount: input.boundMissionSessionCount,
-    proactiveSuggestionCount: input.proactiveSuggestionCount,
-  }), [
-    input.boundMissionSessionCount,
-    input.externalSessionCount,
-    input.missionSessionCount,
-    input.projectsCount,
-    input.proactiveSuggestionCount,
-    messageMode,
-  ]);
+  const workspaceSummaryCards = useMemo(
+    () =>
+      buildWorkspaceSummaryCards({
+        mode: messageMode,
+        projectsCount: input.projectsCount,
+        missionSessionCount: input.missionSessionCount,
+        externalSessionCount: input.externalSessionCount,
+        boundMissionSessionCount: input.boundMissionSessionCount,
+        proactiveSuggestionCount: input.proactiveSuggestionCount,
+      }),
+    [
+      input.boundMissionSessionCount,
+      input.externalSessionCount,
+      input.missionSessionCount,
+      input.projectsCount,
+      input.proactiveSuggestionCount,
+      messageMode,
+    ],
+  );
 
   const codeModeNeedsProjectBinding = isCodeSurface && !input.selectedSession?.projectId;
-  const selectedProjectBindingCandidateId = input.selectedProjectId !== "all" && input.selectedProjectId !== "none"
-    ? input.selectedProjectId
-    : undefined;
+  const selectedProjectBindingCandidateId =
+    input.selectedProjectId !== "all" && input.selectedProjectId !== "none" ? input.selectedProjectId : undefined;
   const selectedProjectBindingCandidateName = selectedProjectBindingCandidateId
     ? input.projects.find((item) => item.projectId === selectedProjectBindingCandidateId)?.name
     : undefined;
@@ -284,29 +287,33 @@ export function useMissionControlSurfaceState(input: {
   });
   const showLearnedMemoryPanel = shouldShowLearnedMemoryPanel(messageMode, input.learnedMemoryCount);
 
-  const dockSectionOrder = useMemo(() => resolveMissionControlDockSectionOrder({
-    mode: messageMode,
-    showTracePanel,
-    showSuggestionsPanel,
-    showLearnedMemoryPanel,
-    hasExternalBindingSection: input.selectedSession?.scope === "external",
-    hasBlockingContext:
-      Boolean(selectedTurnRecovery) ||
-      selectedTurn?.trace.status === "waiting_for_approval" ||
-      selectedTurn?.trace.status === "waiting_for_user_input",
-    hasDelegationSuggestion: input.hasDelegationSuggestion,
-    codeModeNeedsProjectBinding,
-  }), [
-    codeModeNeedsProjectBinding,
-    input.hasDelegationSuggestion,
-    input.selectedSession?.scope,
-    messageMode,
-    selectedTurn?.trace.status,
-    selectedTurnRecovery,
-    showLearnedMemoryPanel,
-    showSuggestionsPanel,
-    showTracePanel,
-  ]);
+  const dockSectionOrder = useMemo(
+    () =>
+      resolveMissionControlDockSectionOrder({
+        mode: messageMode,
+        showTracePanel,
+        showSuggestionsPanel,
+        showLearnedMemoryPanel,
+        hasExternalBindingSection: input.selectedSession?.scope === "external",
+        hasBlockingContext:
+          Boolean(selectedTurnRecovery) ||
+          selectedTurn?.trace.status === "waiting_for_approval" ||
+          selectedTurn?.trace.status === "waiting_for_user_input",
+        hasDelegationSuggestion: input.hasDelegationSuggestion,
+        codeModeNeedsProjectBinding,
+      }),
+    [
+      codeModeNeedsProjectBinding,
+      input.hasDelegationSuggestion,
+      input.selectedSession?.scope,
+      messageMode,
+      selectedTurn?.trace.status,
+      selectedTurnRecovery,
+      showLearnedMemoryPanel,
+      showSuggestionsPanel,
+      showTracePanel,
+    ],
+  );
 
   return {
     messageMode,

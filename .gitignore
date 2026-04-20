@@ -27,6 +27,9 @@ data/npu-runtime-state.json
 workspace/chat/
 .goatcitadel/self-improvement/
 .assistant/
+.codex-tmp/
+.worktrees/*
+!.worktrees/.gitkeep
 .claude/settings.local.json
 apps/gateway/backups/
 backups/

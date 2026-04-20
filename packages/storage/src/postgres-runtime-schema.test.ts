@@ -12,6 +12,7 @@ describe("Postgres runtime schema generation", () => {
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_message_id_unique ON chat_messages\(message_id\);/,
     );
     assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key_unique ON sessions\(session_key\);/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS mutation_idempotency \(/);
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
   });
 
@@ -49,5 +50,62 @@ describe("Postgres runtime schema generation", () => {
     assert.equal(repairMigration?.name, "chat_user_input_prompt_repairs");
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_turn_traces/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS pending_user_input_json TEXT/);
+  });
+
+  it("repairs missing mutation idempotency tables for older Postgres gateway runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 11);
+
+    assert.equal(repairMigration?.name, "mutation_idempotency_runtime_repairs");
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS mutation_idempotency \(/);
+    assert.match(repairMigration?.sql ?? "", /PRIMARY KEY \(method, route_path, idempotency_key, actor_scope\)/);
+    assert.match(repairMigration?.sql ?? "", /CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_updated/);
+  });
+
+  it("repairs prompt-pack run columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 12);
+
+    assert.equal(repairMigration?.name, "prompt_pack_runs_shape_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_runs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS mode TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS tool_tier TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS tool_autonomy TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS web_mode TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS memory_mode TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS thinking_level TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS derived_response_text TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS derived_response_signals_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS integrity_json TEXT/);
+  });
+
+  it("repairs chat turn trace columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 13);
+
+    assert.equal(repairMigration?.name, "chat_turn_trace_shape_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_turn_traces/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS orchestration_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS guidance_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS loop_guard_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS capability_upgrade_suggestions_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS specialist_candidate_suggestions_json TEXT/);
+  });
+
+  it("repairs chat tool run and delegation step columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 14);
+
+    assert.equal(repairMigration?.name, "chat_tool_and_delegation_shape_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_tool_runs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS reused BIGINT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS reused_from_tool_run_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS reuse_reason TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS durable_run_id TEXT/);
+  });
+
+  it("repairs execution plan step durable run columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 15);
+
+    assert.equal(repairMigration?.name, "chat_execution_plan_step_shape_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_execution_plan_steps/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS durable_run_id TEXT/);
   });
 });

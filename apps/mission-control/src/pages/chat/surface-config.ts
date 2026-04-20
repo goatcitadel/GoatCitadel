@@ -73,7 +73,7 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
   },
   cowork: {
     shellEyebrow: "Cowork",
-    stageTitle: "Track coordination",
+    stageTitle: "Workflow overview",
     stageSummary: "Keep the workflow legible: what is running, blocked, and next.",
     emptyTitle: "Frame the work and move it forward",
     emptyBody:
@@ -84,8 +84,7 @@ const EMPTY_CONFIG: Record<ChatMode, Omit<MissionControlSurfaceConfig, "mode" | 
       "Coordinate next steps across roles",
     ],
     dockTitle: "Cowork context",
-    dockSummary:
-      "Workflow state, delegation opportunities, and approvals lead here so the thread stays readable while the system stays transparent.",
+    dockSummary: "Controls and suggestions stay here while the workflow board remains the primary source of truth.",
     layout: {
       dominantArtifact: "workflow",
       sessionRailVisibility: "tertiary",

@@ -8,6 +8,18 @@ import type { ChatMessageRecord, ChatThreadResponse } from "@goatcitadel/contrac
 
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
 
+function normalizeCoworkText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateCoworkText(value: string, maxLength: number): string {
+  const normalized = normalizeCoworkText(value);
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
 export function dedupeStrings(values: Array<string | undefined>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -51,17 +63,26 @@ export function deriveCoworkItems(
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
       .slice(0, 4);
-    lines.forEach((line, index) => items.push({ id: `assistant-${index}`, title: line.slice(0, 88) }));
+    lines.forEach((line, index) =>
+      items.push({
+        id: `assistant-${index}`,
+        title: truncateCoworkText(line, 84),
+      }),
+    );
   }
   if (items.length < 3 && latestUser) {
-    items.push({ id: "user-goal", title: "Current operator request", note: latestUser.content.slice(0, 180) });
+    items.push({
+      id: "user-goal",
+      title: "Current operator request",
+      note: truncateCoworkText(latestUser.content, 132),
+    });
   }
   if (items.length < 5) {
     notices.slice(0, 2).forEach((notice, index) => {
       items.push({
         id: `notice-${notice.id}`,
         title: index === 0 ? "Latest system notice" : "Recent system notice",
-        note: notice.content.slice(0, 180),
+        note: truncateCoworkText(notice.content, 120),
       });
     });
   }

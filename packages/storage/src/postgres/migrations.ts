@@ -455,4 +455,73 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS pending_user_input_json TEXT;
     `,
   },
+  {
+    version: 11,
+    name: "mutation_idempotency_runtime_repairs",
+    sql: `
+      CREATE TABLE IF NOT EXISTS mutation_idempotency (
+        method TEXT NOT NULL,
+        route_path TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        actor_scope TEXT NOT NULL DEFAULT '',
+        payload_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (method, route_path, idempotency_key, actor_scope)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_updated
+        ON mutation_idempotency(updated_at DESC);
+    `,
+  },
+  {
+    version: 12,
+    name: "prompt_pack_runs_shape_repairs",
+    sql: `
+      ALTER TABLE prompt_pack_runs
+        ADD COLUMN IF NOT EXISTS mode TEXT,
+        ADD COLUMN IF NOT EXISTS tool_tier TEXT,
+        ADD COLUMN IF NOT EXISTS tool_autonomy TEXT,
+        ADD COLUMN IF NOT EXISTS web_mode TEXT,
+        ADD COLUMN IF NOT EXISTS memory_mode TEXT,
+        ADD COLUMN IF NOT EXISTS thinking_level TEXT,
+        ADD COLUMN IF NOT EXISTS derived_response_text TEXT,
+        ADD COLUMN IF NOT EXISTS derived_response_signals_json TEXT,
+        ADD COLUMN IF NOT EXISTS integrity_json TEXT;
+    `,
+  },
+  {
+    version: 13,
+    name: "chat_turn_trace_shape_repairs",
+    sql: `
+      ALTER TABLE chat_turn_traces
+        ADD COLUMN IF NOT EXISTS orchestration_json TEXT,
+        ADD COLUMN IF NOT EXISTS guidance_json TEXT,
+        ADD COLUMN IF NOT EXISTS loop_guard_json TEXT,
+        ADD COLUMN IF NOT EXISTS capability_upgrade_suggestions_json TEXT,
+        ADD COLUMN IF NOT EXISTS specialist_candidate_suggestions_json TEXT;
+    `,
+  },
+  {
+    version: 14,
+    name: "chat_tool_and_delegation_shape_repairs",
+    sql: `
+      ALTER TABLE chat_tool_runs
+        ADD COLUMN IF NOT EXISTS reused BIGINT,
+        ADD COLUMN IF NOT EXISTS reused_from_tool_run_id TEXT,
+        ADD COLUMN IF NOT EXISTS reuse_reason TEXT;
+
+      ALTER TABLE chat_delegation_steps
+        ADD COLUMN IF NOT EXISTS durable_run_id TEXT;
+    `,
+  },
+  {
+    version: 15,
+    name: "chat_execution_plan_step_shape_repairs",
+    sql: `
+      ALTER TABLE chat_execution_plan_steps
+        ADD COLUMN IF NOT EXISTS durable_run_id TEXT;
+    `,
+  },
 ];

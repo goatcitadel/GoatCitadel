@@ -11,6 +11,8 @@ export function ChatComposerPlusMenu({
   onRunQuickResearch: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const portalContainer =
+    typeof document === "undefined" ? undefined : (document.querySelector<HTMLElement>(".mc-app-shell") ?? undefined);
 
   useEffect(() => {
     if (disabled) {
@@ -32,7 +34,7 @@ export function ChatComposerPlusMenu({
             +
           </button>
         </Popover.Trigger>
-        <Popover.Portal>
+        <Popover.Portal container={portalContainer}>
           <Popover.Content
             className="chat-plus-popover"
             align="start"
@@ -46,7 +48,8 @@ export function ChatComposerPlusMenu({
                 setOpen(false);
                 onAttachFiles();
               }}
-             className="gc-button">
+              className="gc-button chat-plus-action"
+            >
               Add files or photos
             </button>
             <button
@@ -55,7 +58,8 @@ export function ChatComposerPlusMenu({
                 setOpen(false);
                 onRunQuickResearch();
               }}
-             className="gc-button">
+              className="gc-button chat-plus-action"
+            >
               Quick web research
             </button>
           </Popover.Content>

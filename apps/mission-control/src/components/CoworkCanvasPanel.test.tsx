@@ -144,15 +144,14 @@ describe("CoworkCanvasPanel", () => {
       />,
     );
 
-    expect(markup).toContain("Execution Board");
+    expect(markup).toContain("Workflow overview");
     expect(markup).toContain("Run orch-run-1");
     expect(markup).toContain("Researcher -&gt; Coder");
-    expect(markup).toContain("Execution truth");
-    expect(markup).toContain("Plan state");
-    expect(markup).toContain("Execution state");
-    expect(markup).toContain("Durable run durable-run-1");
-    expect(markup).toContain("Worktree ready");
-    expect(markup).toContain("Approval pause on phase-2");
+    expect(markup).toContain("Needs attention");
+    expect(markup).toContain("Plan");
+    expect(markup).toContain("Execution");
+    expect(markup).toContain("Worktree");
+    expect(markup).toContain("Approval paused on phase-2");
     expect(markup).toContain("paused for approval");
     expect(markup).toContain("Durable linked");
     expect(markup).toContain("Worktree allocated");
@@ -161,11 +160,11 @@ describe("CoworkCanvasPanel", () => {
     expect(markup).toContain("Collected constraints and scoped the problem.");
     expect(markup).toContain("Research is in motion and implementation is queued behind it.");
     expect(markup).toContain("Tools used");
-    expect(markup).toContain("Depends on: plan-step-1");
-    expect(markup).toContain("Durable: durable-plan-1");
-    expect(markup).toContain("Deprecated child run: legacy-child-1");
+    expect(markup).toContain("Run facts");
+    expect(markup).toContain("Depends on plan-step-1");
     expect(markup).toContain("Delegation run");
-    expect(markup).toContain("Durable durable-child-1");
+    expect(markup).toContain("Durable linked");
     expect(markup).toContain("Skipped because dependency failed.");
+    expect(markup).toContain("Stitched output available in the run trace.");
   });
 });

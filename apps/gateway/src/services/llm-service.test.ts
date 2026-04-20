@@ -22,7 +22,9 @@ describe("LlmService", () => {
       ],
     };
 
-    expect(() => new LlmService(config, process.env, { secretStore: createNoopSecretStore() })).toThrowError(/blocked/i);
+    expect(() => new LlmService(config, process.env, { secretStore: createNoopSecretStore() })).toThrowError(
+      /blocked/i,
+    );
   });
 
   it("allows loopback providers for local runtime", () => {
@@ -143,10 +145,12 @@ describe("LlmService", () => {
 
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
 
-    expect(() => service.updateRuntimeConfig({
-      activeProviderId: "openai",
-      activeModel: "claude-sonnet-4-6",
-    })).toThrowError(/belongs to anthropic/i);
+    expect(() =>
+      service.updateRuntimeConfig({
+        activeProviderId: "openai",
+        activeModel: "claude-sonnet-4-6",
+      }),
+    ).toThrowError(/belongs to anthropic/i);
   });
 
   it("rejects chat requests that pair a model with the wrong provider", async () => {
@@ -173,11 +177,13 @@ describe("LlmService", () => {
 
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
 
-    await expect(service.chatCompletions({
-      providerId: "openai",
-      model: "claude-sonnet-4-6",
-      messages: [{ role: "user", content: "hello" }],
-    })).rejects.toThrowError(/belongs to anthropic/i);
+    await expect(
+      service.chatCompletions({
+        providerId: "openai",
+        model: "claude-sonnet-4-6",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).rejects.toThrowError(/belongs to anthropic/i);
   });
 
   it("keeps provider-specific versioned base paths (z.ai v4) intact", () => {
@@ -255,7 +261,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "cmpl_google",
@@ -297,7 +303,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "cmpl_openai_gpt5",
@@ -343,9 +349,9 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
-        "data: {\"id\":\"chunk_openai_gpt5\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n",
+        'data: {"id":"chunk_openai_gpt5","choices":[{"index":0,"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
         {
           status: 200,
           headers: { "content-type": "text/event-stream" },
@@ -388,7 +394,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "cmpl_openai_gpt54_controls",
@@ -446,7 +452,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "cmpl_openai_gpt54_roles",
@@ -494,13 +500,15 @@ describe("LlmService", () => {
 
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
 
-    await expect(service.chatCompletions({
-      providerId: "openai",
-      model: "gpt-5.4",
-      messages: [{ role: "user", content: "hello" }],
-      reasoning: { effort: "high" },
-      temperature: 0.2,
-    })).rejects.toThrowError(/reasoning effort is set to none/i);
+    await expect(
+      service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4",
+        messages: [{ role: "user", content: "hello" }],
+        reasoning: { effort: "high" },
+        temperature: 0.2,
+      }),
+    ).rejects.toThrowError(/reasoning effort is set to none/i);
   });
 
   it("rejects sampling controls for older GPT-5 chat models", async () => {
@@ -519,12 +527,14 @@ describe("LlmService", () => {
 
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
 
-    await expect(service.chatCompletions({
-      providerId: "openai",
-      model: "gpt-5-mini",
-      messages: [{ role: "user", content: "hello" }],
-      temperature: 0.2,
-    })).rejects.toThrowError(/older openai gpt-5 family models/i);
+    await expect(
+      service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5-mini",
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.2,
+      }),
+    ).rejects.toThrowError(/older openai gpt-5 family models/i);
   });
 
   it("canonicalizes legacy Perplexity /v1 endpoints back to the root API base", () => {
@@ -590,10 +600,14 @@ describe("LlmService", () => {
       ],
     };
 
-    const service = new LlmService(config, {
-      ...process.env,
-      ANTHROPIC_API_KEY: "anthropic-secret",
-    }, { secretStore: createNoopSecretStore() });
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        ANTHROPIC_API_KEY: "anthropic-secret",
+      },
+      { secretStore: createNoopSecretStore() },
+    );
     const originalFetch = globalThis.fetch;
     let receivedHeaders: Headers | undefined;
 
@@ -700,10 +714,14 @@ describe("LlmService", () => {
       ],
     };
 
-    const service = new LlmService(config, {
-      ...process.env,
-      GLM_API_KEY: "env-preview-token",
-    }, { secretStore: createTrackedSecretStore({ glm: "stale-keychain-token" }) });
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        GLM_API_KEY: "env-preview-token",
+      },
+      { secretStore: createTrackedSecretStore({ glm: "stale-keychain-token" }) },
+    );
     const originalFetch = globalThis.fetch;
     let receivedHeaders: Headers | undefined;
 
@@ -763,7 +781,9 @@ describe("LlmService", () => {
       },
     });
 
-    expect(updated.providers.find((provider) => provider.providerId === "deepseek")?.defaultModel).toBe("deepseek-chat");
+    expect(updated.providers.find((provider) => provider.providerId === "deepseek")?.defaultModel).toBe(
+      "deepseek-chat",
+    );
   });
 
   it("preserves explicit apiStyle values when updating runtime config", () => {
@@ -791,7 +811,9 @@ describe("LlmService", () => {
       },
     });
 
-    expect(updated.providers.find((provider) => provider.providerId === "anthropic")?.apiStyle).toBe("anthropic-messages");
+    expect(updated.providers.find((provider) => provider.providerId === "anthropic")?.apiStyle).toBe(
+      "anthropic-messages",
+    );
   });
 
   it("reports resolved execution api styles in runtime config", () => {
@@ -825,9 +847,15 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const runtime = service.getRuntimeConfig();
 
-    expect(runtime.providers.find((provider) => provider.providerId === "openai")?.resolvedApiStyle).toBe("openai-responses");
-    expect(runtime.providers.find((provider) => provider.providerId === "anthropic")?.resolvedApiStyle).toBe("anthropic-messages");
-    expect(runtime.providers.find((provider) => provider.providerId === "openrouter")?.resolvedApiStyle).toBe("openai-chat-completions");
+    expect(runtime.providers.find((provider) => provider.providerId === "openai")?.resolvedApiStyle).toBe(
+      "openai-responses",
+    );
+    expect(runtime.providers.find((provider) => provider.providerId === "anthropic")?.resolvedApiStyle).toBe(
+      "anthropic-messages",
+    );
+    expect(runtime.providers.find((provider) => provider.providerId === "openrouter")?.resolvedApiStyle).toBe(
+      "openai-chat-completions",
+    );
   });
 
   it("uses the OpenAI Responses API for GPT-5 native providers", async () => {
@@ -851,7 +879,7 @@ describe("LlmService", () => {
 
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       requestUrl = String(url);
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "resp_openai_native",
@@ -911,6 +939,74 @@ describe("LlmService", () => {
     ]);
   });
 
+  it("injects a json hint into OpenAI Responses input when using json_object output", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "resp_openai_json_object",
+          model: "gpt-5.4-mini",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: '{"ok":true}' }],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [
+          { role: "developer", content: "Return strict JSON." },
+          { role: "user", content: '{"task":"plan this"}' },
+        ],
+        response_format: {
+          type: "json_object",
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.text).toEqual({
+      format: {
+        type: "json_object",
+      },
+    });
+    expect(payloadBody?.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: 'Return json.\n\n{"task":"plan this"}' }],
+      },
+    ]);
+  });
+
   it("normalizes function tools and tool_choice for OpenAI Responses payloads", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -929,7 +1025,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "resp_openai_tool_payload",
@@ -1064,10 +1160,14 @@ describe("LlmService", () => {
       ],
     };
 
-    const service = new LlmService(config, {
-      ...process.env,
-      ANTHROPIC_API_KEY: "anthropic-secret",
-    }, { secretStore: createNoopSecretStore() });
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        ANTHROPIC_API_KEY: "anthropic-secret",
+      },
+      { secretStore: createNoopSecretStore() },
+    );
     const originalFetch = globalThis.fetch;
     let requestUrl = "";
     let payloadBody: Record<string, unknown> | undefined;
@@ -1075,7 +1175,7 @@ describe("LlmService", () => {
 
     globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       requestUrl = String(url);
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       receivedHeaders = new Headers(init?.headers);
       return new Response(
         JSON.stringify({
@@ -1124,9 +1224,7 @@ describe("LlmService", () => {
     expect(receivedHeaders?.get("anthropic-version")).toBe("2023-06-01");
     expect(receivedHeaders?.get("authorization")).toBeNull();
     expect(payloadBody?.system).toBe("Answer in one sentence.");
-    expect(payloadBody?.messages).toEqual([
-      { role: "user", content: "hello" },
-    ]);
+    expect(payloadBody?.messages).toEqual([{ role: "user", content: "hello" }]);
     expect(payloadBody?.thinking).toEqual({
       type: "enabled",
       budget_tokens: 1024,
@@ -1158,7 +1256,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "resp_openai_tool_roundtrip",
@@ -1168,13 +1266,13 @@ describe("LlmService", () => {
               type: "function_call",
               call_id: "call_weather",
               name: "lookup_weather",
-              arguments: "{\"zip\":\"91303\"}",
+              arguments: '{"zip":"91303"}',
             },
             {
               type: "function_call",
               call_id: "call_weather",
               name: "lookup_weather",
-              arguments: "{\"zip\":\"91303\"}",
+              arguments: '{"zip":"91303"}',
             },
           ],
         }),
@@ -1200,7 +1298,7 @@ describe("LlmService", () => {
                 type: "function",
                 function: {
                   name: "lookup_weather",
-                  arguments: "{\"zip\":\"91303\"}",
+                  arguments: '{"zip":"91303"}',
                 },
               },
             ],
@@ -1208,13 +1306,15 @@ describe("LlmService", () => {
           {
             role: "tool",
             tool_call_id: "call_weather",
-            content: "{\"temp\":72}",
+            content: '{"temp":72}',
           },
         ],
       });
 
       expect(completion.choices?.[0]?.finish_reason).toBe("tool_calls");
-      expect(((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as unknown[])?.length).toBe(1);
+      expect(
+        ((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as unknown[])?.length,
+      ).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1228,12 +1328,12 @@ describe("LlmService", () => {
         type: "function_call",
         call_id: "call_weather",
         name: "lookup_weather",
-        arguments: "{\"zip\":\"91303\"}",
+        arguments: '{"zip":"91303"}',
       },
       {
         type: "function_call_output",
         call_id: "call_weather",
-        output: "{\"temp\":72}",
+        output: '{"temp":72}',
       },
     ]);
   });
@@ -1256,7 +1356,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "resp_openai_assistant_history",
@@ -1321,14 +1421,18 @@ describe("LlmService", () => {
       ],
     };
 
-    const service = new LlmService(config, {
-      ...process.env,
-      ANTHROPIC_API_KEY: "anthropic-secret",
-    }, { secretStore: createNoopSecretStore() });
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        ANTHROPIC_API_KEY: "anthropic-secret",
+      },
+      { secretStore: createNoopSecretStore() },
+    );
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "msg_anthropic_tool_roundtrip",
@@ -1370,7 +1474,7 @@ describe("LlmService", () => {
                 type: "function",
                 function: {
                   name: "lookup_weather",
-                  arguments: "{\"zip\":\"91303\"}",
+                  arguments: '{"zip":"91303"}',
                 },
               },
             ],
@@ -1378,13 +1482,15 @@ describe("LlmService", () => {
           {
             role: "tool",
             tool_call_id: "call_weather",
-            content: "{\"temp\":72}",
+            content: '{"temp":72}',
           },
         ],
       });
 
       expect(completion.choices?.[0]?.finish_reason).toBe("tool_calls");
-      expect(((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as unknown[])?.length).toBe(1);
+      expect(
+        ((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as unknown[])?.length,
+      ).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1408,7 +1514,7 @@ describe("LlmService", () => {
           {
             type: "tool_result",
             tool_use_id: "call_weather",
-            content: "{\"temp\":72}",
+            content: '{"temp":72}',
           },
         ],
       },
@@ -1461,9 +1567,7 @@ describe("LlmService", () => {
       requestUrl = String(url);
       return new Response(
         JSON.stringify({
-          data: [
-            { id: "gpt-4.1-mini", object: "model", created: 0, owned_by: "openai" },
-          ],
+          data: [{ id: "gpt-4.1-mini", object: "model", created: 0, owned_by: "openai" }],
         }),
         {
           status: 200,
@@ -1582,7 +1686,7 @@ describe("LlmService", () => {
     const originalFetch = globalThis.fetch;
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           id: "cmpl_test",
@@ -1609,7 +1713,7 @@ describe("LlmService", () => {
                 type: "function",
                 function: {
                   name: "browser_search",
-                  arguments: "{\"query\":\"weather 91303\"}",
+                  arguments: '{"query":"weather 91303"}',
                 },
               },
             ],
@@ -1617,7 +1721,7 @@ describe("LlmService", () => {
           {
             role: "tool",
             tool_call_id: "call_1",
-            content: "{\"results\":[]}",
+            content: '{"results":[]}',
           },
         ],
       });
@@ -1626,11 +1730,11 @@ describe("LlmService", () => {
     }
 
     const messages = Array.isArray(payloadBody?.messages)
-      ? payloadBody.messages as Array<Record<string, unknown>>
+      ? (payloadBody.messages as Array<Record<string, unknown>>)
       : [];
-    const assistantToolCallMessage = messages.find((message) => (
-      message.role === "assistant" && Array.isArray(message.tool_calls)
-    ));
+    const assistantToolCallMessage = messages.find(
+      (message) => message.role === "assistant" && Array.isArray(message.tool_calls),
+    );
     expect(assistantToolCallMessage).toBeTruthy();
     expect(typeof assistantToolCallMessage?.reasoning_content).toBe("string");
     expect(String(assistantToolCallMessage?.reasoning_content)).not.toHaveLength(0);
@@ -1655,7 +1759,7 @@ describe("LlmService", () => {
     const payloads: Record<string, unknown>[] = [];
 
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const payload = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      const payload = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
       payloads.push(payload);
       if (payloads.length === 1) {
         return new Response(
@@ -1686,9 +1790,7 @@ describe("LlmService", () => {
     try {
       const completion = await service.chatCompletions({
         model: "kimi-k2.5",
-        messages: [
-          { role: "user", content: "hello" },
-        ],
+        messages: [{ role: "user", content: "hello" }],
         metadata: { source: "test-suite" },
       });
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
@@ -1721,7 +1823,7 @@ describe("LlmService", () => {
     const payloads: Record<string, unknown>[] = [];
 
     globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const payload = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+      const payload = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
       payloads.push(payload);
       if (payloads.length === 1) {
         return new Response(
@@ -1738,7 +1840,7 @@ describe("LlmService", () => {
         );
       }
       return new Response(
-        "data: {\"id\":\"chunk_1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n",
+        'data: {"id":"chunk_1","choices":[{"index":0,"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n',
         {
           status: 200,
           headers: { "content-type": "text/event-stream" },
@@ -1750,9 +1852,7 @@ describe("LlmService", () => {
     try {
       for await (const chunk of service.chatCompletionsStream({
         model: "kimi-k2.5",
-        messages: [
-          { role: "user", content: "hello" },
-        ],
+        messages: [{ role: "user", content: "hello" }],
         metadata: { source: "test-suite" },
       })) {
         chunks.push(chunk);
@@ -1784,16 +1884,21 @@ describe("LlmService", () => {
 
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async () => new Response("", {
-      status: 301,
-      headers: { Location: "http://169.254.169.254/latest/meta-data/" },
-    })) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("", {
+          status: 301,
+          headers: { Location: "http://169.254.169.254/latest/meta-data/" },
+        }),
+    ) as unknown as typeof fetch;
 
     try {
-      await expect(service.chatCompletions({
-        providerId: "openai",
-        messages: [{ role: "user", content: "hello" }],
-      })).rejects.toThrowError(/blocked redirect/i);
+      await expect(
+        service.chatCompletions({
+          providerId: "openai",
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ).rejects.toThrowError(/blocked redirect/i);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1821,10 +1926,12 @@ describe("LlmService", () => {
     }) as unknown as typeof fetch;
 
     try {
-      await expect(service.chatCompletions({
-        providerId: "openai",
-        messages: [{ role: "user", content: "hello" }],
-      })).rejects.toThrow();
+      await expect(
+        service.chatCompletions({
+          providerId: "openai",
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ).rejects.toThrow();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1847,19 +1954,22 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = vi.fn(async () => new Response(
-      [
-        "data: {\"id\":\"chunk_multiline\",",
-        "data: \"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello from multiline sse\"}}]}",
-        "",
-        "data: [DONE]",
-        "",
-      ].join("\n"),
-      {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          [
+            'data: {"id":"chunk_multiline",',
+            'data: "choices":[{"index":0,"delta":{"content":"hello from multiline sse"}}]}',
+            "",
+            "data: [DONE]",
+            "",
+          ].join("\n"),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        ),
+    ) as unknown as typeof fetch;
 
     const chunks: Record<string, unknown>[] = [];
     try {
@@ -1876,7 +1986,9 @@ describe("LlmService", () => {
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.id).toBe("chunk_multiline");
-    expect(((chunks[0]?.choices as Array<Record<string, unknown>>)[0]?.delta as Record<string, unknown>)?.content).toBe("hello from multiline sse");
+    expect(((chunks[0]?.choices as Array<Record<string, unknown>>)[0]?.delta as Record<string, unknown>)?.content).toBe(
+      "hello from multiline sse",
+    );
   });
 
   it("merges the OpenAI shortlist into preview results even when /models is partial", async () => {
@@ -1896,15 +2008,18 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = vi.fn(async () => new Response(
-      JSON.stringify({
-        data: [{ id: "gpt-5.4-mini" }, { id: "gpt-4.1-mini" }],
-      }),
-      {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: "gpt-5.4-mini" }, { id: "gpt-4.1-mini" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
 
     try {
       const result = await service.previewModels({
@@ -1941,21 +2056,24 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = vi.fn(async () => new Response(
-      JSON.stringify({
-        id: "cmpl_estimated_cost",
-        choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
-        usage: {
-          prompt_tokens: 1_000,
-          completion_tokens: 500,
-          cached_prompt_tokens: 200,
-        },
-      }),
-      {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "cmpl_estimated_cost",
+            choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
+            usage: {
+              prompt_tokens: 1_000,
+              completion_tokens: 500,
+              cached_prompt_tokens: 200,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
 
     try {
       const response = await service.chatCompletions({
@@ -2020,18 +2138,18 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = vi.fn(async () => new Response(
-      JSON.stringify({
-        items: [
-          { name: "custom-alpha" },
-          { model: "custom-beta" },
-        ],
-      }),
-      {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            items: [{ name: "custom-alpha" }, { model: "custom-beta" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
 
     try {
       const models = await service.listModels("custom");
@@ -2058,13 +2176,13 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const originalFetch = globalThis.fetch;
 
-    globalThis.fetch = vi.fn(async () => new Response(
-      JSON.stringify({ data: [] }),
-      {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
 
     try {
       const models = await service.listModels("openai");
@@ -2146,7 +2264,7 @@ describe("LlmService", () => {
     let payloadBody: Record<string, unknown> | undefined;
     globalThis.fetch = vi.fn(async (input, init) => {
       requestedUrl = String(input);
-      payloadBody = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
         JSON.stringify({
           created: 123,
@@ -2233,10 +2351,12 @@ describe("LlmService", () => {
     }
 
     expect(requestedUrl).toBe("https://api.openai.com/v1/images/edits");
-    expect(bodyEntries).toEqual(expect.arrayContaining([
-      ["model", "gpt-image-1"],
-      ["prompt", "Edit the uploaded reference image"],
-    ]));
+    expect(bodyEntries).toEqual(
+      expect.arrayContaining([
+        ["model", "gpt-image-1"],
+        ["prompt", "Edit the uploaded reference image"],
+      ]),
+    );
     expect(bodyEntries.some(([key]) => key === "size")).toBe(false);
     expect(bodyEntries.some(([key]) => key === "image" || key === "image[]")).toBe(true);
   });

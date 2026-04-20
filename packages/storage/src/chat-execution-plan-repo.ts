@@ -150,7 +150,7 @@ export class ChatExecutionPlanRepository {
     const createdAt = input.createdAt ?? new Date().toISOString();
     const updatedAt = input.updatedAt ?? createdAt;
 
-    this.withSavepoint(() => {
+    this.withAtomicWrite(() => {
       this.insertPlanStmt.run({
         planId,
         sessionId: input.sessionId,
@@ -175,7 +175,7 @@ export class ChatExecutionPlanRepository {
 
   public patch(planId: string, input: ChatExecutionPlanPatchInput): ChatExecutionPlanRecord {
     const current = this.get(planId);
-    this.withSavepoint(() => {
+    this.withAtomicWrite(() => {
       this.patchPlanStmt.run({
         planId,
         status: input.status ?? current.status,
@@ -192,18 +192,22 @@ export class ChatExecutionPlanRepository {
   }
 
   public listBySession(sessionId: string, limit = 50): ChatExecutionPlanRecord[] {
-    const rows = toChatExecutionPlanRows(this.listPlansBySessionStmt.all({
-      sessionId,
-      limit: Math.max(1, Math.min(limit, 500)),
-    }));
+    const rows = toChatExecutionPlanRows(
+      this.listPlansBySessionStmt.all({
+        sessionId,
+        limit: Math.max(1, Math.min(limit, 500)),
+      }),
+    );
     return rows.map((row) => this.mapPlan(row));
   }
 
   public listByTurn(turnId: string, limit = 10): ChatExecutionPlanRecord[] {
-    const rows = toChatExecutionPlanRows(this.listPlansByTurnStmt.all({
-      turnId,
-      limit: Math.max(1, Math.min(limit, 100)),
-    }));
+    const rows = toChatExecutionPlanRows(
+      this.listPlansByTurnStmt.all({
+        turnId,
+        limit: Math.max(1, Math.min(limit, 100)),
+      }),
+    );
     return rows.map((row) => this.mapPlan(row));
   }
 
@@ -235,7 +239,11 @@ export class ChatExecutionPlanRepository {
     }
   }
 
-  private withSavepoint<T>(work: () => T): T {
+  private withAtomicWrite<T>(work: () => T): T {
+    if (this.db.dialect === "postgres") {
+      return this.db.transaction("immediate", work);
+    }
+
     const savepointName = `chat_execution_plan_${randomUUID().replaceAll("-", "_")}`;
     this.db.exec(`SAVEPOINT ${savepointName}`);
     try {
@@ -279,45 +287,49 @@ function isChatExecutionPlanRow(value: unknown): value is ChatExecutionPlanRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.plan_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.turn_id === "string"
-    && typeof value.mode === "string"
-    && typeof value.planning_mode === "string"
-    && typeof value.status === "string"
-    && typeof value.source === "string"
-    && typeof value.advisory_only === "number"
-    && typeof value.objective === "string"
-    && typeof value.summary === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && (typeof value.started_at === "string" || value.started_at === null)
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    typeof value.plan_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.turn_id === "string" &&
+    typeof value.mode === "string" &&
+    typeof value.planning_mode === "string" &&
+    typeof value.status === "string" &&
+    typeof value.source === "string" &&
+    typeof value.advisory_only === "number" &&
+    typeof value.objective === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    (typeof value.started_at === "string" || value.started_at === null) &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
 }
 
 function isChatExecutionPlanStepRow(value: unknown): value is ChatExecutionPlanStepRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.plan_id === "string"
-    && typeof value.step_id === "string"
-    && typeof value.step_index === "number"
-    && typeof value.objective === "string"
-    && (typeof value.success_criteria === "string" || value.success_criteria === null)
-    && (typeof value.suggested_tools_json === "string" || value.suggested_tools_json === null)
-    && (typeof value.expected_output === "string" || value.expected_output === null)
-    && typeof value.parallelizable === "number"
-    && (typeof value.depends_on_step_ids_json === "string" || value.depends_on_step_ids_json === null)
-    && (typeof value.delegated_role === "string" || value.delegated_role === null)
-    && typeof value.status === "string"
-    && (typeof value.summary === "string" || value.summary === null)
-    && (typeof value.error === "string" || value.error === null)
-    && (typeof value.started_at === "string" || value.started_at === null)
-    && (typeof value.finished_at === "string" || value.finished_at === null)
-    && (typeof value.child_run_id === "string" || value.child_run_id === null)
-    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
-    && (typeof value.child_session_id === "string" || value.child_session_id === null)
-    && (typeof value.child_turn_id === "string" || value.child_turn_id === null);
+  return (
+    typeof value.plan_id === "string" &&
+    typeof value.step_id === "string" &&
+    typeof value.step_index === "number" &&
+    typeof value.objective === "string" &&
+    (typeof value.success_criteria === "string" || value.success_criteria === null) &&
+    (typeof value.suggested_tools_json === "string" || value.suggested_tools_json === null) &&
+    (typeof value.expected_output === "string" || value.expected_output === null) &&
+    typeof value.parallelizable === "number" &&
+    (typeof value.depends_on_step_ids_json === "string" || value.depends_on_step_ids_json === null) &&
+    (typeof value.delegated_role === "string" || value.delegated_role === null) &&
+    typeof value.status === "string" &&
+    (typeof value.summary === "string" || value.summary === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    (typeof value.started_at === "string" || value.started_at === null) &&
+    (typeof value.finished_at === "string" || value.finished_at === null) &&
+    (typeof value.child_run_id === "string" || value.child_run_id === null) &&
+    (typeof value.durable_run_id === "string" || value.durable_run_id === null) &&
+    (typeof value.child_session_id === "string" || value.child_session_id === null) &&
+    (typeof value.child_turn_id === "string" || value.child_turn_id === null)
+  );
 }
 
 function toChatExecutionPlanRow(value: unknown): ChatExecutionPlanRow | undefined {
@@ -338,9 +350,7 @@ function mapStep(row: ChatExecutionPlanStepRow): ChatExecutionPlanStepRecord {
     index: row.step_index,
     objective: row.objective,
     successCriteria: row.success_criteria ?? undefined,
-    suggestedTools: row.suggested_tools_json
-      ? safeJsonParse<string[]>(row.suggested_tools_json, [])
-      : undefined,
+    suggestedTools: row.suggested_tools_json ? safeJsonParse<string[]>(row.suggested_tools_json, []) : undefined,
     expectedOutput: row.expected_output ?? undefined,
     parallelizable: row.parallelizable === 1,
     dependsOnStepIds: row.depends_on_step_ids_json
@@ -365,9 +375,5 @@ function toPersistedExecutionPlanStepId(planId: string, logicalStepId: string): 
 
 function toLogicalExecutionPlanStepId(planId: string, persistedStepId: string): string {
   const prefix = `${planId}:`;
-  return persistedStepId.startsWith(prefix)
-    ? persistedStepId.slice(prefix.length)
-    : persistedStepId;
+  return persistedStepId.startsWith(prefix) ? persistedStepId.slice(prefix.length) : persistedStepId;
 }
-
-

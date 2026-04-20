@@ -34,11 +34,12 @@ export function ChatDockSuggestionsSection(
     onSpecialistCandidatePatch,
     onAcceptDelegation,
   } = props;
+  const visibleProactiveRuns = proactiveRuns.filter((run) => run.status !== "no_action").slice(0, 4);
 
   return (
     <Panel
       className="chat-v11-agentic-card chat-v11-panel-inbox"
-      title={isCoworkSurface ? "Cowork inbox" : "Suggestions"}
+      title={isCoworkSurface ? "Suggested next moves" : "Suggestions"}
       actions={<span className="token-chip">{proactiveSuggestionCount} suggested</span>}
     >
       {capabilitySuggestions.length > 0 ? (
@@ -90,7 +91,12 @@ export function ChatDockSuggestionsSection(
                 </p>
                 <p>{suggestion.summary}</p>
                 <div className="chat-v11-row-actions">
-                  <button type="button" disabled={sending} onClick={() => void onCreateSpecialistDraft(suggestion)} className="gc-button">
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => void onCreateSpecialistDraft(suggestion)}
+                    className="gc-button"
+                  >
                     Draft dormant specialist
                   </button>
                 </div>
@@ -130,7 +136,8 @@ export function ChatDockSuggestionsSection(
                             `Approved ${candidate.title}.`,
                           )
                         }
-                       className="gc-button">
+                        className="gc-button"
+                      >
                         Approve
                       </button>
                     ) : null}
@@ -145,7 +152,8 @@ export function ChatDockSuggestionsSection(
                             `Activated ${candidate.title} for strong-match routing.`,
                           )
                         }
-                       className="gc-button">
+                        className="gc-button"
+                      >
                         Activate auto-match
                       </button>
                     ) : null}
@@ -162,7 +170,8 @@ export function ChatDockSuggestionsSection(
                             `Disabled ${candidate.title}.`,
                           )
                         }
-                       className="gc-button">
+                        className="gc-button"
+                      >
                         Disable
                       </button>
                     ) : null}
@@ -176,7 +185,8 @@ export function ChatDockSuggestionsSection(
                           `Retired ${candidate.title}.`,
                         )
                       }
-                     className="gc-button">
+                      className="gc-button"
+                    >
                       Retire
                     </button>
                   </div>
@@ -200,7 +210,7 @@ export function ChatDockSuggestionsSection(
       ) : null}
       {isCoworkSurface || (isChatSurface && proactiveSuggestionCount > 0) ? (
         <ul className="chat-v11-proactive-list">
-          {proactiveRuns.slice(0, 4).map((run) => (
+          {visibleProactiveRuns.map((run) => (
             <li key={run.runId}>
               <p>
                 <strong>{run.status}</strong> · {new Date(run.startedAt).toLocaleTimeString()}
@@ -208,8 +218,8 @@ export function ChatDockSuggestionsSection(
               <p>{run.reasoningSummary}</p>
             </li>
           ))}
-          {isCoworkSurface && proactiveRuns.length === 0 ? (
-            <li className="chat-v11-muted">No proactive runs yet for this session.</li>
+          {isCoworkSurface && visibleProactiveRuns.length === 0 ? (
+            <li className="chat-v11-muted">No suggested next moves are waiting right now.</li>
           ) : null}
         </ul>
       ) : null}

@@ -1967,6 +1967,9 @@ function buildOpenAiResponsesPayload(request: ChatCompletionRequest, model: stri
       ...(isRecord(payload.text) ? payload.text : {}),
       format: request.response_format,
     };
+    if (isJsonObjectResponseFormat(request.response_format)) {
+      payload.input = ensureJsonKeywordInResponsesInput(input);
+    }
   }
   if (request.tools !== undefined) payload.tools = mapOpenAiResponsesTools(request.tools);
   if (request.tool_choice !== undefined) payload.tool_choice = mapOpenAiResponsesToolChoice(request.tool_choice);
@@ -1976,6 +1979,59 @@ function buildOpenAiResponsesPayload(request: ChatCompletionRequest, model: stri
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
 
   return payload;
+}
+
+function isJsonObjectResponseFormat(format: ChatCompletionRequest["response_format"]): boolean {
+  return isRecord(format) && format.type === "json_object";
+}
+
+function ensureJsonKeywordInResponsesInput(input: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  if (responsesInputContainsJsonKeyword(input)) {
+    return input;
+  }
+
+  const patched = input.map((item) => ({ ...item }));
+  for (const item of patched) {
+    if (typeof item.role !== "string" || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const block of item.content) {
+      if (!isRecord(block) || typeof block.text !== "string") {
+        continue;
+      }
+      const normalizedType = typeof block.type === "string" ? block.type : "";
+      if (normalizedType !== "input_text" && normalizedType !== "output_text") {
+        continue;
+      }
+      block.text = `Return json.\n\n${block.text}`;
+      return patched;
+    }
+  }
+
+  return [
+    {
+      role: "user",
+      content: [{ type: "input_text", text: "Return json." }],
+    },
+    ...patched,
+  ];
+}
+
+function responsesInputContainsJsonKeyword(input: Array<Record<string, unknown>>): boolean {
+  for (const item of input) {
+    if (!Array.isArray(item.content)) {
+      continue;
+    }
+    for (const block of item.content) {
+      if (!isRecord(block) || typeof block.text !== "string") {
+        continue;
+      }
+      if (/\bjson\b/i.test(block.text)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function mapOpenAiResponsesTools(tools: ChatCompletionRequest["tools"]): ChatCompletionRequest["tools"] {

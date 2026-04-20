@@ -187,13 +187,13 @@
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed {
-  grid-template-columns: minmax(0, 1.85fr) minmax(320px, 0.95fr);
-  grid-template-areas: "secondary primary";
+  grid-template-columns: minmax(480px, 1.52fr) minmax(280px, 0.74fr);
+  grid-template-areas: "primary secondary";
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-open {
-  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.92fr) clamp(320px, 18vw, 360px);
-  grid-template-areas: "secondary primary dock";
+  grid-template-columns: minmax(500px, 1.48fr) minmax(260px, 0.66fr) clamp(272px, 15vw, 296px);
+  grid-template-areas: "primary secondary dock";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
@@ -548,6 +548,10 @@
 
 .chat-v11-secondary-column .chat-cowork-panel {
   min-height: clamp(500px, calc(100vh - 240px), 820px);
+}
+
+.chat-v11-secondary-column .chat-cowork-panel.is-empty {
+  min-height: clamp(360px, calc(100vh - 320px), 620px);
 }
 
 .chat-v11-secondary-column .chat-code-workbench {

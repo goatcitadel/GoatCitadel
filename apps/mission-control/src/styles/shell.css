@@ -180,8 +180,9 @@
 }
 
 .shell-workspace {
-  width: min(100%, 1280px);
-  margin-inline: auto;
+  width: 100%;
+  max-width: 1720px;
+  margin-inline: 0;
   min-width: 0;
   display: grid;
   gap: calc(var(--space-2) * var(--density-scale));
