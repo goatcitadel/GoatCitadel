@@ -2,6 +2,7 @@ import type { ChatCompletionRequest, ChatMessageRecord } from "@goatcitadel/cont
 
 const CHAT_COMPACTION_MAX_ARTIFACTS = 8;
 const PROMPT_CACHE_TRIM_NOTE = "Compacted recent tool/context payload to preserve a cache-stable prompt prefix.";
+const PROMPT_CACHE_TRIM_SNIPPET_LENGTH = 180;
 
 export function buildConversationCompactionSummary(messages: ChatMessageRecord[]): string | undefined {
   const normalized = messages
@@ -15,11 +16,19 @@ export function buildConversationCompactionSummary(messages: ChatMessageRecord[]
   }
 
   const decisionLines = normalized
-    .filter((message) => /(decid|choose|selected|plan|fix|implement|resolved|prefer|must|avoid|do not|don't|should)/i.test(message.content))
+    .filter((message) =>
+      /(decid|choose|selected|plan|fix|implement|resolved|prefer|must|avoid|do not|don't|should)/i.test(
+        message.content,
+      ),
+    )
     .slice(-6)
     .map((message) => `- ${toTitleCase(message.role)}: ${truncateSummaryLine(message.content)}`);
   const failureLines = normalized
-    .filter((message) => /(fail|error|timeout|blocked|could not|couldn't|retry|regression|problem|bug|denied|abort)/i.test(message.content))
+    .filter((message) =>
+      /(fail|error|timeout|blocked|could not|couldn't|retry|regression|problem|bug|denied|abort)/i.test(
+        message.content,
+      ),
+    )
     .slice(-6)
     .map((message) => `- ${toTitleCase(message.role)}: ${truncateSummaryLine(message.content)}`);
   const recentLines = normalized
@@ -31,7 +40,9 @@ export function buildConversationCompactionSummary(messages: ChatMessageRecord[]
     "Compacted conversation context.",
     decisionLines.length > 0 ? ["Decisions and constraints:", ...decisionLines].join("\n") : undefined,
     failureLines.length > 0 ? ["Failed attempts and issues:", ...failureLines].join("\n") : undefined,
-    artifacts.length > 0 ? ["Notable artifacts:", ...artifacts.map((artifact) => `- ${artifact}`)].join("\n") : undefined,
+    artifacts.length > 0
+      ? ["Notable artifacts:", ...artifacts.map((artifact) => `- ${artifact}`)].join("\n")
+      : undefined,
     ["Recent context:", ...recentLines].join("\n"),
   ].filter((section): section is string => Boolean(section));
 
@@ -123,16 +134,36 @@ function isPromptCacheTrimCandidate(message: ChatCompletionRequest["messages"][n
 function compactPromptCacheMessage(
   message: ChatCompletionRequest["messages"][number],
 ): ChatCompletionRequest["messages"][number] {
+  const snippet = buildPromptCacheSnippet(message.content);
+  const identity = [
+    `Role=${message.role}`,
+    typeof message.name === "string" && message.name.trim() ? `name=${message.name.trim()}` : undefined,
+    typeof message.tool_call_id === "string" && message.tool_call_id.trim()
+      ? `tool_call_id=${message.tool_call_id.trim()}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("; ");
   return {
     ...message,
-    content: `${PROMPT_CACHE_TRIM_NOTE} Role=${message.role}.`,
+    content: `${PROMPT_CACHE_TRIM_NOTE} ${identity}. Snippet=${snippet}`,
   };
 }
 
+function buildPromptCacheSnippet(content: ChatCompletionRequest["messages"][number]["content"]): string {
+  const raw = typeof content === "string" ? content : JSON.stringify(content);
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "[empty]";
+  }
+  if (normalized.length <= PROMPT_CACHE_TRIM_SNIPPET_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, PROMPT_CACHE_TRIM_SNIPPET_LENGTH - 1).trimEnd()}…`;
+}
+
 function estimateApproxMessageTokens(messages: ChatCompletionRequest["messages"]): number {
-  return Math.ceil(
-    messages.reduce((total, message) => total + estimateApproxContentTokens(message.content), 0),
-  );
+  return Math.ceil(messages.reduce((total, message) => total + estimateApproxContentTokens(message.content), 0));
 }
 
 function estimateApproxContentTokens(content: ChatCompletionRequest["messages"][number]["content"]): number {

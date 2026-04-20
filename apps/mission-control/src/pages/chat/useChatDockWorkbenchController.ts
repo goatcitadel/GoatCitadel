@@ -2,6 +2,7 @@ import type { ChatMessageRecord, ChatMode, ChatThreadResponse } from "@goatcitad
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import { fetchOrchestrationRun, fetchOrchestrationRunCheckpoints } from "../../api/platform";
+import { useRefreshSubscription } from "../../hooks/useRefreshSubscription";
 import { deriveCoworkItems } from "./chat-page-derivations";
 import { defaultDockOpenForMode } from "./surface-config";
 import { useChatWorkbench } from "./useChatWorkbench";
@@ -60,7 +61,7 @@ export function useChatDockWorkbenchController(input: {
   );
   const canonicalOrchestrationRunId = latestOrchestration?.runId?.trim() || undefined;
 
-  useEffect(() => {
+  const refreshOrchestrationRun = useCallback(async () => {
     if (input.messageMode !== "cowork" || !canonicalOrchestrationRunId) {
       setOrchestrationRun(null);
       setOrchestrationCheckpoints([]);
@@ -69,39 +70,59 @@ export function useChatDockWorkbenchController(input: {
       return;
     }
 
-    let cancelled = false;
     setOrchestrationLoading(true);
     setOrchestrationError(null);
+    try {
+      const [runResult, checkpointResult] = await Promise.allSettled([
+        fetchOrchestrationRun(canonicalOrchestrationRunId),
+        fetchOrchestrationRunCheckpoints(canonicalOrchestrationRunId),
+      ]);
 
-    void Promise.all([
-      fetchOrchestrationRun(canonicalOrchestrationRunId),
-      fetchOrchestrationRunCheckpoints(canonicalOrchestrationRunId),
-    ])
-      .then(([run, checkpoints]) => {
-        if (cancelled) {
-          return;
-        }
-        setOrchestrationRun(run);
-        setOrchestrationCheckpoints(checkpoints.items);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        setOrchestrationRun(null);
-        setOrchestrationCheckpoints([]);
-        setOrchestrationError(error instanceof Error ? error.message : "Failed to load orchestration run.");
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setOrchestrationLoading(false);
-        }
-      });
+      if (runResult.status === "fulfilled") {
+        setOrchestrationRun(runResult.value);
+      }
+      if (checkpointResult.status === "fulfilled") {
+        setOrchestrationCheckpoints(checkpointResult.value.items);
+      }
 
-    return () => {
-      cancelled = true;
-    };
+      if (runResult.status === "rejected" || checkpointResult.status === "rejected") {
+        const failedParts = [
+          ...(runResult.status === "rejected" ? ["run"] : []),
+          ...(checkpointResult.status === "rejected" ? ["checkpoints"] : []),
+        ];
+        const prefix =
+          failedParts.length === 2
+            ? "Orchestration refresh failed while loading "
+            : "Orchestration refresh partially failed while loading ";
+        const suffix =
+          failedParts.length === 2
+            ? "run data and checkpoints."
+            : failedParts[0] === "run"
+              ? "run data."
+              : "checkpoints.";
+        setOrchestrationError(`${prefix}${suffix}`);
+      }
+    } finally {
+      setOrchestrationLoading(false);
+    }
   }, [canonicalOrchestrationRunId, input.messageMode]);
+
+  useEffect(() => {
+    void refreshOrchestrationRun();
+  }, [refreshOrchestrationRun]);
+
+  useRefreshSubscription(
+    "chat",
+    async () => {
+      await refreshOrchestrationRun();
+    },
+    {
+      enabled: input.messageMode === "cowork" && Boolean(canonicalOrchestrationRunId),
+      coalesceMs: 800,
+      staleMs: 20_000,
+      pollIntervalMs: 15_000,
+    },
+  );
 
   const coworkItems = useMemo(
     () => deriveCoworkItems(input.messages, input.localNotices, latestOrchestration),

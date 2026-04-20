@@ -779,6 +779,21 @@ function createBaseSchema(db: DatabaseSync): void {
       PRIMARY KEY (endpoint, idempotency_key)
     );
 
+    CREATE TABLE IF NOT EXISTS mutation_idempotency (
+      method TEXT NOT NULL,
+      route_path TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      actor_scope TEXT NOT NULL DEFAULT '',
+      payload_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (method, route_path, idempotency_key, actor_scope)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_updated
+      ON mutation_idempotency(updated_at DESC);
+
     CREATE TABLE IF NOT EXISTS approvals (
       approval_id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,

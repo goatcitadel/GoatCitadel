@@ -1,7 +1,10 @@
 import type { ChatMode } from "@goatcitadel/contracts";
 import { ActionButton } from "../../components/ActionButton";
-import { StatusChip } from "../../components/StatusChip";
 import { getMissionControlSurfaceConfig } from "./surface-config";
+
+function formatCount(value: number, singular: string, plural = `${singular}s`) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
 
 export function MissionControlEmptyState({
   mode,
@@ -43,6 +46,7 @@ export function MissionControlEmptyState({
             { label: "Open Cowork", onClick: onOpenCowork },
           ];
   const visiblePrompts = mode === "chat" ? config.emptyPrompts.slice(0, 2) : [];
+  const summaryLine = `${formatCount(projectCount, "project")} • ${formatCount(sessionCount, "session")}`;
 
   return (
     <article className={`card chat-v11-empty-shell mission-empty-shell mode-${mode}`}>
@@ -53,16 +57,18 @@ export function MissionControlEmptyState({
       </div>
       <div className="mission-empty-shell-actions">
         <ActionButton
-          label={mode === "code" ? "Start code session" : `Start ${config.label.toLowerCase()} session`}
+          label={
+            mode === "code"
+              ? "Start code session"
+              : mode === "chat"
+                ? "Start chat"
+                : `Start ${config.label.toLowerCase()} session`
+          }
           onClick={onCreateSession}
         />
-        <div className="mission-empty-shell-stats">
-          <StatusChip tone="muted">{sessionCount} sessions</StatusChip>
-          <StatusChip tone="muted">{projectCount} projects</StatusChip>
-          <StatusChip tone={approvalsCount > 0 ? "warning" : "success"}>
-            {approvalsCount > 0 ? `${approvalsCount} approvals waiting` : "Approvals clear"}
-          </StatusChip>
-        </div>
+        <p className="mission-empty-shell-summary">
+          {summaryLine} · <span>{approvalsCount > 0 ? `${approvalsCount} approvals waiting` : "Approvals clear"}</span>
+        </p>
       </div>
       <div className="mission-empty-shell-context">
         <div className="mission-empty-shell-context-copy">

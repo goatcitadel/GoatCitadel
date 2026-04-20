@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Outbound chat execution stays centralized so stream lifecycle, approval context, and retry handoff remain consistent. */
 import type {
   ChatAttachmentRecord,
   ChatCapabilityUpgradeSuggestion,
@@ -41,7 +42,11 @@ import {
   type FinalizedStreamMessageState,
 } from "./chat-page-pure-helpers";
 import { deriveThreadPendingApproval, mergePendingApproval, type PendingApprovalRecord } from "./chat-pending-approval";
-import { deriveThreadPendingUserInput, mergePendingUserInput, type PendingUserInputRecord } from "./chat-pending-user-input";
+import {
+  deriveThreadPendingUserInput,
+  mergePendingUserInput,
+  type PendingUserInputRecord,
+} from "./chat-pending-user-input";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
 export type PendingApprovalState = PendingApprovalRecord;
@@ -457,20 +462,23 @@ export function useChatOutboundExecution(input: {
         clearTimeout(streamReconcileTimeoutRef.current);
       }
       const versionAtSchedule = messageMutationVersionRef.current;
-      streamReconcileTimeoutRef.current = setTimeout(() => {
-        streamReconcileTimeoutRef.current = null;
-        if (selectedSessionIdRef.current !== sessionId) {
-          return;
-        }
-        if (messageMutationVersionRef.current !== versionAtSchedule) {
-          scheduleStreamMessageReconciliation(sessionId);
-          return;
-        }
-        void loadSessionCoreState(sessionId, {
-          background: true,
-          includeThread: true,
-        }).catch((err: Error) => setError(err.message));
-      }, options?.immediate ? 0 : 400);
+      streamReconcileTimeoutRef.current = setTimeout(
+        () => {
+          streamReconcileTimeoutRef.current = null;
+          if (selectedSessionIdRef.current !== sessionId) {
+            return;
+          }
+          if (messageMutationVersionRef.current !== versionAtSchedule) {
+            scheduleStreamMessageReconciliation(sessionId);
+            return;
+          }
+          void loadSessionCoreState(sessionId, {
+            background: true,
+            includeThread: true,
+          }).catch((err: Error) => setError(err.message));
+        },
+        options?.immediate ? 0 : 400,
+      );
     },
     [loadSessionCoreState, messageMutationVersionRef, setError],
   );
@@ -529,7 +537,6 @@ export function useChatOutboundExecution(input: {
           },
         });
         setError(null);
-        setPendingApproval(null);
         session = await ensureSession();
         recordChatOutboundPhase({
           phase: "session_ready",
@@ -540,6 +547,7 @@ export function useChatOutboundExecution(input: {
           message: `Resolved chat session for ${item.action}`,
         });
         if (shouldExecuteLocalChatCommand(item.action, trimmedContent)) {
+          setPendingApproval(null);
           recordChatOutboundPhase({
             phase: "command_handoff",
             action: item.action,
@@ -596,6 +604,7 @@ export function useChatOutboundExecution(input: {
                 attachments: localAttachments.length > 0 ? localAttachments : undefined,
               };
         if (streamEnabled) {
+          setPendingApproval(null);
           const streamToken = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const controller = new AbortController();
           const activeStream: ActiveChatStreamState = {
@@ -833,6 +842,7 @@ export function useChatOutboundExecution(input: {
             immediate: missingFinalizedMessage,
           });
         } else {
+          setPendingApproval(null);
           const sent =
             item.action === "retry" && item.targetTurnId
               ? await retryChatTurn(session.sessionId, item.targetTurnId, {
@@ -1101,9 +1111,14 @@ export function useChatOutboundExecution(input: {
       if (!selectedSession || !pendingUserInput) return;
       setUserInputPending(true);
       try {
-        const result = await answerChatUserInputPrompt(selectedSession.sessionId, pendingUserInput.turnId, pendingUserInput.promptId, {
-          response,
-        });
+        const result = await answerChatUserInputPrompt(
+          selectedSession.sessionId,
+          pendingUserInput.turnId,
+          pendingUserInput.promptId,
+          {
+            response,
+          },
+        );
         setPendingUserInput(null);
         pushLocalNotice(
           result.resumed

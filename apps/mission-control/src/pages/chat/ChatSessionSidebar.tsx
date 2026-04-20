@@ -3,6 +3,14 @@ import { FieldHelp } from "../../components/FieldHelp";
 import { ChatSessionRail } from "../../components/chat/ChatSessionRail";
 import { getMissionControlSurfaceConfig } from "./surface-config";
 
+function formatSummaryCount(value: string, label: string) {
+  const lowerLabel = label.toLowerCase();
+  if (value === "1" && lowerLabel.endsWith("s")) {
+    return `${value} ${lowerLabel.slice(0, -1)}`;
+  }
+  return `${value} ${lowerLabel}`;
+}
+
 export function ChatSessionSidebar(props: {
   mode: ChatMode;
   showProjectCreate: boolean;
@@ -69,6 +77,8 @@ export function ChatSessionSidebar(props: {
         ? "Projects help keep orchestration grouped by objective."
         : "Project binding keeps code sessions precise and repo-aware.";
   const visibleSummaryCards = mode === "chat" ? workspaceSummaryCards : workspaceSummaryCards.slice(0, 2);
+  const workspaceSummaryLine =
+    mode === "chat" ? visibleSummaryCards.map((item) => formatSummaryCount(item.value, item.label)).join(" • ") : null;
 
   return (
     <aside className={`panel panel-soft panel-pad-default chat-v11-left mode-${mode}`}>
@@ -77,14 +87,18 @@ export function ChatSessionSidebar(props: {
           <h3>{summaryTitle}</h3>
           {mode === "chat" ? <p className="chat-v11-muted">{summaryCopy}</p> : null}
         </div>
-        <div className="chat-v11-summary-grid">
-          {visibleSummaryCards.map((item) => (
-            <div key={item.label} className="chat-v11-summary-card">
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
-        </div>
+        {workspaceSummaryLine ? (
+          <p className="chat-v11-summary-line">{workspaceSummaryLine}</p>
+        ) : (
+          <div className="chat-v11-summary-grid">
+            {visibleSummaryCards.map((item) => (
+              <div key={item.label} className="chat-v11-summary-card">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <div className="chat-v11-left-head">
         <div className="chat-v11-left-actions">
@@ -98,16 +112,22 @@ export function ChatSessionSidebar(props: {
               ? `Starting ${surfaceConfig.label.toLowerCase()}...`
               : mode === "code"
                 ? "Start code session"
-                : `New ${surfaceConfig.label.toLowerCase()} session`}
+                : mode === "chat"
+                  ? "Start chat"
+                  : `Start ${surfaceConfig.label.toLowerCase()} session`}
           </button>
           <button
             type="button"
-            className={["gc-button", `chat-v11-project-toggle${showProjectCreate ? " active" : ""}`]
+            className={[
+              "gc-nav-button",
+              "gc-nav-tier-chip",
+              `chat-v11-project-toggle${showProjectCreate ? " active" : ""}`,
+            ]
               .filter(Boolean)
               .join(" ")}
             onClick={onToggleProjectCreate}
           >
-            {showProjectCreate ? "Hide project form" : "New project"}
+            {showProjectCreate ? "Hide project form" : "Project"}
           </button>
         </div>
         <input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Find a chat..." />

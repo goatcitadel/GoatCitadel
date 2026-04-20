@@ -33,23 +33,33 @@ vi.mock("../hooks/useAction", () => ({
 }));
 vi.mock("../components/DataToolbar", () => ({
   DataToolbar: ({ primary, secondary }: { primary?: React.ReactNode; secondary?: React.ReactNode }) => (
-    <div>{primary}{secondary}</div>
+    <div>
+      {primary}
+      {secondary}
+    </div>
   ),
 }));
 vi.mock("../components/FieldHelp", () => ({
   FieldHelp: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../components/OperatorSplitLayout", () => ({
-  OperatorSplitLayout: ({
-    primary,
-    inspector,
-  }: {
-    primary?: React.ReactNode;
-    inspector?: React.ReactNode;
-  }) => <div>{primary}{inspector}</div>,
+  OperatorSplitLayout: ({ primary, inspector }: { primary?: React.ReactNode; inspector?: React.ReactNode }) => (
+    <div>
+      {primary}
+      {inspector}
+    </div>
+  ),
 }));
 vi.mock("../components/PageHeader", () => ({
-  PageHeader: ({ title, subtitle, actions }: { title?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode }) => (
+  PageHeader: ({
+    title,
+    subtitle,
+    actions,
+  }: {
+    title?: React.ReactNode;
+    subtitle?: React.ReactNode;
+    actions?: React.ReactNode;
+  }) => (
     <header>
       <h1>{title}</h1>
       <p>{subtitle}</p>
@@ -58,7 +68,12 @@ vi.mock("../components/PageHeader", () => ({
   ),
 }));
 vi.mock("../components/Panel", () => ({
-  Panel: ({ title, subtitle, actions, children }: {
+  Panel: ({
+    title,
+    subtitle,
+    actions,
+    children,
+  }: {
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
     actions?: React.ReactNode;
@@ -73,12 +88,21 @@ vi.mock("../components/Panel", () => ({
   ),
 }));
 vi.mock("../components/SelectOrCustom", () => ({
-  SelectOrCustom: ({ value, customLabel }: { value?: string; customLabel?: string }) => <div>{customLabel}{value}</div>,
+  SelectOrCustom: ({ value, customLabel }: { value?: string; customLabel?: string }) => (
+    <div>
+      {customLabel}
+      {value}
+    </div>
+  ),
 }));
 vi.mock("../components/ConfirmModal", () => ({
-  ConfirmModal: ({ open, title, message }: { open?: boolean; title?: string; message?: string }) => (
-    open ? <div>{title}{message}</div> : null
-  ),
+  ConfirmModal: ({ open, title, message }: { open?: boolean; title?: string; message?: string }) =>
+    open ? (
+      <div>
+        {title}
+        {message}
+      </div>
+    ) : null,
 }));
 vi.mock("../components/StatusChip", () => ({
   StatusChip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
@@ -98,17 +122,31 @@ vi.mock("../components/ui", () => ({
   }) => (
     <select value={value} onChange={(event) => onChange?.(event.target.value)}>
       {options.map((option) => (
-        <option key={option.value} value={option.value}>{option.label}</option>
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
       ))}
     </select>
   ),
 }));
 vi.mock("../components/ui/GCEmptyState", () => ({
-  GCEmptyState: ({ title, subtitle, action }: { title?: React.ReactNode; subtitle?: React.ReactNode; action?: React.ReactNode }) => (
+  GCEmptyState: ({
+    title,
+    subtitle,
+    description,
+    action,
+    primaryAction,
+  }: {
+    title?: React.ReactNode;
+    subtitle?: React.ReactNode;
+    description?: React.ReactNode;
+    action?: React.ReactNode;
+    primaryAction?: React.ReactNode;
+  }) => (
     <section>
       <h3>{title}</h3>
-      <p>{subtitle}</p>
-      {action}
+      <p>{description ?? subtitle}</p>
+      {primaryAction ?? action}
     </section>
   ),
 }));

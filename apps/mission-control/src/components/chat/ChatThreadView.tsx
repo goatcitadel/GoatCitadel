@@ -39,14 +39,31 @@ function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): boolean {
   return Boolean(turn.trace.completion?.repaired);
 }
 
+function formatRoutingTarget(providerId?: string, model?: string, apiStyle?: string): string | null {
+  const parts = [providerId, model, apiStyle].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 function summarizeRouting(turn: ChatThreadTurnRecord): string[] {
-  const parts = [
-    turn.trace.routing.effectiveProviderId,
-    turn.trace.routing.effectiveModel,
-    turn.trace.routing.effectiveApiStyle,
-    turn.trace.routing.fallbackUsed ? "fallback" : undefined,
-  ].filter(Boolean);
-  return parts as string[];
+  const requested = formatRoutingTarget(turn.trace.routing.primaryProviderId, turn.trace.routing.primaryModel);
+  const effective =
+    formatRoutingTarget(
+      turn.trace.routing.effectiveProviderId,
+      turn.trace.routing.effectiveModel,
+      turn.trace.routing.effectiveApiStyle,
+    ) ??
+    turn.trace.model ??
+    null;
+  const parts = [effective ? `effective ${effective}` : null];
+  if (requested && requested !== effective) {
+    parts.push(`requested ${requested}`);
+  }
+  if (turn.trace.routing.fallbackReason) {
+    parts.push(`fallback: ${turn.trace.routing.fallbackReason}`);
+  } else if (turn.trace.routing.fallbackUsed) {
+    parts.push("fallback used");
+  }
+  return parts.filter((value): value is string => Boolean(value));
 }
 
 function getTraceTone(trace: ChatTurnTraceRecord): "muted" | "warning" | "critical" | "success" {
@@ -344,7 +361,17 @@ function ChatDelegationRunSummary({ delegationRun }: { delegationRun: ActiveChat
   return (
     <section className="chat-v11-turn-card chat-v11-thread-delegation">
       <div className="chat-v11-turn-strip chat-v11-execution-strip">
-        <StatusChip tone={delegationRun.status === "failed" ? "critical" : delegationRun.status === "partial" ? "warning" : delegationRun.status === "completed" ? "success" : "warning"}>
+        <StatusChip
+          tone={
+            delegationRun.status === "failed"
+              ? "critical"
+              : delegationRun.status === "partial"
+                ? "warning"
+                : delegationRun.status === "completed"
+                  ? "success"
+                  : "warning"
+          }
+        >
           {delegationRun.status}
         </StatusChip>
         <span>Delegation run</span>

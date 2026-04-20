@@ -83,12 +83,12 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       description: "Deterministic verification workspace seeded for automated testing.",
     });
     const sessions = [
-      ...Array.from({ length: Math.max(0, parsed.data.sessionCount - 1) }, (_item, index) => (
+      ...Array.from({ length: Math.max(0, parsed.data.sessionCount - 1) }, (_item, index) =>
         fastify.gateway.createChatSession({
           title: `${parsed.data.sessionTitle} ${index + 2}`,
           workspaceId: workspace.workspaceId,
-        })
-      )),
+        }),
+      ),
       fastify.gateway.createChatSession({
         title: parsed.data.sessionTitle,
         workspaceId: workspace.workspaceId,
@@ -148,9 +148,10 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
           role: (index % 2 === 0 ? "user" : "assistant") as ChatMessageRecord["role"],
           actorType: (index % 2 === 0 ? "user" : "agent") as ChatMessageRecord["actorType"],
           actorId: index % 2 === 0 ? "verification-operator" : "goatherder",
-          content: index % 2 === 0
-            ? `Verification long-thread prompt ${index + 1}`
-            : `Verification long-thread response ${index + 1}`,
+          content:
+            index % 2 === 0
+              ? `Verification long-thread prompt ${index + 1}`
+              : `Verification long-thread response ${index + 1}`,
           timestamp: new Date(offset).toISOString(),
         });
       }
@@ -162,9 +163,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         if (!userMessage || userMessage.role !== "user") {
           continue;
         }
-        const assistantMessage = messages[index + 1]?.role === "assistant"
-          ? messages[index + 1]
-          : undefined;
+        const assistantMessage = messages[index + 1]?.role === "assistant" ? messages[index + 1] : undefined;
         const turnId = randomUUID();
         storage.chatTurnTraces.create({
           turnId,
@@ -321,6 +320,8 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const now = new Date().toISOString();
+    const orphanLeaseHeartbeatAt = new Date(Date.now() - 30_000).toISOString();
+    const orphanLeaseExpiresAt = new Date(Date.now() - 15_000).toISOString();
     const orphanApproval = await fastify.gateway.createApproval({
       kind: "verification.approval.wait",
       riskLevel: "danger",
@@ -348,6 +349,9 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       startedAt: now,
       finishedAt: undefined,
       lastError: undefined,
+      leaseOwnerId: "verification-orphan-worker",
+      leaseHeartbeatAt: orphanLeaseHeartbeatAt,
+      leaseExpiresAt: orphanLeaseExpiresAt,
       updatedAt: now,
     });
 
@@ -439,9 +443,10 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
 
       const result = await fastify.gateway.createChatCompletion(payload);
       const firstChoice = Array.isArray(result.choices) ? result.choices[0] : undefined;
-      const content = typeof firstChoice?.message?.content === "string"
-        ? firstChoice.message.content
-        : JSON.stringify(firstChoice?.message?.content ?? "").slice(0, 240);
+      const content =
+        typeof firstChoice?.message?.content === "string"
+          ? firstChoice.message.content
+          : JSON.stringify(firstChoice?.message?.content ?? "").slice(0, 240);
       return reply.send({
         ok: true,
         providerId: payload.providerId,
@@ -482,9 +487,10 @@ function buildProviderExercisePayload(
       },
       {
         role: "user" as const,
-        content: scenario === "structured"
-          ? "Return a short JSON object with keys summary and confidence."
-          : "Reply with one short sentence confirming the provider is healthy.",
+        content:
+          scenario === "structured"
+            ? "Return a short JSON object with keys summary and confidence."
+            : "Reply with one short sentence confirming the provider is healthy.",
       },
     ],
   };
@@ -492,20 +498,22 @@ function buildProviderExercisePayload(
   if (scenario === "tools") {
     return {
       ...base,
-      tools: [{
-        type: "function",
-        function: {
-          name: "echo_status",
-          description: "Echo a health status message.",
-          parameters: {
-            type: "object",
-            properties: {
-              message: { type: "string" },
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "echo_status",
+            description: "Echo a health status message.",
+            parameters: {
+              type: "object",
+              properties: {
+                message: { type: "string" },
+              },
+              required: ["message"],
             },
-            required: ["message"],
           },
         },
-      }],
+      ],
       tool_choice: "auto",
     };
   }

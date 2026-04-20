@@ -299,6 +299,211 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
   });
 
+  it("re-checks MCP policy immediately before runtime invoke and blocks if the second pass tightens", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const host = createHost({
+      policyEngine: {
+        invoke: vi
+          .fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>()
+          .mockResolvedValueOnce({
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-preview-1",
+            result: { dryRun: true },
+          })
+          .mockResolvedValueOnce({
+            outcome: "blocked",
+            policyReason: "blocked by runtime trust gate",
+            auditEventId: "audit-preview-2",
+          }),
+        evaluateAccess: vi
+          .fn<ToolInvocationCoordinatorHost["policyEngine"]["evaluateAccess"]>()
+          .mockReturnValueOnce({
+            allowed: true,
+            requiresApproval: false,
+            reasonCodes: ["preview_allowed"],
+          })
+          .mockReturnValueOnce({
+            allowed: false,
+            requiresApproval: false,
+            reasonCodes: ["runtime_blocked"],
+          }),
+      },
+      invokeMcpRuntimeTool,
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: "blocked by runtime trust gate",
+      policyReason: "blocked by runtime trust gate",
+      reasonCodes: ["runtime_blocked"],
+    });
+    expect(host.policyEngine.evaluateAccess).toHaveBeenCalledTimes(2);
+    expect(host.policyEngine.invoke).toHaveBeenCalledTimes(2);
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it("surfaces second-pass approval requirements before MCP runtime invoke", async () => {
+    const invokeMcpRuntimeTool = vi.fn();
+    const host = createHost({
+      policyEngine: {
+        invoke: vi
+          .fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>()
+          .mockResolvedValueOnce({
+            outcome: "executed",
+            policyReason: "allowed",
+            auditEventId: "audit-preview-1",
+            result: { dryRun: true },
+          })
+          .mockResolvedValueOnce({
+            outcome: "approval_required",
+            approvalId: "approval-runtime-1",
+            policyReason: "late approval required",
+            auditEventId: "audit-preview-2",
+          }),
+        evaluateAccess: vi
+          .fn<ToolInvocationCoordinatorHost["policyEngine"]["evaluateAccess"]>()
+          .mockReturnValueOnce({
+            allowed: true,
+            requiresApproval: false,
+            reasonCodes: ["preview_allowed"],
+          })
+          .mockReturnValueOnce({
+            allowed: true,
+            requiresApproval: true,
+            reasonCodes: ["runtime_approval_required"],
+          }),
+      },
+      invokeMcpRuntimeTool,
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      approvalRequired: true,
+      approvalId: "approval-runtime-1",
+      policyReason: "late approval required",
+      reasonCodes: ["runtime_approval_required"],
+    });
+    expect(host.policyEngine.evaluateAccess).toHaveBeenCalledTimes(2);
+    expect(host.policyEngine.invoke).toHaveBeenCalledTimes(2);
+    expect(invokeMcpRuntimeTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "executed",
+      invokeResult: {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-executed",
+        result: { dryRun: true },
+      } satisfies ToolInvokeResult,
+      expectedGenericOutcome: "executed",
+      expectedMcp: {
+        ok: true,
+      },
+      runtimeCalls: 1,
+    },
+    {
+      label: "blocked",
+      invokeResult: {
+        outcome: "blocked",
+        policyReason: "blocked by risk gate",
+        auditEventId: "audit-blocked",
+      } satisfies ToolInvokeResult,
+      expectedGenericOutcome: "blocked",
+      expectedMcp: {
+        ok: false,
+        error: "blocked by risk gate",
+        policyReason: "blocked by risk gate",
+      },
+      runtimeCalls: 0,
+    },
+    {
+      label: "approval_required",
+      invokeResult: {
+        outcome: "approval_required",
+        approvalId: "approval-shared-1",
+        policyReason: "needs approval",
+        auditEventId: "audit-approval",
+      } satisfies ToolInvokeResult,
+      expectedGenericOutcome: "approval_required",
+      expectedMcp: {
+        ok: false,
+        approvalRequired: true,
+        approvalId: "approval-shared-1",
+        policyReason: "needs approval",
+      },
+      runtimeCalls: 0,
+    },
+  ])("keeps generic and MCP policy outcomes aligned for $label decisions", async (scenario) => {
+    const invokeMcpRuntimeTool = vi.fn(async () => ({
+      ok: true,
+      output: {
+        payload: "ok",
+      },
+    }));
+    const invoke = vi.fn(async () => scenario.invokeResult);
+    const host = createHost({
+      invokeMcpRuntimeTool,
+      policyEngine: {
+        invoke,
+        evaluateAccess: vi.fn(() => ({
+          allowed: false,
+          requiresApproval: false,
+          reasonCodes: ["preview_only"],
+        })),
+      },
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const generic = await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "mcp.invoke",
+        args: {
+          serverId: "srv-1",
+          toolName: "tool.echo",
+          arguments: { value: "hello" },
+        },
+      }),
+    );
+    const mcp = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      agentId: "operator",
+      sessionId: "session-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(generic.outcome).toBe(scenario.expectedGenericOutcome);
+    expect(mcp).toMatchObject(scenario.expectedMcp);
+    expect(invokeMcpRuntimeTool).toHaveBeenCalledTimes(scenario.runtimeCalls);
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "mcp.invoke",
+        dryRun: true,
+      }),
+    );
+  });
+
   it("emits explicit realtime metadata for successful MCP invocation", async () => {
     const publishRealtime = vi.fn();
     const coordinator = new ToolInvocationCoordinatorService(

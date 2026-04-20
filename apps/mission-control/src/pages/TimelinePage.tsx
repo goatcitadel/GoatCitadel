@@ -13,6 +13,7 @@ export type TimelineTab = "activity" | "sessions" | "scheduler" | "improvement";
 interface TimelinePageProps {
   activeTab: TimelineTab;
   workspaceId?: string;
+  showTechnicalDetails?: boolean;
   onTabChange: (tab: TimelineTab) => void;
 }
 
@@ -23,69 +24,30 @@ const ITEMS: Array<{ id: TimelineTab; label: string }> = [
   { id: "improvement", label: "Improvement" },
 ];
 
-export function TimelinePage({ activeTab, onTabChange }: TimelinePageProps) {
-  const { data, error, isRefreshing } = useTimelineSummary();
+export function TimelinePage({ activeTab, showTechnicalDetails = false, onTabChange }: TimelinePageProps) {
+  const { data, error } = useTimelineSummary();
 
   const activeSection = useMemo<(typeof ITEMS)[number]>(
     () => ITEMS.find((item) => item.id === activeTab) ?? ITEMS[0]!,
     [activeTab],
   );
-  const secondarySections = useMemo(() => ITEMS.filter((item) => item.id !== activeSection.id), [activeSection.id]);
 
   const events = data?.events.items ?? [];
   const sessions = data?.sessions.items ?? [];
   const schedulerJobs = data?.scheduler.jobs ?? [];
-  const schedulerReviewQueue = data?.scheduler.reviewQueue ?? [];
+  const schedulerReviewQueue = filterSchedulerReviewQueue(data?.scheduler.reviewQueue ?? [], showTechnicalDetails);
   const improvementReports = data?.improvement.reports ?? [];
   const replayRuns = data?.improvement.replayRuns ?? [];
-  const sessionAttentionCount = sessions.filter((session) => {
-    const record = session as unknown as Record<string, unknown>;
-    const status = String(record.lifecycleStatus ?? record.status ?? "").toLowerCase();
-    return (
-      status.includes("error") || status.includes("fail") || status.includes("pause") || status.includes("blocked")
-    );
-  }).length;
+  const timelineSummaryLine = `${events.length} live events retained · ${sessions.length} recent sessions · ${schedulerReviewQueue.length > 0 ? `${schedulerReviewQueue.length} scheduler items waiting` : "scheduler clear"} · ${improvementReports.length} reports`;
 
   return (
     <section className="space-page stack-lg">
       <SectionTitle
         title="Timeline"
-        subtitle="Keep one runtime story in focus while adjacent lanes stay collapsed until they matter."
+        subtitle="Keep activity, sessions, scheduler, and improvement history focused without a second summary panel."
         density="compact"
       />
-      <div className="workflow-summary-strip operator-summary-strip">
-        <StatCard
-          label="Focus"
-          value={labelForTab(activeTab)}
-          note="Primary monitoring lane"
-          tone="accent"
-          compact
-          className="operator-summary-card"
-        />
-        <StatCard
-          label="Live events"
-          value={String(events.length)}
-          note={isRefreshing ? "Refreshing retained activity" : "Recent retained activity"}
-          compact
-          className="operator-summary-card"
-        />
-        <StatCard
-          label="Session watch"
-          value={sessionAttentionCount > 0 ? `${sessionAttentionCount} need review` : `${sessions.length} recent`}
-          note="Lifecycle and recovery posture"
-          tone={sessionAttentionCount > 0 ? "warning" : "default"}
-          compact
-          className="operator-summary-card"
-        />
-        <StatCard
-          label="Queue watch"
-          value={schedulerReviewQueue.length > 0 ? `${schedulerReviewQueue.length} waiting` : "Queues clear"}
-          note={`${improvementReports.length} improvement reports and ${replayRuns.length} replay runs`}
-          tone={schedulerReviewQueue.length > 0 ? "warning" : "default"}
-          compact
-          className="operator-summary-card"
-        />
-      </div>
+      <p className="office-subtitle">{timelineSummaryLine}</p>
       <PageTabs
         items={ITEMS}
         activeId={activeTab}
@@ -125,38 +87,6 @@ export function TimelinePage({ activeTab, onTabChange }: TimelinePageProps) {
               replayRuns,
             })}
           </Panel>
-          <Panel
-            title="Other lanes"
-            subtitle="Secondary runtime narratives stay collapsed until you focus them."
-            tone="soft"
-            rank="muted"
-            padding="compact"
-          >
-            <div className="office-kpi-grid">
-              {secondarySections.map((section) => {
-                const summary = summarizeTimelineSection(section.id, {
-                  events,
-                  sessions,
-                  schedulerJobs,
-                  schedulerReviewQueue,
-                  improvementReports,
-                  replayRuns,
-                });
-                return (
-                  <StatCard
-                    key={section.id}
-                    label={summary.label}
-                    value={summary.value}
-                    note={summary.note}
-                    tone={summary.tone}
-                    compact
-                    interactive
-                    onClick={() => onTabChange(section.id)}
-                  />
-                );
-              })}
-            </div>
-          </Panel>
         </div>
       </EmbeddedPageChromeProvider>
     </section>
@@ -168,7 +98,7 @@ function describeTimelineError(error: string): string {
   if (match?.[1]) {
     return match[1];
   }
-  return "Retained timeline data could not be loaded. Review the technical detail before treating the lane as healthy.";
+  return "Retained timeline data could not be loaded. Review the technical detail before treating the page as healthy.";
 }
 
 function renderTimelineSection(
@@ -316,85 +246,18 @@ function renderTimelineSection(
   }
 }
 
-function labelForTab(tab: TimelineTab): string {
-  return ITEMS.find((item) => item.id === tab)?.label ?? "Live feed";
-}
-
 function subtitleForTab(tab: TimelineTab): string {
   switch (tab) {
     case "activity":
       return "Watch retained realtime activity without losing the broader runtime narrative.";
     case "sessions":
-      return "Inspect recent session health and recovery posture without leaving the timeline surface.";
+      return "Inspect recent session health and recovery state without leaving Timeline.";
     case "scheduler":
-      return "Keep cron posture and pending intervention attached to the same operational narrative.";
+      return "Keep cron state and pending intervention attached to the same operational narrative.";
     case "improvement":
       return "Replay, evaluation, and review-ready changes stay adjacent to the events they explain.";
     default:
       return "";
-  }
-}
-
-function summarizeTimelineSection(
-  tab: TimelineTab,
-  input: {
-    events: RealtimeEvent[];
-    sessions: TimelineSummaryResponse["sessions"]["items"];
-    schedulerJobs: Array<Record<string, unknown>>;
-    schedulerReviewQueue: Array<Record<string, unknown>>;
-    improvementReports: Array<Record<string, unknown>>;
-    replayRuns: Array<Record<string, unknown>>;
-  },
-): { label: string; value: string; note: string; tone?: "default" | "accent" | "warning" | "success" } {
-  switch (tab) {
-    case "activity":
-      return {
-        label: "Live feed",
-        value: input.events.length > 0 ? `${input.events.length} retained events` : "Quiet feed",
-        note: input.events[0]
-          ? `Latest signal: ${input.events[0].eventType}`
-          : "Open the lane when realtime activity starts moving.",
-      };
-    case "sessions": {
-      const attentionCount = input.sessions.filter((session) => {
-        const record = session as unknown as Record<string, unknown>;
-        return describeSessionPosture(record).includes("attention");
-      }).length;
-      return {
-        label: "Sessions",
-        value: attentionCount > 0 ? `${attentionCount} need attention` : `${input.sessions.length} recent sessions`,
-        note: input.sessions[0]
-          ? `Latest: ${String((input.sessions[0] as unknown as Record<string, unknown>).title ?? "Unnamed session")}`
-          : "No recent session lifecycle updates.",
-        tone: attentionCount > 0 ? "warning" : "default",
-      };
-    }
-    case "scheduler":
-      return {
-        label: "Scheduler",
-        value:
-          input.schedulerReviewQueue.length > 0
-            ? `${input.schedulerReviewQueue.length} review items`
-            : `${input.schedulerJobs.length} jobs steady`,
-        note:
-          input.schedulerReviewQueue.length > 0
-            ? "Open this lane to resolve pending runtime intervention."
-            : "Scheduler posture is steady; inspect only when timing or controls change.",
-        tone: input.schedulerReviewQueue.length > 0 ? "warning" : "success",
-      };
-    case "improvement":
-      return {
-        label: "Improvement",
-        value:
-          input.improvementReports.length > 0
-            ? `${input.improvementReports.length} reports ready`
-            : `${input.replayRuns.length} replay runs`,
-        note: input.improvementReports[0]
-          ? `Latest: ${String(input.improvementReports[0].title ?? input.improvementReports[0].reportId ?? "Improvement report")}`
-          : "Open this lane when you need replay and evaluation proof.",
-      };
-    default:
-      return { label: "Timeline", value: "Unavailable", note: "No summary available." };
   }
 }
 
@@ -415,7 +278,7 @@ function describeSessionPosture(record: Record<string, unknown>): string {
   if (status.includes("done") || status.includes("complete")) {
     return "Completed";
   }
-  return "Monitoring lifecycle posture";
+  return "Monitoring lifecycle state";
 }
 
 function describeReplayPosture(run: Record<string, unknown>): string {
@@ -441,4 +304,14 @@ function formatTimelineMoment(value: unknown, prefix: string): string {
     return `${prefix} ${new Date(timestamp).toLocaleString()}`;
   }
   return `${prefix} ${String(value)}`;
+}
+
+function filterSchedulerReviewQueue(
+  items: Array<Record<string, unknown>>,
+  showTechnicalDetails: boolean,
+): Array<Record<string, unknown>> {
+  if (showTechnicalDetails) {
+    return items;
+  }
+  return items.filter((item) => !JSON.stringify(item).includes("cronReviewQueueV1Enabled"));
 }

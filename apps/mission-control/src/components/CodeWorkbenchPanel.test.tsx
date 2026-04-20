@@ -118,6 +118,6 @@ describe("CodeWorkbenchPanel", () => {
     expect(markup).toContain("Bind a project before this session can open a repo-backed workbench.");
     expect(markup).toContain("Unbound");
     expect(markup).toContain("Project binding is required before repo operations can start.");
-    expect(markup).toContain("Draft snippets remain available as a secondary helper lane.");
+    expect(markup).toContain("Draft snippets remain available as a secondary helper panel.");
   });
 });

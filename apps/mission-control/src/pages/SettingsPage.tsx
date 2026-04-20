@@ -889,9 +889,9 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
         </>
       ) : null}
       {error ? <p className="error">{error}</p> : null}
-      {showPageChrome || changeReview.items.length > 0 || changeReview.overall === "critical" ? (
+      {changeReview.overall !== "safe" ? (
         <ChangeReviewPanel
-          title="Pending Configuration Risk"
+          title="Configuration review"
           overall={changeReview.overall}
           items={changeReview.items}
           requireCriticalConfirm

@@ -208,7 +208,6 @@
 }
 
 .theme-signal-noir .shell-topbar-copy h3,
-.theme-signal-noir .page-header-title,
 .theme-signal-noir .section-header-title,
 .theme-signal-noir .sidebar-section-head p,
 .theme-signal-noir .page-header-eyebrow,
@@ -231,11 +230,19 @@
 }
 
 .theme-signal-noir .shell-topbar-copy h3,
-.theme-signal-noir .page-header-title {
+.theme-signal-noir .shell-bar-title {
   font-size: clamp(1.65rem, 1.2rem + 1.2vw, 2.2rem);
   line-height: 0.98;
   letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-transform: none;
+}
+
+.theme-signal-noir .page-header-title {
+  font-family: var(--font-body);
+  font-size: clamp(1.05rem, 0.98rem + 0.28vw, 1.28rem);
+  line-height: 1.08;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .theme-signal-noir .shell-topbar-kicker,
@@ -543,54 +550,39 @@
 
 .theme-signal-noir .page-header {
   position: relative;
-  margin: 12px 18px 12px;
-  padding: 22px 26px;
-  border-radius: 12px;
-  border: 1px solid rgba(92, 198, 223, 0.14);
-  background: linear-gradient(180deg, rgba(13, 19, 29, 0.98), rgba(8, 11, 18, 1));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 20px 44px rgba(0, 0, 0, 0.24);
-  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 0 100%);
+  margin: 0;
+  padding: 12px 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  clip-path: none;
 }
 
 .theme-signal-noir .page-header::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: min(220px, 36%);
-  height: 2px;
-  background: linear-gradient(90deg, rgba(84, 221, 255, 0.92), rgba(255, 154, 69, 0.54), transparent);
+  content: none;
 }
 
 .theme-signal-noir .page-header::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(84, 221, 255, 0.04), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 42%);
+  content: none;
 }
 
 .theme-signal-noir .page-header-command {
-  border-color: rgba(92, 198, 223, 0.2);
+  border-color: transparent;
 }
 
 .theme-signal-noir .page-header-citadel {
-  border-color: rgba(255, 154, 69, 0.2);
-  background:
-    radial-gradient(circle at top right, rgba(255, 154, 69, 0.08), transparent 24%),
-    linear-gradient(180deg, rgba(15, 19, 28, 0.98), rgba(8, 11, 18, 1));
+  border-color: transparent;
+  background: transparent;
 }
 
 .theme-signal-noir .page-header-main {
-  gap: 10px;
+  gap: 6px;
 }
 
 .theme-signal-noir .page-header-hint {
   max-width: 72ch;
+  color: rgba(180, 202, 223, 0.78);
 }
 
 .theme-signal-noir .page-guide-card,
@@ -605,12 +597,12 @@
 .theme-signal-noir .gc-select-content {
   position: relative;
   overflow: hidden;
-  border-radius: 10px;
-  border: 1px solid rgba(92, 198, 223, 0.12);
-  background: linear-gradient(180deg, rgba(14, 20, 30, 0.98), rgba(8, 11, 18, 1));
+  border-radius: 8px;
+  border: 1px solid rgba(92, 198, 223, 0.1);
+  background: color-mix(in srgb, rgba(9, 14, 21, 0.98) 92%, rgba(84, 221, 255, 0.03));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 18px 36px rgba(0, 0, 0, 0.24);
+    inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    0 10px 22px rgba(0, 0, 0, 0.18);
 }
 
 .theme-signal-noir .page-guide-card::before,
@@ -621,13 +613,7 @@
 .theme-signal-noir .chat-v11-session-bar::before,
 .theme-signal-noir .chat-v11-external-bind::before,
 .theme-signal-noir .workflow-page .data-toolbar::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: min(180px, 42%);
-  height: 2px;
-  background: linear-gradient(90deg, rgba(84, 221, 255, 0.84), rgba(255, 154, 69, 0.5), transparent);
+  content: none;
 }
 
 .theme-signal-noir .panel-soft,
@@ -675,8 +661,20 @@
 .theme-signal-noir .section-header-title,
 .theme-signal-noir .panel .section-header h3 {
   font-size: 1.02rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-family: var(--font-body);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+@media (max-width: 767px) {
+  .theme-signal-noir .panel-has-header .section-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .theme-signal-noir .panel-has-header .section-header-actions {
+    justify-content: flex-start;
+  }
 }
 
 .theme-signal-noir .status-chip {
@@ -1235,10 +1233,10 @@
 
 .theme-signal-noir .shell-bar-title {
   font-family: var(--font-display);
-  font-size: clamp(1.95rem, 1.55rem + 0.8vw, 2.45rem);
-  line-height: 0.94;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: clamp(1.18rem, 1.05rem + 0.35vw, 1.48rem);
+  line-height: 1.02;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: #f3f9ff;
 }
 
@@ -1294,13 +1292,13 @@
 
 .theme-signal-noir .shell-bar .shell-workspace-picker {
   min-width: 240px;
-  padding: 10px 12px;
-  border-radius: 16px;
+  padding: 8px 10px;
+  border-radius: 8px;
   border: 1px solid rgba(92, 198, 223, 0.14);
-  background: linear-gradient(180deg, rgba(11, 18, 27, 0.96), rgba(7, 11, 18, 1));
+  background: linear-gradient(180deg, rgba(11, 18, 27, 0.9), rgba(7, 11, 18, 0.94));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 14px 28px rgba(0, 0, 0, 0.22);
+    0 8px 18px rgba(0, 0, 0, 0.18);
 }
 
 .theme-signal-noir .status-strip-summary,
@@ -1387,7 +1385,7 @@
 }
 
 .theme-signal-noir .shell-secondary-nav {
-  background: linear-gradient(180deg, rgba(7, 11, 18, 0.86), rgba(5, 8, 13, 0.8)), rgba(6, 10, 15, 0.74);
+  background: linear-gradient(180deg, rgba(7, 11, 18, 0.82), rgba(5, 8, 13, 0.76)), rgba(6, 10, 15, 0.7);
   border-bottom-color: rgba(92, 198, 223, 0.1);
 }
 

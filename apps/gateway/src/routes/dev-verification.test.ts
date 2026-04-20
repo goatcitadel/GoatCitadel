@@ -231,37 +231,45 @@ describe("dev verification routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(createApproval).toHaveBeenCalledWith(expect.objectContaining({
-      linkage: expect.objectContaining({
-        sessionId: "session-1",
-        workspaceId: "workspace-1",
+    expect(createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkage: expect.objectContaining({
+          sessionId: "session-1",
+          workspaceId: "workspace-1",
+        }),
       }),
-    }));
-    expect(durableCreateRun).toHaveBeenCalledWith(expect.objectContaining({
-      workflowKey: "approval.wait",
-      status: "waiting",
-      payload: expect.objectContaining({
-        version: "approval.wait.v1",
-        approvalId: "approval-1",
-      }),
-      metadata: {
-        surface: "chat",
-        waitForEvent: {
-          eventKey: "approval.resolved",
-          correlationId: "approval-1",
+    );
+    expect(durableCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowKey: "approval.wait",
+        status: "waiting",
+        payload: expect.objectContaining({
+          version: "approval.wait.v1",
+          approvalId: "approval-1",
+        }),
+        metadata: {
+          surface: "chat",
+          waitForEvent: {
+            eventKey: "approval.resolved",
+            correlationId: "approval-1",
+          },
         },
-      },
-    }));
-    expect(storageTurnCreate).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "session-1",
-      status: "waiting_for_approval",
-      durable: expect.objectContaining({ runId: "durable-turn-1" }),
-    }));
-    expect(inlineUpsert).toHaveBeenCalledWith(expect.objectContaining({
-      approvalId: "approval-1",
-      sessionId: "session-1",
-      status: "pending",
-    }));
+      }),
+    );
+    expect(storageTurnCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        status: "waiting_for_approval",
+        durable: expect.objectContaining({ runId: "durable-turn-1" }),
+      }),
+    );
+    expect(inlineUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        sessionId: "session-1",
+        status: "pending",
+      }),
+    );
     expect(branchSetActiveLeaf).toHaveBeenCalledWith("session-1", expect.any(String));
     expect(response.json()).toMatchObject({
       sessionId: "session-1",
@@ -273,7 +281,8 @@ describe("dev verification routes", () => {
   });
 
   it("seeds orphaned and dead-letter durable recovery scenarios", async () => {
-    const createApproval = vi.fn()
+    const createApproval = vi
+      .fn()
       .mockResolvedValueOnce({
         approvalId: "approval-orphan",
         kind: "verification.approval.wait",
@@ -298,8 +307,7 @@ describe("dev verification routes", () => {
       approvalId,
       resolvedAt: "2026-04-10T00:00:05.000Z",
     }));
-    const getRunId = vi.fn((approvalId: string) =>
-      approvalId === "approval-orphan" ? "run-orphan" : "run-dead");
+    const getRunId = vi.fn((approvalId: string) => (approvalId === "approval-orphan" ? "run-orphan" : "run-dead"));
     const markResolved = vi.fn();
     const updateRun = vi.fn();
     const upsertDeadLetter = vi.fn(() => ({ deadLetterId: "dead-letter-1" }));
@@ -335,18 +343,27 @@ describe("dev verification routes", () => {
     expect(response.statusCode).toBe(201);
     expect(createApproval).toHaveBeenCalledTimes(2);
     expect(approvalResolve).toHaveBeenCalledTimes(2);
-    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({
-      runId: "run-orphan",
-      status: "running",
-    }));
-    expect(updateRun).toHaveBeenCalledWith(expect.objectContaining({
-      runId: "run-dead",
-      status: "dead_lettered",
-    }));
-    expect(upsertDeadLetter).toHaveBeenCalledWith(expect.objectContaining({
-      runId: "run-dead",
-      reason: "verification_seed_dead_letter",
-    }));
+    expect(updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-orphan",
+        status: "running",
+        leaseOwnerId: "verification-orphan-worker",
+        leaseHeartbeatAt: expect.any(String),
+        leaseExpiresAt: expect.any(String),
+      }),
+    );
+    expect(updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-dead",
+        status: "dead_lettered",
+      }),
+    );
+    expect(upsertDeadLetter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-dead",
+        reason: "verification_seed_dead_letter",
+      }),
+    );
     expect(response.json()).toMatchObject({
       orphanRecovery: {
         approvalId: "approval-orphan",
@@ -399,7 +416,7 @@ describe("dev verification routes", () => {
 
   it("uses json_object for DeepSeek structured verification payloads", async () => {
     const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: "{\"summary\":\"ok\",\"confidence\":\"high\"}" } }],
+      choices: [{ message: { content: '{"summary":"ok","confidence":"high"}' } }],
     }));
 
     app = Fastify();
@@ -427,22 +444,24 @@ describe("dev verification routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(createChatCompletion).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: "deepseek",
-      model: "deepseek-chat",
-      memory: {
-        enabled: false,
-        mode: "off",
-      },
-      response_format: {
-        type: "json_object",
-      },
-    }));
+    expect(createChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "deepseek",
+        model: "deepseek-chat",
+        memory: {
+          enabled: false,
+          mode: "off",
+        },
+        response_format: {
+          type: "json_object",
+        },
+      }),
+    );
   });
 
   it("keeps json_schema for non-DeepSeek structured verification payloads", async () => {
     const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: "{\"summary\":\"ok\",\"confidence\":\"high\"}" } }],
+      choices: [{ message: { content: '{"summary":"ok","confidence":"high"}' } }],
     }));
 
     app = Fastify();
@@ -470,22 +489,24 @@ describe("dev verification routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(createChatCompletion).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: "openai",
-      model: "gpt-4.1-mini",
-      memory: {
-        enabled: false,
-        mode: "off",
-      },
-      response_format: expect.objectContaining({
-        type: "json_schema",
+    expect(createChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-4.1-mini",
+        memory: {
+          enabled: false,
+          mode: "off",
+        },
+        response_format: expect.objectContaining({
+          type: "json_schema",
+        }),
       }),
-    }));
+    );
   });
 
   it("sets strict json_schema for Anthropic structured verification payloads", async () => {
     const createChatCompletion = vi.fn(async () => ({
-      choices: [{ message: { content: "{\"summary\":\"ok\",\"confidence\":\"high\"}" } }],
+      choices: [{ message: { content: '{"summary":"ok","confidence":"high"}' } }],
     }));
 
     app = Fastify();
@@ -513,19 +534,21 @@ describe("dev verification routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(createChatCompletion).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: "anthropic",
-      model: "claude-sonnet-4-6",
-      memory: {
-        enabled: false,
-        mode: "off",
-      },
-      response_format: expect.objectContaining({
-        type: "json_schema",
-        json_schema: expect.objectContaining({
-          strict: true,
+    expect(createChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+        memory: {
+          enabled: false,
+          mode: "off",
+        },
+        response_format: expect.objectContaining({
+          type: "json_schema",
+          json_schema: expect.objectContaining({
+            strict: true,
+          }),
         }),
       }),
-    }));
+    );
   });
 });

@@ -52,6 +52,7 @@
     "verify:durable:recovery": "node scripts/verification/run.mjs durable-recovery",
     "verify:surface:regression": "node scripts/verification/run.mjs surface-regression",
     "verify:visual:regression": "node scripts/verification/run.mjs visual-regression",
+    "verify:visual:rebaseline": "node scripts/verification/run.mjs visual-rebaseline",
     "verify:backup:roundtrip": "node scripts/verification/run.mjs backup-roundtrip",
     "verify:soak": "node scripts/verification/run.mjs soak",
     "verify:review": "node scripts/verification/run.mjs review",

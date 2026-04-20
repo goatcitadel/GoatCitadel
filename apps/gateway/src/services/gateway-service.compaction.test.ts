@@ -20,12 +20,14 @@ describe("buildConversationCompactionSummary", () => {
       createMessage({
         messageId: "m1",
         role: "user",
-        content: "We decided to keep the fallback on `browser.search` and avoid changing C:\\code\\personal-ai\\apps\\gateway\\src\\services\\chat-agent-orchestrator.ts.",
+        content:
+          "We decided to keep the fallback on `browser.search` and avoid changing C:\\code\\personal-ai\\apps\\gateway\\src\\services\\chat-agent-orchestrator.ts.",
       }),
       createMessage({
         messageId: "m2",
         role: "assistant",
-        content: "The last attempt failed with TIMEOUT and the blocked source https://example.com/report. Retry with a different host instead.",
+        content:
+          "The last attempt failed with TIMEOUT and the blocked source https://example.com/report. Retry with a different host instead.",
       }),
       createMessage({
         messageId: "m3",
@@ -59,8 +61,8 @@ describe("buildConversationCompactionSummary", () => {
       { role: "system", content: "Pinned instruction block." },
       { role: "user", content: "Please compare the latest release notes." },
       { role: "assistant", content: "I will use the recent search context." },
-      { role: "tool", content: "x".repeat(4000) },
-      { role: "system", content: "y".repeat(2200) },
+      { role: "tool", name: "browser.extract", tool_call_id: "call-1", content: `Result ${"x".repeat(4000)}` },
+      { role: "system", content: `Policy ${"y".repeat(2200)}` },
     ] as const;
 
     const trimmed = trimNewestContextMessagesForPromptCache(messages as never, 260);
@@ -69,6 +71,12 @@ describe("buildConversationCompactionSummary", () => {
     expect(trimmed[1]).toEqual(messages[1]);
     expect(trimmed[2]).toEqual(messages[2]);
     expect(trimmed[3]?.content).toContain("cache-stable prompt prefix");
+    expect(trimmed[3]?.content).toContain("Role=tool");
+    expect(trimmed[3]?.content).toContain("name=browser.extract");
+    expect(trimmed[3]?.content).toContain("tool_call_id=call-1");
+    expect(trimmed[3]?.content).toContain("Snippet=Result");
     expect(trimmed[4]?.content).toContain("cache-stable prompt prefix");
+    expect(trimmed[4]?.content).toContain("Role=system");
+    expect(trimmed[4]?.content).toContain("Snippet=Policy");
   });
 });

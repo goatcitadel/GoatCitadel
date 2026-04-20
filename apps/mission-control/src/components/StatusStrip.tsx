@@ -174,7 +174,7 @@ export function StatusStrip({
             <StatCard
               label="Open tasks"
               value={openTasksCount}
-              note={openTasksCount > 0 ? "Trailboard queue" : "No open tasks"}
+              note={openTasksCount > 0 ? "Task queue" : "No open tasks"}
               tone={openTasksCount > 0 ? "accent" : "default"}
               className="status-strip-card status-strip-card-tasks"
               compact

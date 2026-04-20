@@ -4,6 +4,7 @@ import { createDatabase, type SqliteOptions } from "./sqlite.js";
 import type { DatabaseClient } from "./db.js";
 import { SessionRepository } from "./session-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
+import { MutationIdempotencyRepository } from "./mutation-idempotency-repo.js";
 import { TranscriptLog } from "./transcript-log.js";
 import { AuditLog } from "./audit-log.js";
 import { PostgresTranscriptLog } from "./postgres-transcript-log.js";
@@ -99,6 +100,7 @@ export class Storage {
   public readonly db: DatabaseClient;
   public readonly sessions: SessionRepository;
   public readonly idempotency: IdempotencyRepository;
+  public readonly mutationIdempotency: MutationIdempotencyRepository;
   public readonly transcripts: TranscriptLog | PostgresTranscriptLog;
   public readonly audit: AuditLog | PostgresAuditLog;
   public readonly approvals: ApprovalRepository;
@@ -183,6 +185,7 @@ export class Storage {
       });
     this.sessions = new SessionRepository(this.db);
     this.idempotency = new IdempotencyRepository(this.db);
+    this.mutationIdempotency = new MutationIdempotencyRepository(this.db);
     this.transcripts =
       options.transcripts ??
       (this.db.dialect === "postgres" ? new PostgresTranscriptLog(this.db) : new TranscriptLog(options.transcriptsDir));
@@ -474,6 +477,7 @@ export * from "./sqlite.js";
 export * from "./db.js";
 export * from "./session-repo.js";
 export * from "./idempotency-repo.js";
+export * from "./mutation-idempotency-repo.js";
 export * from "./transcript-log.js";
 export * from "./audit-log.js";
 export * from "./approval-repo.js";

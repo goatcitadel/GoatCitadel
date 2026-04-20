@@ -462,6 +462,73 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
+  it("does not re-fire an already-executed pending tool action when a replayed effect is processed", async () => {
+    const completeEffect = vi.fn();
+    const executeApprovedPendingAction = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect: vi.fn(), skipEffect: vi.fn(), completeEffect },
+          pendingApprovalActions: {
+            find: vi.fn(() => ({
+              approvalId: "approval-1",
+              actionType: "tool.invoke",
+              request: {
+                toolName: "shell.exec",
+                args: {
+                  command: "pwd",
+                },
+              },
+              createdAt: "2026-04-11T00:00:00.000Z",
+              resolutionStatus: "executed",
+              result: {
+                outcome: "executed",
+                auditEventId: "audit-1",
+                result: { ok: true },
+              },
+            })),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction,
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handlePendingActionExecute(
+      createEffect({
+        effectKind: "pending_action_execute",
+        targetKind: "pending_action",
+        targetId: "approval-1",
+      }),
+    );
+
+    expect(executeApprovedPendingAction).not.toHaveBeenCalled();
+    expect(completeEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          actionType: "tool.invoke",
+          resolutionStatus: "executed",
+        }),
+      }),
+    );
+  });
+
   it("emits explicit retained-stream metadata when an approval wait wake is skipped", async () => {
     const publishRealtime = vi.fn();
     const skipEffect = vi.fn();
@@ -571,14 +638,16 @@ describe("approval-resolution-effects-service", () => {
       let effectState = createEffect({
         status: "running",
       });
-      const failEffect = vi.fn((_effectId: string, _workerId: string, _version: number, input: { lastError: string }) => {
-        effectState = {
-          ...effectState,
-          status: "failed",
-          lastError: input.lastError,
-        };
-        return effectState;
-      });
+      const failEffect = vi.fn(
+        (_effectId: string, _workerId: string, _version: number, input: { lastError: string }) => {
+          effectState = {
+            ...effectState,
+            status: "failed",
+            lastError: input.lastError,
+          };
+          return effectState;
+        },
+      );
       const backgroundTasks = new Set<Promise<void>>();
       let resolveEffect!: () => void;
       const executeEffect = new Promise<void>((resolve) => {

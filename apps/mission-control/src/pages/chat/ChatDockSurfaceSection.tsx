@@ -101,12 +101,12 @@ export function ChatDockSurfaceSection(
     <Panel
       className="chat-v11-topbar-panel chat-v11-panel-surface"
       padding="compact"
-      title={isCodeSurface ? "Execution posture" : isCoworkSurface ? "Now / next / controls" : "Surface controls"}
+      title={isCodeSurface ? "Execution controls" : isCoworkSurface ? "Now / next / controls" : "Surface controls"}
       subtitle={
         isCodeSurface
-          ? "Project binding, model, and review posture for this session."
+          ? "Project binding, model, and review settings for this session."
           : isCoworkSurface
-            ? "Guide the workflow lane without crowding the central thread."
+            ? "Guide the workflow without crowding the central thread."
             : activeModePreset.summary
       }
     >
@@ -126,7 +126,7 @@ export function ChatDockSurfaceSection(
       {codeModeNeedsProjectBinding ? (
         <div className="status-banner warning">
           Code mode is unbound. Assign a project in Session management before execution-heavy work. Until then
-          GoatCitadel stays in manual execution posture.
+          GoatCitadel stays in manual execution mode.
           {selectedProjectBindingCandidateId ? (
             <>
               {" "}
@@ -134,7 +134,8 @@ export function ChatDockSurfaceSection(
                 type="button"
                 disabled={sending || Boolean(sessionControlPending)}
                 onClick={() => void onAssignProject(selectedProjectBindingCandidateId)}
-               className="gc-button">
+                className="gc-button"
+              >
                 Bind {selectedProjectBindingCandidateName ?? "selected project"}
               </button>
             </>
@@ -216,16 +217,36 @@ export function ChatDockSurfaceSection(
             </div>
           </div>
           <div className="chat-v11-row-actions">
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("implement")} className="gc-button">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void onRunCodeDelegation("implement")}
+              className="gc-button"
+            >
               Implement
             </button>
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("review")} className="gc-button">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void onRunCodeDelegation("review")}
+              className="gc-button"
+            >
               Review
             </button>
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("test")} className="gc-button">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void onRunCodeDelegation("test")}
+              className="gc-button"
+            >
               Test
             </button>
-            <button type="button" disabled={sending} onClick={() => void onRunCodeDelegation("ship")} className="gc-button">
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void onRunCodeDelegation("ship")}
+              className="gc-button"
+            >
               Ship cycle
             </button>
           </div>
@@ -327,7 +348,8 @@ export function ChatDockSurfaceSection(
                       type="button"
                       disabled={!selectedSessionId || sending}
                       onClick={() => void onSuggestDelegation()}
-                     className="gc-button">
+                      className="gc-button"
+                    >
                       Suggest delegation
                     </button>
                   ) : null}
@@ -335,7 +357,8 @@ export function ChatDockSurfaceSection(
                     type="button"
                     disabled={!selectedSessionId || sending}
                     onClick={() => void onTriggerProactive()}
-                   className="gc-button">
+                    className="gc-button"
+                  >
                     Run proactive
                   </button>
                 </>

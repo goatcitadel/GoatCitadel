@@ -25,6 +25,23 @@ interface ToolPolicyAccessResult {
   reasonCodes: string[];
 }
 
+interface McpPolicyRequestShape {
+  toolName: "mcp.invoke";
+  args: {
+    serverId: string;
+    toolName: string;
+    arguments: Record<string, unknown>;
+  };
+  agentId: string;
+  sessionId: string;
+  taskId?: string;
+}
+
+interface McpPolicyEvaluation {
+  access: ToolPolicyAccessResult;
+  decision: ToolInvokeResult;
+}
+
 type RealtimePublishOptions = Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 
 function buildMcpInvocationRealtimeOptions(input: { sessionId?: string; taskId?: string }): RealtimePublishOptions {
@@ -113,6 +130,64 @@ export interface ToolInvocationCoordinator {
 
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
   public constructor(private readonly host: ToolInvocationCoordinatorHost) {}
+
+  private buildMcpPolicyRequest(input: McpInvokeRequest): McpPolicyRequestShape {
+    return {
+      toolName: "mcp.invoke",
+      args: {
+        serverId: input.serverId,
+        toolName: input.toolName,
+        arguments: input.arguments ?? {},
+      },
+      agentId: input.agentId?.trim() || "operator",
+      sessionId: input.sessionId?.trim() || `mcp:${input.serverId}`,
+      taskId: input.taskId,
+    };
+  }
+
+  private async evaluateMcpPolicy(input: McpInvokeRequest): Promise<McpPolicyEvaluation> {
+    const request = this.buildMcpPolicyRequest(input);
+    return {
+      access: this.host.policyEngine.evaluateAccess(request),
+      decision: await this.host.policyEngine.invoke({
+        ...request,
+        dryRun: true,
+        consentContext: {
+          source: "agent",
+          reason: `MCP tool invoke ${input.serverId}/${input.toolName}`,
+        },
+      }),
+    };
+  }
+
+  private buildMcpPolicyFailure(evaluation: McpPolicyEvaluation): {
+    ok: false;
+    error: string;
+    approvalRequired?: boolean;
+    approvalId?: string;
+    policyReason?: string;
+    reasonCodes?: string[];
+  } | null {
+    if (evaluation.decision.outcome === "approval_required") {
+      return {
+        ok: false,
+        error: "MCP invoke requires approval.",
+        approvalRequired: true,
+        approvalId: evaluation.decision.approvalId,
+        policyReason: evaluation.decision.policyReason,
+        reasonCodes: evaluation.access.reasonCodes,
+      };
+    }
+    if (evaluation.decision.outcome === "blocked") {
+      return {
+        ok: false,
+        error: evaluation.decision.policyReason,
+        policyReason: evaluation.decision.policyReason,
+        reasonCodes: evaluation.access.reasonCodes,
+      };
+    }
+    return null;
+  }
 
   public async invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
     if (!this.host.isValidToolName(request.toolName)) {
@@ -286,61 +361,16 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
 
-    const policyAgentId = input.agentId?.trim() || "operator";
-    const policySessionId = input.sessionId?.trim() || `mcp:${input.serverId}`;
-    const access = this.host.policyEngine.evaluateAccess({
-      toolName: "mcp.invoke",
-      args: {
-        serverId: input.serverId,
-        toolName: input.toolName,
-        arguments: input.arguments ?? {},
-      },
-      agentId: policyAgentId,
-      sessionId: policySessionId,
-      taskId: input.taskId,
-    });
-    if (!access.allowed) {
-      return {
-        ok: false,
-        error: `MCP invoke blocked by policy: ${access.reasonCodes.join(", ")}`,
-        policyReason: "blocked by tool policy",
-        reasonCodes: access.reasonCodes,
-      };
+    const previewEvaluation = await this.evaluateMcpPolicy(input);
+    const previewFailure = this.buildMcpPolicyFailure(previewEvaluation);
+    if (previewFailure) {
+      return previewFailure;
     }
-    if (access.requiresApproval) {
-      const decision = await this.host.policyEngine.invoke({
-        toolName: "mcp.invoke",
-        args: {
-          serverId: input.serverId,
-          toolName: input.toolName,
-          arguments: input.arguments ?? {},
-        },
-        agentId: policyAgentId,
-        sessionId: policySessionId,
-        taskId: input.taskId,
-        consentContext: {
-          source: "agent",
-          reason: `MCP tool invoke ${input.serverId}/${input.toolName}`,
-        },
-      });
-      if (decision.outcome === "approval_required") {
-        return {
-          ok: false,
-          error: "MCP invoke requires approval.",
-          approvalRequired: true,
-          approvalId: decision.approvalId,
-          policyReason: decision.policyReason,
-          reasonCodes: access.reasonCodes,
-        };
-      }
-      if (decision.outcome === "blocked") {
-        return {
-          ok: false,
-          error: decision.policyReason,
-          policyReason: decision.policyReason,
-          reasonCodes: access.reasonCodes,
-        };
-      }
+
+    const runtimeEvaluation = await this.evaluateMcpPolicy(input);
+    const runtimeFailure = this.buildMcpPolicyFailure(runtimeEvaluation);
+    if (runtimeFailure) {
+      return runtimeFailure;
     }
 
     const runtime = isInternalMcpApprovalInboxServer(server)

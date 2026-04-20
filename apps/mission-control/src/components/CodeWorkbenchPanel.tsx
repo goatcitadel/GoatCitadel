@@ -203,11 +203,11 @@ export function CodeWorkbenchPanel({
           {needsProjectBinding ? (
             <div className="chat-code-workbench-empty">
               <p>Project binding is required before repo operations can start.</p>
-              <p>Draft snippets remain available as a secondary helper lane.</p>
+              <p>Draft snippets remain available as a secondary helper panel.</p>
             </div>
           ) : userInputBlocked ? (
             <div className="chat-code-workbench-empty">
-              <p>The selected turn is waiting for your answer in the thread lane.</p>
+              <p>The selected turn is waiting for your answer in the main thread.</p>
               <p>Reply there to continue this run.</p>
             </div>
           ) : !readyForRepoOps ? (

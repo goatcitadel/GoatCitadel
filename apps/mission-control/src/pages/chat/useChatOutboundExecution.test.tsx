@@ -95,6 +95,9 @@ function makeThread(): ChatThreadResponse {
 function Harness(props: {
   streamEnabled?: boolean;
   onCommand?: (sessionId: string, command: string) => Promise<void>;
+  providerOptions?: any[];
+  selectedProviderId?: string;
+  selectedModel?: string;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(makeThread());
   const [draft, setDraft] = useState("");
@@ -126,9 +129,11 @@ function Harness(props: {
       lifecycleStatus: "active",
       scope: "mission",
     } as any,
-    providerOptions: [{ providerId: "openai", label: "OpenAI", models: ["gpt-5.4-mini"] }] as any,
-    selectedProviderId: "openai",
-    selectedModel: "gpt-5.4-mini",
+    providerOptions: (props.providerOptions ?? [
+      { providerId: "openai", label: "OpenAI", models: ["gpt-5.4-mini"] },
+    ]) as any,
+    selectedProviderId: props.selectedProviderId ?? "openai",
+    selectedModel: props.selectedModel ?? "gpt-5.4-mini",
     streamEnabled: props.streamEnabled ?? false,
     sending,
     error,
@@ -218,6 +223,35 @@ describe("useChatOutboundExecution", () => {
       items: [],
       activeApprovalId: null,
       remainingCount: 0,
+    });
+    sendAgentChatMessageMock.mockResolvedValue({
+      sessionId: "session-1",
+      turnId: "turn-2",
+      userMessage: {
+        messageId: "user-2",
+        sessionId: "session-1",
+        role: "user",
+        actorType: "user",
+        actorId: "operator",
+        content: "Run the task",
+        timestamp: "2026-04-08T00:00:02.000Z",
+      },
+      assistantMessage: {
+        messageId: "assistant-2",
+        sessionId: "session-1",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: "Done",
+        timestamp: "2026-04-08T00:00:03.000Z",
+      },
+      trace: {
+        status: "completed",
+        routing: {},
+        toolRuns: [],
+        capabilityUpgradeSuggestions: [],
+        specialistCandidateSuggestions: [],
+      },
     });
   });
 
@@ -493,5 +527,73 @@ describe("useChatOutboundExecution", () => {
     await act(async () => {
       renderer!.unmount();
     });
+  });
+
+  it("preserves prior pending approval context when provider selection fails before dispatch", async () => {
+    fetchChatPendingApprovalsMock.mockResolvedValue({
+      items: [
+        {
+          approvalId: "approval-keep-1",
+          kind: "tool.invoke",
+          toolName: "shell_command",
+          reason: "Still waiting",
+          stale: false,
+          details: {},
+        },
+      ],
+      activeApprovalId: "approval-keep-1",
+      remainingCount: 0,
+    });
+    create(<Harness providerOptions={[]} selectedProviderId={undefined} selectedModel={undefined} />);
+
+    act(() => {
+      latest?.setPendingApproval({
+        approvalId: "approval-keep-1",
+        toolName: "shell_command",
+        reason: "Still waiting",
+      });
+    });
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Run the task",
+        attachments: [],
+        createdAt: "2026-04-08T00:00:00.000Z",
+      });
+    });
+
+    expect(latest?.pendingApproval).toMatchObject({
+      approvalId: "approval-keep-1",
+      toolName: "shell_command",
+      reason: "Still waiting",
+    });
+    expect(sendAgentChatMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("clears pending approval only when outbound execution commits", async () => {
+    create(<Harness />);
+
+    act(() => {
+      latest?.setPendingApproval({
+        approvalId: "approval-clear-1",
+        toolName: "shell_command",
+        reason: "Ready to proceed",
+      });
+    });
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Run the task",
+        attachments: [],
+        createdAt: "2026-04-08T00:00:00.000Z",
+      });
+    });
+
+    expect(sendAgentChatMessageMock).toHaveBeenCalledOnce();
+    expect(latest?.pendingApproval).toBeNull();
   });
 });

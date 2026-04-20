@@ -23,7 +23,7 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
   const activeLabel = ITEMS.find((item) => item.id === activeTab)?.label ?? "General";
   const decisionSummary =
     activeTab === "providers"
-      ? "Choose the provider posture every Work surface inherits first."
+      ? "Choose the provider and model defaults every Work surface inherits."
       : activeTab === "access"
         ? "Lock down tokens, device grants, and gateway entry before broader tuning."
         : activeTab === "budget"
@@ -35,17 +35,13 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
   return (
     <TuneHubLayout
       title="General"
-      subtitle="Core defaults, provider posture, access controls, budgets, and onboarding decisions stay in one Setup area."
-      summaries={[
-        { label: "Current decision", value: activeLabel, note: "The active Setup section", tone: "accent" },
-        {
-          label: "Default posture",
-          value: "Shared across surfaces",
-          note: "Changes here echo into Work, Watch, and Setup",
-        },
-        { label: "Operator focus", value: "Defaults before detail", note: decisionSummary },
-      ]}
-      summaryMode={activeTab === "onboarding" ? "cards" : "posture"}
+      subtitle={
+        <>
+          <strong>{activeLabel}</strong>
+          {" · "}
+          {decisionSummary}
+        </>
+      }
       guideTitle="What this controls"
       guideBody="Use General to lock the defaults that other surfaces inherit. Reach for this before you debug behavior downstream."
       tabItems={ITEMS}

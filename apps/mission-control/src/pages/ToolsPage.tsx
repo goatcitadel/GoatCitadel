@@ -561,30 +561,9 @@ export function ToolsPage() {
         {error ? <p className="error">{error}</p> : null}
         {success ? <p className="status-banner">{success}</p> : null}
         {isRefreshing ? <p className="status-banner">Refreshing tool access data...</p> : null}
-      </div>
-      <div className="tune-posture-bar tools-posture-bar" aria-label="Tools posture summary">
-        <div className="tune-posture-item tune-posture-item-accent">
-          <p className="tune-posture-label">Current profile</p>
-          <p className="tune-posture-value">{currentToolProfile}</p>
-          <p className="tune-posture-note">Global access posture for this workspace.</p>
-        </div>
-        <div className="tune-posture-item">
-          <p className="tune-posture-label">Scoped grants</p>
-          <p className="tune-posture-value">{grants.length}</p>
-          <p className="tune-posture-note">Review, revoke, or tighten them without leaving this page.</p>
-        </div>
-        <div className="tune-posture-item">
-          <p className="tune-posture-label">Catalog reach</p>
-          <p className="tune-posture-value">{catalog.length} tools</p>
-          <p className="tune-posture-note">The catalog stays visible, but secondary to the active grant flow.</p>
-        </div>
-        <div
-          className={`tune-posture-item ${isRefreshing ? "tune-posture-item-warning" : "tune-posture-item-success"}`}
-        >
-          <p className="tune-posture-label">Refresh state</p>
-          <p className="tune-posture-value">{isRefreshing ? "Refreshing" : "Live snapshot"}</p>
-          <p className="tune-posture-note">Operator checks stay close to the policy changes they affect.</p>
-        </div>
+        <p className="office-subtitle">
+          {currentToolProfile} profile · {grants.length} scoped grants · {catalog.length} tools in catalog
+        </p>
       </div>
       {isInitialLoading ? <CardSkeleton lines={8} /> : null}
 

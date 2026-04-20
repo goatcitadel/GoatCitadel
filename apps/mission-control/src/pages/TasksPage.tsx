@@ -529,7 +529,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         eyebrow="Execution"
         title={pageCopy.tasks.title}
         subtitle={pageCopy.tasks.subtitle}
-        hint="Manage queue state, recovery, deliverables, and delegated sessions from one task surface."
+        hint="Manage queue state, recovery, deliverables, and delegated sessions from one place."
         density="compact"
         actions={
           <div className="workflow-summary-strip">
@@ -568,7 +568,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
             {error ? <p className="error">{error}</p> : null}
             {info ? <p className="office-subtitle">{info}</p> : null}
             <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
-              Create Task
+              Create task
             </button>
           </div>
         }
@@ -579,35 +579,35 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
         className="tasks-operator-layout"
         primary={
           <Panel
-            title={viewFilter === "trash" ? "Task Trash" : "Task Board"}
+            title={viewFilter === "trash" ? "Trash" : "Tasks"}
             subtitle={
               viewFilter === "trash"
                 ? "Inspect trashed tasks before restoring or permanently deleting them."
-                : "Use the board to scan queue state, then open the selected task in the inspector."
+                : "Scan queue state, then open the selected task in the inspector."
             }
           >
             {tasks.length === 0 ? (
               <GCEmptyState
                 title={viewFilter === "trash" ? "No trashed tasks right now" : "No tasks in this view yet"}
-                subtitle={
+                description={
                   viewFilter === "trash"
                     ? "Moved tasks will appear here for restore or permanent cleanup."
                     : "Create a task to start tracking operator work, checkpoints, and delegated execution."
                 }
-                action={
+                primaryAction={
                   viewFilter === "trash" ? (
                     <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
                       Return to active tasks
                     </button>
                   ) : (
                     <button type="button" onClick={onCreateTask} disabled={!canCreateTask} className="gc-button">
-                      Create Task
+                      Create task
                     </button>
                   )
                 }
                 secondaryAction={
-                  <button type="button" className="gc-button" onClick={loadTasks}>
-                    Refresh board
+                  <button type="button" className="gc-nav-button gc-nav-tier-chip" onClick={loadTasks}>
+                    Refresh
                   </button>
                 }
               />
@@ -688,10 +688,14 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
             {!selectedTask ? (
               <GCEmptyState
                 title="Select a task to inspect details"
-                subtitle="Open a card from the board to review queue controls, deliverables, delegated sessions, and durable recovery."
-                action={
-                  <button type="button" className="gc-button" onClick={() => setViewFilter("active")}>
-                    Focus the active board
+                description="Open a card from the board to review queue controls, deliverables, delegated sessions, and durable recovery."
+                primaryAction={
+                  <button
+                    type="button"
+                    className="gc-nav-button gc-nav-tier-chip"
+                    onClick={() => setViewFilter("active")}
+                  >
+                    Back to active tasks
                   </button>
                 }
               />
@@ -733,8 +737,7 @@ export function TasksPage({ workspaceId = "default" }: { workspaceId?: string })
                 >
                   <p>{selectedTask.description || "No description yet."}</p>
                   <FieldHelp>
-                    Use the status controls here to move the task through the execution lane before updating detailed
-                    notes.
+                    Use the status controls here to move the task forward before updating detailed notes.
                   </FieldHelp>
                   {selectedTask.deletedAt ? (
                     <p className="office-subtitle">

@@ -94,7 +94,7 @@ GoatCitadel may not claim `1.0` until all of these are true:
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
 - `verify:surface:regression` is green across the visible `Work / Observe / Tune` route set derived from the canonical release-surface manifest
 - `verify:catalog:parity` is green and executes real runtime-backed operator actions for the visible non-channel catalog classes it claims to cover
-- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces derived from the canonical release-surface manifest
+- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces derived from the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)
 - `verify:api:compat` is green and fails on breaking REST route/schema or realtime event-envelope diffs
 - governance docs pass freshness validation against this contract

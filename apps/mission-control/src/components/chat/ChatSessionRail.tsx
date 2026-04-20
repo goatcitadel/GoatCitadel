@@ -44,7 +44,7 @@ function describeMissionSessionMeta(
 ): string {
   const relativeTime = session.lastActivityAt ? formatRelativeSessionTime(session.lastActivityAt) : "Recently active";
   if (mode === "cowork") {
-    return session.projectName ? `${session.projectName} · ${relativeTime}` : `Task lane ready · ${relativeTime}`;
+    return session.projectName ? `${session.projectName} · ${relativeTime}` : `Task ready · ${relativeTime}`;
   }
   if (mode === "code") {
     return session.projectName

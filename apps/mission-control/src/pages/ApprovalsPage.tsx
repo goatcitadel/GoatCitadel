@@ -100,7 +100,7 @@ export function ApprovalsPage() {
     },
   );
 
-  const onResolve = async (approvalId: string, decision: "approve" | "reject") => {
+  const onResolve = async (approvalId: string, decision: "approve" | "reject"): Promise<boolean> => {
     try {
       setSummary(null);
       const result = await resolveAction.run(async () => resolveApproval(approvalId, decision));
@@ -113,8 +113,11 @@ export function ApprovalsPage() {
       }
       applyResolvedApprovalResult(result);
       setError(null);
+      return true;
     } catch (err) {
+      setSummary(null);
       setError((err as Error).message);
+      return false;
     }
   };
 
@@ -383,13 +386,37 @@ export function ApprovalsPage() {
     }
   }, [focusedApprovalId, selectedApprovalId, visibleItems]);
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !(resolveAction.pending || bulkResolveAction.pending)) {
+      return;
+    }
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [bulkResolveAction.pending, resolveAction.pending]);
+
   if (!data) {
     return <CardSkeleton lines={7} />;
   }
 
   const approvalsHeaderActions = (
     <div className="workflow-summary-strip">
-      <StatusChip tone={view === "pending" ? "warning" : "muted"}>
+      <StatusChip
+        tone={
+          view === "pending"
+            ? pendingItems.length > 0
+              ? "warning"
+              : "success"
+            : view === "history"
+              ? "muted"
+              : "default"
+        }
+      >
         {view === "pending"
           ? `${pendingItems.length} pending`
           : view === "history"
@@ -461,10 +488,6 @@ export function ApprovalsPage() {
       <div className="workflow-status-stack">
         {error ? <p className="error">{error}</p> : null}
         {summary ? <p className="office-subtitle">{summary}</p> : null}
-        <p className="office-subtitle">
-          Live approvals happen inline in Chat, Cowork, and Code. This page is for persisted backend approval records,
-          history, and durable recovery.
-        </p>
       </div>
       {visibleItems.length === 0 ? (
         <GCEmptyState
@@ -475,14 +498,14 @@ export function ApprovalsPage() {
                 ? "No approval history yet"
                 : "No recovery records yet"
           }
-          subtitle={
+          description={
             view === "pending"
               ? "The approvals queue is clear right now."
               : view === "history"
                 ? "Resolved, rejected, and expired approval records will appear here."
                 : "Recovery items appear when approvals are linked to durable runs or checkpoints."
           }
-          action={
+          primaryAction={
             <button type="button" className="gc-button" onClick={() => void load()}>
               Refresh approvals
             </button>
@@ -490,20 +513,11 @@ export function ApprovalsPage() {
           secondaryAction={
             <button
               type="button"
-              className="gc-button"
+              className="gc-nav-button gc-nav-tier-chip"
               onClick={() => setView(view === "pending" ? "history" : "pending")}
             >
               {view === "pending" ? "Review history" : "Check pending queue"}
             </button>
-          }
-          meta={
-            <p className="office-subtitle">
-              {view === "pending"
-                ? "New risky actions still surface inline first when a human decision is needed."
-                : view === "history"
-                  ? "Use this view to audit what happened after the inline decision."
-                  : "Use Recovery to resume or inspect persisted pauses without hunting through chat threads."}
-            </p>
           }
           className="approval-empty-panel"
         />
@@ -563,7 +577,7 @@ export function ApprovalsPage() {
                           >
                             {effectiveStatus}
                           </StatusChip>
-                          {liveLaneHref ? <StatusChip tone="default">live lane</StatusChip> : null}
+                          {liveLaneHref ? <StatusChip tone="default">Live session</StatusChip> : null}
                         </div>
                       </div>
                       <p className="office-subtitle">
@@ -598,7 +612,7 @@ export function ApprovalsPage() {
           emptyInspector={
             <GCEmptyState
               title="Select an approval"
-              subtitle="Choose a queue item to inspect its evidence, replay trail, and recovery posture."
+              description="Choose a queue item to inspect its evidence, replay trail, and recovery state."
               className="approval-empty-panel"
             />
           }
@@ -624,8 +638,10 @@ export function ApprovalsPage() {
           if (!pendingDecision) {
             return;
           }
-          void onResolve(pendingDecision.approvalId, pendingDecision.decision).finally(() => {
-            setPendingDecision(null);
+          void onResolve(pendingDecision.approvalId, pendingDecision.decision).then((resolved) => {
+            if (resolved) {
+              setPendingDecision(null);
+            }
           });
         }}
       />
@@ -824,7 +840,7 @@ function ApprovalInspector(props: {
               href={liveLaneHref.href}
               onClick={(event) => openLiveLane(event, liveLaneHref.route)}
             >
-              Open live lane
+              Open live session
             </a>
           ) : null}
         </div>

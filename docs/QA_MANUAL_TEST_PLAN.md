@@ -1,6 +1,6 @@
 # GoatCitadel Manual QA Test Plan
 
-Last updated: 2026-04-11
+Last updated: 2026-04-19
 Status: draft baseline, grounded in current repo-visible `1.0` surface and runtime seams
 
 ## Purpose
@@ -214,16 +214,40 @@ Before running the manual plan:
   - the shell and route remain truthful about the active surface
   - surface switch does not silently drop provider/model state
 
+#### MC-W-03A Requested vs effective routing visibility
+
+- Steps:
+  1. use a seeded or real fallback scenario where the requested provider/model differs from the effective provider/model
+  2. inspect the collapsed thread summary in Chat
+  3. open the trace/details view for the same turn
+- Expected:
+  - requested and effective routing are both visible without relying on tribal knowledge
+  - fallback reason is visible when present
+  - the effective provider/model is not hidden behind stale requested-model labels
+
+#### MC-W-03B Cowork execution board refresh during active orchestration
+
+- Steps:
+  1. open an active Cowork session with orchestration state and at least one checkpoint
+  2. let the run advance, or trigger a seeded refresh-worthy update
+  3. watch the board without manually reloading the page
+- Expected:
+  - run/checkpoint state refreshes while Cowork is active
+  - visible step state tracks the latest orchestration truth
+  - the operator does not need to leave and re-enter Cowork to see progress
+
 #### MC-W-04 Streaming and refresh integrity
 
 - Steps:
   1. trigger a response that streams
   2. switch away and back
   3. refresh after completion
+  4. when possible, run a seeded partial-stream failure scenario
 - Expected:
   - finalized streamed content is not replaced by stale fetched content
   - sidebar/session rail refreshes when titles change
   - no fabricated "done" event appears after an error path
+  - a partial-stream failure does not concatenate a second retry/fallback stream into the same assistant turn
 
 #### MC-W-05 Tasks page
 
@@ -267,6 +291,17 @@ Before running the manual plan:
   - approval moves out of pending
   - approval history is preserved
   - linked follow-on work is visible as confirmed, pending, or unknown, not guessed
+
+#### AP-02A Approval resolve failure keeps context visible
+
+- Steps:
+  1. open a pending approval
+  2. trigger or simulate a resolve failure during approve/reject
+  3. inspect the modal, row state, and visible error handling
+- Expected:
+  - the resolve modal stays open on failure
+  - the pending row remains visible instead of disappearing optimistically
+  - the failure is shown inline with a clear retry path
 
 #### AP-03 Reject path
 

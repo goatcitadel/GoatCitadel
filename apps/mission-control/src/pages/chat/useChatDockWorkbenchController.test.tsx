@@ -1,6 +1,6 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultDockOpenForMode } from "./surface-config";
 import { useChatDockWorkbenchController } from "./useChatDockWorkbenchController";
 
@@ -30,6 +30,14 @@ const platformMocks = vi.hoisted(() => ({
   })),
 }));
 
+const refreshSubscriptionMocks = vi.hoisted(() => ({
+  callback: null as
+    | ((signal: { topic: "chat"; timestamp: number; reason: string; source?: string }) => Promise<void> | void)
+    | null,
+  options: null as { enabled?: boolean; coalesceMs?: number; staleMs?: number; pollIntervalMs?: number } | null,
+  topic: null as string | null,
+}));
+
 vi.mock("./useChatWorkbench", () => ({
   useChatWorkbench: vi.fn(() => ({
     workbenchState: { baseRef: "main" },
@@ -49,6 +57,14 @@ vi.mock("./useChatWorkbench", () => ({
 vi.mock("../../api/platform", () => ({
   fetchOrchestrationRun: platformMocks.fetchOrchestrationRun,
   fetchOrchestrationRunCheckpoints: platformMocks.fetchOrchestrationRunCheckpoints,
+}));
+
+vi.mock("../../hooks/useRefreshSubscription", () => ({
+  useRefreshSubscription: vi.fn((topic, callback, options) => {
+    refreshSubscriptionMocks.topic = topic;
+    refreshSubscriptionMocks.callback = callback;
+    refreshSubscriptionMocks.options = options ?? null;
+  }),
 }));
 
 let latest: ReturnType<typeof useChatDockWorkbenchController> | null = null;
@@ -75,6 +91,42 @@ function Harness(props: { mode: "chat" | "cowork" | "code" }) {
 }
 
 describe("useChatDockWorkbenchController", () => {
+  beforeEach(() => {
+    latest = null;
+    refreshSubscriptionMocks.callback = null;
+    refreshSubscriptionMocks.options = null;
+    refreshSubscriptionMocks.topic = null;
+    platformMocks.fetchOrchestrationRun.mockReset();
+    platformMocks.fetchOrchestrationRun.mockResolvedValue({
+      runId: "orch-run-1",
+      planId: "plan-1",
+      status: "paused",
+      startedAt: "2026-04-19T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 1,
+      durableRunId: "durable-run-1",
+      executionState: "paused_for_approval",
+      worktreeStatus: "ready",
+    });
+    platformMocks.fetchOrchestrationRunCheckpoints.mockReset();
+    platformMocks.fetchOrchestrationRunCheckpoints.mockResolvedValue({
+      items: [
+        {
+          checkpointId: "cp-1",
+          runId: "orch-run-1",
+          planId: "plan-1",
+          checkpointKind: "run_paused_for_approval",
+          details: {},
+          createdAt: "2026-04-19T00:00:01.000Z",
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resets dock openness when the surface mode changes", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
@@ -98,5 +150,117 @@ describe("useChatDockWorkbenchController", () => {
     expect(latest?.orchestrationRun?.durableRunId).toBe("durable-run-1");
     expect(latest?.orchestrationCheckpoints).toHaveLength(1);
     expect(latest?.orchestrationLoading).toBe(false);
+  });
+
+  it("refreshes orchestration state on chat refresh events while cowork is active", async () => {
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(<Harness mode="cowork" />);
+      });
+
+      platformMocks.fetchOrchestrationRun.mockClear();
+      platformMocks.fetchOrchestrationRunCheckpoints.mockClear();
+
+      expect(refreshSubscriptionMocks.topic).toBe("chat");
+      expect(refreshSubscriptionMocks.options?.enabled).toBe(true);
+      expect(refreshSubscriptionMocks.options?.coalesceMs).toBe(800);
+      expect(refreshSubscriptionMocks.options?.staleMs).toBe(20_000);
+      expect(refreshSubscriptionMocks.options?.pollIntervalMs).toBe(15_000);
+
+      await act(async () => {
+        await refreshSubscriptionMocks.callback?.({
+          topic: "chat",
+          timestamp: Date.now(),
+          reason: "unit-test",
+          source: "test",
+        });
+      });
+
+      expect(platformMocks.fetchOrchestrationRun).toHaveBeenCalledWith("orch-run-1");
+      expect(platformMocks.fetchOrchestrationRunCheckpoints).toHaveBeenCalledWith("orch-run-1");
+    } finally {
+      renderer?.unmount();
+    }
+  });
+
+  it("keeps the last known run visible when checkpoint refresh fails", async () => {
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(<Harness mode="cowork" />);
+      });
+
+      platformMocks.fetchOrchestrationRun.mockResolvedValue({
+        runId: "orch-run-1",
+        planId: "plan-1",
+        status: "running",
+        startedAt: "2026-04-19T00:00:00.000Z",
+        totalCostUsd: 1.25,
+        totalIterations: 2,
+        durableRunId: "durable-run-1",
+        executionState: "running",
+        worktreeStatus: "ready",
+      });
+      platformMocks.fetchOrchestrationRunCheckpoints.mockRejectedValueOnce(new Error("checkpoint fetch failed"));
+
+      await act(async () => {
+        await refreshSubscriptionMocks.callback?.({
+          topic: "chat",
+          timestamp: Date.now(),
+          reason: "unit-test",
+          source: "test",
+        });
+      });
+
+      expect(latest?.orchestrationRun?.status).toBe("running");
+      expect(latest?.orchestrationCheckpoints).toHaveLength(1);
+      expect(latest?.orchestrationError).toContain("checkpoints");
+    } finally {
+      renderer?.unmount();
+    }
+  });
+
+  it("keeps the last known checkpoints visible when run refresh fails", async () => {
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(<Harness mode="cowork" />);
+      });
+
+      platformMocks.fetchOrchestrationRun.mockRejectedValueOnce(new Error("run fetch failed"));
+      platformMocks.fetchOrchestrationRunCheckpoints.mockResolvedValueOnce({
+        items: [
+          {
+            checkpointId: "cp-2",
+            runId: "orch-run-1",
+            planId: "plan-1",
+            checkpointKind: "run_progress",
+            details: { step: "handoff" },
+            createdAt: "2026-04-19T00:00:02.000Z",
+          },
+        ],
+      });
+
+      await act(async () => {
+        await refreshSubscriptionMocks.callback?.({
+          topic: "chat",
+          timestamp: Date.now(),
+          reason: "unit-test",
+          source: "test",
+        });
+      });
+
+      expect(latest?.orchestrationRun?.durableRunId).toBe("durable-run-1");
+      expect(latest?.orchestrationCheckpoints).toEqual([
+        expect.objectContaining({
+          checkpointId: "cp-2",
+          checkpointKind: "run_progress",
+        }),
+      ]);
+      expect(latest?.orchestrationError).toContain("run data");
+    } finally {
+      renderer?.unmount();
+    }
   });
 });

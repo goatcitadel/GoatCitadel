@@ -157,6 +157,46 @@ describe("ChatThreadView", () => {
     expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Details")).toBe(true);
   });
 
+  it("renders requested versus effective routing when fallback changed providers", () => {
+    const thread = createThread("plain content");
+    (thread.turns[0] as any).trace.routing = {
+      liveDataIntent: false,
+      fallbackUsed: true,
+      primaryProviderId: "openai",
+      primaryModel: "gpt-4.1-mini",
+      effectiveProviderId: "glm",
+      effectiveModel: "glm-5",
+      effectiveApiStyle: "openai-chat-completions",
+      fallbackReason: "primary rate-limited",
+    };
+
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        loading={false}
+        thread={thread}
+        selectedTurnId="turn-1"
+        delegationRun={null}
+        notices={[]}
+        followOutput={false}
+        onBottomStateChange={vi.fn()}
+        onSelectTurn={vi.fn()}
+        onSwitchBranch={vi.fn()}
+        onRetryTurn={vi.fn()}
+        onEditTurn={vi.fn()}
+        onOpenRunDetails={vi.fn()}
+      />,
+    );
+
+    const text = renderer.root
+      .findAll((node) => Array.isArray(node.children))
+      .map((node) => node.children.join(""))
+      .join(" ");
+
+    expect(text).toContain("effective glm · glm-5 · openai-chat-completions");
+    expect(text).toContain("requested openai · gpt-4.1-mini");
+    expect(text).toContain("fallback: primary rate-limited");
+  });
+
   it("shows a repaired badge when the trace marks the assistant output as repaired", () => {
     const thread = createThread("plain content");
     (thread.turns[0] as any).trace.completion = {
@@ -236,9 +276,23 @@ describe("ChatThreadView", () => {
       />,
     );
 
-    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Delegation run"))).not.toHaveLength(0);
-    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Task task-1"))).not.toHaveLength(0);
-    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Durable durable-child-1"))).not.toHaveLength(0);
-    expect(renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Skipped because dependency failed."))).not.toHaveLength(0);
+    expect(
+      renderer.root.findAll(
+        (node) => Array.isArray(node.children) && node.children.join("").includes("Delegation run"),
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("Task task-1")),
+    ).not.toHaveLength(0);
+    expect(
+      renderer.root.findAll(
+        (node) => Array.isArray(node.children) && node.children.join("").includes("Durable durable-child-1"),
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      renderer.root.findAll(
+        (node) => Array.isArray(node.children) && node.children.join("").includes("Skipped because dependency failed."),
+      ),
+    ).not.toHaveLength(0);
   });
 });

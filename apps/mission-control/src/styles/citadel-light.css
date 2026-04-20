@@ -768,7 +768,10 @@
 
 .theme-citadel-light .page-header {
   margin: 0;
-  padding: var(--mc-surface-pad);
+  padding: 10px 0 4px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .theme-citadel-light .page-header-main {
@@ -782,15 +785,15 @@
 
 .theme-citadel-light .page-header-subtitle,
 .theme-citadel-light .page-header-hint {
-  font-size: 0.96rem;
-  line-height: 1.55;
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
 
 .theme-citadel-light .page-header-hint {
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(17, 112, 138, 0.14);
-  background: linear-gradient(180deg, rgba(139, 173, 182, 0.99), rgba(116, 153, 163, 0.97));
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .theme-citadel-light .page-header-actions {
@@ -2488,8 +2491,8 @@
 
 .theme-citadel-light .gc-alert,
 .theme-citadel-light .gc-empty-state {
-  border-color: rgba(20, 67, 80, 0.1);
-  background: rgba(248, 251, 252, 0.96);
+  border-color: transparent;
+  background: transparent;
 }
 
 .theme-citadel-light .gc-empty-title,

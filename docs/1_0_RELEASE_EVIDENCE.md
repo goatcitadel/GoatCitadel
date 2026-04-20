@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Evidence
 
-Last updated: 2026-04-12
+Last updated: 2026-04-19
 
 This document maps the public `1.0` claims to the repo-visible code paths and verification lanes that prove them.
 
@@ -23,6 +23,7 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 
 - The canonical release-bearing primary surface manifest lives in [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
 - `verify:surface:regression` and `verify:visual:regression` both derive from that same manifest in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs).
+- `verify:visual:regression` is the read-only screenshot gate in [scripts/verification/run.mjs](../scripts/verification/run.mjs); intentional baseline maintenance now goes through `verify:visual:rebaseline`, which threads explicit baseline-write intent into [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs) instead of letting the normal lane rewrite proof artifacts.
 - Checked-in visual baselines live under [scripts/verification/baselines/visual](../scripts/verification/baselines/visual).
 
 ## Durable Ownership Proof
@@ -38,6 +39,19 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 - Route-level auth proof for operator access, device/companion denial, and signed companion mutation denial lives in [apps/gateway/src/routes/privileged-auth.test.ts](../apps/gateway/src/routes/privileged-auth.test.ts).
 - The capability-token remote resolution path remains separate from the operator-only control routes in [apps/gateway/src/routes/approvals.test.ts](../apps/gateway/src/routes/approvals.test.ts).
 - Stack-backed operator-proof denial coverage for device and companion principals now includes the approval control plane in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs).
+
+## Hardening Pass Proof
+
+- Streaming completion retry/fallback now fail closed after any partial emission in [apps/gateway/src/services/llm-completion-service.ts](../apps/gateway/src/services/llm-completion-service.ts), with regression proof for partial-stream tool-protocol failure and cross-provider failure in [apps/gateway/src/services/llm-completion-service.test.ts](../apps/gateway/src/services/llm-completion-service.test.ts).
+- Operator-facing JSON mutation dedupe now blocks duplicate execution through [apps/gateway/src/plugins/idempotency.ts](../apps/gateway/src/plugins/idempotency.ts) and the persisted key-claim store in [packages/storage/src/mutation-idempotency-repo.ts](../packages/storage/src/mutation-idempotency-repo.ts), with route/plugin proof in [apps/gateway/src/plugins/idempotency.test.ts](../apps/gateway/src/plugins/idempotency.test.ts) and storage proof in [packages/storage/src/mutation-idempotency-repo.test.ts](../packages/storage/src/mutation-idempotency-repo.test.ts).
+- Learned-memory policy ownership now routes through [apps/gateway/src/services/memory-lifecycle-service.ts](../apps/gateway/src/services/memory-lifecycle-service.ts) using session `memoryMode` instead of ad hoc write-time decisions, with coverage in [apps/gateway/src/services/memory-lifecycle-service.test.ts](../apps/gateway/src/services/memory-lifecycle-service.test.ts).
+- MCP and generic tool execution are now governed by the same policy engine in [apps/gateway/src/services/tool-invocation-coordinator-service.ts](../apps/gateway/src/services/tool-invocation-coordinator-service.ts), with MCP re-checking the normalized `mcp.invoke` request immediately before runtime dispatch and parity coverage in [apps/gateway/src/services/tool-invocation-coordinator-service.test.ts](../apps/gateway/src/services/tool-invocation-coordinator-service.test.ts).
+- Prompt compaction now preserves tool/message identity breadcrumbs in [apps/gateway/src/services/chat-compaction.ts](../apps/gateway/src/services/chat-compaction.ts), with regression coverage in [apps/gateway/src/services/gateway-service.compaction.test.ts](../apps/gateway/src/services/gateway-service.compaction.test.ts).
+- Mission Control routing transparency now surfaces requested versus effective routing in [apps/mission-control/src/components/ChatTraceCard.tsx](../apps/mission-control/src/components/ChatTraceCard.tsx) and [apps/mission-control/src/components/chat/ChatThreadView.tsx](../apps/mission-control/src/components/chat/ChatThreadView.tsx), with UI proof in [apps/mission-control/src/components/ChatTraceCard.test.tsx](../apps/mission-control/src/components/ChatTraceCard.test.tsx) and [apps/mission-control/src/components/chat/ChatThreadView.test.tsx](../apps/mission-control/src/components/chat/ChatThreadView.test.tsx).
+- Mission Control approval failure resilience now keeps resolution context visible in [apps/mission-control/src/pages/ApprovalsPage.tsx](../apps/mission-control/src/pages/ApprovalsPage.tsx), with failure-path proof in [apps/mission-control/src/pages/ApprovalsPage.test.tsx](../apps/mission-control/src/pages/ApprovalsPage.test.tsx).
+- Cowork orchestration truth now refreshes through the existing app refresh bus in [apps/mission-control/src/pages/chat/useChatDockWorkbenchController.ts](../apps/mission-control/src/pages/chat/useChatDockWorkbenchController.ts), preserving last-known-good run/checkpoint state on partial refresh failures with hook-level proof in [apps/mission-control/src/pages/chat/useChatDockWorkbenchController.test.tsx](../apps/mission-control/src/pages/chat/useChatDockWorkbenchController.test.tsx).
+- Chat outbound execution now keeps prior pending-approval context visible until execution actually commits in [apps/mission-control/src/pages/chat/useChatOutboundExecution.ts](../apps/mission-control/src/pages/chat/useChatOutboundExecution.ts), with regression proof in [apps/mission-control/src/pages/chat/useChatOutboundExecution.test.tsx](../apps/mission-control/src/pages/chat/useChatOutboundExecution.test.tsx).
+- Approval-effect replay now has an explicit regression proving already-executed pending tool actions are not re-fired when replayed effect processing runs again in [apps/gateway/src/services/approval-resolution-effects-service.test.ts](../apps/gateway/src/services/approval-resolution-effects-service.test.ts).
 
 ## Ecosystem Proof Map
 
@@ -73,3 +87,9 @@ This document maps the public `1.0` claims to the repo-visible code paths and ve
 
 - Public release posture is defined in [README.md](../README.md), [CHANGELOG.md](../CHANGELOG.md), and [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md).
 - Governance freshness and implementation-anchor checks live in [scripts/validate-governance-docs.mjs](../scripts/validate-governance-docs.mjs).
+
+## Closeout Validation Truth
+
+- Closeout validation keeps the contract and handbook anchored through `pnpm docs:check`.
+- The hardening pass now has green compatibility, operator, durable, surface, and visual proof lanes through [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs); the visual regression lane is read-only and any intentional baseline updates must go through `verify:visual:rebaseline` before a clean rerun against the checked-in assets under [scripts/verification/baselines/visual](../scripts/verification/baselines/visual).
+- No known non-blocking failures remain explicitly accepted for this pass.

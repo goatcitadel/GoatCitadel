@@ -1,4 +1,3 @@
-import { FieldHelp } from "../../components/FieldHelp";
 import { Panel } from "../../components/Panel";
 import { StatusChip } from "../../components/StatusChip";
 import { formatDeploymentProfileLabel } from "../settings-page-utils";
@@ -30,7 +29,7 @@ export function SettingsOverviewSection({
   const resolvedModel = activeModel || fallbackModel || "not set";
   return (
     <section id="settings-overview" className="settings-v2-section">
-      <Panel title="Current Forge Posture" subtitle="Current environment, defaults, and safety posture." tone="soft">
+      <Panel title="Current settings" subtitle="Environment, defaults, and access state." tone="soft">
         <div className="settings-v2-summary">
           <StatusChip tone="muted">{environment}</StatusChip>
           <StatusChip
@@ -52,10 +51,6 @@ export function SettingsOverviewSection({
             {allowLoopbackBypass ? "Loopback bypass on" : "Loopback bypass off"}
           </StatusChip>
         </div>
-        <FieldHelp>
-          Environment and workspace values come from the running gateway. Use the section rail to jump directly to
-          access, runtime, providers, or local voice tools.
-        </FieldHelp>
         <div className="settings-v2-overview-grid">
           <div>
             <strong>Environment</strong>

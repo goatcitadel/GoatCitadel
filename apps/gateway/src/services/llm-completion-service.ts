@@ -500,6 +500,7 @@ export async function* createChatCompletionStream(
   ];
   const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
   let streamed = false;
+  let streamFailedAfterEmit = false;
   let lastError: Error | undefined;
 
   attemptLoop: for (let index = 0; index < retryAttempts.length; index += 1) {
@@ -540,8 +541,11 @@ export async function* createChatCompletionStream(
         break attemptLoop;
       } catch (error) {
         lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+        if (attemptStreamed) {
+          streamFailedAfterEmit = true;
+          break attemptLoop;
+        }
         if (
-          !attemptStreamed &&
           transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
           shouldRetryTransientProviderError(lastError)
         ) {
@@ -554,6 +558,10 @@ export async function* createChatCompletionStream(
         break;
       }
     }
+  }
+
+  if (streamFailedAfterEmit) {
+    throw lastError ?? new Error("chat completion stream failed after emitting output");
   }
 
   if (!streamed && allowCrossProviderFallback) {
@@ -589,8 +597,11 @@ export async function* createChatCompletionStream(
           break;
         } catch (error) {
           lastError = normalizeChatCompletionAttemptError(error, withContext.timeoutMs);
+          if (attemptStreamed) {
+            streamFailedAfterEmit = true;
+            break;
+          }
           if (
-            !attemptStreamed &&
             transientRetryIndex < CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT - 1 &&
             shouldRetryTransientProviderError(lastError)
           ) {
@@ -603,6 +614,10 @@ export async function* createChatCompletionStream(
         break;
       }
     }
+  }
+
+  if (streamFailedAfterEmit) {
+    throw lastError ?? new Error("chat completion stream failed after emitting output");
   }
 
   if (!streamed) {

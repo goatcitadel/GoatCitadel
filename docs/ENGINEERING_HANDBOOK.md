@@ -197,7 +197,7 @@ Design properties:
 - Deterministic session mapping.
 - Append-only transcript logging.
 - Gateway-owned accounting.
-- Idempotent mutation semantics.
+- Event-ingest dedupe via route-owned idempotency records.
 
 ### 4.2 Tool Invocation and Safety Gate Flow
 
@@ -283,7 +283,7 @@ Purpose: allows external channels (for example Discord or Slack connectors) to m
 Behavior:
 
 - Normalizes channel payload into `GatewayEventInput`.
-- Enforces idempotency with header.
+- Preserves the ingest route's own dedupe behavior instead of the generic mutation-claim path.
 - Reuses primary ingest pipeline.
 - Publishes channel ingestion realtime event.
 
@@ -382,9 +382,29 @@ Related host/origin controls:
 
 ### 6.2 Idempotency Enforcement
 
-Mutating methods (`POST`, `PATCH`, `PUT`, `DELETE`) require `Idempotency-Key`.
+Operator-facing JSON mutation routes under `/api/v1/**` require `Idempotency-Key`.
 
 Rejected requests without this header receive `400`.
+
+The gateway persists a mutation claim keyed by:
+
+- HTTP method
+- normalized route path
+- `Idempotency-Key`
+- canonical request-body hash
+- actor scope when available
+
+Behavior:
+
+- first request claims the key as pending
+- same key + same payload while pending => `409 request already in progress`
+- same key + same payload after success => `409 duplicate mutation blocked`
+- same key + different payload => `409 key reused with different payload`
+- failed `5xx` handling releases the claim for a later retry
+
+This layer blocks duplicate mutation execution. It does not replay prior successful responses.
+
+Inbound webhook routes and the canonical gateway event-ingest route keep their route-specific dedupe behavior.
 
 ### 6.3 Sandbox Controls
 
@@ -493,7 +513,7 @@ Office implementation details:
 
 ## 10. API Surface Reference
 
-All mutating endpoints require `Idempotency-Key`.
+Operator-facing mutating JSON endpoints require `Idempotency-Key` and block duplicate execution.
 
 ### Health and Streams
 
@@ -743,7 +763,7 @@ Minimum backup set:
 Release-proof expectation:
 
 - `verify:backup:roundtrip` must seed, mutate, restore, and verify all four classes above, including every runtime `config/*.json` file present at backup time.
-- `verify:visual:regression` must compare checked-in baselines for the shell and primary `Work / Observe / Tune` surfaces, not just capture screenshots.
+- `verify:visual:regression` must compare checked-in baselines for the shell and primary `Work / Observe / Tune` surfaces, not just capture screenshots, and it must stay read-only; intentional baseline updates go through `verify:visual:rebaseline`.
 - `verify:catalog:parity` must execute real operator actions for the visible runtime-backed non-channel classes it claims to cover.
 - `verify:api:compat` must snapshot REST schemas and realtime event envelopes and fail on breaking diffs.
 
@@ -792,7 +812,7 @@ Use separate reviewer tracks for:
 
 Before approving production use:
 
-1. Verify every mutating route enforces idempotency.
+1. Verify operator-facing mutation routes require `Idempotency-Key` and block duplicate execution without double-running handlers.
 2. Verify deny-wins behavior under all policy combinations.
 3. Verify jail and allowlist gates cannot be bypassed with path traversal or host tricks.
 4. Verify approval resolution does not execute stale or malformed pending actions.

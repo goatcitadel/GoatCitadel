@@ -26,8 +26,8 @@
   top: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
+  align-items: start;
   gap: calc(var(--space-3) * var(--density-scale));
   padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
   border-bottom: 1px solid var(--border-default);
@@ -36,7 +36,6 @@
 
 .shell-bar-brand,
 .shell-bar-brand-copy,
-.shell-bar-context,
 .shell-bar-page {
   display: grid;
   gap: calc(var(--space-1) * var(--density-scale));
@@ -54,8 +53,8 @@
 
 .shell-bar-title {
   margin: 0;
-  font: 700 22px/0.95 var(--font-display);
-  letter-spacing: 0.01em;
+  font: 650 1.2rem/1.05 var(--font-body);
+  letter-spacing: 0;
   color: var(--text-primary);
 }
 
@@ -78,7 +77,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: center;
+  align-items: flex-start;
   gap: calc(var(--space-2) * var(--density-scale));
 }
 
@@ -86,14 +85,14 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: center;
+  align-items: flex-start;
   gap: calc(var(--space-2) * var(--density-scale));
 }
 
 .shell-workspace-picker {
   display: grid;
   gap: calc(var(--space-1) * var(--density-scale));
-  min-width: 192px;
+  min-width: 208px;
 }
 
 .shell-context-picker {
@@ -181,6 +180,8 @@
 }
 
 .shell-workspace {
+  width: min(100%, 1280px);
+  margin-inline: auto;
   min-width: 0;
   display: grid;
   gap: calc(var(--space-2) * var(--density-scale));
@@ -192,6 +193,18 @@
   .shell-main {
     width: auto;
     margin-inline: calc(var(--space-4) * 1);
+  }
+
+  .shell-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .shell-bar-actions {
+    justify-content: flex-start;
+  }
+
+  .shell-bar-utility {
+    justify-content: flex-start;
   }
 }
 
@@ -385,6 +398,8 @@
 .space-page {
   display: grid;
   gap: calc(var(--space-3) * var(--density-scale));
+  width: 100%;
+  min-width: 0;
 }
 
 .space-page-surface {

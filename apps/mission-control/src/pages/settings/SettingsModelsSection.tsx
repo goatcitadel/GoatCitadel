@@ -159,8 +159,8 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
             <code>--alias gemma-4-local</code>.
           </p>
           <p className="office-subtitle">
-            Base URL: <code>http://127.0.0.1:8080/v1</code> | model id: <code>gemma-4-local</code> or the alias
-            returned by <code>/v1/models</code>.
+            Base URL: <code>http://127.0.0.1:8080/v1</code> | model id: <code>gemma-4-local</code> or the alias returned
+            by <code>/v1/models</code>.
           </p>
           <p className="office-subtitle">
             If GoatCitadel is remote, replace <code>127.0.0.1</code> with the host IP/tailnet name and include that host
@@ -234,8 +234,12 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
           Save Active Provider/Model
         </button>
 
-        <button type="button" onClick={onToggleAdvanced} className="gc-button">
-          {showAdvanced ? "Hide advanced provider settings" : "Show advanced provider settings"}
+        <button
+          type="button"
+          onClick={onToggleAdvanced}
+          className="gc-nav-button gc-nav-tier-chip settings-advanced-toggle"
+        >
+          {showAdvanced ? "Hide advanced settings" : "Show advanced settings"}
         </button>
         {showAdvanced ? (
           <div className="advanced-block">
@@ -342,7 +346,12 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
                 "none"}
             </p>
             <div className="controls-row">
-              <button type="button" onClick={onSaveProviderKeyToSecureStore} disabled={!providerApiKey.trim()} className="gc-button">
+              <button
+                type="button"
+                onClick={onSaveProviderKeyToSecureStore}
+                disabled={!providerApiKey.trim()}
+                className="gc-button"
+              >
                 Save Key to Secure Store
               </button>
               <button type="button" onClick={onDeleteProviderKeyFromSecureStore} className="gc-button">

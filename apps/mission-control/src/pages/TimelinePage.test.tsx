@@ -33,7 +33,7 @@ vi.mock("../hooks/useRefreshSubscription", () => ({
 import { TimelinePage } from "./TimelinePage";
 
 describe("TimelinePage", () => {
-  it("renders one focused timeline panel with collapsed secondary lanes", async () => {
+  it("renders one focused timeline panel without the secondary summary panel", async () => {
     apiMocks.connectEventStream.mockImplementation((onEvent: (event: unknown) => void) => {
       streamState.onEvent = onEvent;
       return () => {
@@ -135,11 +135,36 @@ describe("TimelinePage", () => {
     expect(text).toContain("Timeline");
     expect(text).toContain("Live feed");
     expect(text).toContain("Operator Session");
-    expect(text).toContain("Other lanes");
-    expect(text).toContain("1 review items");
-    expect(text).toContain("1 reports ready");
+    expect(text).toContain("1 scheduler items waiting");
+    expect(text).toContain("1 reports");
     expect(text).toContain("Recovered and progressing");
-    expect(text).toContain("operator-summary-card");
-    expect(text).toContain("stat-card-compact");
+    expect(text).not.toContain("Other lanes");
+  });
+
+  it("hides scheduler diagnostics unless technical details are enabled", async () => {
+    apiMocks.connectEventStream.mockImplementation(() => () => undefined);
+    apiMocks.fetchTimelineSummary.mockResolvedValue({
+      generatedAt: "2026-04-10T10:00:00.000Z",
+      events: { items: [] },
+      sessions: { items: [] },
+      scheduler: {
+        jobs: [],
+        reviewQueue: [{ itemId: "diag-1", reason: "cronReviewQueueV1Enabled disabled", status: "pending" }],
+      },
+      improvement: { reports: [], replayRuns: [] },
+    });
+
+    let renderer = create(<div />);
+    await act(async () => {
+      renderer = create(<TimelinePage activeTab="scheduler" onTabChange={() => undefined} />);
+    });
+
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("cronReviewQueueV1Enabled disabled");
+
+    await act(async () => {
+      renderer.update(<TimelinePage activeTab="scheduler" showTechnicalDetails onTabChange={() => undefined} />);
+    });
+
+    expect(JSON.stringify(renderer.toJSON())).toContain("cronReviewQueueV1Enabled disabled");
   });
 });

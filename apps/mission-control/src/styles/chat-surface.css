@@ -14,21 +14,21 @@
 }
 
 .chat-v11-shell.surface-layout-chat {
-  grid-template-columns: minmax(256px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(224px, 280px) minmax(0, 1fr);
 }
 
 .chat-v11-shell.surface-layout-cowork {
-  grid-template-columns: minmax(196px, 244px) minmax(0, 1fr);
+  grid-template-columns: minmax(188px, 232px) minmax(0, 1fr);
 }
 
 .chat-v11-shell.surface-layout-code {
-  grid-template-columns: minmax(188px, 236px) minmax(0, 1fr);
+  grid-template-columns: minmax(184px, 228px) minmax(0, 1fr);
 }
 
 .chat-v11-left {
   gap: 10px;
-  padding: 14px;
-  border-radius: 18px;
+  padding: 12px;
+  border-radius: 12px;
 }
 
 .chat-v11-left.mode-chat {
@@ -57,6 +57,13 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+
+.chat-v11-summary-line {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .chat-v11-left-head {
@@ -615,13 +622,13 @@
 
 .mission-empty-shell {
   display: grid;
-  gap: 18px;
-  min-height: min(68vh, 680px);
+  gap: 14px;
+  min-height: min(56vh, 520px);
   align-content: start;
   justify-items: stretch;
-  padding: clamp(24px, 4vw, 48px);
+  padding: clamp(20px, 3vw, 32px);
   text-align: left;
-  border-radius: 24px;
+  border-radius: 12px;
 }
 
 .chat-v11-shell[data-idle-min-height="compact-workbench"] .mission-empty-shell {
@@ -639,15 +646,15 @@
 
 .mission-empty-shell-actions {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   justify-items: start;
 }
 
-.mission-empty-shell-stats {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-start;
+.mission-empty-shell-summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 .mission-empty-shell-context {
@@ -673,7 +680,7 @@
 }
 
 .mission-empty-shell-jump {
-  min-width: 148px;
+  min-width: 0;
 }
 
 .mission-empty-shell-prompts {
@@ -684,8 +691,8 @@
 }
 
 .mission-empty-shell-prompt {
-  padding: 10px 14px;
-  border-radius: 999px;
+  padding: 8px 12px;
+  border-radius: 8px;
   border: 1px solid var(--border-default);
   background: rgba(115, 205, 255, 0.05);
   color: var(--text-muted);

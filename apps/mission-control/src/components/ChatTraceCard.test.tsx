@@ -1,4 +1,4 @@
-import { create } from "react-test-renderer";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { ChatTraceCard } from "./ChatTraceCard";
@@ -78,8 +78,8 @@ function makeTrace(): ChatTurnTraceRecord {
       liveDataIntent: true,
       fallbackUsed: true,
       fallbackReason: "primary blocked by remote site",
-      primaryProviderId: "glm",
-      primaryModel: "glm-5",
+      primaryProviderId: "openai",
+      primaryModel: "gpt-4.1-mini",
       effectiveProviderId: "glm",
       effectiveModel: "glm-5",
       effectiveApiStyle: "openai-chat-completions",
@@ -147,9 +147,13 @@ function makeTrace(): ChatTurnTraceRecord {
 }
 
 describe("ChatTraceCard", () => {
-  it("renders routing and browser diagnostics", () => {
-    const renderer = create(<ChatTraceCard trace={makeTrace()} defaultCollapsed={false} />);
-    const text = renderer.root.findAllByType("p")
+  it("renders routing and browser diagnostics", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={makeTrace()} defaultCollapsed={false} />);
+    });
+    const text = renderer.root
+      .findAllByType("p")
       .map((node) => node.children.join(" "))
       .join("\n")
       .replace(/\s+/g, " ")
@@ -158,6 +162,8 @@ describe("ChatTraceCard", () => {
 
     expect(text).toContain("Fallback reason: primary blocked by remote site");
     expect(text).toContain("Upstream API: openai-chat-completions");
+    expect(text).toContain("Requested: openai · gpt-4.1-mini");
+    expect(text).toContain("Effective: glm · glm-5");
     expect(text).toContain("Engine: Built-in browser (builtin)");
     expect(text).toContain("URL: https://www.movieinsider.com/movies");
     expect(text).toContain("HTTP status: 403");
@@ -165,14 +171,33 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("Stored browser output as an artifact to keep live context compact.");
     expect(text).toContain("Next step: Retry with a narrower request");
     expect(text).toContain("Try the next viable source instead of retrying the blocked host.");
-    expect(text).toContain("Check the top likely sources, skip blocked hosts, and summarize the confirmed release window.");
+    expect(text).toContain(
+      "Check the top likely sources, skip blocked hosts, and summarize the confirmed release window.",
+    );
     expect(text).toContain("Open the best unblocked source and confirm release details.");
     expect(text).toContain("Status: pending");
     expect(text).toContain("Repeated browser.navigate call detected.");
-    expect(fullText).toContain("Lineage: durable durable-child-2 | child session delegate-session-2 | child turn delegate-turn-2 | deprecated childRunId legacy-child-2");
-    expect(renderer.root.findAll((node) =>
-      typeof node.props.className === "string" && node.props.className.includes("chat-tool-artifact-badge"),
-    )).toHaveLength(2);
-    expect(renderer.root.findAllByType("button").some((button) => button.children.join("") === "Inspect raw artifact")).toBe(true);
+    expect(fullText).toContain(
+      "Lineage: durable durable-child-2 | child session delegate-session-2 | child turn delegate-turn-2 | deprecated childRunId legacy-child-2",
+    );
+    expect(
+      renderer.root.findAll(
+        (node) => typeof node.props.className === "string" && node.props.className.includes("chat-tool-artifact-badge"),
+      ),
+    ).toHaveLength(2);
+    expect(
+      renderer.root.findAllByType("button").some((button) => button.children.join("") === "Inspect raw artifact"),
+    ).toBe(true);
+  });
+
+  it("surfaces requested versus effective routing in the collapsed header", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={makeTrace()} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("completed · glm · glm-5");
+    expect(text).toContain("Requested openai · gpt-4.1-mini -> Effective glm · glm-5 · primary blocked by remote site");
   });
 });

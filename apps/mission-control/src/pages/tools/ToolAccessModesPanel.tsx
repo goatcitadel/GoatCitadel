@@ -29,11 +29,10 @@ export function ToolAccessModesPanel(props: ToolAccessModesPanelProps) {
 
   return (
     <Panel
-      title="Access Modes"
+      title="Access presets"
       subtitle={
         <>
-          One-click profile switching for safe days versus power days. Current profile:{" "}
-          <strong>{currentToolProfile}</strong>.
+          Switch the workspace-wide tool profile in one click. Current profile: <strong>{currentToolProfile}</strong>.
         </>
       }
     >

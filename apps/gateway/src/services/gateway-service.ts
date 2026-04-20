@@ -1865,6 +1865,20 @@ export class GatewayService {
         writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
         normalizeRelativePath: (relativePath) => this.normalizeRelativePath(relativePath),
       },
+      resolveLearnedMemoryPolicy: (sessionId) => {
+        if (this.isReplayScratchSession(sessionId)) {
+          return {
+            allowWrite: false,
+            reason: "replay_scratch" as const,
+          };
+        }
+        const prefs = this.storage.chatSessionPrefs.ensure(sessionId);
+        return {
+          allowWrite: prefs.memoryMode !== "off",
+          memoryMode: prefs.memoryMode,
+          reason: prefs.memoryMode === "off" ? ("memory_mode_off" as const) : ("allowed" as const),
+        };
+      },
       readTranscriptOrEmpty: (sessionId) => this.readTranscriptOrEmpty(sessionId),
     });
     this.durableWorkflowRegistry = durableExecutionService.createDurableWorkflowExecutorRegistry(
@@ -3574,9 +3588,6 @@ export class GatewayService {
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): void {
-    if (this.isReplayScratchSession(sessionId)) {
-      return;
-    }
     return this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
   }
 
@@ -4064,9 +4075,9 @@ export class GatewayService {
             ? response.trace?.pendingApprovalSummary?.reason?.trim() || "Delegate is waiting for approval."
             : waitingForUserInput
               ? response.trace?.pendingUserInput?.question?.trim() || "Delegate is waiting for user input."
-            : stillActive
-              ? "Delegate is still waiting on a tool result."
-              : "(delegate returned no output)");
+              : stillActive
+                ? "Delegate is still waiting on a tool result."
+                : "(delegate returned no output)");
         const finishedAt = new Date().toISOString();
         const completedStep = this.storage.chatDelegationSteps.patch(step.stepId, {
           status: failed ? "failed" : "completed",

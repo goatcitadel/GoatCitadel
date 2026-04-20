@@ -638,6 +638,16 @@ describe("App gateway access gate", () => {
     window.localStorage.setItem("goatcitadel.ui.mode.v1", "advanced");
     window.location.search = "?space=operate&page=surface&surface=chat";
     window.location.href = "http://localhost:5173/?space=operate&page=surface&surface=chat";
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("min-width: 1100px"),
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
     preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
 
     let renderer: ReactTestRenderer;
@@ -657,6 +667,8 @@ describe("App gateway access gate", () => {
     expect(text).toContain("Setup");
     expect(text).toContain("Cowork");
     expect(text).toContain("Code");
+    expect(text).toContain("Mission Control");
+    expect(text).not.toContain("shell-secondary-nav");
     expect(text).not.toContain("Surface");
     expect(text).not.toContain("More");
   });
@@ -886,7 +898,7 @@ describe("App gateway access gate", () => {
     expect(text).toContain("iPhone Safari");
   });
 
-  it("keeps provider trust in the shell layer for work surfaces", async () => {
+  it("keeps provider trust out of duplicated shell chrome for work surfaces", async () => {
     const { App } = await import("./App");
 
     let renderer: ReactTestRenderer;
@@ -895,10 +907,9 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const text = await waitForTreeText(renderer!, "OpenAI / gpt-5.4");
-    expect(text).toContain("shell-trust-provider");
-    expect(text).toContain("OpenAI / gpt-5.4");
-    expect(text.split("OpenAI / gpt-5.4").length - 1).toBe(1);
+    const text = await waitForTreeText(renderer!, "chat-ready:chat:locked");
+    expect(text).not.toContain("shell-trust-provider");
+    expect(text).not.toContain("OpenAI / gpt-5.4");
   });
 
   it("keeps workload detail collapsed by default while the shell stays compact", async () => {
@@ -951,8 +962,7 @@ describe("App gateway access gate", () => {
     expect(renderTreeText(renderer!)).not.toContain("Pending decisions");
 
     const statusToggle = renderer!.root.find(
-      (node) =>
-        typeof node.props.className === "string" && node.props.className.includes("shell-status-toggle"),
+      (node) => typeof node.props.className === "string" && node.props.className.includes("shell-status-toggle"),
     );
 
     await act(async () => {

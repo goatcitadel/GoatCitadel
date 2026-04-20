@@ -22,10 +22,11 @@ describe("MissionControlEmptyState", () => {
 
     expect(markup).toContain("Chat");
     expect(markup).toContain("Start with the thing you actually need");
-    expect(markup).toContain("Start chat session");
+    expect(markup).toContain("Start chat");
     expect(markup).toContain("Draft a launch update from my notes");
     expect(markup).toContain("Primary Ops");
     expect(markup).toContain("2 approvals waiting");
+    expect(markup).toContain("1 project • 3 sessions");
     expect(markup).toContain("Open Cowork");
     expect(markup).toContain("Open Code");
   });
@@ -49,7 +50,7 @@ describe("MissionControlEmptyState", () => {
     expect(markup).toContain("Code");
     expect(markup).toContain("Anchor the implementation before you execute");
     expect(markup).toContain("Start code session");
-    expect(markup).toContain("4 projects");
+    expect(markup).toContain("4 projects • 0 sessions");
     expect(markup).toContain("Repo Bound");
     expect(markup).toContain("Approvals clear");
     expect(markup).toContain("Open Tasks");

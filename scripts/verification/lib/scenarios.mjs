@@ -2200,7 +2200,7 @@ export async function runBackupRoundtripLane(context, options = {}) {
 }
 
 export async function runVisualRegressionLane(context, options = {}) {
-  const updateBaselines = maybeParseBool(process.env.GOATCITADEL_UPDATE_VISUAL_BASELINES, false);
+  const updateBaselines = maybeParseBool(options.updateBaselines, false);
   if (!updateBaselines) {
     await assertVisualBaselineCoverage(context);
   }
@@ -2262,7 +2262,9 @@ export async function runVisualRegressionLane(context, options = {}) {
                   gatewayUrl: stack.gatewayUrl,
                   correlationId,
                 });
-                const comparison = await compareVisualBaseline(context, artifactSlug);
+                const comparison = await compareVisualBaseline(context, artifactSlug, {
+                  updateBaselines,
+                });
                 const failed = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
                 return {
                   status: failed ? "failed" : "passed",
@@ -2989,13 +2991,13 @@ async function captureBrowserArtifacts(context, input) {
   };
 }
 
-async function compareVisualBaseline(context, slug) {
+async function compareVisualBaseline(context, slug, options = {}) {
   const screenshotPath = path.join(context.artifactRoot, "screenshots", `${slug}.png`);
   const baselinePath = path.join(VISUAL_BASELINE_DIR, `${slug}.png`);
   const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", `${slug}-visual-compare.json`);
   const diffPath = path.join(context.artifactRoot, "screenshots", `${slug}-diff.png`);
   const baselineArtifactPath = path.join(context.artifactRoot, "screenshots", `${slug}-baseline.png`);
-  const updateBaselines = maybeParseBool(process.env.GOATCITADEL_UPDATE_VISUAL_BASELINES, false);
+  const updateBaselines = maybeParseBool(options.updateBaselines, false);
 
   await fs.mkdir(path.dirname(baselinePath), { recursive: true });
   if (updateBaselines) {

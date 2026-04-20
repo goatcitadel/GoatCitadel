@@ -288,7 +288,9 @@ export async function buildApp() {
   await app.register(gatewayPlugin);
   assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins);
   await app.register(authPlugin);
-  await app.register(idempotencyHeaderPlugin);
+  await app.register(idempotencyHeaderPlugin, {
+    mutationStore: app.gateway.storage.mutationIdempotency,
+  });
 
   await app.register(healthRoute);
   await app.register(authRoutes);

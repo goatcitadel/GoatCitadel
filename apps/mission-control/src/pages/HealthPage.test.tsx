@@ -33,7 +33,7 @@ vi.mock("../hooks/useRefreshSubscription", () => ({
 import { HealthPage } from "./HealthPage";
 
 describe("HealthPage", () => {
-  it("renders one focused health lane with compressed secondary context", async () => {
+  it("renders one focused health page without duplicated secondary summaries", async () => {
     apiMocks.fetchHealthSummary.mockResolvedValueOnce({
       generatedAt: "2026-04-10T10:00:00.000Z",
       systemVitals: {
@@ -180,13 +180,12 @@ describe("HealthPage", () => {
 
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain("Health");
-    expect(text).toContain("Runtime state");
+    expect(text).toContain("Runtime");
     expect(text).toContain("Service Manager");
     expect(text).toContain("Backup ready");
-    expect(text).toContain("Other lane");
-    expect(text).toContain("Spend + backup view");
-    expect(text).toContain("2 files captured");
-    expect(text).toContain("operator-summary-card");
-    expect(text).toContain("stat-card-compact");
+    expect(text).toContain("Runtime serving");
+    expect(text).toContain("$2.50 recorded");
+    expect(text).toContain("Latest backup");
+    expect(text).not.toContain("Other lane");
   });
 });

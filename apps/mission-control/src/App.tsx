@@ -1073,7 +1073,6 @@ export function App() {
 
   const visiblePage = getVisiblePage(route);
   const currentPageLabel = getVisiblePageLabel(route);
-  const currentPageDescription = SPACE_META[route.space].description;
   const detailPanelVisible = Boolean(detailPanelEntry) && (detailPanelPinned || detailPanelOpen);
   const handleToggleDetailPanel = useCallback(() => {
     setDetailPanelOpen((current) => !current);
@@ -1240,10 +1239,7 @@ export function App() {
       }
       if (route.page === "tasks") {
         return (
-          <ShellPageFrame
-            title="Trailboard"
-            subtitle="Track active work, blockers, and linked sessions without leaving the operator flow."
-          >
+          <ShellPageFrame title="Tasks" subtitle="Track active work, blockers, and linked sessions from one queue.">
             <TasksPage workspaceId={activeWorkspaceId} />
           </ShellPageFrame>
         );
@@ -1264,6 +1260,7 @@ export function App() {
           <TimelinePage
             workspaceId={activeWorkspaceId}
             activeTab={timelineTab}
+            showTechnicalDetails={showTechnicalDetails}
             onTabChange={(tab: TimelineTab) =>
               navigate(
                 tab === "sessions"
@@ -1367,6 +1364,7 @@ export function App() {
     route.page,
     route.space,
     route.surface,
+    showTechnicalDetails,
   ]);
 
   if (gatewayAccess.status !== "ready") {
@@ -1409,11 +1407,11 @@ export function App() {
         <header className="shell-bar mc-shell-bar">
           <div className="shell-bar-brand">
             <div className="shell-bar-brand-copy">
-              <p className="shell-bar-kicker">GoatCitadel Mission Control</p>
-              <h1 className="shell-bar-title">{SPACE_META[route.space].label}</h1>
+              <p className="shell-bar-kicker">GoatCitadel</p>
+              <h1 className="shell-bar-title">Mission Control</h1>
             </div>
           </div>
-          <div className="shell-bar-context mc-shell-bar-context">
+          <div className="shell-bar-actions mc-shell-bar-actions">
             {!desktopShellRail ? (
               <nav className="space-nav" aria-label="Mission Control spaces">
                 {(Object.keys(SPACE_META) as Space[]).map((space) => (
@@ -1428,12 +1426,41 @@ export function App() {
                 ))}
               </nav>
             ) : null}
-            <p className="shell-bar-page-label">{currentPageLabel}</p>
-            <p className="shell-bar-page-note">{currentPageDescription}</p>
-          </div>
-          <div className="shell-bar-actions mc-shell-bar-actions">
+            <label className="shell-workspace-picker">
+              <span className="shell-action-label">Workspace</span>
+              <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
+            </label>
             <div className="shell-bar-utility mc-shell-bar-utility">
               <GlobalFreshnessPill streamState={streamState} variant="compact" />
+              <StatusChip tone={shellGatewayState.tone}>{shellGatewayState.label}</StatusChip>
+              <button
+                type="button"
+                className={`shell-trust-action gc-nav-button gc-nav-tier-chip mc-shell-chip${operateApprovalsCount > 0 ? " active" : ""}`}
+                onClick={() => navigate({ space: "operate", page: "approvals" })}
+              >
+                {workTrustDescriptor.approvalsSummary}
+              </button>
+              {route.space === "operate" ? (
+                <button
+                  type="button"
+                  className={`shell-trust-action shell-status-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
+                  aria-expanded={operateStatusVariant === "expanded"}
+                  aria-controls="shell-attached-status-panel"
+                  onClick={() => setOperateStatusStripExpanded((current) => !current)}
+                >
+                  {workTrustDescriptor.runtimeSummary}
+                </button>
+              ) : null}
+              {detailPanelEntry ? (
+                <button
+                  type="button"
+                  className={`shell-detail-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${detailPanelVisible ? " active" : ""}`}
+                  aria-expanded={detailPanelVisible}
+                  onClick={handleToggleDetailPanel}
+                >
+                  {detailPanelVisible ? "Hide details" : "Open details"}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip mc-shell-chip"
@@ -1442,17 +1469,13 @@ export function App() {
                 {appCopy.quickActionsButton}
               </button>
             </div>
-            <label className="shell-workspace-picker">
-              <span className="shell-action-label">Workspace</span>
-              <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
-            </label>
           </div>
         </header>
 
-        <div className={`shell-secondary-nav mc-shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
-          <div className="shell-secondary-nav-primary mc-shell-secondary-nav-primary">
-            {!desktopShellRail ? (
-              compactShellNav ? (
+        {!desktopShellRail ? (
+          <div className={`shell-secondary-nav mc-shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
+            <div className="shell-secondary-nav-primary mc-shell-secondary-nav-primary">
+              {compactShellNav ? (
                 <label className="shell-context-picker">
                   <span className="shell-action-label">Current area</span>
                   <GCSelect
@@ -1478,56 +1501,10 @@ export function App() {
                     </button>
                   ))}
                 </nav>
-              )
-            ) : (
-              <div className="shell-context-summary">
-                <p className="shell-action-label">{SPACE_META[route.space].label}</p>
-                <p className="shell-bar-page-note">{currentPageLabel}</p>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-          <div className="shell-trust-hud mc-shell-trust-hud" aria-label="Shell trust context">
-            {route.space === "operate" ? (
-              <StatusChip tone="muted">{workTrustDescriptor.workspaceLabel}</StatusChip>
-            ) : null}
-            <StatusChip tone={workTrustDescriptor.gatewayTone}>{workTrustDescriptor.gatewayLabel}</StatusChip>
-            {route.space === "operate" && route.page === "surface" ? (
-              <StatusChip tone="muted" className="shell-trust-provider">
-                {workTrustDescriptor.activeModeLabel} · {workTrustDescriptor.providerModelSummary}
-              </StatusChip>
-            ) : route.space === "operate" ? (
-              <StatusChip tone="muted">{workTrustDescriptor.activeModeLabel}</StatusChip>
-            ) : null}
-            {detailPanelEntry ? (
-              <button
-                type="button"
-                className={`shell-detail-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${detailPanelVisible ? " active" : ""}`}
-                aria-expanded={detailPanelVisible}
-                onClick={handleToggleDetailPanel}
-              >
-                {detailPanelVisible ? "Hide details" : "Open details"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={`shell-trust-action gc-nav-button gc-nav-tier-chip mc-shell-chip${operateApprovalsCount > 0 ? " active" : ""}`}
-              onClick={() => navigate({ space: "operate", page: "approvals" })}
-            >
-              {workTrustDescriptor.approvalsSummary}
-            </button>
-            {route.space === "operate" ? (
-              <button
-                type="button"
-                className={`shell-trust-action shell-status-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
-                aria-expanded={operateStatusVariant === "expanded"}
-                aria-controls="shell-attached-status-panel"
-                onClick={() => setOperateStatusStripExpanded((current) => !current)}
-              >
-                {workTrustDescriptor.runtimeSummary}
-              </button>
-            ) : null}
-          </div>
-        </div>
+        ) : null}
 
         <main className="shell-main mc-shell-main">
           {notifications.length > 0 ? (

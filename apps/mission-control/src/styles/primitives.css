@@ -1115,10 +1115,10 @@
 .page-chrome,
 .page-header {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .page-chrome-copy,
@@ -1154,7 +1154,8 @@
 .page-chrome-title,
 .page-header-title {
   margin: 0;
-  font: 700 24px/1.05 var(--font-display);
+  font: 650 1.3rem/1.1 var(--font-body);
+  letter-spacing: 0;
   color: var(--text-primary);
 }
 
@@ -1206,12 +1207,12 @@
 
 .page-chrome-density-compact .page-chrome-title,
 .page-chrome-density-compact .page-header-title {
-  font-size: 1.15rem;
-  line-height: 1.05;
+  font-size: 1.12rem;
+  line-height: 1.08;
 }
 
 .page-chrome-density-compact.page-chrome-section .page-chrome-title {
-  font-size: 1.1rem;
+  font-size: 1.08rem;
 }
 
 .page-chrome-density-compact .page-chrome-subtitle,
@@ -1239,6 +1240,14 @@
   gap: 4px;
 }
 
+.section-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .section-header-title {
   margin: 0;
   font: 700 16px/1.15 var(--font-body);
@@ -1248,6 +1257,35 @@
 .section-header-subtitle {
   color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary) 16%);
   font: 400 13px/1.45 var(--font-body);
+}
+
+.gc-empty-state {
+  display: grid;
+  gap: calc(var(--space-3) * var(--density-scale));
+  align-content: start;
+  justify-items: start;
+  padding: calc(var(--space-3) * var(--density-scale));
+}
+
+.gc-empty-copy {
+  display: grid;
+  gap: calc(var(--space-1) * var(--density-scale));
+  max-width: 60ch;
+}
+
+.gc-empty-title,
+.gc-empty-subtitle {
+  margin: 0;
+}
+
+.gc-empty-title {
+  font: 650 1rem/1.2 var(--font-body);
+  color: var(--text-primary);
+}
+
+.gc-empty-subtitle {
+  color: color-mix(in srgb, var(--text-secondary) 86%, var(--text-primary) 14%);
+  font: 400 0.9rem/1.55 var(--font-body);
 }
 
 .gc-empty-state-compact .gc-empty-title {
@@ -1274,8 +1312,15 @@
   gap: calc(var(--space-2) * var(--density-scale));
 }
 
+.gc-empty-secondary-action .gc-button,
+.gc-empty-secondary-action .gc-nav-button {
+  min-height: auto;
+}
+
 .gc-empty-meta {
   color: color-mix(in srgb, var(--text-secondary) 84%, var(--text-primary) 16%);
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 .gc-data-table {
@@ -1459,6 +1504,10 @@
   .gateway-access-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .section-header-actions {
+    justify-content: flex-start;
   }
 
   .gateway-access-shell {

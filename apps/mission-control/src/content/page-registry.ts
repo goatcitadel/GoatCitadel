@@ -11,7 +11,15 @@ export type VisiblePage = VisibleWorkPage | VisibleObservePage | VisibleTunePage
 
 export type ActivityTab = "activity" | "scheduler" | "improvement";
 export type ArtifactsTab = "memory" | "files";
-export type SettingsTab = "general" | "providers" | "access" | "budget" | "runtime" | "workspaces" | "addons" | "onboarding";
+export type SettingsTab =
+  | "general"
+  | "providers"
+  | "access"
+  | "budget"
+  | "runtime"
+  | "workspaces"
+  | "addons"
+  | "onboarding";
 export type IntegrationsTab = "overview" | "channels" | "mcp";
 export type AgentsTab = "overview" | "herd-live" | "herd-lab" | "skills";
 
@@ -60,7 +68,7 @@ export const PAGE_META: Record<SpacePage, RouteInfo> = {
     space: "operate",
     page: "tasks",
     label: "Tasks",
-    description: "Trailboard for open work, blockers, and linked sessions.",
+    description: "Queue for open work, blockers, and linked sessions.",
   },
   approvals: {
     space: "operate",
@@ -222,7 +230,14 @@ function isOperatePage(value: string | null): value is OperatePage {
 }
 
 function isObservePage(value: string | null): value is ObservePage {
-  return value === "activity" || value === "sessions" || value === "artifacts" || value === "costs" || value === "system" || value === "quality";
+  return (
+    value === "activity" ||
+    value === "sessions" ||
+    value === "artifacts" ||
+    value === "costs" ||
+    value === "system" ||
+    value === "quality"
+  );
 }
 
 function isConfigurePage(value: string | null): value is ConfigurePage {
@@ -244,16 +259,17 @@ function normalizeTab(page: SpacePage, tab: string | null): NestedHostTab | unde
   if (page === "artifacts" && (tab === "memory" || tab === "files")) {
     return tab;
   }
-  if (page === "settings" && (
-    tab === "general" ||
-    tab === "providers" ||
-    tab === "access" ||
-    tab === "budget" ||
-    tab === "runtime" ||
-    tab === "workspaces" ||
-    tab === "addons" ||
-    tab === "onboarding"
-  )) {
+  if (
+    page === "settings" &&
+    (tab === "general" ||
+      tab === "providers" ||
+      tab === "access" ||
+      tab === "budget" ||
+      tab === "runtime" ||
+      tab === "workspaces" ||
+      tab === "addons" ||
+      tab === "onboarding")
+  ) {
     return tab;
   }
   if (page === "integrations" && (tab === "overview" || tab === "channels" || tab === "mcp")) {
@@ -316,9 +332,12 @@ export function readRouteFromLocation(): ResolvedRoute {
   if (legacyTab && legacyTab in LEGACY_TAB_REDIRECTS) {
     const legacyRoute = LEGACY_TAB_REDIRECTS[legacyTab]!;
     const querySurface = url.searchParams.get("surface");
-    const nextSurface = legacyRoute.page === "surface"
-      ? (isWorkSurface(querySurface) ? querySurface : legacyRoute.surface)
-      : legacyRoute.surface;
+    const nextSurface =
+      legacyRoute.page === "surface"
+        ? isWorkSurface(querySurface)
+          ? querySurface
+          : legacyRoute.surface
+        : legacyRoute.surface;
     return normalizeResolvedRoute({
       ...legacyRoute,
       surface: nextSurface,
@@ -489,13 +508,14 @@ export function buildRouteForVisiblePage(currentRoute: ResolvedRoute, targetPage
     }
     return { space: "configure", page: "settings", tab: "workspaces" };
   }
-  if (currentRoute.page === "settings" && (
-    currentRoute.tab === "general" ||
-    currentRoute.tab === "providers" ||
-    currentRoute.tab === "access" ||
-    currentRoute.tab === "budget" ||
-    currentRoute.tab === "onboarding"
-  )) {
+  if (
+    currentRoute.page === "settings" &&
+    (currentRoute.tab === "general" ||
+      currentRoute.tab === "providers" ||
+      currentRoute.tab === "access" ||
+      currentRoute.tab === "budget" ||
+      currentRoute.tab === "onboarding")
+  ) {
     return currentRoute;
   }
   return { space: "configure", page: "settings", tab: "general" };

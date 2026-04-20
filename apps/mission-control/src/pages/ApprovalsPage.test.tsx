@@ -25,6 +25,39 @@ vi.mock("../api/client", () => ({
   resolveApprovalsBulk: apiMocks.resolveApprovalsBulk,
   resumeDurableRun: apiMocks.resumeDurableRun,
 }));
+vi.mock("../components/ConfirmModal", () => ({
+  ConfirmModal: ({
+    open,
+    title,
+    message,
+    confirmLabel,
+    cancelLabel,
+    pending,
+    onConfirm,
+    onCancel,
+  }: {
+    open?: boolean;
+    title?: string;
+    message?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    pending?: boolean;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+  }) =>
+    open ? (
+      <div>
+        <div>{title}</div>
+        <div>{message}</div>
+        <button type="button" disabled={pending} onClick={onCancel}>
+          {cancelLabel ?? "Cancel"}
+        </button>
+        <button type="button" disabled={pending} onClick={onConfirm}>
+          {confirmLabel ?? "Confirm"}
+        </button>
+      </div>
+    ) : null,
+}));
 
 import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
 import { ApprovalsPage } from "./ApprovalsPage";
@@ -57,10 +90,10 @@ function instanceText(node: unknown): string {
   return children.map((child) => instanceText(child)).join(" ");
 }
 
-async function clickButton(renderer: ReactTestRenderer, label: string): Promise<void> {
+async function clickButton(renderer: ReactTestRenderer, label: string, occurrence = 0): Promise<void> {
   const button = renderer.root.findAll(
     (node) => node.type === "button" && instanceText(node).replace(/\s+/g, " ").includes(label),
-  )[0];
+  )[occurrence];
 
   if (!button) {
     throw new Error(`Button not found: ${label}`);
@@ -87,6 +120,8 @@ describe("ApprovalsPage", () => {
       clearTimeout,
       setInterval,
       clearInterval,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       location: {
         search: "",
       },
@@ -156,10 +191,14 @@ describe("ApprovalsPage", () => {
       await flush();
 
       const text = rendererText(renderer);
+      const tree = JSON.stringify(renderer.toJSON());
       expect(text).toContain("No pending approvals");
       expect(text).toContain("The approvals queue is clear right now.");
+      expect(text).toContain("Review history");
       expect(text).not.toContain("Reject all pending");
       expect(text).not.toContain("0 replay trails loaded");
+      expect(tree).toContain("status-chip-success");
+      expect(tree).not.toContain("status-chip-warning");
     } finally {
       renderer.unmount();
     }
@@ -667,6 +706,37 @@ describe("ApprovalsPage", () => {
       expect(text).toContain("Wait mapping: run-wait | Status: waiting");
       expect(text).toContain("Canonical session: session-canonical");
       expect(text).toContain("Canonical task: task-canonical");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("keeps the resolve modal open and surfaces the error when approval resolution fails", async () => {
+    apiMocks.resolveApproval.mockRejectedValueOnce(new Error("network down"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Approve now");
+      await flush();
+      await clickButton(renderer, "Approve", 1);
+      await flush();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const text = rendererText(renderer);
+      expect(apiMocks.resolveApproval).toHaveBeenCalledWith("approval-1", "approve");
+      expect(text).toContain("Approve Action");
+      expect(text).toContain("network down");
     } finally {
       renderer.unmount();
     }

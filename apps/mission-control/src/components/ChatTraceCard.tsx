@@ -19,6 +19,38 @@ function formatTime(value?: string): string {
   return date.toLocaleTimeString();
 }
 
+function formatRoutingTarget(providerId?: string, model?: string): string | null {
+  const parts = [providerId, model].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function summarizeTraceRouting(trace: ChatTurnTraceRecord): {
+  requestedLabel: string | null;
+  effectiveLabel: string | null;
+  mismatchLabel: string | null;
+} {
+  const requestedLabel = formatRoutingTarget(trace.routing.primaryProviderId, trace.routing.primaryModel);
+  const effectiveLabel =
+    formatRoutingTarget(trace.routing.effectiveProviderId, trace.routing.effectiveModel) ?? trace.model ?? null;
+  const mismatch =
+    trace.routing.fallbackUsed || (requestedLabel && effectiveLabel ? requestedLabel !== effectiveLabel : false);
+  if (!mismatch) {
+    return {
+      requestedLabel,
+      effectiveLabel,
+      mismatchLabel: null,
+    };
+  }
+  const effectiveText = effectiveLabel ?? "not recorded";
+  const requestedText = requestedLabel ?? "auto";
+  const reasonSuffix = trace.routing.fallbackReason ? ` · ${trace.routing.fallbackReason}` : "";
+  return {
+    requestedLabel,
+    effectiveLabel,
+    mismatchLabel: `Requested ${requestedText} -> Effective ${effectiveText}${reasonSuffix}`,
+  };
+}
+
 export function ChatTraceCard({
   trace,
   defaultCollapsed = true,
@@ -28,14 +60,16 @@ export function ChatTraceCard({
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const fallbackAttemptCount = getTraceFallbackAttemptCount(trace);
+  const routingSummary = summarizeTraceRouting(trace);
   return (
     <article className="chat-trace-card">
       <header className="chat-trace-head">
         <div>
           <p className="chat-trace-title">Run Trace</p>
           <p className="chat-trace-meta">
-            {trace.status} · {trace.model ?? "model n/a"} · {formatTime(trace.startedAt)}
+            {trace.status} · {routingSummary.effectiveLabel ?? "model n/a"} · {formatTime(trace.startedAt)}
           </p>
+          {routingSummary.mismatchLabel ? <p className="chat-trace-meta">{routingSummary.mismatchLabel}</p> : null}
         </div>
         <button type="button" onClick={() => setCollapsed((value) => !value)} className="gc-button">
           {collapsed ? "Show trace" : "Hide trace"}
@@ -95,13 +129,13 @@ export function ChatTraceCard({
           <div className="chat-trace-section">
             <strong>Routing</strong>
             <p>
-              {(trace.routing.primaryProviderId || trace.routing.primaryModel)
-                ? `Primary: ${trace.routing.primaryProviderId ?? "provider auto"}${trace.routing.primaryModel ? ` · ${trace.routing.primaryModel}` : ""}`
-                : "Primary: not recorded"}
+              {routingSummary.requestedLabel
+                ? `Requested: ${routingSummary.requestedLabel}`
+                : "Requested: not recorded"}
             </p>
             <p>
-              {(trace.routing.effectiveProviderId || trace.routing.effectiveModel)
-                ? `Effective: ${trace.routing.effectiveProviderId ?? "provider auto"}${trace.routing.effectiveModel ? ` · ${trace.routing.effectiveModel}` : ""}`
+              {routingSummary.effectiveLabel
+                ? `Effective: ${routingSummary.effectiveLabel}`
                 : "Effective: not recorded"}
             </p>
             {trace.routing.effectiveApiStyle ? <p>Upstream API: {trace.routing.effectiveApiStyle}</p> : null}
@@ -114,36 +148,45 @@ export function ChatTraceCard({
                 {trace.toolRuns.map((run) => {
                   const diagnostics = getChatToolRunDiagnostics(run);
                   return (
-                  <li key={run.toolRunId}>
-                    <span>{run.toolName}</span>
-                    <span>{run.status}</span>
-                    <span>{formatTime(run.startedAt)}</span>
-                    {diagnostics.outputVirtualized || diagnostics.storedAsArtifact ? (
-                      <p className="chat-tool-artifact-row">
-                        {diagnostics.outputVirtualized ? (
-                          <span className="chat-tool-artifact-badge">Output summarized</span>
-                        ) : null}
-                        {diagnostics.storedAsArtifact ? (
-                          <span className="chat-tool-artifact-badge">Stored as artifact</span>
-                        ) : null}
-                      </p>
-                    ) : null}
-                    {diagnostics.engineLabel ? <p>Engine: {diagnostics.engineLabel}{diagnostics.engineTier ? ` (${diagnostics.engineTier})` : ""}</p> : null}
-                    {diagnostics.url ? <p>URL: {diagnostics.url}</p> : null}
-                    {diagnostics.finalUrl && diagnostics.finalUrl !== diagnostics.url ? <p>Final URL: {diagnostics.finalUrl}</p> : null}
-                    {diagnostics.httpStatus !== undefined ? <p>HTTP status: {diagnostics.httpStatus}</p> : null}
-                    {diagnostics.browserFailureClass ? <p>Browser failure: {diagnostics.browserFailureClass}</p> : null}
-                    {diagnostics.summary ? <p>{diagnostics.summary}</p> : null}
-                    {diagnostics.artifactId ? (
-                      <ChatToolArtifactInspector
-                        artifactId={diagnostics.artifactId}
-                        artifactPath={diagnostics.artifactPath}
-                        originalByteLength={diagnostics.originalByteLength}
-                      />
-                    ) : null}
-                    {run.error ? <p>Error: {run.error}</p> : null}
-                    {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
-                  </li>
+                    <li key={run.toolRunId}>
+                      <span>{run.toolName}</span>
+                      <span>{run.status}</span>
+                      <span>{formatTime(run.startedAt)}</span>
+                      {diagnostics.outputVirtualized || diagnostics.storedAsArtifact ? (
+                        <p className="chat-tool-artifact-row">
+                          {diagnostics.outputVirtualized ? (
+                            <span className="chat-tool-artifact-badge">Output summarized</span>
+                          ) : null}
+                          {diagnostics.storedAsArtifact ? (
+                            <span className="chat-tool-artifact-badge">Stored as artifact</span>
+                          ) : null}
+                        </p>
+                      ) : null}
+                      {diagnostics.engineLabel ? (
+                        <p>
+                          Engine: {diagnostics.engineLabel}
+                          {diagnostics.engineTier ? ` (${diagnostics.engineTier})` : ""}
+                        </p>
+                      ) : null}
+                      {diagnostics.url ? <p>URL: {diagnostics.url}</p> : null}
+                      {diagnostics.finalUrl && diagnostics.finalUrl !== diagnostics.url ? (
+                        <p>Final URL: {diagnostics.finalUrl}</p>
+                      ) : null}
+                      {diagnostics.httpStatus !== undefined ? <p>HTTP status: {diagnostics.httpStatus}</p> : null}
+                      {diagnostics.browserFailureClass ? (
+                        <p>Browser failure: {diagnostics.browserFailureClass}</p>
+                      ) : null}
+                      {diagnostics.summary ? <p>{diagnostics.summary}</p> : null}
+                      {diagnostics.artifactId ? (
+                        <ChatToolArtifactInspector
+                          artifactId={diagnostics.artifactId}
+                          artifactPath={diagnostics.artifactPath}
+                          originalByteLength={diagnostics.originalByteLength}
+                        />
+                      ) : null}
+                      {run.error ? <p>Error: {run.error}</p> : null}
+                      {run.failureGuidance ? <p>Next move: {run.failureGuidance}</p> : null}
+                    </li>
                   );
                 })}
               </ul>
@@ -181,7 +224,8 @@ export function ChatTraceCard({
               <p>{trace.orchestration.routeDecision.selectedRoles.join(" -> ")}</p>
               {trace.orchestration.routeDecision.specialistCandidates?.length ? (
                 <p>
-                  Specialists: {trace.orchestration.routeDecision.specialistCandidates
+                  Specialists:{" "}
+                  {trace.orchestration.routeDecision.specialistCandidates
                     .map((item) => `${item.title} (${item.baseRole})`)
                     .join(" · ")}
                 </p>
@@ -191,9 +235,16 @@ export function ChatTraceCard({
                 {trace.orchestration.steps.map((step) => (
                   <li key={step.stepId}>
                     <span>{step.role}</span>
-                    <span>{step.providerId ?? "provider auto"}{step.model ? ` · ${step.model}` : ""}</span>
+                    <span>
+                      {step.providerId ?? "provider auto"}
+                      {step.model ? ` · ${step.model}` : ""}
+                    </span>
                     <span>{step.status}</span>
-                    {step.specialistTitle ? <p>Specialist: {step.specialistTitle} ({step.specialistRole ?? "specialist"})</p> : null}
+                    {step.specialistTitle ? (
+                      <p>
+                        Specialist: {step.specialistTitle} ({step.specialistRole ?? "specialist"})
+                      </p>
+                    ) : null}
                   </li>
                 ))}
               </ul>

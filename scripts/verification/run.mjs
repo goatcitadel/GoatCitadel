@@ -35,6 +35,7 @@ const VALID_LANES = new Set([
   "durable-recovery",
   "surface-regression",
   "visual-regression",
+  "visual-rebaseline",
   "backup-roundtrip",
   "soak",
   "review",
@@ -92,7 +93,9 @@ async function main() {
     } else if (lane === "surface-regression") {
       await runSurfaceRegressionLane(context, { profile });
     } else if (lane === "visual-regression") {
-      await runVisualRegressionLane(context, { profile });
+      await runVisualRegressionLane(context, { profile, updateBaselines: false });
+    } else if (lane === "visual-rebaseline") {
+      await runVisualRegressionLane(context, { profile, updateBaselines: true });
     } else if (lane === "backup-roundtrip") {
       await runBackupRoundtripLane(context, { profile });
     } else if (lane === "soak") {
@@ -106,7 +109,7 @@ async function main() {
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });
       await runSurfaceRegressionLane(context, { profile });
-      await runVisualRegressionLane(context, { profile });
+      await runVisualRegressionLane(context, { profile, updateBaselines: false });
       await runBackupRoundtripLane(context, { profile });
       if (includeSoak) {
         await runSoakLane(context, { profile, durationMs });
@@ -153,6 +156,7 @@ function shouldGenerateReview(lane) {
     lane === "durable-recovery" ||
     lane === "surface-regression" ||
     lane === "visual-regression" ||
+    lane === "visual-rebaseline" ||
     lane === "backup-roundtrip" ||
     lane === "all" ||
     lane === "soak"

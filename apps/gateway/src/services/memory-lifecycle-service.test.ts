@@ -57,6 +57,7 @@ describe("MemoryLifecycleService", () => {
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
       },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
       readTranscriptOrEmpty: vi.fn(async () => []),
     });
 
@@ -186,6 +187,7 @@ describe("MemoryLifecycleService", () => {
         requireFeatureEnabled,
         publishRealtime,
       },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
       readTranscriptOrEmpty: vi.fn(async () => []),
     });
 
@@ -239,6 +241,7 @@ describe("MemoryLifecycleService", () => {
         requireFeatureEnabled: vi.fn(),
         publishRealtime: vi.fn(),
       },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
       files: {
         rootDir: tempRoot,
         workspaceDir: "workspace",
@@ -255,5 +258,110 @@ describe("MemoryLifecycleService", () => {
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("skips learned-memory writes when the session memory mode is off", () => {
+    const extractAndPersistLearnedMemory = vi.fn();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {
+        extractAndPersistLearnedMemory,
+      } as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({
+        allowWrite: false,
+        memoryMode: "off",
+        reason: "memory_mode_off",
+      })),
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    service.extractLearnedMemory("session-1", "Remember that I prefer dark mode.", {
+      role: "user",
+      sourceRef: "msg-1",
+    });
+
+    expect(extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+  });
+
+  it("continues learned-memory writes when session memory mode is auto or on", () => {
+    const extractAndPersistLearnedMemory = vi.fn();
+    const resolveLearnedMemoryPolicy = vi
+      .fn()
+      .mockReturnValueOnce({ allowWrite: true, memoryMode: "auto", reason: "allowed" })
+      .mockReturnValueOnce({ allowWrite: true, memoryMode: "on", reason: "allowed" });
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {
+        extractAndPersistLearnedMemory,
+      } as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    service.extractLearnedMemory("session-auto", "Remember that I prefer dark mode.", {
+      role: "user",
+      sourceRef: "msg-auto",
+    });
+    service.extractLearnedMemory("session-on", "Remember that I prefer light mode.", {
+      role: "assistant",
+      sourceRef: "msg-on",
+    });
+
+    expect(extractAndPersistLearnedMemory).toHaveBeenCalledTimes(2);
+    expect(extractAndPersistLearnedMemory).toHaveBeenNthCalledWith(
+      1,
+      "session-auto",
+      "Remember that I prefer dark mode.",
+      expect.objectContaining({ sourceRef: "msg-auto" }),
+    );
+    expect(extractAndPersistLearnedMemory).toHaveBeenNthCalledWith(
+      2,
+      "session-on",
+      "Remember that I prefer light mode.",
+      expect.objectContaining({ sourceRef: "msg-on" }),
+    );
+  });
+
+  it("skips learned-memory writes for replay scratch sessions at the lifecycle policy layer", () => {
+    const extractAndPersistLearnedMemory = vi.fn();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {
+        extractAndPersistLearnedMemory,
+      } as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({
+        allowWrite: false,
+        reason: "replay_scratch",
+      })),
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    service.extractLearnedMemory("scratch-session", "Remember the experimental patch.", {
+      role: "assistant",
+      sourceRef: "msg-scratch",
+    });
+
+    expect(extractAndPersistLearnedMemory).not.toHaveBeenCalled();
   });
 });

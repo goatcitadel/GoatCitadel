@@ -44,6 +44,11 @@ export interface MemoryLifecycleDependencies {
   readonly learned: ChatLearnedMemoryService;
   readonly maintenance: MemoryMaintenanceService;
   readonly admin: MemoryLifecycleAdminDependencies;
+  resolveLearnedMemoryPolicy(sessionId: string): {
+    allowWrite: boolean;
+    memoryMode?: "off" | "auto" | "on";
+    reason?: "memory_mode_off" | "replay_scratch" | "allowed";
+  };
   readonly files?: {
     rootDir: string;
     workspaceDir: string;
@@ -349,6 +354,10 @@ export class MemoryLifecycleService {
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): void {
+    const policy = this.deps.resolveLearnedMemoryPolicy(sessionId);
+    if (!policy.allowWrite) {
+      return;
+    }
     this.deps.learned.extractAndPersistLearnedMemory(sessionId, content, source);
   }
 
