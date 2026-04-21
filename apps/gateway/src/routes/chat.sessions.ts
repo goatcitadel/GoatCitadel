@@ -74,6 +74,11 @@ const workbenchFileQuerySchema = z.object({
   path: z.string().min(1),
 });
 
+const workbenchSaveFileBodySchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+});
+
 const generatedArtifactsQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
@@ -354,6 +359,42 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(await fastify.gateway.getChatSessionWorkbenchFile(params.data.sessionId, query.data.path));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.put("/api/v1/chat/sessions/:sessionId/workbench/file", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = workbenchSaveFileBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(await fastify.gateway.saveChatSessionWorkbenchFile(params.data.sessionId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/workbench/file-diff", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const query = workbenchFileQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(await fastify.gateway.getChatSessionWorkbenchFileDiff(params.data.sessionId, query.data.path));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

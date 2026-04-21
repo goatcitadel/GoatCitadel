@@ -696,6 +696,14 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 70,
+    name: "generated_artifact_provenance_repairs",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_generated_artifacts", "source_block_index", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_generated_artifacts", "content_hash", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -4660,6 +4668,8 @@ function createChatGeneratedArtifactsAndThreadKnowledgeSchema(db: DatabaseSync):
       supersedes_artifact_id TEXT,
       provider_id TEXT,
       model TEXT,
+      source_block_index INTEGER,
+      content_hash TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

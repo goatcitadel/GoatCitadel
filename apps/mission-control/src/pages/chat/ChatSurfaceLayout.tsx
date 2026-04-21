@@ -1,5 +1,6 @@
 import type { ChatMode } from "@goatcitadel/contracts";
 import type { ReactNode } from "react";
+import { ResizablePaneLayout } from "../../components/ResizablePaneLayout";
 import { Drawer, DrawerContent, Sheet, SheetContent } from "../../components/ui";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { getMissionControlSurfaceConfig } from "./surface-config";
@@ -29,6 +30,7 @@ export function ChatSurfaceLayout({
 }) {
   const layout = getMissionControlSurfaceConfig(mode).layout;
   const compactSecondaryPanels = useMediaQuery("(max-width: 840px)");
+  const stackedDesktopPanels = useMediaQuery("(max-width: 1200px)");
   const inlineSessionRail = !compactSecondaryPanels;
   if (!hasActiveSession) {
     return (
@@ -87,6 +89,114 @@ export function ChatSurfaceLayout({
       : null;
   const effectiveDockOpen = hasActiveSession ? dockOpen : layout.idleDockOpen;
   const inlineDock = !compactSecondaryPanels && effectiveDockOpen;
+  const useResizableDesktopLayout = !compactSecondaryPanels && !stackedDesktopPanels;
+
+  const artifactPane = (
+    <div
+      className={`chat-v11-artifact-column ${workflowIsPrimary ? `chat-v11-primary-column chat-v11-workflow-primary chat-v11-workflow-primary-${mode} ${layout.workflowColumnClassName ?? ""}` : `chat-v11-primary-column ${layout.primaryColumnClassName}`}`.trim()}
+      data-surface-slot="artifact"
+    >
+      {artifactColumn}
+    </div>
+  );
+  const supportPane = supportThreadColumn ? (
+    <div
+      className={`chat-v11-support-column chat-v11-primary-column ${layout.primaryColumnClassName}`.trim()}
+      data-surface-slot="support-thread"
+    >
+      {supportThreadColumn}
+    </div>
+  ) : null;
+  const dockPane = inlineDock ? (
+    <div className={`chat-v11-dock-column ${layout.dockClassName}`} data-surface-slot="dock">
+      {contextDock}
+    </div>
+  ) : null;
+
+  const desktopMainGrid =
+    useResizableDesktopLayout && (supportPane || dockPane) ? (
+      <div
+        className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"} chat-v11-main-grid-resizable`}
+      >
+        {supportPane ? (
+          <ResizablePaneLayout
+            storageKey={`chat-surface.${mode}.main${dockPane ? ".with-dock" : ""}`}
+            orientation={dockPane ? "horizontal" : "vertical"}
+            className={`chat-v11-resizable-main chat-v11-resizable-main-${mode}`}
+            panes={[
+              {
+                id: "workspace",
+                minSize: dockPane ? 420 : 560,
+                className: "chat-v11-main-pane chat-v11-main-pane-workspace",
+                children: (
+                  <ResizablePaneLayout
+                    storageKey={`chat-surface.${mode}.columns`}
+                    className={`chat-v11-resizable-columns chat-v11-resizable-columns-${mode}`}
+                    panes={[
+                      {
+                        id: "artifact",
+                        minSize: mode === "code" ? 620 : 560,
+                        className: "chat-v11-main-pane chat-v11-main-pane-artifact",
+                        children: artifactPane,
+                      },
+                      {
+                        id: "support-thread",
+                        defaultSize: mode === "code" ? 360 : 320,
+                        minSize: 280,
+                        maxSize: 520,
+                        className: "chat-v11-main-pane chat-v11-main-pane-support",
+                        children: supportPane,
+                      },
+                    ]}
+                  />
+                ),
+              },
+              ...(dockPane
+                ? [
+                    {
+                      id: "dock",
+                      defaultSize: mode === "code" ? 260 : 220,
+                      minSize: 180,
+                      maxSize: 420,
+                      className: "chat-v11-main-pane chat-v11-main-pane-dock",
+                      children: dockPane,
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        ) : (
+          <ResizablePaneLayout
+            storageKey={`chat-surface.${mode}.dock`}
+            className={`chat-v11-resizable-columns chat-v11-resizable-columns-${mode}`}
+            panes={[
+              {
+                id: "artifact",
+                minSize: 620,
+                className: "chat-v11-main-pane chat-v11-main-pane-artifact",
+                children: artifactPane,
+              },
+              {
+                id: "dock",
+                defaultSize: 360,
+                minSize: 300,
+                maxSize: 460,
+                className: "chat-v11-main-pane chat-v11-main-pane-dock",
+                children: dockPane,
+              },
+            ]}
+          />
+        )}
+      </div>
+    ) : (
+      <div
+        className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"}`}
+      >
+        {artifactPane}
+        {supportPane}
+        {dockPane}
+      </div>
+    );
 
   return (
     <div
@@ -115,31 +225,7 @@ export function ChatSurfaceLayout({
             </button>
           </div>
         ) : null}
-        <div className={`chat-v11-conversation-shell surface-${mode}`}>
-          <div
-            className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"}`}
-          >
-            <div
-              className={`chat-v11-artifact-column ${workflowIsPrimary ? `chat-v11-primary-column chat-v11-workflow-primary chat-v11-workflow-primary-${mode} ${layout.workflowColumnClassName ?? ""}` : `chat-v11-primary-column ${layout.primaryColumnClassName}`}`.trim()}
-              data-surface-slot="artifact"
-            >
-              {artifactColumn}
-            </div>
-            {supportThreadColumn ? (
-              <div
-                className={`chat-v11-support-column chat-v11-primary-column ${layout.primaryColumnClassName}`.trim()}
-                data-surface-slot="support-thread"
-              >
-                {supportThreadColumn}
-              </div>
-            ) : null}
-            {inlineDock ? (
-              <div className={`chat-v11-dock-column ${layout.dockClassName}`} data-surface-slot="dock">
-                {contextDock}
-              </div>
-            ) : null}
-          </div>
-        </div>
+        <div className={`chat-v11-conversation-shell surface-${mode}`}>{desktopMainGrid}</div>
       </div>
       {compactSecondaryPanels ? (
         <Sheet open={sessionRailOpen} onOpenChange={onSessionRailOpenChange}>

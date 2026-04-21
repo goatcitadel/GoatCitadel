@@ -296,6 +296,11 @@ export function ChatPage({
     }>
   >([]);
   const [selectedPresetId, setSelectedPresetId] = useState<string>("");
+  const [workbenchDiscardConfirm, setWorkbenchDiscardConfirm] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -427,6 +432,7 @@ export function ChatPage({
     loadSidebar,
     loadSessionCoreState,
   } = sessionData;
+  const currentSessionMode: ChatMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
   const threadController = useChatThreadController({
     routeSearch,
     sessions: sessions?.items,
@@ -474,6 +480,7 @@ export function ChatPage({
   const sessionControls = useChatSessionControls({
     workspaceId,
     historyView,
+    sessionMode: currentSessionMode,
     selectedProjectId,
     selectedSession,
     renameTitle,
@@ -947,14 +954,23 @@ export function ChatPage({
     workbenchState,
     workbenchTree,
     selectedWorkbenchFile,
+    selectedWorkbenchFileDiff,
+    workbenchDraftContent,
+    workbenchExpandedPaths,
     workbenchDiff,
     workbenchOutput,
     workbenchLoading,
     workbenchBusy,
+    workbenchSaving,
     workbenchError,
+    hasDirtyWorkbenchDraft,
+    setWorkbenchDraftContent,
+    setWorkbenchExpandedPaths,
     refreshWorkbench,
     createWorkbenchWorktree,
     openWorkbenchFile,
+    saveWorkbenchFile,
+    discardWorkbenchDraft,
     latestOrchestration,
     orchestrationRun,
     orchestrationCheckpoints,
@@ -974,6 +990,30 @@ export function ChatPage({
     localNotices,
     dockSectionOrder,
   });
+  const guardWorkbenchNavigation = useCallback(
+    (action: () => void, message: string) => {
+      if (!(messageMode === "code" && hasDirtyWorkbenchDraft)) {
+        action();
+        return;
+      }
+      setWorkbenchDiscardConfirm({
+        title: "Discard unsaved workbench changes?",
+        message,
+        onConfirm: () => {
+          discardWorkbenchDraft();
+          action();
+        },
+      });
+    },
+    [discardWorkbenchDraft, hasDirtyWorkbenchDraft, messageMode],
+  );
+
+  useEffect(() => {
+    if (!hasDirtyWorkbenchDraft && workbenchDiscardConfirm) {
+      setWorkbenchDiscardConfirm(null);
+    }
+  }, [hasDirtyWorkbenchDraft, workbenchDiscardConfirm]);
+
   useEffect(() => {
     if (!compactSurfaceLayout && sessionRailOpen) {
       setSessionRailOpen(false);
@@ -1142,12 +1182,20 @@ export function ChatPage({
 
   const handleSelectSessionFromRail = useCallback(
     (sessionId: string, options?: { turnId?: string | null }) => {
-      setSelectedSessionId(sessionId);
-      setSelectedTurnId(options?.turnId ?? null);
-      setActiveGeneratedArtifact(null);
-      setSessionRailOpen(false);
+      if (sessionId === selectedSessionId) {
+        setSelectedTurnId(options?.turnId ?? null);
+        setActiveGeneratedArtifact(null);
+        setSessionRailOpen(false);
+        return;
+      }
+      guardWorkbenchNavigation(() => {
+        setSelectedSessionId(sessionId);
+        setSelectedTurnId(options?.turnId ?? null);
+        setActiveGeneratedArtifact(null);
+        setSessionRailOpen(false);
+      }, "Switching sessions will discard the unsaved editor changes in the current Code workbench file.");
     },
-    [setSelectedSessionId, setSelectedTurnId],
+    [guardWorkbenchNavigation, selectedSessionId, setSelectedSessionId, setSelectedTurnId],
   );
   const handleSessionRailOpenChange = useCallback(
     (next: boolean) => {
@@ -1178,13 +1226,41 @@ export function ChatPage({
         options && Object.prototype.hasOwnProperty.call(options, "artifactId")
           ? (options.artifactId ?? undefined)
           : (activeGeneratedArtifact?.artifactId ?? undefined);
-      onNavigateSurface?.(nextSurface, {
-        sessionId: options?.sessionId ?? selectedSessionId,
-        turnId: options?.turnId ?? selectedTurnId,
-        artifactId: nextArtifactId,
-      });
+      const nextSessionId = options?.sessionId ?? selectedSessionId;
+      const runNavigation = () =>
+        onNavigateSurface?.(nextSurface, {
+          sessionId: nextSessionId,
+          turnId: options?.turnId ?? selectedTurnId,
+          artifactId: nextArtifactId,
+        });
+
+      if (
+        messageMode === "code" &&
+        hasDirtyWorkbenchDraft &&
+        (nextSurface !== messageMode || nextSessionId !== selectedSessionId)
+      ) {
+        setWorkbenchDiscardConfirm({
+          title: "Discard unsaved workbench changes?",
+          message: "Switching surfaces will discard the unsaved editor changes in the current Code workbench file.",
+          onConfirm: () => {
+            discardWorkbenchDraft();
+            runNavigation();
+          },
+        });
+        return;
+      }
+
+      runNavigation();
     },
-    [activeGeneratedArtifact?.artifactId, onNavigateSurface, selectedSessionId, selectedTurnId],
+    [
+      activeGeneratedArtifact?.artifactId,
+      discardWorkbenchDraft,
+      hasDirtyWorkbenchDraft,
+      messageMode,
+      onNavigateSurface,
+      selectedSessionId,
+      selectedTurnId,
+    ],
   );
 
   const handleCloseGeneratedArtifact = useCallback(() => {
@@ -1196,28 +1272,15 @@ export function ChatPage({
     });
   }, [handleNavigateSurface, messageMode, selectedSessionId, selectedTurnId]);
 
-  const handleOpenGeneratedArtifactFromTurn = useCallback(
-    async (turnId: string, options?: { supersedeLatest?: boolean }) => {
-      if (!selectedSessionId) {
-        return;
-      }
-      const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
-      const existingArtifactId = targetTurn?.generatedArtifacts?.[0]?.artifactId;
-      const artifact =
-        existingArtifactId && !options?.supersedeLatest
-          ? (await fetchChatGeneratedArtifact(existingArtifactId)).item
-          : (
-              await createChatGeneratedArtifact(selectedSessionId, turnId, {
-                supersedeLatest: options?.supersedeLatest ?? false,
-              })
-            ).item;
+  const revealGeneratedArtifact = useCallback(
+    async (artifact: ChatGeneratedArtifactRecord) => {
       if (compactSurfaceLayout) {
         setSessionRailOpen(false);
         setDockOpen(false);
       }
       setActiveGeneratedArtifact(artifact);
       setSelectedTurnId(artifact.turnId);
-      await loadSessionCoreState(selectedSessionId, {
+      await loadSessionCoreState(artifact.sessionId, {
         background: true,
         includeThread: true,
       });
@@ -1230,25 +1293,63 @@ export function ChatPage({
           : current,
       );
       handleNavigateSurface(messageMode, {
-        sessionId: selectedSessionId,
+        sessionId: artifact.sessionId,
         turnId: artifact.turnId,
         artifactId: artifact.artifactId,
       });
-      if (options?.supersedeLatest) {
-        pushLocalNotice("Saved a new generated artifact version.", "success");
-      }
     },
     [
       compactSurfaceLayout,
       handleNavigateSurface,
       loadSessionCoreState,
       messageMode,
-      pushLocalNotice,
-      selectedSessionId,
       setDockOpen,
       setGeneratedArtifacts,
-      thread?.turns,
     ],
+  );
+
+  const handleOpenGeneratedArtifactFromTurn = useCallback(
+    async (turnId: string) => {
+      try {
+        if (!selectedSessionId) {
+          return;
+        }
+        const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
+        const existingArtifactId = targetTurn?.generatedArtifacts?.[0]?.artifactId;
+        if (!existingArtifactId) {
+          pushLocalNotice("Create an artifact from this turn before opening it.", "warning");
+          return;
+        }
+        const artifact = (await fetchChatGeneratedArtifact(existingArtifactId)).item;
+        await revealGeneratedArtifact(artifact);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setError, thread?.turns],
+  );
+
+  const handleCreateGeneratedArtifactFromTurn = useCallback(
+    async (turnId: string, options?: { supersedeLatest?: boolean }) => {
+      try {
+        if (!selectedSessionId) {
+          return;
+        }
+        const artifact = (
+          await createChatGeneratedArtifact(selectedSessionId, turnId, {
+            supersedeLatest: options?.supersedeLatest ?? false,
+          })
+        ).item;
+        await revealGeneratedArtifact(artifact);
+        pushLocalNotice(
+          options?.supersedeLatest ? "Saved a new generated artifact version." : "Created a generated artifact.",
+          "success",
+        );
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setError],
   );
 
   const handleRemoveThreadKnowledge = useCallback(
@@ -1357,12 +1458,20 @@ export function ChatPage({
       });
   }, [lockSurface, prefs?.mode, selectedSessionId, setPrefs, surface]);
 
-  const handlePrefPatch = useCallback(
-    async (patch: ChatSessionPrefsPatch) => {
-      if (!selectedSession) return;
+  const applyPrefPatchToSession = useCallback(
+    async (
+      sessionId: string,
+      patch: ChatSessionPrefsPatch,
+      options?: {
+        syncLocalState?: boolean;
+      },
+    ) => {
       lastLocalPrefMutationAtRef.current = Date.now();
       const previousPrefs = prefsRef.current;
-      const optimisticPrefs = previousPrefs ? resolveOptimisticChatPrefs(previousPrefs, patch) : null;
+      const shouldSyncLocalState =
+        options?.syncLocalState ?? (!selectedSession || selectedSession.sessionId === sessionId);
+      const optimisticPrefs =
+        shouldSyncLocalState && previousPrefs ? resolveOptimisticChatPrefs(previousPrefs, patch) : null;
       const mutationId = prefMutationSequenceRef.current + 1;
       prefMutationSequenceRef.current = mutationId;
       if (optimisticPrefs) {
@@ -1370,21 +1479,36 @@ export function ChatPage({
         setPrefs(optimisticPrefs);
       }
       try {
-        const updated = await updateChatSessionPrefs(selectedSession.sessionId, patch);
+        const updated = await updateChatSessionPrefs(sessionId, patch);
         if (prefMutationSequenceRef.current !== mutationId) {
-          return;
+          return updated;
         }
-        prefsRef.current = updated;
-        setPrefs(updated);
+        if (shouldSyncLocalState) {
+          prefsRef.current = updated;
+          setPrefs(updated);
+        }
+        return updated;
       } catch (err) {
         if (prefMutationSequenceRef.current === mutationId && previousPrefs) {
           prefsRef.current = previousPrefs;
           setPrefs(previousPrefs);
         }
         setError((err as Error).message);
+        throw err;
       }
     },
     [prefsRef, selectedSession, setPrefs],
+  );
+  const handlePrefPatch = useCallback(
+    async (patch: ChatSessionPrefsPatch) => {
+      if (!selectedSession) return;
+      try {
+        await applyPrefPatchToSession(selectedSession.sessionId, patch);
+      } catch {
+        // Errors are already surfaced in local state for dock/composer callers.
+      }
+    },
+    [applyPrefPatchToSession, selectedSession],
   );
   const handleSetPendingAttachmentMode = useCallback((attachmentId: string, mode: PendingAttachmentDocumentMode) => {
     setPendingAttachmentModes((current) => ({
@@ -1489,47 +1613,56 @@ export function ChatPage({
     }
   }, [ensureSession, knowledgeUrlDraft, knowledgeUrlMode, pushLocalNotice, setError, setThreadKnowledgeAttachments]);
   const handleApplyPreset = useCallback(async () => {
-    const preset = presetProfiles.find((item) => item.agentId === selectedPresetId);
-    if (!preset) {
-      return;
-    }
-    const patch: ChatSessionPrefsPatch = {
-      providerId: preset.preferredProviderId,
-      model: preset.preferredModel,
-      toolAutonomy: preset.toolsPosture,
-    };
-    const hasPatch = Object.values(patch).some((value) => value !== undefined);
-    if (hasPatch) {
-      await handlePrefPatch(patch);
-    }
-    if (preset.promptFraming) {
-      setDraft((current) =>
-        current.trim() ? `${preset.promptFraming}\n\n${current.trim()}` : (preset.promptFraming ?? ""),
+    try {
+      const preset = presetProfiles.find((item) => item.agentId === selectedPresetId);
+      if (!preset) {
+        return;
+      }
+      const session = await ensureSession();
+      const patch: ChatSessionPrefsPatch = {
+        providerId: preset.preferredProviderId,
+        model: preset.preferredModel,
+        toolAutonomy: preset.toolsPosture,
+      };
+      const hasPatch = Object.values(patch).some((value) => value !== undefined);
+      if (hasPatch) {
+        await applyPrefPatchToSession(session.sessionId, patch, {
+          syncLocalState: true,
+        });
+      }
+      if (preset.promptFraming) {
+        setDraft((current) =>
+          current.trim() ? `${preset.promptFraming}\n\n${current.trim()}` : (preset.promptFraming ?? ""),
+        );
+      }
+      const missingKnowledgeAttachmentIds = (preset.knowledgeAttachmentIds ?? []).filter(
+        (attachmentId) => !(threadKnowledgeAttachments?.items ?? []).some((item) => item.attachmentId === attachmentId),
       );
+      if (missingKnowledgeAttachmentIds.length > 0) {
+        const warning =
+          missingKnowledgeAttachmentIds.length === 1
+            ? `Skipped 1 unavailable knowledge default.`
+            : `Skipped ${missingKnowledgeAttachmentIds.length} unavailable knowledge defaults.`;
+        setPresetApplyWarning(warning);
+        pushLocalNotice(warning, "warning");
+      } else {
+        setPresetApplyWarning(null);
+      }
+      if (preset.routeHint && preset.routeHint !== messageMode) {
+        handleNavigateSurface(preset.routeHint);
+      }
+      pushLocalNotice(`Applied ${preset.label}.`, "success");
+    } catch (err) {
+      setError((err as Error).message);
     }
-    const missingKnowledgeAttachmentIds = (preset.knowledgeAttachmentIds ?? []).filter(
-      (attachmentId) => !(threadKnowledgeAttachments?.items ?? []).some((item) => item.attachmentId === attachmentId),
-    );
-    if (missingKnowledgeAttachmentIds.length > 0) {
-      const warning =
-        missingKnowledgeAttachmentIds.length === 1
-          ? `Skipped 1 unavailable knowledge default.`
-          : `Skipped ${missingKnowledgeAttachmentIds.length} unavailable knowledge defaults.`;
-      setPresetApplyWarning(warning);
-      pushLocalNotice(warning, "warning");
-    } else {
-      setPresetApplyWarning(null);
-    }
-    if (preset.routeHint && preset.routeHint !== messageMode) {
-      handleNavigateSurface(preset.routeHint);
-    }
-    pushLocalNotice(`Applied ${preset.label}.`, "success");
   }, [
+    applyPrefPatchToSession,
+    ensureSession,
     handleNavigateSurface,
-    handlePrefPatch,
     messageMode,
     presetProfiles,
     pushLocalNotice,
+    setError,
     setPresetApplyWarning,
     selectedPresetId,
     threadKnowledgeAttachments?.items,
@@ -1636,10 +1769,12 @@ export function ChatPage({
     selectedProviderId,
     routePreflight: currentRoutePreflight,
     selectedSessionId,
+    activeThreadSessionId: thread?.sessionId,
     pendingAttachments,
     draft,
     latestAssistantMessageId: latestAssistantTurn?.assistantMessage?.messageId,
     latestAssistantContent: latestAssistantTurn?.assistantMessage?.content,
+    latestAssistantStatus: latestAssistantTurn?.trace.status,
     setDraft,
     setError,
     pushLocalNotice,
@@ -1724,13 +1859,22 @@ export function ChatPage({
         workbenchState,
         workbenchTree,
         selectedWorkbenchFile,
+        selectedWorkbenchFileDiff,
+        workbenchDraftContent,
+        workbenchExpandedPaths,
         workbenchDiff,
         workbenchOutput,
         workbenchLoading,
         workbenchBusy,
+        workbenchSaving,
         workbenchError,
+        hasDirtyWorkbenchDraft,
         createWorkbenchWorktree,
         openWorkbenchFile,
+        saveWorkbenchFile,
+        discardWorkbenchDraft,
+        setWorkbenchDraftContent,
+        setWorkbenchExpandedPaths,
         refreshWorkbench,
         handleRunCodeHelper,
         activeGeneratedArtifact,
@@ -1820,8 +1964,9 @@ export function ChatPage({
               handleDockOpenChange(true);
             }}
             onOpenGeneratedArtifact={(turnId) => void handleOpenGeneratedArtifactFromTurn(turnId)}
+            onCreateGeneratedArtifact={(turnId) => void handleCreateGeneratedArtifactFromTurn(turnId)}
             onCreateGeneratedArtifactVersion={(turnId) =>
-              void handleOpenGeneratedArtifactFromTurn(turnId, { supersedeLatest: true })
+              void handleCreateGeneratedArtifactFromTurn(turnId, { supersedeLatest: true })
             }
             onApprovePending={(allowScope) => void handleApprovePending(allowScope)}
             onDenyPending={() => void handleDenyPending()}
@@ -2040,6 +2185,22 @@ export function ChatPage({
         onConfirm={handleConfirmCapabilitySuggestion}
       />
       <ConfirmModal
+        open={Boolean(workbenchDiscardConfirm)}
+        title={workbenchDiscardConfirm?.title ?? "Discard unsaved workbench changes?"}
+        message={workbenchDiscardConfirm?.message ?? ""}
+        confirmLabel="Discard changes"
+        danger
+        onCancel={() => setWorkbenchDiscardConfirm(null)}
+        onConfirm={() => {
+          if (!workbenchDiscardConfirm) {
+            return;
+          }
+          const action = workbenchDiscardConfirm.onConfirm;
+          setWorkbenchDiscardConfirm(null);
+          action();
+        }}
+      />
+      <ConfirmModal
         open={Boolean(sessionDeleteConfirm)}
         title="Delete session permanently"
         message={sessionDeleteConfirm ? getDeleteSessionConfirmationMessage(sessionDeleteConfirm.label) : ""}
@@ -2083,13 +2244,22 @@ function renderWorkSurface(input: {
   workbenchState: ReturnType<typeof useChatDockWorkbenchController>["workbenchState"];
   workbenchTree: ReturnType<typeof useChatDockWorkbenchController>["workbenchTree"];
   selectedWorkbenchFile: ReturnType<typeof useChatDockWorkbenchController>["selectedWorkbenchFile"];
+  selectedWorkbenchFileDiff: ReturnType<typeof useChatDockWorkbenchController>["selectedWorkbenchFileDiff"];
+  workbenchDraftContent: ReturnType<typeof useChatDockWorkbenchController>["workbenchDraftContent"];
+  workbenchExpandedPaths: ReturnType<typeof useChatDockWorkbenchController>["workbenchExpandedPaths"];
   workbenchDiff: ReturnType<typeof useChatDockWorkbenchController>["workbenchDiff"];
   workbenchOutput: ReturnType<typeof useChatDockWorkbenchController>["workbenchOutput"];
   workbenchLoading: boolean;
   workbenchBusy: boolean;
+  workbenchSaving: boolean;
   workbenchError: string | null;
+  hasDirtyWorkbenchDraft: boolean;
   createWorkbenchWorktree: (baseRef?: string) => Promise<void>;
-  openWorkbenchFile: (relativePath: string) => Promise<void>;
+  openWorkbenchFile: (relativePath: string) => Promise<boolean>;
+  saveWorkbenchFile: () => Promise<boolean>;
+  discardWorkbenchDraft: () => void;
+  setWorkbenchDraftContent: (next: string) => void;
+  setWorkbenchExpandedPaths: (nextPaths: string[]) => void;
   refreshWorkbench: () => Promise<void>;
   handleRunCodeHelper: (language: string, source: string) => Promise<void>;
   activeGeneratedArtifact: ChatGeneratedArtifactRecord | null;
@@ -2155,16 +2325,25 @@ function renderWorkSurface(input: {
           workbenchState: input.workbenchState,
           workbenchTree: input.workbenchTree,
           selectedFile: input.selectedWorkbenchFile,
+          selectedFileDiff: input.selectedWorkbenchFileDiff,
+          draftContent: input.workbenchDraftContent,
+          expandedPaths: input.workbenchExpandedPaths,
           diff: input.workbenchDiff,
           output: input.workbenchOutput,
           loading: input.workbenchLoading,
           busy: input.workbenchBusy,
+          saving: input.workbenchSaving,
           error: input.workbenchError,
+          hasDirtyDraft: input.hasDirtyWorkbenchDraft,
           generatedArtifact: input.activeGeneratedArtifact,
           onCloseGeneratedArtifact: input.handleCloseGeneratedArtifact,
           onCreateWorktree: () => void input.createWorkbenchWorktree(input.workbenchState?.baseRef),
           onSelectFile: (relativePath) => void input.openWorkbenchFile(relativePath),
+          onDraftChange: (nextValue) => input.setWorkbenchDraftContent(nextValue),
+          onExpandedPathsChange: (nextPaths) => input.setWorkbenchExpandedPaths(nextPaths),
           onRefresh: () => void input.refreshWorkbench(),
+          onSaveFile: () => void input.saveWorkbenchFile(),
+          onDiscardDraft: () => input.discardWorkbenchDraft(),
           onRunHelperSnippet: (language, source) => void input.handleRunCodeHelper(language, source),
         }}
       />

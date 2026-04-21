@@ -113,6 +113,8 @@ export interface ChatGeneratedArtifactReference {
   language?: string;
   providerId?: string;
   model?: string;
+  sourceBlockIndex?: number;
+  contentHash?: string;
   createdAt: string;
 }
 
@@ -130,6 +132,8 @@ export interface ChatGeneratedArtifactRecord {
   supersedesArtifactId?: string;
   providerId?: string;
   model?: string;
+  sourceBlockIndex?: number;
+  contentHash?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -260,6 +264,20 @@ export interface ChatSessionWorkbenchFileResponse {
   language: string;
   changed: boolean;
   content: string;
+}
+
+export interface ChatSessionWorkbenchSaveFileRequest {
+  path: string;
+  content: string;
+}
+
+export interface ChatSessionWorkbenchFileDiffResponse {
+  state: ChatSessionWorkbenchRecord;
+  path: string;
+  language: string;
+  changed: boolean;
+  originalContent: string;
+  modifiedContent: string;
 }
 
 export interface ChatSessionWorkbenchDiffSummary {

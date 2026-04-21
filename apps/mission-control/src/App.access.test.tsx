@@ -490,6 +490,29 @@ describe("App gateway access gate", () => {
     expect(connectEventStreamMock).toHaveBeenCalledTimes(1);
   }, 15_000);
 
+  it("restores the last safe shell route when launched from the PWA entrypoint", async () => {
+    const { App } = await import("./App");
+    window.localStorage.setItem("goatcitadel.shell.last-route", "?space=operate&page=surface&surface=code");
+    window.location.search = "?source=pwa";
+    window.location.href = "http://localhost:5173/?source=pwa";
+    window.history.replaceState = vi.fn((_state: unknown, _title: string, nextUrl: string) => {
+      const url = new URL(String(nextUrl), window.location.origin);
+      window.location.search = url.search;
+      window.location.href = url.href;
+    });
+    preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
+
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = mount(<App />);
+    });
+    await flush();
+
+    const text = await waitForTreeText(renderer!, "chat-ready:code:locked");
+    expect(text).toContain("chat-ready:code:locked");
+    expect(window.history.replaceState).toHaveBeenCalledWith(null, "", "/?space=operate&page=surface&surface=code");
+  }, 15_000);
+
   it("keeps direct Work surface entry active when onboarding is incomplete", async () => {
     const { App } = await import("./App");
     window.location.search = "?space=operate&page=surface&surface=code";

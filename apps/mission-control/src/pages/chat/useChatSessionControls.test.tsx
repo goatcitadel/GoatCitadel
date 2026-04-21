@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatSessionControls } from "./useChatSessionControls";
 
 const archiveWorkspaceChatSessionsMock = vi.fn();
+const createChatSessionMock = vi.fn();
 const deleteChatSessionMock = vi.fn();
 const setChatSessionBindingMock = vi.fn();
 
@@ -12,6 +13,7 @@ vi.mock("../../api/client", async () => {
   return {
     ...actual,
     archiveWorkspaceChatSessions: (...args: unknown[]) => archiveWorkspaceChatSessionsMock(...args),
+    createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
     deleteChatSession: (...args: unknown[]) => deleteChatSessionMock(...args),
     setChatSessionBinding: (...args: unknown[]) => setChatSessionBindingMock(...args),
   };
@@ -39,6 +41,7 @@ function Harness() {
   const hook = useChatSessionControls({
     workspaceId: "default",
     historyView,
+    sessionMode: "code",
     selectedProjectId,
     selectedSession: {
       sessionId: "session-1",
@@ -74,6 +77,7 @@ describe("useChatSessionControls", () => {
   beforeEach(() => {
     latest = null;
     archiveWorkspaceChatSessionsMock.mockReset();
+    createChatSessionMock.mockReset();
     deleteChatSessionMock.mockReset();
     setChatSessionBindingMock.mockReset();
   });
@@ -115,5 +119,56 @@ describe("useChatSessionControls", () => {
       writable: true,
     });
     expect(latest?.binding).toMatchObject({ writable: true, target: "#ops" });
+  });
+
+  it("creates the first ensured session with the active surface mode", async () => {
+    createChatSessionMock.mockResolvedValue({
+      sessionId: "session-new",
+      mode: "code",
+    });
+
+    let latestEnsureOnly: ReturnType<typeof useChatSessionControls> | null = null;
+
+    function EnsureHarness() {
+      const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+      const [historyView, setHistoryView] = useState<"active" | "archived">("active");
+      const [selectedProjectId, setSelectedProjectId] = useState("all");
+      const [, setQueuedOutbound] = useState<any[]>([]);
+      const [, setThread] = useState<any>(null);
+      const [, setBinding] = useState<any>(null);
+
+      latestEnsureOnly = useChatSessionControls({
+        workspaceId: "default",
+        historyView,
+        sessionMode: "code",
+        selectedProjectId,
+        selectedSession: null,
+        renameTitle: "",
+        folderName: "",
+        tagsValue: "",
+        setSelectedProjectId,
+        setSelectedSessionId,
+        setHistoryView,
+        setError: vi.fn(),
+        setSending: vi.fn(),
+        setQueuedOutbound,
+        setThread,
+        loadSidebar: vi.fn(async () => undefined),
+        setBinding,
+      });
+
+      return <span>{selectedSessionId ?? "none"}</span>;
+    }
+
+    create(<EnsureHarness />);
+
+    await act(async () => {
+      await latestEnsureOnly?.ensureSession();
+    });
+
+    expect(createChatSessionMock).toHaveBeenCalledWith({
+      workspaceId: "default",
+      mode: "code",
+    });
   });
 });

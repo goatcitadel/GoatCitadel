@@ -11,7 +11,8 @@
     "outDir": "dist",
     "types": ["vite/client"],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@goatcitadel/contracts": ["../../packages/contracts/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],

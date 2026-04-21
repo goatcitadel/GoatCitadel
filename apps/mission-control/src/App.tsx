@@ -71,7 +71,9 @@ import { useUiPreferences } from "./state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "./state/effects-mode";
 import { publishEventStreamStatus, resetEventStreamStatus } from "./state/event-stream-status-store";
 import { deriveShellGatewayAccessState } from "./state/gateway-shell-state";
+import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useRefreshSubscription } from "./hooks/useRefreshSubscription";
+import { ResizablePaneLayout } from "./components/ResizablePaneLayout";
 import {
   isDevDiagnosticsEnabled,
   recordClientDiagnostic,
@@ -93,6 +95,15 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
+
+function buildPersistedRouteSearch(route: ResolvedRoute): string {
+  return buildRouteSearch({
+    space: route.space,
+    page: route.page,
+    surface: route.surface,
+    tab: route.tab,
+  });
+}
 
 function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof TModule>(
   loader: () => Promise<TModule>,
@@ -279,6 +290,18 @@ function deriveWorkspacesTab(route: ResolvedRoute): WorkspacesTab {
   return route.space === "configure" && route.page === "settings" && route.tab === "addons" ? "addons" : "workspaces";
 }
 
+function resolveShellRailDefaultSize(navMode: "expanded" | "compact" | "icon"): number {
+  switch (navMode) {
+    case "compact":
+      return 176;
+    case "icon":
+      return 92;
+    case "expanded":
+    default:
+      return 264;
+  }
+}
+
 const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   {
     topic: "surface",
@@ -426,6 +449,7 @@ export function App() {
   const [gatewayAccessAutoRetryPending, setGatewayAccessAutoRetryPending] = useState(false);
   const gatewayAccessAutoRetryTimerRef = useRef<number | null>(null);
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
+  const stackedShellDetailPanel = useMediaQuery("(max-width: 1279px)");
   const shellGatewayState = useMemo(
     () => deriveShellGatewayAccessState(gatewayAccess, streamState),
     [gatewayAccess, streamState],
@@ -979,8 +1003,9 @@ export function App() {
     }
     const url = new URL(window.location.href);
     const search = buildRouteSearch(route);
+    const persistedSearch = buildPersistedRouteSearch(route);
     window.history.replaceState(null, "", `${url.pathname}${search}${url.hash}`);
-    window.localStorage.setItem(LAST_ROUTE_STORAGE_KEY, search);
+    window.localStorage.setItem(LAST_ROUTE_STORAGE_KEY, persistedSearch);
     setDevDiagnosticsCurrentRoute(`${url.pathname}${search}${url.hash}`);
     recordClientDiagnostic({
       level: "info",
@@ -1623,6 +1648,48 @@ export function App() {
   const compactShellNavValue = visiblePage;
   const shellThemeClass = resolveShellThemeClass(theme);
   const pageErrorResetKey = `${route.space}:${route.page}:${route.tab ?? ""}`;
+  const useResizableShellLayout = desktopShellRail && !stackedShellDetailPanel;
+  const shellRailDefaultSize = resolveShellRailDefaultSize(navMode);
+  const shellWorkspace = (
+    <div className="shell-workspace">
+      {route.space === "operate" && route.page === "surface" && onboardingComplete === false ? (
+        <div className="status-banner warning">
+          Onboarding still needs attention. Work surfaces stay available, but finish the configuration checklist before
+          trusting provider, access, or runtime defaults.
+          <button
+            type="button"
+            className="gc-button"
+            onClick={() => navigate({ space: "configure", page: "settings", tab: "onboarding" })}
+          >
+            Open onboarding
+          </button>
+        </div>
+      ) : null}
+      <PageErrorBoundary
+        resetKey={pageErrorResetKey}
+        pageLabel={currentPageLabel}
+        onReturnToChat={() => navigate(DEFAULT_ROUTE)}
+      >
+        <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>{content}</Suspense>
+      </PageErrorBoundary>
+    </div>
+  );
+  const shellDetailPane =
+    detailPanelEntry && detailPanelVisible ? (
+      <SideInspectorDrawer
+        kicker={detailPanelEntry.kicker}
+        title={detailPanelEntry.title}
+        subtitle={detailPanelEntry.subtitle}
+        open={detailPanelVisible}
+        pinned={detailPanelPinned}
+        onClose={() => setDetailPanelOpen(false)}
+        onTogglePinned={handleTogglePinnedDetailPanel}
+        actions={detailPanelEntry.actions}
+        className="shell-detail-panel"
+      >
+        {detailPanelEntry.body}
+      </SideInspectorDrawer>
+    ) : null;
 
   return (
     <ShellDetailPanelProvider
@@ -1791,56 +1858,68 @@ export function App() {
             </div>
           ) : null}
           <div
-            className={`shell-main-layout mc-shell-main-layout${desktopShellRail ? " with-rail" : ""}${detailPanelVisible ? " with-detail-panel" : ""}`}
+            className={`shell-main-layout mc-shell-main-layout${desktopShellRail ? " with-rail" : ""}${detailPanelVisible ? " with-detail-panel" : ""}${useResizableShellLayout ? " is-resizable" : ""}`}
           >
-            {desktopShellRail ? (
-              <ShellNavRail
-                route={route}
-                visiblePage={visiblePage}
-                navMode={navMode}
-                approvalsCount={operateApprovalsCount}
-                onSelectSpace={handleSelectSpace}
-                onSelectVisiblePage={handleSelectVisiblePage}
-                onCycleNavMode={handleCycleNavMode}
+            {useResizableShellLayout ? (
+              <ResizablePaneLayout
+                storageKey={`shell.main.${navMode}${shellDetailPane ? ".detail" : ""}`}
+                className="shell-main-resizable"
+                panes={[
+                  {
+                    id: "rail",
+                    defaultSize: shellRailDefaultSize,
+                    minSize: navMode === "icon" ? 74 : navMode === "compact" ? 148 : 220,
+                    maxSize: navMode === "icon" ? 112 : navMode === "compact" ? 248 : 340,
+                    className: "shell-main-pane shell-main-pane-rail",
+                    children: (
+                      <ShellNavRail
+                        route={route}
+                        visiblePage={visiblePage}
+                        navMode={navMode}
+                        approvalsCount={operateApprovalsCount}
+                        onSelectSpace={handleSelectSpace}
+                        onSelectVisiblePage={handleSelectVisiblePage}
+                        onCycleNavMode={handleCycleNavMode}
+                      />
+                    ),
+                  },
+                  {
+                    id: "workspace",
+                    minSize: 640,
+                    className: "shell-main-pane shell-main-pane-workspace",
+                    children: shellWorkspace,
+                  },
+                  ...(shellDetailPane
+                    ? [
+                        {
+                          id: "detail",
+                          defaultSize: 360,
+                          minSize: 300,
+                          maxSize: 460,
+                          className: "shell-main-pane shell-main-pane-detail",
+                          children: shellDetailPane,
+                        },
+                      ]
+                    : []),
+                ]}
               />
-            ) : null}
-            <div className="shell-workspace">
-              {route.space === "operate" && route.page === "surface" && onboardingComplete === false ? (
-                <div className="status-banner warning">
-                  Onboarding still needs attention. Work surfaces stay available, but finish the configuration checklist
-                  before trusting provider, access, or runtime defaults.
-                  <button
-                    type="button"
-                    className="gc-button"
-                    onClick={() => navigate({ space: "configure", page: "settings", tab: "onboarding" })}
-                  >
-                    Open onboarding
-                  </button>
-                </div>
-              ) : null}
-              <PageErrorBoundary
-                resetKey={pageErrorResetKey}
-                pageLabel={currentPageLabel}
-                onReturnToChat={() => navigate(DEFAULT_ROUTE)}
-              >
-                <Suspense fallback={<PageLoadingFallback label={currentPageLabel} />}>{content}</Suspense>
-              </PageErrorBoundary>
-            </div>
-            {detailPanelEntry ? (
-              <SideInspectorDrawer
-                kicker={detailPanelEntry.kicker}
-                title={detailPanelEntry.title}
-                subtitle={detailPanelEntry.subtitle}
-                open={detailPanelVisible}
-                pinned={detailPanelPinned}
-                onClose={() => setDetailPanelOpen(false)}
-                onTogglePinned={handleTogglePinnedDetailPanel}
-                actions={detailPanelEntry.actions}
-                className="shell-detail-panel"
-              >
-                {detailPanelEntry.body}
-              </SideInspectorDrawer>
-            ) : null}
+            ) : (
+              <>
+                {desktopShellRail ? (
+                  <ShellNavRail
+                    route={route}
+                    visiblePage={visiblePage}
+                    navMode={navMode}
+                    approvalsCount={operateApprovalsCount}
+                    onSelectSpace={handleSelectSpace}
+                    onSelectVisiblePage={handleSelectVisiblePage}
+                    onCycleNavMode={handleCycleNavMode}
+                  />
+                ) : null}
+                {shellWorkspace}
+                {detailPanelEntry ? shellDetailPane : null}
+              </>
+            )}
           </div>
         </main>
 

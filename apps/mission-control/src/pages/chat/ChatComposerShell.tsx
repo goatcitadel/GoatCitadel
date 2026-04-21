@@ -527,6 +527,7 @@ export function ChatComposerShell(props: {
                 <p>
                   {attachment.retrievalMode === "full_text" ? "Read in full" : "Retrieval"} · {attachment.ingestStatus}
                 </p>
+                {attachment.errorMessage ? <p>{attachment.errorMessage}</p> : null}
               </div>
               <button
                 type="button"

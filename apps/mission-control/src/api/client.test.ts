@@ -125,6 +125,19 @@ describe("isTrustedGatewayHost", () => {
     });
   });
 
+  it("clears the persisted last-route shell state with auth reset", () => {
+    window.localStorage.setItem("goatcitadel.shell.last-route", "?space=operate&page=surface&surface=code");
+    persistGatewayAuthState({
+      mode: "token",
+      token: "abc123",
+    });
+
+    clearGatewayAuthState();
+
+    expect(window.localStorage.getItem("goatcitadel.shell.last-route")).toBeNull();
+    expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
+  });
+
   it("clears stale lease and gateway node identity when the realtime stream errors and retries", async () => {
     class MockEventSource {
       public static instances: MockEventSource[] = [];

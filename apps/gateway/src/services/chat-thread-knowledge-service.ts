@@ -9,6 +9,9 @@ import type {
 import { ValidationError } from "@goatcitadel/contracts";
 import type { KnowledgeChunkRecord, Storage } from "@goatcitadel/storage";
 
+const FULL_TEXT_SOURCE_CHAR_LIMIT = 12_000;
+const FULL_TEXT_TOTAL_CHAR_BUDGET = 32_000;
+
 export interface ChatThreadKnowledgeHost {
   readonly storage: Pick<Storage, "chatAttachments" | "chatThreadKnowledgeAttachments" | "gatewaySql" | "knowledge">;
   getSession(sessionId: string): unknown;
@@ -72,6 +75,12 @@ export async function attachChatThreadKnowledgeAttachment(
     if (attachment.sessionId !== normalizedSessionId) {
       throw new ValidationError({ message: "Thread knowledge attachments must come from the same chat session." });
     }
+    const existingAttachment = host.storage.chatThreadKnowledgeAttachments
+      .listBySession(normalizedSessionId)
+      .find((item) => item.chatAttachmentId === attachment.attachmentId && item.retrievalMode === input.retrievalMode);
+    if (existingAttachment) {
+      return existingAttachment;
+    }
     const created = host.storage.chatThreadKnowledgeAttachments.create({
       attachmentId: randomUUID(),
       sessionId: normalizedSessionId,
@@ -79,19 +88,33 @@ export async function attachChatThreadKnowledgeAttachment(
       sourceRef: attachment.fileName,
       title: input.title?.trim() || attachment.fileName,
       retrievalMode: input.retrievalMode,
-      ingestStatus: input.retrievalMode === "full_text" ? "ready" : "queued",
+      ingestStatus: "queued",
       namespace: input.retrievalMode === "retrieval" ? namespace : undefined,
       chatAttachmentId: attachment.attachmentId,
       createdAt: now,
       updatedAt: now,
     });
-    if (input.retrievalMode === "full_text") {
-      return created;
-    }
     try {
       const text = await extractAttachmentKnowledgeText(host, attachment);
       if (!text.trim()) {
-        throw new Error("This attachment does not have extracted text available for retrieval yet.");
+        throw new Error(
+          input.retrievalMode === "full_text"
+            ? "This attachment does not have readable text available for full-text use yet."
+            : "This attachment does not have extracted text available for retrieval yet.",
+        );
+      }
+      if (input.retrievalMode === "full_text") {
+        return host.storage.chatThreadKnowledgeAttachments.patch(
+          created.attachmentId,
+          {
+            ingestStatus: "ready",
+            chatAttachmentId: attachment.attachmentId,
+            chunkCount: 1,
+            lastIngestAt: now,
+            errorMessage: "",
+          },
+          now,
+        );
       }
       const document = host.storage.knowledge.createDocument(
         {
@@ -143,6 +166,18 @@ export async function attachChatThreadKnowledgeAttachment(
   if (!url) {
     throw new ValidationError({ message: "Either chatAttachmentId or url is required." });
   }
+  const normalizedUrlKey = url.toLowerCase();
+  const existingUrlAttachment = host.storage.chatThreadKnowledgeAttachments
+    .listBySession(normalizedSessionId)
+    .find(
+      (item) =>
+        item.sourceType === "url" &&
+        item.retrievalMode === input.retrievalMode &&
+        item.sourceRef.trim().toLowerCase() === normalizedUrlKey,
+    );
+  if (existingUrlAttachment) {
+    return existingUrlAttachment;
+  }
   const created = host.storage.chatThreadKnowledgeAttachments.create({
     attachmentId: randomUUID(),
     sessionId: normalizedSessionId,
@@ -170,13 +205,19 @@ export async function attachChatThreadKnowledgeAttachment(
     const normalizedResult = toPlainRecord(result);
     const document = readKnowledgeDocumentResult(normalizedResult);
     const chunksSaved = readKnowledgeChunksSaved(normalizedResult);
+    const documentText = document?.docId ? resolveDocumentKnowledgeText(host, document.docId) : "";
+    const chunkCount = document?.docId ? host.storage.knowledge.listChunksByDocument(document.docId, 500).length : 0;
+    const usableChunkCount = Math.max(chunksSaved ?? 0, chunkCount);
+    if (!document?.docId || usableChunkCount <= 0 || !documentText.trim()) {
+      throw new Error("This source did not produce readable knowledge content.");
+    }
     return host.storage.chatThreadKnowledgeAttachments.patch(
       created.attachmentId,
       {
         ingestStatus: "ready",
         namespace,
-        documentId: document?.docId,
-        chunkCount: chunksSaved,
+        documentId: document.docId,
+        chunkCount: usableChunkCount,
         lastIngestAt: now,
         errorMessage: "",
       },
@@ -213,8 +254,16 @@ export function removeChatThreadKnowledgeAttachment(
   if (current.sessionId !== normalizedSessionId) {
     throw new ValidationError({ message: "Thread knowledge attachment does not belong to this session." });
   }
+  const documentId = current.documentId?.trim() || undefined;
+  const deleted = host.storage.chatThreadKnowledgeAttachments.delete(normalizedAttachmentId);
+  if (deleted && documentId) {
+    const remainingReferences = host.storage.chatThreadKnowledgeAttachments.listByDocumentId(documentId);
+    if (remainingReferences.length === 0) {
+      host.storage.knowledge.deleteDocument(documentId);
+    }
+  }
   return {
-    deleted: host.storage.chatThreadKnowledgeAttachments.delete(normalizedAttachmentId),
+    deleted,
     attachmentId: normalizedAttachmentId,
   };
 }
@@ -238,75 +287,145 @@ export async function resolveThreadKnowledgeContext(
   const retrievalAttachments = attachments.filter((item) => item.retrievalMode === "retrieval");
   const fullTextBlocks: string[] = [];
   const citations: ChatCitationRecord[] = [];
+  const notices: string[] = [];
+  let remainingFullTextBudget = FULL_TEXT_TOTAL_CHAR_BUDGET;
+  const now = new Date().toISOString();
 
   for (const attachment of fullTextAttachments) {
     const text = await resolveFullTextAttachmentContent(host, attachment);
     if (!text.trim()) {
+      host.storage.chatThreadKnowledgeAttachments.patch(
+        attachment.attachmentId,
+        {
+          ingestStatus: "failed",
+          errorMessage: "This source no longer has readable content available for full-text use.",
+          lastIngestAt: now,
+          chunkCount: 0,
+        },
+        now,
+      );
+      notices.push(`Skipped ${attachment.title} because no readable full-text content was available.`);
       continue;
     }
+    if (remainingFullTextBudget <= 0) {
+      notices.push(`Skipped ${attachment.title} because the thread knowledge full-text budget was exhausted.`);
+      continue;
+    }
+    const excerpt = text.slice(0, Math.min(FULL_TEXT_SOURCE_CHAR_LIMIT, remainingFullTextBudget)).trim();
+    if (!excerpt) {
+      notices.push(`Skipped ${attachment.title} because the remaining full-text budget was exhausted.`);
+      continue;
+    }
+    if (excerpt.length < text.trim().length) {
+      notices.push(`Truncated ${attachment.title} to stay within the full-text context budget.`);
+    }
+    remainingFullTextBudget = Math.max(0, remainingFullTextBudget - excerpt.length);
     fullTextBlocks.push(
       [
         `Source: ${attachment.title}`,
         attachment.sourceType === "url" ? `Reference: ${attachment.sourceRef}` : undefined,
-        text.slice(0, 12_000),
+        excerpt,
       ]
         .filter(Boolean)
         .join("\n"),
     );
     citations.push(
       buildKnowledgeCitationRecord(attachment, {
-        excerpt: text.slice(0, 320),
+        excerpt: excerpt.slice(0, 320),
       }),
     );
   }
 
   if (retrievalAttachments.length > 0 && query.trim()) {
     const namespace = buildThreadKnowledgeNamespace(sessionId);
-    const queryResult = toPlainRecord(
-      await host.knowledgeEmbeddingsQuery({
-        namespace,
-        query: query.trim(),
-        limit: Math.max(4, Math.min(12, retrievalAttachments.length * 4)),
-        sessionId,
-      }),
-    );
-    const docsById = new Map(
-      host.storage.knowledge.listDocuments(namespace, 500).map((document) => [document.docId, document] as const),
-    );
-    const retrievalByDocId = new Map(
-      retrievalAttachments.filter((item) => item.documentId).map((item) => [item.documentId!, item] as const),
-    );
-    const groupedSnippets: string[] = [];
-    for (const item of readEmbeddingItems(queryResult)) {
-      const attachment = retrievalByDocId.get(item.docId);
-      if (!attachment) {
-        continue;
+    const retrievalReadyAttachments = retrievalAttachments.filter((item) => {
+      if (item.documentId?.trim()) {
+        return true;
       }
-      const doc = docsById.get(item.docId);
-      const chunk = findChunkById(host.storage.knowledge.listChunksByDocument(item.docId, 200), item.chunkId);
-      citations.push(
-        buildKnowledgeCitationRecord(attachment, {
-          title: doc?.title ?? attachment.title,
-          sourceRef: doc?.sourceRef ?? attachment.sourceRef,
-          chunk,
-          excerpt: item.snippet,
-        }),
+      host.storage.chatThreadKnowledgeAttachments.patch(
+        item.attachmentId,
+        {
+          ingestStatus: "failed",
+          errorMessage: "This retrieval source is missing its ingested document.",
+          lastIngestAt: now,
+          chunkCount: 0,
+        },
+        now,
       );
-      groupedSnippets.push([`Source: ${doc?.title ?? attachment.title}`, `Snippet: ${item.snippet}`].join("\n"));
-      if (groupedSnippets.length >= 6) {
-        break;
+      notices.push(`Skipped ${item.title} because its retrieval document is missing.`);
+      return false;
+    });
+    if (retrievalReadyAttachments.length > 0) {
+      try {
+        const queryResult = toPlainRecord(
+          await host.knowledgeEmbeddingsQuery({
+            namespace,
+            query: query.trim(),
+            limit: Math.max(4, Math.min(12, retrievalReadyAttachments.length * 4)),
+            sessionId,
+          }),
+        );
+        const docsById = new Map(
+          host.storage.knowledge.listDocuments(namespace, 500).map((document) => [document.docId, document] as const),
+        );
+        const retrievalByDocId = new Map(
+          retrievalReadyAttachments.filter((item) => item.documentId).map((item) => [item.documentId!, item] as const),
+        );
+        const groupedSnippets: string[] = [];
+        for (const item of readEmbeddingItems(queryResult)) {
+          const attachment = retrievalByDocId.get(item.docId);
+          if (!attachment) {
+            continue;
+          }
+          const doc = docsById.get(item.docId);
+          const chunk = findChunkById(host.storage.knowledge.listChunksByDocument(item.docId, 200), item.chunkId);
+          citations.push(
+            buildKnowledgeCitationRecord(attachment, {
+              title: doc?.title ?? attachment.title,
+              sourceRef: doc?.sourceRef ?? attachment.sourceRef,
+              chunk,
+              excerpt: item.snippet,
+            }),
+          );
+          groupedSnippets.push([`Source: ${doc?.title ?? attachment.title}`, `Snippet: ${item.snippet}`].join("\n"));
+          if (groupedSnippets.length >= 6) {
+            break;
+          }
+        }
+        if (groupedSnippets.length > 0) {
+          fullTextBlocks.push(["Retrieved thread knowledge:", ...groupedSnippets].join("\n\n"));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        for (const attachment of retrievalReadyAttachments) {
+          host.storage.chatThreadKnowledgeAttachments.patch(
+            attachment.attachmentId,
+            {
+              ingestStatus: "failed",
+              errorMessage: `Retrieval failed: ${message}`,
+              lastIngestAt: now,
+            },
+            now,
+          );
+        }
+        notices.push("Skipped retrieval-backed thread knowledge because retrieval failed for this turn.");
       }
-    }
-    if (groupedSnippets.length > 0) {
-      fullTextBlocks.push(["Retrieved thread knowledge:", ...groupedSnippets].join("\n\n"));
     }
   }
 
   return {
     systemInstruction:
-      fullTextBlocks.length > 0 ? ["Thread knowledge context:", ...fullTextBlocks].join("\n\n") : undefined,
+      fullTextBlocks.length > 0 || notices.length > 0
+        ? [
+            "Thread knowledge context:",
+            ...(notices.length > 0
+              ? ["Notices:", ...notices.map((notice) => `- ${notice}`), "Treat skipped sources as unavailable."]
+              : []),
+            ...fullTextBlocks,
+          ].join("\n\n")
+        : undefined,
     citations,
-    attachments,
+    attachments: host.storage.chatThreadKnowledgeAttachments.listBySession(sessionId),
   };
 }
 
@@ -319,11 +438,7 @@ async function resolveFullTextAttachmentContent(
   attachment: ThreadKnowledgeAttachmentRecord,
 ): Promise<string> {
   if (attachment.documentId) {
-    return host.storage.knowledge
-      .listChunksByDocument(attachment.documentId, 200)
-      .map((chunk) => chunk.content.trim())
-      .filter(Boolean)
-      .join("\n\n");
+    return resolveDocumentKnowledgeText(host, attachment.documentId);
   }
   if (!attachment.chatAttachmentId) {
     return "";
@@ -350,6 +465,14 @@ async function extractAttachmentKnowledgeText(
     }
   }
   return transcriptOrOcr ?? "";
+}
+
+function resolveDocumentKnowledgeText(host: ChatThreadKnowledgeHost, documentId: string): string {
+  return host.storage.knowledge
+    .listChunksByDocument(documentId, 500)
+    .map((chunk) => chunk.content.trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function chunkKnowledgeText(value: string, targetChars = 1_400, overlapChars = 180, maxChunks = 120): string[] {
@@ -477,7 +600,7 @@ function buildKnowledgeCitationRecord(
         ? attachment.sourceRef
         : `attachment://${attachment.chatAttachmentId ?? attachment.attachmentId}`,
     snippet: input.excerpt,
-    sourceType: "file",
+    sourceType: attachment.sourceType === "url" ? "web" : "file",
     knowledge,
   };
 }

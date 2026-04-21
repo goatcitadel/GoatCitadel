@@ -72,6 +72,7 @@ function buildThreadViewProps(thread: ChatThreadResponse) {
     onEditTurn: vi.fn(),
     onOpenRunDetails: vi.fn(),
     onOpenGeneratedArtifact: vi.fn(),
+    onCreateGeneratedArtifact: vi.fn(),
     onCreateGeneratedArtifactVersion: vi.fn(),
   };
 }
@@ -218,6 +219,9 @@ describe("ChatThreadView", () => {
         onRetryTurn={vi.fn()}
         onEditTurn={vi.fn()}
         onOpenRunDetails={vi.fn()}
+        onOpenGeneratedArtifact={vi.fn()}
+        onCreateGeneratedArtifact={vi.fn()}
+        onCreateGeneratedArtifactVersion={vi.fn()}
       />,
     );
 
@@ -239,5 +243,55 @@ describe("ChatThreadView", () => {
         (node) => Array.isArray(node.children) && node.children.join("").includes("Skipped because dependency failed."),
       ),
     ).not.toHaveLength(0);
+  });
+
+  it("distinguishes create-artifact from open-artifact actions", () => {
+    const thread = createThread("plain content");
+    const onCreateGeneratedArtifact = vi.fn();
+    const onOpenGeneratedArtifact = vi.fn();
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        {...buildThreadViewProps(thread)}
+        onCreateGeneratedArtifact={onCreateGeneratedArtifact}
+        onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+      />,
+    );
+
+    const createButton = renderer.root.find(
+      (node) => node.type === "button" && node.props["aria-label"] === "Create generated artifact for turn turn-1",
+    );
+    expect(createButton.children.join("")).toBe("Create artifact");
+
+    TestRenderer.act(() => {
+      createButton.props.onClick();
+    });
+
+    expect(onCreateGeneratedArtifact).toHaveBeenCalledWith("turn-1");
+    expect(onOpenGeneratedArtifact).not.toHaveBeenCalled();
+
+    (thread.turns[0] as any).generatedArtifacts = [
+      {
+        artifactId: "artifact-1",
+        kind: "markdown",
+        title: "Artifact",
+        sourceSurface: "chat",
+        version: 1,
+        turnId: "turn-1",
+        createdAt: "2026-04-04T00:00:02.000Z",
+      },
+    ];
+
+    const withArtifact = TestRenderer.create(
+      <ChatThreadView
+        {...buildThreadViewProps(thread)}
+        onCreateGeneratedArtifact={onCreateGeneratedArtifact}
+        onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+      />,
+    );
+    const openButton = withArtifact.root.find(
+      (node) => node.type === "button" && node.props["aria-label"] === "Open generated artifact for turn turn-1",
+    );
+
+    expect(openButton.children.join("")).toBe("Open artifact");
   });
 });

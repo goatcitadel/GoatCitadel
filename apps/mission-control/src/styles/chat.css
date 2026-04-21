@@ -1967,6 +1967,45 @@
   align-items: center;
 }
 
+.chat-code-workbench-tree-node {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 78%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-inset) 88%, transparent);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.chat-code-workbench-tree-node.selected {
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-default));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
+
+.chat-code-workbench-tree-node-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.chat-code-workbench-monaco-shell {
+  min-height: 420px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(8, 12, 20, 0.64);
+}
+
+.chat-code-workbench-monaco,
+.chat-code-workbench-diff {
+  min-height: 100%;
+}
+
 .chat-code-workbench-pre,
 .chat-code-workbench-inline-pre {
   margin: 0;
@@ -2507,7 +2546,7 @@
   padding: 7px;
 }
 
-.theme-signal-noir .chat-v11-session-row button {
+.theme-signal-noir .chat-v11-session-row > .chat-v11-session-row-button {
   width: 100%;
   border: 0;
   background: transparent;

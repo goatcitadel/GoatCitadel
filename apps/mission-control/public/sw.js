@@ -1,5 +1,20 @@
-const CACHE_NAME = "goatcitadel-mission-control-v1";
-const APP_SHELL_ASSETS = ["/", "/manifest.webmanifest", "/brand/favicon-32x32.png", "/brand/apple-touch-icon.png"];
+const BUILD_ID = new URL(self.location.href).searchParams.get("build")?.trim() || "v1";
+const CACHE_NAME = `goatcitadel-mission-control-${BUILD_ID}`;
+const APP_SHELL_ASSETS = ["/", "/?source=pwa", "/manifest.webmanifest", "/brand/favicon-32x32.png", "/brand/apple-touch-icon.png"];
+const STATIC_DESTINATIONS = new Set(["script", "style", "image", "font", "manifest"]);
+
+function isApiLikeRequest(url) {
+  return (
+    url.pathname.startsWith("/api/") ||
+    url.pathname === "/health" ||
+    url.pathname.includes("/events/stream") ||
+    url.pathname.includes("/sse")
+  );
+}
+
+function shouldCacheStaticAsset(request, url) {
+  return APP_SHELL_ASSETS.includes(`${url.pathname}${url.search}`) || APP_SHELL_ASSETS.includes(url.pathname) || STATIC_DESTINATIONS.has(request.destination);
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -28,13 +43,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  if (isApiLikeRequest(url)) {
+    return;
+  }
+
   if (event.request.mode === "navigate") {
     event.respondWith(
       fetch(event.request).catch(async () => {
         const cache = await caches.open(CACHE_NAME);
-        return cache.match("/") || Response.error();
+        return (await cache.match(`${url.pathname}${url.search}`)) || (await cache.match("/")) || Response.error();
       }),
     );
+    return;
+  }
+
+  if (!shouldCacheStaticAsset(event.request, url)) {
     return;
   }
 
@@ -45,7 +68,12 @@ self.addEventListener("fetch", (event) => {
       }
       return fetch(event.request)
         .then((response) => {
-          if (!response || response.status !== 200 || response.type !== "basic") {
+          if (
+            !response ||
+            response.status !== 200 ||
+            response.type !== "basic" ||
+            /\bno-store\b/i.test(response.headers.get("cache-control") || "")
+          ) {
             return response;
           }
           const responseClone = response.clone();

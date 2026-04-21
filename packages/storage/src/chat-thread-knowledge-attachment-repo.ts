@@ -37,6 +37,7 @@ export class ChatThreadKnowledgeAttachmentRepository {
   private readonly getStmt;
   private readonly insertStmt;
   private readonly listBySessionStmt;
+  private readonly listByDocumentStmt;
   private readonly deleteStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -97,6 +98,12 @@ export class ChatThreadKnowledgeAttachmentRepository {
       SELECT *
       FROM chat_thread_knowledge_attachments
       WHERE session_id = ?
+      ORDER BY created_at DESC, attachment_id DESC
+    `);
+    this.listByDocumentStmt = db.prepare(`
+      SELECT *
+      FROM chat_thread_knowledge_attachments
+      WHERE document_id = ?
       ORDER BY created_at DESC, attachment_id DESC
     `);
     this.deleteStmt = db.prepare(`
@@ -165,6 +172,13 @@ export class ChatThreadKnowledgeAttachmentRepository {
   public listBySession(sessionId: string): ThreadKnowledgeAttachmentRecord[] {
     const rows = toChatThreadKnowledgeAttachmentRows(
       this.listBySessionStmt.all(sanitizeRequired(sessionId, "sessionId")),
+    );
+    return rows.map(mapRow);
+  }
+
+  public listByDocumentId(documentId: string): ThreadKnowledgeAttachmentRecord[] {
+    const rows = toChatThreadKnowledgeAttachmentRows(
+      this.listByDocumentStmt.all(sanitizeRequired(documentId, "documentId")),
     );
     return rows.map(mapRow);
   }

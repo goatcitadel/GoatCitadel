@@ -1,5 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import "react-reflex/styles.css";
+import "./lib/configure-monaco";
 import { App } from "./App";
 import { UiPreferencesProvider } from "./state/ui-preferences";
 import "./styles.css";
@@ -16,9 +18,9 @@ if (!root) {
   throw new Error("Root element not found");
 }
 
-if ("serviceWorker" in navigator) {
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js");
+    void navigator.serviceWorker.register(`/sw.js?build=${encodeURIComponent(__GC_BUILD_ID__)}`);
   });
 }
 

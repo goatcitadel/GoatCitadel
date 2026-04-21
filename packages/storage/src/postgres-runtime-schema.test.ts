@@ -122,4 +122,13 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS chat_generated_artifacts \(/);
     assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS chat_thread_knowledge_attachments \(/);
   });
+
+  it("repairs generated artifact provenance columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 18);
+
+    assert.equal(repairMigration?.name, "generated_artifact_provenance_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_generated_artifacts/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS source_block_index BIGINT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS content_hash TEXT/);
+  });
 });

@@ -2667,6 +2667,20 @@ export class GatewayService {
     return chatWorkbenchService.getChatSessionWorkbenchFile(this, sessionId, relativePath);
   }
 
+  public async saveChatSessionWorkbenchFile(
+    sessionId: string,
+    input: import("@goatcitadel/contracts").ChatSessionWorkbenchSaveFileRequest,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchFileResponse> {
+    return chatWorkbenchService.saveChatSessionWorkbenchFile(this, sessionId, input);
+  }
+
+  public async getChatSessionWorkbenchFileDiff(
+    sessionId: string,
+    relativePath: string,
+  ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchFileDiffResponse> {
+    return chatWorkbenchService.getChatSessionWorkbenchFileDiff(this, sessionId, relativePath);
+  }
+
   public async getChatSessionWorkbenchDiff(
     sessionId: string,
   ): Promise<import("@goatcitadel/contracts").ChatSessionWorkbenchDiffResponse> {

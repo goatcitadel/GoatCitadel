@@ -225,6 +225,20 @@
   min-height: 0;
 }
 
+.shell-main-layout.is-resizable {
+  display: block;
+}
+
+.shell-main-resizable,
+.shell-main-pane,
+.shell-main-pane .gc-resizable-pane-content {
+  min-height: 0;
+}
+
+.shell-main-pane-workspace .gc-resizable-pane-content {
+  align-content: start;
+}
+
 .shell-main-layout.with-rail {
   grid-template-columns: auto minmax(0, 1fr);
 }
@@ -418,6 +432,10 @@
   backdrop-filter: blur(14px);
 }
 
+.gc-resizable-pane .shell-nav-rail {
+  width: 100%;
+}
+
 .shell-nav-rail-expanded {
   width: 256px;
 }
@@ -541,6 +559,10 @@
   background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
   box-shadow: var(--shadow-1);
   min-height: 0;
+}
+
+.shell-main-pane-detail .side-inspector-drawer {
+  width: 100%;
 }
 
 .side-inspector-drawer.closed {

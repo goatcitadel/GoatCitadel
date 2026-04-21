@@ -192,6 +192,7 @@ function ChatTurnActions({
   onEditTurn,
   onOpenRunDetails,
   onOpenGeneratedArtifact,
+  onCreateGeneratedArtifact,
   onCreateGeneratedArtifactVersion,
 }: {
   mode: ChatMode;
@@ -202,6 +203,7 @@ function ChatTurnActions({
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
@@ -241,11 +243,13 @@ function ChatTurnActions({
         {turn.assistantMessage ? (
           <button
             type="button"
-            aria-label={`Open generated artifact for turn ${turn.turnId}`}
-            onClick={() => onOpenGeneratedArtifact(turn.turnId)}
+            aria-label={`${hasGeneratedArtifact ? "Open" : "Create"} generated artifact for turn ${turn.turnId}`}
+            onClick={() =>
+              hasGeneratedArtifact ? onOpenGeneratedArtifact(turn.turnId) : onCreateGeneratedArtifact(turn.turnId)
+            }
             className="gc-button"
           >
-            Open artifact
+            {hasGeneratedArtifact ? "Open artifact" : "Create artifact"}
           </button>
         ) : null}
         {hasGeneratedArtifact ? (
@@ -275,6 +279,7 @@ function ChatTurnCard({
   onEditTurn,
   onOpenRunDetails,
   onOpenGeneratedArtifact,
+  onCreateGeneratedArtifact,
   onCreateGeneratedArtifactVersion,
 }: {
   mode: ChatMode;
@@ -286,6 +291,7 @@ function ChatTurnCard({
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -365,6 +371,7 @@ function ChatTurnCard({
         onEditTurn={onEditTurn}
         onOpenRunDetails={onOpenRunDetails}
         onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+        onCreateGeneratedArtifact={onCreateGeneratedArtifact}
         onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
       />
     </article>
@@ -478,6 +485,7 @@ export function ChatThreadView({
   onEditTurn,
   onOpenRunDetails,
   onOpenGeneratedArtifact,
+  onCreateGeneratedArtifact,
   onCreateGeneratedArtifactVersion,
 }: {
   mode: ChatMode;
@@ -497,6 +505,7 @@ export function ChatThreadView({
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   const threadEndRef = useRef<HTMLDivElement | null>(null);
@@ -548,6 +557,7 @@ export function ChatThreadView({
             onEditTurn={onEditTurn}
             onOpenRunDetails={onOpenRunDetails}
             onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+            onCreateGeneratedArtifact={onCreateGeneratedArtifact}
             onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
           />
         ))}

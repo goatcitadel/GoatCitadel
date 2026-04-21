@@ -20,6 +20,8 @@ interface ChatGeneratedArtifactRow {
   supersedes_artifact_id: string | null;
   provider_id: string | null;
   model: string | null;
+  source_block_index: number | null;
+  content_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -46,6 +48,8 @@ export class ChatGeneratedArtifactRepository {
         supersedes_artifact_id,
         provider_id,
         model,
+        source_block_index,
+        content_hash,
         created_at,
         updated_at
       ) VALUES (
@@ -62,6 +66,8 @@ export class ChatGeneratedArtifactRepository {
         @supersedesArtifactId,
         @providerId,
         @model,
+        @sourceBlockIndex,
+        @contentHash,
         @createdAt,
         @updatedAt
       )
@@ -103,6 +109,8 @@ export class ChatGeneratedArtifactRepository {
       supersedesArtifactId: sanitizeOptional(input.supersedesArtifactId),
       providerId: sanitizeOptional(input.providerId),
       model: sanitizeOptional(input.model),
+      sourceBlockIndex: input.sourceBlockIndex !== undefined ? Math.max(0, Math.floor(input.sourceBlockIndex)) : null,
+      contentHash: sanitizeOptional(input.contentHash),
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
     });
@@ -268,6 +276,8 @@ function isChatGeneratedArtifactRow(value: unknown): value is ChatGeneratedArtif
     (typeof value.supersedes_artifact_id === "string" || value.supersedes_artifact_id === null) &&
     (typeof value.provider_id === "string" || value.provider_id === null) &&
     (typeof value.model === "string" || value.model === null) &&
+    (typeof value.source_block_index === "number" || value.source_block_index === null) &&
+    (typeof value.content_hash === "string" || value.content_hash === null) &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );
@@ -296,6 +306,8 @@ function mapRow(row: ChatGeneratedArtifactRow): ChatGeneratedArtifactRecord {
     supersedesArtifactId: row.supersedes_artifact_id ?? undefined,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,
+    sourceBlockIndex: row.source_block_index ?? undefined,
+    contentHash: row.content_hash ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

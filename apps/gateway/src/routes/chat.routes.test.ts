@@ -156,6 +156,38 @@ describe("chat routes additional coverage", () => {
       changed: true,
       content: "export const demo = true;",
     }));
+    const saveChatSessionWorkbenchFile = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:02:00.000Z",
+      },
+      path: "index.ts",
+      sizeBytes: 33,
+      modifiedAt: "2026-04-10T00:02:00.000Z",
+      contentType: "text/typescript",
+      language: "ts",
+      changed: true,
+      content: "export const demo = false;",
+    }));
+    const getChatSessionWorkbenchFileDiff = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:02:00.000Z",
+      },
+      path: "index.ts",
+      language: "ts",
+      changed: true,
+      originalContent: "export const demo = true;",
+      modifiedContent: "export const demo = false;",
+    }));
     const getChatSessionWorkbenchDiff = vi.fn(async () => ({
       state: {
         sessionId: "sess-1",
@@ -189,6 +221,8 @@ describe("chat routes additional coverage", () => {
       createChatSessionWorkbenchWorktree,
       getChatSessionWorkbenchTree,
       getChatSessionWorkbenchFile,
+      saveChatSessionWorkbenchFile,
+      getChatSessionWorkbenchFileDiff,
       getChatSessionWorkbenchDiff,
       getChatSessionWorkbenchOutput,
     } as never);
@@ -224,6 +258,31 @@ describe("chat routes additional coverage", () => {
     });
     expect(fileResponse.statusCode).toBe(200);
     expect(getChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", "index.ts");
+
+    const saveFileResponse = await app.inject({
+      method: "PUT",
+      url: "/api/v1/chat/sessions/sess-1/workbench/file",
+      payload: {
+        path: "index.ts",
+        content: "export const demo = false;",
+      },
+    });
+    expect(saveFileResponse.statusCode).toBe(200);
+    expect(saveChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", {
+      path: "index.ts",
+      content: "export const demo = false;",
+    });
+
+    const fileDiffResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench/file-diff?path=index.ts",
+    });
+    expect(fileDiffResponse.statusCode).toBe(200);
+    expect(fileDiffResponse.json()).toMatchObject({
+      changed: true,
+      path: "index.ts",
+    });
+    expect(getChatSessionWorkbenchFileDiff).toHaveBeenCalledWith("sess-1", "index.ts");
 
     const diffResponse = await app.inject({
       method: "GET",

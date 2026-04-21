@@ -2,13 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   ChatGeneratedArtifactRecord,
   ChatSessionWorkbenchDiffResponse,
+  ChatSessionWorkbenchFileDiffResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchRecord,
   ChatSessionWorkbenchTreeResponse,
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
+import { ConfirmModal } from "./ConfirmModal";
+import { MonacoDiffEditor } from "./MonacoDiffEditor";
 import { StatusChip } from "./StatusChip";
+import { WorkbenchFileTree } from "./WorkbenchFileTree";
+import { WorkbenchMonacoEditor } from "./WorkbenchMonacoEditor";
 import { GeneratedArtifactViewer } from "./chat/GeneratedArtifactViewer";
 
 interface CodeBlockRecord {
@@ -36,6 +41,8 @@ function normalizeSnippetLanguage(language?: string): "javascript" | "typescript
   return "typescript";
 }
 
+type WorkbenchPaneId = "file" | "selected-diff" | "repo-diff" | "output" | "snippets" | "artifact";
+
 export function CodeWorkbenchPanel({
   selectedTurn,
   projectName,
@@ -43,16 +50,25 @@ export function CodeWorkbenchPanel({
   workbenchState,
   workbenchTree,
   selectedFile,
+  selectedFileDiff,
+  draftContent,
+  expandedPaths,
   diff,
   output,
   loading,
   busy,
+  saving,
   error,
+  hasDirtyDraft,
   generatedArtifact,
   onCloseGeneratedArtifact,
   onCreateWorktree,
   onSelectFile,
+  onDraftChange,
+  onExpandedPathsChange,
   onRefresh,
+  onSaveFile,
+  onDiscardDraft,
   onRunHelperSnippet,
 }: {
   selectedTurn: ChatThreadTurnRecord | null;
@@ -61,16 +77,25 @@ export function CodeWorkbenchPanel({
   workbenchState?: ChatSessionWorkbenchRecord | null;
   workbenchTree?: ChatSessionWorkbenchTreeResponse | null;
   selectedFile?: ChatSessionWorkbenchFileResponse | null;
+  selectedFileDiff?: ChatSessionWorkbenchFileDiffResponse | null;
+  draftContent?: string;
+  expandedPaths?: string[];
   diff?: ChatSessionWorkbenchDiffResponse | null;
   output?: ChatSessionWorkbenchOutputResponse | null;
   loading: boolean;
   busy: boolean;
+  saving: boolean;
   error?: string | null;
+  hasDirtyDraft: boolean;
   generatedArtifact?: ChatGeneratedArtifactRecord | null;
   onCloseGeneratedArtifact?: () => void;
   onCreateWorktree: () => void;
   onSelectFile: (relativePath: string) => void;
+  onDraftChange: (next: string) => void;
+  onExpandedPathsChange: (nextPaths: string[]) => void;
   onRefresh: () => void;
+  onSaveFile: () => void;
+  onDiscardDraft: () => void;
   onRunHelperSnippet: (language: string, source: string) => void;
 }) {
   const codeBlocks = useMemo(
@@ -81,65 +106,93 @@ export function CodeWorkbenchPanel({
   const boundProjectLabel = projectName ?? "bound project";
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
   const helperRuns = output?.helperRuns ?? [];
-  const [activePane, setActivePane] = useState<"file" | "diff" | "output" | "snippets" | "artifact">("diff");
+  const [activePane, setActivePane] = useState<WorkbenchPaneId>("file");
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
-  const [drafts, setDrafts] = useState<string[]>([]);
-  const [helperLanguage, setHelperLanguage] = useState<"javascript" | "typescript">("typescript");
+  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveBlockIndex(0);
-    if (codeBlocks.length > 0) {
-      setDrafts(codeBlocks.map((block) => block.content));
-      setHelperLanguage(normalizeSnippetLanguage(codeBlocks[0]?.language));
-      return;
-    }
-    setDrafts([""]);
-    setHelperLanguage("typescript");
-  }, [codeBlocks, selectedTurn?.turnId]);
+  }, [codeBlocks.length, selectedTurn?.turnId]);
 
   useEffect(() => {
-    if (needsProjectBinding) {
-      setActivePane(codeBlocks.length > 0 ? "snippets" : "diff");
-      return;
-    }
-    if (diff?.changedFiles.length) {
-      setActivePane("diff");
-      return;
-    }
     if (generatedArtifact) {
       setActivePane("artifact");
       return;
     }
-    if (output?.helperRuns.length || output?.output) {
-      setActivePane("output");
+    if (needsProjectBinding) {
+      setActivePane(codeBlocks.length > 0 ? "snippets" : "repo-diff");
+      return;
+    }
+    if (hasDirtyDraft) {
+      setActivePane("file");
       return;
     }
     if (selectedFile) {
       setActivePane("file");
       return;
     }
-    if (codeBlocks.length > 0) {
-      setActivePane("snippets");
+    if (selectedFileDiff) {
+      setActivePane("selected-diff");
       return;
     }
-    if (!needsProjectBinding) {
+    if (diff?.changedFiles.length) {
+      setActivePane("repo-diff");
+      return;
+    }
+    if (output?.helperRuns.length || output?.output) {
       setActivePane("output");
+      return;
+    }
+    if (codeBlocks.length > 0) {
+      setActivePane("snippets");
     }
   }, [
     codeBlocks.length,
     diff?.changedFiles.length,
     generatedArtifact,
+    hasDirtyDraft,
     needsProjectBinding,
     output?.helperRuns.length,
     output?.output,
     selectedFile,
+    selectedFileDiff,
   ]);
 
-  const activeDraft = drafts[activeBlockIndex] ?? "";
+  useEffect(() => {
+    if (typeof window === "undefined" || !selectedFile || !hasDirtyDraft) {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        onSaveFile();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [hasDirtyDraft, onSaveFile, selectedFile]);
+
   const approvalBlocked = selectedTurn?.trace?.status === "waiting_for_approval";
   const userInputBlocked = selectedTurn?.trace?.status === "waiting_for_user_input";
+  const activeDraft = draftContent ?? selectedFile?.content ?? "";
+  const activeBlock = codeBlocks[activeBlockIndex] ?? null;
   const primaryPath = selectedFile?.path ?? changedFiles[0];
-  const fileList = workbenchTree?.items.filter((item) => item.kind === "file") ?? [];
+  const fileTreeItems = workbenchTree?.items ?? [];
+  const effectiveSelectedFileDiffOriginal = selectedFileDiff?.originalContent ?? selectedFile?.content ?? "";
+  const effectiveSelectedFileDiffModified =
+    hasDirtyDraft && selectedFile ? activeDraft : (selectedFileDiff?.modifiedContent ?? selectedFile?.content ?? "");
+  const currentLanguage = selectedFile?.language ?? selectedFileDiff?.language ?? "plaintext";
+
+  const requestFileSelection = (relativePath: string) => {
+    if (!relativePath || relativePath === selectedFile?.path) {
+      return;
+    }
+    if (hasDirtyDraft) {
+      setPendingFilePath(relativePath);
+      return;
+    }
+    onSelectFile(relativePath);
+  };
 
   return (
     <section className="chat-code-workbench chat-workspace-panel mission-dock-panel">
@@ -162,6 +215,7 @@ export function CodeWorkbenchPanel({
             {workbenchState?.worktreeStatus ?? "uninitialized"}
           </StatusChip>
           {userInputBlocked ? <StatusChip tone="warning">Answer needed</StatusChip> : null}
+          {hasDirtyDraft ? <StatusChip tone="warning">Unsaved changes</StatusChip> : null}
           <StatusChip
             tone={
               workbenchState?.validationStatus === "passed"
@@ -181,11 +235,20 @@ export function CodeWorkbenchPanel({
           <span>Base ref: {workbenchState?.baseRef ?? "repo default"}</span>
           <span>Worktree: {workbenchState?.worktreePath ?? "not created"}</span>
           {primaryPath ? <span>Active file: {primaryPath}</span> : null}
+          {selectedFile?.sizeBytes ? <span>{selectedFile.sizeBytes.toLocaleString()} bytes</span> : null}
         </div>
         <div className="chat-code-workbench-toolbar">
           <div className="chat-code-workbench-actions">
             <button type="button" className="gc-button" onClick={onRefresh} disabled={loading || busy}>
               Refresh
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={onSaveFile}
+              disabled={!selectedFile || !hasDirtyDraft || busy || saving}
+            >
+              {saving ? "Saving..." : "Save file"}
             </button>
             <button
               type="button"
@@ -226,25 +289,15 @@ export function CodeWorkbenchPanel({
               <p>No worktree is active yet.</p>
               <p>Create one to unlock the file tree, diff viewer, and validation output.</p>
             </div>
-          ) : fileList.length > 0 ? (
-            <ul className="chat-code-workbench-tree" aria-label="Workbench file tree">
-              {fileList.map((item) => (
-                <li key={item.path}>
-                  <button
-                    type="button"
-                    className={[
-                      "gc-button",
-                      "chat-code-workbench-tree-button",
-                      selectedFile?.path === item.path ? "active" : "",
-                    ].join(" ")}
-                    onClick={() => onSelectFile(item.path)}
-                  >
-                    <span>{item.name}</span>
-                    {item.changed ? <StatusChip tone="warning">changed</StatusChip> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
+          ) : fileTreeItems.length > 0 ? (
+            <WorkbenchFileTree
+              storageScopeKey={workbenchState?.sessionId ?? "workbench"}
+              items={fileTreeItems}
+              selectedPath={selectedFile?.path}
+              expandedPaths={expandedPaths ?? []}
+              onExpandedPathsChange={onExpandedPathsChange}
+              onSelectFile={requestFileSelection}
+            />
           ) : (
             <div className="chat-code-workbench-empty">
               <p>No repo files are ready to inspect yet.</p>
@@ -256,9 +309,10 @@ export function CodeWorkbenchPanel({
         <section className="chat-code-workbench-main">
           <div className="chat-code-workbench-pane-tabs" aria-label="Workbench panes">
             {[
-              ["diff", "Diff"],
+              ["file", "File"],
+              ["selected-diff", "Selected diff"],
+              ["repo-diff", "Repo diff"],
               ["output", "Output"],
-              ["file", "Files"],
               ["snippets", "Draft snippets"],
               ...(generatedArtifact ? [["artifact", "Artifact"]] : []),
             ].map(([paneId, label]) => (
@@ -266,7 +320,7 @@ export function CodeWorkbenchPanel({
                 key={paneId}
                 type="button"
                 className={["gc-button", activePane === paneId ? "active" : ""].filter(Boolean).join(" ")}
-                onClick={() => setActivePane(paneId as "file" | "diff" | "output" | "snippets" | "artifact")}
+                onClick={() => setActivePane(paneId as WorkbenchPaneId)}
               >
                 {label}
               </button>
@@ -280,21 +334,56 @@ export function CodeWorkbenchPanel({
                   <div className="chat-code-workbench-section-head">
                     <strong>{selectedFile.path}</strong>
                     <span>
-                      {selectedFile.language} · {selectedFile.sizeBytes} bytes
+                      {selectedFile.language} · {hasDirtyDraft ? "unsaved" : selectedFile.changed ? "changed" : "saved"}
                     </span>
                   </div>
-                  <pre className="chat-code-workbench-pre">{selectedFile.content}</pre>
+                  <div className="chat-code-workbench-monaco-shell">
+                    <WorkbenchMonacoEditor
+                      className="chat-code-workbench-monaco"
+                      value={activeDraft}
+                      language={selectedFile.language}
+                      height={520}
+                      onChange={onDraftChange}
+                    />
+                  </div>
                 </>
               ) : (
                 <div className="chat-code-workbench-empty">
                   <p>No file is selected yet.</p>
-                  <p>Pick a changed file or the first repo file in the worktree to inspect it here.</p>
+                  <p>Pick a file in the tree to start editing it in Monaco.</p>
                 </div>
               )}
             </div>
           ) : null}
 
-          {activePane === "diff" ? (
+          {activePane === "selected-diff" ? (
+            <div className="chat-code-workbench-pane">
+              {selectedFile && selectedFileDiff ? (
+                <>
+                  <div className="chat-code-workbench-section-head">
+                    <strong>Selected-file diff</strong>
+                    <span>{selectedFile.path}</span>
+                  </div>
+                  <div className="chat-code-workbench-monaco-shell">
+                    <MonacoDiffEditor
+                      className="chat-code-workbench-diff"
+                      language={currentLanguage}
+                      original={effectiveSelectedFileDiffOriginal}
+                      modified={effectiveSelectedFileDiffModified}
+                      height={520}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="chat-code-workbench-empty">
+                  <p>No selected-file diff is ready yet.</p>
+                  <p>Choose a repo file to compare the editor against the current git base.</p>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {activePane === "repo-diff" ? (
             <div className="chat-code-workbench-pane">
               {diff ? (
                 <>
@@ -305,11 +394,19 @@ export function CodeWorkbenchPanel({
                     </span>
                   </div>
                   {diff.diff.trim().length > 0 ? (
-                    <pre className="chat-code-workbench-pre">{diff.diff}</pre>
+                    <div className="chat-code-workbench-monaco-shell">
+                      <WorkbenchMonacoEditor
+                        className="chat-code-workbench-monaco"
+                        value={diff.diff}
+                        language="diff"
+                        readOnly
+                        height={520}
+                      />
+                    </div>
                   ) : (
                     <div className="chat-code-workbench-empty">
                       <p>No diff is available yet.</p>
-                      <p>Once the session edits the worktree, this pane becomes the main review surface.</p>
+                      <p>Once the session edits the worktree, this pane becomes the main repo review surface.</p>
                     </div>
                   )}
                 </>
@@ -371,59 +468,62 @@ export function CodeWorkbenchPanel({
                 <span>
                   {codeBlocks.length > 0
                     ? `${codeBlocks.length} extracted draft${codeBlocks.length === 1 ? "" : "s"}`
-                    : "manual draft"}
+                    : "no extracted drafts"}
                 </span>
               </div>
               {codeBlocks.length > 0 ? (
-                <div className="chat-code-workbench-tabs" aria-label="Draft snippets">
-                  {codeBlocks.map((block, index) => (
+                <>
+                  <div className="chat-code-workbench-tabs" aria-label="Draft snippets">
+                    {codeBlocks.map((block, index) => (
+                      <button
+                        key={block.id}
+                        type="button"
+                        className={["gc-button", index === activeBlockIndex ? "active" : ""].filter(Boolean).join(" ")}
+                        onClick={() => setActiveBlockIndex(index)}
+                      >
+                        {block.language || "snippet"} {index + 1}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="chat-code-workbench-helper-row">
+                    <label className="chat-code-workbench-select">
+                      <span>Helper runtime</span>
+                      <select value={normalizeSnippetLanguage(activeBlock?.language)} disabled>
+                        <option value="typescript">TypeScript</option>
+                        <option value="javascript">JavaScript</option>
+                      </select>
+                    </label>
                     <button
-                      key={block.id}
                       type="button"
-                      className={["gc-button", index === activeBlockIndex ? "active" : ""].filter(Boolean).join(" ")}
-                      onClick={() => {
-                        setActiveBlockIndex(index);
-                        setHelperLanguage(normalizeSnippetLanguage(block.language));
-                      }}
+                      className="gc-button"
+                      onClick={() =>
+                        activeBlock
+                          ? onRunHelperSnippet(normalizeSnippetLanguage(activeBlock.language), activeBlock.content)
+                          : undefined
+                      }
+                      disabled={busy || !activeBlock}
                     >
-                      {block.language || "snippet"} {index + 1}
+                      Run helper
                     </button>
-                  ))}
+                  </div>
+                  <div className="chat-code-workbench-monaco-shell">
+                    <WorkbenchMonacoEditor
+                      className="chat-code-workbench-monaco"
+                      value={activeBlock?.content ?? ""}
+                      language={activeBlock?.language ?? "plaintext"}
+                      readOnly
+                      height={420}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="chat-code-workbench-empty">
+                  <p>No extracted helper snippets are available for this turn.</p>
+                  <p>When the assistant emits fenced code blocks, they show up here as runnable scratch artifacts.</p>
                 </div>
-              ) : null}
-              <div className="chat-code-workbench-helper-row">
-                <label className="chat-code-workbench-select">
-                  <span>Helper runtime</span>
-                  <select
-                    value={helperLanguage}
-                    onChange={(event) => setHelperLanguage(event.target.value as "javascript" | "typescript")}
-                  >
-                    <option value="typescript">TypeScript</option>
-                    <option value="javascript">JavaScript</option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="gc-button"
-                  onClick={() => onRunHelperSnippet(helperLanguage, activeDraft)}
-                  disabled={busy || activeDraft.trim().length === 0}
-                >
-                  Run helper
-                </button>
-              </div>
-              <textarea
-                className="chat-code-workbench-editor"
-                value={activeDraft}
-                onChange={(event) => {
-                  const next = [...drafts];
-                  next[activeBlockIndex] = event.target.value;
-                  setDrafts(next);
-                }}
-                spellCheck={false}
-                aria-label="Draft snippet editor"
-              />
+              )}
               <p className="chat-code-workbench-note">
-                Draft snippets stay secondary. They are useful for transforms, parser checks, and quick validation, but
+                Helper snippets stay secondary. They are useful for transforms, parser checks, and quick validation, but
                 they do not own the repo tree, diff, or main edit loop.
               </p>
             </div>
@@ -491,6 +591,26 @@ export function CodeWorkbenchPanel({
           </ul>
         </aside>
       </div>
+
+      <ConfirmModal
+        open={Boolean(pendingFilePath)}
+        title="Discard unsaved file changes?"
+        message="Switching files will discard the unsaved editor changes in the current workbench file."
+        confirmLabel="Discard and switch"
+        danger
+        pending={saving}
+        cancelDisabled={saving}
+        disableDismiss={saving}
+        onCancel={() => setPendingFilePath(null)}
+        onConfirm={() => {
+          if (!pendingFilePath) {
+            return;
+          }
+          onDiscardDraft();
+          onSelectFile(pendingFilePath);
+          setPendingFilePath(null);
+        }}
+      />
     </section>
   );
 }

@@ -20,9 +20,11 @@ import type {
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
   ChatSessionWorkbenchDiffResponse,
+  ChatSessionWorkbenchFileDiffResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchRecord,
+  ChatSessionWorkbenchSaveFileRequest,
   ChatSessionWorkbenchTreeResponse,
   ChatSessionBulkArchiveResult,
   ChatSessionOrigin,
@@ -323,6 +325,29 @@ export async function fetchChatSessionWorkbenchFile(
   const query = new URLSearchParams({ path: relativePath });
   return request<ChatSessionWorkbenchFileResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file?${query.toString()}`,
+  );
+}
+
+export async function saveChatSessionWorkbenchFile(
+  sessionId: string,
+  input: ChatSessionWorkbenchSaveFileRequest,
+): Promise<ChatSessionWorkbenchFileResponse> {
+  return request<ChatSessionWorkbenchFileResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function fetchChatSessionWorkbenchFileDiff(
+  sessionId: string,
+  relativePath: string,
+): Promise<ChatSessionWorkbenchFileDiffResponse> {
+  const query = new URLSearchParams({ path: relativePath });
+  return request<ChatSessionWorkbenchFileDiffResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-diff?${query.toString()}`,
   );
 }
 

@@ -50,9 +50,11 @@ export class KnowledgeRepository {
   private readonly listChunksByDocStmt;
   private readonly listDocumentsStmt;
   private readonly listDocumentsByNamespaceStmt;
+  private readonly getDocumentStmt;
   private readonly updateChunkEmbeddingStmt;
   private readonly deleteChunksByNamespaceStmt;
   private readonly deleteDocumentsByNamespaceStmt;
+  private readonly deleteDocumentStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertDocumentStmt = db.prepare(`
@@ -104,6 +106,12 @@ export class KnowledgeRepository {
       ORDER BY created_at DESC
       LIMIT @limit
     `);
+    this.getDocumentStmt = db.prepare(`
+      SELECT *
+      FROM knowledge_documents
+      WHERE doc_id = @docId
+      LIMIT 1
+    `);
     this.updateChunkEmbeddingStmt = db.prepare(`
       UPDATE knowledge_chunks
       SET embedding_json = @embeddingJson
@@ -120,6 +128,10 @@ export class KnowledgeRepository {
     this.deleteDocumentsByNamespaceStmt = db.prepare(`
       DELETE FROM knowledge_documents
       WHERE namespace = @namespace
+    `);
+    this.deleteDocumentStmt = db.prepare(`
+      DELETE FROM knowledge_documents
+      WHERE doc_id = @docId
     `);
   }
 
@@ -207,6 +219,26 @@ export class KnowledgeRepository {
     }));
   }
 
+  public getDocument(docId: string): KnowledgeDocumentRecord | undefined {
+    const row = toKnowledgeDocumentRows(
+      this.getDocumentStmt.all({
+        docId,
+      }),
+    )[0];
+    if (!row) {
+      return undefined;
+    }
+    return {
+      docId: row.doc_id,
+      namespace: row.namespace,
+      sourceType: row.source_type,
+      sourceRef: row.source_ref,
+      title: row.title,
+      metadata: parseKnowledgeMetadata(row.metadata_json),
+      createdAt: row.created_at,
+    };
+  }
+
   public listChunksByNamespace(namespace?: string, limit = 500): KnowledgeChunkRecord[] {
     const rows = toKnowledgeChunkRows(
       namespace
@@ -245,6 +277,16 @@ export class KnowledgeRepository {
     this.deleteDocumentsByNamespaceStmt.run({
       namespace,
     });
+  }
+
+  public deleteDocument(docId: string): boolean {
+    return (
+      Number(
+        this.deleteDocumentStmt.run({
+          docId,
+        }).changes ?? 0,
+      ) > 0
+    );
   }
 }
 

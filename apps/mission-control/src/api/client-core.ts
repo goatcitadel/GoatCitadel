@@ -28,6 +28,7 @@ const RAW_API_BASE = import.meta.env.VITE_GATEWAY_URL ?? inferDefaultGatewayBase
 export const API_BASE = normalizeGatewayBaseUrl(RAW_API_BASE);
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
+const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -370,6 +371,7 @@ export function clearGatewayAuthState(): void {
   }
   window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
   window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  window.localStorage.removeItem(LAST_ROUTE_STORAGE_KEY);
 }
 
 export function readStoredGatewayAuthState(): GatewayAuthState | undefined {

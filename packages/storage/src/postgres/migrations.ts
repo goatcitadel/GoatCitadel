@@ -618,4 +618,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_thread_knowledge_attachments(document_id, updated_at DESC);
     `,
   },
+  {
+    version: 18,
+    name: "generated_artifact_provenance_repairs",
+    sql: `
+      ALTER TABLE chat_generated_artifacts
+        ADD COLUMN IF NOT EXISTS source_block_index BIGINT,
+        ADD COLUMN IF NOT EXISTS content_hash TEXT;
+    `,
+  },
 ];

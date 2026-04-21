@@ -6,9 +6,11 @@ import {
   NotFoundError,
   ValidationError,
   type ChatSessionWorkbenchDiffResponse,
+  type ChatSessionWorkbenchFileDiffResponse,
   type ChatSessionWorkbenchFileResponse,
   type ChatSessionWorkbenchOutputResponse,
   type ChatSessionWorkbenchRecord,
+  type ChatSessionWorkbenchSaveFileRequest,
   type ChatSessionWorkbenchTreeEntry,
   type ChatSessionWorkbenchTreeResponse,
 } from "@goatcitadel/contracts";
@@ -30,7 +32,12 @@ export interface ChatWorkbenchHost {
   readonly config: GatewayRuntimeConfig;
   readonly storage: ChatWorkbenchStorage;
   requireChatSession(sessionId: string): void;
-  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
+  publishRealtime(
+    channel: string,
+    topic: string,
+    payload: Record<string, unknown>,
+    options?: Pick<import("@goatcitadel/contracts").RealtimeEvent, "eventClass" | "eventAuthority" | "links">,
+  ): void;
 }
 
 export async function getChatSessionWorkbench(
@@ -113,48 +120,110 @@ export async function getChatSessionWorkbenchFile(
   host.requireChatSession(sessionId);
   const state = syncWorkbenchState(host, sessionId);
   const context = resolveWorkbenchContext(host, sessionId, state, true);
-  const normalized = normalizeWorkbenchRelativePath(relativePath);
+  return buildWorkbenchFileResponse(host, sessionId, context, relativePath);
+}
+
+export async function saveChatSessionWorkbenchFile(
+  host: ChatWorkbenchHost,
+  sessionId: string,
+  input: ChatSessionWorkbenchSaveFileRequest,
+): Promise<ChatSessionWorkbenchFileResponse> {
+  host.requireChatSession(sessionId);
+  const state = syncWorkbenchState(host, sessionId);
+  const context = resolveWorkbenchContext(host, sessionId, state, true);
+  const normalized = normalizeWorkbenchRelativePath(input.path);
   const targetPath = path.resolve(context.projectRoot, normalized);
   assertPathInsideRoot(targetPath, context.projectRoot, "workbench file");
+  assertWritePathInJail(targetPath, host.config.toolPolicy.sandbox.writeJailRoots);
+
+  const contentBytes = Buffer.byteLength(input.content, "utf8");
+  if (contentBytes > MAX_FILE_BYTES) {
+    throw new ValidationError({
+      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
+    });
+  }
+
+  let existingStat: fsSync.Stats | null = null;
   try {
     assertExistingPathRealpathAllowed(
       targetPath,
       host.config.toolPolicy.sandbox.writeJailRoots,
       host.config.toolPolicy.sandbox.readOnlyRoots,
     );
+    existingStat = await fs.stat(targetPath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      throw new NotFoundError({ entity: "Workbench file", id: normalized });
+    if (code !== "ENOENT") {
+      throw error;
     }
-    throw error;
   }
 
-  const stat = await fs.stat(targetPath);
-  if (stat.isDirectory()) {
+  if (existingStat?.isDirectory()) {
     throw new ValidationError({ message: `Path is a directory: ${normalized}` });
   }
-  if (stat.size > MAX_FILE_BYTES) {
+
+  if (existingStat && existingStat.size > MAX_FILE_BYTES) {
     throw new ValidationError({
-      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench viewer.`,
+      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
     });
   }
 
-  const content = await fs.readFile(targetPath, "utf8");
-  const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
-  const nextState = host.storage.chatSessionWorkbench.patch(sessionId, {
-    projectId: context.project.projectId,
-    activeFilePath: normalized,
-  });
+  if (existingStat) {
+    const existingBuffer = await fs.readFile(targetPath);
+    assertWorkbenchFileIsText(existingBuffer, normalized, "editor");
+  } else {
+    const parentDir = path.dirname(targetPath);
+    const parentStat = await fs.stat(parentDir).catch(() => null);
+    if (!parentStat?.isDirectory()) {
+      throw new ValidationError({ message: `Parent directory does not exist for ${normalized}.` });
+    }
+    assertPathInsideRoot(parentDir, context.projectRoot, "workbench file parent");
+  }
+
+  await fs.writeFile(targetPath, input.content, "utf8");
+
+  const response = await buildWorkbenchFileResponse(host, sessionId, context, normalized);
+  host.publishRealtime(
+    "chat_workbench_updated",
+    "chat",
+    {
+      type: "chat_workbench_file_saved",
+      sessionId,
+      projectId: context.project.projectId,
+      path: normalized,
+      changed: response.changed,
+      activeFilePath: response.state.activeFilePath,
+    },
+    {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links: { sessionId },
+    },
+  );
+  return response;
+}
+
+export async function getChatSessionWorkbenchFileDiff(
+  host: ChatWorkbenchHost,
+  sessionId: string,
+  relativePath: string,
+): Promise<ChatSessionWorkbenchFileDiffResponse> {
+  host.requireChatSession(sessionId);
+  const state = syncWorkbenchState(host, sessionId);
+  const context = resolveWorkbenchContext(host, sessionId, state, true);
+  const file = await buildWorkbenchFileResponse(host, sessionId, context, relativePath);
+  const repoScopedFilePath = toRepoScopedFilePath(context.repoScopePath, file.path);
+  const originalContent = file.changed
+    ? (readGitFileAtHead(context.worktreePath, repoScopedFilePath) ?? "")
+    : file.content;
+
   return {
-    state: hydrateWorkbenchRecord(host, nextState, context.project.projectId),
-    path: normalized,
-    sizeBytes: stat.size,
-    modifiedAt: stat.mtime.toISOString(),
-    contentType: guessContentType(targetPath),
-    language: guessLanguage(targetPath),
-    changed: changedFiles.has(normalized),
-    content,
+    state: file.state,
+    path: file.path,
+    language: file.language,
+    changed: file.changed,
+    originalContent,
+    modifiedContent: file.content,
   };
 }
 
@@ -257,6 +326,39 @@ function syncWorkbenchState(host: ChatWorkbenchHost, sessionId: string): ChatSes
   return hydrateWorkbenchRecord(host, patched, projectId);
 }
 
+async function buildWorkbenchFileResponse(
+  host: ChatWorkbenchHost,
+  sessionId: string,
+  context: {
+    project: { projectId: string; workspacePath: string };
+    projectRoot: string;
+    worktreePath: string;
+    repoScopePath: string;
+  },
+  relativePath: string,
+): Promise<ChatSessionWorkbenchFileResponse> {
+  const { normalized, targetPath, stat, content } = await readWorkbenchFilePayload(
+    host,
+    context.projectRoot,
+    relativePath,
+  );
+  const changedFiles = new Set(listChangedFiles(context.worktreePath, context.repoScopePath));
+  const nextState = host.storage.chatSessionWorkbench.patch(sessionId, {
+    projectId: context.project.projectId,
+    activeFilePath: normalized,
+  });
+  return {
+    state: hydrateWorkbenchRecord(host, nextState, context.project.projectId),
+    path: normalized,
+    sizeBytes: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+    contentType: guessContentType(targetPath),
+    language: guessLanguage(targetPath),
+    changed: changedFiles.has(normalized),
+    content,
+  };
+}
+
 function hydrateWorkbenchRecord(
   host: ChatWorkbenchHost,
   input: ChatSessionWorkbenchRecord,
@@ -320,6 +422,53 @@ function resolveProjectContext(
   };
 }
 
+async function readWorkbenchFilePayload(
+  host: ChatWorkbenchHost,
+  projectRoot: string,
+  relativePath: string,
+): Promise<{
+  normalized: string;
+  targetPath: string;
+  stat: fsSync.Stats;
+  content: string;
+}> {
+  const normalized = normalizeWorkbenchRelativePath(relativePath);
+  const targetPath = path.resolve(projectRoot, normalized);
+  assertPathInsideRoot(targetPath, projectRoot, "workbench file");
+  try {
+    assertExistingPathRealpathAllowed(
+      targetPath,
+      host.config.toolPolicy.sandbox.writeJailRoots,
+      host.config.toolPolicy.sandbox.readOnlyRoots,
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new NotFoundError({ entity: "Workbench file", id: normalized });
+    }
+    throw error;
+  }
+
+  const stat = await fs.stat(targetPath);
+  if (stat.isDirectory()) {
+    throw new ValidationError({ message: `Path is a directory: ${normalized}` });
+  }
+  if (stat.size > MAX_FILE_BYTES) {
+    throw new ValidationError({
+      message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench viewer.`,
+    });
+  }
+
+  const contentBuffer = await fs.readFile(targetPath);
+  assertWorkbenchFileIsText(contentBuffer, normalized, "viewer");
+  return {
+    normalized,
+    targetPath,
+    stat,
+    content: contentBuffer.toString("utf8"),
+  };
+}
+
 async function walkWorkbenchTree(
   rootDir: string,
   currentDir: string,
@@ -378,6 +527,18 @@ function runGit(cwd: string, args: string[]): string {
   });
 }
 
+function readGitFileAtHead(cwd: string, repoScopedFilePath: string): string | null {
+  try {
+    return runGit(cwd, ["show", `HEAD:${repoScopedFilePath}`]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("exists on disk, but not in 'HEAD'") || message.includes("does not exist in 'HEAD'")) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function serializeWorkbenchPath(host: ChatWorkbenchHost, fullPath: string): string {
   return serializePathWithinRoot(host.config.rootDir, fullPath);
 }
@@ -406,6 +567,12 @@ function normalizeWorkbenchRelativePath(inputPath: string): string {
     throw new ValidationError({ message: `Absolute paths are not allowed: ${inputPath}` });
   }
   return normalized;
+}
+
+function toRepoScopedFilePath(repoScopePath: string, relativePath: string): string {
+  const normalizedScope = repoScopePath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  const normalizedRelativePath = normalizeWorkbenchRelativePath(relativePath);
+  return path.posix.join(normalizedScope, normalizedRelativePath);
 }
 
 function assertPathInsideRoot(targetPath: string, rootDir: string, label: string): void {
@@ -486,5 +653,14 @@ function guessContentType(filePath: string): string {
       return "text/html";
     default:
       return "text/plain";
+  }
+}
+
+function assertWorkbenchFileIsText(fileBuffer: Buffer, relativePath: string, surface: "viewer" | "editor"): void {
+  const sample = fileBuffer.subarray(0, Math.min(fileBuffer.length, 8192));
+  if (sample.includes(0)) {
+    throw new ValidationError({
+      message: `File is not a text file and cannot be opened in the workbench ${surface}: ${relativePath}`,
+    });
   }
 }

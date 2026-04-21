@@ -42,6 +42,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
@@ -157,6 +158,7 @@ export function MissionControlActiveSessionSurface({
   onEditTurn,
   onOpenRunDetails,
   onOpenGeneratedArtifact,
+  onCreateGeneratedArtifact,
   onCreateGeneratedArtifactVersion,
   onApprovePending,
   onDenyPending,
@@ -283,6 +285,7 @@ export function MissionControlActiveSessionSurface({
           onEditTurn={onEditTurn}
           onOpenRunDetails={onOpenRunDetails}
           onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+          onCreateGeneratedArtifact={onCreateGeneratedArtifact}
           onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
           onApprovePending={onApprovePending}
           onDenyPending={onDenyPending}

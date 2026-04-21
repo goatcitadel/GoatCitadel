@@ -195,11 +195,14 @@ export function ChatSessionRail({
           }
 
           const isSelected = selectedSessionId === row.sessionId;
+          const visibleTags = (row.tags ?? []).slice(0, 3);
           return (
             <div key={row.key} className="chat-v11-session-row">
               <button
                 type="button"
-                className={["gc-button", isSelected ? "active" : ""].filter(Boolean).join(" ")}
+                className={["gc-button", "chat-v11-session-row-button", isSelected ? "active" : ""]
+                  .filter(Boolean)
+                  .join(" ")}
                 onClick={() => row.sessionId && onSelectSession(row.sessionId)}
               >
                 <span className="chat-v11-session-row-title">
@@ -208,34 +211,26 @@ export function ChatSessionRail({
                 </span>
                 {row.meta ? <span className="chat-v11-session-row-meta">{row.meta}</span> : null}
                 {row.subtitle ? <span className="chat-v11-session-row-preview">{row.subtitle}</span> : null}
-                {row.folderName || (row.tags?.length ?? 0) > 0 ? (
-                  <span className="chat-v11-session-row-taxonomy">
-                    {row.folderName ? <StatusChip tone="muted">{row.folderName}</StatusChip> : null}
-                    {(row.tags ?? []).slice(0, 3).map((tag) => (
-                      <span
+              </button>
+              {row.folderName || visibleTags.length > 0 ? (
+                <div className="chat-v11-session-row-taxonomy">
+                  {row.folderName ? <StatusChip tone="muted">{row.folderName}</StatusChip> : null}
+                  {visibleTags.map((tag) => {
+                    const isActive = selectedTag?.toLowerCase() === tag.toLowerCase();
+                    return (
+                      <button
                         key={`${row.key}-${tag}`}
-                        role="button"
-                        tabIndex={0}
-                        className={`chat-v11-session-tag${selectedTag?.toLowerCase() === tag.toLowerCase() ? " active" : ""}`}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onSelectTag(selectedTag?.toLowerCase() === tag.toLowerCase() ? null : tag);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            onSelectTag(selectedTag?.toLowerCase() === tag.toLowerCase() ? null : tag);
-                          }
-                        }}
+                        type="button"
+                        className={`chat-v11-session-tag${isActive ? " active" : ""}`}
+                        aria-pressed={isActive}
+                        onClick={() => onSelectTag(isActive ? null : tag)}
                       >
                         #{tag}
-                      </span>
-                    ))}
-                  </span>
-                ) : null}
-              </button>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
               {(row.searchHits?.length ?? 0) > 0 ? (
                 <div className="chat-v11-session-search-hits">
                   {row.searchHits?.map((hit, index) => (

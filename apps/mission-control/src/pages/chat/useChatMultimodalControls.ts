@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatAttachmentRecord,
   RoutingPreflightResult,
+  ChatTurnLifecycleStatus,
   VoiceRuntimeStatus,
   VoiceStatus,
 } from "@goatcitadel/contracts";
@@ -62,10 +63,12 @@ export function useChatMultimodalControls(input: {
   selectedProviderId?: string;
   routePreflight: RoutingPreflightResult | null;
   selectedSessionId: string | null;
+  activeThreadSessionId?: string | null;
   pendingAttachments: ChatAttachmentRecord[];
   draft: string;
   latestAssistantMessageId?: string;
   latestAssistantContent?: string;
+  latestAssistantStatus?: ChatTurnLifecycleStatus;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setError: (value: string | null) => void;
   pushLocalNotice: (message: string, tone?: "neutral" | "warning" | "critical" | "success") => void;
@@ -76,10 +79,12 @@ export function useChatMultimodalControls(input: {
     selectedProviderId,
     routePreflight,
     selectedSessionId,
+    activeThreadSessionId,
     pendingAttachments,
     draft,
     latestAssistantMessageId,
     latestAssistantContent,
+    latestAssistantStatus,
     setDraft,
     setError,
     pushLocalNotice,
@@ -88,6 +93,7 @@ export function useChatMultimodalControls(input: {
 
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const lastSpokenMessageIdRef = useRef<string | null>(null);
+  const primedSessionIdRef = useRef<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
   const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
   const [voiceBusy, setVoiceBusy] = useState(false);
@@ -158,11 +164,26 @@ export function useChatMultimodalControls(input: {
   }, [speakResponsesEnabled]);
 
   useEffect(() => {
+    if (primedSessionIdRef.current === selectedSessionId) {
+      return;
+    }
+    if (activeThreadSessionId !== selectedSessionId) {
+      return;
+    }
+    primedSessionIdRef.current = selectedSessionId;
+    lastSpokenMessageIdRef.current = latestAssistantMessageId ?? null;
+    if (typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined") {
+      window.speechSynthesis.cancel();
+    }
+  }, [activeThreadSessionId, latestAssistantMessageId, selectedSessionId]);
+
+  useEffect(() => {
     if (
       !voiceOutputAvailable ||
       !speakResponsesEnabled ||
       !latestAssistantMessageId ||
-      !latestAssistantContent?.trim()
+      !latestAssistantContent?.trim() ||
+      latestAssistantStatus !== "completed"
     ) {
       return;
     }
@@ -176,7 +197,13 @@ export function useChatMultimodalControls(input: {
     return () => {
       window.speechSynthesis.cancel();
     };
-  }, [latestAssistantContent, latestAssistantMessageId, speakResponsesEnabled, voiceOutputAvailable]);
+  }, [
+    latestAssistantContent,
+    latestAssistantMessageId,
+    latestAssistantStatus,
+    speakResponsesEnabled,
+    voiceOutputAvailable,
+  ]);
 
   const handleToggleVoiceTalk = useCallback(async () => {
     setVoiceBusy(true);

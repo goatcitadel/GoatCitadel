@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
 import { fetchChatAttachmentPreview } from "../../api/client";
 
+const attachmentPreviewCache = new Map<string, ChatAttachmentPreviewResponse>();
+const attachmentPreviewInFlight = new Map<string, Promise<ChatAttachmentPreviewResponse>>();
+
 function summarizeExtraction(preview: ChatAttachmentPreviewResponse | null): string | null {
   if (!preview) {
     return null;
@@ -14,12 +17,14 @@ function ChatAttachmentPreviewCard({
 }: {
   attachment: NonNullable<ChatMessageRecord["attachments"]>[number];
 }) {
-  const [preview, setPreview] = useState<ChatAttachmentPreviewResponse | null>(null);
+  const [preview, setPreview] = useState<ChatAttachmentPreviewResponse | null>(
+    () => attachmentPreviewCache.get(attachment.attachmentId) ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void fetchChatAttachmentPreview(attachment.attachmentId)
+    void loadAttachmentPreview(attachment.attachmentId)
       .then((response) => {
         if (!cancelled) {
           setPreview(response);
@@ -67,6 +72,29 @@ function ChatAttachmentPreviewCard({
       )}
     </article>
   );
+}
+
+function loadAttachmentPreview(attachmentId: string): Promise<ChatAttachmentPreviewResponse> {
+  const cached = attachmentPreviewCache.get(attachmentId);
+  if (cached) {
+    return Promise.resolve(cached);
+  }
+  const existingRequest = attachmentPreviewInFlight.get(attachmentId);
+  if (existingRequest) {
+    return existingRequest;
+  }
+  const request = fetchChatAttachmentPreview(attachmentId)
+    .then((response) => {
+      attachmentPreviewCache.set(attachmentId, response);
+      attachmentPreviewInFlight.delete(attachmentId);
+      return response;
+    })
+    .catch((error) => {
+      attachmentPreviewInFlight.delete(attachmentId);
+      throw error;
+    });
+  attachmentPreviewInFlight.set(attachmentId, request);
+  return request;
 }
 
 export function ChatAttachmentPreviewStack({

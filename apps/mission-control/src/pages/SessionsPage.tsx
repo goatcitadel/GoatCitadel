@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { TableVirtuoso, Virtuoso } from "react-virtuoso";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
+import { Virtuoso } from "react-virtuoso";
 import {
   fetchRuntimeLifecycle,
   fetchSessionSummary,
@@ -16,7 +24,6 @@ import { Panel } from "../components/Panel";
 import { SelectOrCustom } from "../components/SelectOrCustom";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { StatusChip } from "../components/StatusChip";
-import { TableSkeleton } from "../components/TableSkeleton";
 import { GCSelect } from "../components/ui";
 import { pageCopy } from "../content/copy";
 
@@ -30,6 +37,7 @@ export function SessionsPage() {
   const [lifecycle, setLifecycle] = useState<RuntimeLifecycleResponse | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [viewMode, setViewMode] = useState<"split" | "table">("split");
+  const [sorting, setSorting] = useState<SortingState>([{ id: "updatedAt", desc: true }]);
   const [error, setError] = useState<string | null>(null);
   const detailsRequestSeq = useRef(0);
 
@@ -130,6 +138,44 @@ export function SessionsPage() {
   }, [items]);
 
   const selected = filtered.find((session) => session.sessionId === selectedSessionId) ?? filtered[0] ?? null;
+  const sessionColumns = useMemo<ColumnDef<SessionsResponse["items"][number]>[]>(
+    () => [
+      {
+        accessorKey: "sessionKey",
+        header: "Session Key",
+        cell: ({ row }) => row.original.sessionKey,
+      },
+      {
+        accessorKey: "health",
+        header: "Health",
+        cell: ({ row }) => <StatusChip tone={sessionHealthTone(row.original.health)}>{row.original.health}</StatusChip>,
+      },
+      {
+        accessorKey: "updatedAt",
+        header: "Updated",
+        cell: ({ row }) => new Date(row.original.updatedAt).toLocaleString(),
+      },
+      {
+        accessorKey: "tokenTotal",
+        header: "Tokens",
+        cell: ({ row }) => row.original.tokenTotal.toLocaleString(),
+      },
+      {
+        accessorKey: "costUsdTotal",
+        header: "Cost (USD)",
+        cell: ({ row }) => `$${row.original.costUsdTotal.toFixed(4)}`,
+      },
+    ],
+    [],
+  );
+  const sessionTable = useReactTable({
+    data: filtered,
+    columns: sessionColumns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
 
   if (error && !data) {
     return <p className="error">{error}</p>;
@@ -205,33 +251,48 @@ export function SessionsPage() {
           title="Sessions Table"
           subtitle="Use the table when you want a compact scan of session health, recency, and spend."
         >
-          {detailsLoading ? (
-            <TableSkeleton rows={6} cols={5} />
+          {filtered.length === 0 ? (
+            <p className="office-subtitle">No sessions match the current filter.</p>
           ) : (
             <div className="virtual-table-shell">
-              <TableVirtuoso
-                data={filtered}
-                fixedHeaderContent={() => (
-                  <tr>
-                    <th>Session Key</th>
-                    <th>Health</th>
-                    <th>Updated</th>
-                    <th>Tokens</th>
-                    <th>Cost (USD)</th>
-                  </tr>
-                )}
-                itemContent={(_index, session) => (
-                  <>
-                    <td>{session.sessionKey}</td>
-                    <td>
-                      <span className="token-chip">{session.health}</span>
-                    </td>
-                    <td>{new Date(session.updatedAt).toLocaleString()}</td>
-                    <td>{session.tokenTotal}</td>
-                    <td>{session.costUsdTotal.toFixed(4)}</td>
-                  </>
-                )}
-              />
+              <table className="gc-data-table sessions-table">
+                <thead>
+                  {sessionTable.getHeaderGroups().map((headerGroup) => (
+                    <tr key={headerGroup.id}>
+                      {headerGroup.headers.map((header) => {
+                        const sortState = header.column.getIsSorted();
+                        return (
+                          <th key={header.id}>
+                            <button
+                              type="button"
+                              className="sessions-table-sort"
+                              onClick={header.column.getToggleSortingHandler()}
+                            >
+                              <span>{flexRender(header.column.columnDef.header, header.getContext())}</span>
+                              <span className="sessions-table-sort-indicator" aria-hidden="true">
+                                {sortState === "asc" ? "↑" : sortState === "desc" ? "↓" : "↕"}
+                              </span>
+                            </button>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </thead>
+                <tbody>
+                  {sessionTable.getRowModel().rows.map((row) => (
+                    <tr
+                      key={row.id}
+                      className={row.original.sessionId === selectedSessionId ? "row-selected" : undefined}
+                      onClick={() => setSelectedSessionId(row.original.sessionId)}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </Panel>

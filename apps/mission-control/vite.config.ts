@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv } from "vite";
@@ -7,6 +8,9 @@ import tailwindcss from "@tailwindcss/vite";
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
+const packageJson = JSON.parse(fs.readFileSync(path.resolve(configDir, "./package.json"), "utf8")) as {
+  version?: string;
+};
 
 export function resolveViteAllowedHosts(env: Record<string, string | undefined> = process.env): string[] {
   const raw = env.GOATCITADEL_VITE_ALLOWED_HOSTS?.trim();
@@ -26,9 +30,13 @@ export default defineConfig(({ mode }) => {
     ...process.env,
     ...loadEnv(mode, repoRoot, ""),
   };
+  const buildId = `${packageJson.version ?? "dev"}-${mode}`;
 
   return {
     envDir: repoRoot,
+    define: {
+      __GC_BUILD_ID__: JSON.stringify(buildId),
+    },
     plugins: [tailwindcss(), react()],
     resolve: {
       // Fresh installer-based copies may not have workspace package dist output yet.

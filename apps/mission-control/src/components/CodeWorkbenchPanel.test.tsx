@@ -1,5 +1,6 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create } from "react-test-renderer";
 import { describe, expect, it } from "vitest";
 import { CodeWorkbenchPanel } from "./CodeWorkbenchPanel";
 
@@ -56,6 +57,16 @@ describe("CodeWorkbenchPanel", () => {
           changed: true,
           content: "const answer = 42;",
         }}
+        selectedFileDiff={{
+          state: {} as any,
+          path: "src/index.ts",
+          language: "typescript",
+          changed: true,
+          originalContent: "const answer = 0;",
+          modifiedContent: "const answer = 42;",
+        }}
+        draftContent="const answer = 42;"
+        expandedPaths={["src"]}
         diff={{
           state: {} as any,
           scopePath: ".",
@@ -84,10 +95,16 @@ describe("CodeWorkbenchPanel", () => {
         }}
         loading={false}
         busy={false}
+        saving={false}
         error={null}
+        hasDirtyDraft={false}
         onCreateWorktree={() => undefined}
         onSelectFile={() => undefined}
+        onDraftChange={() => undefined}
+        onExpandedPathsChange={() => undefined}
         onRefresh={() => undefined}
+        onSaveFile={() => undefined}
+        onDiscardDraft={() => undefined}
         onRunHelperSnippet={() => undefined}
       />,
     );
@@ -107,10 +124,16 @@ describe("CodeWorkbenchPanel", () => {
         needsProjectBinding
         loading={false}
         busy={false}
+        saving={false}
         error={null}
+        hasDirtyDraft={false}
         onCreateWorktree={() => undefined}
         onSelectFile={() => undefined}
+        onDraftChange={() => undefined}
+        onExpandedPathsChange={() => undefined}
         onRefresh={() => undefined}
+        onSaveFile={() => undefined}
+        onDiscardDraft={() => undefined}
         onRunHelperSnippet={() => undefined}
       />,
     );
@@ -119,5 +142,81 @@ describe("CodeWorkbenchPanel", () => {
     expect(markup).toContain("Unbound");
     expect(markup).toContain("Project binding is required before repo operations can start.");
     expect(markup).toContain("Draft snippets remain available as a secondary helper panel.");
+  });
+
+  it("foregrounds the artifact pane when a generated artifact is open", () => {
+    let renderer: ReturnType<typeof create> | null = null;
+
+    act(() => {
+      renderer = create(
+        <CodeWorkbenchPanel
+          selectedTurn={
+            {
+              turnId: "turn-1",
+              assistantMessage: {
+                content: "```ts\nconst answer = 42;\n```",
+              },
+              trace: {
+                status: "completed",
+              },
+              toolRuns: [],
+            } as any
+          }
+          projectName="Atlas"
+          needsProjectBinding
+          diff={{
+            state: {} as any,
+            scopePath: ".",
+            changedFiles: ["src/index.ts"],
+            summary: {
+              changedFiles: 1,
+              additions: 1,
+              deletions: 0,
+            },
+            diff: "+const answer = 42;",
+          }}
+          generatedArtifact={{
+            artifactId: "artifact-1",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            title: "Implementation note",
+            kind: "markdown",
+            content: "# Result",
+            sourceSurface: "code",
+            version: 1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }}
+          loading={false}
+          busy={false}
+          saving={false}
+          error={null}
+          hasDirtyDraft={false}
+          onCreateWorktree={() => undefined}
+          onSelectFile={() => undefined}
+          onDraftChange={() => undefined}
+          onExpandedPathsChange={() => undefined}
+          onRefresh={() => undefined}
+          onSaveFile={() => undefined}
+          onDiscardDraft={() => undefined}
+          onRunHelperSnippet={() => undefined}
+        />,
+      );
+    });
+
+    const buttons = renderer!.root.findAllByType("button");
+    const artifactTab = buttons.find(
+      (button) =>
+        button.children.join("") === "Artifact" &&
+        typeof button.props.className === "string" &&
+        button.props.className.includes("active"),
+    );
+
+    expect(artifactTab).toBeTruthy();
+    expect(
+      renderer!.root.findAll(
+        (node) => Array.isArray(node.children) && node.children.join("").includes("Generated artifact"),
+      ),
+    ).not.toHaveLength(0);
   });
 });

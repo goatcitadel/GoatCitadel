@@ -29,6 +29,7 @@ export type SessionControlPending =
 export function useChatSessionControls(input: {
   workspaceId: string;
   historyView: ChatHistoryView;
+  sessionMode: ChatMode;
   selectedProjectId: string;
   selectedSession: ChatSessionRecord | null;
   renameTitle: string;
@@ -47,6 +48,7 @@ export function useChatSessionControls(input: {
   const {
     workspaceId,
     historyView,
+    sessionMode,
     selectedProjectId,
     selectedSession,
     renameTitle,
@@ -104,8 +106,8 @@ export function useChatSessionControls(input: {
     const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
     const created = await createChatSession(
       selectedProjectId !== "all" && selectedProjectId !== "none"
-        ? { workspaceId, projectId: selectedProjectId, mode: "chat" }
-        : { workspaceId, mode: "chat" },
+        ? { workspaceId, projectId: selectedProjectId, mode: sessionMode }
+        : { workspaceId, mode: sessionMode },
     );
     if (nextHistoryView !== historyView) {
       setHistoryView(nextHistoryView);
@@ -113,7 +115,16 @@ export function useChatSessionControls(input: {
     await loadSidebar(nextHistoryView);
     setSelectedSessionId(created.sessionId);
     return created;
-  }, [historyView, loadSidebar, selectedProjectId, selectedSession, setHistoryView, setSelectedSessionId, workspaceId]);
+  }, [
+    historyView,
+    loadSidebar,
+    selectedProjectId,
+    selectedSession,
+    sessionMode,
+    setHistoryView,
+    setSelectedSessionId,
+    workspaceId,
+  ]);
 
   const handleCreateProject = useCallback(async () => {
     const name = projectName.trim();
