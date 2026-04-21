@@ -5,21 +5,21 @@ import { StatCard } from "./StatCard";
 import { useShellDetailPanel } from "./ShellDetailPanelContext";
 
 type SummaryTone = "default" | "accent" | "warning" | "success";
-type TuneHubSummaryMode = "cards" | "posture";
+type ConfigureHubSummaryMode = "cards" | "posture";
 
-interface TuneHubSummaryItem {
+interface ConfigureHubSummaryItem {
   label: string;
   value: ReactNode;
   note?: ReactNode;
   tone?: SummaryTone;
 }
 
-interface TuneHubLayoutProps<TTab extends string> {
+interface ConfigureHubLayoutProps<TTab extends string> {
   className?: string;
   title: string;
   subtitle: ReactNode;
-  summaries?: TuneHubSummaryItem[];
-  summaryMode?: TuneHubSummaryMode;
+  summaries?: ConfigureHubSummaryItem[];
+  summaryMode?: ConfigureHubSummaryMode;
   showSummaryNotes?: boolean;
   guideTitle?: ReactNode;
   guideBody?: ReactNode;
@@ -30,7 +30,7 @@ interface TuneHubLayoutProps<TTab extends string> {
   children: ReactNode;
 }
 
-export function TuneHubLayout<TTab extends string>({
+export function ConfigureHubLayout<TTab extends string>({
   className,
   title,
   subtitle,
@@ -44,7 +44,7 @@ export function TuneHubLayout<TTab extends string>({
   onTabChange,
   tabAriaLabel,
   children,
-}: TuneHubLayoutProps<TTab>) {
+}: ConfigureHubLayoutProps<TTab>) {
   const { registerEntry } = useShellDetailPanel();
   const visibleSummaries = summaries?.filter((item) => item.value !== null && item.value !== undefined) ?? [];
   const detailBody = useMemo(() => <div className="tune-hub-guide-body">{guideBody}</div>, [guideBody]);
@@ -54,9 +54,9 @@ export function TuneHubLayout<TTab extends string>({
       return undefined;
     }
     return registerEntry({
-      id: `tune-hub-guide:${title}`,
+      id: `configure-hub-guide:${title}`,
       title: typeof guideTitle === "string" ? guideTitle : "Page details",
-      kicker: "Setup context",
+      kicker: "Configure context",
       subtitle: subtitle,
       body: detailBody,
       priority: 10,

@@ -1,5 +1,5 @@
 import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
-import { TuneHubLayout } from "../components/TuneHubLayout";
+import { ConfigureHubLayout } from "../components/ConfigureHubLayout";
 import type { AgentsTab } from "../content/page-registry";
 import { AgentsPage } from "./AgentsPage";
 import { AgentsBoardPage } from "./AgentsBoardPage";
@@ -32,7 +32,7 @@ export function AgentsHubPage({ activeTab, workspaceId, sessionId, onTabChange }
           : "Overview stays focused on roster posture and availability.";
 
   return (
-    <TuneHubLayout
+    <ConfigureHubLayout
       className={activeTab === "board" ? "agents-hub-layout-board" : undefined}
       title="Agents"
       subtitle="Roster, board visibility, and reusable skills in one control surface."
@@ -56,8 +56,8 @@ export function AgentsHubPage({ activeTab, workspaceId, sessionId, onTabChange }
               : activeTab === "catalog"
                 ? "Dormant imports"
                 : activeTab === "board"
-                  ? "Watch the board"
-                  : "Watch the roster",
+                  ? "Review the board"
+                  : "Review the roster",
           note: "Agent controls should stay compact and inspectable.",
         },
       ]}
@@ -75,6 +75,6 @@ export function AgentsHubPage({ activeTab, workspaceId, sessionId, onTabChange }
         {activeTab === "skills" ? <SkillsPage /> : null}
         {activeTab === "catalog" ? <AgentsCatalogPage workspaceId={workspaceId} sessionId={sessionId} /> : null}
       </EmbeddedPageChromeProvider>
-    </TuneHubLayout>
+    </ConfigureHubLayout>
   );
 }

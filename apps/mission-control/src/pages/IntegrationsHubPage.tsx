@@ -1,5 +1,5 @@
 import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
-import { TuneHubLayout } from "../components/TuneHubLayout";
+import { ConfigureHubLayout } from "../components/ConfigureHubLayout";
 import type { IntegrationsTab } from "../content/page-registry";
 import { ChannelSetupPage } from "./ChannelSetupPage";
 import { IntegrationsPage } from "./IntegrationsPage";
@@ -26,14 +26,14 @@ export function IntegrationsHubPage({ activeTab, onTabChange }: IntegrationsHubP
         : "Overview keeps the catalog, connection posture, and operator actions in one lane.";
 
   return (
-    <TuneHubLayout
+    <ConfigureHubLayout
       title="Integrations"
       subtitle="Connections, transport hooks, and MCP reach stay framed as operator decisions instead of a connector catalog."
       summaries={[
         { label: "Active lane", value: activeLabel, note: "Current operator section", tone: "accent" },
         {
           label: "Default posture",
-          value: activeTab === "mcp" ? "Infrastructure first" : "Setup beside evidence",
+          value: activeTab === "mcp" ? "Infrastructure first" : "Configuration beside evidence",
           note: postureNote,
         },
         {
@@ -64,6 +64,6 @@ export function IntegrationsHubPage({ activeTab, onTabChange }: IntegrationsHubP
           <IntegrationsPage view="overview" />
         )}
       </EmbeddedPageChromeProvider>
-    </TuneHubLayout>
+    </ConfigureHubLayout>
   );
 }

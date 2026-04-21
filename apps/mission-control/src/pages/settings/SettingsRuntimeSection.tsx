@@ -86,7 +86,7 @@ export function SettingsRuntimeSection(props: SettingsRuntimeSectionProps) {
       <Panel
         className="settings-v2-panel"
         title="Runtime Controls"
-        subtitle="Tune how boldly GoatCitadel acts by default before you change providers, tools, or outbound access."
+        subtitle="Configure how boldly GoatCitadel acts by default before you change providers, tools, or outbound access."
       >
         <FieldHelp>
           Runtime controls shape how boldly GoatCitadel acts by default. Use the allowlist preset first, then drop into

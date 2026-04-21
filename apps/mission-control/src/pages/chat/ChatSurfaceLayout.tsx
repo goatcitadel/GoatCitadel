@@ -20,6 +20,35 @@ export function ChatSurfaceLayout({
   hasActiveSession?: boolean;
 }) {
   const layout = getMissionControlSurfaceConfig(mode).layout;
+  if (!hasActiveSession) {
+    return (
+      <div
+        className={`chat-v11-shell ${layout.shellClassName} is-idle-simplified`}
+        data-dominant-artifact={layout.dominantArtifact}
+        data-thread-placement={layout.threadPlacement}
+        data-session-rail-visibility={layout.sessionRailVisibility}
+        data-support-thread-behavior={layout.supportThreadBehavior}
+        data-dock-behavior={layout.dockBehavior}
+        data-desktop-density={layout.desktopDensity}
+        data-session-state="idle"
+        data-idle-min-height={layout.idleMinHeight}
+      >
+        <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
+        <div className="chat-v11-main">
+          <div className={`chat-v11-conversation-shell surface-${mode}`}>
+            <div className="chat-v11-main-grid chat-v11-main-grid-idle">
+              <div
+                className={`chat-v11-primary-column ${layout.primaryColumnClassName}`.trim()}
+                data-surface-slot="primary"
+              >
+                {workflowColumn ?? primaryColumn}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const workflowIsPrimary = layout.workflowPlacement === "primary" && workflowColumn;
   const artifactColumn = workflowIsPrimary ? workflowColumn : primaryColumn;
   const supportThreadColumn =
@@ -47,7 +76,7 @@ export function ChatSurfaceLayout({
             className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"}`}
           >
             <div
-              className={`chat-v11-artifact-column ${workflowIsPrimary ? `chat-v11-secondary-column chat-v11-secondary-column-${mode} ${layout.workflowColumnClassName ?? ""}` : `chat-v11-primary-column ${layout.primaryColumnClassName}`}`.trim()}
+              className={`chat-v11-artifact-column ${workflowIsPrimary ? `chat-v11-primary-column chat-v11-workflow-primary chat-v11-workflow-primary-${mode} ${layout.workflowColumnClassName ?? ""}` : `chat-v11-primary-column ${layout.primaryColumnClassName}`}`.trim()}
               data-surface-slot="artifact"
             >
               {artifactColumn}

@@ -1,3 +1,4 @@
+import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it } from "vitest";
 import { UiPreferencesProvider, useUiPreferences } from "./ui-preferences";
@@ -84,6 +85,39 @@ describe("UiPreferencesProvider", () => {
     });
 
     expect(observedNavMode).toBe("expanded");
+    act(() => {
+      renderer!.unmount();
+    });
+  });
+
+  it("persists status center expansion preferences", () => {
+    installWindowWithStorage();
+
+    let observedExpanded = false;
+
+    function Probe() {
+      const { statusCenterExpanded, setStatusCenterExpanded } = useUiPreferences();
+      observedExpanded = statusCenterExpanded;
+
+      React.useEffect(() => {
+        setStatusCenterExpanded(true);
+      }, [setStatusCenterExpanded]);
+
+      return null;
+    }
+
+    let renderer: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <UiPreferencesProvider>
+          <Probe />
+        </UiPreferencesProvider>,
+      );
+    });
+
+    expect(observedExpanded).toBe(true);
+    expect(window.localStorage.getItem("goatcitadel.ui.status_center_expanded.v1")).toBe("true");
+
     act(() => {
       renderer!.unmount();
     });

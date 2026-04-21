@@ -104,9 +104,24 @@ export const appCopy = {
     { id: "npu", label: "Local Runtime", code: "NPU" },
   ] satisfies NavItemCopy[],
   navSections: [
-    { label: "Setup", items: ["onboarding", "settings", "workspaces", "integrations", "tools", "addons"] },
-    { label: "Work", items: ["dashboard", "chat", "assembly", "promptLab", "improvement", "tasks", "agents", "office", "officeLab", "approvals", "sessions"] },
-    { label: "Watch", items: ["activity", "system", "memory", "files", "costs", "mesh", "npu", "cron"] },
+    { label: "Configure", items: ["onboarding", "settings", "workspaces", "integrations", "tools", "addons"] },
+    {
+      label: "Work",
+      items: [
+        "dashboard",
+        "chat",
+        "assembly",
+        "promptLab",
+        "improvement",
+        "tasks",
+        "agents",
+        "office",
+        "officeLab",
+        "approvals",
+        "sessions",
+      ],
+    },
+    { label: "Observe", items: ["activity", "system", "memory", "files", "costs", "mesh", "npu", "cron"] },
     { label: "Admin", items: ["skills", "mcp"] },
   ] satisfies NavSectionCopy[],
   nextStepByTab: {
@@ -116,7 +131,7 @@ export const appCopy = {
     system: "If anything feels slow, check vitals here first.",
     files: "Create or update a file, then review path and risk hints before saving.",
     memory: "Use this when replies feel off-context or forgetful.",
-    agents: "Tune your crew roles so each agent has a clear job.",
+    agents: "Configure crew roles so each agent has a clear job.",
     office: "Pick an agent station to see what it is doing right now.",
     officeLab: "Use Herd Lab to watch deck load, approvals, and live crew activity in the 2D operations view.",
     activity: "Keep this open while you test actions in other tabs.",
@@ -125,9 +140,9 @@ export const appCopy = {
     chat: "Pick a project, open a session, and send a message.",
     assembly: "Use Cowork when the task needs decomposition, orchestration, checkpoints, or multi-model debate.",
     promptLab: "Use Quality to run prompt tests, review regressions, and compare reliability over time.",
-    improvement: "Review weekly replay findings, then apply or revert low-risk tunes.",
+    improvement: "Review weekly replay findings, then apply or revert low-risk adjustments.",
     skills: "Decide which skills are always on, guarded, or off.",
-    costs: "Watch spend and switch to a lighter mode when needed.",
+    costs: "Review spend and switch to a lighter mode when needed.",
     settings: "Update providers and safety defaults in one place.",
     workspaces: "Select workspace context, then edit global or workspace guidance safely.",
     tools: "Grant only what you need, then dry-run before going live.",
@@ -171,8 +186,16 @@ export const pageCopy: Record<PageId, PageCopy> = {
         "Use readiness checks to confirm whether the add-on is display-ready and safe to open.",
       ],
       terms: [
-        { term: "Same owner", meaning: "Configured metadata that says the add-on repository is published by the same owner as GoatCitadel. It is still separate code that you should review." },
-        { term: "Display-ready", meaning: "The add-on exposes a stable web entry path that GoatCitadel can open externally or embed. Arena currently uses an external local URL instead of an embedded surface." },
+        {
+          term: "Same owner",
+          meaning:
+            "Configured metadata that says the add-on repository is published by the same owner as GoatCitadel. It is still separate code that you should review.",
+        },
+        {
+          term: "Display-ready",
+          meaning:
+            "The add-on exposes a stable web entry path that GoatCitadel can open externally or embed. Arena currently uses an external local URL instead of an embedded surface.",
+        },
       ],
     },
   },
@@ -205,7 +228,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
       terms: [
         { term: "Artifact", meaning: "A useful output file like a report, brief, note, or release doc." },
         { term: "Write jail", meaning: "Allowed folders where file writes are permitted." },
-        { term: "Trail preview", meaning: "Shows text directly, renders image files visually, and flags unsupported binary previews." },
+        {
+          term: "Trail preview",
+          meaning: "Shows text directly, renders image files visually, and flags unsupported binary previews.",
+        },
       ],
     },
   },
@@ -222,8 +248,14 @@ export const pageCopy: Record<PageId, PageCopy> = {
       ],
       terms: [
         { term: "QMD", meaning: "Query-time distilled memory used to keep prompts concise and relevant." },
-        { term: "Context impact", meaning: "How much QMD reduced or expanded token usage versus the original context payload." },
-        { term: "Pinned memory", meaning: "Pinned items stay favored and are less likely to be forgotten automatically." },
+        {
+          term: "Context impact",
+          meaning: "How much QMD reduced or expanded token usage versus the original context payload.",
+        },
+        {
+          term: "Pinned memory",
+          meaning: "Pinned items stay favored and are less likely to be forgotten automatically.",
+        },
         { term: "TTL override", meaning: "Optional time-to-live override in seconds for a specific memory item." },
       ],
     },
@@ -270,7 +302,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
         "Use the live rail to see event traffic without opening the full activity stream.",
       ],
       terms: [
-        { term: "Deck", meaning: "A named citadel area like Command Deck or Build Bay that groups related agent roles." },
+        {
+          term: "Deck",
+          meaning: "A named citadel area like Command Deck or Build Bay that groups related agent roles.",
+        },
         { term: "Live rail", meaning: "The recent event feed driving the office floor state and urgency indicators." },
       ],
     },
@@ -333,8 +368,15 @@ export const pageCopy: Record<PageId, PageCopy> = {
       terms: [
         { term: "Mission session", meaning: "A local GoatCitadel chat session using configured model providers." },
         { term: "External session", meaning: "A routed chat that can write back to an integration target." },
-        { term: "Writeback binding", meaning: "Connection + target mapping required before posting to external sessions." },
-        { term: "Learned memory confidence", meaning: "Estimate of how reliable a saved memory item is for future replies. It is not a completion percentage." },
+        {
+          term: "Writeback binding",
+          meaning: "Connection + target mapping required before posting to external sessions.",
+        },
+        {
+          term: "Learned memory confidence",
+          meaning:
+            "Estimate of how reliable a saved memory item is for future replies. It is not a completion percentage.",
+        },
       ],
     },
   },
@@ -352,8 +394,16 @@ export const pageCopy: Record<PageId, PageCopy> = {
       ],
       terms: [
         { term: "Blind review", meaning: "A proposal is reviewed by ID without exposing the author model." },
-        { term: "Minority report", meaning: "A preserved dissent when the top options remain too close or a critical objection stays unresolved." },
-        { term: "Convergence", meaning: "A weighted measure of whether the models are aligning on cause, solution, risks, scope, and test plan." },
+        {
+          term: "Minority report",
+          meaning:
+            "A preserved dissent when the top options remain too close or a critical objection stays unresolved.",
+        },
+        {
+          term: "Convergence",
+          meaning:
+            "A weighted measure of whether the models are aligning on cause, solution, risks, scope, and test plan.",
+        },
       ],
     },
   },
@@ -387,7 +437,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
       ],
       terms: [
         { term: "Likely wrong", meaning: "A replay item with high wrongness probability after rule + model scoring." },
-        { term: "Duplicate suppressed", meaning: "Repeated finding fingerprint from prior reports, hidden from top list." },
+        {
+          term: "Duplicate suppressed",
+          meaning: "Repeated finding fingerprint from prior reports, hidden from top list.",
+        },
       ],
     },
   },
@@ -407,8 +460,14 @@ export const pageCopy: Record<PageId, PageCopy> = {
         { term: "Sleep", meaning: "Skill is auto-eligible only when confidence is high enough." },
         { term: "Guarded auto threshold", meaning: "Minimum confidence required before a sleep skill auto-activates." },
         { term: "Import validation", meaning: "Checks SKILL.md integrity and risk signals before install." },
-        { term: "Disabled by default", meaning: "Imported skills stay off until you review and enable them explicitly." },
-        { term: "Source provider", meaning: "Where a suggested skill came from, such as a curated marketplace or GitHub." },
+        {
+          term: "Disabled by default",
+          meaning: "Imported skills stay off until you review and enable them explicitly.",
+        },
+        {
+          term: "Source provider",
+          meaning: "Where a suggested skill came from, such as a curated marketplace or GitHub.",
+        },
       ],
     },
   },
@@ -440,9 +499,18 @@ export const pageCopy: Record<PageId, PageCopy> = {
       ],
       terms: [
         { term: "Tool profile", meaning: "Baseline capability set used by policy resolver." },
-        { term: "Remember credentials", meaning: "Stores gateway credentials in browser local storage for convenience; leave off on shared devices." },
-        { term: "Provider ID", meaning: "Stable machine name GoatCitadel uses internally for a provider, such as glm or moonshot." },
-        { term: "Network allowlist", meaning: "Outbound hosts GoatCitadel is allowed to contact. This is not your machine's LAN IP." },
+        {
+          term: "Remember credentials",
+          meaning: "Stores gateway credentials in browser local storage for convenience; leave off on shared devices.",
+        },
+        {
+          term: "Provider ID",
+          meaning: "Stable machine name GoatCitadel uses internally for a provider, such as glm or moonshot.",
+        },
+        {
+          term: "Network allowlist",
+          meaning: "Outbound hosts GoatCitadel is allowed to contact. This is not your machine's LAN IP.",
+        },
       ],
     },
   },
@@ -477,7 +545,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
       terms: [
         { term: "Scope precedence", meaning: "task > agent > session > workspace > global." },
         { term: "Grant", meaning: "An explicit allow or deny rule layered on top of the baseline tool profile." },
-        { term: "Dry-run", meaning: "Validation-focused tool execution used to confirm args and policy before a live call." },
+        {
+          term: "Dry-run",
+          meaning: "Validation-focused tool execution used to confirm args and policy before a live call.",
+        },
       ],
     },
   },
@@ -509,9 +580,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
         "Track activity and attach deliverables.",
         "Manage subagent sessions tied to task work.",
       ],
-      terms: [
-        { term: "Subagent session", meaning: "A linked agent conversation doing part of a task." },
-      ],
+      terms: [{ term: "Subagent session", meaning: "A linked agent conversation doing part of a task." }],
     },
   },
   integrations: {
@@ -553,8 +622,14 @@ export const pageCopy: Record<PageId, PageCopy> = {
         { term: "MCP Server", meaning: "A process or endpoint exposing tools/resources over MCP." },
         { term: "OAuth", meaning: "Token-based auth flow for remote MCP services." },
         { term: "Trust tier", meaning: "Trusted, restricted, or quarantined execution posture." },
-        { term: "Template library", meaning: "Starter MCP definitions you can add quickly. They still need review before live use." },
-        { term: "Redaction mode", meaning: "How aggressively GoatCitadel strips sensitive data before sending it to the MCP server." },
+        {
+          term: "Template library",
+          meaning: "Starter MCP definitions you can add quickly. They still need review before live use.",
+        },
+        {
+          term: "Redaction mode",
+          meaning: "How aggressively GoatCitadel strips sensitive data before sending it to the MCP server.",
+        },
       ],
     },
   },
@@ -573,7 +648,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
       terms: [
         { term: "Session ownership", meaning: "Single-writer lock for a session across nodes." },
         { term: "Node ID", meaning: "Stable identity for one GoatCitadel machine in the mesh." },
-        { term: "Static peers", meaning: "Explicitly configured peer nodes. Leave blank unless you intend to connect machines directly." },
+        {
+          term: "Static peers",
+          meaning: "Explicitly configured peer nodes. Leave blank unless you intend to connect machines directly.",
+        },
         { term: "mDNS", meaning: "Local-network discovery for simple LAN setups." },
         { term: "Tailnet", meaning: "Private-network mode for Tailscale-style connectivity." },
       ],
@@ -608,9 +686,19 @@ export const pageCopy: Record<PageId, PageCopy> = {
         "Apply setup and continue to testing tabs.",
       ],
       terms: [
-        { term: "Provider ID", meaning: "GoatCitadel's internal machine name for a provider. The label is just the human-facing display name." },
-        { term: "API key env var", meaning: "Name of the environment variable GoatCitadel should read, not the key value itself." },
-        { term: "Network allowlist", meaning: "Outbound hosts GoatCitadel is allowed to contact. It is not the IP address of your machine." },
+        {
+          term: "Provider ID",
+          meaning:
+            "GoatCitadel's internal machine name for a provider. The label is just the human-facing display name.",
+        },
+        {
+          term: "API key env var",
+          meaning: "Name of the environment variable GoatCitadel should read, not the key value itself.",
+        },
+        {
+          term: "Network allowlist",
+          meaning: "Outbound hosts GoatCitadel is allowed to contact. It is not the IP address of your machine.",
+        },
       ],
     },
   },
@@ -620,11 +708,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
     guide: {
       what: "Displays unfiltered realtime event payloads.",
       when: "Use this when you need exact raw events for debugging.",
-      actions: [
-        "Trigger an action elsewhere.",
-        "Observe raw payloads here.",
-        "Compare with processed page views.",
-      ],
+      actions: ["Trigger an action elsewhere.", "Observe raw payloads here.", "Compare with processed page views."],
     },
   },
 };

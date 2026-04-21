@@ -6,8 +6,8 @@ export type ConfigurePage = "settings" | "integrations" | "tools" | "agents";
 export type SpacePage = OperatePage | ObservePage | ConfigurePage;
 export type VisibleWorkPage = WorkSurface | "tasks" | "approvals";
 export type VisibleObservePage = "timeline" | "health" | "artifacts" | "quality";
-export type VisibleTunePage = "general" | "runtime" | "workspaces" | "integrations" | "tools" | "agents";
-export type VisiblePage = VisibleWorkPage | VisibleObservePage | VisibleTunePage;
+export type VisibleConfigurePage = "general" | "runtime" | "workspaces" | "integrations" | "tools" | "agents";
+export type VisiblePage = VisibleWorkPage | VisibleObservePage | VisibleConfigurePage;
 
 export type ActivityTab = "activity" | "scheduler" | "improvement";
 export type ArtifactsTab = "memory" | "files";
@@ -48,12 +48,12 @@ export const SPACE_META: Record<Space, { label: string; description: string }> =
     description: "Chat, Cowork, Code, and the decisions around active work.",
   },
   observe: {
-    label: "Watch",
-    description: "What the system is doing and how it is behaving.",
+    label: "Observe",
+    description: "Health, timelines, artifacts, and what the system is doing right now.",
   },
   configure: {
-    label: "Setup",
-    description: "Models, runtime, governance, and integrations.",
+    label: "Configure",
+    description: "Runtime, governance, integrations, and operator defaults.",
   },
 };
 

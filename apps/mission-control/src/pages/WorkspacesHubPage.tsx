@@ -1,5 +1,5 @@
 import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
-import { TuneHubLayout } from "../components/TuneHubLayout";
+import { ConfigureHubLayout } from "../components/ConfigureHubLayout";
 import { AddonsPage } from "./AddonsPage";
 import { WorkspacesPage } from "./WorkspacesPage";
 
@@ -24,7 +24,7 @@ export function WorkspacesHubPage({
   onTabChange,
 }: WorkspacesHubPageProps) {
   return (
-    <TuneHubLayout
+    <ConfigureHubLayout
       title="Workspaces"
       subtitle="Workspace lifecycle, operating context, and optional extensions should read like environment control, not account management."
       guideTitle="What this controls"
@@ -41,6 +41,6 @@ export function WorkspacesHubPage({
           <WorkspacesPage activeWorkspaceId={activeWorkspaceId} onWorkspaceChange={onWorkspaceChange} />
         )}
       </EmbeddedPageChromeProvider>
-    </TuneHubLayout>
+    </ConfigureHubLayout>
   );
 }

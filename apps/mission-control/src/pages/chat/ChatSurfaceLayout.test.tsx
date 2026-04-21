@@ -75,15 +75,15 @@ describe("ChatSurfaceLayout", () => {
     const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
 
     expect(css).toContain(".chat-v11-main-grid.surface-grid-code.with-dock-collapsed");
-    expect(css).toContain('grid-template-areas: "secondary primary";');
+    expect(css).toContain('grid-template-areas: "primary secondary";');
   });
 
   it("keeps the code workbench ahead of the dock as the layout collapses", () => {
     const css = readFileSync(new URL("../../styles/chat-surface.css", import.meta.url), "utf8");
 
     expect(css).toContain("@media (max-width: 1440px)");
-    expect(css).toMatch(/grid-template-areas:\s*"secondary"\s*"primary"\s*"dock";/);
+    expect(css).toMatch(/grid-template-areas:\s*"primary"\s*"secondary"\s*"dock";/);
     expect(css).toContain("@media (max-width: 1200px)");
-    expect(css).toMatch(/grid-template-areas:\s*"secondary"\s*"dock";/);
+    expect(css).toMatch(/grid-template-areas:\s*"primary"\s*"dock";/);
   });
 });

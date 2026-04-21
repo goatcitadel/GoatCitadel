@@ -123,6 +123,21 @@
   letter-spacing: 0.02em;
 }
 
+.mission-surface-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.mission-surface-summary-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .mission-surface-header-copy h2,
 .mission-context-dock-head h3,
 .mission-empty-shell-copy h3 {
@@ -145,36 +160,6 @@
   justify-content: flex-end;
 }
 
-.mission-surface-trust-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.mission-surface-trust-chip {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-elevated) 82%, transparent);
-}
-
-.mission-surface-trust-chip span {
-  font-size: 0.66rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.mission-surface-trust-chip strong {
-  font-size: 0.82rem;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
 .mission-surface-dock-toggle {
   padding-inline: 12px;
 }
@@ -183,6 +168,11 @@
   width: 100%;
   min-width: 0;
   align-items: start;
+  grid-template-areas: "primary";
+}
+
+.chat-v11-main-grid-idle {
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "primary";
 }
 
@@ -217,23 +207,27 @@
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed {
-  grid-template-columns: minmax(480px, 1.52fr) minmax(280px, 0.74fr);
+  grid-template-columns: minmax(560px, 1.68fr) minmax(280px, 0.72fr);
   grid-template-areas: "primary secondary";
 }
 
 .chat-v11-main-grid.surface-grid-cowork.with-dock-open {
-  grid-template-columns: minmax(500px, 1.48fr) minmax(260px, 0.66fr) clamp(272px, 15vw, 296px);
-  grid-template-areas: "primary secondary dock";
+  grid-template-columns: minmax(560px, 1.62fr) minmax(260px, 0.68fr);
+  grid-template-areas:
+    "primary secondary"
+    "dock dock";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
-  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
-  grid-template-areas: "secondary primary";
+  grid-template-columns: minmax(0, 1.72fr) minmax(300px, 0.78fr);
+  grid-template-areas: "primary secondary";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-open {
-  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) clamp(320px, 18vw, 360px);
-  grid-template-areas: "secondary primary dock";
+  grid-template-columns: minmax(0, 1.72fr) minmax(300px, 0.78fr);
+  grid-template-areas:
+    "primary secondary"
+    "dock dock";
 }
 
 /* Code surface editor collapsible state */
@@ -298,6 +292,22 @@
   letter-spacing: -0.01em;
 }
 
+.chat-v11.is-idle-simplified .chat-v11-session-rail {
+  opacity: 0.96;
+}
+
+.chat-v11.is-idle-simplified .chat-v11-main {
+  min-width: 0;
+}
+
+.chat-v11.is-idle-simplified .chat-v11-primary-column {
+  max-width: min(980px, 100%);
+}
+
+.chat-v11.is-idle-simplified .mission-empty-shell {
+  min-height: min(52vh, 560px);
+}
+
 /* ── Surface identity: Chat — conversational, breathing room ── */
 
 .chat-v11.mode-chat .chat-v11-thread {
@@ -351,6 +361,14 @@
 
 .surface-layout-code .chat-v11-support-column .chat-v11-thread {
   max-width: none;
+}
+
+.chat-v11-workflow-primary-code .chat-code-workbench {
+  min-height: clamp(640px, calc(100vh - 240px), 1040px);
+}
+
+.chat-v11-workflow-primary-cowork .chat-cowork-panel {
+  min-height: clamp(600px, calc(100vh - 240px), 980px);
 }
 
 .surface-workflow-code .chat-code-workbench {
@@ -593,18 +611,6 @@
   min-height: 0;
 }
 
-.chat-v11-secondary-column .chat-cowork-panel {
-  min-height: clamp(500px, calc(100vh - 240px), 820px);
-}
-
-.chat-v11-secondary-column .chat-cowork-panel.is-empty {
-  min-height: clamp(360px, calc(100vh - 320px), 620px);
-}
-
-.chat-v11-secondary-column .chat-code-workbench {
-  min-height: clamp(500px, calc(100vh - 240px), 860px);
-}
-
 .chat-v11-shell[data-dominant-artifact="workflow"] .chat-v11-artifact-column,
 .chat-v11-shell[data-dominant-artifact="workbench"] .chat-v11-artifact-column {
   align-self: stretch;
@@ -761,10 +767,11 @@
 @media (max-width: 1760px) {
   .chat-v11-main-grid.surface-grid-cowork.with-dock-open,
   .chat-v11-main-grid.surface-grid-code.with-dock-open {
-    grid-template-columns: minmax(0, 1fr) clamp(280px, 26vw, 360px);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "secondary primary"
-      "dock dock";
+      "primary"
+      "secondary"
+      "dock";
   }
 
   .chat-v11-main-grid.surface-grid-cowork.with-dock-open .chat-v11-dock-column,
@@ -783,14 +790,14 @@
   .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "secondary"
-      "primary";
+      "primary"
+      "secondary";
   }
 
   .chat-v11-main-grid.surface-grid-cowork.with-dock-open {
     grid-template-areas:
-      "secondary"
       "primary"
+      "secondary"
       "dock";
   }
 
@@ -798,14 +805,14 @@
   .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "secondary"
-      "primary";
+      "primary"
+      "secondary";
   }
 
   .chat-v11-main-grid.surface-grid-code.with-dock-open {
     grid-template-areas:
-      "secondary"
       "primary"
+      "secondary"
       "dock";
   }
 
@@ -828,14 +835,14 @@
   .chat-v11-main-grid.surface-grid-cowork.with-dock-collapsed,
   .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "secondary";
+    grid-template-areas: "primary";
   }
 
   .chat-v11-main-grid.surface-grid-cowork.with-dock-open,
   .chat-v11-main-grid.surface-grid-code.with-dock-open {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "secondary"
+      "primary"
       "dock";
   }
 

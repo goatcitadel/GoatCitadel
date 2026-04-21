@@ -663,12 +663,12 @@ describe("App gateway access gate", () => {
     const text = renderTreeText(renderer!);
     expect(text).toContain("chat-ready:chat:locked");
     expect(text).toContain("Work");
-    expect(text).toContain("Watch");
-    expect(text).toContain("Setup");
+    expect(text).toContain("Observe");
+    expect(text).toContain("Configure");
     expect(text).toContain("Cowork");
     expect(text).toContain("Code");
     expect(text).toContain("Mission Control");
-    expect(text).not.toContain("shell-secondary-nav");
+    expect(text).toContain("Work pages");
     expect(text).not.toContain("Surface");
     expect(text).not.toContain("More");
   });
@@ -912,7 +912,7 @@ describe("App gateway access gate", () => {
     expect(text).not.toContain("OpenAI / gpt-5.4");
   });
 
-  it("keeps workload detail collapsed by default while the shell stays compact", async () => {
+  it("keeps the status center collapsed by default while the shell stays compact", async () => {
     const { App } = await import("./App");
 
     let renderer: ReactTestRenderer;
@@ -922,12 +922,13 @@ describe("App gateway access gate", () => {
     await flush();
 
     const text = await waitForTreeText(renderer!, "chat-ready:chat:locked");
-    expect(text).toContain("Approvals clear");
-    expect(text).toContain("No runtime");
-    expect(text).not.toContain("Operator status");
+    expect(text).toContain("Status Center");
+    expect(text).toContain("Decisions clear");
+    expect(text).not.toContain("System health");
+    expect(text).not.toContain("Pending decisions");
   });
 
-  it("does not auto-expand workload detail when approvals are the only active trust warning", async () => {
+  it("does not auto-expand the status center when approvals are the only active trust warning", async () => {
     const { App } = await import("./App");
     fetchDashboardStateMock.mockResolvedValue({
       timestamp: new Date().toISOString(),
@@ -945,24 +946,32 @@ describe("App gateway access gate", () => {
     });
     await flush();
 
-    const text = await waitForTreeText(renderer!, "2 approvals");
-    expect(text).toContain("2 approvals");
-    expect(text).not.toContain("Operator status");
+    const text = await waitForTreeText(renderer!, "2 decisions waiting");
+    expect(text).toContain("2 decisions waiting");
+    expect(text).not.toContain("System health");
   });
 
-  it("lets the runtime summary chip expand workload detail on demand", async () => {
+  it("lets the status center expand workload detail on demand", async () => {
     const { App } = await import("./App");
+    const { UiPreferencesProvider } = await import("./state/ui-preferences");
 
     let renderer: ReactTestRenderer;
     await act(async () => {
-      renderer = mount(<App />);
+      renderer = mount(
+        <UiPreferencesProvider>
+          <App />
+        </UiPreferencesProvider>,
+      );
     });
     await flush();
 
     expect(renderTreeText(renderer!)).not.toContain("Pending decisions");
 
     const statusToggle = renderer!.root.find(
-      (node) => typeof node.props.className === "string" && node.props.className.includes("shell-status-toggle"),
+      (node) =>
+        node.type === "button" &&
+        typeof node.props.className === "string" &&
+        node.props.className.includes("shell-status-center-trigger"),
     );
 
     await act(async () => {
@@ -971,7 +980,8 @@ describe("App gateway access gate", () => {
     await flush();
 
     const expandedText = renderTreeText(renderer!);
-    expect(expandedText).toContain("Pending decisions");
+    expect(expandedText).toContain("System health");
+    expect(expandedText).toContain("Approvals clear");
     expect(expandedText).toContain("Active agents");
   });
 

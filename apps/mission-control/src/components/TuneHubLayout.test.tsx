@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./PageTabs", () => ({
-  PageTabs: ({ items }: { items?: Array<{ label: string }> }) => <div>{items?.map((item) => item.label).join(" ")}</div>,
+  PageTabs: ({ items }: { items?: Array<{ label: string }> }) => (
+    <div>{items?.map((item) => item.label).join(" ")}</div>
+  ),
 }));
 vi.mock("./SectionTitle", () => ({
   SectionTitle: ({ title, subtitle }: { title?: React.ReactNode; subtitle?: React.ReactNode }) => (
@@ -14,7 +16,12 @@ vi.mock("./SectionTitle", () => ({
   ),
 }));
 vi.mock("./StatCard", () => ({
-  StatCard: ({ label, value, note, className }: {
+  StatCard: ({
+    label,
+    value,
+    note,
+    className,
+  }: {
     label?: React.ReactNode;
     value?: React.ReactNode;
     note?: React.ReactNode;
@@ -33,12 +40,12 @@ vi.mock("./ShellDetailPanelContext", () => ({
   }),
 }));
 
-import { TuneHubLayout } from "./TuneHubLayout";
+import { ConfigureHubLayout } from "./ConfigureHubLayout";
 
-describe("TuneHubLayout", () => {
+describe("ConfigureHubLayout", () => {
   it("renders compact operator summaries before the main tune content", () => {
     const markup = renderToStaticMarkup(
-      <TuneHubLayout
+      <ConfigureHubLayout
         title="General"
         subtitle="Keep current defaults and posture visible before deeper settings."
         summaries={[
@@ -47,7 +54,7 @@ describe("TuneHubLayout", () => {
         ]}
       >
         <div>Main content</div>
-      </TuneHubLayout>,
+      </ConfigureHubLayout>,
     );
 
     expect(markup).toContain("operator-summary-strip");
@@ -59,36 +66,36 @@ describe("TuneHubLayout", () => {
 
   it("renders the posture bar mode without reintroducing summary cards", () => {
     const markup = renderToStaticMarkup(
-      <TuneHubLayout
+      <ConfigureHubLayout
         title="General"
         subtitle="Core defaults"
         summaryMode="posture"
         summaries={[
-          { label: "Current decision", value: "Providers", note: "The active Tune lane", tone: "accent" },
+          { label: "Current decision", value: "Providers", note: "The active Configure lane", tone: "accent" },
           { label: "Operator focus", value: "Defaults before detail", note: "Shared posture" },
         ]}
       >
         <div>Main content</div>
-      </TuneHubLayout>,
+      </ConfigureHubLayout>,
     );
 
     expect(markup).toContain("tune-posture-bar");
     expect(markup).toContain("tune-posture-item-accent");
     expect(markup).not.toContain("operator-summary-card");
-    expect(markup).not.toContain("The active Tune lane");
+    expect(markup).not.toContain("The active Configure lane");
     expect(markup).toContain("Main content");
   });
 
   it("skips the summary strip when no summaries are provided and keeps guide details out of the inline header", () => {
     const markup = renderToStaticMarkup(
-      <TuneHubLayout
+      <ConfigureHubLayout
         title="Runtime"
         subtitle="Runtime controls"
         guideTitle="What this controls"
         guideBody="Only open when you need extra posture help."
       >
         <div>Main content</div>
-      </TuneHubLayout>,
+      </ConfigureHubLayout>,
     );
 
     expect(markup).not.toContain("operator-summary-strip");

@@ -6,7 +6,7 @@ import { FieldHelp } from "../components/FieldHelp";
 import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
 import { Panel } from "../components/Panel";
 import { StatusChip } from "../components/StatusChip";
-import { TuneHubLayout } from "../components/TuneHubLayout";
+import { ConfigureHubLayout } from "../components/ConfigureHubLayout";
 import { LlamaCppPage } from "./LlamaCppPage";
 import { MeshPage } from "./MeshPage";
 import { NpuPage } from "./NpuPage";
@@ -84,7 +84,7 @@ export function RuntimeHubPage() {
   };
 
   return (
-    <TuneHubLayout
+    <ConfigureHubLayout
       title="Runtime"
       subtitle="Gateway controls, local runtimes, acceleration targets, and backup safety need to read like one operator cockpit."
       summaries={[
@@ -156,8 +156,8 @@ export function RuntimeHubPage() {
                     />
                   </label>
                   <FieldHelp>
-                    Creating a backup fills this path automatically. Verification runs here. Restore remains an
-                    offline CLI operation so the gateway cannot overwrite active runtime files while it is serving.
+                    Creating a backup fills this path automatically. Verification runs here. Restore remains an offline
+                    CLI operation so the gateway cannot overwrite active runtime files while it is serving.
                   </FieldHelp>
                   <div className="actions">
                     <button
@@ -225,6 +225,6 @@ export function RuntimeHubPage() {
           </Panel>
         </div>
       </EmbeddedPageChromeProvider>
-    </TuneHubLayout>
+    </ConfigureHubLayout>
   );
 }

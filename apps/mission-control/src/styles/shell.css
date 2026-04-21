@@ -74,7 +74,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: flex-start;
+  align-items: end;
   gap: calc(var(--space-2) * var(--density-scale));
 }
 
@@ -100,6 +100,7 @@
 
 .shell-theme-toggle,
 .shell-settings-trigger {
+  opacity: 0.86;
   transition: all 0.2s ease;
 }
 
@@ -115,7 +116,7 @@
 
 .shell-secondary-nav {
   display: flex;
-  align-items: center;
+  align-items: end;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: calc(var(--space-2) * var(--density-scale));
@@ -130,6 +131,10 @@
 .shell-secondary-nav-primary {
   min-width: 0;
   flex: 1 1 520px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space-2) * var(--density-scale));
+  align-items: end;
 }
 
 .shell-trust-hud {
@@ -199,7 +204,7 @@
   display: grid;
   gap: calc(var(--space-2) * var(--density-scale));
   align-content: start;
-  min-height: clamp(440px, calc(100vh - 240px), 1200px);
+  min-height: clamp(440px, calc(100vh - 210px), 1200px);
 }
 
 @media (max-width: 960px) {
@@ -219,6 +224,16 @@
   .shell-bar-utility {
     justify-content: flex-start;
   }
+
+  .shell-status-center {
+    min-width: min(100%, 100%);
+  }
+
+  .shell-status-center-panel {
+    left: 0;
+    right: auto;
+    width: min(100vw - 32px, 680px);
+  }
 }
 
 .shell-attached-status-panel {
@@ -228,6 +243,117 @@
 .shell-context-summary {
   display: grid;
   gap: 4px;
+  min-width: 220px;
+  flex: 1 1 220px;
+}
+
+.shell-status-center {
+  position: relative;
+  min-width: min(100%, 320px);
+}
+
+.shell-status-center-trigger {
+  min-height: 42px;
+  height: auto;
+  padding: 8px 12px;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shell-status-center-trigger-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.shell-status-center-trigger-label,
+.shell-status-center-section-kicker,
+.shell-status-entry-label {
+  margin: 0;
+  font: 700 11px/1.2 var(--font-body);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.shell-status-center-trigger-note,
+.shell-status-entry-note {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.shell-status-center-trigger-meta {
+  display: flex;
+  align-items: center;
+}
+
+.shell-status-center-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(780px, calc(100vw - 48px));
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  box-shadow: var(--shadow-2);
+  backdrop-filter: blur(20px);
+  z-index: 40;
+}
+
+.shell-status-center-section,
+.shell-status-center-section-head {
+  display: grid;
+  gap: 6px;
+}
+
+.shell-status-center-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.shell-status-entry-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-1) 90%, var(--surface-elevated) 10%);
+}
+
+.shell-status-entry-card.interactive {
+  text-align: left;
+  transition:
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.shell-status-entry-card.interactive:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
+  transform: translateY(-1px);
+}
+
+.shell-status-entry-copy,
+.shell-status-entry-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.shell-status-entry-meta {
+  justify-items: end;
+  align-content: start;
+}
+
+.shell-status-entry-action {
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 
 .shell-nav-rail {
@@ -522,6 +648,12 @@
 .status-strip-card-spend .stat-card-note,
 .status-strip-card-tasks .stat-card-note {
   opacity: 0.82;
+}
+
+@media (max-width: 880px) {
+  .shell-status-center-entry-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .shell-notification-region {

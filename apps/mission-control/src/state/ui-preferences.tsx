@@ -19,6 +19,8 @@ interface UiPreferencesValue {
   setShowTechnicalDetails: (enabled: boolean) => void;
   detailPanelPinned: boolean;
   setDetailPanelPinned: (enabled: boolean) => void;
+  statusCenterExpanded: boolean;
+  setStatusCenterExpanded: (enabled: boolean) => void;
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
   theme: UiTheme;
@@ -31,6 +33,7 @@ const EFFECTS_MODE_KEY = "goatcitadel.ui.effects_mode.v1";
 const NAV_MODE_KEY = "goatcitadel.ui.nav_mode.v1";
 const DETAILS_KEY = "goatcitadel.ui.technical_details.v1";
 const DETAIL_PANEL_PINNED_KEY = "goatcitadel.ui.detail_panel_pinned.v1";
+const STATUS_CENTER_EXPANDED_KEY = "goatcitadel.ui.status_center_expanded.v1";
 const WORKSPACE_KEY = "goatcitadel.ui.workspace_id.v1";
 const THEME_KEY = "goatcitadel.ui.theme.v1";
 
@@ -47,6 +50,8 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setShowTechnicalDetails: () => {},
   detailPanelPinned: false,
   setDetailPanelPinned: () => {},
+  statusCenterExpanded: false,
+  setStatusCenterExpanded: () => {},
   activeWorkspaceId: "default",
   setActiveWorkspaceId: () => {},
   theme: "dark",
@@ -60,6 +65,9 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   const [navMode, setNavModeState] = useState<ShellNavMode>(() => readNavModeFromStorage());
   const [showTechnicalDetails, setShowTechnicalDetailsState] = useState<boolean>(() => readDetailsFromStorage());
   const [detailPanelPinned, setDetailPanelPinnedState] = useState<boolean>(() => readDetailPanelPinnedFromStorage());
+  const [statusCenterExpanded, setStatusCenterExpandedState] = useState<boolean>(() =>
+    readStatusCenterExpandedFromStorage(),
+  );
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string>(() => readWorkspaceIdFromStorage());
   const [theme, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
 
@@ -98,6 +106,11 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         setDetailPanelPinnedState(enabled);
         writeStorage(DETAIL_PANEL_PINNED_KEY, String(enabled));
       },
+      statusCenterExpanded,
+      setStatusCenterExpanded: (enabled) => {
+        setStatusCenterExpandedState(enabled);
+        writeStorage(STATUS_CENTER_EXPANDED_KEY, String(enabled));
+      },
       activeWorkspaceId,
       setActiveWorkspaceId: (workspaceId) => {
         const normalized = normalizeWorkspaceId(workspaceId);
@@ -110,7 +123,17 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         writeStorage(THEME_KEY, nextTheme);
       },
     }),
-    [mode, density, effectsMode, navMode, showTechnicalDetails, detailPanelPinned, activeWorkspaceId, theme],
+    [
+      mode,
+      density,
+      effectsMode,
+      navMode,
+      showTechnicalDetails,
+      detailPanelPinned,
+      statusCenterExpanded,
+      activeWorkspaceId,
+      theme,
+    ],
   );
 
   return <UiPreferencesContext.Provider value={value}>{props.children}</UiPreferencesContext.Provider>;
@@ -181,6 +204,13 @@ function readDetailPanelPinnedFromStorage(): boolean {
     return false;
   }
   return window.localStorage.getItem(DETAIL_PANEL_PINNED_KEY) === "true";
+}
+
+function readStatusCenterExpandedFromStorage(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.localStorage.getItem(STATUS_CENTER_EXPANDED_KEY) === "true";
 }
 
 function writeStorage(key: string, value: string): void {

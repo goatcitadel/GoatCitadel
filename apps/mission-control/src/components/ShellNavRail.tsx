@@ -23,9 +23,6 @@ export function cycleShellNavMode(mode: ShellNavMode): ShellNavMode {
   return "expanded";
 }
 
-/** Pages excluded from the nav rail for operate space — handled via in-page mode tabs */
-const OPERATE_INLINE_PAGES = new Set(["chat", "cowork", "code"]);
-
 export function ShellNavRail({
   route,
   visiblePage,
@@ -46,8 +43,7 @@ export function ShellNavRail({
   const showLabels = navMode !== "icon";
   const showDescriptions = navMode === "expanded";
 
-  /** For operate space, only show Tasks + Approvals (modes handled inline) */
-  const currentSpacePages = VISIBLE_SPACE_PAGES[route.space].filter((item) => !OPERATE_INLINE_PAGES.has(item.page));
+  const currentSpacePages = VISIBLE_SPACE_PAGES[route.space];
 
   return (
     <aside

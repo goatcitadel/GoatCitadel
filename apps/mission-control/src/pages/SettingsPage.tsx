@@ -874,7 +874,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
             eyebrow="Configuration"
             title={pageCopy.settings.title}
             subtitle={pageCopy.settings.subtitle}
-            hint="Tune providers, access, and runtime defaults without leaving Mission Control."
+            hint="Configure providers, access, and runtime defaults without leaving Mission Control."
             className="page-header-command settings-header"
             density="compact"
           />

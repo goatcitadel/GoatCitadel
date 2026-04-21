@@ -47,8 +47,8 @@ vi.mock("../components/StatusChip", () => ({
   StatusChip: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 
-vi.mock("../components/TuneHubLayout", () => ({
-  TuneHubLayout: ({
+vi.mock("../components/ConfigureHubLayout", () => ({
+  ConfigureHubLayout: ({
     title,
     subtitle,
     children,

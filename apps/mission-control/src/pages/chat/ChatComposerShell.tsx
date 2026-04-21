@@ -299,6 +299,7 @@ export function ChatComposerShell(props: {
         onKeyDown={onComposerKeyDown}
         onPaste={onComposerPaste}
         placeholder={placeholder}
+        aria-label={`${surfaceConfig.label} message`}
         rows={4}
       />
       {commandSuggestions.length > 0 ? (
@@ -324,6 +325,7 @@ export function ChatComposerShell(props: {
               type="button"
               className="gc-button chat-attachment-chip"
               onClick={() => onRemoveAttachment(item.attachmentId)}
+              aria-label={`Remove attachment ${item.fileName}`}
             >
               {item.fileName} ×
             </button>

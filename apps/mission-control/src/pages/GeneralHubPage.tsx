@@ -1,5 +1,5 @@
 import { EmbeddedPageChromeProvider } from "../components/EmbeddedPageChrome";
-import { TuneHubLayout } from "../components/TuneHubLayout";
+import { ConfigureHubLayout } from "../components/ConfigureHubLayout";
 import { OnboardingPage } from "./OnboardingPage";
 import { SettingsPage } from "./SettingsPage";
 
@@ -33,7 +33,7 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
             : "Set the base defaults Mission Control will reuse everywhere else.";
 
   return (
-    <TuneHubLayout
+    <ConfigureHubLayout
       title="General"
       subtitle={
         <>
@@ -56,6 +56,6 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
           <SettingsPage activeTab={activeTab} />
         )}
       </EmbeddedPageChromeProvider>
-    </TuneHubLayout>
+    </ConfigureHubLayout>
   );
 }

@@ -243,7 +243,7 @@ export function CodeWorkbenchPanel({
         </section>
 
         <section className="chat-code-workbench-main">
-          <div className="chat-code-workbench-pane-tabs" role="tablist" aria-label="Workbench panes">
+          <div className="chat-code-workbench-pane-tabs" aria-label="Workbench panes">
             {[
               ["diff", "Diff"],
               ["output", "Output"],
@@ -363,7 +363,7 @@ export function CodeWorkbenchPanel({
                 </span>
               </div>
               {codeBlocks.length > 0 ? (
-                <div className="chat-code-workbench-tabs" role="tablist" aria-label="Draft snippets">
+                <div className="chat-code-workbench-tabs" aria-label="Draft snippets">
                   {codeBlocks.map((block, index) => (
                     <button
                       key={block.id}

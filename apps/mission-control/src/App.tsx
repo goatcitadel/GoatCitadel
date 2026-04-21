@@ -27,7 +27,6 @@ import {
 } from "./api/shell-client";
 import { fetchDashboardState, type DashboardStateResponse } from "./api/client";
 import { DeviceAccessApprovalModal, type DeviceAccessApprovalPrompt } from "./components/DeviceAccessApprovalModal";
-import { GlobalFreshnessPill } from "./components/GlobalFreshnessPill";
 import { GCSelect } from "./components/ui";
 import { GatewayAccessGate } from "./components/GatewayAccessGate";
 import { NotificationStack, type NotificationItem, upsertNotificationItem } from "./components/NotificationStack";
@@ -36,10 +35,10 @@ import { RemoteApprovalActionModal, type RemoteApprovalActionPrompt } from "./co
 import { ShellPageFrame } from "./components/ShellPageFrame";
 import { ShellDetailPanelProvider, type ShellDetailPanelEntry } from "./components/ShellDetailPanelContext";
 import { ShellNavRail, cycleShellNavMode } from "./components/ShellNavRail";
+import { ShellStatusCenter } from "./components/ShellStatusCenter";
 import { SideInspectorDrawer } from "./components/SideInspectorDrawer";
 import { SignalLoader } from "./components/SignalLoader";
-import { StatusChip } from "./components/StatusChip";
-import { StatusStrip } from "./components/StatusStrip";
+import type { ShellStatusEntry, ShellStatusSummary } from "./components/shell-status-model";
 import {
   buildRouteSearch,
   buildRouteForVisiblePage,
@@ -47,6 +46,7 @@ import {
   getVisiblePage,
   getVisiblePageLabel,
   normalizeResolvedRoute,
+  PAGE_META,
   readRouteFromLocation,
   SPACE_META,
   VISIBLE_SPACE_PAGES,
@@ -212,10 +212,6 @@ type IdleWindow = Window & {
 type ViewTransitionDocument = Document & {
   startViewTransition?: (updateCallback: () => void) => { finished: Promise<void> };
 };
-
-function deriveOperateStatusStripExpanded(): boolean {
-  return false;
-}
 
 function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   const forcedTheme = readThemeOverrideFromLocation();
@@ -384,6 +380,8 @@ export function App() {
     setShowTechnicalDetails,
     detailPanelPinned,
     setDetailPanelPinned,
+    statusCenterExpanded,
+    setStatusCenterExpanded,
     activeWorkspaceId,
     setActiveWorkspaceId,
     theme,
@@ -403,9 +401,6 @@ export function App() {
   const [operateStatus, setOperateStatus] = useState<DashboardStateResponse | null>(null);
   const [operateStatusLastSuccessAt, setOperateStatusLastSuccessAt] = useState<number | null>(null);
   const [operateStatusLastError, setOperateStatusLastError] = useState<string | null>(null);
-  const [operateStatusStripExpanded, setOperateStatusStripExpanded] = useState(() =>
-    deriveOperateStatusStripExpanded(),
-  );
   const [operateProviderModelSummary, setOperateProviderModelSummary] = useState<string | null>(null);
   const [desktopShellRail, setDesktopShellRail] = useState(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -1182,9 +1177,6 @@ export function App() {
     operateActiveAgentsCount > 0
       ? `${operateActiveAgentsCount} runtime${operateActiveAgentsCount === 1 ? "" : "s"}`
       : "No runtime";
-  const hasOperateUrgency =
-    operateStatusFreshness.state === "stale" || shellGatewayState.status === "degraded-live-updates";
-  const operateStatusVariant = hasOperateUrgency || operateStatusStripExpanded ? "expanded" : "compact";
   const workTrustDescriptor = useMemo<WorkTrustDescriptor>(
     () => ({
       workspaceLabel: activeWorkspaceName.trim().length > 0 ? activeWorkspaceName : "Workspace unavailable",
@@ -1212,12 +1204,173 @@ export function App() {
     ],
   );
 
-  useEffect(() => {
-    if (route.space !== "operate") {
-      return;
-    }
-    setOperateStatusStripExpanded(deriveOperateStatusStripExpanded());
-  }, [route]);
+  const shellStatusSummary = useMemo<ShellStatusSummary>(() => {
+    const spendLabel =
+      operateDailyCostUsd > 0 ? `$${operateDailyCostUsd.toFixed(operateDailyCostUsd >= 10 ? 1 : 2)}` : "$0.00";
+    const decisionLabel =
+      operateApprovalsCount > 0
+        ? `${operateApprovalsCount} decision${operateApprovalsCount === 1 ? "" : "s"} waiting`
+        : operateStatusFreshness.state === "stale"
+          ? "Status needs review"
+          : "Decisions clear";
+
+    return {
+      tone:
+        operateApprovalsCount > 0
+          ? "warning"
+          : shellGatewayState.status === "degraded-live-updates" || operateStatusFreshness.state === "stale"
+            ? "warning"
+            : "success",
+      label: decisionLabel,
+      note:
+        operateStatusFreshness.state === "stale"
+          ? operateStatusFreshness.note
+          : (shellGatewayState.summary ?? "Routing, approvals, and runtime posture are in sync."),
+      approvalCount: operateApprovalsCount,
+      sections: [
+        {
+          id: "system-health",
+          title: "System health",
+          summary: shellGatewayState.label,
+          entries: [
+            {
+              id: "gateway",
+              label: "Gateway",
+              value: shellGatewayState.label,
+              note: shellGatewayState.nextStep,
+              tone: shellGatewayState.tone,
+            },
+            {
+              id: "freshness",
+              label: "Freshness",
+              value: operateStatusFreshness.state === "live" ? "Live snapshot" : "Needs refresh",
+              note: operateStatusFreshness.note,
+              tone: operateStatusFreshness.state === "live" ? "success" : "warning",
+            },
+          ],
+        },
+        {
+          id: "runtime-routing",
+          title: "Runtime and routing",
+          summary: runtimeSummaryLabel,
+          entries: [
+            {
+              id: "runtime",
+              label: "Runtime posture",
+              value: runtimeSummaryLabel,
+              note: operateProviderModelSummary ?? "Provider routing pending",
+              tone: operateActiveAgentsCount > 0 ? "success" : "muted",
+            },
+            {
+              id: "workspace",
+              label: "Workspace",
+              value: activeWorkspaceName.trim().length > 0 ? activeWorkspaceName : "Workspace unavailable",
+              note:
+                route.space === "operate" && route.page === "surface"
+                  ? CHAT_MODE_PRESETS[operateSurfaceTab].label
+                  : currentPageLabel,
+              tone: "default",
+            },
+          ],
+        },
+        {
+          id: "decisions-approvals",
+          title: "Decisions and approvals",
+          summary: approvalsChipLabel,
+          entries: [
+            {
+              id: "approvals",
+              label: "Approvals",
+              value: approvalsChipLabel,
+              note:
+                operateApprovalsCount > 0
+                  ? "Open the queue to review pending decisions."
+                  : "No approvals are waiting for operator action.",
+              tone: operateApprovalsCount > 0 ? "warning" : "success",
+              actionLabel: "Open queue",
+            },
+            {
+              id: "tasks",
+              label: "Open tasks",
+              value: String(operateOpenTasksCount),
+              note:
+                operateOpenTasksCount > 0 ? "Review linked work and blockers." : "No open tasks in the shared queue.",
+              tone: operateOpenTasksCount > 0 ? "live" : "muted",
+              actionLabel: "Open tasks",
+            },
+          ],
+        },
+        {
+          id: "activity-spend",
+          title: "Activity and spend",
+          summary: `${spendLabel} today`,
+          entries: [
+            {
+              id: "spend",
+              label: "Spend today",
+              value: spendLabel,
+              note: "Tracked provider and runtime usage for the current dashboard window.",
+              tone: "default",
+              actionLabel: "Open health",
+            },
+            {
+              id: "agents",
+              label: "Active agents",
+              value: String(operateActiveAgentsCount),
+              note:
+                operateActiveAgentsCount > 0
+                  ? "Inspect current roster and live board activity."
+                  : "No agents are actively running right now.",
+              tone: operateActiveAgentsCount > 0 ? "live" : "muted",
+              actionLabel: "Open agents",
+            },
+          ],
+        },
+      ],
+    };
+  }, [
+    activeWorkspaceName,
+    approvalsChipLabel,
+    currentPageLabel,
+    operateActiveAgentsCount,
+    operateApprovalsCount,
+    operateDailyCostUsd,
+    operateOpenTasksCount,
+    operateProviderModelSummary,
+    operateStatusFreshness.note,
+    operateStatusFreshness.state,
+    operateSurfaceTab,
+    route.page,
+    route.space,
+    runtimeSummaryLabel,
+    shellGatewayState.label,
+    shellGatewayState.nextStep,
+    shellGatewayState.status,
+    shellGatewayState.summary,
+    shellGatewayState.tone,
+  ]);
+
+  const handleShellStatusEntryAction = useCallback(
+    (entry: ShellStatusEntry) => {
+      switch (entry.id) {
+        case "approvals":
+          navigate({ space: "operate", page: "approvals" });
+          break;
+        case "tasks":
+          navigate({ space: "operate", page: "tasks" });
+          break;
+        case "spend":
+          handleSelectVisiblePage("health");
+          break;
+        case "agents":
+          navigate({ space: "configure", page: "agents", tab: "overview" });
+          break;
+        default:
+          break;
+      }
+    },
+    [handleSelectVisiblePage, navigate],
+  );
 
   useEffect(() => {
     if (route.space !== "operate" || route.page !== "surface") {
@@ -1424,45 +1577,36 @@ export function App() {
             </div>
           </div>
           <div className="shell-bar-actions mc-shell-bar-actions">
-            {!desktopShellRail ? (
-              <nav className="space-nav" aria-label="Mission Control spaces">
-                {(Object.keys(SPACE_META) as Space[]).map((space) => (
-                  <button
-                    key={space}
-                    type="button"
-                    className={`space-nav-item gc-nav-button gc-nav-tier-space mc-shell-chip${route.space === space ? " active" : ""}`}
-                    onClick={() => handleSelectSpace(space)}
-                  >
-                    {SPACE_META[space].label}
-                  </button>
-                ))}
-              </nav>
-            ) : null}
+            <nav className="space-nav" aria-label="Mission Control spaces">
+              {(Object.keys(SPACE_META) as Space[]).map((space) => (
+                <button
+                  key={space}
+                  type="button"
+                  className={`space-nav-item gc-nav-button gc-nav-tier-space mc-shell-chip${route.space === space ? " active" : ""}`}
+                  onClick={() => handleSelectSpace(space)}
+                >
+                  {SPACE_META[space].label}
+                </button>
+              ))}
+            </nav>
             <label className="shell-workspace-picker">
               <span className="shell-action-label">Workspace</span>
               <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
             </label>
             <div className="shell-bar-utility mc-shell-bar-utility">
-              <GlobalFreshnessPill streamState={streamState} variant="compact" />
-              <StatusChip tone={shellGatewayState.tone}>{shellGatewayState.label}</StatusChip>
               <button
                 type="button"
-                className={`shell-trust-action gc-nav-button gc-nav-tier-chip mc-shell-chip${operateApprovalsCount > 0 ? " active" : ""}`}
-                onClick={() => navigate({ space: "operate", page: "approvals" })}
+                className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip mc-shell-chip"
+                onClick={() => setPaletteOpen(true)}
               >
-                {workTrustDescriptor.approvalsSummary}
+                Command Palette
               </button>
-              {route.space === "operate" ? (
-                <button
-                  type="button"
-                  className={`shell-trust-action shell-status-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip${operateStatusVariant === "expanded" ? " active" : ""}`}
-                  aria-expanded={operateStatusVariant === "expanded"}
-                  aria-controls="shell-attached-status-panel"
-                  onClick={() => setOperateStatusStripExpanded((current) => !current)}
-                >
-                  {workTrustDescriptor.runtimeSummary}
-                </button>
-              ) : null}
+              <ShellStatusCenter
+                summary={shellStatusSummary}
+                expanded={statusCenterExpanded}
+                onToggle={() => setStatusCenterExpanded(!statusCenterExpanded)}
+                onEntryAction={handleShellStatusEntryAction}
+              />
               {detailPanelEntry ? (
                 <button
                   type="button"
@@ -1498,6 +1642,10 @@ export function App() {
         {!desktopShellRail ? (
           <div className={`shell-secondary-nav mc-shell-secondary-nav${compactShellNav ? " compact" : ""}`}>
             <div className="shell-secondary-nav-primary mc-shell-secondary-nav-primary">
+              <div className="shell-context-summary">
+                <p className="shell-bar-page-label">{SPACE_META[route.space].label}</p>
+                <p className="shell-bar-page-note">{currentPageLabel}</p>
+              </div>
               {compactShellNav ? (
                 <label className="shell-context-picker">
                   <span className="shell-action-label">Current area</span>
@@ -1527,7 +1675,31 @@ export function App() {
               )}
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="shell-secondary-nav mc-shell-secondary-nav">
+            <div className="shell-secondary-nav-primary mc-shell-secondary-nav-primary">
+              <div className="shell-context-summary">
+                <p className="shell-bar-page-label">{SPACE_META[route.space].label}</p>
+                <p className="shell-bar-page-note">{PAGE_META[route.page].description}</p>
+              </div>
+              <nav
+                className={route.space === "operate" ? "surface-nav" : "secondary-page-nav"}
+                aria-label={`${SPACE_META[route.space].label} pages`}
+              >
+                {VISIBLE_SPACE_PAGES[route.space].map((item) => (
+                  <button
+                    key={item.page}
+                    type="button"
+                    className={`${route.space === "operate" ? "surface-nav-item" : "secondary-page-nav-item"} gc-nav-button gc-nav-tier-page mc-shell-chip${visiblePage === item.page ? " active" : ""}`}
+                    onClick={() => handleSelectVisiblePage(item.page)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+          </div>
+        )}
 
         <main className="shell-main mc-shell-main">
           {notifications.length > 0 ? (
@@ -1553,68 +1725,10 @@ export function App() {
               />
             ) : null}
             <div className="shell-workspace">
-              {/* In-page mode tabs for Chat / Cowork / Code — replaces nav rail modes */}
-              {route.space === "operate" && route.page === "surface" ? (
-                <nav className="signal-mode-tabs" aria-label="Work surface mode" role="tablist">
-                  {(["chat", "cowork", "code"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      role="tab"
-                      className={`signal-mode-tab gc-nav-button gc-nav-tier-page${operateSurfaceTab === mode ? " active" : ""}`}
-                      aria-selected={operateSurfaceTab === mode}
-                      onClick={() => navigate({ space: "operate", page: "surface", surface: mode })}
-                    >
-                      {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                    </button>
-                  ))}
-                  <div className="signal-mode-tabs-spacer" />
-                  {operateApprovalsCount > 0 ? (
-                    <button
-                      type="button"
-                      className="signal-approvals-tab gc-nav-button gc-nav-tier-chip"
-                      onClick={() => navigate({ space: "operate", page: "approvals" })}
-                      aria-label={`${operateApprovalsCount} approval${operateApprovalsCount === 1 ? "" : "s"} pending`}
-                    >
-                      <span className="signal-approvals-dot" aria-hidden="true" />
-                      {operateApprovalsCount} approval{operateApprovalsCount === 1 ? "" : "s"}
-                    </button>
-                  ) : null}
-                </nav>
-              ) : null}
-              {route.space === "operate" && operateStatusVariant === "expanded" ? (
-                <div className="shell-attached-status-panel" id="shell-attached-status-panel">
-                  <StatusStrip
-                    approvalsCount={operateApprovalsCount}
-                    approvalsLabel="Pending decisions"
-                    approvalsNote={
-                      operateStatusFreshness.state === "stale"
-                        ? `${operateStatusFreshness.note} Review the Approvals page before trusting these counts.`
-                        : "Backend approvals plus local Mission Control prompts."
-                    }
-                    activeAgentsCount={operateActiveAgentsCount}
-                    dailyCostUsd={operateDailyCostUsd}
-                    openTasksCount={operateOpenTasksCount}
-                    variant="expanded"
-                    context="work"
-                    placement="attached"
-                    onToggleVariant={(next) => setOperateStatusStripExpanded(next === "expanded")}
-                    onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
-                    onOpenAgents={() => navigate({ space: "configure", page: "agents", tab: "board" })}
-                    onOpenCosts={() => handleSelectVisiblePage("health")}
-                    onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
-                  />
-                </div>
-              ) : null}
-              {shellGatewayState.status === "degraded-live-updates" ? (
-                <div className="status-banner warning">
-                  {shellGatewayState.summary} {shellGatewayState.nextStep}
-                </div>
-              ) : null}
               {route.space === "operate" && route.page === "surface" && onboardingComplete === false ? (
                 <div className="status-banner warning">
-                  Onboarding still needs attention. Work surfaces stay available, but finish the setup checklist before
-                  trusting provider, access, or runtime defaults.
+                  Onboarding still needs attention. Work surfaces stay available, but finish the configuration checklist
+                  before trusting provider, access, or runtime defaults.
                   <button
                     type="button"
                     className="gc-button"
