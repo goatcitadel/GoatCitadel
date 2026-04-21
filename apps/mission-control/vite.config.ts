@@ -41,6 +41,7 @@ export default defineConfig(({ mode }) => {
     resolve: {
       // Fresh installer-based copies may not have workspace package dist output yet.
       // Resolve contracts from source so Mission Control stays bootable in dev mode.
+      dedupe: ["react", "react-dom"],
       alias: [
         {
           find: "@",

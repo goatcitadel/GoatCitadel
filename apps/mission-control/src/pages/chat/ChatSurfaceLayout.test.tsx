@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ChatSurfaceLayout } from "./ChatSurfaceLayout";
 
 describe("ChatSurfaceLayout", () => {
-  it("renders the promoted secondary column and dock for cowork", () => {
+  it("keeps cowork chat beside the workflow board and moves context into a drawer", () => {
     const markup = renderToStaticMarkup(
       <ChatSurfaceLayout
         mode="cowork"
@@ -26,7 +26,8 @@ describe("ChatSurfaceLayout", () => {
     expect(markup).toContain('data-support-thread-behavior="stacked"');
     expect(markup).toContain('data-dock-behavior="drawer"');
     expect(markup).toContain("Workflow column");
-    expect(markup).toContain("Context dock");
+    expect(markup).not.toContain("chat-v11-dock-column");
+    expect(markup).not.toContain("Context dock");
     expect(markup.indexOf("Workflow column")).toBeLessThan(markup.indexOf("Primary column"));
   });
 

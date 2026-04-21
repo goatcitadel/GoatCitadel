@@ -59,6 +59,7 @@
     "@types/react-test-renderer": "^19.1.0",
     "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "happy-dom": "^20.9.0",
     "react-test-renderer": "^19.1.1",
     "vite": "^5.4.10"
   }

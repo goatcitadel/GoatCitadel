@@ -336,7 +336,7 @@ async function runAgentSendChatMessageLlmPath(
     }
 
     const dedupedTurnCitations = dedupeChatCitations([
-      ...prepared.threadKnowledgeCitations,
+      ...(prepared.threadKnowledgeCitations ?? []),
       ...(turnResult.turnTrace.citations ?? []),
     ]);
     const persistedTurnFailure =

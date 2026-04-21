@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
+import { shouldRenderMonacoRuntime } from "./monaco-runtime";
 
 interface MonacoDiffEditorProps {
   original: string;
@@ -7,10 +8,6 @@ interface MonacoDiffEditorProps {
   language?: string;
   height?: number | string;
   className?: string;
-}
-
-function shouldRenderMonaco(): boolean {
-  return typeof window !== "undefined" && import.meta.env.MODE !== "test";
 }
 
 function resolveMonacoTheme(): "vs" | "vs-dark" {
@@ -41,9 +38,28 @@ export function MonacoDiffEditor({ original, modified, language, height = "100%"
   const editorRef = useRef<MonacoEditorNamespace.IStandaloneDiffEditor | null>(null);
   const originalModelRef = useRef<MonacoEditorNamespace.ITextModel | null>(null);
   const modifiedModelRef = useRef<MonacoEditorNamespace.ITextModel | null>(null);
+  const latestInputRef = useRef({ original, modified, language });
+  latestInputRef.current = { original, modified, language };
+
+  function applyDiffModel(nextOriginal: string, nextModified: string, nextLanguage?: string): void {
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    if (!shouldRenderMonacoRuntime() || !editor || !monaco) {
+      return;
+    }
+    originalModelRef.current?.dispose();
+    modifiedModelRef.current?.dispose();
+    originalModelRef.current = monaco.editor.createModel(nextOriginal, normalizeMonacoLanguage(nextLanguage));
+    modifiedModelRef.current = monaco.editor.createModel(nextModified, normalizeMonacoLanguage(nextLanguage));
+    editor.setModel({
+      original: originalModelRef.current,
+      modified: modifiedModelRef.current,
+    });
+    monaco.editor.setTheme(resolveMonacoTheme());
+  }
 
   useEffect(() => {
-    if (!shouldRenderMonaco() || !containerRef.current) {
+    if (!shouldRenderMonacoRuntime() || !containerRef.current) {
       return undefined;
     }
     let disposed = false;
@@ -64,6 +80,8 @@ export function MonacoDiffEditor({ original, modified, language, height = "100%"
         scrollBeyondLastLine: false,
         smoothScrolling: true,
       });
+      const latestInput = latestInputRef.current;
+      applyDiffModel(latestInput.original, latestInput.modified, latestInput.language);
     });
 
     return () => {
@@ -78,22 +96,10 @@ export function MonacoDiffEditor({ original, modified, language, height = "100%"
   }, []);
 
   useEffect(() => {
-    const monaco = monacoRef.current;
-    if (!shouldRenderMonaco() || !editorRef.current || !monaco) {
-      return;
-    }
-    originalModelRef.current?.dispose();
-    modifiedModelRef.current?.dispose();
-    originalModelRef.current = monaco.editor.createModel(original, normalizeMonacoLanguage(language));
-    modifiedModelRef.current = monaco.editor.createModel(modified, normalizeMonacoLanguage(language));
-    editorRef.current.setModel({
-      original: originalModelRef.current,
-      modified: modifiedModelRef.current,
-    });
-    monaco.editor.setTheme(resolveMonacoTheme());
+    applyDiffModel(original, modified, language);
   }, [language, modified, original]);
 
-  if (!shouldRenderMonaco()) {
+  if (!shouldRenderMonacoRuntime()) {
     return (
       <div className={className}>
         <pre>{original}</pre>

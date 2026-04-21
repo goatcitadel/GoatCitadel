@@ -627,4 +627,48 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS content_hash TEXT;
     `,
   },
+  {
+    version: 19,
+    name: "imported_agent_catalog_schema_repairs",
+    sql: `
+      CREATE TABLE IF NOT EXISTS imported_agent_catalog (
+        entry_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        division TEXT NOT NULL,
+        state TEXT NOT NULL,
+        definition_id TEXT NOT NULL UNIQUE,
+        slug TEXT NOT NULL,
+        frontmatter_json TEXT NOT NULL,
+        raw_markdown TEXT NOT NULL,
+        body_markdown TEXT NOT NULL,
+        section_order_json TEXT NOT NULL,
+        section_map_json TEXT NOT NULL,
+        parse_status TEXT NOT NULL,
+        parse_warnings_json TEXT NOT NULL,
+        provenance_provider TEXT NOT NULL,
+        provenance_repo_url TEXT,
+        provenance_ref TEXT,
+        provenance_commit TEXT,
+        provenance_path TEXT NOT NULL,
+        provenance_sha256 TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        activated_at TEXT,
+        retired_at TEXT,
+        search_text TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace
+        ON imported_agent_catalog(workspace_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace_division
+        ON imported_agent_catalog(workspace_id, division, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace_state
+        ON imported_agent_catalog(workspace_id, state, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace_parse
+        ON imported_agent_catalog(workspace_id, parse_status, updated_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_agent_catalog_source_path
+        ON imported_agent_catalog(workspace_id, provenance_provider, COALESCE(provenance_repo_url, ''), provenance_path);
+    `,
+  },
 ];

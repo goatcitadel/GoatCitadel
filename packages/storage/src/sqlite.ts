@@ -4637,9 +4637,9 @@ function createChatSessionWorkbenchSchema(db: DatabaseSync): void {
 }
 
 function migrateChatSessionOrganization(db: DatabaseSync): void {
-  addColumnIfMissing(db, "chat_session_meta", "folder_id", "TEXT");
-  addColumnIfMissing(db, "chat_session_meta", "folder_name", "TEXT");
-  addColumnIfMissing(db, "chat_session_meta", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissingIfTableExists(db, "chat_session_meta", "folder_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_session_meta", "folder_name", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_session_meta", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
   if (tableExists(db, "chat_session_meta")) {
     db.exec(`
       UPDATE chat_session_meta

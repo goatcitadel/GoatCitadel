@@ -131,4 +131,16 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS source_block_index BIGINT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS content_hash TEXT/);
   });
+
+  it("repairs the imported agent catalog table for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 19);
+
+    assert.equal(repairMigration?.name, "imported_agent_catalog_schema_repairs");
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS imported_agent_catalog \(/);
+    assert.match(repairMigration?.sql ?? "", /CREATE INDEX IF NOT EXISTS idx_imported_agent_catalog_workspace/);
+    assert.match(
+      repairMigration?.sql ?? "",
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_agent_catalog_source_path/,
+    );
+  });
 });

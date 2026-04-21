@@ -706,7 +706,7 @@ export async function* streamPreparedAgentChatTurn(
       });
 
       const orchestrationCitations = dedupeChatCitations([
-        ...prepared.threadKnowledgeCitations,
+        ...(prepared.threadKnowledgeCitations ?? []),
         ...orchestrationResult.citations,
       ]);
       for (const citation of orchestrationCitations) {
@@ -876,7 +876,7 @@ export async function* streamPreparedAgentChatTurn(
     let approvalRequired = false;
     let userInputRequired = false;
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
-    const streamCitations: ChatCitationRecord[] = [...prepared.threadKnowledgeCitations];
+    const streamCitations: ChatCitationRecord[] = [...(prepared.threadKnowledgeCitations ?? [])];
     for await (const chunk of host.turnRuntime.runStream({
       sessionId,
       turnId,

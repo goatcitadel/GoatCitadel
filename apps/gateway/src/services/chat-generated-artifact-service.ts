@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   ChatGeneratedArtifactKind,
   ChatGeneratedArtifactRecord,
@@ -11,7 +11,7 @@ import { ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
 export interface ChatGeneratedArtifactHost {
-  readonly storage: Pick<Storage, "chatGeneratedArtifacts" | "chatSessionPrefs" | "chatTurnTraces" | "gatewaySql">;
+  readonly storage: Pick<Storage, "chatGeneratedArtifacts" | "chatTurnTraces" | "gatewaySql">;
   requireChatSession(sessionId: string): ChatSessionRecord;
 }
 
@@ -74,8 +74,7 @@ export function createChatGeneratedArtifactFromTurn(
   if (!trace.assistantMessageId) {
     throw new ValidationError({ message: "Artifacts can only be created from assistant turns." });
   }
-  const prefs = host.storage.chatSessionPrefs.ensure(sessionId);
-  const sourceSurface = prefs.mode;
+  const sourceSurface = trace.mode;
   const turnArtifacts = host.storage.chatGeneratedArtifacts.listByTurn(turnId, 50);
   const latestSameTurnArtifact = turnArtifacts[0];
   if (!input.supersedeLatest && latestSameTurnArtifact) {
@@ -83,12 +82,28 @@ export function createChatGeneratedArtifactFromTurn(
   }
   const assistantText = resolveAssistantTextFromTrace(host, turnId);
   const inferred = inferGeneratedArtifactFromAssistantText(assistantText);
+  if (
+    input.supersedeLatest &&
+    latestSameTurnArtifact?.supersedesArtifactId &&
+    latestSameTurnArtifact.kind === inferred.kind &&
+    latestSameTurnArtifact.sourceBlockIndex === inferred.sourceBlockIndex &&
+    latestSameTurnArtifact.contentHash === inferred.contentHash
+  ) {
+    return latestSameTurnArtifact;
+  }
   const now = new Date().toISOString();
   const nextVersion =
     input.supersedeLatest && latestSameTurnArtifact ? Math.max(1, latestSameTurnArtifact.version + 1) : 1;
   const artifactId = input.supersedeLatest
-    ? randomUUID()
+    ? buildStableSupersededArtifactId(
+        turnId,
+        latestSameTurnArtifact?.artifactId,
+        inferred.kind,
+        inferred.contentHash,
+        inferred.sourceBlockIndex,
+      )
     : buildStableGeneratedArtifactId(turnId, inferred.kind, inferred.contentHash, inferred.sourceBlockIndex);
+  const expectedSupersedesArtifactId = input.supersedeLatest ? latestSameTurnArtifact?.artifactId : undefined;
   try {
     return host.storage.chatGeneratedArtifacts.create({
       artifactId,
@@ -101,7 +116,7 @@ export function createChatGeneratedArtifactFromTurn(
       language: inferred.language,
       sourceSurface,
       version: nextVersion,
-      supersedesArtifactId: input.supersedeLatest ? latestSameTurnArtifact?.artifactId : undefined,
+      supersedesArtifactId: expectedSupersedesArtifactId,
       providerId: trace.routing.effectiveProviderId ?? trace.routing.primaryProviderId,
       model: trace.routing.effectiveModel ?? trace.routing.primaryModel ?? trace.model,
       sourceBlockIndex: inferred.sourceBlockIndex,
@@ -110,11 +125,19 @@ export function createChatGeneratedArtifactFromTurn(
       updatedAt: now,
     });
   } catch (error) {
-    if (!input.supersedeLatest) {
-      const currentArtifact = host.storage.chatGeneratedArtifacts.listByTurn(turnId, 50)[0];
-      if (currentArtifact) {
+    try {
+      const currentArtifact = host.storage.chatGeneratedArtifacts.get(artifactId);
+      if (
+        currentArtifact.turnId === turnId &&
+        currentArtifact.kind === inferred.kind &&
+        currentArtifact.sourceBlockIndex === inferred.sourceBlockIndex &&
+        currentArtifact.contentHash === inferred.contentHash &&
+        currentArtifact.supersedesArtifactId === expectedSupersedesArtifactId
+      ) {
         return currentArtifact;
       }
+    } catch {
+      // Fall through and rethrow the original persistence error.
     }
     throw error;
   }
@@ -260,6 +283,28 @@ function withArtifactContentHash(input: {
     ...input,
     contentHash: createHash("sha256").update(input.content).digest("hex"),
   };
+}
+
+function buildStableSupersededArtifactId(
+  turnId: string,
+  supersedesArtifactId: string | undefined,
+  kind: ChatGeneratedArtifactKind,
+  contentHash: string,
+  sourceBlockIndex?: number,
+): string {
+  const hash = createHash("sha256");
+  hash.update("generated-artifact-supersede");
+  hash.update("\u0000");
+  hash.update(turnId.trim());
+  hash.update("\u0000");
+  hash.update((supersedesArtifactId ?? "").trim());
+  hash.update("\u0000");
+  hash.update(kind);
+  hash.update("\u0000");
+  hash.update(contentHash);
+  hash.update("\u0000");
+  hash.update(sourceBlockIndex !== undefined ? String(sourceBlockIndex) : "");
+  return `gartv-${hash.digest("hex")}`;
 }
 
 function buildStableGeneratedArtifactId(

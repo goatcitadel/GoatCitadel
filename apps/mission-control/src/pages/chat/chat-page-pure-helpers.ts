@@ -1,3 +1,4 @@
+import type { Dispatch, SetStateAction } from "react";
 /**
  * Pure helpers and types extracted from ChatPage.tsx as part of Step 10
  * (page decomposition). No React/DOM/state dependencies — safely
@@ -9,6 +10,8 @@ import {
   applyChatModePresetToPatch,
   CHAT_MODE_PRESETS,
   type ChatCapabilityUpgradeSuggestion,
+  type ChatGeneratedArtifactRecord,
+  type ChatMode,
   type ChatSessionPrefsPatch,
   type ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
@@ -40,6 +43,29 @@ export interface FinalizedStreamMessageState {
   placeholderId: string;
   messageId?: string;
   content: string;
+}
+
+export interface RevealGeneratedArtifactInput {
+  artifact: ChatGeneratedArtifactRecord;
+  compactSurfaceLayout: boolean;
+  messageMode: ChatMode;
+  loadSessionCoreState: (
+    sessionId: string,
+    options?: { background?: boolean; includeThread?: boolean },
+  ) => Promise<void>;
+  setSessionRailOpen: (open: boolean) => void;
+  setDockOpen: (open: boolean) => void;
+  setActiveGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord | null) => void;
+  setSelectedTurnId: (turnId: string | null) => void;
+  setGeneratedArtifacts: Dispatch<
+    SetStateAction<{
+      items: ChatGeneratedArtifactRecord[];
+    } | null>
+  >;
+  handleNavigateSurface: (
+    surface: ChatMode,
+    options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
+  ) => void;
 }
 
 export function resolveChatRefreshPlan(
@@ -249,4 +275,30 @@ export function shouldApplyFetchedMessagesAfterStream(
 
 export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"], content: string): boolean {
   return action === "send" && content.trim().startsWith("/");
+}
+
+export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArtifactInput): Promise<void> {
+  if (input.compactSurfaceLayout) {
+    input.setSessionRailOpen(false);
+    input.setDockOpen(false);
+  }
+  input.setActiveGeneratedArtifact(input.artifact);
+  input.setSelectedTurnId(input.artifact.turnId);
+  await input.loadSessionCoreState(input.artifact.sessionId, {
+    background: true,
+    includeThread: true,
+  });
+  input.setGeneratedArtifacts((current) =>
+    current
+      ? {
+          ...current,
+          items: [input.artifact, ...current.items.filter((item) => item.artifactId !== input.artifact.artifactId)],
+        }
+      : current,
+  );
+  input.handleNavigateSurface(input.messageMode, {
+    sessionId: input.artifact.sessionId,
+    turnId: input.artifact.turnId,
+    artifactId: input.artifact.artifactId,
+  });
 }

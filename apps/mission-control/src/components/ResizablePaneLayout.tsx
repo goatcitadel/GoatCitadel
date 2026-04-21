@@ -20,6 +20,12 @@ interface ResizablePaneLayoutProps {
 }
 
 const STORAGE_PREFIX = "goatcitadel.layout.";
+const STORAGE_VERSION = 3;
+
+interface StoredPaneLayout {
+  version: number;
+  panes: Record<string, number>;
+}
 
 function resolveStorageKey(storageKey?: string): string | null {
   const trimmed = storageKey?.trim();
@@ -29,7 +35,18 @@ function resolveStorageKey(storageKey?: string): string | null {
   return `${STORAGE_PREFIX}${trimmed}`;
 }
 
-function readStoredPaneSizes(storageKey?: string): Record<string, number> {
+function clearStoredPaneLayout(storageKey?: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const resolvedKey = resolveStorageKey(storageKey);
+  if (!resolvedKey) {
+    return;
+  }
+  window.localStorage.removeItem(resolvedKey);
+}
+
+function readStoredPaneFlexes(storageKey?: string): Record<string, number> {
   if (typeof window === "undefined") {
     return {};
   }
@@ -42,15 +59,73 @@ function readStoredPaneSizes(storageKey?: string): Record<string, number> {
     if (!raw) {
       return {};
     }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parsed = JSON.parse(raw) as StoredPaneLayout;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      parsed.version !== STORAGE_VERSION ||
+      !parsed.panes ||
+      typeof parsed.panes !== "object"
+    ) {
+      clearStoredPaneLayout(storageKey);
+      return {};
+    }
     return Object.fromEntries(
-      Object.entries(parsed).flatMap(([paneId, size]) =>
-        typeof size === "number" && Number.isFinite(size) && size > 0 ? [[paneId, Math.round(size)]] : [],
+      Object.entries(parsed.panes).flatMap(([paneId, size]) =>
+        typeof size === "number" && Number.isFinite(size) && size > 0 ? [[paneId, size]] : [],
       ),
     );
   } catch {
     return {};
   }
+}
+
+function measurePaneFlexes(
+  container: Element | null,
+  panes: readonly ResizablePaneDescriptor[],
+  orientation: "horizontal" | "vertical",
+): Record<string, number> {
+  if (!container) {
+    return {};
+  }
+  const paneElements = Array.from(container.children).filter(
+    (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("gc-resizable-pane"),
+  );
+  const measuredSizes = panes.map((_, index) => {
+    const element = paneElements[index];
+    if (!element) {
+      return 0;
+    }
+    const rect = element.getBoundingClientRect();
+    return orientation === "vertical" ? rect.width : rect.height;
+  });
+  const totalMeasuredSize = measuredSizes.reduce((sum, size) => sum + size, 0);
+  if (!(totalMeasuredSize > 0)) {
+    return {};
+  }
+  return Object.fromEntries(
+    panes.flatMap((pane, index) => {
+      const measuredSize = measuredSizes[index] ?? 0;
+      if (!(measuredSize > 0)) {
+        return [];
+      }
+      return [[pane.id, measuredSize / totalMeasuredSize]];
+    }),
+  );
+}
+
+function resolveDefaultPaneFlexes(panes: readonly ResizablePaneDescriptor[]): Record<string, number> {
+  const weightedSizes = panes.map((pane) => pane.defaultSize ?? pane.minSize ?? 1);
+  const totalWeight = weightedSizes.reduce((sum, size) => sum + size, 0);
+  if (!(totalWeight > 0)) {
+    return {};
+  }
+  return Object.fromEntries(
+    panes.map((pane, index) => {
+      const weight = weightedSizes[index] ?? 1;
+      return [pane.id, weight / totalWeight];
+    }),
+  );
 }
 
 function joinClassNames(...values: Array<string | undefined | null | false>): string {
@@ -65,44 +140,35 @@ export function ResizablePaneLayout({
   splitterClassName,
 }: ResizablePaneLayoutProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const [storedSizes, setStoredSizes] = useState<Record<string, number>>(() => readStoredPaneSizes(storageKey));
+  const [storedFlexes, setStoredFlexes] = useState<Record<string, number>>(() => readStoredPaneFlexes(storageKey));
   const shouldRenderReflex = typeof window !== "undefined" && import.meta.env.MODE !== "test";
+  const defaultFlexes = resolveDefaultPaneFlexes(panes);
 
   useEffect(() => {
-    setStoredSizes(readStoredPaneSizes(storageKey));
+    setStoredFlexes(readStoredPaneFlexes(storageKey));
   }, [storageKey]);
 
-  const persistPaneSizes = useCallback(() => {
+  const persistPaneLayout = useCallback(() => {
     if (typeof window === "undefined") {
       return;
     }
     const resolvedKey = resolveStorageKey(storageKey);
-    const container = rootRef.current?.querySelector(":scope > .reflex-container");
-    if (!container) {
+    const container = rootRef.current?.querySelector(":scope > .reflex-container") ?? null;
+    const nextFlexes = measurePaneFlexes(container, panes, orientation);
+    if (Object.keys(nextFlexes).length === 0) {
       return;
     }
-    const paneElements = Array.from(container.children).filter(
-      (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains("gc-resizable-pane"),
-    );
-    const nextSizes = Object.fromEntries(
-      panes.flatMap((pane, index) => {
-        const element = paneElements[index];
-        const measuredSize = element
-          ? Math.round(
-              orientation === "vertical"
-                ? element.getBoundingClientRect().width
-                : element.getBoundingClientRect().height,
-            )
-          : undefined;
-        const size = measuredSize && measuredSize > 0 ? measuredSize : (storedSizes[pane.id] ?? pane.defaultSize);
-        return typeof size === "number" && size > 0 ? [[pane.id, size]] : [];
-      }),
-    );
-    setStoredSizes(nextSizes);
+    setStoredFlexes(nextFlexes);
     if (resolvedKey) {
-      window.localStorage.setItem(resolvedKey, JSON.stringify(nextSizes));
+      window.localStorage.setItem(
+        resolvedKey,
+        JSON.stringify({
+          version: STORAGE_VERSION,
+          panes: nextFlexes,
+        } satisfies StoredPaneLayout),
+      );
     }
-  }, [orientation, panes, storageKey, storedSizes]);
+  }, [orientation, panes, storageKey]);
 
   if (panes.length === 0) {
     return null;
@@ -147,17 +213,17 @@ export function ResizablePaneLayout({
           <Fragment key={pane.id}>
             <ReflexElement
               className={joinClassNames("gc-resizable-pane", pane.className)}
-              size={storedSizes[pane.id] ?? pane.defaultSize}
+              flex={storedFlexes[pane.id] ?? defaultFlexes[pane.id]}
               minSize={pane.minSize}
               maxSize={pane.maxSize}
-              onStopResize={persistPaneSizes}
+              onStopResize={persistPaneLayout}
             >
               <div className={joinClassNames("gc-resizable-pane-content", pane.contentClassName)}>{pane.children}</div>
             </ReflexElement>
             {index < panes.length - 1 ? (
               <ReflexSplitter
                 className={joinClassNames("gc-resizable-splitter", splitterClassName)}
-                onStopResize={persistPaneSizes}
+                onStopResize={persistPaneLayout}
               />
             ) : null}
           </Fragment>

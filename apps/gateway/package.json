@@ -34,7 +34,7 @@
     "dev:supervisor": "tsx src/dev-supervisor.ts",
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests && tsx --test src/services/chat-generated-artifact-service.test.ts src/services/chat-thread-knowledge-service.test.ts",
     "test:improvement-ledger": "tsx --test src/services/improvement-service.node.test.ts src/improvement-operator-proof.node.test.ts",
     "test:coverage": "vitest run --passWithNoTests --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
     "coverage:smoke": "c8 --report-dir=coverage-smoke --reporter=json tsx src/coverage-smoke.ts",

@@ -18,6 +18,11 @@ export default defineConfig({
     ],
   },
   test: {
-    exclude: [...configDefaults.exclude, "src/**/*.node.test.ts"],
+    exclude: [
+      ...configDefaults.exclude,
+      "src/**/*.node.test.ts",
+      "src/services/chat-generated-artifact-service.test.ts",
+      "src/services/chat-thread-knowledge-service.test.ts",
+    ],
   },
 });

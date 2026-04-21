@@ -2,7 +2,16 @@ import { useEffect, useState } from "react";
 import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
 import { fetchChatAttachmentPreview } from "../../api/client";
 
-const attachmentPreviewCache = new Map<string, ChatAttachmentPreviewResponse>();
+const ATTACHMENT_PREVIEW_CACHE_TTL_MS = 30_000;
+const ATTACHMENT_PREVIEW_RETRY_DELAY_MS = 5_000;
+
+const attachmentPreviewCache = new Map<
+  string,
+  {
+    response: ChatAttachmentPreviewResponse;
+    cachedAt: number;
+  }
+>();
 const attachmentPreviewInFlight = new Map<string, Promise<ChatAttachmentPreviewResponse>>();
 
 function summarizeExtraction(preview: ChatAttachmentPreviewResponse | null): string | null {
@@ -17,18 +26,26 @@ function ChatAttachmentPreviewCard({
 }: {
   attachment: NonNullable<ChatMessageRecord["attachments"]>[number];
 }) {
-  const [preview, setPreview] = useState<ChatAttachmentPreviewResponse | null>(
-    () => attachmentPreviewCache.get(attachment.attachmentId) ?? null,
-  );
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [preview, setPreview] = useState<ChatAttachmentPreviewResponse | null>(() => {
+    const cached = attachmentPreviewCache.get(attachment.attachmentId);
+    return cached ? cached.response : null;
+  });
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void loadAttachmentPreview(attachment.attachmentId)
+    let retryHandle: number | null = null;
+    void loadAttachmentPreview(attachment.attachmentId, { forceRefresh: refreshTick > 0 })
       .then((response) => {
         if (!cancelled) {
           setPreview(response);
           setError(null);
+          if (shouldRetryAttachmentPreview(response)) {
+            retryHandle = window.setTimeout(() => {
+              setRefreshTick((current) => current + 1);
+            }, ATTACHMENT_PREVIEW_RETRY_DELAY_MS);
+          }
         }
       })
       .catch((nextError) => {
@@ -38,8 +55,11 @@ function ChatAttachmentPreviewCard({
       });
     return () => {
       cancelled = true;
+      if (retryHandle !== null) {
+        window.clearTimeout(retryHandle);
+      }
     };
-  }, [attachment.attachmentId]);
+  }, [attachment.attachmentId, refreshTick]);
 
   const extractionSummary = summarizeExtraction(preview);
   const extractionLabel = preview?.transcriptText
@@ -74,10 +94,17 @@ function ChatAttachmentPreviewCard({
   );
 }
 
-function loadAttachmentPreview(attachmentId: string): Promise<ChatAttachmentPreviewResponse> {
+function shouldRetryAttachmentPreview(preview: ChatAttachmentPreviewResponse): boolean {
+  return !summarizeExtraction(preview) && (preview.analysisStatus === "queued" || preview.analysisStatus === "running");
+}
+
+function loadAttachmentPreview(
+  attachmentId: string,
+  options?: { forceRefresh?: boolean },
+): Promise<ChatAttachmentPreviewResponse> {
   const cached = attachmentPreviewCache.get(attachmentId);
-  if (cached) {
-    return Promise.resolve(cached);
+  if (!options?.forceRefresh && cached && Date.now() - cached.cachedAt < ATTACHMENT_PREVIEW_CACHE_TTL_MS) {
+    return Promise.resolve(cached.response);
   }
   const existingRequest = attachmentPreviewInFlight.get(attachmentId);
   if (existingRequest) {
@@ -85,7 +112,10 @@ function loadAttachmentPreview(attachmentId: string): Promise<ChatAttachmentPrev
   }
   const request = fetchChatAttachmentPreview(attachmentId)
     .then((response) => {
-      attachmentPreviewCache.set(attachmentId, response);
+      attachmentPreviewCache.set(attachmentId, {
+        response,
+        cachedAt: Date.now(),
+      });
       attachmentPreviewInFlight.delete(attachmentId);
       return response;
     })
@@ -113,4 +143,9 @@ export function ChatAttachmentPreviewStack({
       ))}
     </div>
   );
+}
+
+export function resetAttachmentPreviewStateForTests(): void {
+  attachmentPreviewCache.clear();
+  attachmentPreviewInFlight.clear();
 }

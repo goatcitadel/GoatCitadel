@@ -1403,6 +1403,88 @@
   padding-top: calc(var(--space-2) * var(--density-scale));
 }
 
+.theme-signal-noir.gateway-access-shell {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(84, 221, 255, 0.12), transparent 24%),
+    radial-gradient(circle at 84% 10%, rgba(255, 154, 69, 0.08), transparent 20%),
+    linear-gradient(180deg, rgba(7, 12, 18, 0.98), rgba(4, 7, 12, 1));
+}
+
+.theme-signal-noir .gateway-access-card {
+  border-color: rgba(92, 198, 223, 0.2);
+  background:
+    radial-gradient(circle at top left, rgba(84, 221, 255, 0.08), transparent 36%),
+    linear-gradient(180deg, rgba(13, 20, 30, 0.96), rgba(7, 11, 18, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 28px 60px rgba(0, 0, 0, 0.34);
+}
+
+.theme-signal-noir .gateway-access-header,
+.theme-signal-noir .gateway-access-meta,
+.theme-signal-noir .gateway-access-status,
+.theme-signal-noir .gateway-access-form,
+.theme-signal-noir .gateway-access-actions,
+.theme-signal-noir .gateway-access-details {
+  gap: 14px;
+}
+
+.theme-signal-noir .gateway-access-title {
+  font-size: clamp(1.8rem, 2.2vw, 2.35rem);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  color: #f5fbff;
+}
+
+.theme-signal-noir .gateway-access-subtitle,
+.theme-signal-noir .gateway-access-note {
+  color: rgba(191, 210, 228, 0.82);
+}
+
+.theme-signal-noir .gateway-access-meta > div,
+.theme-signal-noir .gateway-access-status,
+.theme-signal-noir .gateway-access-details,
+.theme-signal-noir .gateway-access-row {
+  border-radius: 18px;
+  border: 1px solid rgba(92, 198, 223, 0.14);
+  background: linear-gradient(180deg, rgba(12, 19, 29, 0.94), rgba(8, 13, 21, 0.98)), rgba(6, 10, 16, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 14px 32px rgba(0, 0, 0, 0.2);
+  padding: 14px 16px;
+}
+
+.theme-signal-noir .gateway-access-row {
+  align-items: stretch;
+}
+
+.theme-signal-noir .gateway-access-row label,
+.theme-signal-noir .gateway-access-status p,
+.theme-signal-noir .gateway-access-meta .gc-meta-label {
+  color: #ebf6ff;
+}
+
+.theme-signal-noir .gateway-access-mono {
+  color: #f7fbff;
+}
+
+.theme-signal-noir .gateway-access-row .gc-input,
+.theme-signal-noir .gateway-access-row .gc-select-shell,
+.theme-signal-noir .gateway-access-row input {
+  background: rgba(5, 10, 16, 0.94);
+  border-color: rgba(92, 198, 223, 0.18);
+  color: #f5fbff;
+}
+
+.theme-signal-noir .gateway-access-error,
+.theme-signal-noir .error.gateway-access-error {
+  border-radius: 16px;
+  border: 1px solid rgba(255, 154, 69, 0.22);
+  background: rgba(62, 30, 16, 0.82);
+  color: #ffd9bc;
+  padding: 12px 14px;
+}
+
 .theme-signal-noir .status-strip .stat-card {
   min-height: 108px;
   border-color: rgba(92, 198, 223, 0.14);

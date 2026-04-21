@@ -19,7 +19,12 @@ async function createStorage(): Promise<{ storage: Storage; rootDir: string }> {
   };
 }
 
-function seedSession(storage: Storage, sessionId: string, workspaceId = "default"): ChatSessionRecord {
+function seedSession(
+  storage: Storage,
+  sessionId: string,
+  workspaceId = "default",
+  mode: "chat" | "cowork" | "code" = "code",
+): ChatSessionRecord {
   const now = "2026-04-20T00:00:00.000Z";
   storage.sessions.upsert({
     sessionId,
@@ -42,7 +47,7 @@ function seedSession(storage: Storage, sessionId: string, workspaceId = "default
   storage.chatSessionPrefs.patch(
     sessionId,
     {
-      mode: "code",
+      mode,
     },
     now,
   );
@@ -151,7 +156,7 @@ describe("chat-generated-artifact-service", () => {
     const { storage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
-    const session = seedSession(storage, "sess-2");
+    const session = seedSession(storage, "sess-2", "default", "chat");
     seedAssistantTurn(
       storage,
       session.sessionId,
@@ -178,8 +183,172 @@ describe("chat-generated-artifact-service", () => {
 
     assert.equal(initial.sourceBlockIndex, 0);
     assert.match(initial.contentHash ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(initial.sourceSurface, "code");
     assert.equal(superseded.version, 2);
     assert.equal(superseded.supersedesArtifactId, initial.artifactId);
     assert.equal(hydrated.contentHash, initial.contentHash);
+  });
+
+  it("returns the same superseded artifact for repeated identical new-version requests", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-3");
+    seedAssistantTurn(storage, session.sessionId, "turn-3", "```ts\nexport const answer = 42;\n```");
+
+    const host = {
+      storage,
+      requireChatSession: () => session,
+    };
+
+    const initial = createChatGeneratedArtifactFromTurn(host, {
+      sessionId: session.sessionId,
+      turnId: "turn-3",
+    });
+    const firstSupersede = createChatGeneratedArtifactFromTurn(host, {
+      sessionId: session.sessionId,
+      turnId: "turn-3",
+      supersedeLatest: true,
+    });
+    const secondSupersede = createChatGeneratedArtifactFromTurn(host, {
+      sessionId: session.sessionId,
+      turnId: "turn-3",
+      supersedeLatest: true,
+    });
+
+    assert.equal(firstSupersede.artifactId, secondSupersede.artifactId);
+    assert.equal(firstSupersede.supersedesArtifactId, initial.artifactId);
+    assert.equal(storage.chatGeneratedArtifacts.listByTurn("turn-3", 10).length, 2);
+  });
+
+  it("collapses concurrent supersede requests that observe the same parent artifact", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-4");
+    seedAssistantTurn(storage, session.sessionId, "turn-4", "```ts\nexport const answer = 42;\n```");
+
+    const host = {
+      storage,
+      requireChatSession: () => session,
+    };
+
+    const initial = createChatGeneratedArtifactFromTurn(host, {
+      sessionId: session.sessionId,
+      turnId: "turn-4",
+    });
+    const originalListByTurn = storage.chatGeneratedArtifacts.listByTurn.bind(storage.chatGeneratedArtifacts);
+    storage.chatGeneratedArtifacts.listByTurn = (() => [initial]) as typeof storage.chatGeneratedArtifacts.listByTurn;
+
+    try {
+      const [firstSupersede, secondSupersede] = await Promise.all([
+        Promise.resolve().then(() =>
+          createChatGeneratedArtifactFromTurn(host, {
+            sessionId: session.sessionId,
+            turnId: "turn-4",
+            supersedeLatest: true,
+          }),
+        ),
+        Promise.resolve().then(() =>
+          createChatGeneratedArtifactFromTurn(host, {
+            sessionId: session.sessionId,
+            turnId: "turn-4",
+            supersedeLatest: true,
+          }),
+        ),
+      ]);
+
+      assert.equal(firstSupersede.artifactId, secondSupersede.artifactId);
+      assert.equal(originalListByTurn("turn-4", 10).length, 2);
+    } finally {
+      storage.chatGeneratedArtifacts.listByTurn = originalListByTurn;
+    }
+  });
+
+  it("rethrows when a post-collision artifact does not match the requested create identity", () => {
+    const expectedError = new Error("insert failed");
+    const session = {
+      sessionId: "sess-mismatch",
+      sessionKey: "mission:operator:sess-mismatch",
+      workspaceId: "default",
+      scope: "mission",
+      includeInHistory: true,
+      pinned: false,
+      lifecycleStatus: "active",
+      channel: "mission",
+      account: "operator",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      lastActivityAt: "2026-04-20T00:00:00.000Z",
+      tokenTotal: 0,
+      costUsdTotal: 0,
+    } satisfies ChatSessionRecord;
+
+    const host = {
+      requireChatSession: () => session,
+      storage: {
+        chatTurnTraces: {
+          get: () => ({
+            turnId: "turn-mismatch",
+            sessionId: session.sessionId,
+            userMessageId: "user-turn-mismatch",
+            assistantMessageId: "assistant-turn-mismatch",
+            status: "completed",
+            mode: "code",
+            webMode: "auto",
+            memoryMode: "auto",
+            thinkingLevel: "standard",
+            routing: {
+              liveDataIntent: false,
+              primaryProviderId: "openai",
+              primaryModel: "gpt-4.1",
+              effectiveProviderId: "openai",
+              effectiveModel: "gpt-4.1",
+              fallbackUsed: false,
+            },
+            startedAt: "2026-04-20T00:00:01.000Z",
+            finishedAt: "2026-04-20T00:00:02.000Z",
+          }),
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => ({
+              content: "```ts\nexport const answer = 42;\n```",
+            }),
+          }),
+        },
+        chatGeneratedArtifacts: {
+          listByTurn: () => [],
+          create: () => {
+            throw expectedError;
+          },
+          get: () => ({
+            artifactId: "gart-mismatch",
+            sessionId: session.sessionId,
+            workspaceId: "default",
+            turnId: "turn-mismatch",
+            title: "Wrong artifact",
+            kind: "html",
+            content: "<div>wrong</div>",
+            sourceSurface: "code",
+            version: 1,
+            providerId: "openai",
+            model: "gpt-4.1",
+            sourceBlockIndex: 99,
+            contentHash: "wrong",
+            createdAt: "2026-04-20T00:00:03.000Z",
+            updatedAt: "2026-04-20T00:00:03.000Z",
+          }),
+        },
+      },
+    };
+
+    assert.throws(
+      () =>
+        createChatGeneratedArtifactFromTurn(host as Parameters<typeof createChatGeneratedArtifactFromTurn>[0], {
+          sessionId: session.sessionId,
+          turnId: "turn-mismatch",
+        }),
+      expectedError,
+    );
   });
 });

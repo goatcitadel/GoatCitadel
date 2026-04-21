@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import {
   formatSessionLabel,
@@ -8,6 +8,7 @@ import {
   resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
+  revealGeneratedArtifactInSurface,
   shouldExecuteLocalChatCommand,
   shouldShowLearnedMemoryPanel,
   shouldShowSuggestionsPanel,
@@ -16,11 +17,7 @@ import {
 } from "./ChatPage";
 import type { ChatSessionPrefsRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 
-function makeMessage(
-  messageId: string,
-  role: "user" | "assistant",
-  content: string,
-): ChatMessageRecord {
+function makeMessage(messageId: string, role: "user" | "assistant", content: string): ChatMessageRecord {
   return {
     messageId,
     sessionId: "sess-1",
@@ -58,9 +55,7 @@ function makeSession(
   };
 }
 
-function makePrefs(
-  overrides: Partial<ChatSessionPrefsRecord> = {},
-): ChatSessionPrefsRecord {
+function makePrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessionPrefsRecord {
   return {
     sessionId: "sess-1",
     mode: "chat",
@@ -95,37 +90,51 @@ describe("chat session rail labels", () => {
   });
 
   it("formats human and fallback labels for the session rail", () => {
-    expect(formatSessionLabel(makeSession({
-      title: "Release checklist",
-    }))).toBe("Release checklist");
+    expect(
+      formatSessionLabel(
+        makeSession({
+          title: "Release checklist",
+        }),
+      ),
+    ).toBe("Release checklist");
 
-    expect(formatSessionLabel(makeSession({
-      title: "mission:operator:chat_123456",
-    }))).toBe("Mission chat - 123456");
+    expect(
+      formatSessionLabel(
+        makeSession({
+          title: "mission:operator:chat_123456",
+        }),
+      ),
+    ).toBe("Mission chat - 123456");
 
-    expect(formatSessionLabel(makeSession({
-      sessionId: "sess_654321",
-      sessionKey: "external:slack:thread_1",
-      scope: "external",
-      title: "external:slack:thread_1",
-      channel: "slack",
-      account: "ops",
-    }))).toBe("External chat - slack / ops");
+    expect(
+      formatSessionLabel(
+        makeSession({
+          sessionId: "sess_654321",
+          sessionKey: "external:slack:thread_1",
+          scope: "external",
+          title: "external:slack:thread_1",
+          channel: "slack",
+          account: "ops",
+        }),
+      ),
+    ).toBe("External chat - slack / ops");
   });
 });
 
 describe("chat capability confirmation copy", () => {
   it("describes install-and-enable actions with the proper risk posture", () => {
-    expect(getCapabilitySuggestionConfirmationCopy({
-      kind: "skill_import",
-      title: "Filesystem access",
-      summary: "Install the hosted filesystem helper.",
-      reason: "The request needs filesystem capabilities.",
-      recommendedAction: "install_skill_enable",
-      riskLevel: "high",
-      sourceRef: "skill://filesystem-access",
-      requiresUserApproval: true,
-    })).toMatchObject({
+    expect(
+      getCapabilitySuggestionConfirmationCopy({
+        kind: "skill_import",
+        title: "Filesystem access",
+        summary: "Install the hosted filesystem helper.",
+        reason: "The request needs filesystem capabilities.",
+        recommendedAction: "install_skill_enable",
+        riskLevel: "high",
+        sourceRef: "skill://filesystem-access",
+        requiresUserApproval: true,
+      }),
+    ).toMatchObject({
       title: "Install and enable hosted skill",
       confirmLabel: "Install and enable",
       danger: true,
@@ -133,19 +142,23 @@ describe("chat capability confirmation copy", () => {
   });
 
   it("skips confirmation copy for non-destructive profile review suggestions", () => {
-    expect(getCapabilitySuggestionConfirmationCopy({
-      kind: "existing_but_disabled",
-      title: "Tool Access",
-      summary: "Switch the current tool profile.",
-      reason: "The current policy blocks this action.",
-      recommendedAction: "switch_tool_profile",
-      riskLevel: "medium",
-      requiresUserApproval: true,
-    })).toBeNull();
+    expect(
+      getCapabilitySuggestionConfirmationCopy({
+        kind: "existing_but_disabled",
+        title: "Tool Access",
+        summary: "Switch the current tool profile.",
+        reason: "The current policy blocks this action.",
+        recommendedAction: "switch_tool_profile",
+        riskLevel: "medium",
+        requiresUserApproval: true,
+      }),
+    ).toBeNull();
   });
 
   it("formats permanent session deletion copy without browser confirm text", () => {
-    expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain("Delete \"Release checklist\" permanently?");
+    expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain(
+      'Delete "Release checklist" permanently?',
+    );
     expect(getDeleteSessionConfirmationMessage("Release checklist")).toContain("attached files");
   });
 });
@@ -162,33 +175,39 @@ describe("local chat command execution", () => {
 
 describe("resolveChatRefreshPlan", () => {
   it("does not fully reload the thread for tool progress events", () => {
-    expect(resolveChatRefreshPlan({
-      reason: "tool_invoked",
-      eventType: "tool_invoked",
-      source: "gateway",
-    })).toEqual({
+    expect(
+      resolveChatRefreshPlan({
+        reason: "tool_invoked",
+        eventType: "tool_invoked",
+        source: "gateway",
+      }),
+    ).toEqual({
       refreshSidebar: false,
       refreshSession: "none",
     });
   });
 
   it("reloads the thread when the backend announces a thread update", () => {
-    expect(resolveChatRefreshPlan({
-      reason: "chat_thread_updated",
-      eventType: "chat_thread_updated",
-      source: "chat",
-    })).toEqual({
+    expect(
+      resolveChatRefreshPlan({
+        reason: "chat_thread_updated",
+        eventType: "chat_thread_updated",
+        source: "chat",
+      }),
+    ).toEqual({
       refreshSidebar: false,
       refreshSession: "full",
     });
   });
 
   it("refreshes the sidebar for title updates without reloading the thread", () => {
-    expect(resolveChatRefreshPlan({
-      reason: "chat_session_title_updated",
-      eventType: "chat_session_title_updated",
-      source: "chat",
-    })).toEqual({
+    expect(
+      resolveChatRefreshPlan({
+        reason: "chat_session_title_updated",
+        eventType: "chat_session_title_updated",
+        source: "chat",
+      }),
+    ).toEqual({
       refreshSidebar: true,
       refreshSession: "none",
     });
@@ -225,22 +244,86 @@ describe("resolveSelectedTurnId", () => {
   });
 });
 
+describe("revealGeneratedArtifactInSurface", () => {
+  it("loads the owning session core state and foregrounds the artifact even when the session was not already selected", async () => {
+    const artifact = {
+      artifactId: "artifact-route",
+      sessionId: "sess-artifact",
+      workspaceId: "default",
+      turnId: "turn-artifact",
+      title: "Generated artifact",
+      kind: "code" as const,
+      content: "export const answer = 42;",
+      language: "ts",
+      sourceSurface: "code" as const,
+      version: 1,
+      providerId: "openai",
+      model: "gpt-4.1",
+      createdAt: "2026-04-21T00:00:00.000Z",
+      updatedAt: "2026-04-21T00:00:00.000Z",
+    };
+    const loadSessionCoreState = vi.fn(async () => undefined);
+    const setSessionRailOpen = vi.fn();
+    const setDockOpen = vi.fn();
+    const setActiveGeneratedArtifact = vi.fn();
+    const setSelectedTurnId = vi.fn();
+    const setGeneratedArtifacts = vi.fn((updater) =>
+      updater({
+        items: [
+          {
+            ...artifact,
+            artifactId: "artifact-older",
+          },
+        ],
+      }),
+    );
+    const handleNavigateSurface = vi.fn();
+
+    await revealGeneratedArtifactInSurface({
+      artifact,
+      compactSurfaceLayout: true,
+      messageMode: "code",
+      loadSessionCoreState,
+      setSessionRailOpen,
+      setDockOpen,
+      setActiveGeneratedArtifact,
+      setSelectedTurnId,
+      setGeneratedArtifacts,
+      handleNavigateSurface,
+    });
+
+    expect(setSessionRailOpen).toHaveBeenCalledWith(false);
+    expect(setDockOpen).toHaveBeenCalledWith(false);
+    expect(setActiveGeneratedArtifact).toHaveBeenCalledWith(artifact);
+    expect(setSelectedTurnId).toHaveBeenCalledWith(artifact.turnId);
+    expect(loadSessionCoreState).toHaveBeenCalledWith(artifact.sessionId, {
+      background: true,
+      includeThread: true,
+    });
+    expect(handleNavigateSurface).toHaveBeenCalledWith("code", {
+      sessionId: artifact.sessionId,
+      turnId: artifact.turnId,
+      artifactId: artifact.artifactId,
+    });
+  });
+});
+
 describe("shouldApplyFetchedMessagesAfterStream", () => {
   it("rejects stale fetched messages that would wipe a finalized streamed assistant reply", () => {
     const current = [
       makeMessage("user-1", "user", "what's going on with Kristi Noem lately?"),
       makeMessage("assistant-1", "assistant", "Latest news summary"),
     ];
-    const fetched = [
-      makeMessage("user-1", "user", "what's going on with Kristi Noem lately?"),
-    ];
+    const fetched = [makeMessage("user-1", "user", "what's going on with Kristi Noem lately?")];
 
-    expect(shouldApplyFetchedMessagesAfterStream(current, fetched, {
-      sessionId: "sess-1",
-      placeholderId: "stream-1",
-      messageId: "assistant-1",
-      content: "Latest news summary",
-    })).toBe(false);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(current, fetched, {
+        sessionId: "sess-1",
+        placeholderId: "stream-1",
+        messageId: "assistant-1",
+        content: "Latest news summary",
+      }),
+    ).toBe(false);
   });
 
   it("rejects fetched messages with matching content but the wrong assistant message id", () => {
@@ -253,12 +336,14 @@ describe("shouldApplyFetchedMessagesAfterStream", () => {
       makeMessage("assistant-older", "assistant", "Latest   news   summary"),
     ];
 
-    expect(shouldApplyFetchedMessagesAfterStream(current, fetched, {
-      sessionId: "sess-1",
-      placeholderId: "stream-1",
-      messageId: "assistant-1",
-      content: "Latest news summary",
-    })).toBe(false);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(current, fetched, {
+        sessionId: "sess-1",
+        placeholderId: "stream-1",
+        messageId: "assistant-1",
+        content: "Latest news summary",
+      }),
+    ).toBe(false);
   });
 
   it("accepts fetched messages once the persisted assistant reply matches the finalized streamed message id", () => {
@@ -271,22 +356,19 @@ describe("shouldApplyFetchedMessagesAfterStream", () => {
       makeMessage("assistant-1", "assistant", "Latest   news   summary"),
     ];
 
-    expect(shouldApplyFetchedMessagesAfterStream(current, fetched, {
-      sessionId: "sess-1",
-      placeholderId: "stream-1",
-      messageId: "assistant-1",
-      content: "Latest news summary",
-    })).toBe(true);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(current, fetched, {
+        sessionId: "sess-1",
+        placeholderId: "stream-1",
+        messageId: "assistant-1",
+        content: "Latest news summary",
+      }),
+    ).toBe(true);
   });
 
   it("accepts fetched messages when there is no finalized streamed placeholder to protect", () => {
-    const current = [
-      makeMessage("user-1", "user", "hello"),
-    ];
-    const fetched = [
-      makeMessage("user-1", "user", "hello"),
-      makeMessage("assistant-1", "assistant", "hi"),
-    ];
+    const current = [makeMessage("user-1", "user", "hello")];
+    const fetched = [makeMessage("user-1", "user", "hello"), makeMessage("assistant-1", "assistant", "hi")];
 
     expect(shouldApplyFetchedMessagesAfterStream(current, fetched, null)).toBe(true);
   });
@@ -374,57 +456,72 @@ function makeTurn(
 describe("Wave 2 surface helpers", () => {
   it("keeps normal chat trace panels hidden unless something notable happened", () => {
     expect(shouldShowTracePanel("chat", makeTurn())).toBe(false);
-    expect(shouldShowTracePanel("chat", makeTurn({
-      toolRuns: [
-        {
-          toolRunId: "tool-1",
-          turnId: "turn-1",
-          sessionId: "sess-1",
-          toolName: "browser.navigate",
-          status: "failed",
-          startedAt: "2026-03-08T00:00:00.200Z",
-        },
-      ],
-    }))).toBe(true);
+    expect(
+      shouldShowTracePanel(
+        "chat",
+        makeTurn({
+          toolRuns: [
+            {
+              toolRunId: "tool-1",
+              turnId: "turn-1",
+              sessionId: "sess-1",
+              toolName: "browser.navigate",
+              status: "failed",
+              startedAt: "2026-03-08T00:00:00.200Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
     expect(shouldShowTracePanel("cowork", makeTurn())).toBe(true);
   });
 
   it("shows suggestions only where they materially help", () => {
-    expect(shouldShowSuggestionsPanel("chat", {
-      capabilitySuggestionCount: 0,
-      specialistSuggestionCount: 0,
-      specialistCandidateCount: 0,
-      proactiveSuggestionCount: 0,
-      hasDelegationSuggestion: false,
-    })).toBe(false);
-    expect(shouldShowSuggestionsPanel("chat", {
-      capabilitySuggestionCount: 1,
-      specialistSuggestionCount: 0,
-      specialistCandidateCount: 0,
-      proactiveSuggestionCount: 0,
-      hasDelegationSuggestion: false,
-    })).toBe(true);
-    expect(shouldShowSuggestionsPanel("code", {
-      capabilitySuggestionCount: 0,
-      specialistSuggestionCount: 0,
-      specialistCandidateCount: 0,
-      proactiveSuggestionCount: 2,
-      hasDelegationSuggestion: true,
-    })).toBe(false);
-    expect(shouldShowSuggestionsPanel("code", {
-      capabilitySuggestionCount: 0,
-      specialistSuggestionCount: 1,
-      specialistCandidateCount: 0,
-      proactiveSuggestionCount: 0,
-      hasDelegationSuggestion: false,
-    })).toBe(true);
-    expect(shouldShowSuggestionsPanel("cowork", {
-      capabilitySuggestionCount: 0,
-      specialistSuggestionCount: 0,
-      specialistCandidateCount: 0,
-      proactiveSuggestionCount: 0,
-      hasDelegationSuggestion: false,
-    })).toBe(true);
+    expect(
+      shouldShowSuggestionsPanel("chat", {
+        capabilitySuggestionCount: 0,
+        specialistSuggestionCount: 0,
+        specialistCandidateCount: 0,
+        proactiveSuggestionCount: 0,
+        hasDelegationSuggestion: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowSuggestionsPanel("chat", {
+        capabilitySuggestionCount: 1,
+        specialistSuggestionCount: 0,
+        specialistCandidateCount: 0,
+        proactiveSuggestionCount: 0,
+        hasDelegationSuggestion: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowSuggestionsPanel("code", {
+        capabilitySuggestionCount: 0,
+        specialistSuggestionCount: 0,
+        specialistCandidateCount: 0,
+        proactiveSuggestionCount: 2,
+        hasDelegationSuggestion: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowSuggestionsPanel("code", {
+        capabilitySuggestionCount: 0,
+        specialistSuggestionCount: 1,
+        specialistCandidateCount: 0,
+        proactiveSuggestionCount: 0,
+        hasDelegationSuggestion: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowSuggestionsPanel("cowork", {
+        capabilitySuggestionCount: 0,
+        specialistSuggestionCount: 0,
+        specialistCandidateCount: 0,
+        proactiveSuggestionCount: 0,
+        hasDelegationSuggestion: false,
+      }),
+    ).toBe(true);
   });
 
   it("keeps learned memory off the chat surface until there is something to review", () => {

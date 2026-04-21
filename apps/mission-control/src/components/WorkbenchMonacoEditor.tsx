@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { shouldRenderMonacoRuntime } from "./monaco-runtime";
 
 interface WorkbenchMonacoEditorProps {
   value: string;
@@ -7,10 +8,6 @@ interface WorkbenchMonacoEditorProps {
   height?: number | string;
   onChange?: (value: string) => void;
   className?: string;
-}
-
-function shouldRenderMonaco(): boolean {
-  return typeof window !== "undefined" && import.meta.env.MODE !== "test";
 }
 
 function resolveMonacoTheme(): "vs" | "vs-dark" {
@@ -65,15 +62,21 @@ export function WorkbenchMonacoEditor({
   const [editorComponent, setEditorComponent] = useState<MonacoEditorComponent | null>(null);
 
   useEffect(() => {
-    if (!shouldRenderMonaco()) {
+    if (!shouldRenderMonacoRuntime()) {
       return;
     }
+    let cancelled = false;
     void import("@uiw/react-monacoeditor").then((module) => {
-      setEditorComponent(() => module.default);
+      if (!cancelled) {
+        setEditorComponent(() => module.default);
+      }
     });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  if (!shouldRenderMonaco()) {
+  if (!shouldRenderMonacoRuntime()) {
     if (readOnly) {
       return <pre className={className}>{value}</pre>;
     }

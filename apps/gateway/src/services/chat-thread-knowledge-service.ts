@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   ChatAttachmentRecord,
   ChatCitationRecord,
@@ -78,22 +78,34 @@ export async function attachChatThreadKnowledgeAttachment(
     const existingAttachment = host.storage.chatThreadKnowledgeAttachments
       .listBySession(normalizedSessionId)
       .find((item) => item.chatAttachmentId === attachment.attachmentId && item.retrievalMode === input.retrievalMode);
-    if (existingAttachment) {
+    if (existingAttachment?.ingestStatus === "ready") {
       return existingAttachment;
     }
-    const created = host.storage.chatThreadKnowledgeAttachments.create({
-      attachmentId: randomUUID(),
-      sessionId: normalizedSessionId,
-      sourceType: "file",
-      sourceRef: attachment.fileName,
-      title: input.title?.trim() || attachment.fileName,
-      retrievalMode: input.retrievalMode,
-      ingestStatus: "queued",
-      namespace: input.retrievalMode === "retrieval" ? namespace : undefined,
-      chatAttachmentId: attachment.attachmentId,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const created = existingAttachment
+      ? resetThreadKnowledgeAttachmentForRetry(host, existingAttachment, {
+          sourceRef: attachment.fileName,
+          title: input.title?.trim() || attachment.fileName,
+          namespace: input.retrievalMode === "retrieval" ? namespace : undefined,
+          chatAttachmentId: attachment.attachmentId,
+          now,
+        })
+      : host.storage.chatThreadKnowledgeAttachments.create({
+          attachmentId: buildStableThreadKnowledgeAttachmentId([
+            normalizedSessionId,
+            attachment.attachmentId,
+            input.retrievalMode,
+          ]),
+          sessionId: normalizedSessionId,
+          sourceType: "file",
+          sourceRef: attachment.fileName,
+          title: input.title?.trim() || attachment.fileName,
+          retrievalMode: input.retrievalMode,
+          ingestStatus: "queued",
+          namespace: input.retrievalMode === "retrieval" ? namespace : undefined,
+          chatAttachmentId: attachment.attachmentId,
+          createdAt: now,
+          updatedAt: now,
+        });
     try {
       const text = await extractAttachmentKnowledgeText(host, attachment);
       if (!text.trim()) {
@@ -166,30 +178,41 @@ export async function attachChatThreadKnowledgeAttachment(
   if (!url) {
     throw new ValidationError({ message: "Either chatAttachmentId or url is required." });
   }
-  const normalizedUrlKey = url.toLowerCase();
+  const normalizedUrlKey = normalizeKnowledgeUrlKey(url);
   const existingUrlAttachment = host.storage.chatThreadKnowledgeAttachments
     .listBySession(normalizedSessionId)
     .find(
       (item) =>
         item.sourceType === "url" &&
         item.retrievalMode === input.retrievalMode &&
-        item.sourceRef.trim().toLowerCase() === normalizedUrlKey,
+        normalizeKnowledgeUrlKey(item.sourceRef) === normalizedUrlKey,
     );
-  if (existingUrlAttachment) {
+  if (existingUrlAttachment?.ingestStatus === "ready") {
     return existingUrlAttachment;
   }
-  const created = host.storage.chatThreadKnowledgeAttachments.create({
-    attachmentId: randomUUID(),
-    sessionId: normalizedSessionId,
-    sourceType: "url",
-    sourceRef: url,
-    title: input.title?.trim() || url,
-    retrievalMode: input.retrievalMode,
-    ingestStatus: "queued",
-    namespace,
-    createdAt: now,
-    updatedAt: now,
-  });
+  const created = existingUrlAttachment
+    ? resetThreadKnowledgeAttachmentForRetry(host, existingUrlAttachment, {
+        sourceRef: url,
+        title: input.title?.trim() || url,
+        namespace,
+        now,
+      })
+    : host.storage.chatThreadKnowledgeAttachments.create({
+        attachmentId: buildStableThreadKnowledgeAttachmentId([
+          normalizedSessionId,
+          normalizedUrlKey,
+          input.retrievalMode,
+        ]),
+        sessionId: normalizedSessionId,
+        sourceType: "url",
+        sourceRef: url,
+        title: input.title?.trim() || url,
+        retrievalMode: input.retrievalMode,
+        ingestStatus: "queued",
+        namespace,
+        createdAt: now,
+        updatedAt: now,
+      });
   try {
     const result = await host.knowledgeDocsIngest({
       sourceType: "url",
@@ -397,18 +420,8 @@ export async function resolveThreadKnowledgeContext(
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        for (const attachment of retrievalReadyAttachments) {
-          host.storage.chatThreadKnowledgeAttachments.patch(
-            attachment.attachmentId,
-            {
-              ingestStatus: "failed",
-              errorMessage: `Retrieval failed: ${message}`,
-              lastIngestAt: now,
-            },
-            now,
-          );
-        }
         notices.push("Skipped retrieval-backed thread knowledge because retrieval failed for this turn.");
+        notices.push(`Retrieval error: ${message}`);
       }
     }
   }
@@ -431,6 +444,43 @@ export async function resolveThreadKnowledgeContext(
 
 export function buildThreadKnowledgeNamespace(sessionId: string): string {
   return `chat-session:${sessionId}:knowledge`;
+}
+
+function resetThreadKnowledgeAttachmentForRetry(
+  host: ChatThreadKnowledgeHost,
+  attachment: ThreadKnowledgeAttachmentRecord,
+  input: {
+    sourceRef: string;
+    title: string;
+    namespace?: string;
+    chatAttachmentId?: string;
+    now: string;
+  },
+): ThreadKnowledgeAttachmentRecord {
+  const currentDocumentId = attachment.documentId?.trim() || undefined;
+  if (currentDocumentId) {
+    const remainingReferences = host.storage.chatThreadKnowledgeAttachments
+      .listByDocumentId(currentDocumentId)
+      .filter((item) => item.attachmentId !== attachment.attachmentId);
+    if (remainingReferences.length === 0) {
+      host.storage.knowledge.deleteDocument(currentDocumentId);
+    }
+  }
+  return host.storage.chatThreadKnowledgeAttachments.patch(
+    attachment.attachmentId,
+    {
+      sourceRef: input.sourceRef,
+      title: input.title,
+      ingestStatus: "queued",
+      chunkCount: 0,
+      namespace: input.namespace ?? "",
+      chatAttachmentId: input.chatAttachmentId ?? "",
+      documentId: "",
+      errorMessage: "",
+      lastIngestAt: input.now,
+    },
+    input.now,
+  );
 }
 
 async function resolveFullTextAttachmentContent(
@@ -518,6 +568,38 @@ function looksUsefulDecodedText(value: string): boolean {
     return code === 10 || code === 13 || code === 9 || (code >= 32 && code <= 126);
   }).length;
   return printableChars / Math.max(1, value.length) >= 0.85;
+}
+
+function normalizeKnowledgeUrlKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.protocol = parsed.protocol.toLowerCase();
+    parsed.hostname = parsed.hostname.toLowerCase();
+    if (
+      (parsed.protocol === "https:" && parsed.port === "443") ||
+      (parsed.protocol === "http:" && parsed.port === "80")
+    ) {
+      parsed.port = "";
+    }
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+function buildStableThreadKnowledgeAttachmentId(parts: string[]): string {
+  const hash = createHash("sha256");
+  hash.update("thread-knowledge-attachment");
+  for (const part of parts) {
+    hash.update("\u0000");
+    hash.update(part.trim());
+  }
+  return `tkatt-${hash.digest("hex")}`;
 }
 
 function readKnowledgeDocumentResult(value: Record<string, unknown>): { docId?: string } | undefined {

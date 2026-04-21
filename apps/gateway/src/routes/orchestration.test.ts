@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { orchestrationRoutes } from "./orchestration.js";
 
 describe("orchestration routes", () => {
@@ -128,6 +129,30 @@ describe("orchestration routes", () => {
     });
     expect(context.statusCode).toBe(200);
     expect(context.json()).toMatchObject({ items: [{ contextId: "ctx-1" }] });
+  });
+
+  it("maps missing orchestration runs to a 404 instead of a 500", async () => {
+    const getRun = vi.fn(() => {
+      throw new NotFoundError({ entity: "Orchestration run", id: "run-missing" });
+    });
+    app = Fastify();
+    app.decorate("gateway", { getRun } as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/orchestration/runs/run-missing",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      error: "Orchestration run run-missing not found",
+      code: "ENTITY_NOT_FOUND",
+      details: {
+        entity: "Orchestration run",
+        id: "run-missing",
+      },
+    });
   });
 
   it("records approval resume intent without synchronously advancing the orchestration", async () => {

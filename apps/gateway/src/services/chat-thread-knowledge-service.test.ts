@@ -225,8 +225,9 @@ describe("chat-thread-knowledge-service", () => {
 
     assert.deepEqual(result.citations, []);
     assert.match(result.systemInstruction ?? "", /Skipped retrieval-backed thread knowledge/);
-    assert.equal(updated?.ingestStatus, "failed");
-    assert.match(updated?.errorMessage ?? "", /vector store offline/);
+    assert.match(result.systemInstruction ?? "", /vector store offline/);
+    assert.equal(updated?.ingestStatus, "ready");
+    assert.equal(updated?.errorMessage, undefined);
   });
 
   it("emits URL-backed knowledge citations with web provenance", async () => {
@@ -381,5 +382,174 @@ describe("chat-thread-knowledge-service", () => {
       /Skipped Budget 1 because the thread knowledge full-text budget was exhausted\./,
     );
     assert.equal(result.citations.length, 3);
+  });
+
+  it("retries a previously failed file attachment instead of returning the stale failed record", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-file-retry");
+    seedAttachment(storage, session.sessionId, "attachment-retry", {
+      fileName: "notes.txt",
+      mimeType: "text/plain",
+      mediaType: "text",
+      extractPreview: undefined,
+    });
+    let allowRead = false;
+    const host = createHost(storage, {
+      readChatAttachmentContent: async (attachmentId: string) => {
+        const record = storage.chatAttachments.get(attachmentId);
+        if (!allowRead) {
+          throw new Error("text extraction still pending");
+        }
+        return {
+          bytes: Buffer.from("Recovered readable text", "utf8"),
+          record,
+        };
+      },
+    });
+
+    const failed = await attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+      chatAttachmentId: "attachment-retry",
+      retrievalMode: "full_text",
+    });
+    allowRead = true;
+    const retried = await attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+      chatAttachmentId: "attachment-retry",
+      retrievalMode: "full_text",
+    });
+
+    assert.equal(failed.attachmentId, retried.attachmentId);
+    assert.equal(retried.ingestStatus, "ready");
+    assert.equal(retried.errorMessage, undefined);
+  });
+
+  it("preserves case-sensitive URL paths when deduping thread knowledge sources", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-url-case");
+    const host = createHost(storage, {
+      knowledgeDocsIngest: async ({ source, namespace, title }) => {
+        const document = storage.knowledge.createDocument(
+          {
+            namespace,
+            sourceType: "url",
+            sourceRef: source,
+            title: title ?? source,
+          },
+          "2026-04-20T00:00:00.000Z",
+        );
+        storage.knowledge.appendChunks(
+          document.docId,
+          [{ content: source.includes("/Foo") ? "Upper path" : "Lower path" }],
+          "2026-04-20T00:00:00.000Z",
+        );
+        return {
+          document: { docId: document.docId },
+          chunksSaved: 1,
+        };
+      },
+    });
+
+    const upper = await attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+      url: "https://example.com/Foo",
+      retrievalMode: "full_text",
+    });
+    const lower = await attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+      url: "https://example.com/foo",
+      retrievalMode: "full_text",
+    });
+
+    assert.notEqual(upper.attachmentId, lower.attachmentId);
+  });
+
+  it("collapses identical concurrent file attaches into one knowledge attachment", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-file-concurrent");
+    seedAttachment(storage, session.sessionId, "attachment-concurrent", {
+      fileName: "notes.txt",
+      mimeType: "text/plain",
+      mediaType: "text",
+      extractPreview: "Concurrent readable text",
+    });
+    const host = createHost(storage);
+    const originalListBySession = storage.chatThreadKnowledgeAttachments.listBySession.bind(
+      storage.chatThreadKnowledgeAttachments,
+    );
+    storage.chatThreadKnowledgeAttachments.listBySession =
+      (() => []) as typeof storage.chatThreadKnowledgeAttachments.listBySession;
+
+    try {
+      const [first, second] = await Promise.all([
+        attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+          chatAttachmentId: "attachment-concurrent",
+          retrievalMode: "full_text",
+        }),
+        attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+          chatAttachmentId: "attachment-concurrent",
+          retrievalMode: "full_text",
+        }),
+      ]);
+
+      assert.equal(first.attachmentId, second.attachmentId);
+      assert.equal(originalListBySession(session.sessionId).length, 1);
+    } finally {
+      storage.chatThreadKnowledgeAttachments.listBySession = originalListBySession;
+    }
+  });
+
+  it("collapses identical concurrent URL attaches into one knowledge attachment", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-url-concurrent");
+    const host = createHost(storage, {
+      knowledgeDocsIngest: async ({ source, namespace, title }) => {
+        const document = storage.knowledge.createDocument(
+          {
+            namespace,
+            sourceType: "url",
+            sourceRef: source,
+            title: title ?? source,
+          },
+          "2026-04-20T00:00:00.000Z",
+        );
+        storage.knowledge.appendChunks(
+          document.docId,
+          [{ content: "Concurrent url text" }],
+          "2026-04-20T00:00:00.000Z",
+        );
+        return {
+          document: { docId: document.docId },
+          chunksSaved: 1,
+        };
+      },
+    });
+    const originalListBySession = storage.chatThreadKnowledgeAttachments.listBySession.bind(
+      storage.chatThreadKnowledgeAttachments,
+    );
+    storage.chatThreadKnowledgeAttachments.listBySession =
+      (() => []) as typeof storage.chatThreadKnowledgeAttachments.listBySession;
+
+    try {
+      const [first, second] = await Promise.all([
+        attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+          url: "https://example.com/docs/release-notes",
+          retrievalMode: "full_text",
+        }),
+        attachChatThreadKnowledgeAttachment(host, session.sessionId, {
+          url: "https://example.com/docs/release-notes",
+          retrievalMode: "full_text",
+        }),
+      ]);
+
+      assert.equal(first.attachmentId, second.attachmentId);
+      assert.equal(originalListBySession(session.sessionId).length, 1);
+    } finally {
+      storage.chatThreadKnowledgeAttachments.listBySession = originalListBySession;
+    }
   });
 });

@@ -88,7 +88,8 @@ export function ChatSurfaceLayout({
       ? primaryColumn
       : null;
   const effectiveDockOpen = hasActiveSession ? dockOpen : layout.idleDockOpen;
-  const inlineDock = !compactSecondaryPanels && effectiveDockOpen;
+  const desktopDrawerDock = !compactSecondaryPanels && effectiveDockOpen && layout.dockBehavior === "drawer";
+  const inlineDock = !compactSecondaryPanels && effectiveDockOpen && layout.dockBehavior !== "drawer";
   const useResizableDesktopLayout = !compactSecondaryPanels && !stackedDesktopPanels;
 
   const artifactPane = (
@@ -231,6 +232,13 @@ export function ChatSurfaceLayout({
         <Sheet open={sessionRailOpen} onOpenChange={onSessionRailOpenChange}>
           <SheetContent side="left" className="chat-v11-session-sheet">
             {sessionRail}
+          </SheetContent>
+        </Sheet>
+      ) : null}
+      {desktopDrawerDock ? (
+        <Sheet open={effectiveDockOpen} onOpenChange={onDockOpenChange}>
+          <SheetContent side="right" className="mission-context-dock-drawer">
+            {contextDock}
           </SheetContent>
         </Sheet>
       ) : null}

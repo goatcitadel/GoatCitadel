@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 const planSchema = z.object({
   planId: z.string().min(1),
@@ -78,16 +79,28 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/orchestration/runs/:runId", async (request, reply) => {
     const runId = (request.params as { runId: string }).runId;
-    return reply.send(fastify.gateway.getRun(runId));
+    try {
+      return reply.send(fastify.gateway.getRun(runId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/orchestration/runs/:runId/checkpoints", async (request, reply) => {
     const runId = (request.params as { runId: string }).runId;
-    return reply.send({ items: fastify.gateway.listRunCheckpoints(runId) });
+    try {
+      return reply.send({ items: fastify.gateway.listRunCheckpoints(runId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/orchestration/runs/:runId/context", async (request, reply) => {
     const runId = (request.params as { runId: string }).runId;
-    return reply.send({ items: fastify.gateway.listRunContexts(runId) });
+    try {
+      return reply.send({ items: fastify.gateway.listRunContexts(runId) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 };

@@ -51,6 +51,7 @@ import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
+  revealGeneratedArtifactInSurface,
   resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
@@ -84,6 +85,7 @@ import {
 } from "./chat/useChatSurfaceOrchestration";
 import { useChatThreadController } from "./chat/useChatThreadController";
 import { useChatMultimodalControls } from "./chat/useChatMultimodalControls";
+import { useRouteGeneratedArtifactReveal } from "./chat/useRouteGeneratedArtifactReveal";
 import {
   formatSessionLabel,
   looksMachineSessionLabel,
@@ -102,6 +104,7 @@ export {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
   looksMachineSessionLabel,
+  revealGeneratedArtifactInSurface,
   resolveSelectedTurnId,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
@@ -1026,39 +1029,6 @@ export function ChatPage({
     }
   }, [compactSurfaceLayout, dockOpen, sessionRailOpen, setDockOpen]);
 
-  useEffect(() => {
-    if (!routeArtifactId) {
-      setActiveGeneratedArtifact(null);
-      return;
-    }
-    let cancelled = false;
-    void fetchChatGeneratedArtifact(routeArtifactId)
-      .then((response) => {
-        if (cancelled) {
-          return;
-        }
-        if (selectedSessionId && response.item.sessionId !== selectedSessionId) {
-          return;
-        }
-        if (compactSurfaceLayout) {
-          setSessionRailOpen(false);
-          setDockOpen(false);
-        }
-        setActiveGeneratedArtifact(response.item);
-        if (response.item.turnId) {
-          setSelectedTurnId(response.item.turnId);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setActiveGeneratedArtifact(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [compactSurfaceLayout, routeArtifactId, selectedSessionId, setDockOpen]);
-
   const providerLabelById = useMemo(
     () => new Map(providerOptions.map((provider) => [provider.providerId, provider.label])),
     [providerOptions],
@@ -1274,28 +1244,17 @@ export function ChatPage({
 
   const revealGeneratedArtifact = useCallback(
     async (artifact: ChatGeneratedArtifactRecord) => {
-      if (compactSurfaceLayout) {
-        setSessionRailOpen(false);
-        setDockOpen(false);
-      }
-      setActiveGeneratedArtifact(artifact);
-      setSelectedTurnId(artifact.turnId);
-      await loadSessionCoreState(artifact.sessionId, {
-        background: true,
-        includeThread: true,
-      });
-      setGeneratedArtifacts((current) =>
-        current
-          ? {
-              ...current,
-              items: [artifact, ...current.items.filter((item) => item.artifactId !== artifact.artifactId)],
-            }
-          : current,
-      );
-      handleNavigateSurface(messageMode, {
-        sessionId: artifact.sessionId,
-        turnId: artifact.turnId,
-        artifactId: artifact.artifactId,
+      await revealGeneratedArtifactInSurface({
+        artifact,
+        compactSurfaceLayout,
+        messageMode,
+        loadSessionCoreState,
+        setSessionRailOpen,
+        setDockOpen,
+        setActiveGeneratedArtifact,
+        setSelectedTurnId,
+        setGeneratedArtifacts,
+        handleNavigateSurface,
       });
     },
     [
@@ -1307,6 +1266,11 @@ export function ChatPage({
       setGeneratedArtifacts,
     ],
   );
+  useRouteGeneratedArtifactReveal({
+    routeArtifactId,
+    revealGeneratedArtifact,
+    setActiveGeneratedArtifact,
+  });
 
   const handleOpenGeneratedArtifactFromTurn = useCallback(
     async (turnId: string) => {
