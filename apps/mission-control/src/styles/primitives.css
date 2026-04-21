@@ -90,6 +90,11 @@
   box-shadow: var(--shadow-1);
 }
 
+.stat-card-compact-dense {
+  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-3) * var(--density-scale));
+  gap: calc(var(--space-1) * var(--density-scale));
+}
+
 .stat-card-label,
 .stat-card-value,
 .stat-card-note {
@@ -353,7 +358,7 @@
 .operator-split-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
-  gap: calc(var(--space-3) * var(--density-scale));
+  gap: calc(var(--space-2) * var(--density-scale));
   align-items: start;
   min-width: 0;
 }
@@ -453,17 +458,27 @@
 
 .memory-summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: calc(var(--space-2) * var(--density-scale));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: calc(var(--space-1) * var(--density-scale));
   align-items: stretch;
 }
 
 .memory-summary-grid .stat-card-compact {
   min-height: 0;
+  padding: calc(var(--space-2) * var(--density-scale));
+  gap: calc(var(--space-1) * var(--density-scale));
+}
+
+.memory-summary-grid .stat-card-compact .stat-card-label {
+  font-size: 0.7rem;
 }
 
 .memory-summary-grid .stat-card-compact .stat-card-value {
-  font-size: clamp(1rem, 0.94rem + 0.28vw, 1.16rem);
+  font-size: clamp(0.9rem, 0.85rem + 0.2vw, 1rem);
+}
+
+.memory-summary-grid .stat-card-compact .stat-card-note {
+  font-size: 0.75rem;
 }
 
 .tasks-page .page-guide-card,
@@ -695,6 +710,51 @@
   font-size: 0.78rem;
   --gc-nav-bg: var(--surface-elevated);
   --gc-nav-radius: var(--radius-sm);
+}
+
+/* ─── Form & Select Field Compact Styling ─── */
+.form-field-compact,
+.select-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-field-compact label,
+.select-compact label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+}
+
+.form-field-compact select,
+.form-field-compact input,
+.select-compact select {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.form-field-compact select:hover,
+.form-field-compact input:hover,
+.select-compact select:hover {
+  border-color: color-mix(in srgb, var(--border-default) 85%, transparent);
+}
+
+.form-field-compact select:focus,
+.form-field-compact input:focus,
+.select-compact select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--surface-1) 96%, var(--accent-primary) 4%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }
 
 .gc-nav-tier-section {
@@ -1335,9 +1395,9 @@
 }
 
 .gc-data-table :where(th, td) {
-  padding: calc(var(--space-3) * var(--density-scale));
+  padding: calc(var(--space-3) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
   border-bottom: 1px solid var(--gc-table-divider, var(--border-subtle));
 }
 
@@ -1346,10 +1406,12 @@
 }
 
 .gc-data-table thead th {
-  font: 700 11px/1.2 var(--font-body);
+  font: 700 11px/1.25 var(--font-body);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--gc-table-head-text, var(--text-secondary));
+  padding-top: calc(var(--space-4) * var(--density-scale));
+  padding-bottom: calc(var(--space-4) * var(--density-scale));
 }
 
 .gc-data-table tbody td {
@@ -1361,7 +1423,8 @@
 }
 
 .gc-data-table tbody tr:hover td {
-  background: var(--gc-table-row-hover, color-mix(in srgb, var(--surface-2) 48%, transparent));
+  background: var(--gc-table-row-hover, color-mix(in srgb, var(--surface-2) 40%, transparent));
+  transition: background-color 150ms ease;
 }
 
 .gc-data-table .actions {
@@ -1647,6 +1710,38 @@
 
 .cron-weekday-option input {
   margin: 0;
+}
+
+/* ─── Space reduction utilities ─── */
+.space-reduce-gap {
+  gap: calc(var(--space-2) * var(--density-scale)) !important;
+}
+
+.space-reduce-padding {
+  padding: calc(var(--space-2) * var(--density-scale)) !important;
+}
+
+.card-compact {
+  padding: calc(var(--space-3) * var(--density-scale));
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.page-section-compact {
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+/* ─── Quality page density optimization ─── */
+.quality-page-section {
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.quality-page-card {
+  padding: calc(var(--space-3) * var(--density-scale));
+  gap: calc(var(--space-2) * var(--density-scale));
+}
+
+.quality-page-grid {
+  gap: calc(var(--space-2) * var(--density-scale));
 }
 
 @media (max-width: 767px) {

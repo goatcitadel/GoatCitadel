@@ -72,13 +72,18 @@ export function shouldShowSuggestionsPanel(
     hasDelegationSuggestion: boolean;
   },
 ): boolean {
-  return (
-    input.capabilitySuggestionCount > 0 ||
-    input.specialistSuggestionCount > 0 ||
-    input.specialistCandidateCount > 0 ||
-    input.proactiveSuggestionCount > 0 ||
-    input.hasDelegationSuggestion
-  );
+  if (mode === "cowork") {
+    return true;
+  }
+
+  const hasReusableSuggestions =
+    input.capabilitySuggestionCount > 0 || input.specialistSuggestionCount > 0 || input.specialistCandidateCount > 0;
+
+  if (mode === "code") {
+    return hasReusableSuggestions;
+  }
+
+  return hasReusableSuggestions || input.proactiveSuggestionCount > 0 || input.hasDelegationSuggestion;
 }
 
 export function shouldShowLearnedMemoryPanel(mode: ChatMode, learnedMemoryCount: number): boolean {

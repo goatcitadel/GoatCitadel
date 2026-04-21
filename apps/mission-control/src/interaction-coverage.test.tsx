@@ -2,6 +2,63 @@ import { afterEach, beforeEach, describe, it, vi } from "vitest";
 import React from "react";
 import { act, create } from "react-test-renderer";
 
+vi.mock("react-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
+  return {
+    ...actual,
+    createPortal: (children: React.ReactNode) => children,
+  };
+});
+
+vi.mock("./components/ui", () => ({
+  GCSelect: ({
+    id,
+    value,
+    onChange,
+    options = [],
+    disabled,
+  }: {
+    id?: string;
+    value?: string;
+    onChange?: (value: string) => void;
+    options?: Array<{ value: string; label: string }>;
+    disabled?: boolean;
+  }) => (
+    <select id={id} value={value} onChange={(event) => onChange?.(event.target.value)} disabled={disabled}>
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+  GCSwitch: ({
+    id,
+    checked,
+    onCheckedChange,
+    disabled,
+    label,
+  }: {
+    id?: string;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    disabled?: boolean;
+    label?: string;
+  }) => (
+    <label htmlFor={id}>
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onCheckedChange?.(event.target.checked)}
+        disabled={disabled}
+      />
+      {label}
+    </label>
+  ),
+  Textarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => <textarea {...props} />,
+}));
+
 vi.mock("react-virtuoso", () => {
   const renderItems = (
     data: unknown[],
@@ -602,6 +659,15 @@ function buildPayload(pathname: string, method: string): unknown {
 }
 
 function installWindowAndFetch(): void {
+  const baseDocument = globalThis.document;
+  const fallbackBody = {
+    nodeType: 1,
+    nodeName: "BODY",
+    appendChild: () => undefined,
+    removeChild: () => undefined,
+    contains: () => false,
+    ownerDocument: null,
+  };
   const location = {
     protocol: "http:",
     hostname: "localhost",
@@ -685,22 +751,30 @@ function installWindowAndFetch(): void {
     writable: true,
     value: MockEventSource,
   });
+  Object.defineProperty(globalThis, "DocumentFragment", {
+    configurable: true,
+    writable: true,
+    value: class MockDocumentFragment {},
+  });
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     writable: true,
     value: {
-      body: {},
+      body: fallbackBody,
+      documentElement: baseDocument?.documentElement ?? { nodeType: 1, nodeName: "HTML" },
       hidden: false,
       visibilityState: "visible",
-      createElement: () => ({
-        setAttribute: () => undefined,
-        click: () => undefined,
-        remove: () => undefined,
-        style: {},
-      }),
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      dispatchEvent: () => true,
+      createElement:
+        baseDocument?.createElement?.bind(baseDocument) ??
+        (() => ({
+          setAttribute: () => undefined,
+          click: () => undefined,
+          remove: () => undefined,
+          style: {},
+        })),
+      addEventListener: baseDocument?.addEventListener?.bind(baseDocument) ?? (() => undefined),
+      removeEventListener: baseDocument?.removeEventListener?.bind(baseDocument) ?? (() => undefined),
+      dispatchEvent: baseDocument?.dispatchEvent?.bind(baseDocument) ?? (() => true),
     },
   });
   Object.defineProperty(globalThis, "navigator", {

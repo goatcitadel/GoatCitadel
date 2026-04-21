@@ -31,9 +31,9 @@
   --text-muted: var(--gc-text-muted, var(--muted));
   --text-disabled: var(--gc-text-disabled, var(--text-muted));
   --accent-primary: var(--gc-accent, var(--accent));
-  --accent-success: var(--gc-accent-success, var(--ok, #6ef5a5));
-  --accent-warning: var(--gc-accent-warning, var(--gc-accent-ember, var(--warn, #ff9a45)));
-  --accent-danger: var(--gc-accent-danger, var(--danger, #ff5678));
+  --accent-success: var(--gc-accent-success, var(--ok, #34d399));
+  --accent-warning: var(--gc-accent-warning, var(--gc-accent-ember, var(--warn, #f59e0b)));
+  --accent-danger: var(--gc-accent-danger, var(--danger, #f43f5e));
   --panel-soft: var(--surface-2);
   --accent-muted: var(--gc-accent-strong, var(--accent-soft, var(--accent-primary)));
   --shadow-sm: var(--shadow-1);
@@ -44,6 +44,10 @@
   --page-gap-tight: 14px;
   --page-gap-default: 20px;
   --page-gap-loose: 28px;
+
+  /* Dark mode background lightening */
+  --gc-bg-app: oklch(0.145 0.008 240);
+  --gc-bg-shell: oklch(0.145 0.008 240);
 }
 
 :root[data-visual-regression="true"] {

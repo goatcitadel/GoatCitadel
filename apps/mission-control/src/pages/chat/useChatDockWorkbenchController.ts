@@ -56,7 +56,12 @@ export function useChatDockWorkbenchController(input: {
     setDockOpen(defaultDockOpenForMode(input.messageMode, getViewportWidth()));
   }, [input.messageMode]);
 
-  const activeWorkflowTurn = useMemo(() => resolveActiveWorkflowTurn(input.thread), [input.thread]);
+  const activeWorkflowTurn = useMemo(() => {
+    if (input.selectedTurn?.trace.orchestration) {
+      return input.selectedTurn;
+    }
+    return resolveActiveWorkflowTurn(input.thread) ?? input.selectedTurn ?? null;
+  }, [input.selectedTurn, input.thread]);
   const latestOrchestration = useMemo(
     () => activeWorkflowTurn?.trace.orchestration ?? input.thread?.turns.at(-1)?.trace.orchestration,
     [activeWorkflowTurn, input.thread],

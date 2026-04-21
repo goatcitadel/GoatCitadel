@@ -3,10 +3,7 @@
   display: grid;
   grid-template-rows: auto auto 1fr;
   color: var(--text-primary);
-  background:
-    radial-gradient(circle at top left, rgba(64, 181, 201, 0.12), transparent 24%),
-    radial-gradient(circle at top right, rgba(17, 112, 138, 0.12), transparent 22%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-canvas) 86%, white 14%), var(--surface-canvas));
+  background: var(--surface-canvas);
 }
 
 .app-shell.layout-shell {
@@ -99,6 +96,21 @@
   display: grid;
   gap: calc(var(--space-1) * var(--density-scale));
   width: min(100%, 280px);
+}
+
+.shell-theme-toggle,
+.shell-settings-trigger {
+  transition: all 0.2s ease;
+}
+
+.shell-theme-toggle:hover,
+.shell-settings-trigger:hover {
+  background: color-mix(in srgb, var(--surface-1) 50%, transparent);
+}
+
+.shell-theme-toggle:active,
+.shell-settings-trigger:active {
+  background: color-mix(in srgb, var(--surface-1) 70%, transparent);
 }
 
 .shell-secondary-nav {
@@ -550,6 +562,71 @@
 
 .settings-hub-content {
   min-width: 0;
+}
+
+/* Signal mode tabs — Chat / Cowork / Code inline switcher */
+.signal-mode-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--space-2) * var(--density-scale));
+  margin-bottom: calc(var(--space-2) * var(--density-scale));
+}
+
+.signal-mode-tabs-spacer {
+  flex: 1 1 0;
+}
+
+.signal-mode-tab {
+  min-height: 36px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signal-approvals-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--accent-warning);
+  border-color: color-mix(in srgb, var(--accent-warning) 30%, var(--border-default));
+}
+
+.signal-approvals-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-warning);
+  flex-shrink: 0;
+  animation: signal-dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes signal-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Approvals count label in nav rail */
+.signal-approvals-count {
+  color: var(--accent-warning);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* Slim ⌘K command palette trigger */
+.signal-palette-trigger {
+  min-height: 32px;
+  padding-inline: var(--space-3);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
 }
 
 .shell-page-loading {

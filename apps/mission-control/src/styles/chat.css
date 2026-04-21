@@ -2056,6 +2056,26 @@
   }
 }
 
+/* Collapse workbench to 2-column (sidebar + main) when viewport < 1680px.
+   Prevents the center column from being starved when the workbench is ~550px wide.
+   The rail moves below as a full-width row. */
+@media (max-width: 1680px) {
+  .chat-code-workbench-shell {
+    grid-template-columns: minmax(130px, 172px) minmax(0, 1fr);
+  }
+
+  .chat-code-workbench-rail {
+    grid-column: 1 / -1;
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+    padding-top: 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+  }
+}
+
 @media (max-width: 1280px) {
   .theme-signal-noir .chat-v11-shell {
     grid-template-columns: minmax(0, 1fr);

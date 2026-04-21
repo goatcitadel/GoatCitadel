@@ -50,6 +50,13 @@ function resolveGatewayAccessThemeClass(): "theme-signal-noir" | "theme-citadel-
   if (value === "light" || value === "citadel-light" || value === "theme-citadel-light") {
     return "theme-citadel-light";
   }
+  if (value === "dark" || value === "signal-noir" || value === "theme-signal-noir") {
+    return "theme-signal-noir";
+  }
+  const storedTheme = window.localStorage.getItem("goatcitadel.ui.theme.v1");
+  if (storedTheme === "light") {
+    return "theme-citadel-light";
+  }
   return "theme-signal-noir";
 }
 

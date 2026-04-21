@@ -47,6 +47,7 @@ describe("ShellNavRail", () => {
         route={{ space: "operate", page: "surface", surface: "chat" }}
         visiblePage="chat"
         navMode="icon"
+        approvalsCount={0}
         onSelectSpace={() => undefined}
         onSelectVisiblePage={() => undefined}
         onCycleNavMode={() => undefined}

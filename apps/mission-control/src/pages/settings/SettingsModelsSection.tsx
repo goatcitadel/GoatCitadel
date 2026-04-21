@@ -224,11 +224,16 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
           </p>
         ) : null}
         {models.length > 0 ? (
-          <ul className="compact-list">
-            {models.map((model) => (
-              <li key={model.id}>{model.id}</li>
-            ))}
-          </ul>
+          <details className="advanced-panel">
+            <summary style={{ cursor: "pointer", fontSize: "0.85rem" }}>
+              {models.length} available model{models.length !== 1 ? "s" : ""} — click to expand
+            </summary>
+            <ul className="compact-list" style={{ marginTop: "0.5rem" }}>
+              {models.map((model) => (
+                <li key={model.id}>{model.id}</li>
+              ))}
+            </ul>
+          </details>
         ) : null}
         <button type="button" onClick={onSaveActiveLlm} disabled={blockSaves} className="gc-button">
           Save Active Provider/Model

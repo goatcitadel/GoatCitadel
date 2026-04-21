@@ -40,7 +40,6 @@ import { SideInspectorDrawer } from "./components/SideInspectorDrawer";
 import { SignalLoader } from "./components/SignalLoader";
 import { StatusChip } from "./components/StatusChip";
 import { StatusStrip } from "./components/StatusStrip";
-import { appCopy } from "./content/copy";
 import {
   buildRouteSearch,
   buildRouteForVisiblePage,
@@ -218,15 +217,23 @@ function deriveOperateStatusStripExpanded(): boolean {
   return false;
 }
 
-function resolveShellThemeClass(): "theme-signal-noir" | "theme-citadel-light" {
+function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
+  const forcedTheme = readThemeOverrideFromLocation();
+  return (forcedTheme ?? theme) === "light" ? "theme-citadel-light" : "theme-signal-noir";
+}
+
+function readThemeOverrideFromLocation(): "dark" | "light" | null {
   if (typeof window === "undefined") {
-    return "theme-signal-noir";
+    return null;
   }
   const value = new URLSearchParams(window.location.search).get("theme")?.trim().toLowerCase();
   if (value === "light" || value === "citadel-light" || value === "theme-citadel-light") {
-    return "theme-citadel-light";
+    return "light";
   }
-  return "theme-signal-noir";
+  if (value === "dark" || value === "signal-noir" || value === "theme-signal-noir") {
+    return "dark";
+  }
+  return null;
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -379,6 +386,8 @@ export function App() {
     setDetailPanelPinned,
     activeWorkspaceId,
     setActiveWorkspaceId,
+    theme,
+    setTheme,
   } = useUiPreferences();
   const [route, setRoute] = useState<ResolvedRoute>(() => readRouteFromLocation());
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
@@ -1391,7 +1400,7 @@ export function App() {
     label: item.label,
   }));
   const compactShellNavValue = visiblePage;
-  const shellThemeClass = resolveShellThemeClass();
+  const shellThemeClass = resolveShellThemeClass(theme);
   const pageErrorResetKey = `${route.space}:${route.page}:${route.tab ?? ""}`;
 
   return (
@@ -1461,15 +1470,26 @@ export function App() {
                   aria-expanded={detailPanelVisible}
                   onClick={handleToggleDetailPanel}
                 >
-                  {detailPanelVisible ? "Hide details" : "Open details"}
+                  {detailPanelVisible ? "Hide details" : "Show details"}
                 </button>
               ) : null}
               <button
                 type="button"
-                className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip mc-shell-chip"
-                onClick={() => setPaletteOpen(true)}
+                className="shell-theme-toggle gc-nav-button gc-nav-tier-chip mc-shell-chip"
+                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
               >
-                {appCopy.quickActionsButton}
+                {theme === "dark" ? "🌙" : "☀️"}
+              </button>
+              <button
+                type="button"
+                className="shell-settings-trigger gc-nav-button gc-nav-tier-chip mc-shell-chip"
+                onClick={() => navigate({ space: "configure", page: "settings", tab: "general" })}
+                title="Settings"
+                aria-label="Settings"
+              >
+                ⚙️
               </button>
             </div>
           </div>
@@ -1526,12 +1546,42 @@ export function App() {
                 route={route}
                 visiblePage={visiblePage}
                 navMode={navMode}
+                approvalsCount={operateApprovalsCount}
                 onSelectSpace={handleSelectSpace}
                 onSelectVisiblePage={handleSelectVisiblePage}
                 onCycleNavMode={handleCycleNavMode}
               />
             ) : null}
             <div className="shell-workspace">
+              {/* In-page mode tabs for Chat / Cowork / Code — replaces nav rail modes */}
+              {route.space === "operate" && route.page === "surface" ? (
+                <nav className="signal-mode-tabs" aria-label="Work surface mode" role="tablist">
+                  {(["chat", "cowork", "code"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="tab"
+                      className={`signal-mode-tab gc-nav-button gc-nav-tier-page${operateSurfaceTab === mode ? " active" : ""}`}
+                      aria-selected={operateSurfaceTab === mode}
+                      onClick={() => navigate({ space: "operate", page: "surface", surface: mode })}
+                    >
+                      {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                    </button>
+                  ))}
+                  <div className="signal-mode-tabs-spacer" />
+                  {operateApprovalsCount > 0 ? (
+                    <button
+                      type="button"
+                      className="signal-approvals-tab gc-nav-button gc-nav-tier-chip"
+                      onClick={() => navigate({ space: "operate", page: "approvals" })}
+                      aria-label={`${operateApprovalsCount} approval${operateApprovalsCount === 1 ? "" : "s"} pending`}
+                    >
+                      <span className="signal-approvals-dot" aria-hidden="true" />
+                      {operateApprovalsCount} approval{operateApprovalsCount === 1 ? "" : "s"}
+                    </button>
+                  ) : null}
+                </nav>
+              ) : null}
               {route.space === "operate" && operateStatusVariant === "expanded" ? (
                 <div className="shell-attached-status-panel" id="shell-attached-status-panel">
                   <StatusStrip

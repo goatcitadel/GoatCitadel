@@ -23,10 +23,14 @@ export function cycleShellNavMode(mode: ShellNavMode): ShellNavMode {
   return "expanded";
 }
 
+/** Pages excluded from the nav rail for operate space — handled via in-page mode tabs */
+const OPERATE_INLINE_PAGES = new Set(["chat", "cowork", "code"]);
+
 export function ShellNavRail({
   route,
   visiblePage,
   navMode,
+  approvalsCount,
   onSelectSpace,
   onSelectVisiblePage,
   onCycleNavMode,
@@ -34,14 +38,16 @@ export function ShellNavRail({
   route: ResolvedRoute;
   visiblePage: VisiblePage;
   navMode: ShellNavMode;
+  approvalsCount: number;
   onSelectSpace: (space: Space) => void;
   onSelectVisiblePage: (page: VisiblePage) => void;
   onCycleNavMode: () => void;
 }) {
   const showLabels = navMode !== "icon";
   const showDescriptions = navMode === "expanded";
-  const workSurfaceItems = VISIBLE_SPACE_PAGES.operate.filter((item) => item.page === "chat" || item.page === "cowork" || item.page === "code");
-  const workSupportItems = VISIBLE_SPACE_PAGES.operate.filter((item) => item.page === "tasks" || item.page === "approvals");
+
+  /** For operate space, only show Tasks + Approvals (modes handled inline) */
+  const currentSpacePages = VISIBLE_SPACE_PAGES[route.space].filter((item) => !OPERATE_INLINE_PAGES.has(item.page));
 
   return (
     <aside
@@ -52,7 +58,7 @@ export function ShellNavRail({
         {showLabels ? (
           <div className="shell-nav-rail-copy">
             <p className="shell-bar-kicker">Mission Control</p>
-            <p className="shell-nav-rail-title">Operator rail</p>
+            <p className="shell-nav-rail-title">Navigation</p>
           </div>
         ) : null}
         <Button
@@ -69,6 +75,7 @@ export function ShellNavRail({
       </div>
       <Separator className="bg-border/60" />
       <ScrollArea className="mc-shell-nav-rail-scroll">
+        {/* Spaces */}
         <div className="shell-nav-rail-section">
           {showLabels ? <p className="shell-nav-rail-label">Spaces</p> : null}
           <div className="shell-nav-rail-list shell-nav-rail-space-list">
@@ -104,98 +111,50 @@ export function ShellNavRail({
           </div>
         </div>
 
-        <div className="shell-nav-rail-section">
-          {showLabels ? <p className="shell-nav-rail-label">{SPACE_META[route.space].label}</p> : null}
-          {route.space === "operate" ? (
-            <div className="shell-nav-rail-groups">
-              <div className="shell-nav-rail-group">
-                {showLabels ? <p className="shell-nav-rail-sublabel">Modes</p> : null}
-                <div className="shell-nav-rail-list">
-                  {workSurfaceItems.map((item) => (
-                    <Button
-                      key={item.page}
-                      type="button"
-                      variant="ghost"
-                      className={cn(
-                        "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
-                        visiblePage === item.page && "active",
-                      )}
-                      onClick={() => onSelectVisiblePage(item.page)}
-                      aria-current={visiblePage === item.page ? "page" : undefined}
-                      aria-label={item.label}
-                      title={item.label}
-                    >
-                      <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
-                        {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
-                      </Badge>
-                      {showLabels ? (
-                        <span className="shell-nav-rail-item-copy">
-                          <span className="shell-nav-rail-item-label">{item.label}</span>
-                        </span>
-                      ) : null}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              <div className="shell-nav-rail-group">
-                {showLabels ? <p className="shell-nav-rail-sublabel">Queue</p> : null}
-                <div className="shell-nav-rail-list">
-                  {workSupportItems.map((item) => (
-                    <Button
-                      key={item.page}
-                      type="button"
-                      variant="ghost"
-                      className={cn(
-                        "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
-                        visiblePage === item.page && "active",
-                      )}
-                      onClick={() => onSelectVisiblePage(item.page)}
-                      aria-current={visiblePage === item.page ? "page" : undefined}
-                      aria-label={item.label}
-                      title={item.label}
-                    >
-                      <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
-                        {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
-                      </Badge>
-                      {showLabels ? (
-                        <span className="shell-nav-rail-item-copy">
-                          <span className="shell-nav-rail-item-label">{item.label}</span>
-                        </span>
-                      ) : null}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
+        {/* Pages for current space */}
+        {currentSpacePages.length > 0 ? (
+          <div className="shell-nav-rail-section">
+            {showLabels ? <p className="shell-nav-rail-label">{SPACE_META[route.space].label}</p> : null}
             <div className="shell-nav-rail-list">
-              {VISIBLE_SPACE_PAGES[route.space].map((item) => (
-                <Button
-                  key={item.page}
-                  type="button"
-                  variant="ghost"
-                  className={cn(
-                    "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
-                    visiblePage === item.page && "active",
-                  )}
-                  onClick={() => onSelectVisiblePage(item.page)}
-                  aria-current={visiblePage === item.page ? "page" : undefined}
-                  aria-label={item.label}
-                  title={item.label}
-                >
-                  <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
-                    {item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase()}
-                  </Badge>
-                  {showLabels ? (
-                    <span className="shell-nav-rail-item-copy">
-                      <span className="shell-nav-rail-item-label">{item.label}</span>
-                    </span>
-                  ) : null}
-                </Button>
-              ))}
+              {currentSpacePages.map((item) => {
+                const isApprovals = item.page === "approvals";
+                const badgeLabel = item.label.slice(0, navMode === "compact" ? 1 : 2).toUpperCase();
+                return (
+                  <Button
+                    key={item.page}
+                    type="button"
+                    variant="ghost"
+                    className={cn(
+                      "gc-nav-button shell-nav-rail-item shell-nav-rail-page justify-start whitespace-normal text-left",
+                      visiblePage === item.page && "active",
+                    )}
+                    onClick={() => onSelectVisiblePage(item.page)}
+                    aria-current={visiblePage === item.page ? "page" : undefined}
+                    aria-label={item.label}
+                    title={item.label}
+                  >
+                    <Badge variant="outline" className="shell-nav-rail-badge" aria-hidden="true">
+                      {badgeLabel}
+                    </Badge>
+                    {showLabels ? (
+                      <span className="shell-nav-rail-item-copy">
+                        <span className="shell-nav-rail-item-label">{item.label}</span>
+                        {isApprovals && approvalsCount > 0 ? (
+                          <span
+                            className="shell-nav-rail-item-note signal-approvals-count"
+                            aria-label={`${approvalsCount} pending`}
+                          >
+                            {approvalsCount} pending
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                  </Button>
+                );
+              })}
             </div>
-          )}
-        </div>
+          </div>
+        ) : null}
       </ScrollArea>
     </aside>
   );

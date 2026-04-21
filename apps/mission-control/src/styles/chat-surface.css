@@ -22,7 +22,7 @@
 }
 
 .chat-v11-shell.surface-layout-code {
-  grid-template-columns: minmax(184px, 228px) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
 }
 
 .chat-v11-left {
@@ -227,19 +227,32 @@
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-collapsed {
-  grid-template-columns: minmax(0, 1.85fr) minmax(320px, 0.95fr);
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
   grid-template-areas: "secondary primary";
 }
 
 .chat-v11-main-grid.surface-grid-code.with-dock-open {
-  grid-template-columns: minmax(0, 1.75fr) minmax(320px, 0.92fr) clamp(320px, 18vw, 360px);
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) clamp(320px, 18vw, 360px);
   grid-template-areas: "secondary primary dock";
+}
+
+/* Code surface editor collapsible state */
+.chat-v11-main-grid.surface-grid-code.editor-collapsed {
+  grid-template-columns: minmax(280px, 320px) 0;
+  grid-template-areas: "secondary";
+}
+
+.chat-v11-main-grid.surface-grid-code.editor-collapsed .chat-v11-primary-column {
+  display: none;
 }
 
 .chat-v11-thread {
   gap: 12px;
   padding: 8px;
   border-radius: 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
 }
 
 .chat-v11.mode-chat .chat-v11-shell {
@@ -298,17 +311,21 @@
 /* ── Surface identity: Cowork — orchestration, multi-lane ── */
 
 .chat-v11.mode-cowork .chat-v11-thread {
-  border-radius: 16px;
+  border-radius: 14px;
   min-height: 0;
+  border: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 95%, var(--accent-primary) 2%);
 }
 
 .chat-v11.mode-cowork .chat-v11-thread-shell {
-  gap: 9px;
+  gap: 11px;
 }
 
 .chat-v11.mode-cowork .chat-v11-composer {
-  padding: 10px;
-  border-radius: 14px;
+  padding: 11px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  background: var(--surface-2);
 }
 
 /* ── Surface identity: Code — precision, rectilinear ── */
@@ -632,7 +649,14 @@
 
 /* --- Surface identity: Code (tight, technical) — high specificity override --- */
 .space-page-surface .chat-v11.shell-owned-surface.mode-code .chat-v11-thread {
-  border-radius: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 92%, var(--surface-2) 8%);
+}
+
+.space-page-surface .chat-v11.shell-owned-surface.mode-code .chat-v11-turn-card {
+  border: 1px solid color-mix(in srgb, var(--border-default) 50%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 88%, var(--surface-1) 12%);
 }
 
 /* Mode-specific dock spacing */
@@ -652,6 +676,8 @@
 .chat-v11.mode-code .chat-code-workbench {
   font-family: var(--font-mono, "JetBrains Mono", monospace);
   font-size: 0.86rem;
+  border: 1px solid color-mix(in srgb, var(--border-default) 50%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 88%, var(--surface-inset) 12%);
 }
 
 .mission-empty-shell {
@@ -825,6 +851,11 @@
   .chat-v11-main-grid.surface-grid-code .chat-v11-support-column {
     display: none;
   }
+}
+
+/* ─── Delegate visibility: Show only active delegate in Code surface sidebar ─── */
+.chat-v11.mode-code .chat-v11-left [data-delegate-item]:not([data-delegate-active="true"]) {
+  display: none;
 }
 
 @media (max-width: 840px) {

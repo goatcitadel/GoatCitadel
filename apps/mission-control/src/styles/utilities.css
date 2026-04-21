@@ -8,6 +8,11 @@
   gap: var(--space-4);
 }
 
+/* Tune hub pages: tighter vertical rhythm */
+.tune-hub-layout.stack-lg {
+  gap: var(--space-4);
+}
+
 .mobile-only {
   display: none;
 }

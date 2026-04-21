@@ -3,75 +3,75 @@
 }
 
 .theme-citadel-light {
-  --background: #a8bcc3;
-  --surface: #97adb5;
-  --surface-elevated: #8ca4ad;
-  --surface-muted: #7f98a2;
-  --text-primary: #0f1d24;
-  --text-secondary: #253a42;
-  --text-muted: #4f6670;
-  --border-quiet: rgba(15, 35, 44, 0.11);
-  --border-default: rgba(15, 35, 44, 0.18);
-  --border-strong: rgba(17, 112, 138, 0.3);
-  --accent: #11708a;
-  --focus: rgba(17, 112, 138, 0.2);
-  --success: #15835f;
-  --warning: #b66a1f;
-  --danger: #b54a59;
-  --info: #0d5f7a;
-  --gc-bg-shell: #a8bcc3;
-  --gc-bg-sidebar: #98afb7;
-  --gc-bg-panel: #97adb5;
-  --gc-bg-panel-elevated: #8ca4ad;
-  --gc-bg-panel-muted: #7f98a2;
-  --gc-bg-inset: #728a94;
-  --gc-bg-code: #10212b;
-  --gc-bg-code-soft: #18313d;
-  --gc-border-quiet: rgba(15, 35, 44, 0.11);
-  --gc-border-default: rgba(15, 35, 44, 0.22);
-  --gc-border-strong: rgba(17, 112, 138, 0.38);
-  --gc-border-live: rgba(14, 145, 170, 0.48);
-  --gc-text-primary: #0f1d24;
-  --gc-text-secondary: #253a42;
-  --gc-text-muted: #4f6670;
-  --gc-text-disabled: #687f88;
-  --gc-accent: #11708a;
-  --gc-accent-strong: #0e5f75;
-  --gc-accent-ember: #b66a1f;
-  --gc-accent-cyan: #11708a;
-  --gc-accent-success: #15835f;
-  --gc-accent-warning: #b66a1f;
-  --gc-accent-danger: #b54a59;
-  --gc-accent-info: #0d5f7a;
-  --gc-teal-surface-strong: rgba(156, 190, 200, 0.99);
-  --gc-teal-surface: rgba(139, 175, 186, 0.98);
-  --gc-teal-surface-soft: rgba(122, 159, 171, 0.97);
-  --gc-teal-surface-deep: rgba(107, 145, 158, 0.96);
-  --mission-surface-glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 249, 251, 0.98));
-  --mission-surface-glass-border: rgba(20, 67, 80, 0.1);
-  --mission-surface-glass-shadow: 0 10px 22px rgba(20, 52, 62, 0.06);
-  --mission-surface-posture-text: rgba(19, 58, 68, 0.74);
+  /* Signal Light — clean zinc/white palette with cyan-teal accent */
+  --background: #fafbfc;
+  --surface: #f5f6f8;
+  --surface-elevated: #ffffff;
+  --surface-muted: #e8eaef;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #71717a;
+  --border-quiet: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(8, 145, 178, 0.36);
+  --accent: #0891b2;
+  --focus: rgba(8, 145, 178, 0.18);
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #e11d48;
+  --info: #0284c7;
+  --gc-bg-shell: #f9fafb;
+  --gc-bg-sidebar: #f3f4f6;
+  --gc-bg-panel: #ffffff;
+  --gc-bg-panel-elevated: #ffffff;
+  --gc-bg-panel-muted: #f3f4f6;
+  --gc-bg-inset: #e5e7eb;
+  --gc-bg-code: #18181b;
+  --gc-bg-code-soft: #27272a;
+  --gc-border-quiet: rgba(0, 0, 0, 0.06);
+  --gc-border-default: rgba(0, 0, 0, 0.1);
+  --gc-border-strong: rgba(8, 145, 178, 0.32);
+  --gc-border-live: rgba(8, 145, 178, 0.48);
+  --gc-text-primary: #18181b;
+  --gc-text-secondary: #52525b;
+  --gc-text-muted: #71717a;
+  --gc-text-disabled: #a1a1aa;
+  --gc-accent: #0891b2;
+  --gc-accent-strong: #0e7490;
+  --gc-accent-ember: #d97706;
+  --gc-accent-cyan: #0891b2;
+  --gc-accent-success: #059669;
+  --gc-accent-warning: #d97706;
+  --gc-accent-danger: #e11d48;
+  --gc-accent-info: #0284c7;
+  --gc-teal-surface-strong: rgba(8, 145, 178, 0.12);
+  --gc-teal-surface: rgba(8, 145, 178, 0.08);
+  --gc-teal-surface-soft: rgba(8, 145, 178, 0.05);
+  --gc-teal-surface-deep: rgba(8, 145, 178, 0.04);
+  --mission-surface-glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(249, 250, 251, 0.98));
+  --mission-surface-glass-border: rgba(0, 0, 0, 0.08);
+  --mission-surface-glass-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --mission-surface-posture-text: rgba(24, 24, 27, 0.72);
   --mission-surface-rail-bg: linear-gradient(
     180deg,
-    color-mix(in srgb, rgba(136, 156, 165, 0.99) 92%, var(--surface-rail-accent, transparent) 8%),
-    rgba(118, 139, 148, 0.99)
+    color-mix(in srgb, #f3f4f6 92%, var(--surface-rail-accent, transparent) 8%),
+    #f3f4f6
   );
-  --mission-surface-rail-posture-text: rgba(24, 54, 63, 0.74);
-  --gc-shell-band: linear-gradient(180deg, rgba(173, 195, 203, 0.99), rgba(155, 179, 188, 0.98));
-  --gc-shell-band-muted: linear-gradient(180deg, rgba(161, 184, 192, 0.99), rgba(143, 168, 177, 0.98));
-  --panel: #97adb5;
-  --panel-alt: #7f98a2;
-  --panel-border: rgba(15, 35, 44, 0.16);
-  --panel-soft: #7f98a2;
-  --panel-elevated: #8ca4ad;
-  --panel-accent: rgba(17, 112, 138, 0.14);
-  --text-muted: #5e737d;
-  --accent: #11708a;
+  --mission-surface-rail-posture-text: rgba(39, 39, 42, 0.72);
+  --gc-shell-band: linear-gradient(180deg, #f9fafb, #f3f4f6);
+  --gc-shell-band-muted: linear-gradient(180deg, #f3f4f6, #e5e7eb);
+  --panel: #ffffff;
+  --panel-alt: #f3f4f6;
+  --panel-border: rgba(0, 0, 0, 0.1);
+  --panel-soft: #f3f4f6;
+  --panel-elevated: #ffffff;
+  --panel-accent: rgba(8, 145, 178, 0.1);
+  /* Note: --text-muted and --accent already defined above, overriding legacy values */
   color: var(--gc-text-primary);
 }
 
 .layout-shell.theme-citadel-light {
-  background: linear-gradient(180deg, #a8bcc3 0%, #97adb5 100%);
+  background: #f9fafb;
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -113,7 +113,7 @@
   gap: 16px;
   grid-template-rows: auto auto auto 1fr auto;
   border-right: 1px solid var(--gc-border-default);
-  background: var(--gc-bg-sidebar);
+  background: #ffffff;
   box-shadow: none;
 }
 
@@ -224,10 +224,10 @@
 .theme-citadel-light .gc-select-native,
 .theme-citadel-light .gc-select-trigger,
 .theme-citadel-light .gc-combobox-trigger {
-  min-height: 42px;
+  min-height: 40px;
   border-radius: 8px;
   border: 1px solid var(--gc-border-default);
-  background: linear-gradient(180deg, rgba(152, 186, 196, 0.99), rgba(126, 162, 172, 0.97));
+  background: #ffffff;
   color: var(--gc-text-primary);
   box-shadow: none;
 }
@@ -235,8 +235,8 @@
 .theme-citadel-light .gc-button:hover,
 .theme-citadel-light .gc-select-trigger:hover,
 .theme-citadel-light .gc-combobox-trigger:hover {
-  border-color: rgba(17, 112, 138, 0.24);
-  background: linear-gradient(180deg, rgba(145, 179, 189, 0.99), rgba(119, 156, 166, 0.97));
+  border-color: rgba(8, 145, 178, 0.3);
+  background: #f9fafb;
   box-shadow: none;
 }
 
@@ -248,11 +248,9 @@
 .theme-citadel-light .gc-combobox-trigger:focus-visible,
 .theme-citadel-light .gc-switch-root:focus-visible,
 .theme-citadel-light .chat-v11-turn-surface:focus-visible {
-  outline: 2px solid transparent;
+  outline: 2px solid rgba(8, 145, 178, 0.5);
   outline-offset: 2px;
-  box-shadow:
-    0 0 0 2px var(--focus),
-    0 0 0 5px rgba(15, 138, 166, 0.07);
+  box-shadow: none;
 }
 
 .theme-citadel-light .gc-button.active,
@@ -260,8 +258,8 @@
 .theme-citadel-light .gc-select-option[data-highlighted],
 .theme-citadel-light .gc-select-option[data-state="checked"],
 .theme-citadel-light .gc-combobox-option.active {
-  border-color: rgba(15, 138, 166, 0.42);
-  background: linear-gradient(180deg, rgba(118, 171, 185, 0.99), rgba(93, 147, 161, 0.97));
+  border-color: rgba(8, 145, 178, 0.32);
+  background: rgba(8, 145, 178, 0.08);
   color: var(--gc-accent-strong);
 }
 
@@ -293,22 +291,23 @@
 }
 
 .theme-citadel-light .sidebar-primary-nav .sidebar-primary-pill {
-  min-height: 48px;
-  padding: 10px 12px;
+  min-height: 40px;
+  padding: 8px 10px;
   gap: 10px;
-  border-radius: 12px;
+  border-radius: 8px;
   border-color: transparent;
   background: transparent;
-  color: var(--gc-text-primary);
+  color: var(--gc-text-secondary);
 }
 
 .theme-citadel-light .sidebar-primary-nav .sidebar-primary-pill:hover {
-  border-color: rgba(21, 50, 59, 0.08);
-  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--gc-text-primary);
 }
 
 .theme-citadel-light .sidebar-primary-nav .sidebar-primary-pill .nav-code {
-  color: var(--gc-accent-strong);
+  color: var(--gc-text-muted);
 }
 
 .theme-citadel-light .sidebar-primary-nav .sidebar-primary-pill .nav-label {
@@ -316,13 +315,14 @@
 }
 
 .theme-citadel-light .sidebar-primary-nav .sidebar-primary-pill.active {
-  border-color: rgba(17, 112, 138, 0.14);
-  background: rgba(17, 112, 138, 0.08);
+  border-color: rgba(8, 145, 178, 0.2);
+  background: rgba(8, 145, 178, 0.08);
   box-shadow: none;
 }
 
 .theme-citadel-light .sidebar-primary-nav .sidebar-primary-pill.active .nav-label {
-  color: var(--gc-text-primary);
+  color: #0891b2;
+  font-weight: 700;
 }
 
 .theme-citadel-light .sidebar-footer {
@@ -376,9 +376,9 @@
   padding: 16px 18px;
   border-radius: 16px;
   border: 1px solid var(--gc-border-default);
-  background: linear-gradient(180deg, rgba(200, 214, 220, 0.99), rgba(185, 201, 208, 0.98));
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(8px);
-  box-shadow: 0 6px 16px rgba(21, 50, 59, 0.05);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
 .theme-citadel-light .shell-topbar::after {
@@ -428,16 +428,16 @@
 
 .theme-citadel-light .shell-quick-action,
 .theme-citadel-light .dashboard-hero-primary {
-  border-color: rgba(17, 112, 138, 0.18);
-  background: #11708a;
-  color: #f8feff;
+  border-color: rgba(8, 145, 178, 0.24);
+  background: #0891b2;
+  color: #ffffff;
   box-shadow: none;
 }
 
 .theme-citadel-light .shell-quick-action:hover,
 .theme-citadel-light .dashboard-hero-primary:hover {
-  border-color: rgba(17, 112, 138, 0.32);
-  background: #0f667d;
+  border-color: rgba(8, 145, 178, 0.4);
+  background: #0e7490;
 }
 
 .theme-citadel-light .shell-status-link,
@@ -510,10 +510,10 @@
 .theme-citadel-light .chat-v11-session-bar,
 .theme-citadel-light .chat-v11-external-bind,
 .theme-citadel-light .workflow-page .data-toolbar {
-  border-radius: 16px;
-  border: 1px solid var(--gc-border-default);
-  background: linear-gradient(180deg, rgba(168, 199, 208, 0.99), rgba(142, 176, 186, 0.97));
-  box-shadow: 0 12px 28px rgba(21, 50, 59, 0.08);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
 }
 
 .theme-citadel-light .shell-context-bar {
@@ -852,40 +852,40 @@
   gap: 6px;
   padding: 4px 9px;
   border-radius: 8px;
-  border: 1px solid rgba(21, 50, 59, 0.14);
-  background: rgba(154, 186, 194, 0.98);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #f3f4f6;
   color: var(--gc-text-primary);
   font-size: 0.76rem;
 }
 
 .theme-citadel-light .status-chip-live {
-  border-color: rgba(15, 138, 166, 0.24);
-  background: rgba(130, 181, 193, 0.99);
+  border-color: rgba(8, 145, 178, 0.24);
+  background: rgba(8, 145, 178, 0.06);
   color: var(--gc-accent-strong);
 }
 
 .theme-citadel-light .status-chip-success {
-  border-color: rgba(21, 131, 95, 0.24);
-  background: rgba(221, 239, 229, 0.98);
+  border-color: rgba(5, 150, 105, 0.22);
+  background: rgba(5, 150, 105, 0.06);
   color: var(--gc-accent-success);
 }
 
 .theme-citadel-light .status-chip-warning {
-  border-color: rgba(182, 106, 31, 0.24);
-  background: rgba(255, 248, 239, 0.98);
+  border-color: rgba(217, 119, 6, 0.24);
+  background: rgba(217, 119, 6, 0.06);
   color: var(--gc-accent-warning);
 }
 
 .theme-citadel-light .status-chip-critical {
-  border-color: rgba(181, 74, 89, 0.24);
-  background: rgba(255, 246, 248, 0.98);
+  border-color: rgba(225, 29, 72, 0.22);
+  background: rgba(225, 29, 72, 0.06);
   color: var(--gc-accent-danger);
 }
 
 .theme-citadel-light .status-chip-muted {
-  color: var(--gc-text-primary);
-  border-color: rgba(20, 67, 80, 0.16);
-  background: rgba(145, 174, 182, 0.98);
+  color: var(--gc-text-secondary);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #f9fafb;
 }
 
 .theme-citadel-light .data-toolbar {
@@ -934,27 +934,27 @@
 }
 
 .theme-citadel-light .gc-action-secondary {
-  border-color: var(--gc-border-default);
-  background: linear-gradient(180deg, rgba(176, 208, 216, 0.99), rgba(147, 182, 192, 0.97));
+  border-color: rgba(0, 0, 0, 0.1);
+  background: #f3f4f6;
   color: var(--gc-text-primary);
 }
 
 .theme-citadel-light .gc-action-primary {
-  border-color: rgba(15, 138, 166, 0.24);
-  background: #0f8aa6;
-  color: #f8feff;
+  border-color: rgba(8, 145, 178, 0.24);
+  background: #0891b2;
+  color: #ffffff;
 }
 
 .theme-citadel-light .gc-action-tertiary {
-  border-color: var(--gc-border-quiet);
-  background: linear-gradient(180deg, rgba(166, 198, 206, 0.99), rgba(138, 172, 181, 0.97));
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #f9fafb;
   color: var(--gc-text-secondary);
   box-shadow: none;
 }
 
 .theme-citadel-light .gc-action-danger {
-  border-color: rgba(181, 74, 89, 0.2);
-  background: linear-gradient(180deg, rgba(173, 194, 201, 0.99), rgba(148, 172, 180, 0.97));
+  border-color: rgba(225, 29, 72, 0.2);
+  background: rgba(225, 29, 72, 0.05);
   color: var(--gc-accent-danger);
 }
 
@@ -1226,17 +1226,17 @@
 }
 
 .theme-citadel-light .chat-v11-shell {
-  --gc-chat-app: #6a838d;
-  --gc-chat-thread: #81979f;
-  --gc-chat-composer: #8ca2ab;
-  --gc-chat-elevated: #788e98;
-  --gc-chat-elevated-soft: #8ca2ab;
-  --gc-chat-border: #738a94;
-  --gc-chat-border-strong: rgba(56, 182, 200, 0.48);
-  --gc-chat-text: #fbfdfe;
-  --gc-chat-muted: #eef5f7;
-  --gc-chat-accent: #38b6c8;
-  --gc-chat-accent-soft: rgba(56, 182, 200, 0.16);
+  --gc-chat-app: #f3f4f6;
+  --gc-chat-thread: #ffffff;
+  --gc-chat-composer: #f9fafb;
+  --gc-chat-elevated: #f3f4f6;
+  --gc-chat-elevated-soft: #f9fafb;
+  --gc-chat-border: rgba(0, 0, 0, 0.08);
+  --gc-chat-border-strong: rgba(8, 145, 178, 0.4);
+  --gc-chat-text: #18181b;
+  --gc-chat-muted: #71717a;
+  --gc-chat-accent: #0891b2;
+  --gc-chat-accent-soft: rgba(8, 145, 178, 0.08);
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
   align-items: start;
@@ -1287,16 +1287,16 @@
 .theme-citadel-light .chat-v11-left,
 .theme-citadel-light .chat-v11-thread,
 .theme-citadel-light .chat-v11-empty-shell {
-  border-radius: 18px;
-  border: 1px solid var(--gc-chat-border);
-  background: linear-gradient(180deg, rgba(164, 182, 189, 0.99), rgba(145, 165, 173, 0.99));
-  box-shadow: 0 12px 24px rgba(17, 31, 38, 0.08);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
   color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-left {
   gap: 14px;
-  background: linear-gradient(180deg, rgba(136, 156, 165, 0.99), rgba(118, 139, 148, 0.99));
+  background: #f9fafb;
 }
 
 .theme-citadel-light .chat-v11.mode-cowork .chat-v11-header {
@@ -1314,11 +1314,9 @@
 }
 
 .theme-citadel-light .panel.panel-soft.chat-v11-left {
-  background: linear-gradient(180deg, rgba(136, 156, 165, 0.99), rgba(118, 139, 148, 0.99)) !important;
-  border-color: rgba(72, 97, 109, 0.42);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 12px 24px rgba(27, 54, 64, 0.1) !important;
+  background: #f9fafb !important;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05) !important;
 }
 
 .theme-citadel-light .chat-v11-conversation-shell {
@@ -1434,19 +1432,17 @@
 }
 
 .theme-citadel-light .chat-v11-thread {
-  background: linear-gradient(180deg, rgba(154, 173, 181, 0.99), rgba(135, 155, 164, 0.99)) !important;
-  border-color: rgba(98, 120, 132, 0.28);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 12px 24px rgba(23, 37, 44, 0.08) !important;
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04) !important;
 }
 
 .theme-citadel-light .chat-v11-thread::before {
-  background: linear-gradient(90deg, rgba(224, 238, 242, 0.24), rgba(56, 182, 200, 0.12), transparent 78%);
+  background: linear-gradient(90deg, rgba(8, 145, 178, 0.06), transparent 78%);
 }
 
 .theme-citadel-light .chat-v11-thread-scroll {
-  background: linear-gradient(180deg, rgba(176, 193, 199, 0.99), rgba(160, 178, 185, 0.99));
+  background: #f9fafb;
 }
 
 .theme-citadel-light .chat-cowork-panel,
@@ -1680,20 +1676,20 @@
 
 .theme-citadel-light .chat-v11-message {
   padding: 14px 16px;
-  border-radius: 18px;
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(204, 216, 221, 0.34);
-  color: #102a33;
+  border-radius: 12px;
+  border-color: rgba(0, 0, 0, 0.07);
+  background: #f9fafb;
+  color: #18181b;
 }
 
 .theme-citadel-light .chat-v11-message.user {
-  border-color: rgba(56, 182, 200, 0.32);
-  background: rgba(56, 182, 200, 0.18);
+  border-color: rgba(8, 145, 178, 0.2);
+  background: rgba(8, 145, 178, 0.06);
 }
 
 .theme-citadel-light .chat-v11-message.system {
-  border-color: rgba(229, 154, 99, 0.28);
-  background: rgba(229, 154, 99, 0.14);
+  border-color: rgba(217, 119, 6, 0.2);
+  background: rgba(217, 119, 6, 0.05);
 }
 
 .theme-citadel-light .chat-v11-message-meta,
@@ -1786,12 +1782,9 @@
   --mc-shell-card-pad: 12px 16px;
   --mc-control-gap: 8px;
   --mc-control-min-height: 36px;
-  border: 1px solid var(--gc-border-default);
-  background:
-    radial-gradient(circle at top left, rgba(15, 138, 166, 0.06), transparent 24%),
-    radial-gradient(circle at top right, rgba(17, 112, 138, 0.05), transparent 26%),
-    linear-gradient(180deg, rgba(182, 198, 205, 0.99), rgba(168, 186, 194, 0.98));
-  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   gap: 0;
   padding: 0;
   overflow: visible;
@@ -1878,20 +1871,20 @@
 .theme-citadel-light .command-deck-surface-tab,
 .theme-citadel-light .command-deck-overflow summary,
 .theme-citadel-light .command-deck-overflow-item {
-  border-color: var(--gc-border-default);
+  border-color: rgba(0, 0, 0, 0.08);
   border-radius: 7px;
   padding-inline: 12px;
-  background: linear-gradient(180deg, rgba(118, 155, 166, 0.99), rgba(95, 132, 144, 0.97));
-  color: var(--gc-text-primary);
+  background: #f3f4f6;
+  color: var(--gc-text-secondary);
   box-shadow: none;
 }
 
 .theme-citadel-light .command-deck-pill.active,
 .theme-citadel-light .command-deck-surface-tab.active,
 .theme-citadel-light .command-deck-overflow-item.active {
-  border-color: rgba(15, 138, 166, 0.34);
-  background: linear-gradient(180deg, rgba(92, 145, 160, 0.99), rgba(70, 123, 138, 0.97));
-  color: #f3fbfd;
+  border-color: rgba(8, 145, 178, 0.3);
+  background: rgba(8, 145, 178, 0.1);
+  color: #0891b2;
 }
 
 .theme-citadel-light .command-deck-overflow-panel {
@@ -1965,19 +1958,19 @@
 
 .theme-citadel-light .chat-v11-composer {
   padding: 14px;
-  border-radius: 20px;
-  border: 1px solid var(--gc-chat-border);
-  background: linear-gradient(180deg, rgba(125, 146, 154, 0.99), rgba(106, 127, 135, 0.99));
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #f9fafb;
   color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-thread .chat-v11-composer {
-  border-top-color: rgba(227, 238, 242, 0.16);
-  background: linear-gradient(180deg, rgba(120, 141, 149, 0.99), rgba(101, 122, 130, 0.99));
+  border-top-color: rgba(0, 0, 0, 0.07);
+  background: #f3f4f6;
 }
 
 .theme-citadel-light .chat-v11-thread .chat-v11-composer {
-  background: linear-gradient(180deg, rgba(120, 141, 149, 0.99), rgba(101, 122, 130, 0.99)) !important;
+  background: #f3f4f6 !important;
   box-shadow: none !important;
 }
 
@@ -2476,11 +2469,11 @@
 .theme-citadel-light .gc-switch-root {
   width: 42px;
   height: 24px;
-  background: rgba(216, 228, 233, 0.98);
+  background: #d4d4d8;
 }
 
 .theme-citadel-light .gc-switch-root[data-state="checked"] {
-  background: rgba(15, 138, 166, 0.9);
+  background: #0891b2;
 }
 
 .theme-citadel-light .gc-switch-thumb {
@@ -2616,15 +2609,14 @@
   min-height: 100vh;
   color: var(--gc-text-primary);
   background:
-    radial-gradient(circle at 12% 0%, rgba(15, 138, 166, 0.12), transparent 24%),
-    radial-gradient(circle at 86% 6%, rgba(182, 106, 31, 0.1), transparent 18%),
-    linear-gradient(180deg, #f6fbfd 0%, #eef4f6 52%, #e8f0f3 100%);
+    radial-gradient(circle at 12% 0%, rgba(8, 145, 178, 0.08), transparent 24%),
+    linear-gradient(180deg, #f9fafb 0%, #f3f4f6 100%);
 }
 
 .theme-citadel-light .gateway-access-card {
-  border-color: rgba(15, 138, 166, 0.16);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(243, 248, 250, 0.98)), #ffffff;
-  box-shadow: 0 28px 70px rgba(16, 46, 57, 0.16);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 }
 
 .theme-citadel-light .gateway-access-header,
@@ -2883,28 +2875,26 @@
 }
 
 .theme-citadel-light .app-shell {
-  background:
-    radial-gradient(circle at top left, rgba(66, 201, 219, 0.16), transparent 22%),
-    radial-gradient(circle at top right, rgba(17, 112, 138, 0.14), transparent 20%),
-    linear-gradient(180deg, rgba(181, 203, 210, 0.98), rgba(158, 182, 190, 0.98) 20%, rgba(143, 169, 178, 0.98));
+  background: #f9fafb;
 }
 
 .theme-citadel-light .shell-bar {
-  background: linear-gradient(180deg, rgba(222, 236, 240, 0.84), rgba(194, 214, 221, 0.78)), rgba(206, 223, 229, 0.78);
-  border-bottom-color: rgba(17, 66, 82, 0.16);
-  box-shadow: 0 10px 24px rgba(30, 59, 69, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(12px);
 }
 
 .theme-citadel-light .shell-bar-title {
-  color: #10222a;
+  color: #18181b;
 }
 
 .theme-citadel-light .shell-bar-page-label {
-  color: #0d5f75;
+  color: #0891b2;
 }
 
 .theme-citadel-light .shell-bar-page-note {
-  color: rgba(26, 54, 64, 0.78);
+  color: #52525b;
 }
 
 .theme-citadel-light {
@@ -2919,11 +2909,10 @@
 .theme-citadel-light .surface-nav-item,
 .theme-citadel-light .secondary-page-nav-item,
 .theme-citadel-light .shell-command-trigger-topbar {
-  border-color: rgba(21, 72, 87, 0.16);
-  background: linear-gradient(180deg, rgba(245, 251, 253, 0.9), rgba(216, 233, 238, 0.86));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.7),
-    0 8px 18px rgba(35, 67, 77, 0.08);
+  border-color: rgba(0, 0, 0, 0.1);
+  background: #ffffff;
+  box-shadow: none;
+  color: #18181b;
 }
 
 .theme-citadel-light .gc-nav-button.active,
@@ -2931,31 +2920,26 @@
 .theme-citadel-light .space-nav-item.active,
 .theme-citadel-light .surface-nav-item.active,
 .theme-citadel-light .secondary-page-nav-item.active {
-  border-color: rgba(17, 112, 138, 0.3);
-  background: linear-gradient(180deg, rgba(165, 220, 230, 0.96), rgba(125, 191, 205, 0.92));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    0 12px 22px rgba(19, 78, 95, 0.12);
+  border-color: rgba(8, 145, 178, 0.3);
+  background: rgba(8, 145, 178, 0.08);
+  color: #0891b2;
+  box-shadow: none;
 }
 
 .theme-citadel-light .shell-bar .shell-workspace-picker {
   min-width: 240px;
   padding: 8px 10px;
   border-radius: 16px;
-  border: 1px solid rgba(21, 72, 87, 0.16);
-  background: linear-gradient(180deg, rgba(210, 230, 236, 0.96), rgba(185, 207, 214, 0.94));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.6),
-    0 10px 20px rgba(33, 63, 73, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #f3f4f6;
+  box-shadow: none;
 }
 
 .theme-citadel-light .status-strip-summary,
 .theme-citadel-light .status-strip-compact-row .gc-nav-button {
-  border-color: rgba(21, 72, 87, 0.16);
-  background: linear-gradient(180deg, rgba(239, 247, 249, 0.94), rgba(214, 229, 234, 0.9));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.72),
-    0 10px 20px rgba(29, 62, 72, 0.06);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  box-shadow: none;
 }
 
 .theme-citadel-light .shell-bar .shell-status-link,
@@ -2969,8 +2953,8 @@
 }
 
 .theme-citadel-light .shell-secondary-nav {
-  background: linear-gradient(180deg, rgba(198, 217, 223, 0.72), rgba(182, 203, 210, 0.78)), rgba(190, 210, 216, 0.72);
-  border-bottom-color: rgba(17, 66, 82, 0.14);
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom-color: rgba(0, 0, 0, 0.07);
 }
 
 .theme-citadel-light .shell-main {
@@ -2980,11 +2964,9 @@
 
 .theme-citadel-light .status-strip .stat-card {
   min-height: 104px;
-  border-color: rgba(21, 72, 87, 0.16);
-  background: linear-gradient(180deg, rgba(232, 242, 246, 0.96), rgba(202, 221, 227, 0.94));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.72),
-    0 14px 28px rgba(29, 62, 72, 0.08);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 .theme-citadel-light .status-strip-tier-primary .stat-card {
@@ -2993,10 +2975,8 @@
 
 .theme-citadel-light .status-strip-tier-secondary .stat-card {
   min-height: 92px;
-  background: linear-gradient(180deg, rgba(223, 236, 240, 0.94), rgba(198, 217, 223, 0.92));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.68),
-    0 10px 20px rgba(29, 62, 72, 0.05);
+  background: #f9fafb;
+  box-shadow: none;
 }
 
 .theme-citadel-light .status-strip-card-approvals.is-attention {

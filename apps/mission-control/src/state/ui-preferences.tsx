@@ -4,6 +4,7 @@ import type { ShellNavMode } from "../components/ShellNavRail";
 
 export type UiExperienceMode = "simple" | "advanced";
 export type UiDensity = "comfortable" | "default" | "compact";
+export type UiTheme = "dark" | "light";
 
 interface UiPreferencesValue {
   mode: UiExperienceMode;
@@ -20,6 +21,8 @@ interface UiPreferencesValue {
   setDetailPanelPinned: (enabled: boolean) => void;
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
+  theme: UiTheme;
+  setTheme: (theme: UiTheme) => void;
 }
 
 const MODE_KEY = "goatcitadel.ui.mode.v1";
@@ -29,6 +32,7 @@ const NAV_MODE_KEY = "goatcitadel.ui.nav_mode.v1";
 const DETAILS_KEY = "goatcitadel.ui.technical_details.v1";
 const DETAIL_PANEL_PINNED_KEY = "goatcitadel.ui.detail_panel_pinned.v1";
 const WORKSPACE_KEY = "goatcitadel.ui.workspace_id.v1";
+const THEME_KEY = "goatcitadel.ui.theme.v1";
 
 const UiPreferencesContext = createContext<UiPreferencesValue>({
   mode: "simple",
@@ -45,6 +49,8 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setDetailPanelPinned: () => {},
   activeWorkspaceId: "default",
   setActiveWorkspaceId: () => {},
+  theme: "dark",
+  setTheme: () => {},
 });
 
 export function UiPreferencesProvider(props: { children: ReactNode }) {
@@ -55,6 +61,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   const [showTechnicalDetails, setShowTechnicalDetailsState] = useState<boolean>(() => readDetailsFromStorage());
   const [detailPanelPinned, setDetailPanelPinnedState] = useState<boolean>(() => readDetailPanelPinnedFromStorage());
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string>(() => readWorkspaceIdFromStorage());
+  const [theme, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
 
   const value = useMemo<UiPreferencesValue>(
     () => ({
@@ -97,8 +104,13 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         setActiveWorkspaceIdState(normalized);
         writeStorage(WORKSPACE_KEY, normalized);
       },
+      theme,
+      setTheme: (nextTheme) => {
+        setThemeState(nextTheme);
+        writeStorage(THEME_KEY, nextTheme);
+      },
     }),
-    [mode, density, effectsMode, navMode, showTechnicalDetails, detailPanelPinned, activeWorkspaceId],
+    [mode, density, effectsMode, navMode, showTechnicalDetails, detailPanelPinned, activeWorkspaceId, theme],
   );
 
   return <UiPreferencesContext.Provider value={value}>{props.children}</UiPreferencesContext.Provider>;
@@ -191,4 +203,12 @@ function normalizeWorkspaceId(value: string | null | undefined): string {
     return "default";
   }
   return /^[a-zA-Z0-9._-]{1,80}$/.test(trimmed) ? trimmed : "default";
+}
+
+function readThemeFromStorage(): UiTheme {
+  if (typeof window === "undefined") {
+    return "dark";
+  }
+  const raw = window.localStorage.getItem(THEME_KEY);
+  return raw === "light" ? "light" : "dark";
 }
