@@ -1,7 +1,4 @@
-export type LlmApiStyle =
-  | "openai-chat-completions"
-  | "openai-responses"
-  | "anthropic-messages";
+export type LlmApiStyle = "openai-chat-completions" | "openai-responses" | "anthropic-messages";
 
 export interface LlmProviderCapabilities {
   vision: boolean;
@@ -11,29 +8,34 @@ export interface LlmProviderCapabilities {
   jsonMode: boolean;
   webSearch?: boolean;
   reasoning?: boolean;
+  voiceInput?: boolean;
+  voiceOutput?: boolean;
+  imageGenerate?: boolean;
+  imageEdit?: boolean;
+  artifacts?: boolean;
 }
 
 export type LlmProviderRequestAuthConfig =
   | {
-    type: "bearer";
-    token?: string;
-    tokenEnv?: string;
-    headerName?: string;
-  }
+      type: "bearer";
+      token?: string;
+      tokenEnv?: string;
+      headerName?: string;
+    }
   | {
-    type: "header";
-    headerName: string;
-    value?: string;
-    valueEnv?: string;
-    scheme?: string;
-  }
+      type: "header";
+      headerName: string;
+      value?: string;
+      valueEnv?: string;
+      scheme?: string;
+    }
   | {
-    type: "query";
-    queryParam: string;
-    value?: string;
-    valueEnv?: string;
-    prefix?: string;
-  };
+      type: "query";
+      queryParam: string;
+      value?: string;
+      valueEnv?: string;
+      prefix?: string;
+    };
 
 export type LlmProviderRequestProxyAuthConfig = Extract<
   LlmProviderRequestAuthConfig,

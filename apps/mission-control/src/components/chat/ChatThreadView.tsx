@@ -11,6 +11,7 @@ import { StatusChip } from "../StatusChip";
 import { Badge } from "../ui";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
+import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
 import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
 
 export interface ChatThreadNotice {
@@ -190,6 +191,8 @@ function ChatTurnActions({
   onRetryTurn,
   onEditTurn,
   onOpenRunDetails,
+  onOpenGeneratedArtifact,
+  onCreateGeneratedArtifactVersion,
 }: {
   mode: ChatMode;
   turn: ChatThreadTurnRecord;
@@ -198,9 +201,12 @@ function ChatTurnActions({
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
-  if (!selected && !suggestionSummary) {
+  const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
+  if (!selected && !suggestionSummary && !hasGeneratedArtifact) {
     return null;
   }
   return (
@@ -232,6 +238,26 @@ function ChatTurnActions({
         >
           Edit and resend
         </button>
+        {turn.assistantMessage ? (
+          <button
+            type="button"
+            aria-label={`Open generated artifact for turn ${turn.turnId}`}
+            onClick={() => onOpenGeneratedArtifact(turn.turnId)}
+            className="gc-button"
+          >
+            Open artifact
+          </button>
+        ) : null}
+        {hasGeneratedArtifact ? (
+          <button
+            type="button"
+            aria-label={`Create a new artifact version for turn ${turn.turnId}`}
+            onClick={() => onCreateGeneratedArtifactVersion(turn.turnId)}
+            className="gc-button"
+          >
+            New version
+          </button>
+        ) : null}
       </div>
       <ChatBranchSwitcher turn={turn} onSwitch={onSwitchBranch} />
       {suggestionSummary ? <p className="chat-v11-turn-action-note">Suggested next move: {suggestionSummary}</p> : null}
@@ -248,6 +274,8 @@ function ChatTurnCard({
   onRetryTurn,
   onEditTurn,
   onOpenRunDetails,
+  onOpenGeneratedArtifact,
+  onCreateGeneratedArtifactVersion,
 }: {
   mode: ChatMode;
   turn: ChatThreadTurnRecord;
@@ -257,6 +285,8 @@ function ChatTurnCard({
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) {
@@ -284,6 +314,7 @@ function ChatTurnCard({
             <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
           </p>
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
+          <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} />
         </div>
         <div className="chat-v11-turn-bubble assistant">
           <p className="chat-v11-message-meta">
@@ -333,6 +364,8 @@ function ChatTurnCard({
         onRetryTurn={onRetryTurn}
         onEditTurn={onEditTurn}
         onOpenRunDetails={onOpenRunDetails}
+        onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+        onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
       />
     </article>
   );
@@ -444,6 +477,8 @@ export function ChatThreadView({
   onRetryTurn,
   onEditTurn,
   onOpenRunDetails,
+  onOpenGeneratedArtifact,
+  onCreateGeneratedArtifactVersion,
 }: {
   mode: ChatMode;
   loading: boolean;
@@ -461,6 +496,8 @@ export function ChatThreadView({
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -510,6 +547,8 @@ export function ChatThreadView({
             onRetryTurn={onRetryTurn}
             onEditTurn={onEditTurn}
             onOpenRunDetails={onOpenRunDetails}
+            onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+            onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
           />
         ))}
         <ChatThreadNotices notices={notices} />

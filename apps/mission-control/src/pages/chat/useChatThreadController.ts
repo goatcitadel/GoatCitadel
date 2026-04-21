@@ -24,6 +24,10 @@ export function useChatThreadController(input: {
   thread: ChatThreadResponse | null;
   selectedProjectId: string;
   setSelectedProjectId: Dispatch<SetStateAction<string>>;
+  selectedFolderId: string;
+  setSelectedFolderId: Dispatch<SetStateAction<string>>;
+  selectedTag: string | null;
+  setSelectedTag: Dispatch<SetStateAction<string | null>>;
   historyView: ChatHistoryView;
   setHistoryView: Dispatch<SetStateAction<ChatHistoryView>>;
   selectedSessionId: string | null;
@@ -90,9 +94,36 @@ export function useChatThreadController(input: {
     () => input.projects?.find((item) => item.projectId === selectedSession?.projectId) ?? null,
     [input.projects, selectedSession?.projectId],
   );
+  const availableFolders = useMemo(() => {
+    const folders = new Map<string, { folderId: string; name: string; count: number }>();
+    for (const item of input.sessions ?? []) {
+      if (!item.folderId || !item.folderName) {
+        continue;
+      }
+      const current = folders.get(item.folderId);
+      folders.set(item.folderId, {
+        folderId: item.folderId,
+        name: item.folderName,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+    return [...folders.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }, [input.sessions]);
+  const availableTags = useMemo(() => {
+    const tags = new Map<string, { tag: string; count: number }>();
+    for (const item of input.sessions ?? []) {
+      for (const tag of item.tags ?? []) {
+        const key = tag.toLowerCase();
+        tags.set(key, {
+          tag,
+          count: (tags.get(key)?.count ?? 0) + 1,
+        });
+      }
+    }
+    return [...tags.values()].sort((left, right) => left.tag.localeCompare(right.tag));
+  }, [input.sessions]);
   const visibleSessions = useMemo(() => {
     const all = input.sessions ?? [];
-    const q = input.search.trim().toLowerCase();
     return all.filter((item) => {
       if (input.selectedProjectId !== "all") {
         if (input.selectedProjectId === "none") {
@@ -103,16 +134,21 @@ export function useChatThreadController(input: {
           return false;
         }
       }
-      if (!q) {
-        return true;
+      if (input.selectedFolderId !== "all") {
+        if (input.selectedFolderId === "none") {
+          if (item.folderId) {
+            return false;
+          }
+        } else if (item.folderId !== input.selectedFolderId) {
+          return false;
+        }
       }
-      const haystack = [item.title, item.sessionKey, item.projectName, item.channel, item.account]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
+      if (input.selectedTag) {
+        return (item.tags ?? []).some((tag) => tag.toLowerCase() === input.selectedTag?.toLowerCase());
+      }
+      return true;
     });
-  }, [input.search, input.selectedProjectId, input.sessions]);
+  }, [input.selectedFolderId, input.selectedProjectId, input.selectedTag, input.sessions]);
 
   const missionSessions = useMemo(() => visibleSessions.filter((item) => item.scope === "mission"), [visibleSessions]);
   const externalSessions = useMemo(
@@ -136,6 +172,10 @@ export function useChatThreadController(input: {
   return {
     selectedProjectId: input.selectedProjectId,
     setSelectedProjectId: input.setSelectedProjectId,
+    selectedFolderId: input.selectedFolderId,
+    setSelectedFolderId: input.setSelectedFolderId,
+    selectedTag: input.selectedTag,
+    setSelectedTag: input.setSelectedTag,
     historyView: input.historyView,
     setHistoryView: input.setHistoryView,
     selectedSessionId: input.selectedSessionId,
@@ -148,6 +188,8 @@ export function useChatThreadController(input: {
     setFollowThreadOutput: input.setFollowThreadOutput,
     selectedSession,
     selectedProject,
+    availableFolders,
+    availableTags,
     visibleSessions,
     missionSessions,
     externalSessions,

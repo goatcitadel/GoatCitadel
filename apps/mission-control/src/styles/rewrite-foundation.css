@@ -76,13 +76,13 @@
 
 .mc-shell-bar,
 .mc-shell-secondary-nav {
-  border-radius: 8px;
+  border-radius: var(--shell-chrome-radius);
   background: color-mix(in srgb, var(--card) 92%, transparent);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(var(--shell-chrome-blur));
 }
 
 .mc-shell-bar {
-  padding: 18px 20px;
+  padding: var(--shell-chrome-padding);
 }
 
 .mc-shell-bar-context,
@@ -108,8 +108,8 @@
 
 .mc-shell-nav-rail {
   background: color-mix(in srgb, var(--sidebar) 92%, transparent);
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: calc(var(--shell-chrome-radius) - 2px);
+  padding: 14px;
 }
 
 .mc-shell-nav-rail-head {
@@ -159,7 +159,7 @@
 }
 
 .mc-panel {
-  border-radius: 8px;
+  border-radius: calc(var(--shell-chrome-radius) - 4px);
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--card) 96%, white 4%) 0%,

@@ -1,5 +1,6 @@
 /* eslint-disable max-lines */
 import type { DurableRunStatus } from "./durable.js";
+import type { ThreadKnowledgeCitationRecord } from "./knowledge.js";
 import type { SkillSourceProvider } from "./skills.js";
 
 export type ChatProjectLifecycleStatus = "active" | "archived";
@@ -70,6 +71,69 @@ export interface ChatProjectRecord {
   updatedAt: string;
 }
 
+export interface ChatFolderRecord {
+  folderId: string;
+  workspaceId?: string;
+  name: string;
+  sessionCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ChatSessionSearchHitRecord {
+  messageId: string;
+  turnId?: string;
+  excerpt: string;
+  score: number;
+  matchedText?: string;
+  timestamp?: string;
+}
+
+export type ChatSurfaceHandoffSource = ChatMode;
+
+export interface ChatSessionHandoffRecord {
+  sourceSurface: ChatSurfaceHandoffSource;
+  originTurnId?: string;
+  originArtifactId?: string;
+  createdAt: string;
+}
+
+export type ChatGeneratedArtifactKind = "markdown" | "html" | "mermaid" | "code" | "text";
+
+export type ChatGeneratedArtifactSourceSurface = "chat" | "cowork" | "code";
+
+export interface ChatGeneratedArtifactReference {
+  artifactId: string;
+  kind: ChatGeneratedArtifactKind;
+  title: string;
+  sourceSurface: ChatGeneratedArtifactSourceSurface;
+  version: number;
+  supersedesArtifactId?: string;
+  turnId?: string;
+  language?: string;
+  providerId?: string;
+  model?: string;
+  createdAt: string;
+}
+
+export interface ChatGeneratedArtifactRecord {
+  artifactId: string;
+  sessionId: string;
+  workspaceId?: string;
+  turnId: string;
+  title: string;
+  kind: ChatGeneratedArtifactKind;
+  content: string;
+  language?: string;
+  sourceSurface: ChatGeneratedArtifactSourceSurface;
+  version: number;
+  supersedesArtifactId?: string;
+  providerId?: string;
+  model?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ChatSessionRecord {
   sessionId: string;
   sessionKey: string;
@@ -81,8 +145,14 @@ export interface ChatSessionRecord {
   pinned: boolean;
   lifecycleStatus: ChatSessionLifecycleStatus;
   archivedAt?: string;
+  folderId?: string;
+  folderName?: string;
+  tags?: string[];
   projectId?: string;
   projectName?: string;
+  searchHits?: ChatSessionSearchHitRecord[];
+  lastHandoff?: ChatSessionHandoffRecord;
+  generatedArtifacts?: ChatGeneratedArtifactReference[];
   channel: string;
   account: string;
   updatedAt: string;
@@ -94,6 +164,9 @@ export interface ChatSessionRecord {
 export interface ChatSessionCreateInput {
   workspaceId?: string;
   title?: string;
+  folderId?: string;
+  folderName?: string;
+  tags?: string[];
   projectId?: string;
   mode?: ChatMode;
   origin?: ChatSessionOrigin;
@@ -104,6 +177,8 @@ export interface ChatSessionListQuery {
   scope?: ChatSessionScope | "all";
   workspaceId?: string;
   projectId?: string;
+  folderId?: string;
+  tag?: string;
   q?: string;
   view?: ChatSessionLifecycleStatus | "all";
   limit?: number;
@@ -480,6 +555,7 @@ export interface ChatCitationRecord {
   url: string;
   snippet?: string;
   sourceType?: "web" | "file" | "tool";
+  knowledge?: ThreadKnowledgeCitationRecord;
 }
 
 export interface ChatToolRunRecord {
@@ -1181,6 +1257,7 @@ export interface ChatThreadTurnRecord {
   trace: ChatTurnTraceRecord;
   toolRuns: ChatToolRunRecord[];
   citations: ChatCitationRecord[];
+  generatedArtifacts?: ChatGeneratedArtifactReference[];
   branch: ChatThreadTurnBranchRecord;
 }
 

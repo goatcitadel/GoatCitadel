@@ -112,4 +112,22 @@ describe("ChatComposerShell", () => {
     expect(markup).toContain("Fallback can cross the current runtime boundary");
     expect(markup).toContain("Acknowledge fallback");
   });
+
+  it("renders the preset picker trigger with the selected preset label", () => {
+    const markup = buildComposerMarkup({
+      presetOptions: [
+        {
+          value: "preset-reviewer",
+          label: "Reviewer",
+          summary: "Bias the surface toward review and verification.",
+          routeHint: "code",
+          toolsPosture: "manual",
+        },
+      ],
+      selectedPresetId: "preset-reviewer",
+    });
+
+    expect(markup).toContain("Preset");
+    expect(markup).toContain("Reviewer");
+  });
 });

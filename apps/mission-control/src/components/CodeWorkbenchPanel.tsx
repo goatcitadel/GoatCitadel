@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
+  ChatGeneratedArtifactRecord,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
@@ -8,6 +9,7 @@ import type {
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { StatusChip } from "./StatusChip";
+import { GeneratedArtifactViewer } from "./chat/GeneratedArtifactViewer";
 
 interface CodeBlockRecord {
   id: string;
@@ -46,6 +48,8 @@ export function CodeWorkbenchPanel({
   loading,
   busy,
   error,
+  generatedArtifact,
+  onCloseGeneratedArtifact,
   onCreateWorktree,
   onSelectFile,
   onRefresh,
@@ -62,6 +66,8 @@ export function CodeWorkbenchPanel({
   loading: boolean;
   busy: boolean;
   error?: string | null;
+  generatedArtifact?: ChatGeneratedArtifactRecord | null;
+  onCloseGeneratedArtifact?: () => void;
   onCreateWorktree: () => void;
   onSelectFile: (relativePath: string) => void;
   onRefresh: () => void;
@@ -75,7 +81,7 @@ export function CodeWorkbenchPanel({
   const boundProjectLabel = projectName ?? "bound project";
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
   const helperRuns = output?.helperRuns ?? [];
-  const [activePane, setActivePane] = useState<"file" | "diff" | "output" | "snippets">("diff");
+  const [activePane, setActivePane] = useState<"file" | "diff" | "output" | "snippets" | "artifact">("diff");
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
   const [drafts, setDrafts] = useState<string[]>([]);
   const [helperLanguage, setHelperLanguage] = useState<"javascript" | "typescript">("typescript");
@@ -100,6 +106,10 @@ export function CodeWorkbenchPanel({
       setActivePane("diff");
       return;
     }
+    if (generatedArtifact) {
+      setActivePane("artifact");
+      return;
+    }
     if (output?.helperRuns.length || output?.output) {
       setActivePane("output");
       return;
@@ -118,6 +128,7 @@ export function CodeWorkbenchPanel({
   }, [
     codeBlocks.length,
     diff?.changedFiles.length,
+    generatedArtifact,
     needsProjectBinding,
     output?.helperRuns.length,
     output?.output,
@@ -249,12 +260,13 @@ export function CodeWorkbenchPanel({
               ["output", "Output"],
               ["file", "Files"],
               ["snippets", "Draft snippets"],
+              ...(generatedArtifact ? [["artifact", "Artifact"]] : []),
             ].map(([paneId, label]) => (
               <button
                 key={paneId}
                 type="button"
                 className={["gc-button", activePane === paneId ? "active" : ""].filter(Boolean).join(" ")}
-                onClick={() => setActivePane(paneId as "file" | "diff" | "output" | "snippets")}
+                onClick={() => setActivePane(paneId as "file" | "diff" | "output" | "snippets" | "artifact")}
               >
                 {label}
               </button>
@@ -414,6 +426,29 @@ export function CodeWorkbenchPanel({
                 Draft snippets stay secondary. They are useful for transforms, parser checks, and quick validation, but
                 they do not own the repo tree, diff, or main edit loop.
               </p>
+            </div>
+          ) : null}
+
+          {activePane === "artifact" ? (
+            <div className="chat-code-workbench-pane">
+              {generatedArtifact ? (
+                <>
+                  <div className="chat-code-workbench-section-head">
+                    <strong>Generated artifact</strong>
+                    {onCloseGeneratedArtifact ? (
+                      <button type="button" className="gc-button" onClick={onCloseGeneratedArtifact}>
+                        Close artifact
+                      </button>
+                    ) : null}
+                  </div>
+                  <GeneratedArtifactViewer artifact={generatedArtifact} />
+                </>
+              ) : (
+                <div className="chat-code-workbench-empty">
+                  <p>No generated artifact is open.</p>
+                  <p>Open one from the thread to inspect it inside the workbench.</p>
+                </div>
+              )}
             </div>
           ) : null}
         </section>

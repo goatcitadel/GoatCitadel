@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
+  AgentPresetDefaults,
   AgentLifecycleStatus,
   AgentProfileArchiveInput,
   AgentProfileCreateInput,
@@ -20,6 +21,7 @@ interface AgentProfileRow {
   specialties_json: string;
   default_tools_json: string;
   aliases_json: string;
+  preset_defaults_json: string | null;
   is_builtin: number;
   lifecycle_status: AgentLifecycleStatus;
   archived_at: string | null;
@@ -58,13 +60,13 @@ export class AgentProfileRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO agent_profiles (
         agent_id, role_id, name, title, summary,
-        specialties_json, default_tools_json, aliases_json,
+        specialties_json, default_tools_json, aliases_json, preset_defaults_json,
         is_builtin, lifecycle_status,
         archived_at, archived_by, archive_reason,
         created_at, updated_at
       ) VALUES (
         @agentId, @roleId, @name, @title, @summary,
-        @specialtiesJson, @defaultToolsJson, @aliasesJson,
+        @specialtiesJson, @defaultToolsJson, @aliasesJson, @presetDefaultsJson,
         @isBuiltin, @lifecycleStatus,
         @archivedAt, @archivedBy, @archiveReason,
         @createdAt, @updatedAt
@@ -80,6 +82,7 @@ export class AgentProfileRepository {
         specialties_json = @specialtiesJson,
         default_tools_json = @defaultToolsJson,
         aliases_json = @aliasesJson,
+        preset_defaults_json = @presetDefaultsJson,
         updated_at = @updatedAt
       WHERE agent_id = @agentId
     `);
@@ -111,12 +114,12 @@ export class AgentProfileRepository {
     this.seedStmt = db.prepare(`
       INSERT INTO agent_profiles (
         agent_id, role_id, name, title, summary,
-        specialties_json, default_tools_json, aliases_json,
+        specialties_json, default_tools_json, aliases_json, preset_defaults_json,
         is_builtin, lifecycle_status,
         created_at, updated_at
       ) VALUES (
         @agentId, @roleId, @name, @title, @summary,
-        @specialtiesJson, @defaultToolsJson, @aliasesJson,
+        @specialtiesJson, @defaultToolsJson, @aliasesJson, @presetDefaultsJson,
         1, 'active',
         @createdAt, @updatedAt
       )
@@ -135,6 +138,7 @@ export class AgentProfileRepository {
         specialtiesJson: serializeArray(seed.specialties),
         defaultToolsJson: serializeArray(seed.defaultTools),
         aliasesJson: serializeArray(seed.aliases),
+        presetDefaultsJson: serializePresetDefaults(seed.presetDefaults),
         createdAt: now,
         updatedAt: now,
       });
@@ -142,10 +146,12 @@ export class AgentProfileRepository {
   }
 
   public list(view: AgentLifecycleStatus | "all" = "active", limit = 500): AgentProfileRecord[] {
-    const rows = toAgentProfileRows(this.listStmt.all({
-      view,
-      limit: Math.max(1, Math.min(2000, Math.floor(limit))),
-    }));
+    const rows = toAgentProfileRows(
+      this.listStmt.all({
+        view,
+        limit: Math.max(1, Math.min(2000, Math.floor(limit))),
+      }),
+    );
     return rows.map(mapRow);
   }
 
@@ -183,6 +189,7 @@ export class AgentProfileRepository {
       specialtiesJson: serializeArray(input.specialties ?? []),
       defaultToolsJson: serializeArray(input.defaultTools ?? []),
       aliasesJson: serializeArray(input.aliases ?? []),
+      presetDefaultsJson: serializePresetDefaults(input.presetDefaults),
       isBuiltin: 0,
       lifecycleStatus: "active",
       archivedAt: null,
@@ -201,15 +208,14 @@ export class AgentProfileRepository {
       name: input.name !== undefined ? sanitizeRequired(input.name, "name") : current.name,
       title: input.title !== undefined ? sanitizeRequired(input.title, "title") : current.title,
       summary: input.summary !== undefined ? sanitizeRequired(input.summary, "summary") : current.summary,
-      specialtiesJson: input.specialties !== undefined
-        ? serializeArray(input.specialties)
-        : serializeArray(current.specialties),
-      defaultToolsJson: input.defaultTools !== undefined
-        ? serializeArray(input.defaultTools)
-        : serializeArray(current.defaultTools),
-      aliasesJson: input.aliases !== undefined
-        ? serializeArray(input.aliases)
-        : serializeArray(current.aliases),
+      specialtiesJson:
+        input.specialties !== undefined ? serializeArray(input.specialties) : serializeArray(current.specialties),
+      defaultToolsJson:
+        input.defaultTools !== undefined ? serializeArray(input.defaultTools) : serializeArray(current.defaultTools),
+      aliasesJson: input.aliases !== undefined ? serializeArray(input.aliases) : serializeArray(current.aliases),
+      presetDefaultsJson: serializePresetDefaults(
+        input.presetDefaults !== undefined ? input.presetDefaults : current.presetDefaults,
+      ),
       updatedAt: now,
     });
     return this.get(agentId);
@@ -265,6 +271,7 @@ function mapRow(row: AgentProfileRow): AgentProfileRecord {
     specialties: parseStringArray(row.specialties_json),
     defaultTools: parseStringArray(row.default_tools_json),
     aliases: parseStringArray(row.aliases_json),
+    presetDefaults: parsePresetDefaults(row.preset_defaults_json),
     isBuiltin: row.is_builtin === 1,
     editable: true,
     lifecycleStatus: row.lifecycle_status,
@@ -281,7 +288,10 @@ function mapRow(row: AgentProfileRow): AgentProfileRecord {
 }
 
 function normalizeRoleId(value: string): string {
-  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-");
   if (!normalized) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "roleId" });
   }
@@ -328,6 +338,46 @@ function parseStringArray(value: string): string[] {
   return out;
 }
 
+function serializePresetDefaults(value?: AgentPresetDefaults): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized: AgentPresetDefaults = {
+    presetLabel: sanitizeOptional(value.presetLabel) ?? undefined,
+    presetSummary: sanitizeOptional(value.presetSummary) ?? undefined,
+    routeHint: value.routeHint,
+    preferredProviderId: sanitizeOptional(value.preferredProviderId) ?? undefined,
+    preferredModel: sanitizeOptional(value.preferredModel) ?? undefined,
+    toolsPosture: value.toolsPosture,
+    knowledgeAttachmentIds: value.knowledgeAttachmentIds?.map((item) => item.trim()).filter(Boolean),
+    promptFraming: sanitizeOptional(value.promptFraming) ?? undefined,
+  };
+  if (Object.values(normalized).every((item) => item === undefined || (Array.isArray(item) && item.length === 0))) {
+    return null;
+  }
+  return JSON.stringify(normalized);
+}
+
+function parsePresetDefaults(value: string | null): AgentPresetDefaults | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<AgentPresetDefaults | null>(value, null);
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  return {
+    presetLabel: sanitizeOptional(parsed.presetLabel) ?? undefined,
+    presetSummary: sanitizeOptional(parsed.presetSummary) ?? undefined,
+    routeHint: parsed.routeHint,
+    preferredProviderId: sanitizeOptional(parsed.preferredProviderId) ?? undefined,
+    preferredModel: sanitizeOptional(parsed.preferredModel) ?? undefined,
+    toolsPosture: parsed.toolsPosture,
+    knowledgeAttachmentIds: parsed.knowledgeAttachmentIds?.map((item) => item.trim()).filter(Boolean) ?? [],
+    promptFraming: sanitizeOptional(parsed.promptFraming) ?? undefined,
+  };
+}
+
 function toAgentProfileRow(value: unknown): AgentProfileRow | undefined {
   return isAgentProfileRow(value) ? value : undefined;
 }
@@ -343,25 +393,26 @@ function isAgentProfileRow(value: unknown): value is AgentProfileRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.agent_id === "string"
-    && typeof value.role_id === "string"
-    && typeof value.name === "string"
-    && typeof value.title === "string"
-    && typeof value.summary === "string"
-    && typeof value.specialties_json === "string"
-    && typeof value.default_tools_json === "string"
-    && typeof value.aliases_json === "string"
-    && typeof value.is_builtin === "number"
-    && typeof value.lifecycle_status === "string"
-    && (typeof value.archived_at === "string" || value.archived_at === null)
-    && (typeof value.archived_by === "string" || value.archived_by === null)
-    && (typeof value.archive_reason === "string" || value.archive_reason === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.agent_id === "string" &&
+    typeof value.role_id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.title === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.specialties_json === "string" &&
+    typeof value.default_tools_json === "string" &&
+    typeof value.aliases_json === "string" &&
+    (typeof value.preset_defaults_json === "string" || value.preset_defaults_json === null) &&
+    typeof value.is_builtin === "number" &&
+    typeof value.lifecycle_status === "string" &&
+    (typeof value.archived_at === "string" || value.archived_at === null) &&
+    (typeof value.archived_by === "string" || value.archived_by === null) &&
+    (typeof value.archive_reason === "string" || value.archive_reason === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

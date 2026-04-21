@@ -546,4 +546,76 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       WHERE action IS NULL OR BTRIM(action) = '' OR action = 'task';
     `,
   },
+  {
+    version: 17,
+    name: "chat_session_and_agent_refresh_repairs",
+    sql: `
+      ALTER TABLE agent_profiles
+        ADD COLUMN IF NOT EXISTS preset_defaults_json TEXT;
+
+      ALTER TABLE chat_session_meta
+        ADD COLUMN IF NOT EXISTS folder_id TEXT,
+        ADD COLUMN IF NOT EXISTS folder_name TEXT,
+        ADD COLUMN IF NOT EXISTS tags_json TEXT NOT NULL DEFAULT '[]';
+
+      UPDATE chat_session_meta
+      SET tags_json = '[]'
+      WHERE tags_json IS NULL OR BTRIM(tags_json) = '';
+
+      CREATE INDEX IF NOT EXISTS idx_chat_session_meta_folder
+        ON chat_session_meta(workspace_id, folder_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_generated_artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT,
+        turn_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        language TEXT,
+        source_surface TEXT NOT NULL,
+        version BIGINT NOT NULL,
+        supersedes_artifact_id TEXT,
+        provider_id TEXT,
+        model TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_session_created
+        ON chat_generated_artifacts(session_id, created_at DESC, version DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_turn_created
+        ON chat_generated_artifacts(turn_id, version DESC, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_workspace_created
+        ON chat_generated_artifacts(workspace_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_surface_kind_created
+        ON chat_generated_artifacts(source_surface, kind, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_thread_knowledge_attachments (
+        attachment_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        title TEXT NOT NULL,
+        retrieval_mode TEXT NOT NULL,
+        ingest_status TEXT NOT NULL,
+        chunk_count BIGINT,
+        namespace TEXT,
+        chat_attachment_id TEXT,
+        document_id TEXT,
+        error_message TEXT,
+        last_ingest_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_session_created
+        ON chat_thread_knowledge_attachments(session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_session_mode
+        ON chat_thread_knowledge_attachments(session_id, retrieval_mode, ingest_status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_document
+        ON chat_thread_knowledge_attachments(document_id, updated_at DESC);
+    `,
+  },
 ];

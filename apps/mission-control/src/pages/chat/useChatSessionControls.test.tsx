@@ -48,6 +48,8 @@ function Harness() {
       scope: "external",
     } as any,
     renameTitle: "Release checklist",
+    folderName: "Launch",
+    tagsValue: "release, checklist",
     setSelectedProjectId,
     setSelectedSessionId,
     setHistoryView,

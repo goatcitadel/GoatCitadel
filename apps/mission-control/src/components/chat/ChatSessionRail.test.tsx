@@ -4,10 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatSessionRail } from "./ChatSessionRail";
 
 vi.mock("react-virtuoso", () => ({
-  Virtuoso: (props: {
-    data?: unknown[];
-    itemContent?: (index: number, item: any) => React.ReactNode;
-  }) => (
+  Virtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: any) => React.ReactNode }) => (
     <div>
       {(props.data ?? []).map((item, index) => (
         <div key={index}>{props.itemContent ? props.itemContent(index, item) : null}</div>
@@ -38,6 +35,8 @@ describe("ChatSessionRail", () => {
         ]}
         selectedSessionId="mission-1"
         onSelectSession={vi.fn()}
+        selectedTag={null}
+        onSelectTag={vi.fn()}
         renderSessionLabel={(sessionId) => `Session ${sessionId}`}
         mode="cowork"
       />,
@@ -49,7 +48,7 @@ describe("ChatSessionRail", () => {
     expect(markup).toContain("Atlas ·");
     expect(markup).toContain("Coordination source");
     expect(markup).toContain("Pinned");
-    expect(markup).toContain("class=\"gc-button active\"");
+    expect(markup).toContain('class="gc-button active"');
   });
 
   it("surfaces code-mode binding hints when sessions are unbound", () => {
@@ -71,6 +70,8 @@ describe("ChatSessionRail", () => {
         ]}
         selectedSessionId={null}
         onSelectSession={vi.fn()}
+        selectedTag={null}
+        onSelectTag={vi.fn()}
         renderSessionLabel={() => "Implementation review"}
         mode="code"
       />,

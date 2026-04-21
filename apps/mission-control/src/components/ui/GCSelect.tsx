@@ -40,6 +40,15 @@ export function GCSelect({
   const selected = useMemo(() => {
     return selectableOptions.find((option) => option.value === value) ?? null;
   }, [selectableOptions, value]);
+  const portalOptions = useMemo(() => {
+    return selectableOptions.map((option, index) => ({
+      ...option,
+      portalValue: option.value === "" ? `__gc-select-empty-${index}` : option.value,
+    }));
+  }, [selectableOptions]);
+  const selectedPortalValue = useMemo(() => {
+    return portalOptions.find((option) => option.value === value)?.portalValue ?? "";
+  }, [portalOptions, value]);
 
   if (!canUsePortalSelect) {
     return (
@@ -68,7 +77,14 @@ export function GCSelect({
   }
 
   return (
-    <Select value={selected?.value ?? ""} onValueChange={onChange} disabled={disabled}>
+    <Select
+      value={selectedPortalValue}
+      onValueChange={(nextValue) => {
+        const resolved = portalOptions.find((option) => option.portalValue === nextValue);
+        onChange(resolved?.value ?? nextValue);
+      }}
+      disabled={disabled}
+    >
       <span className={cn("gc-select-shell mc-gc-select-shell", className)}>
         {renderPrefix ? <span className="gc-select-prefix mc-gc-select-prefix">{renderPrefix}</span> : null}
         <SelectTrigger
@@ -79,10 +95,10 @@ export function GCSelect({
         </SelectTrigger>
       </span>
       <SelectContent className="gc-select-content mc-gc-select-content" position="popper" sideOffset={6} align="start">
-        {selectableOptions.map((option) => (
+        {portalOptions.map((option) => (
           <SelectItem
-            key={option.value}
-            value={option.value}
+            key={option.portalValue}
+            value={option.portalValue}
             disabled={option.disabled}
             className={cn("gc-select-option", option.value === selected?.value && "active")}
           >

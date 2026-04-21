@@ -1,6 +1,7 @@
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatDelegationSuggestionRecord,
+  ChatGeneratedArtifactRecord,
   ChatModePresetRecord,
   ChatOrchestrationSummary,
   ChatSessionBindingRecord,
@@ -38,7 +39,7 @@ export interface ChatContextDockPanelsProps {
   selectedProjectBindingCandidateId?: string;
   selectedProjectBindingCandidateName?: string;
   sending: boolean;
-  sessionControlPending: "rename" | "pin" | "archive" | "delete" | "project" | "binding" | null;
+  sessionControlPending: "rename" | "organization" | "pin" | "archive" | "delete" | "project" | "binding" | null;
   providerOptions: ChatModelProviderOption[];
   selectedProviderId?: string;
   selectedModel?: string;
@@ -48,6 +49,7 @@ export interface ChatContextDockPanelsProps {
   selectedSessionId: string | null;
   showTracePanel: boolean;
   selectedTurn: ChatThreadTurnRecord | null;
+  activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
   routePreflight?: RoutingPreflightResult | null;
   providerLabelById?: Map<string, string>;
   showSuggestionsPanel: boolean;
@@ -92,13 +94,20 @@ export interface ChatContextDockPanelsProps {
   onAcceptDelegation: () => Promise<void>;
   onRebuildLearnedMemory: () => Promise<void>;
   onUpdateMemoryStatus: (itemId: string, status: "active" | "superseded" | "conflict" | "disabled") => Promise<void>;
+  onCloseGeneratedArtifact?: () => void;
   onRenameTitleChange: (value: string) => void;
   renameTitle: string;
+  folderName: string;
+  onFolderNameChange: (value: string) => void;
+  tagsValue: string;
+  onTagsValueChange: (value: string) => void;
   onRenameSession: () => Promise<void>;
+  onSaveOrganization: () => Promise<void>;
   onTogglePinSession: () => Promise<void>;
   onToggleArchiveSession: () => Promise<void>;
   onDeleteSession: () => void;
   onAssignProject: (value: string) => Promise<void>;
+  onExportSnapshot: () => void;
   onIntegrationConnectionIdChange: (value: string) => void;
   onIntegrationTargetChange: (value: string) => void;
   onSaveExternalBinding: () => Promise<void>;

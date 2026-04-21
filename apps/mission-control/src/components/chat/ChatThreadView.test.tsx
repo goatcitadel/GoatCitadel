@@ -56,24 +56,30 @@ function createThread(content: string): ChatThreadResponse {
   } as unknown as ChatThreadResponse;
 }
 
+function buildThreadViewProps(thread: ChatThreadResponse) {
+  return {
+    mode: "chat" as const,
+    loading: false,
+    thread,
+    selectedTurnId: "turn-1",
+    delegationRun: null,
+    notices: [],
+    followOutput: false,
+    onBottomStateChange: vi.fn(),
+    onSelectTurn: vi.fn(),
+    onSwitchBranch: vi.fn(),
+    onRetryTurn: vi.fn(),
+    onEditTurn: vi.fn(),
+    onOpenRunDetails: vi.fn(),
+    onOpenGeneratedArtifact: vi.fn(),
+    onCreateGeneratedArtifactVersion: vi.fn(),
+  };
+}
+
 describe("ChatThreadView", () => {
   it("skips raw HTML in assistant markdown output", () => {
     const renderer = TestRenderer.create(
-      <ChatThreadView
-        mode="chat"
-        loading={false}
-        thread={createThread("<img src=x onerror=alert(1) /> **safe**")}
-        selectedTurnId="turn-1"
-        delegationRun={null}
-        notices={[]}
-        followOutput={false}
-        onBottomStateChange={vi.fn()}
-        onSelectTurn={vi.fn()}
-        onSwitchBranch={vi.fn()}
-        onRetryTurn={vi.fn()}
-        onEditTurn={vi.fn()}
-        onOpenRunDetails={vi.fn()}
-      />,
+      <ChatThreadView {...buildThreadViewProps(createThread("<img src=x onerror=alert(1) /> **safe**"))} />,
     );
 
     expect(renderer.root.findAllByType("img")).toHaveLength(0);
@@ -81,23 +87,7 @@ describe("ChatThreadView", () => {
   });
 
   it("adds accessible labels to branch and turn actions", () => {
-    const renderer = TestRenderer.create(
-      <ChatThreadView
-        mode="chat"
-        loading={false}
-        thread={createThread("plain content")}
-        selectedTurnId="turn-1"
-        delegationRun={null}
-        notices={[]}
-        followOutput={false}
-        onBottomStateChange={vi.fn()}
-        onSelectTurn={vi.fn()}
-        onSwitchBranch={vi.fn()}
-        onRetryTurn={vi.fn()}
-        onEditTurn={vi.fn()}
-        onOpenRunDetails={vi.fn()}
-      />,
-    );
+    const renderer = TestRenderer.create(<ChatThreadView {...buildThreadViewProps(createThread("plain content"))} />);
 
     const buttons = renderer.root.findAllByType("button");
     expect(buttons.map((button) => button.props["aria-label"])).toEqual(
@@ -136,23 +126,7 @@ describe("ChatThreadView", () => {
       },
     ];
 
-    const renderer = TestRenderer.create(
-      <ChatThreadView
-        mode="chat"
-        loading={false}
-        thread={thread}
-        selectedTurnId="turn-1"
-        delegationRun={null}
-        notices={[]}
-        followOutput={false}
-        onBottomStateChange={vi.fn()}
-        onSelectTurn={vi.fn()}
-        onSwitchBranch={vi.fn()}
-        onRetryTurn={vi.fn()}
-        onEditTurn={vi.fn()}
-        onOpenRunDetails={vi.fn()}
-      />,
-    );
+    const renderer = TestRenderer.create(<ChatThreadView {...buildThreadViewProps(thread)} />);
 
     expect(
       renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("") === "1 tool"),
@@ -173,23 +147,7 @@ describe("ChatThreadView", () => {
       fallbackReason: "primary rate-limited",
     };
 
-    const renderer = TestRenderer.create(
-      <ChatThreadView
-        mode="chat"
-        loading={false}
-        thread={thread}
-        selectedTurnId="turn-1"
-        delegationRun={null}
-        notices={[]}
-        followOutput={false}
-        onBottomStateChange={vi.fn()}
-        onSelectTurn={vi.fn()}
-        onSwitchBranch={vi.fn()}
-        onRetryTurn={vi.fn()}
-        onEditTurn={vi.fn()}
-        onOpenRunDetails={vi.fn()}
-      />,
-    );
+    const renderer = TestRenderer.create(<ChatThreadView {...buildThreadViewProps(thread)} />);
 
     const text = renderer.root
       .findAll((node) => Array.isArray(node.children))
@@ -208,23 +166,7 @@ describe("ChatThreadView", () => {
       repaired: true,
     };
 
-    const renderer = TestRenderer.create(
-      <ChatThreadView
-        mode="chat"
-        loading={false}
-        thread={thread}
-        selectedTurnId="turn-1"
-        delegationRun={null}
-        notices={[]}
-        followOutput={false}
-        onBottomStateChange={vi.fn()}
-        onSelectTurn={vi.fn()}
-        onSwitchBranch={vi.fn()}
-        onRetryTurn={vi.fn()}
-        onEditTurn={vi.fn()}
-        onOpenRunDetails={vi.fn()}
-      />,
-    );
+    const renderer = TestRenderer.create(<ChatThreadView {...buildThreadViewProps(thread)} />);
 
     const repairedBadge = renderer.root.findAll(
       (node) =>
@@ -238,10 +180,7 @@ describe("ChatThreadView", () => {
   it("renders attached delegation progress and stitched output", () => {
     const renderer = TestRenderer.create(
       <ChatThreadView
-        mode="chat"
-        loading={false}
-        thread={createThread("plain content")}
-        selectedTurnId="turn-1"
+        {...buildThreadViewProps(createThread("plain content"))}
         delegationRun={{
           runId: "run-1",
           taskId: "task-1",

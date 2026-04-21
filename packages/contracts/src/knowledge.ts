@@ -65,3 +65,33 @@ export interface EmbeddingQueryInput {
   agentId?: string;
   taskId?: string;
 }
+
+export type ThreadKnowledgeRetrievalMode = "full_text" | "retrieval";
+
+export interface ThreadKnowledgeAttachmentRecord {
+  attachmentId: string;
+  sessionId: string;
+  sourceType: "file" | "url";
+  sourceRef: string;
+  title: string;
+  retrievalMode: ThreadKnowledgeRetrievalMode;
+  ingestStatus: "queued" | "running" | "ready" | "failed";
+  chunkCount?: number;
+  namespace?: string;
+  chatAttachmentId?: string;
+  documentId?: string;
+  errorMessage?: string;
+  lastIngestAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ThreadKnowledgeCitationRecord {
+  attachmentId: string;
+  sourceRef: string;
+  title: string;
+  sectionLabel?: string;
+  chunkId?: string;
+  excerpt?: string;
+  retrievalMode: ThreadKnowledgeRetrievalMode;
+}

@@ -3,11 +3,23 @@ import { FieldHelp } from "../../components/FieldHelp";
 import { Panel } from "../../components/Panel";
 import { GCCombobox } from "../../components/ui";
 
-export type ChatSessionControlPending = "rename" | "pin" | "archive" | "delete" | "project" | "binding" | null;
+export type ChatSessionControlPending =
+  | "rename"
+  | "organization"
+  | "pin"
+  | "archive"
+  | "delete"
+  | "project"
+  | "binding"
+  | null;
 
 export interface ChatSessionManagementPanelProps {
   renameTitle: string;
   onRenameTitleChange: (value: string) => void;
+  folderName: string;
+  onFolderNameChange: (value: string) => void;
+  tagsValue: string;
+  onTagsValueChange: (value: string) => void;
   sending: boolean;
   sessionControlPending: ChatSessionControlPending;
   pinned: boolean;
@@ -15,16 +27,22 @@ export interface ChatSessionManagementPanelProps {
   selectedSessionProjectValue: string;
   projectOptions: Array<{ value: string; label: string }>;
   onRename: () => void;
+  onSaveOrganization: () => void;
   onTogglePin: () => void;
   onToggleArchive: () => void;
   onDelete: () => void;
   onAssignProject: (value: string) => void;
+  onExportSnapshot: () => void;
 }
 
 export function ChatSessionManagementPanel(props: ChatSessionManagementPanelProps) {
   const {
     renameTitle,
     onRenameTitleChange,
+    folderName,
+    onFolderNameChange,
+    tagsValue,
+    onTagsValueChange,
     sending,
     sessionControlPending,
     pinned,
@@ -32,10 +50,12 @@ export function ChatSessionManagementPanel(props: ChatSessionManagementPanelProp
     selectedSessionProjectValue,
     projectOptions,
     onRename,
+    onSaveOrganization,
     onTogglePin,
     onToggleArchive,
     onDelete,
     onAssignProject,
+    onExportSnapshot,
   } = props;
 
   const disabled = sending || Boolean(sessionControlPending);
@@ -53,6 +73,25 @@ export function ChatSessionManagementPanel(props: ChatSessionManagementPanelProp
         placeholder="Give this chat a title"
       />
       <ActionButton label="Save" disabled={disabled} pending={sessionControlPending === "rename"} onClick={onRename} />
+      <FieldHelp>
+        Folders keep the rail tidy. Tags make quick filters feel lightweight instead of project-heavy.
+      </FieldHelp>
+      <input
+        value={folderName}
+        onChange={(event) => onFolderNameChange(event.target.value)}
+        placeholder="Folder name (optional)"
+      />
+      <input
+        value={tagsValue}
+        onChange={(event) => onTagsValueChange(event.target.value)}
+        placeholder="Tags, comma separated"
+      />
+      <ActionButton
+        label="Save organization"
+        disabled={disabled}
+        pending={sessionControlPending === "organization"}
+        onClick={onSaveOrganization}
+      />
       <ActionButton
         label={pinned ? "Unpin" : "Pin"}
         disabled={disabled}
@@ -78,6 +117,7 @@ export function ChatSessionManagementPanel(props: ChatSessionManagementPanelProp
         disabled={disabled}
         options={projectOptions}
       />
+      <ActionButton label="Export snapshot" disabled={disabled} onClick={onExportSnapshot} />
     </Panel>
   );
 }

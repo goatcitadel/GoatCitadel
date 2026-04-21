@@ -5,13 +5,10 @@ import { useChatThreadController } from "./useChatThreadController";
 
 let latest: ReturnType<typeof useChatThreadController> | null = null;
 
-function Harness(props: {
-  routeSearch: string;
-  sessions?: Array<any>;
-  projects?: Array<any>;
-  thread?: any;
-}) {
+function Harness(props: { routeSearch: string; sessions?: Array<any>; projects?: Array<any>; thread?: any }) {
   const [selectedProjectId, setSelectedProjectId] = useState("all");
+  const [selectedFolderId, setSelectedFolderId] = useState("all");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<"active" | "archived">("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -27,6 +24,10 @@ function Harness(props: {
     thread: props.thread ?? null,
     selectedProjectId,
     setSelectedProjectId,
+    selectedFolderId,
+    setSelectedFolderId,
+    selectedTag,
+    setSelectedTag,
     historyView,
     setHistoryView,
     selectedSessionId,
@@ -72,7 +73,7 @@ describe("useChatThreadController", () => {
     expect(latest?.followThreadOutput).toBe(true);
   });
 
-  it("filters visible sessions by project and search query", async () => {
+  it("filters visible sessions by project and folder", async () => {
     await act(async () => {
       create(
         <Harness
@@ -83,6 +84,9 @@ describe("useChatThreadController", () => {
               scope: "mission",
               lifecycleStatus: "active",
               projectId: "project-1",
+              folderId: "launch",
+              folderName: "Launch",
+              tags: ["release"],
               title: "Alpha session",
               sessionKey: "alpha",
             },
@@ -90,6 +94,7 @@ describe("useChatThreadController", () => {
               sessionId: "session-2",
               scope: "external",
               lifecycleStatus: "active",
+              tags: ["ops"],
               title: "Slack bridge",
               channel: "slack",
               account: "ops",
@@ -102,7 +107,7 @@ describe("useChatThreadController", () => {
 
     act(() => {
       latest?.setSelectedProjectId("project-1");
-      latest?.setSearch("alpha");
+      latest?.setSelectedFolderId("launch");
     });
 
     expect(latest?.visibleSessions.map((item) => item.sessionId)).toEqual(["session-1"]);

@@ -15,6 +15,7 @@ import {
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatCitationRecord,
   ChatDelegationRunRecord,
   GatewayEventInput,
   ChatMessageRecord,
@@ -56,6 +57,7 @@ import {
   scoreSpecialistCandidateMatch,
 } from "./gateway-service.js";
 import type { LlmService } from "./llm-service.js";
+import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
 
 export interface ChatTurnRoute {
   channel: string;
@@ -86,11 +88,22 @@ export interface ChatTurnPrepHost {
   ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
   patchSessionAutonomyPrefs(
     sessionId: string,
-    input: Partial<Pick<SessionAutonomyPrefsRecord, "proactiveMode" | "maxActionsPerHour" | "maxActionsPerTurn" | "cooldownSeconds" | "retrievalMode" | "reflectionMode">>,
+    input: Partial<
+      Pick<
+        SessionAutonomyPrefsRecord,
+        | "proactiveMode"
+        | "maxActionsPerHour"
+        | "maxActionsPerTurn"
+        | "cooldownSeconds"
+        | "retrievalMode"
+        | "reflectionMode"
+      >
+    >,
   ): SessionAutonomyPrefsRecord;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
   getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefsRecord;
   resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance>;
+  resolveThreadKnowledgeContext(sessionId: string, query: string): Promise<ResolvedThreadKnowledgeContext>;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
   buildLlmMessagesFromBranchPath(
     sessionId: string,
@@ -117,6 +130,7 @@ export interface PreparedAgentChatTurn {
   autonomy: SessionAutonomyPrefsRecord;
   normalized: ReturnType<typeof normalizeAgentInputFromSend>;
   retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
+  threadKnowledgeCitations: ChatCitationRecord[];
   resolvedGuidance: ResolvedRuntimeGuidance;
   conversationMessages: ChatMessageRecord[];
   history: ChatCompletionRequest["messages"];
@@ -234,8 +248,10 @@ export async function prepareAgentChatTurn(
     memoryMode: normalized.memoryMode ?? prefs.memoryMode,
   });
   const resolvedGuidance = await host.resolveRuntimeGuidance(workspaceId);
+  const threadKnowledgeContext = await host.resolveThreadKnowledgeContext(sessionId, content);
   const guidanceSystemInstruction = mergeChatSystemInstructions(
     resolvedGuidance.systemInstruction,
+    threadKnowledgeContext.systemInstruction,
     buildPlanningModeSystemInstruction(prefs.planningMode),
     missingRequiredProjectBinding
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
@@ -287,6 +303,7 @@ export async function prepareAgentChatTurn(
     autonomy,
     normalized,
     retrievalTrace,
+    threadKnowledgeCitations: threadKnowledgeContext.citations,
     resolvedGuidance,
     conversationMessages,
     history,

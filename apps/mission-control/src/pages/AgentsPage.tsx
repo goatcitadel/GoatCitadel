@@ -35,6 +35,14 @@ interface AgentFormState {
   specialtiesText: string;
   defaultToolsText: string;
   aliasesText: string;
+  presetLabel: string;
+  presetSummary: string;
+  presetRouteHint: "" | "chat" | "cowork" | "code";
+  presetProviderId: string;
+  presetModel: string;
+  presetToolsPosture: "" | "safe_auto" | "manual";
+  presetKnowledgeAttachmentsText: string;
+  presetPromptFraming: string;
 }
 
 const BUILTIN_ROLE_OPTIONS = BUILTIN_AGENT_ROSTER.map((item) => ({
@@ -68,6 +76,7 @@ export function AgentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [criticalConfirmed, setCriticalConfirmed] = useState(false);
+  const [showPresetAdvancedDefaults, setShowPresetAdvancedDefaults] = useState(false);
   const [risk, setRisk] = useState<{
     overall: "safe" | "warning" | "critical";
     items: Array<{ field: string; level: "safe" | "warning" | "critical"; hint?: string }>;
@@ -192,6 +201,11 @@ export function AgentsPage() {
   }, [creating, selected]);
 
   useEffect(() => {
+    const baseline = creating ? emptyForm() : selected ? formFromAgent(selected) : emptyForm();
+    setShowPresetAdvancedDefaults(hasAdvancedPresetDefaults(baseline));
+  }, [creating, selected]);
+
+  useEffect(() => {
     if (creating) {
       return;
     }
@@ -311,6 +325,7 @@ export function AgentsPage() {
           specialties: splitMultiline(form.specialtiesText),
           defaultTools: splitMultiline(form.defaultToolsText),
           aliases: splitMultiline(form.aliasesText),
+          presetDefaults: buildPresetDefaultsFromForm(form),
         });
         setCreating(false);
         setSelectedAgentId(created.agentId);
@@ -323,6 +338,7 @@ export function AgentsPage() {
           specialties: splitMultiline(form.specialtiesText),
           defaultTools: splitMultiline(form.defaultToolsText),
           aliases: splitMultiline(form.aliasesText),
+          presetDefaults: buildPresetDefaultsFromForm(form),
         });
         setInfo(`Updated agent "${updated.name}".`);
       }
@@ -629,6 +645,128 @@ export function AgentsPage() {
                   />
                 </div>
 
+                <FieldHelp>
+                  Preset defaults let this profile double as a lightweight template for Chat, Cowork, and Code without
+                  creating a second preset system.
+                </FieldHelp>
+
+                <div className="controls-row">
+                  <label htmlFor="agentPresetLabel">Preset label</label>
+                  <input
+                    id="agentPresetLabel"
+                    value={form.presetLabel}
+                    onChange={(event) => setForm((prev) => ({ ...prev, presetLabel: event.target.value }))}
+                    placeholder="Code Helper"
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentPresetSummary">Preset summary</label>
+                  <textarea
+                    id="agentPresetSummary"
+                    value={form.presetSummary}
+                    onChange={(event) => setForm((prev) => ({ ...prev, presetSummary: event.target.value }))}
+                    rows={2}
+                    placeholder="Short operator-facing summary for the picker."
+                  />
+                </div>
+
+                <div className="controls-row">
+                  <label htmlFor="agentPresetRouteHint">Preset route hint</label>
+                  <GCSelect
+                    id="agentPresetRouteHint"
+                    value={form.presetRouteHint}
+                    onChange={(value) =>
+                      setForm((prev) => ({ ...prev, presetRouteHint: value as AgentFormState["presetRouteHint"] }))
+                    }
+                    options={[
+                      { value: "", label: "No route hint" },
+                      { value: "chat", label: "Chat" },
+                      { value: "cowork", label: "Cowork" },
+                      { value: "code", label: "Code" },
+                    ]}
+                  />
+                </div>
+                <div className="agents-preset-disclosure">
+                  <button
+                    type="button"
+                    className="gc-nav-button gc-nav-tier-chip"
+                    onClick={() => setShowPresetAdvancedDefaults((current) => !current)}
+                  >
+                    {showPresetAdvancedDefaults ? "Hide advanced defaults" : "Advanced defaults"}
+                  </button>
+                  <p className="office-subtitle">
+                    Provider, model, tool posture, knowledge defaults, and prompt framing stay tucked away until you
+                    need them.
+                  </p>
+                </div>
+                {showPresetAdvancedDefaults ? (
+                  <div className="agents-preset-advanced-grid">
+                    <div className="controls-row">
+                      <label htmlFor="agentPresetProvider">Preferred provider</label>
+                      <input
+                        id="agentPresetProvider"
+                        value={form.presetProviderId}
+                        onChange={(event) => setForm((prev) => ({ ...prev, presetProviderId: event.target.value }))}
+                        placeholder="openai"
+                      />
+                    </div>
+
+                    <div className="controls-row">
+                      <label htmlFor="agentPresetModel">Preferred model</label>
+                      <input
+                        id="agentPresetModel"
+                        value={form.presetModel}
+                        onChange={(event) => setForm((prev) => ({ ...prev, presetModel: event.target.value }))}
+                        placeholder="gpt-5.4"
+                      />
+                    </div>
+
+                    <div className="controls-row">
+                      <label htmlFor="agentPresetToolsPosture">Tools posture</label>
+                      <GCSelect
+                        id="agentPresetToolsPosture"
+                        value={form.presetToolsPosture}
+                        onChange={(value) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            presetToolsPosture: value as AgentFormState["presetToolsPosture"],
+                          }))
+                        }
+                        options={[
+                          { value: "", label: "Keep current posture" },
+                          { value: "safe_auto", label: "Safe auto" },
+                          { value: "manual", label: "Manual" },
+                        ]}
+                      />
+                    </div>
+
+                    <div className="controls-row">
+                      <label htmlFor="agentPresetKnowledge">Knowledge attachment IDs (one per line)</label>
+                      <textarea
+                        id="agentPresetKnowledge"
+                        value={form.presetKnowledgeAttachmentsText}
+                        onChange={(event) =>
+                          setForm((prev) => ({ ...prev, presetKnowledgeAttachmentsText: event.target.value }))
+                        }
+                        rows={2}
+                        placeholder="knowledge-attachment-id"
+                      />
+                    </div>
+
+                    <div className="controls-row">
+                      <label htmlFor="agentPresetPrompt">Prompt framing</label>
+                      <textarea
+                        id="agentPresetPrompt"
+                        value={form.presetPromptFraming}
+                        onChange={(event) => setForm((prev) => ({ ...prev, presetPromptFraming: event.target.value }))}
+                        rows={4}
+                        placeholder="Optional prompt framing inserted when the preset is applied."
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
                 <ChangeReviewPanel
                   title="Agent Change Review"
                   overall={risk.overall}
@@ -726,6 +864,14 @@ function emptyForm(): AgentFormState {
     specialtiesText: "",
     defaultToolsText: "",
     aliasesText: "",
+    presetLabel: "",
+    presetSummary: "",
+    presetRouteHint: "",
+    presetProviderId: "",
+    presetModel: "",
+    presetToolsPosture: "",
+    presetKnowledgeAttachmentsText: "",
+    presetPromptFraming: "",
   };
 }
 
@@ -738,6 +884,14 @@ function formFromAgent(agent: AgentsResponse["items"][number]): AgentFormState {
     specialtiesText: agent.specialties.join("\n"),
     defaultToolsText: agent.defaultTools.join("\n"),
     aliasesText: agent.aliases.join("\n"),
+    presetLabel: agent.presetDefaults?.presetLabel ?? "",
+    presetSummary: agent.presetDefaults?.presetSummary ?? "",
+    presetRouteHint: agent.presetDefaults?.routeHint ?? "",
+    presetProviderId: agent.presetDefaults?.preferredProviderId ?? "",
+    presetModel: agent.presetDefaults?.preferredModel ?? "",
+    presetToolsPosture: agent.presetDefaults?.toolsPosture ?? "",
+    presetKnowledgeAttachmentsText: (agent.presetDefaults?.knowledgeAttachmentIds ?? []).join("\n"),
+    presetPromptFraming: agent.presetDefaults?.promptFraming ?? "",
   };
 }
 
@@ -765,6 +919,31 @@ function normalizeRoleIdCandidate(value: string): string {
   return normalized.slice(0, 80);
 }
 
+function hasAdvancedPresetDefaults(form: AgentFormState): boolean {
+  return Boolean(
+    form.presetProviderId.trim() ||
+    form.presetModel.trim() ||
+    form.presetToolsPosture ||
+    form.presetKnowledgeAttachmentsText.trim() ||
+    form.presetPromptFraming.trim(),
+  );
+}
+
+function buildPresetDefaultsFromForm(form: AgentFormState) {
+  const knowledgeAttachmentIds = splitMultiline(form.presetKnowledgeAttachmentsText);
+  const presetDefaults = {
+    presetLabel: form.presetLabel.trim() || undefined,
+    presetSummary: form.presetSummary.trim() || undefined,
+    routeHint: form.presetRouteHint || undefined,
+    preferredProviderId: form.presetProviderId.trim() || undefined,
+    preferredModel: form.presetModel.trim() || undefined,
+    toolsPosture: form.presetToolsPosture || undefined,
+    knowledgeAttachmentIds: knowledgeAttachmentIds.length > 0 ? knowledgeAttachmentIds : undefined,
+    promptFraming: form.presetPromptFraming.trim() || undefined,
+  };
+  return Object.values(presetDefaults).some((value) => value !== undefined) ? presetDefaults : undefined;
+}
+
 function buildFormChanges(
   current: AgentFormState,
   baseline: AgentFormState,
@@ -777,6 +956,14 @@ function buildFormChanges(
     { field: "specialtiesText", label: "specialties" },
     { field: "defaultToolsText", label: "defaultTools" },
     { field: "aliasesText", label: "aliases" },
+    { field: "presetLabel", label: "presetLabel" },
+    { field: "presetSummary", label: "presetSummary" },
+    { field: "presetRouteHint", label: "presetRouteHint" },
+    { field: "presetProviderId", label: "preferredProviderId" },
+    { field: "presetModel", label: "preferredModel" },
+    { field: "presetToolsPosture", label: "toolsPosture" },
+    { field: "presetKnowledgeAttachmentsText", label: "knowledgeAttachmentIds" },
+    { field: "presetPromptFraming", label: "promptFraming" },
   ];
 
   const changes: Array<{ field: string; from: unknown; to: unknown }> = [];

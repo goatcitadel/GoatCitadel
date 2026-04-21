@@ -1,6 +1,8 @@
 import type {
   ChatAttachmentRecord,
   ChatMode,
+  ThreadKnowledgeAttachmentRecord,
+  ThreadKnowledgeRetrievalMode,
   ChatThreadResponse,
   RoutingPreflightResult,
 } from "@goatcitadel/contracts";
@@ -8,6 +10,7 @@ import type { ClipboardEvent, DragEvent, KeyboardEvent, RefObject } from "react"
 import { ChatComposerPlusMenu } from "../../components/ChatComposerPlusMenu";
 import { ChatQueueBar, type ChatQueueItemView } from "../../components/chat/ChatQueueBar";
 import { StatusChip } from "../../components/StatusChip";
+import { ChatPresetPicker } from "./ChatPresetPicker";
 import { describeChatUiError } from "./chat-error-copy";
 import { getMissionControlSurfaceConfig } from "./surface-config";
 
@@ -34,6 +37,35 @@ function getCoworkComposerLabel(input: {
   return "Send instruction";
 }
 
+function isDocumentAttachment(attachment: ChatAttachmentRecord): boolean {
+  const mimeType = attachment.mimeType.toLowerCase();
+  if (attachment.mediaType === "image" || attachment.mediaType === "audio" || attachment.mediaType === "video") {
+    return false;
+  }
+  return (
+    attachment.mediaType === "text" ||
+    mimeType.startsWith("text/") ||
+    mimeType.includes("pdf") ||
+    mimeType.includes("json") ||
+    mimeType.includes("xml") ||
+    mimeType.includes("yaml") ||
+    mimeType.includes("csv") ||
+    mimeType.includes("markdown") ||
+    Boolean(attachment.extractPreview?.trim()) ||
+    Boolean(attachment.ocrText?.trim()) ||
+    Boolean(attachment.transcriptText?.trim())
+  );
+}
+
+function canReadAttachmentInFull(attachment: ChatAttachmentRecord): boolean {
+  return (
+    attachment.extractStatus === "ready" ||
+    Boolean(attachment.extractPreview?.trim()) ||
+    Boolean(attachment.ocrText?.trim()) ||
+    Boolean(attachment.transcriptText?.trim())
+  );
+}
+
 export function ChatComposerShell(props: {
   mode: ChatMode;
   isDragActive: boolean;
@@ -46,6 +78,17 @@ export function ChatComposerShell(props: {
   commandSuggestions: Array<{ key: string; command: string; description: string; applyValue: string }>;
   commandIndex: number;
   pendingAttachments: ChatAttachmentRecord[];
+  pendingAttachmentModes?: Record<string, "message" | ThreadKnowledgeRetrievalMode>;
+  threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
+  presetOptions?: Array<{
+    value: string;
+    label: string;
+    summary?: string;
+    routeHint?: ChatMode;
+    toolsPosture?: "safe_auto" | "manual";
+  }>;
+  selectedPresetId?: string;
+  presetApplyWarning?: string | null;
   selectedTurnRecovery: {
     action?: string;
     label: string;
@@ -63,6 +106,7 @@ export function ChatComposerShell(props: {
   activeStreamTurnAssigned: boolean;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
+  audioInputRef?: RefObject<HTMLInputElement | null>;
   onDragEnter: (event: DragEvent<HTMLDivElement>) => void;
   onDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDragLeave: (event: DragEvent<HTMLDivElement>) => void;
@@ -79,10 +123,37 @@ export function ChatComposerShell(props: {
   onComposerKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onComposerPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   onApplyDraftCommand: (value: string) => void;
+  onPresetChange?: (value: string) => void;
+  onApplyPreset?: () => void;
+  onDismissPresetWarning?: () => void;
+  onSetAttachmentMode?: (attachmentId: string, mode: "message" | ThreadKnowledgeRetrievalMode) => void;
+  onRemoveThreadKnowledgeAttachment?: (attachmentId: string) => void;
+  knowledgeUrlDraft?: string;
+  knowledgeUrlMode?: ThreadKnowledgeRetrievalMode;
+  onKnowledgeUrlDraftChange?: (value: string) => void;
+  onKnowledgeUrlModeChange?: (value: ThreadKnowledgeRetrievalMode) => void;
+  onAttachKnowledgeUrl?: () => void;
   onRemoveAttachment: (attachmentId: string) => void;
   onAttachFiles: () => void;
   onUploadFiles: (files: FileList | null) => void;
   onRunQuickResearch: () => void;
+  voiceBusy?: boolean;
+  voiceInputAvailable?: boolean;
+  voiceOutputAvailable?: boolean;
+  voiceTalkActive?: boolean;
+  voiceStatusLabel?: string;
+  voiceUnavailableReason?: string | null;
+  speakResponsesEnabled?: boolean;
+  imageBusy?: boolean;
+  imageGenerationAvailable?: boolean;
+  imageEditAvailable?: boolean;
+  imageRouteLabel?: string | null;
+  onToggleVoiceTalk?: () => void;
+  onOpenAudioTranscribe?: () => void;
+  onAudioFileSelected?: (files: FileList | null) => void;
+  onToggleSpeakResponses?: () => void;
+  onGenerateImage?: () => void;
+  onEditImage?: () => void;
   onStopActiveTurn: () => void;
   onSend: () => void;
 }) {
@@ -98,6 +169,11 @@ export function ChatComposerShell(props: {
     commandSuggestions,
     commandIndex,
     pendingAttachments,
+    pendingAttachmentModes = {},
+    threadKnowledgeAttachments = [],
+    presetOptions = [],
+    selectedPresetId = "",
+    presetApplyWarning = null,
     selectedTurnRecovery,
     selectedTurn,
     selectedSessionId,
@@ -111,6 +187,7 @@ export function ChatComposerShell(props: {
     activeStreamTurnAssigned,
     composerRef,
     fileInputRef,
+    audioInputRef,
     onDragEnter,
     onDragOver,
     onDragLeave,
@@ -127,10 +204,37 @@ export function ChatComposerShell(props: {
     onComposerKeyDown,
     onComposerPaste,
     onApplyDraftCommand,
+    onPresetChange = () => undefined,
+    onApplyPreset = () => undefined,
+    onDismissPresetWarning = () => undefined,
+    onSetAttachmentMode = () => undefined,
+    onRemoveThreadKnowledgeAttachment = () => undefined,
+    knowledgeUrlDraft = "",
+    knowledgeUrlMode = "retrieval",
+    onKnowledgeUrlDraftChange = () => undefined,
+    onKnowledgeUrlModeChange = () => undefined,
+    onAttachKnowledgeUrl = () => undefined,
     onRemoveAttachment,
     onAttachFiles,
     onUploadFiles,
     onRunQuickResearch,
+    voiceBusy = false,
+    voiceInputAvailable = false,
+    voiceOutputAvailable = false,
+    voiceTalkActive = false,
+    voiceStatusLabel = "Voice unavailable",
+    voiceUnavailableReason = null,
+    speakResponsesEnabled = false,
+    imageBusy = false,
+    imageGenerationAvailable = false,
+    imageEditAvailable = false,
+    imageRouteLabel = null,
+    onToggleVoiceTalk = () => undefined,
+    onOpenAudioTranscribe = () => undefined,
+    onAudioFileSelected = () => undefined,
+    onToggleSpeakResponses = () => undefined,
+    onGenerateImage = () => undefined,
+    onEditImage = () => undefined,
     onStopActiveTurn,
     onSend,
   } = props;
@@ -151,6 +255,15 @@ export function ChatComposerShell(props: {
   const currentRouteLabel = routePreflight
     ? [routePreflight.effectiveProviderId, routePreflight.effectiveModel].filter(Boolean).join(" / ")
     : null;
+  const sessionStateLabel = selectedSessionId ? "Thread ready" : "New thread";
+  const webModeLabel =
+    currentWebMode === "off"
+      ? null
+      : currentWebMode === "deep"
+        ? "Deep web"
+        : currentWebMode === "quick"
+          ? "Quick web"
+          : "Web auto";
 
   return (
     <div
@@ -193,6 +306,20 @@ export function ChatComposerShell(props: {
             ) : null}
           </div>
           <button type="button" onClick={onDismissError} className="gc-button">
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+      {presetApplyWarning ? (
+        <div className="chat-v11-composer-banner recovery">
+          <div className="chat-v11-recovery-copy">
+            <div className="chat-v11-recovery-head">
+              <StatusChip tone="warning">preset</StatusChip>
+              <strong>Preset applied with skipped defaults</strong>
+            </div>
+            <p>{presetApplyWarning}</p>
+          </div>
+          <button type="button" onClick={onDismissPresetWarning} className="gc-button">
             Dismiss
           </button>
         </div>
@@ -289,19 +416,29 @@ export function ChatComposerShell(props: {
         </div>
       ) : null}
       <div className="chat-v11-composer-headline">
-        <p className="chat-v11-composer-kicker">{surfaceConfig.label}</p>
-        <span>{surfaceConfig.stageSummary}</span>
+        <div className="chat-v11-composer-heading-row">
+          <div className="chat-v11-composer-title-stack">
+            <p className="chat-v11-composer-kicker">{surfaceConfig.label}</p>
+            <span>{surfaceConfig.stageSummary}</span>
+          </div>
+          <div className="chat-v11-composer-chip-row" aria-label="Composer posture">
+            <span className="chat-v11-composer-chip">{sessionStateLabel}</span>
+            {webModeLabel ? <span className="chat-v11-composer-chip subtle">{webModeLabel}</span> : null}
+          </div>
+        </div>
       </div>
-      <textarea
-        ref={composerRef}
-        value={draft}
-        onChange={(event) => onDraftChange(event.target.value)}
-        onKeyDown={onComposerKeyDown}
-        onPaste={onComposerPaste}
-        placeholder={placeholder}
-        aria-label={`${surfaceConfig.label} message`}
-        rows={4}
-      />
+      <div className="chat-v11-composer-input-shell">
+        <textarea
+          ref={composerRef}
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={onComposerKeyDown}
+          onPaste={onComposerPaste}
+          placeholder={placeholder}
+          aria-label={`${surfaceConfig.label} message`}
+          rows={4}
+        />
+      </div>
       {commandSuggestions.length > 0 ? (
         <div className="chat-v11-command-popover" role="listbox" aria-label="Slash command suggestions">
           {commandSuggestions.map((item, index) => (
@@ -320,47 +457,256 @@ export function ChatComposerShell(props: {
       {pendingAttachments.length > 0 ? (
         <div className="chat-v11-pending-attachments">
           {pendingAttachments.map((item) => (
-            <button
-              key={item.attachmentId}
-              type="button"
-              className="gc-button chat-attachment-chip"
-              onClick={() => onRemoveAttachment(item.attachmentId)}
-              aria-label={`Remove attachment ${item.fileName}`}
-            >
-              {item.fileName} ×
-            </button>
+            <div key={item.attachmentId} className="chat-v11-pending-attachment-card">
+              <div className="chat-v11-pending-attachment-head">
+                <div>
+                  <strong>{item.fileName}</strong>
+                  <p className="chat-v11-pending-attachment-meta">
+                    {item.mimeType} · {Math.max(1, Math.round(item.sizeBytes / 1024))} KB
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="gc-button chat-attachment-chip"
+                  onClick={() => onRemoveAttachment(item.attachmentId)}
+                  aria-label={`Remove attachment ${item.fileName}`}
+                >
+                  Remove
+                </button>
+              </div>
+              {isDocumentAttachment(item) ? (
+                <div className="chat-v11-attachment-mode-row" aria-label={`Attachment mode for ${item.fileName}`}>
+                  <button
+                    type="button"
+                    className={[
+                      "gc-button",
+                      (pendingAttachmentModes[item.attachmentId] ?? "message") === "message" ? "active" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onClick={() => onSetAttachmentMode(item.attachmentId, "message")}
+                  >
+                    Message only
+                  </button>
+                  <button
+                    type="button"
+                    className={["gc-button", pendingAttachmentModes[item.attachmentId] === "full_text" ? "active" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    disabled={!canReadAttachmentInFull(item)}
+                    onClick={() => onSetAttachmentMode(item.attachmentId, "full_text")}
+                    title={
+                      canReadAttachmentInFull(item)
+                        ? "Keep this document in direct full-text context for later turns."
+                        : "Full-text context will unlock when extraction is ready."
+                    }
+                  >
+                    Read in full
+                  </button>
+                  <button
+                    type="button"
+                    className={["gc-button", pendingAttachmentModes[item.attachmentId] === "retrieval" ? "active" : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                    onClick={() => onSetAttachmentMode(item.attachmentId, "retrieval")}
+                  >
+                    Use retrieval
+                  </button>
+                </div>
+              ) : null}
+            </div>
           ))}
         </div>
       ) : null}
+      {threadKnowledgeAttachments.length > 0 ? (
+        <div className="chat-v11-thread-knowledge-strip" aria-label="Thread knowledge sources">
+          {threadKnowledgeAttachments.map((attachment) => (
+            <div key={attachment.attachmentId} className="chat-v11-thread-knowledge-chip">
+              <div>
+                <strong>{attachment.title}</strong>
+                <p>
+                  {attachment.retrievalMode === "full_text" ? "Read in full" : "Retrieval"} · {attachment.ingestStatus}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="gc-button"
+                onClick={() => onRemoveThreadKnowledgeAttachment(attachment.attachmentId)}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {voiceUnavailableReason ? (
+        <div className="chat-v11-composer-banner recovery">
+          <div className="chat-v11-recovery-copy">
+            <div className="chat-v11-recovery-head">
+              <StatusChip tone="warning">voice</StatusChip>
+              <strong>{voiceStatusLabel}</strong>
+            </div>
+            <p>{voiceUnavailableReason}</p>
+          </div>
+        </div>
+      ) : null}
       <div className="chat-v11-composer-actions">
-        <ChatComposerPlusMenu
-          disabled={sending}
-          onAttachFiles={onAttachFiles}
-          onRunQuickResearch={onRunQuickResearch}
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="chat-v11-hidden-file"
-          onChange={(event) => onUploadFiles(event.target.files)}
-        />
+        <div className="chat-v11-composer-actions-start">
+          <ChatComposerPlusMenu
+            disabled={sending}
+            onAttachFiles={onAttachFiles}
+            onRunQuickResearch={onRunQuickResearch}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="chat-v11-hidden-file"
+            onChange={(event) => onUploadFiles(event.target.files)}
+          />
+          <input
+            ref={audioInputRef}
+            type="file"
+            accept="audio/*"
+            className="chat-v11-hidden-file"
+            onChange={(event) => onAudioFileSelected(event.target.files)}
+          />
+          {presetOptions.length > 0 ? (
+            <div className="chat-v11-composer-preset-row">
+              <ChatPresetPicker
+                presets={presetOptions}
+                selectedPresetId={selectedPresetId}
+                onPresetChange={onPresetChange}
+                onApplyPreset={onApplyPreset}
+              />
+            </div>
+          ) : null}
+          <div className="chat-v11-composer-multimodal-row" aria-label="Multimodal tools">
+            <button
+              type="button"
+              className={`gc-button ${voiceTalkActive ? "active" : ""}`.trim()}
+              disabled={!voiceInputAvailable || voiceBusy || sending}
+              title={
+                voiceInputAvailable ? "Start or stop push-to-talk." : (voiceUnavailableReason ?? "Voice unavailable")
+              }
+              onClick={onToggleVoiceTalk}
+            >
+              {voiceBusy ? "Voice..." : voiceTalkActive ? "Stop talk" : "Start talk"}
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              disabled={!voiceInputAvailable || voiceBusy || sending}
+              title={
+                voiceInputAvailable
+                  ? "Insert a transcript from an audio file."
+                  : (voiceUnavailableReason ?? "Voice unavailable")
+              }
+              onClick={onOpenAudioTranscribe}
+            >
+              Insert transcript
+            </button>
+            {voiceOutputAvailable ? (
+              <button
+                type="button"
+                className={`gc-button ${speakResponsesEnabled ? "active" : ""}`.trim()}
+                onClick={onToggleSpeakResponses}
+                title="Toggle spoken assistant replies."
+              >
+                {speakResponsesEnabled ? "Speak replies on" : "Speak replies off"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="gc-button"
+              disabled={!imageGenerationAvailable || imageBusy || sending || draft.trim().length === 0}
+              title={
+                imageGenerationAvailable
+                  ? `Create an image from the current prompt${imageRouteLabel ? ` via ${imageRouteLabel}` : ""}.`
+                  : "Image generation is unavailable on the current route."
+              }
+              onClick={onGenerateImage}
+            >
+              {imageBusy ? "Imaging..." : "Create image"}
+            </button>
+            {imageEditAvailable ? (
+              <button
+                type="button"
+                className="gc-button"
+                disabled={imageBusy || sending || draft.trim().length === 0}
+                title={
+                  imageRouteLabel
+                    ? `Edit the latest attached image via ${imageRouteLabel}.`
+                    : "Edit the latest attached image."
+                }
+                onClick={onEditImage}
+              >
+                {imageBusy ? "Imaging..." : "Edit image"}
+              </button>
+            ) : null}
+          </div>
+          <div className="chat-v11-composer-helper-pills" aria-label="Composer tools">
+            <span className="chat-v11-composer-helper-pill">Slash commands</span>
+            {pendingAttachments.length > 0 ? (
+              <span className="chat-v11-composer-helper-pill">
+                {pendingAttachments.length} file{pendingAttachments.length === 1 ? "" : "s"} attached
+              </span>
+            ) : null}
+            {currentRouteLabel ? <span className="chat-v11-composer-helper-pill">{currentRouteLabel}</span> : null}
+            <span className="chat-v11-composer-helper-pill">{voiceStatusLabel}</span>
+            {imageRouteLabel ? <span className="chat-v11-composer-helper-pill subtle">{imageRouteLabel}</span> : null}
+          </div>
+          <div className="chat-v11-knowledge-url-row">
+            <input
+              value={knowledgeUrlDraft}
+              onChange={(event) => onKnowledgeUrlDraftChange(event.target.value)}
+              placeholder="Attach a URL to thread knowledge"
+              aria-label="Thread knowledge URL"
+            />
+            <div className="chat-v11-attachment-mode-row">
+              <button
+                type="button"
+                className={["gc-button", knowledgeUrlMode === "full_text" ? "active" : ""].filter(Boolean).join(" ")}
+                onClick={() => onKnowledgeUrlModeChange("full_text")}
+              >
+                Read in full
+              </button>
+              <button
+                type="button"
+                className={["gc-button", knowledgeUrlMode === "retrieval" ? "active" : ""].filter(Boolean).join(" ")}
+                onClick={() => onKnowledgeUrlModeChange("retrieval")}
+              >
+                Use retrieval
+              </button>
+            </div>
+            <button
+              type="button"
+              className="gc-button"
+              disabled={!knowledgeUrlDraft.trim()}
+              onClick={onAttachKnowledgeUrl}
+            >
+              Attach source
+            </button>
+          </div>
+        </div>
         <p>{helperCopy}</p>
-        {sending && hasActiveStream ? (
-          <button type="button" onClick={onStopActiveTurn} className="gc-button">
-            {activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}
-          </button>
-        ) : (
-          <button type="button" disabled={!canSend} onClick={onSend} className="gc-button">
-            {mode === "cowork"
-              ? getCoworkComposerLabel({ selectedTurn, editingTurnId, sending })
-              : sending
-                ? "Sending..."
-                : editingTurnId
-                  ? "Edit and resend"
-                  : "Send message"}
-          </button>
-        )}
+        <div className="chat-v11-composer-actions-end">
+          {sending && hasActiveStream ? (
+            <button type="button" onClick={onStopActiveTurn} className="gc-button">
+              {activeStreamTurnAssigned ? "Stop turn" : "Stop stream"}
+            </button>
+          ) : (
+            <button type="button" disabled={!canSend} onClick={onSend} className="gc-button">
+              {mode === "cowork"
+                ? getCoworkComposerLabel({ selectedTurn, editingTurnId, sending })
+                : sending
+                  ? "Sending..."
+                  : editingTurnId
+                    ? "Edit and resend"
+                    : "Send message"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

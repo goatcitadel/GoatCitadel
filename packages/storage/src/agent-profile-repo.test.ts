@@ -40,8 +40,11 @@ describe("AgentProfileRepository", () => {
     assert.equal(active.length >= BUILTIN_AGENT_PROFILES.length, true);
 
     const architect = active.find((item) => item.roleId === "architect");
+    const coder = active.find((item) => item.roleId === "coder");
     assert.ok(architect);
+    assert.ok(coder);
     assert.equal(architect.isBuiltin, true);
+    assert.equal(coder.presetDefaults?.presetLabel, "Code Helper");
 
     const updated = repo.update(architect.agentId, {
       title: "Chief Systems Architect",

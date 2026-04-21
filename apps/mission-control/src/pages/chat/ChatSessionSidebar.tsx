@@ -20,6 +20,9 @@ export function ChatSessionSidebar(props: {
   projectPath: string;
   historyView: "active" | "archived";
   selectedProjectId: string;
+  availableFolders: Array<{ folderId: string; name: string; count: number }>;
+  selectedFolderId: string;
+  selectedTag: string | null;
   missionSessions: Array<ChatSessionRecord & { projectName?: string | null }>;
   externalSessions: Array<ChatSessionRecord & { channel?: string | null; account?: string | null }>;
   selectedSessionId: string | null;
@@ -37,7 +40,9 @@ export function ChatSessionSidebar(props: {
   onHistoryViewChange: (view: "active" | "archived") => void;
   onArchiveWorkspace?: () => void;
   onSelectProjectId: (projectId: string) => void;
-  onSelectSession: (sessionId: string) => void;
+  onSelectFolderId: (folderId: string) => void;
+  onSelectTag: (tag: string | null) => void;
+  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
   renderSessionLabel: (sessionId: string) => string;
 }) {
   const {
@@ -49,6 +54,9 @@ export function ChatSessionSidebar(props: {
     projectPath,
     historyView,
     selectedProjectId,
+    availableFolders,
+    selectedFolderId,
+    selectedTag,
     missionSessions,
     externalSessions,
     selectedSessionId,
@@ -66,6 +74,8 @@ export function ChatSessionSidebar(props: {
     onHistoryViewChange,
     onArchiveWorkspace,
     onSelectProjectId,
+    onSelectFolderId,
+    onSelectTag,
     onSelectSession,
     renderSessionLabel,
   } = props;
@@ -79,6 +89,7 @@ export function ChatSessionSidebar(props: {
   const visibleSummaryCards = mode === "chat" ? workspaceSummaryCards : workspaceSummaryCards.slice(0, 2);
   const workspaceSummaryLine =
     mode === "chat" ? visibleSummaryCards.map((item) => formatSummaryCount(item.value, item.label)).join(" • ") : null;
+  const totalConversationCount = missionSessions.length + externalSessions.length;
 
   return (
     <aside className={`panel panel-soft panel-pad-default chat-v11-left mode-${mode}`}>
@@ -130,8 +141,17 @@ export function ChatSessionSidebar(props: {
             {showProjectCreate ? "Hide project form" : "Project"}
           </button>
         </div>
-        <input value={search} onChange={(event) => onSearchChange(event.target.value)} placeholder="Find a chat..." />
+        <input
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="Search conversations"
+        />
       </div>
+      <p className="chat-v11-rail-posture">
+        {totalConversationCount === 0
+          ? "No conversations yet. Start a fresh session or bind one to a project."
+          : `${totalConversationCount} conversation${totalConversationCount === 1 ? "" : "s"} across mission and external threads.`}
+      </p>
       {mode === "chat" ? (
         <FieldHelp>Mission chats stay local unless a bound integration is explicitly in play.</FieldHelp>
       ) : null}
@@ -164,6 +184,20 @@ export function ChatSessionSidebar(props: {
         >
           Unassigned
         </button>
+        <button
+          type="button"
+          className={["gc-button", selectedFolderId === "all" ? "active" : ""].filter(Boolean).join(" ")}
+          onClick={() => onSelectFolderId("all")}
+        >
+          All folders
+        </button>
+        <button
+          type="button"
+          className={["gc-button", selectedFolderId === "none" ? "active" : ""].filter(Boolean).join(" ")}
+          onClick={() => onSelectFolderId("none")}
+        >
+          No folder
+        </button>
         {archiveWorkspaceEnabled && onArchiveWorkspace ? (
           <button
             type="button"
@@ -175,6 +209,33 @@ export function ChatSessionSidebar(props: {
           </button>
         ) : null}
       </div>
+      {availableFolders.length > 0 ? (
+        <div className="chat-v11-filter-row chat-v11-filter-row-compact">
+          {availableFolders.map((folder) => (
+            <button
+              key={folder.folderId}
+              type="button"
+              className={["gc-nav-button", selectedFolderId === folder.folderId ? "active" : ""]
+                .filter(Boolean)
+                .join(" ")}
+              onClick={() => onSelectFolderId(folder.folderId)}
+            >
+              {folder.name} ({folder.count})
+            </button>
+          ))}
+          {selectedTag ? (
+            <button type="button" className="gc-nav-button active" onClick={() => onSelectTag(null)}>
+              Tag: #{selectedTag} ×
+            </button>
+          ) : null}
+        </div>
+      ) : selectedTag ? (
+        <div className="chat-v11-filter-row chat-v11-filter-row-compact">
+          <button type="button" className="gc-nav-button active" onClick={() => onSelectTag(null)}>
+            Tag: #{selectedTag} ×
+          </button>
+        </div>
+      ) : null}
       {showProjectCreate ? (
         <div className="chat-v11-project-create">
           <input
@@ -198,6 +259,8 @@ export function ChatSessionSidebar(props: {
         externalSessions={externalSessions}
         selectedSessionId={selectedSessionId}
         onSelectSession={onSelectSession}
+        selectedTag={selectedTag}
+        onSelectTag={onSelectTag}
         renderSessionLabel={renderSessionLabel}
         mode={mode}
       />

@@ -24,11 +24,13 @@
   z-index: 30;
   display: grid;
   grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
-  align-items: start;
+  align-items: center;
   gap: calc(var(--space-3) * var(--density-scale));
-  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
-  border-bottom: 1px solid var(--border-default);
-  backdrop-filter: blur(18px);
+  margin: calc(var(--space-3) * var(--density-scale)) var(--shell-gutter) calc(var(--space-2) * var(--density-scale));
+  padding: var(--shell-chrome-padding);
+  border: 1px solid var(--border-default);
+  border-radius: var(--shell-chrome-radius);
+  backdrop-filter: blur(var(--shell-chrome-blur));
 }
 
 .shell-bar-brand,
@@ -36,6 +38,14 @@
 .shell-bar-page {
   display: grid;
   gap: calc(var(--space-1) * var(--density-scale));
+}
+
+.shell-bar-title-row,
+.shell-bar-route-pills {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space-2) * var(--density-scale));
+  flex-wrap: wrap;
 }
 
 .shell-bar-kicker,
@@ -50,7 +60,7 @@
 
 .shell-bar-title {
   margin: 0;
-  font: 650 1.2rem/1.05 var(--font-body);
+  font: 650 1.15rem/1.05 var(--font-body);
   letter-spacing: 0;
   color: var(--text-primary);
 }
@@ -58,8 +68,29 @@
 .shell-bar-page-note {
   margin: 0;
   max-width: 54ch;
-  font: 500 13px/1.45 var(--font-body);
+  font: 500 0.82rem/1.45 var(--font-body);
   color: var(--text-secondary);
+}
+
+.shell-bar-page-note-inline {
+  max-width: 70ch;
+}
+
+.shell-bar-route-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface-2) 84%, transparent);
+  color: var(--text-secondary);
+  font: 600 0.73rem/1.2 var(--font-body);
+  letter-spacing: 0.04em;
+}
+
+.shell-bar-route-pill.secondary {
+  color: var(--text-primary);
 }
 
 .space-nav,
@@ -74,7 +105,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: end;
+  align-items: center;
   gap: calc(var(--space-2) * var(--density-scale));
 }
 
@@ -82,7 +113,7 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: flex-start;
+  align-items: center;
   gap: calc(var(--space-2) * var(--density-scale));
 }
 
@@ -120,11 +151,17 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: calc(var(--space-2) * var(--density-scale));
-  padding: calc(var(--space-2) * var(--density-scale)) calc(var(--space-4) * var(--density-scale));
-  border-bottom: 1px solid var(--border-default);
+  margin: 0 var(--shell-gutter) calc(var(--space-2) * var(--density-scale));
+  padding: calc(var(--space-2) * var(--density-scale)) var(--shell-chrome-padding);
+  border: 1px solid var(--border-default);
+  border-radius: calc(var(--shell-chrome-radius) - 2px);
 }
 
 .shell-secondary-nav.compact {
+  justify-content: flex-start;
+}
+
+.shell-secondary-nav.is-rail-driven {
   justify-content: flex-start;
 }
 
@@ -174,8 +211,8 @@
   width: auto;
   max-width: none;
   margin: 0;
-  margin-inline: calc(var(--space-5) * 1);
-  padding: calc(var(--space-2) * var(--density-scale)) 0 calc(var(--space-5) * var(--density-scale));
+  margin-inline: var(--shell-gutter);
+  padding: calc(var(--space-1) * var(--density-scale)) 0 calc(var(--space-5) * var(--density-scale));
   display: block;
   min-height: 0;
   overflow-x: hidden;
@@ -204,17 +241,18 @@
   display: grid;
   gap: calc(var(--space-2) * var(--density-scale));
   align-content: start;
-  min-height: clamp(440px, calc(100vh - 210px), 1200px);
+  min-height: clamp(440px, calc(100vh - 184px), 1200px);
 }
 
 @media (max-width: 960px) {
   .shell-main {
     width: auto;
-    margin-inline: calc(var(--space-4) * 1);
+    margin-inline: var(--space-4);
   }
 
   .shell-bar {
     grid-template-columns: minmax(0, 1fr);
+    margin-inline: var(--space-4);
   }
 
   .shell-bar-actions {
@@ -233,6 +271,10 @@
     left: 0;
     right: auto;
     width: min(100vw - 32px, 680px);
+  }
+
+  .shell-secondary-nav {
+    margin-inline: var(--space-4);
   }
 }
 
@@ -253,7 +295,7 @@
 }
 
 .shell-status-center-trigger {
-  min-height: 42px;
+  min-height: 40px;
   height: auto;
   padding: 8px 12px;
   justify-content: space-between;
@@ -262,9 +304,14 @@
 
 .shell-status-center-trigger-copy {
   display: grid;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
   text-align: left;
+}
+
+.shell-status-center-trigger-summary {
+  display: grid;
+  gap: 2px;
 }
 
 .shell-status-center-trigger-label,

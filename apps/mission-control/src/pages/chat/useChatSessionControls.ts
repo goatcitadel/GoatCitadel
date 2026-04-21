@@ -16,7 +16,15 @@ import {
 import type { ChatHistoryView } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
-export type SessionControlPending = null | "rename" | "pin" | "archive" | "delete" | "project" | "binding";
+export type SessionControlPending =
+  | null
+  | "rename"
+  | "organization"
+  | "pin"
+  | "archive"
+  | "delete"
+  | "project"
+  | "binding";
 
 export function useChatSessionControls(input: {
   workspaceId: string;
@@ -24,6 +32,8 @@ export function useChatSessionControls(input: {
   selectedProjectId: string;
   selectedSession: ChatSessionRecord | null;
   renameTitle: string;
+  folderName: string;
+  tagsValue: string;
   setSelectedProjectId: React.Dispatch<React.SetStateAction<string>>;
   setSelectedSessionId: React.Dispatch<React.SetStateAction<string | null>>;
   setHistoryView: React.Dispatch<React.SetStateAction<ChatHistoryView>>;
@@ -40,6 +50,8 @@ export function useChatSessionControls(input: {
     selectedProjectId,
     selectedSession,
     renameTitle,
+    folderName,
+    tagsValue,
     setSelectedProjectId,
     setSelectedSessionId,
     setHistoryView,
@@ -151,6 +163,25 @@ export function useChatSessionControls(input: {
       setSessionControlPending(null);
     }
   }, [loadSidebar, renameTitle, selectedSession, setError]);
+
+  const handleSaveOrganization = useCallback(async () => {
+    if (!selectedSession) return;
+    setSessionControlPending("organization");
+    try {
+      await updateChatSession(selectedSession.sessionId, {
+        folderName: folderName.trim() || "",
+        tags: tagsValue
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+      });
+      await loadSidebar();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSessionControlPending(null);
+    }
+  }, [folderName, loadSidebar, selectedSession, setError, tagsValue]);
 
   const handleTogglePinSession = useCallback(async () => {
     if (!selectedSession) return;
@@ -267,6 +298,7 @@ export function useChatSessionControls(input: {
     handleCreateProject,
     handleArchiveWorkspaceMissionChats,
     handleRenameSession,
+    handleSaveOrganization,
     handleTogglePinSession,
     handleToggleArchiveSession,
     handleDeleteSession,

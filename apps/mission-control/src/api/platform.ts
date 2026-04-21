@@ -15,6 +15,8 @@ import type {
   LlamaCppAdvisorRequest,
   LlamaCppModelManifest,
   LlamaCppRuntimeStatus,
+  ImageGenerationRequest,
+  ImageGenerationResponse,
   MemoryContextPack,
   ModelReputation,
   NpuModelManifest,
@@ -200,6 +202,13 @@ export async function previewLlmModels(
     method: "POST",
     body: JSON.stringify(input),
     signal: options?.signal,
+  });
+}
+
+export async function generateLlmImage(input: ImageGenerationRequest): Promise<ImageGenerationResponse> {
+  return request<ImageGenerationResponse>("/api/v1/llm/images", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 

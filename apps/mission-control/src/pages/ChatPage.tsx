@@ -1,19 +1,27 @@
 /* eslint-disable max-lines -- ChatPage remains the top-level orchestration entrypoint while behavior lives in focused hooks and dock sections. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatAttachmentRecord,
+  ChatGeneratedArtifactRecord,
   ChatMode,
   ChatModePresetRecord,
   RoutingPreflightResult,
   ChatSessionPrefsPatch,
   ChatThreadResponse,
+  ThreadKnowledgeAttachmentRecord,
+  ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
 import { isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import {
+  attachThreadKnowledgeAttachment,
+  createChatGeneratedArtifact,
+  fetchAgents,
+  fetchChatGeneratedArtifact,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchSkills,
   parseChatCommand,
+  removeThreadKnowledgeAttachment,
   updateChatSessionPrefs,
 } from "../api/client";
 import { CardSkeleton } from "../components/CardSkeleton";
@@ -24,6 +32,7 @@ import type { ChatStreamStatus } from "../components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "../components/chat/ChatThreadView";
 import { deriveCoworkRunViewModel } from "../components/cowork-view-model";
 import { useEventStreamStatus } from "../hooks/useEventStreamStatus";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { pageCopy } from "../content/copy";
 import {
@@ -74,6 +83,7 @@ import {
   type OutboundQueueItem,
 } from "./chat/useChatSurfaceOrchestration";
 import { useChatThreadController } from "./chat/useChatThreadController";
+import { useChatMultimodalControls } from "./chat/useChatMultimodalControls";
 import {
   formatSessionLabel,
   looksMachineSessionLabel,
@@ -182,6 +192,35 @@ function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null
   return preflight?.fallbackResult === "local_to_cloud" || preflight?.fallbackResult === "cloud_to_local";
 }
 
+function isDocumentAttachment(attachment: ChatAttachmentRecord): boolean {
+  const mimeType = attachment.mimeType.toLowerCase();
+  if (attachment.mediaType === "image" || attachment.mediaType === "audio" || attachment.mediaType === "video") {
+    return false;
+  }
+  return (
+    attachment.mediaType === "text" ||
+    mimeType.startsWith("text/") ||
+    mimeType.includes("pdf") ||
+    mimeType.includes("json") ||
+    mimeType.includes("xml") ||
+    mimeType.includes("yaml") ||
+    mimeType.includes("csv") ||
+    mimeType.includes("markdown") ||
+    Boolean(attachment.extractPreview?.trim()) ||
+    Boolean(attachment.ocrText?.trim()) ||
+    Boolean(attachment.transcriptText?.trim())
+  );
+}
+
+function canReadAttachmentInFull(attachment: ChatAttachmentRecord): boolean {
+  return (
+    attachment.extractStatus === "ready" ||
+    Boolean(attachment.extractPreview?.trim()) ||
+    Boolean(attachment.ocrText?.trim()) ||
+    Boolean(attachment.transcriptText?.trim())
+  );
+}
+
 export function ChatPage({
   workspaceId = "default",
   workspaceName = workspaceId,
@@ -194,6 +233,7 @@ export function ChatPage({
   onOpenCode = () => undefined,
   onOpenTasks = () => undefined,
   onOpenApprovals = () => undefined,
+  onNavigateSurface,
 }: {
   workspaceId?: string;
   workspaceName?: string;
@@ -206,8 +246,15 @@ export function ChatPage({
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
   onOpenApprovals?: () => void;
+  onNavigateSurface?: (
+    surface: ChatMode,
+    options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
+  ) => void;
 }) {
+  type PendingAttachmentDocumentMode = "message" | ThreadKnowledgeRetrievalMode;
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
+  const [selectedFolderId, setSelectedFolderId] = useState<string>("all");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<"active" | "archived">("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -216,6 +263,8 @@ export function ChatPage({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
+  const [folderName, setFolderName] = useState("");
+  const [tagsValue, setTagsValue] = useState("");
   const [streamEnabled, setStreamEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     const raw = window.localStorage.getItem(STREAM_PREF_KEY);
@@ -225,6 +274,28 @@ export function ChatPage({
   const [isDragActive, setIsDragActive] = useState(false);
   const [followThreadOutput, setFollowThreadOutput] = useState(true);
   const [localNotices, setLocalNotices] = useState<ChatThreadNotice[]>([]);
+  const [activeGeneratedArtifact, setActiveGeneratedArtifact] = useState<ChatGeneratedArtifactRecord | null>(null);
+  const [sessionRailOpen, setSessionRailOpen] = useState(false);
+  const [pendingAttachmentModes, setPendingAttachmentModes] = useState<Record<string, PendingAttachmentDocumentMode>>(
+    {},
+  );
+  const [knowledgeUrlDraft, setKnowledgeUrlDraft] = useState("");
+  const [knowledgeUrlMode, setKnowledgeUrlMode] = useState<ThreadKnowledgeRetrievalMode>("retrieval");
+  const [presetApplyWarning, setPresetApplyWarning] = useState<string | null>(null);
+  const [presetProfiles, setPresetProfiles] = useState<
+    Array<{
+      agentId: string;
+      label: string;
+      summary?: string;
+      routeHint?: ChatMode;
+      preferredProviderId?: string;
+      preferredModel?: string;
+      toolsPosture?: "safe_auto" | "manual";
+      knowledgeAttachmentIds?: string[];
+      promptFraming?: string;
+    }>
+  >([]);
+  const [selectedPresetId, setSelectedPresetId] = useState<string>("");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -247,6 +318,8 @@ export function ChatPage({
   >(async () => undefined);
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
   const routeSearch = typeof window === "undefined" ? "" : window.location.search;
+  const deferredSearch = useDeferredValue(search.trim());
+  const compactSurfaceLayout = useMediaQuery("(max-width: 840px)");
 
   const {
     config: runtimeLlmConfig,
@@ -273,9 +346,43 @@ export function ChatPage({
     pushLocalNoticeRef.current = pushLocalNotice;
   }, [pushLocalNotice]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAgents("active", 500)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        setPresetProfiles(
+          response.items
+            .filter((item) => item.presetDefaults?.presetLabel)
+            .map((item) => ({
+              agentId: item.agentId,
+              label: item.presetDefaults?.presetLabel ?? item.name,
+              summary: item.presetDefaults?.presetSummary,
+              routeHint: item.presetDefaults?.routeHint,
+              preferredProviderId: item.presetDefaults?.preferredProviderId,
+              preferredModel: item.presetDefaults?.preferredModel,
+              toolsPosture: item.presetDefaults?.toolsPosture,
+              knowledgeAttachmentIds: item.presetDefaults?.knowledgeAttachmentIds,
+              promptFraming: item.presetDefaults?.promptFraming,
+            })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPresetProfiles([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const sessionData = useChatSessionData({
     workspaceId,
     historyView,
+    searchQuery: deferredSearch,
     selectedSessionId,
     setSelectedSessionId,
     runtimeLlmConfig,
@@ -293,6 +400,10 @@ export function ChatPage({
     setPrefs,
     binding,
     setBinding,
+    generatedArtifacts,
+    setGeneratedArtifacts,
+    threadKnowledgeAttachments,
+    setThreadKnowledgeAttachments,
     settings,
     commandCatalog,
     proactiveStatus,
@@ -323,6 +434,10 @@ export function ChatPage({
     thread,
     selectedProjectId,
     setSelectedProjectId,
+    selectedFolderId,
+    setSelectedFolderId,
+    selectedTag,
+    setSelectedTag,
     historyView,
     setHistoryView,
     selectedSessionId,
@@ -345,7 +460,12 @@ export function ChatPage({
     workspaceMissionSessionCount,
     boundMissionSessionCount,
     visibleSessionLabelById,
+    availableFolders,
   } = threadController;
+  const routeArtifactId = useMemo(
+    () => new URLSearchParams(routeSearch).get("artifactId")?.trim() || null,
+    [routeSearch],
+  );
 
   useEffect(() => {
     loadSessionCoreStateRef.current = loadSessionCoreState;
@@ -357,6 +477,8 @@ export function ChatPage({
     selectedProjectId,
     selectedSession,
     renameTitle,
+    folderName,
+    tagsValue,
     setSelectedProjectId,
     setSelectedSessionId,
     setHistoryView,
@@ -390,6 +512,7 @@ export function ChatPage({
     handleCreateProject,
     handleArchiveWorkspaceMissionChats,
     handleRenameSession,
+    handleSaveOrganization,
     handleTogglePinSession,
     handleToggleArchiveSession,
     handleDeleteSession,
@@ -700,6 +823,40 @@ export function ChatPage({
     }
   }, [selectedSessionId, workspaceId, setQueuedOutbound]);
 
+  useEffect(() => {
+    setPendingAttachmentModes((current) => {
+      const next: Record<string, PendingAttachmentDocumentMode> = {};
+      for (const attachment of pendingAttachments) {
+        const currentMode = current[attachment.attachmentId];
+        if (!isDocumentAttachment(attachment)) {
+          continue;
+        }
+        if (currentMode === "retrieval") {
+          next[attachment.attachmentId] = "retrieval";
+          continue;
+        }
+        if (currentMode === "full_text" && canReadAttachmentInFull(attachment)) {
+          next[attachment.attachmentId] = "full_text";
+          continue;
+        }
+        next[attachment.attachmentId] = "message";
+      }
+      return next;
+    });
+  }, [pendingAttachments]);
+
+  useEffect(() => {
+    if (!activeGeneratedArtifact) {
+      return;
+    }
+    const refreshedArtifact = generatedArtifacts?.items.find(
+      (item) => item.artifactId === activeGeneratedArtifact.artifactId,
+    );
+    if (refreshedArtifact) {
+      setActiveGeneratedArtifact(refreshedArtifact);
+    }
+  }, [activeGeneratedArtifact, generatedArtifacts?.items]);
+
   useDebouncedLocalStoragePersistence(createDraftStorageKey(workspaceId, selectedSessionId), draft);
   useDebouncedLocalStoragePersistence(
     createAttachmentStorageKey(workspaceId, selectedSessionId),
@@ -717,7 +874,9 @@ export function ChatPage({
 
   useEffect(() => {
     setRenameTitle(selectedSession?.title ?? "");
-  }, [selectedSession?.sessionId, selectedSession?.title]);
+    setFolderName(selectedSession?.folderName ?? "");
+    setTagsValue((selectedSession?.tags ?? []).join(", "));
+  }, [selectedSession?.folderName, selectedSession?.sessionId, selectedSession?.tags, selectedSession?.title]);
   const planningMode = prefs?.planningMode ?? "off";
   const proactiveSuggestionCount = proactiveRuns.filter((run) => run.status === "suggested").length;
 
@@ -762,6 +921,7 @@ export function ChatPage({
     proactiveSuggestionCount,
     hasDelegationSuggestion: Boolean(delegationSuggestion),
     learnedMemoryCount: learnedMemory.length,
+    hasGeneratedArtifact: Boolean(activeGeneratedArtifact),
   });
 
   useEffect(() => {
@@ -814,6 +974,51 @@ export function ChatPage({
     localNotices,
     dockSectionOrder,
   });
+  useEffect(() => {
+    if (!compactSurfaceLayout && sessionRailOpen) {
+      setSessionRailOpen(false);
+    }
+  }, [compactSurfaceLayout, sessionRailOpen]);
+
+  useEffect(() => {
+    if (compactSurfaceLayout && sessionRailOpen && dockOpen) {
+      setDockOpen(false);
+    }
+  }, [compactSurfaceLayout, dockOpen, sessionRailOpen, setDockOpen]);
+
+  useEffect(() => {
+    if (!routeArtifactId) {
+      setActiveGeneratedArtifact(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchChatGeneratedArtifact(routeArtifactId)
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        if (selectedSessionId && response.item.sessionId !== selectedSessionId) {
+          return;
+        }
+        if (compactSurfaceLayout) {
+          setSessionRailOpen(false);
+          setDockOpen(false);
+        }
+        setActiveGeneratedArtifact(response.item);
+        if (response.item.turnId) {
+          setSelectedTurnId(response.item.turnId);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setActiveGeneratedArtifact(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [compactSurfaceLayout, routeArtifactId, selectedSessionId, setDockOpen]);
+
   const providerLabelById = useMemo(
     () => new Map(providerOptions.map((provider) => [provider.providerId, provider.label])),
     [providerOptions],
@@ -895,6 +1100,7 @@ export function ChatPage({
         gatewayTone: "muted",
         gatewayLabel: "Gateway state unavailable",
         approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
+        runStateSummary: activeWorkflowTurn ? `Run: ${activeWorkflowTurn.trace.status}` : undefined,
         activeModeLabel: activeModePreset.label,
         providerModelSummary: effectiveProviderModelSummary,
         requestedProviderModelSummary,
@@ -907,6 +1113,7 @@ export function ChatPage({
       },
     [
       activeModePreset.label,
+      activeWorkflowTurn,
       approvalsCount,
       currentRoutePreflight,
       effectiveProviderModelSummary,
@@ -932,6 +1139,163 @@ export function ChatPage({
     !pendingUserInput &&
     !coworkRouteBlocked &&
     (!coworkRouteBoundaryAckRequired || currentRouteBoundaryAcknowledged);
+
+  const handleSelectSessionFromRail = useCallback(
+    (sessionId: string, options?: { turnId?: string | null }) => {
+      setSelectedSessionId(sessionId);
+      setSelectedTurnId(options?.turnId ?? null);
+      setActiveGeneratedArtifact(null);
+      setSessionRailOpen(false);
+    },
+    [setSelectedSessionId, setSelectedTurnId],
+  );
+  const handleSessionRailOpenChange = useCallback(
+    (next: boolean) => {
+      setSessionRailOpen(next);
+      if (next && compactSurfaceLayout) {
+        setDockOpen(false);
+        setActiveGeneratedArtifact(null);
+      }
+    },
+    [compactSurfaceLayout, setDockOpen],
+  );
+  const handleDockOpenChange = useCallback(
+    (next: boolean) => {
+      setDockOpen(next);
+      if (next && compactSurfaceLayout) {
+        setSessionRailOpen(false);
+        setActiveGeneratedArtifact(null);
+      }
+    },
+    [compactSurfaceLayout, setDockOpen],
+  );
+  const handleNavigateSurface = useCallback(
+    (
+      nextSurface: ChatMode,
+      options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
+    ) => {
+      const nextArtifactId =
+        options && Object.prototype.hasOwnProperty.call(options, "artifactId")
+          ? (options.artifactId ?? undefined)
+          : (activeGeneratedArtifact?.artifactId ?? undefined);
+      onNavigateSurface?.(nextSurface, {
+        sessionId: options?.sessionId ?? selectedSessionId,
+        turnId: options?.turnId ?? selectedTurnId,
+        artifactId: nextArtifactId,
+      });
+    },
+    [activeGeneratedArtifact?.artifactId, onNavigateSurface, selectedSessionId, selectedTurnId],
+  );
+
+  const handleCloseGeneratedArtifact = useCallback(() => {
+    setActiveGeneratedArtifact(null);
+    handleNavigateSurface(messageMode, {
+      sessionId: selectedSessionId,
+      turnId: selectedTurnId,
+      artifactId: null,
+    });
+  }, [handleNavigateSurface, messageMode, selectedSessionId, selectedTurnId]);
+
+  const handleOpenGeneratedArtifactFromTurn = useCallback(
+    async (turnId: string, options?: { supersedeLatest?: boolean }) => {
+      if (!selectedSessionId) {
+        return;
+      }
+      const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
+      const existingArtifactId = targetTurn?.generatedArtifacts?.[0]?.artifactId;
+      const artifact =
+        existingArtifactId && !options?.supersedeLatest
+          ? (await fetchChatGeneratedArtifact(existingArtifactId)).item
+          : (
+              await createChatGeneratedArtifact(selectedSessionId, turnId, {
+                supersedeLatest: options?.supersedeLatest ?? false,
+              })
+            ).item;
+      if (compactSurfaceLayout) {
+        setSessionRailOpen(false);
+        setDockOpen(false);
+      }
+      setActiveGeneratedArtifact(artifact);
+      setSelectedTurnId(artifact.turnId);
+      await loadSessionCoreState(selectedSessionId, {
+        background: true,
+        includeThread: true,
+      });
+      setGeneratedArtifacts((current) =>
+        current
+          ? {
+              ...current,
+              items: [artifact, ...current.items.filter((item) => item.artifactId !== artifact.artifactId)],
+            }
+          : current,
+      );
+      handleNavigateSurface(messageMode, {
+        sessionId: selectedSessionId,
+        turnId: artifact.turnId,
+        artifactId: artifact.artifactId,
+      });
+      if (options?.supersedeLatest) {
+        pushLocalNotice("Saved a new generated artifact version.", "success");
+      }
+    },
+    [
+      compactSurfaceLayout,
+      handleNavigateSurface,
+      loadSessionCoreState,
+      messageMode,
+      pushLocalNotice,
+      selectedSessionId,
+      setDockOpen,
+      setGeneratedArtifacts,
+      thread?.turns,
+    ],
+  );
+
+  const handleRemoveThreadKnowledge = useCallback(
+    async (attachmentId: string) => {
+      if (!selectedSessionId) {
+        return;
+      }
+      await removeThreadKnowledgeAttachment(selectedSessionId, attachmentId);
+      await loadSessionCoreState(selectedSessionId, {
+        background: true,
+        includeThread: false,
+      });
+      setThreadKnowledgeAttachments((current) =>
+        current
+          ? {
+              items: current.items.filter((item) => item.attachmentId !== attachmentId),
+            }
+          : current,
+      );
+      pushLocalNotice("Removed thread knowledge attachment.", "success");
+    },
+    [loadSessionCoreState, pushLocalNotice, selectedSessionId, setThreadKnowledgeAttachments],
+  );
+
+  const handleExportSessionSnapshot = useCallback(() => {
+    if (typeof window === "undefined" || !selectedSession) {
+      return;
+    }
+    const snapshot = {
+      exportedAt: new Date().toISOString(),
+      session: selectedSession,
+      mode: messageMode,
+      prefs,
+      binding,
+      thread,
+    };
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${(selectedSession.title?.trim() || selectedSession.sessionId).replace(/[^a-z0-9_-]+/gi, "-")}-snapshot.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    pushLocalNotice("Session snapshot exported locally.", "success");
+  }, [binding, messageMode, prefs, pushLocalNotice, selectedSession, thread]);
 
   const handleRunCodeHelper = useCallback(
     async (language: string, source: string) => {
@@ -1022,22 +1386,170 @@ export function ChatPage({
     },
     [prefsRef, selectedSession, setPrefs],
   );
+  const handleSetPendingAttachmentMode = useCallback((attachmentId: string, mode: PendingAttachmentDocumentMode) => {
+    setPendingAttachmentModes((current) => ({
+      ...current,
+      [attachmentId]: mode,
+    }));
+  }, []);
+  const attachPendingKnowledgeSources = useCallback(async () => {
+    const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
+    const requiresThreadKnowledge =
+      pendingAttachments.some((attachment) => {
+        const mode = pendingAttachmentModes[attachment.attachmentId] ?? "message";
+        return isDocumentAttachment(attachment) && mode !== "message";
+      }) || normalizedKnowledgeUrl.length > 0;
+    if (!requiresThreadKnowledge) {
+      return;
+    }
+    const session = await ensureSession();
+    const existingKeys = new Set(
+      (threadKnowledgeAttachments?.items ?? []).map((item) =>
+        item.chatAttachmentId
+          ? `${item.chatAttachmentId}:${item.retrievalMode}`
+          : `url:${item.sourceRef.trim().toLowerCase()}:${item.retrievalMode}`,
+      ),
+    );
+    const nextItems: ThreadKnowledgeAttachmentRecord[] = [...(threadKnowledgeAttachments?.items ?? [])];
+
+    for (const attachment of pendingAttachments) {
+      if (!isDocumentAttachment(attachment)) {
+        continue;
+      }
+      const mode = pendingAttachmentModes[attachment.attachmentId] ?? "message";
+      if (mode === "message") {
+        continue;
+      }
+      if (mode === "full_text" && !canReadAttachmentInFull(attachment)) {
+        throw new Error(`${attachment.fileName} is not ready for full-text context yet. Use retrieval instead.`);
+      }
+      const key = `${attachment.attachmentId}:${mode}`;
+      if (existingKeys.has(key)) {
+        continue;
+      }
+      const response = await attachThreadKnowledgeAttachment(session.sessionId, {
+        chatAttachmentId: attachment.attachmentId,
+        title: attachment.fileName,
+        retrievalMode: mode,
+      });
+      existingKeys.add(key);
+      nextItems.unshift(response.item);
+    }
+
+    if (normalizedKnowledgeUrl) {
+      const urlKey = `url:${normalizedKnowledgeUrl.toLowerCase()}:${knowledgeUrlMode}`;
+      if (!existingKeys.has(urlKey)) {
+        const response = await attachThreadKnowledgeAttachment(session.sessionId, {
+          url: normalizedKnowledgeUrl,
+          title: normalizedKnowledgeUrl,
+          retrievalMode: knowledgeUrlMode,
+        });
+        nextItems.unshift(response.item);
+      }
+      setKnowledgeUrlDraft("");
+    }
+
+    setThreadKnowledgeAttachments({ items: nextItems });
+  }, [
+    ensureSession,
+    knowledgeUrlDraft,
+    knowledgeUrlMode,
+    pendingAttachmentModes,
+    pendingAttachments,
+    setThreadKnowledgeAttachments,
+    threadKnowledgeAttachments?.items,
+  ]);
+  const handleSendWithKnowledge = useCallback(async () => {
+    try {
+      await attachPendingKnowledgeSources();
+      await handleSend();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
+    }
+  }, [attachPendingKnowledgeSources, handleSend, setError]);
+  const handleAttachKnowledgeUrl = useCallback(async () => {
+    const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
+    if (!normalizedKnowledgeUrl) {
+      return;
+    }
+    try {
+      const session = await ensureSession();
+      const response = await attachThreadKnowledgeAttachment(session.sessionId, {
+        url: normalizedKnowledgeUrl,
+        title: normalizedKnowledgeUrl,
+        retrievalMode: knowledgeUrlMode,
+      });
+      setThreadKnowledgeAttachments((current) => ({
+        items: [response.item, ...(current?.items ?? [])],
+      }));
+      setKnowledgeUrlDraft("");
+      pushLocalNotice("Attached a thread knowledge source.", "success");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to attach thread knowledge source.");
+    }
+  }, [ensureSession, knowledgeUrlDraft, knowledgeUrlMode, pushLocalNotice, setError, setThreadKnowledgeAttachments]);
+  const handleApplyPreset = useCallback(async () => {
+    const preset = presetProfiles.find((item) => item.agentId === selectedPresetId);
+    if (!preset) {
+      return;
+    }
+    const patch: ChatSessionPrefsPatch = {
+      providerId: preset.preferredProviderId,
+      model: preset.preferredModel,
+      toolAutonomy: preset.toolsPosture,
+    };
+    const hasPatch = Object.values(patch).some((value) => value !== undefined);
+    if (hasPatch) {
+      await handlePrefPatch(patch);
+    }
+    if (preset.promptFraming) {
+      setDraft((current) =>
+        current.trim() ? `${preset.promptFraming}\n\n${current.trim()}` : (preset.promptFraming ?? ""),
+      );
+    }
+    const missingKnowledgeAttachmentIds = (preset.knowledgeAttachmentIds ?? []).filter(
+      (attachmentId) => !(threadKnowledgeAttachments?.items ?? []).some((item) => item.attachmentId === attachmentId),
+    );
+    if (missingKnowledgeAttachmentIds.length > 0) {
+      const warning =
+        missingKnowledgeAttachmentIds.length === 1
+          ? `Skipped 1 unavailable knowledge default.`
+          : `Skipped ${missingKnowledgeAttachmentIds.length} unavailable knowledge defaults.`;
+      setPresetApplyWarning(warning);
+      pushLocalNotice(warning, "warning");
+    } else {
+      setPresetApplyWarning(null);
+    }
+    if (preset.routeHint && preset.routeHint !== messageMode) {
+      handleNavigateSurface(preset.routeHint);
+    }
+    pushLocalNotice(`Applied ${preset.label}.`, "success");
+  }, [
+    handleNavigateSurface,
+    handlePrefPatch,
+    messageMode,
+    presetProfiles,
+    pushLocalNotice,
+    setPresetApplyWarning,
+    selectedPresetId,
+    threadKnowledgeAttachments?.items,
+  ]);
 
   const handleRevealSelectedTurnDetails = useCallback(() => {
     if (!selectedTurn) {
       return;
     }
     setSelectedTurnId(selectedTurn.turnId);
-    setDockOpen(true);
-  }, [selectedTurn, setDockOpen]);
+    handleDockOpenChange(true);
+  }, [handleDockOpenChange, selectedTurn]);
   const handleRevealActiveTurnDetails = useCallback(() => {
     const nextTurn = activeWorkflowTurn ?? selectedTurn;
     if (!nextTurn) {
       return;
     }
     setSelectedTurnId(nextTurn.turnId);
-    setDockOpen(true);
-  }, [activeWorkflowTurn, selectedTurn, setDockOpen]);
+    handleDockOpenChange(true);
+  }, [activeWorkflowTurn, handleDockOpenChange, selectedTurn]);
 
   const handleSelectBranchTurnAndSync = useCallback(
     async (turnId: string) => {
@@ -1049,6 +1561,7 @@ export function ChatPage({
     [handleSelectBranchTurn],
   );
   const {
+    uploadAttachments,
     handleComposerKeyDown,
     handleComposerPaste,
     handleDragEnter,
@@ -1057,7 +1570,6 @@ export function ChatPage({
     handleDrop,
     handleDismissError,
     handleCancelEdit,
-    handleToggleDock,
     handleCreateCurrentModeSession,
     handleArchiveWorkspace,
     handleConfirmCapabilitySuggestion,
@@ -1092,6 +1604,46 @@ export function ChatPage({
     setEditingTurnId,
     setDockOpen,
     setArchiveWorkspaceConfirmOpen,
+  });
+  const handleToggleDock = useCallback(() => {
+    handleDockOpenChange(!dockOpen);
+  }, [dockOpen, handleDockOpenChange]);
+  const latestAssistantTurn = useMemo(
+    () => [...(thread?.turns ?? [])].reverse().find((turn) => Boolean(turn.assistantMessage?.content?.trim())) ?? null,
+    [thread?.turns],
+  );
+  const {
+    audioInputRef,
+    voiceBusy,
+    voiceInputAvailable,
+    voiceOutputAvailable,
+    voiceTalkActive,
+    voiceStatusLabel,
+    voiceUnavailableReason,
+    speakResponsesEnabled,
+    setSpeakResponsesEnabled,
+    imageBusy,
+    imageGenerationAvailable,
+    imageEditAvailable,
+    imageRouteLabel,
+    handleToggleVoiceTalk,
+    handleOpenAudioTranscribe,
+    handleAudioFileSelected,
+    handleGenerateImage,
+    handleEditImage,
+  } = useChatMultimodalControls({
+    providerOptions,
+    selectedProviderId,
+    routePreflight: currentRoutePreflight,
+    selectedSessionId,
+    pendingAttachments,
+    draft,
+    latestAssistantMessageId: latestAssistantTurn?.assistantMessage?.messageId,
+    latestAssistantContent: latestAssistantTurn?.assistantMessage?.content,
+    setDraft,
+    setError,
+    pushLocalNotice,
+    uploadAttachments,
   });
 
   const workspaceSummaryText = selectedSession
@@ -1165,6 +1717,9 @@ export function ChatPage({
         isCoworkSurface,
         isCodeSurface,
         dockOpen,
+        handleDockOpenChange,
+        sessionRailOpen,
+        handleSessionRailOpenChange,
         codeModeNeedsProjectBinding,
         workbenchState,
         workbenchTree,
@@ -1178,6 +1733,8 @@ export function ChatPage({
         openWorkbenchFile,
         refreshWorkbench,
         handleRunCodeHelper,
+        activeGeneratedArtifact,
+        handleCloseGeneratedArtifact,
         latestOrchestration,
         orchestrationRun,
         orchestrationCheckpoints,
@@ -1201,6 +1758,9 @@ export function ChatPage({
             projectPath={projectPath}
             historyView={historyView}
             selectedProjectId={selectedProjectId}
+            availableFolders={availableFolders}
+            selectedFolderId={selectedFolderId}
+            selectedTag={selectedTag}
             missionSessions={missionSessions}
             externalSessions={externalSessions}
             selectedSessionId={selectedSessionId}
@@ -1218,7 +1778,9 @@ export function ChatPage({
             onHistoryViewChange={setHistoryView}
             onArchiveWorkspace={handleArchiveWorkspace}
             onSelectProjectId={setSelectedProjectId}
-            onSelectSession={setSelectedSessionId}
+            onSelectFolderId={setSelectedFolderId}
+            onSelectTag={setSelectedTag}
+            onSelectSession={handleSelectSessionFromRail}
             renderSessionLabel={(sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`}
           />
         ),
@@ -1230,6 +1792,7 @@ export function ChatPage({
             trust={sessionTrust}
             dockOpen={dockOpen}
             onToggleDock={handleToggleDock}
+            onNavigateSurface={handleNavigateSurface}
             loading={messagesLoading}
             thread={thread}
             selectedTurnId={selectedTurnId}
@@ -1254,8 +1817,12 @@ export function ChatPage({
             onEditTurn={handleBeginEditTurn}
             onOpenRunDetails={(turnId) => {
               setSelectedTurnId(turnId);
-              setDockOpen(true);
+              handleDockOpenChange(true);
             }}
+            onOpenGeneratedArtifact={(turnId) => void handleOpenGeneratedArtifactFromTurn(turnId)}
+            onCreateGeneratedArtifactVersion={(turnId) =>
+              void handleOpenGeneratedArtifactFromTurn(turnId, { supersedeLatest: true })
+            }
             onApprovePending={(allowScope) => void handleApprovePending(allowScope)}
             onDenyPending={() => void handleDenyPending()}
             onSubmitUserInput={(response) => void handleSubmitUserInput(response)}
@@ -1277,6 +1844,17 @@ export function ChatPage({
             commandSuggestions={commandSuggestions}
             commandIndex={commandIndex}
             pendingAttachments={pendingAttachments}
+            pendingAttachmentModes={pendingAttachmentModes}
+            threadKnowledgeAttachments={threadKnowledgeAttachments?.items ?? []}
+            presetOptions={presetProfiles.map((item) => ({
+              value: item.agentId,
+              label: item.label,
+              summary: item.summary,
+              routeHint: item.routeHint,
+              toolsPosture: item.toolsPosture,
+            }))}
+            selectedPresetId={selectedPresetId}
+            presetApplyWarning={presetApplyWarning}
             selectedTurnRecovery={selectedTurnRecovery}
             selectedTurn={selectedTurn}
             selectedSessionId={selectedSessionId}
@@ -1290,6 +1868,7 @@ export function ChatPage({
             activeStreamTurnAssigned={Boolean(activeStreamRef.current?.turnId)}
             composerRef={composerRef}
             fileInputRef={fileInputRef}
+            audioInputRef={audioInputRef}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -1305,12 +1884,41 @@ export function ChatPage({
             onComposerKeyDown={handleComposerKeyDown}
             onComposerPaste={handleComposerPaste}
             onApplyDraftCommand={handleApplyDraftCommand}
+            onPresetChange={setSelectedPresetId}
+            onApplyPreset={() => void handleApplyPreset()}
+            onDismissPresetWarning={() => setPresetApplyWarning(null)}
+            onSetAttachmentMode={handleSetPendingAttachmentMode}
+            onRemoveThreadKnowledgeAttachment={(attachmentId) => void handleRemoveThreadKnowledge(attachmentId)}
+            knowledgeUrlDraft={knowledgeUrlDraft}
+            knowledgeUrlMode={knowledgeUrlMode}
+            onKnowledgeUrlDraftChange={setKnowledgeUrlDraft}
+            onKnowledgeUrlModeChange={setKnowledgeUrlMode}
+            onAttachKnowledgeUrl={() => void handleAttachKnowledgeUrl()}
             onRemoveAttachment={handleRemoveAttachment}
             onAttachFiles={() => fileInputRef.current?.click()}
             onUploadFiles={handleUploadFiles}
             onRunQuickResearch={() => void handleRunQuickResearch()}
+            voiceBusy={voiceBusy}
+            voiceInputAvailable={voiceInputAvailable}
+            voiceOutputAvailable={voiceOutputAvailable}
+            voiceTalkActive={voiceTalkActive}
+            voiceStatusLabel={voiceStatusLabel}
+            voiceUnavailableReason={voiceUnavailableReason}
+            speakResponsesEnabled={speakResponsesEnabled}
+            imageBusy={imageBusy}
+            imageGenerationAvailable={imageGenerationAvailable}
+            imageEditAvailable={imageEditAvailable}
+            imageRouteLabel={imageRouteLabel}
+            onToggleVoiceTalk={() => void handleToggleVoiceTalk()}
+            onOpenAudioTranscribe={handleOpenAudioTranscribe}
+            onAudioFileSelected={handleAudioFileSelected}
+            onToggleSpeakResponses={() => setSpeakResponsesEnabled((current) => !current)}
+            onGenerateImage={() => void handleGenerateImage()}
+            onEditImage={() => void handleEditImage()}
+            activeGeneratedArtifact={activeGeneratedArtifact}
+            onCloseGeneratedArtifact={handleCloseGeneratedArtifact}
             onStopActiveTurn={() => void handleStopActiveTurn()}
-            onSend={() => void handleSend()}
+            onSend={() => void handleSendWithKnowledge()}
           />
         ) : (
           <MissionControlEmptyState
@@ -1353,6 +1961,7 @@ export function ChatPage({
             selectedSessionId={selectedSessionId}
             showTracePanel={showTracePanel}
             selectedTurn={selectedTurn}
+            activeGeneratedArtifact={activeGeneratedArtifact}
             routePreflight={currentRoutePreflight}
             providerLabelById={providerLabelById}
             showSuggestionsPanel={showSuggestionsPanel}
@@ -1394,13 +2003,20 @@ export function ChatPage({
             onAcceptDelegation={handleAcceptDelegation}
             onRebuildLearnedMemory={handleRebuildLearnedMemory}
             onUpdateMemoryStatus={handleMemoryStatusUpdate}
+            onCloseGeneratedArtifact={handleCloseGeneratedArtifact}
             onRenameTitleChange={setRenameTitle}
             renameTitle={renameTitle}
+            folderName={folderName}
+            onFolderNameChange={setFolderName}
+            tagsValue={tagsValue}
+            onTagsValueChange={setTagsValue}
             onRenameSession={handleRenameSession}
+            onSaveOrganization={handleSaveOrganization}
             onTogglePinSession={handleTogglePinSession}
             onToggleArchiveSession={handleToggleArchiveSession}
             onDeleteSession={() => handleDeleteSession(formatSessionLabel(selectedSession))}
             onAssignProject={handleAssignProject}
+            onExportSnapshot={handleExportSessionSnapshot}
             onIntegrationConnectionIdChange={setIntegrationConnectionId}
             onIntegrationTargetChange={setIntegrationTarget}
             onSaveExternalBinding={handleSaveExternalBinding}
@@ -1460,6 +2076,9 @@ function renderWorkSurface(input: {
   isCoworkSurface: boolean;
   isCodeSurface: boolean;
   dockOpen: boolean;
+  handleDockOpenChange: (next: boolean) => void;
+  sessionRailOpen: boolean;
+  handleSessionRailOpenChange: (next: boolean) => void;
   codeModeNeedsProjectBinding: boolean;
   workbenchState: ReturnType<typeof useChatDockWorkbenchController>["workbenchState"];
   workbenchTree: ReturnType<typeof useChatDockWorkbenchController>["workbenchTree"];
@@ -1473,6 +2092,8 @@ function renderWorkSurface(input: {
   openWorkbenchFile: (relativePath: string) => Promise<void>;
   refreshWorkbench: () => Promise<void>;
   handleRunCodeHelper: (language: string, source: string) => Promise<void>;
+  activeGeneratedArtifact: ChatGeneratedArtifactRecord | null;
+  handleCloseGeneratedArtifact: () => void;
   latestOrchestration: ReturnType<typeof useChatDockWorkbenchController>["latestOrchestration"];
   orchestrationRun: ReturnType<typeof useChatDockWorkbenchController>["orchestrationRun"];
   orchestrationCheckpoints: ReturnType<typeof useChatDockWorkbenchController>["orchestrationCheckpoints"];
@@ -1496,7 +2117,10 @@ function renderWorkSurface(input: {
     primaryColumn: input.primaryColumn,
     contextDock: input.contextDock,
     dockOpen: input.selectedSession ? input.dockOpen : false,
+    onDockOpenChange: input.handleDockOpenChange,
     hasActiveSession: Boolean(input.selectedSession),
+    sessionRailOpen: input.sessionRailOpen,
+    onSessionRailOpenChange: input.handleSessionRailOpenChange,
   };
 
   if (input.selectedSession && input.isCoworkSurface) {
@@ -1536,6 +2160,8 @@ function renderWorkSurface(input: {
           loading: input.workbenchLoading,
           busy: input.workbenchBusy,
           error: input.workbenchError,
+          generatedArtifact: input.activeGeneratedArtifact,
+          onCloseGeneratedArtifact: input.handleCloseGeneratedArtifact,
           onCreateWorktree: () => void input.createWorkbenchWorktree(input.workbenchState?.baseRef),
           onSelectFile: (relativePath) => void input.openWorkbenchFile(relativePath),
           onRefresh: () => void input.refreshWorkbench(),
@@ -1554,7 +2180,10 @@ function renderWorkSurface(input: {
         workflowColumn={input.primaryColumn}
         contextDock={input.contextDock}
         dockOpen={false}
+        onDockOpenChange={input.handleDockOpenChange}
         hasActiveSession={false}
+        sessionRailOpen={input.sessionRailOpen}
+        onSessionRailOpenChange={input.handleSessionRailOpenChange}
       />
     );
   }

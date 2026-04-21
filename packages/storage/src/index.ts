@@ -52,10 +52,12 @@ import { ChatConversationSummaryRepository } from "./chat-conversation-summary-r
 import { ChatSpecialistCandidateRepository } from "./chat-specialist-candidate-repo.js";
 import { ChatToolRunRepository } from "./chat-tool-run-repo.js";
 import { ChatToolArtifactRepository } from "./chat-tool-artifact-repo.js";
+import { ChatGeneratedArtifactRepository } from "./chat-generated-artifact-repo.js";
 import { ChatInlineApprovalRepository } from "./chat-inline-approval-repo.js";
 import { ChatDelegationRunRepository } from "./chat-delegation-run-repo.js";
 import { ChatDelegationStepRepository } from "./chat-delegation-step-repo.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
+import { ChatThreadKnowledgeAttachmentRepository } from "./chat-thread-knowledge-attachment-repo.js";
 import { SystemSettingsRepository } from "./system-settings-repo.js";
 import { ResearchRunRepository } from "./research-run-repo.js";
 import { ResearchSourceRepository } from "./research-source-repo.js";
@@ -148,9 +150,11 @@ export class Storage {
   public readonly chatSpecialistCandidates: ChatSpecialistCandidateRepository;
   public readonly chatToolRuns: ChatToolRunRepository;
   public readonly chatToolArtifacts: ChatToolArtifactRepository;
+  public readonly chatGeneratedArtifacts: ChatGeneratedArtifactRepository;
   public readonly chatInlineApprovals: ChatInlineApprovalRepository;
   public readonly chatDelegationRuns: ChatDelegationRunRepository;
   public readonly chatDelegationSteps: ChatDelegationStepRepository;
+  public readonly chatThreadKnowledgeAttachments: ChatThreadKnowledgeAttachmentRepository;
   public readonly systemSettings: SystemSettingsRepository;
   public readonly researchRuns: ResearchRunRepository;
   public readonly researchSources: ResearchSourceRepository;
@@ -238,9 +242,11 @@ export class Storage {
     this.chatSpecialistCandidates = new ChatSpecialistCandidateRepository(this.db);
     this.chatToolRuns = new ChatToolRunRepository(this.db);
     this.chatToolArtifacts = new ChatToolArtifactRepository(this.db);
+    this.chatGeneratedArtifacts = new ChatGeneratedArtifactRepository(this.db);
     this.chatInlineApprovals = new ChatInlineApprovalRepository(this.db);
     this.chatDelegationRuns = new ChatDelegationRunRepository(this.db);
     this.chatDelegationSteps = new ChatDelegationStepRepository(this.db);
+    this.chatThreadKnowledgeAttachments = new ChatThreadKnowledgeAttachmentRepository(this.db);
     this.systemSettings = new SystemSettingsRepository(this.db);
     this.researchRuns = new ResearchRunRepository(this.db);
     this.researchSources = new ResearchSourceRepository(this.db);
@@ -402,6 +408,8 @@ export class Storage {
         "transcript_outbox",
         "chat_inline_approvals",
         "chat_stream_events",
+        "chat_thread_knowledge_attachments",
+        "chat_generated_artifacts",
         "chat_tool_artifacts",
         "chat_tool_runs",
         "chat_specialist_candidates",
@@ -419,6 +427,7 @@ export class Storage {
       for (const table of simpleSessionDeletes) {
         this.db.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sid);
       }
+      this.knowledge.deleteNamespace(`chat-session:${sid}:knowledge`);
 
       this.db
         .prepare(
@@ -519,9 +528,11 @@ export * from "./chat-execution-plan-repo.js";
 export * from "./chat-conversation-summary-repo.js";
 export * from "./chat-tool-run-repo.js";
 export * from "./chat-tool-artifact-repo.js";
+export * from "./chat-generated-artifact-repo.js";
 export * from "./chat-inline-approval-repo.js";
 export * from "./chat-delegation-run-repo.js";
 export * from "./chat-delegation-step-repo.js";
+export * from "./chat-thread-knowledge-attachment-repo.js";
 export * from "./system-settings-repo.js";
 export * from "./research-run-repo.js";
 export * from "./research-source-repo.js";

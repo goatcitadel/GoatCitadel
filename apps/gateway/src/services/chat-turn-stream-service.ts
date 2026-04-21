@@ -705,7 +705,11 @@ export async function* streamPreparedAgentChatTurn(
         },
       });
 
-      for (const citation of orchestrationResult.citations) {
+      const orchestrationCitations = dedupeChatCitations([
+        ...prepared.threadKnowledgeCitations,
+        ...orchestrationResult.citations,
+      ]);
+      for (const citation of orchestrationCitations) {
         yield {
           type: "citation",
           sessionId,
@@ -760,7 +764,7 @@ export async function* streamPreparedAgentChatTurn(
             workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
             truncated: prepared.resolvedGuidance.truncated,
           },
-          citations: orchestrationResult.citations,
+          citations: orchestrationCitations,
         }),
         toolRuns: orchestrationToolRuns,
       };
@@ -872,7 +876,7 @@ export async function* streamPreparedAgentChatTurn(
     let approvalRequired = false;
     let userInputRequired = false;
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
-    const streamCitations: ChatCitationRecord[] = [];
+    const streamCitations: ChatCitationRecord[] = [...prepared.threadKnowledgeCitations];
     for await (const chunk of host.turnRuntime.runStream({
       sessionId,
       turnId,

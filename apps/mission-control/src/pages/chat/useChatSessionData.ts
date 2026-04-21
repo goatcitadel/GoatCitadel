@@ -12,22 +12,27 @@ import {
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
+  fetchChatGeneratedArtifacts,
   fetchChatCommandCatalog,
   fetchChatLearnedMemory,
   fetchChatProjects,
   fetchChatProactiveRuns,
   fetchChatProactiveStatus,
   fetchChatSessionBinding,
+  fetchChatSessionGeneratedArtifacts,
   fetchChatSessionPrefs,
   fetchChatSessions,
   fetchChatSpecialistCandidates,
   fetchChatThread,
+  fetchThreadKnowledgeAttachments,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchSettings,
   fetchSkills,
   type ChatProjectsResponse,
+  type ChatGeneratedArtifactsResponse,
   type ChatSessionsResponse,
+  type ChatThreadKnowledgeAttachmentsResponse,
   type RuntimeSettingsResponse,
 } from "../../api/client";
 import { useRefreshSubscription } from "../../hooks/useRefreshSubscription";
@@ -46,6 +51,7 @@ export type ChatHistoryView = "active" | "archived";
 export function useChatSessionData(input: {
   workspaceId: string;
   historyView: ChatHistoryView;
+  searchQuery: string;
   selectedSessionId: string | null;
   setSelectedSessionId: React.Dispatch<React.SetStateAction<string | null>>;
   runtimeLlmConfig: RuntimeSettingsResponse["llm"] | null;
@@ -57,6 +63,7 @@ export function useChatSessionData(input: {
   const {
     workspaceId,
     historyView,
+    searchQuery,
     selectedSessionId,
     setSelectedSessionId,
     runtimeLlmConfig,
@@ -71,6 +78,9 @@ export function useChatSessionData(input: {
   const [thread, setThread] = useState<ChatThreadResponse | null>(null);
   const [prefs, setPrefs] = useState<ChatSessionPrefsRecord | null>(null);
   const [binding, setBinding] = useState<ChatSessionBindingRecord | null>(null);
+  const [generatedArtifacts, setGeneratedArtifacts] = useState<ChatGeneratedArtifactsResponse | null>(null);
+  const [threadKnowledgeAttachments, setThreadKnowledgeAttachments] =
+    useState<ChatThreadKnowledgeAttachmentsResponse | null>(null);
   const [settings, setSettings] = useState<RuntimeSettingsResponse | null>(null);
   const [commandCatalog, setCommandCatalog] = useState<CommandCatalogItem[]>([]);
   const [proactiveStatus, setProactiveStatus] = useState<ProactivePolicy | null>(null);
@@ -101,7 +111,13 @@ export function useChatSessionData(input: {
       });
       const [nextProjects, nextSessions] = await Promise.all([
         fetchChatProjects("all", 250, workspaceId),
-        fetchChatSessions({ scope: "all", view: nextHistoryView, limit: 250, workspaceId }),
+        fetchChatSessions({
+          scope: "all",
+          view: nextHistoryView,
+          limit: 250,
+          workspaceId,
+          q: searchQuery.trim() || undefined,
+        }),
       ]);
       setProjects(nextProjects);
       setSessions(nextSessions);
@@ -114,7 +130,7 @@ export function useChatSessionData(input: {
           : (nextSessions.items[0]?.sessionId ?? null);
       });
     },
-    [historyView, setSelectedSessionId, workspaceId],
+    [historyView, searchQuery, setSelectedSessionId, workspaceId],
   );
 
   const loadRuntimeCatalog = useCallback(async () => {
@@ -155,10 +171,12 @@ export function useChatSessionData(input: {
         setMessagesLoading(true);
       }
       try {
-        const [nextThread, nextBinding, nextPrefs] = await Promise.all([
+        const [nextThread, nextBinding, nextPrefs, nextArtifacts, nextKnowledgeAttachments] = await Promise.all([
           includeThread ? fetchChatThread(sessionId) : Promise.resolve(undefined),
           fetchChatSessionBinding(sessionId),
           fetchChatSessionPrefs(sessionId),
+          fetchChatSessionGeneratedArtifacts(sessionId),
+          fetchThreadKnowledgeAttachments(sessionId),
         ]);
         if (generation !== loadCoreGenerationRef.current) return;
         if (nextThread) {
@@ -166,6 +184,8 @@ export function useChatSessionData(input: {
         }
         setBinding(nextBinding.item);
         setPrefs(nextPrefs);
+        setGeneratedArtifacts(nextArtifacts);
+        setThreadKnowledgeAttachments(nextKnowledgeAttachments);
       } finally {
         if (!background) {
           setMessagesLoading(false);
@@ -188,17 +208,28 @@ export function useChatSessionData(input: {
         setSecondaryLoading(true);
       }
       try {
-        const [nextProactiveStatus, nextProactiveRuns, nextMemory, nextSpecialists] = await Promise.all([
+        const [
+          nextProactiveStatus,
+          nextProactiveRuns,
+          nextMemory,
+          nextSpecialists,
+          nextArtifacts,
+          nextKnowledgeAttachments,
+        ] = await Promise.all([
           fetchChatProactiveStatus(sessionId),
           fetchChatProactiveRuns(sessionId, 30),
           fetchChatLearnedMemory(sessionId, 80),
           fetchChatSpecialistCandidates(sessionId, 80),
+          fetchChatGeneratedArtifacts({ sessionId, limit: 200 }),
+          fetchThreadKnowledgeAttachments(sessionId),
         ]);
         if (generation !== loadSecondaryGenerationRef.current) return;
         setProactiveStatus(nextProactiveStatus.policy);
         setProactiveRuns(nextProactiveRuns.items);
         setLearnedMemory(nextMemory.items);
         setSpecialistCandidates(nextSpecialists.items);
+        setGeneratedArtifacts(nextArtifacts);
+        setThreadKnowledgeAttachments(nextKnowledgeAttachments);
       } finally {
         if (!background) {
           setSecondaryLoading(false);
@@ -347,6 +378,8 @@ export function useChatSessionData(input: {
       setThread(null);
       setPrefs(null);
       setBinding(null);
+      setGeneratedArtifacts(null);
+      setThreadKnowledgeAttachments(null);
       setProactiveStatus(null);
       setProactiveRuns([]);
       setLearnedMemory([]);
@@ -359,6 +392,8 @@ export function useChatSessionData(input: {
       setThread(null);
       setPrefs(null);
       setBinding(null);
+      setGeneratedArtifacts(null);
+      setThreadKnowledgeAttachments(null);
       setProactiveStatus(null);
       setProactiveRuns([]);
       setLearnedMemory([]);
@@ -384,6 +419,10 @@ export function useChatSessionData(input: {
     setPrefs,
     binding,
     setBinding,
+    generatedArtifacts,
+    setGeneratedArtifacts,
+    threadKnowledgeAttachments,
+    setThreadKnowledgeAttachments,
     settings,
     setSettings,
     commandCatalog,

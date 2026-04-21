@@ -108,4 +108,18 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_execution_plan_steps/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS durable_run_id TEXT/);
   });
+
+  it("repairs chat session organization and generated artifact schema for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 17);
+
+    assert.equal(repairMigration?.name, "chat_session_and_agent_refresh_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE agent_profiles/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS preset_defaults_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_session_meta/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS folder_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS folder_name TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS tags_json TEXT NOT NULL DEFAULT '\[\]'/);
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS chat_generated_artifacts \(/);
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS chat_thread_knowledge_attachments \(/);
+  });
 });

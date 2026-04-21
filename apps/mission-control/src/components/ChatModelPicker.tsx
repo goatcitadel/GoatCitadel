@@ -5,6 +5,12 @@ export interface ChatModelProviderOption {
   label: string;
   baseUrl?: string;
   defaultModel?: string;
+  capabilities?: {
+    voiceInput?: boolean;
+    voiceOutput?: boolean;
+    imageGenerate?: boolean;
+    imageEdit?: boolean;
+  };
   models: string[];
   disabled?: boolean;
   availabilityLabel?: string;

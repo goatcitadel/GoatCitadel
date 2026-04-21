@@ -1,4 +1,5 @@
 import type {
+  ChatGeneratedArtifactReference,
   ChatMessageRecord,
   ChatThreadResponse,
   ChatThreadTurnRecord,
@@ -9,6 +10,7 @@ interface ThreadTurnInput {
   trace: ChatTurnTraceRecord;
   userMessage?: ChatMessageRecord;
   assistantMessage?: ChatMessageRecord;
+  generatedArtifacts?: ChatGeneratedArtifactReference[];
 }
 
 interface ThreadNode extends ThreadTurnInput {
@@ -45,9 +47,8 @@ export function buildChatThreadResponse(input: {
   }
 
   const byId = new Map(nodes.map((node) => [node.turnId, node]));
-  const validActiveLeafTurnId = input.activeLeafTurnId && byId.has(input.activeLeafTurnId)
-    ? input.activeLeafTurnId
-    : nodes.at(-1)?.turnId;
+  const validActiveLeafTurnId =
+    input.activeLeafTurnId && byId.has(input.activeLeafTurnId) ? input.activeLeafTurnId : nodes.at(-1)?.turnId;
   if (!validActiveLeafTurnId) {
     return {
       sessionId: input.sessionId,
@@ -72,10 +73,15 @@ export function buildChatThreadResponse(input: {
   }
 
   const selectedPathTurnIds = buildSelectedPathTurnIds(
-    new Map(nodes.map((node) => [node.turnId, {
-      turnId: node.turnId,
-      parentTurnId: node.trace.parentTurnId,
-    }])),
+    new Map(
+      nodes.map((node) => [
+        node.turnId,
+        {
+          turnId: node.turnId,
+          parentTurnId: node.trace.parentTurnId,
+        },
+      ]),
+    ),
     validActiveLeafTurnId,
   );
   const newestLeafCache = new Map<string, string>();
@@ -95,6 +101,7 @@ export function buildChatThreadResponse(input: {
         trace: node.trace,
         toolRuns: node.trace.toolRuns,
         citations: node.trace.citations,
+        generatedArtifacts: node.generatedArtifacts,
         branch: {
           siblingTurnIds,
           activeSiblingIndex: Math.max(0, siblingTurnIds.indexOf(node.turnId)),
@@ -154,8 +161,8 @@ export function resolveNewestLeafTurnId(
     const candidateTurnId = resolveNewestLeafTurnId(childTurnId, turnsById, childrenByTurnId, cache);
     const candidateStartedAtMs = turnsById.get(candidateTurnId)?.startedAtMs ?? 0;
     if (
-      candidateStartedAtMs > bestStartedAtMs
-      || (candidateStartedAtMs === bestStartedAtMs && candidateTurnId.localeCompare(bestTurnId) > 0)
+      candidateStartedAtMs > bestStartedAtMs ||
+      (candidateStartedAtMs === bestStartedAtMs && candidateTurnId.localeCompare(bestTurnId) > 0)
     ) {
       bestTurnId = candidateTurnId;
       bestStartedAtMs = candidateStartedAtMs;

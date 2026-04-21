@@ -34,6 +34,8 @@ export function ChatThreadShell(props: {
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifactVersion: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onSubmitUserInput: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
@@ -62,6 +64,8 @@ export function ChatThreadShell(props: {
     onRetryTurn,
     onEditTurn,
     onOpenRunDetails,
+    onOpenGeneratedArtifact,
+    onCreateGeneratedArtifactVersion,
     onApprovePending,
     onDenyPending,
     onSubmitUserInput,
@@ -92,6 +96,8 @@ export function ChatThreadShell(props: {
           onRetryTurn={onRetryTurn}
           onEditTurn={onEditTurn}
           onOpenRunDetails={onOpenRunDetails}
+          onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+          onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
         />
       </div>
 

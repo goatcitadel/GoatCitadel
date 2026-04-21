@@ -149,6 +149,9 @@ import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCancelTurnResponse,
   ChatCitationRecord,
+  ChatGeneratedArtifactKind,
+  ChatGeneratedArtifactRecord,
+  ChatGeneratedArtifactSourceSurface,
   ChatDelegateAcceptRequest,
   ChatDelegateRequest,
   ChatDelegateSuggestRequest,
@@ -208,6 +211,7 @@ import type {
   MemoryContextComposeRequest,
   MemoryContextPack,
   MemoryRelationScope,
+  ThreadKnowledgeAttachmentRecord,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
   MemoryMaintenanceProvenanceRecord,
@@ -436,6 +440,8 @@ import {
   shouldAllowCrossProviderFallback,
 } from "./chat-session-utils.js";
 import { buildChatThreadResponse, buildSelectedPathTurnIds, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
+import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
+import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js";
 import { executeOrchestrationPlan } from "../orchestration/engine.js";
 import { CHAT_MODE_POLICY } from "../orchestration/policies/chat-policy.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
@@ -2121,6 +2127,30 @@ export class GatewayService {
     };
   }
 
+  public listChatGeneratedArtifacts(
+    input: {
+      sessionId?: string;
+      workspaceId?: string;
+      sourceSurface?: ChatGeneratedArtifactSourceSurface;
+      kind?: ChatGeneratedArtifactKind;
+      limit?: number;
+    } = {},
+  ): ChatGeneratedArtifactRecord[] {
+    return chatGeneratedArtifactService.listChatGeneratedArtifacts(this, input);
+  }
+
+  public getChatGeneratedArtifact(artifactId: string): ChatGeneratedArtifactRecord {
+    return chatGeneratedArtifactService.getChatGeneratedArtifact(this, artifactId);
+  }
+
+  public createChatGeneratedArtifactFromTurn(input: {
+    sessionId: string;
+    turnId: string;
+    supersedeLatest?: boolean;
+  }): ChatGeneratedArtifactRecord {
+    return chatGeneratedArtifactService.createChatGeneratedArtifactFromTurn(this, input);
+  }
+
   public listDevDiagnostics(input?: {
     level?: "debug" | "info" | "warn" | "error";
     category?: string;
@@ -2558,7 +2588,10 @@ export class GatewayService {
     return chatSessionService.createChatSession(this, input);
   }
 
-  public updateChatSession(sessionId: string, input: { title?: string }): ChatSessionRecord {
+  public updateChatSession(
+    sessionId: string,
+    input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
+  ): ChatSessionRecord {
     return chatSessionService.updateChatSession(this, sessionId, input);
   }
 
@@ -2761,6 +2794,9 @@ export class GatewayService {
   public async getChatThread(sessionId: string): Promise<ChatThreadResponse> {
     this.getSession(sessionId);
     const state = await this.loadChatTurnSessionState(sessionId);
+    const generatedArtifactsByTurnId = this.storage.chatGeneratedArtifacts.listByTurnIds(
+      state.traces.map((trace) => trace.turnId),
+    );
     return buildChatThreadResponse({
       sessionId,
       activeLeafTurnId: state.activeLeafTurnId,
@@ -2768,6 +2804,9 @@ export class GatewayService {
         trace,
         userMessage: state.messagesById.get(trace.userMessageId),
         assistantMessage: trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
+        generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
+          chatGeneratedArtifactService.buildGeneratedArtifactReference,
+        ),
       })),
     });
   }
@@ -2775,6 +2814,9 @@ export class GatewayService {
   public async selectChatBranchTurn(sessionId: string, turnId: string): Promise<ChatThreadResponse> {
     this.getSession(sessionId);
     const state = await this.loadChatTurnSessionState(sessionId);
+    const generatedArtifactsByTurnId = this.storage.chatGeneratedArtifacts.listByTurnIds(
+      state.traces.map((trace) => trace.turnId),
+    );
     const target = state.traces.find((trace) => trace.turnId === turnId);
     if (!target) {
       throw new Error(`Chat turn ${turnId} not found in session ${sessionId}`);
@@ -2818,8 +2860,29 @@ export class GatewayService {
         trace,
         userMessage: state.messagesById.get(trace.userMessageId),
         assistantMessage: trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
+        generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
+          chatGeneratedArtifactService.buildGeneratedArtifactReference,
+        ),
       })),
     });
+  }
+
+  public listChatThreadKnowledgeAttachments(sessionId: string): ThreadKnowledgeAttachmentRecord[] {
+    return chatThreadKnowledgeService.listChatThreadKnowledgeAttachments(this, sessionId);
+  }
+
+  public async attachChatThreadKnowledgeAttachment(
+    sessionId: string,
+    input: chatThreadKnowledgeService.AttachThreadKnowledgeAttachmentInput,
+  ): Promise<ThreadKnowledgeAttachmentRecord> {
+    return chatThreadKnowledgeService.attachChatThreadKnowledgeAttachment(this, sessionId, input);
+  }
+
+  public removeChatThreadKnowledgeAttachment(
+    sessionId: string,
+    attachmentId: string,
+  ): { deleted: boolean; attachmentId: string } {
+    return chatThreadKnowledgeService.removeChatThreadKnowledgeAttachment(this, sessionId, attachmentId);
   }
 
   public getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord {
@@ -11149,10 +11212,14 @@ export class GatewayService {
     const session = this.getSession(sessionId);
     const projectLink = this.storage.chatSessionProjects.get(sessionId);
     const project = projectLink ? this.storage.chatProjects.find(projectLink.projectId) : undefined;
+    const generatedArtifacts = this.storage.chatGeneratedArtifacts
+      .listBySession(sessionId, 12)
+      .slice(0, 6)
+      .map(chatGeneratedArtifactService.buildGeneratedArtifactReference);
     const meta =
       this.storage.chatSessionMeta.get(sessionId) ??
       this.storage.chatSessionMeta.ensure(sessionId, undefined, project?.workspaceId ?? DEFAULT_WORKSPACE_ID);
-    return toChatSessionRecord(session, meta, project);
+    return toChatSessionRecord(session, meta, project, { generatedArtifacts });
   }
 
   /** @internal */ public isReplayScratchSession(sessionId: string): boolean {
@@ -11190,6 +11257,13 @@ export class GatewayService {
       room: third,
       threadId: fourth,
     };
+  }
+
+  /** @internal */ public resolveThreadKnowledgeContext(
+    sessionId: string,
+    query: string,
+  ): Promise<chatThreadKnowledgeService.ResolvedThreadKnowledgeContext> {
+    return chatThreadKnowledgeService.resolveThreadKnowledgeContext(this, sessionId, query);
   }
 
   private async buildLlmMessagesFromTranscript(
@@ -12142,8 +12216,12 @@ export function toChatSessionRecord(
     pinned: boolean;
     lifecycleStatus: "active" | "archived";
     archivedAt?: string;
+    folderId?: string;
+    folderName?: string;
+    tags?: string[];
   },
   project?: ChatProjectRecord,
+  extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "generatedArtifacts">>,
 ): ChatSessionRecord {
   return {
     sessionId: session.sessionId,
@@ -12156,8 +12234,14 @@ export function toChatSessionRecord(
     pinned: meta.pinned,
     lifecycleStatus: meta.lifecycleStatus,
     archivedAt: meta.archivedAt,
+    folderId: meta.folderId,
+    folderName: meta.folderName,
+    tags: meta.tags ?? [],
     projectId: project?.projectId,
     projectName: project?.name,
+    searchHits: extras?.searchHits,
+    lastHandoff: extras?.lastHandoff,
+    generatedArtifacts: extras?.generatedArtifacts,
     channel: session.channel,
     account: session.account,
     updatedAt: session.updatedAt,
@@ -14357,7 +14441,16 @@ export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitati
   const deduped: ChatCitationRecord[] = [];
   const seen = new Map<string, number>();
   for (const citation of citations) {
-    const key = citation.url.trim().toLowerCase();
+    const key = citation.knowledge
+      ? [
+          "knowledge",
+          citation.knowledge.attachmentId,
+          citation.knowledge.chunkId ?? citation.knowledge.sectionLabel ?? citation.knowledge.sourceRef,
+          citation.knowledge.retrievalMode,
+        ]
+          .join(":")
+          .toLowerCase()
+      : citation.url.trim().toLowerCase();
     const existingIndex = seen.get(key);
     if (existingIndex === undefined) {
       seen.set(key, deduped.length);
@@ -14377,6 +14470,7 @@ export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitati
       title: existing.title ?? citation.title,
       snippet: existing.snippet ?? citation.snippet,
       sourceType: existing.sourceType ?? citation.sourceType,
+      knowledge: existing.knowledge ?? citation.knowledge,
     };
   }
   return deduped;
@@ -14715,6 +14809,15 @@ function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
     typeof value.url === "string" &&
     (value.title === undefined || typeof value.title === "string") &&
     (value.snippet === undefined || typeof value.snippet === "string") &&
+    (value.knowledge === undefined ||
+      (isRecord(value.knowledge) &&
+        typeof value.knowledge.attachmentId === "string" &&
+        typeof value.knowledge.sourceRef === "string" &&
+        typeof value.knowledge.title === "string" &&
+        (value.knowledge.sectionLabel === undefined || typeof value.knowledge.sectionLabel === "string") &&
+        (value.knowledge.chunkId === undefined || typeof value.knowledge.chunkId === "string") &&
+        (value.knowledge.excerpt === undefined || typeof value.knowledge.excerpt === "string") &&
+        (value.knowledge.retrievalMode === "full_text" || value.knowledge.retrievalMode === "retrieval"))) &&
     (value.sourceType === undefined ||
       value.sourceType === "web" ||
       value.sourceType === "file" ||

@@ -1,5 +1,7 @@
 import type { ChatMode } from "@goatcitadel/contracts";
 import type { ReactNode } from "react";
+import { Drawer, DrawerContent, Sheet, SheetContent } from "../../components/ui";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { getMissionControlSurfaceConfig } from "./surface-config";
 
 export function ChatSurfaceLayout({
@@ -9,7 +11,10 @@ export function ChatSurfaceLayout({
   workflowColumn,
   contextDock,
   dockOpen,
+  onDockOpenChange,
   hasActiveSession = true,
+  sessionRailOpen = false,
+  onSessionRailOpenChange,
 }: {
   mode: ChatMode;
   sessionRail: ReactNode;
@@ -17,9 +22,14 @@ export function ChatSurfaceLayout({
   workflowColumn?: ReactNode;
   contextDock: ReactNode;
   dockOpen: boolean;
+  onDockOpenChange?: (next: boolean) => void;
   hasActiveSession?: boolean;
+  sessionRailOpen?: boolean;
+  onSessionRailOpenChange?: (next: boolean) => void;
 }) {
   const layout = getMissionControlSurfaceConfig(mode).layout;
+  const compactSecondaryPanels = useMediaQuery("(max-width: 840px)");
+  const inlineSessionRail = !compactSecondaryPanels;
   if (!hasActiveSession) {
     return (
       <div
@@ -33,8 +43,21 @@ export function ChatSurfaceLayout({
         data-session-state="idle"
         data-idle-min-height={layout.idleMinHeight}
       >
-        <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
+        {inlineSessionRail ? (
+          <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
+        ) : null}
         <div className="chat-v11-main">
+          {compactSecondaryPanels ? (
+            <div className="chat-v11-mobile-rail-launcher">
+              <button
+                type="button"
+                className="gc-nav-button gc-nav-tier-chip"
+                onClick={() => onSessionRailOpenChange?.(!sessionRailOpen)}
+              >
+                {sessionRailOpen ? "Hide history" : "History"}
+              </button>
+            </div>
+          ) : null}
           <div className={`chat-v11-conversation-shell surface-${mode}`}>
             <div className="chat-v11-main-grid chat-v11-main-grid-idle">
               <div
@@ -46,6 +69,13 @@ export function ChatSurfaceLayout({
             </div>
           </div>
         </div>
+        {compactSecondaryPanels ? (
+          <Sheet open={sessionRailOpen} onOpenChange={onSessionRailOpenChange}>
+            <SheetContent side="left" className="chat-v11-session-sheet">
+              {sessionRail}
+            </SheetContent>
+          </Sheet>
+        ) : null}
       </div>
     );
   }
@@ -56,6 +86,7 @@ export function ChatSurfaceLayout({
       ? primaryColumn
       : null;
   const effectiveDockOpen = hasActiveSession ? dockOpen : layout.idleDockOpen;
+  const inlineDock = !compactSecondaryPanels && effectiveDockOpen;
 
   return (
     <div
@@ -69,8 +100,21 @@ export function ChatSurfaceLayout({
       data-session-state={hasActiveSession ? "active" : "idle"}
       data-idle-min-height={layout.idleMinHeight}
     >
-      <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
+      {inlineSessionRail ? (
+        <div className={`chat-v11-session-rail ${layout.sessionRailClassName}`}>{sessionRail}</div>
+      ) : null}
       <div className="chat-v11-main">
+        {compactSecondaryPanels ? (
+          <div className="chat-v11-mobile-rail-launcher">
+            <button
+              type="button"
+              className="gc-nav-button gc-nav-tier-chip"
+              onClick={() => onSessionRailOpenChange?.(!sessionRailOpen)}
+            >
+              {sessionRailOpen ? "Hide history" : "History"}
+            </button>
+          </div>
+        ) : null}
         <div className={`chat-v11-conversation-shell surface-${mode}`}>
           <div
             className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"}`}
@@ -89,7 +133,7 @@ export function ChatSurfaceLayout({
                 {supportThreadColumn}
               </div>
             ) : null}
-            {effectiveDockOpen ? (
+            {inlineDock ? (
               <div className={`chat-v11-dock-column ${layout.dockClassName}`} data-surface-slot="dock">
                 {contextDock}
               </div>
@@ -97,6 +141,18 @@ export function ChatSurfaceLayout({
           </div>
         </div>
       </div>
+      {compactSecondaryPanels ? (
+        <Sheet open={sessionRailOpen} onOpenChange={onSessionRailOpenChange}>
+          <SheetContent side="left" className="chat-v11-session-sheet">
+            {sessionRail}
+          </SheetContent>
+        </Sheet>
+      ) : null}
+      {compactSecondaryPanels && hasActiveSession ? (
+        <Drawer open={effectiveDockOpen} onOpenChange={onDockOpenChange} shouldScaleBackground={false}>
+          <DrawerContent className="mission-context-dock-drawer">{contextDock}</DrawerContent>
+        </Drawer>
+      ) : null}
     </div>
   );
 }

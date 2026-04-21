@@ -32,6 +32,17 @@ const catalogActivationSchema = z.object({
   sessionId: z.string().min(1),
 });
 
+const presetDefaultsSchema = z.object({
+  presetLabel: z.string().min(1).optional(),
+  presetSummary: z.string().min(1).optional(),
+  routeHint: z.enum(["chat", "cowork", "code"]).optional(),
+  preferredProviderId: z.string().min(1).optional(),
+  preferredModel: z.string().min(1).optional(),
+  toolsPosture: z.enum(["safe_auto", "manual"]).optional(),
+  knowledgeAttachmentIds: z.array(z.string().min(1)).optional(),
+  promptFraming: z.string().min(1).optional(),
+});
+
 const createSchema = z.object({
   roleId: z.string().min(1),
   name: z.string().min(1),
@@ -40,6 +51,7 @@ const createSchema = z.object({
   specialties: z.array(z.string().min(1)).optional(),
   defaultTools: z.array(z.string().min(1)).optional(),
   aliases: z.array(z.string().min(1)).optional(),
+  presetDefaults: presetDefaultsSchema.optional(),
 });
 
 const updateSchema = z.object({
@@ -49,6 +61,7 @@ const updateSchema = z.object({
   specialties: z.array(z.string().min(1)).optional(),
   defaultTools: z.array(z.string().min(1)).optional(),
   aliases: z.array(z.string().min(1)).optional(),
+  presetDefaults: presetDefaultsSchema.optional(),
 });
 
 const archiveSchema = z

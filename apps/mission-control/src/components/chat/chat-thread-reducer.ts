@@ -156,25 +156,28 @@ function updateTurnFromStreamChunk(
       }
       return {
         ...turn,
-        assistantMessage: turn.assistantMessage ? {
-          ...turn.assistantMessage,
-          messageId: chunk.messageId ?? turn.assistantMessage.messageId,
-          content: nextContent,
-        } : {
-          messageId: chunk.messageId ?? `assistant-${turn.turnId}`,
-          sessionId,
-          role: "assistant",
-          actorType: "agent",
-          actorId: "assistant",
-          content: chunk.delta,
-          timestamp: new Date().toISOString(),
-        },
+        assistantMessage: turn.assistantMessage
+          ? {
+              ...turn.assistantMessage,
+              messageId: chunk.messageId ?? turn.assistantMessage.messageId,
+              content: nextContent,
+            }
+          : {
+              messageId: chunk.messageId ?? `assistant-${turn.turnId}`,
+              sessionId,
+              role: "assistant",
+              actorType: "agent",
+              actorId: "assistant",
+              content: chunk.delta,
+              timestamp: new Date().toISOString(),
+            },
       };
     }
     case "message_done": {
-      const sameAssistant = turn.assistantMessage
-        && turn.assistantMessage.messageId === chunk.messageId
-        && turn.assistantMessage.content === chunk.content;
+      const sameAssistant =
+        turn.assistantMessage &&
+        turn.assistantMessage.messageId === chunk.messageId &&
+        turn.assistantMessage.content === chunk.content;
       const nextTraceCompletion = chunk.repaired
         ? {
             ...turn.trace.completion,
@@ -184,29 +187,29 @@ function updateTurnFromStreamChunk(
         : turn.trace.completion;
       const sameTraceCompletion =
         nextTraceCompletion === turn.trace.completion ||
-        (
-          nextTraceCompletion?.repaired === turn.trace.completion?.repaired &&
+        (nextTraceCompletion?.repaired === turn.trace.completion?.repaired &&
           nextTraceCompletion?.status === turn.trace.completion?.status &&
-          nextTraceCompletion?.finishReason === turn.trace.completion?.finishReason
-        );
+          nextTraceCompletion?.finishReason === turn.trace.completion?.finishReason);
       if (sameAssistant && sameTraceCompletion) {
         return turn;
       }
       return {
         ...turn,
-        assistantMessage: turn.assistantMessage ? {
-          ...turn.assistantMessage,
-          messageId: chunk.messageId,
-          content: chunk.content,
-        } : {
-          messageId: chunk.messageId,
-          sessionId,
-          role: "assistant",
-          actorType: "agent",
-          actorId: "assistant",
-          content: chunk.content,
-          timestamp: new Date().toISOString(),
-        },
+        assistantMessage: turn.assistantMessage
+          ? {
+              ...turn.assistantMessage,
+              messageId: chunk.messageId,
+              content: chunk.content,
+            }
+          : {
+              messageId: chunk.messageId,
+              sessionId,
+              role: "assistant",
+              actorType: "agent",
+              actorId: "assistant",
+              content: chunk.content,
+              timestamp: new Date().toISOString(),
+            },
         trace: {
           ...turn.trace,
           completion: nextTraceCompletion,
@@ -260,10 +263,7 @@ function updateTurnFromStreamChunk(
   }
 }
 
-function applyTraceUpdate(
-  turn: ChatThreadTurnRecord,
-  trace: ChatThreadTurnRecord["trace"],
-): ChatThreadTurnRecord {
+function applyTraceUpdate(turn: ChatThreadTurnRecord, trace: ChatThreadTurnRecord["trace"]): ChatThreadTurnRecord {
   const mergedTrace: ChatThreadTurnRecord["trace"] = {
     ...turn.trace,
     ...trace,
@@ -278,10 +278,12 @@ function applyTraceUpdate(
     trace: mergedTrace,
     toolRuns: mergedTrace.toolRuns,
     citations: mergedTrace.citations,
-    assistantMessage: turn.assistantMessage ? {
-      ...turn.assistantMessage,
-      messageId: mergedTrace.assistantMessageId ?? turn.assistantMessage.messageId,
-    } : turn.assistantMessage,
+    assistantMessage: turn.assistantMessage
+      ? {
+          ...turn.assistantMessage,
+          messageId: mergedTrace.assistantMessageId ?? turn.assistantMessage.messageId,
+        }
+      : turn.assistantMessage,
   };
 }
 
@@ -299,13 +301,13 @@ function appendOrReplaceCitation(
   return dedupeCitations([...current, citation]);
 }
 
-function dedupeCitations(
-  citations: ChatThreadTurnRecord["citations"],
-): ChatThreadTurnRecord["citations"] {
+function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThreadTurnRecord["citations"] {
   let deduped: ChatThreadTurnRecord["citations"] = [];
   const seen = new Map<string, number>();
   for (const citation of citations) {
-    const key = citation.url.trim().toLowerCase();
+    const key = citation.knowledge
+      ? `knowledge:${citation.knowledge.attachmentId}:${citation.knowledge.chunkId ?? citation.knowledge.sourceRef}:${citation.knowledge.retrievalMode}`
+      : citation.url.trim().toLowerCase();
     const existingIndex = seen.get(key);
     if (existingIndex === undefined) {
       seen.set(key, deduped.length);
@@ -318,14 +320,19 @@ function dedupeCitations(
       deduped.push(citation);
       continue;
     }
-    deduped = deduped.map((item, i) => i === existingIndex ? {
-      ...existing,
-      citationId: existing.citationId,
-      url: existing.url,
-      title: existing.title ?? citation.title,
-      snippet: existing.snippet ?? citation.snippet,
-      sourceType: existing.sourceType ?? citation.sourceType,
-    } : item);
+    deduped = deduped.map((item, i) =>
+      i === existingIndex
+        ? {
+            ...existing,
+            citationId: existing.citationId,
+            url: existing.url,
+            title: existing.title ?? citation.title,
+            snippet: existing.snippet ?? citation.snippet,
+            sourceType: existing.sourceType ?? citation.sourceType,
+            knowledge: existing.knowledge ?? citation.knowledge,
+          }
+        : item,
+    );
   }
   return deduped;
 }

@@ -407,6 +407,13 @@ export interface RuntimeSettingsResponse {
         video: boolean;
         toolCalling: boolean;
         jsonMode: boolean;
+        webSearch?: boolean;
+        reasoning?: boolean;
+        voiceInput?: boolean;
+        voiceOutput?: boolean;
+        imageGenerate?: boolean;
+        imageEdit?: boolean;
+        artifacts?: boolean;
       };
     }>;
   };

@@ -335,7 +335,10 @@ async function runAgentSendChatMessageLlmPath(
       }
     }
 
-    const dedupedTurnCitations = dedupeChatCitations(turnResult.turnTrace.citations ?? []);
+    const dedupedTurnCitations = dedupeChatCitations([
+      ...prepared.threadKnowledgeCitations,
+      ...(turnResult.turnTrace.citations ?? []),
+    ]);
     const persistedTurnFailure =
       turnResult.turnTrace.failure ?? inferDegradedAssistantTurnFailure(turnResult.assistantContent);
     if (turnResult.requiresApproval || turnResult.turnTrace.status === "cancelled") {

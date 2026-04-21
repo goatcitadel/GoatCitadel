@@ -1287,16 +1287,16 @@
 .theme-citadel-light .chat-v11-left,
 .theme-citadel-light .chat-v11-thread,
 .theme-citadel-light .chat-v11-empty-shell {
-  border-radius: 12px;
+  border-radius: 20px;
   border: 1px solid rgba(0, 0, 0, 0.08);
-  background: #ffffff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
   color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-left {
   gap: 14px;
-  background: #f9fafb;
+  background: radial-gradient(circle at top left, rgba(8, 145, 178, 0.06), transparent 32%), rgba(248, 250, 252, 0.98);
 }
 
 .theme-citadel-light .chat-v11.mode-cowork .chat-v11-header {
@@ -1958,32 +1958,44 @@
 
 .theme-citadel-light .chat-v11-composer {
   padding: 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  background: #f9fafb;
+  border-radius: 18px;
+  border: 1px solid rgba(8, 145, 178, 0.12);
+  background: rgba(249, 250, 251, 0.96);
   color: var(--gc-chat-text);
 }
 
 .theme-citadel-light .chat-v11-thread .chat-v11-composer {
-  border-top-color: rgba(0, 0, 0, 0.07);
-  background: #f3f4f6;
+  border-top-color: rgba(8, 145, 178, 0.08);
+  background: rgba(249, 250, 251, 0.98);
 }
 
 .theme-citadel-light .chat-v11-thread .chat-v11-composer {
-  background: #f3f4f6 !important;
+  background: rgba(249, 250, 251, 0.98) !important;
   box-shadow: none !important;
 }
 
 .theme-citadel-light .chat-v11.mode-cowork .chat-v11-composer {
   border-color: rgba(66, 201, 219, 0.22);
   background:
-    radial-gradient(circle at bottom right, rgba(66, 201, 219, 0.08), transparent 28%),
-    linear-gradient(180deg, rgba(122, 145, 153, 0.99), rgba(103, 126, 134, 0.99));
+    radial-gradient(circle at bottom right, rgba(66, 201, 219, 0.08), transparent 28%), rgba(244, 250, 251, 0.98);
 }
 
 .theme-citadel-light .chat-v11.mode-code .chat-v11-composer {
-  border-color: rgba(84, 107, 117, 0.5);
-  background: linear-gradient(180deg, rgba(114, 136, 144, 0.99), rgba(95, 116, 124, 0.99));
+  border-color: rgba(84, 107, 117, 0.18);
+  background: rgba(247, 250, 252, 0.98);
+}
+
+.theme-citadel-light .chat-v11-composer-input-shell {
+  border-color: rgba(8, 145, 178, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.theme-citadel-light .chat-v11-composer-chip,
+.theme-citadel-light .chat-v11-composer-helper-pill,
+.theme-citadel-light .mission-surface-summary-row span {
+  border-color: rgba(8, 145, 178, 0.12);
+  background: rgba(240, 249, 255, 0.92);
+  color: #155e75;
 }
 
 .theme-citadel-light .chat-v11-project-create,
@@ -2879,10 +2891,10 @@
 }
 
 .theme-citadel-light .shell-bar {
-  background: rgba(255, 255, 255, 0.92);
-  border-bottom-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-  backdrop-filter: blur(12px);
+  background: radial-gradient(circle at top left, rgba(8, 145, 178, 0.08), transparent 34%), rgba(255, 255, 255, 0.92);
+  border-color: rgba(8, 145, 178, 0.12);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(var(--shell-chrome-blur));
 }
 
 .theme-citadel-light .shell-bar-title {
@@ -2895,6 +2907,16 @@
 
 .theme-citadel-light .shell-bar-page-note {
   color: #52525b;
+}
+
+.theme-citadel-light .shell-bar-route-pill {
+  border-color: rgba(8, 145, 178, 0.12);
+  background: rgba(240, 249, 255, 0.92);
+  color: #155e75;
+}
+
+.theme-citadel-light .shell-bar-route-pill.secondary {
+  color: #18181b;
 }
 
 .theme-citadel-light {
@@ -2954,7 +2976,7 @@
 
 .theme-citadel-light .shell-secondary-nav {
   background: rgba(255, 255, 255, 0.85);
-  border-bottom-color: rgba(0, 0, 0, 0.07);
+  border-color: rgba(8, 145, 178, 0.1);
 }
 
 .theme-citadel-light .shell-main {

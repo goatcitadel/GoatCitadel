@@ -77,9 +77,11 @@ export function ShellStatusCenter({
         onClick={onToggle}
       >
         <span className="shell-status-center-trigger-copy">
-          <span className="shell-status-center-trigger-label">Status Center</span>
-          <strong className="shell-status-center-trigger-value">{summary.label}</strong>
-          <span className="shell-status-center-trigger-note">{summary.note}</span>
+          <span className="shell-status-center-trigger-label">Status</span>
+          <span className="shell-status-center-trigger-summary">
+            <strong className="shell-status-center-trigger-value">{summary.label}</strong>
+            <span className="shell-status-center-trigger-note">{summary.note}</span>
+          </span>
         </span>
         <div className="shell-status-center-trigger-meta">
           <StatusChip tone={summary.tone}>

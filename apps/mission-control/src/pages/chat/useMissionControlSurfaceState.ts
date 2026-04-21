@@ -17,6 +17,7 @@ export interface MissionControlWorkspaceSummaryCard {
 export type MissionControlDockSectionId =
   | "workflow"
   | "surface"
+  | "artifact"
   | "trace"
   | "suggestions"
   | "memory"
@@ -99,15 +100,16 @@ export function resolveMissionControlDockSectionOrder(input: {
   showSuggestionsPanel: boolean;
   showLearnedMemoryPanel: boolean;
   hasExternalBindingSection: boolean;
+  hasGeneratedArtifact: boolean;
   hasBlockingContext: boolean;
   hasDelegationSuggestion: boolean;
   codeModeNeedsProjectBinding: boolean;
 }): MissionControlDockSectionId[] {
   const baseOrder: MissionControlDockSectionId[] =
     input.mode === "chat"
-      ? ["surface", "trace", "memory", "session", "suggestions"]
+      ? ["surface", "artifact", "trace", "memory", "session", "suggestions"]
       : input.mode === "cowork"
-        ? ["workflow", "suggestions", "trace", "surface", "memory", "session"]
+        ? ["workflow", "artifact", "suggestions", "trace", "surface", "memory", "session"]
         : ["workflow", "surface", "session", "trace"];
 
   const sections = [...baseOrder];
@@ -137,6 +139,9 @@ export function resolveMissionControlDockSectionOrder(input: {
       }
       if (section === "memory") {
         return input.showLearnedMemoryPanel;
+      }
+      if (section === "artifact") {
+        return input.hasGeneratedArtifact;
       }
       if (section === "external") {
         return input.hasExternalBindingSection;
@@ -198,6 +203,7 @@ export function useMissionControlSurfaceState(input: {
   proactiveSuggestionCount: number;
   hasDelegationSuggestion: boolean;
   learnedMemoryCount: number;
+  hasGeneratedArtifact?: boolean;
 }): {
   messageMode: ChatMode;
   activeModePreset: (typeof CHAT_MODE_PRESETS)[ChatMode];
@@ -300,6 +306,7 @@ export function useMissionControlSurfaceState(input: {
         showSuggestionsPanel,
         showLearnedMemoryPanel,
         hasExternalBindingSection: input.selectedSession?.scope === "external",
+        hasGeneratedArtifact: Boolean(input.hasGeneratedArtifact),
         hasBlockingContext:
           Boolean(selectedTurnRecovery) ||
           selectedTurn?.trace.status === "waiting_for_approval" ||
@@ -309,6 +316,7 @@ export function useMissionControlSurfaceState(input: {
       }),
     [
       codeModeNeedsProjectBinding,
+      input.hasGeneratedArtifact,
       input.hasDelegationSuggestion,
       input.selectedSession?.scope,
       messageMode,

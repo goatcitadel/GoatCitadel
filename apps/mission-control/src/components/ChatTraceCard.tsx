@@ -8,6 +8,13 @@ import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
 
+function isExternalCitationUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  return /^https?:\/\//i.test(url);
+}
+
 function formatTime(value?: string): string {
   if (!value) {
     return "n/a";
@@ -198,13 +205,20 @@ export function ChatTraceCard({
               <ul className="chat-citation-list">
                 {trace.citations.map((citation) => (
                   <li key={citation.citationId}>
-                    {citation.url ? (
+                    {isExternalCitationUrl(citation.url) ? (
                       <a href={citation.url} target="_blank" rel="noreferrer">
                         {citation.title || citation.url}
                       </a>
                     ) : (
                       <span>{citation.title ?? "source"}</span>
                     )}
+                    {citation.knowledge ? (
+                      <p className="chat-trace-meta">
+                        {citation.knowledge.sourceRef}
+                        {citation.knowledge.sectionLabel ? ` · ${citation.knowledge.sectionLabel}` : ""}
+                        {citation.knowledge.retrievalMode === "full_text" ? " · full text" : " · retrieval"}
+                      </p>
+                    ) : null}
                     {citation.snippet ? <p>{citation.snippet}</p> : null}
                   </li>
                 ))}

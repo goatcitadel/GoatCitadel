@@ -10,7 +10,7 @@ export type VisibleConfigurePage = "general" | "runtime" | "workspaces" | "integ
 export type VisiblePage = VisibleWorkPage | VisibleObservePage | VisibleConfigurePage;
 
 export type ActivityTab = "activity" | "scheduler" | "improvement";
-export type ArtifactsTab = "memory" | "files";
+export type ArtifactsTab = "memory" | "files" | "generated";
 export type SettingsTab =
   | "general"
   | "providers"
@@ -32,6 +32,7 @@ export interface ResolvedRoute {
   tab?: NestedHostTab;
   sessionId?: string;
   turnId?: string;
+  artifactId?: string;
   approvalId?: string;
 }
 
@@ -92,7 +93,7 @@ export const PAGE_META: Record<SpacePage, RouteInfo> = {
     space: "observe",
     page: "artifacts",
     label: "Artifacts",
-    description: "Browse memory and files from one place.",
+    description: "Browse memory, files, and generated outputs from one place.",
   },
   costs: {
     space: "observe",
@@ -202,6 +203,7 @@ const LEGACY_TAB_REDIRECTS: Record<string, ResolvedRoute> = {
   sessions: { space: "observe", page: "sessions" },
   memory: { space: "observe", page: "artifacts", tab: "memory" },
   files: { space: "observe", page: "artifacts", tab: "files" },
+  generated: { space: "observe", page: "artifacts", tab: "generated" },
   costs: { space: "observe", page: "costs" },
   system: { space: "observe", page: "system" },
   promptLab: { space: "observe", page: "quality" },
@@ -257,7 +259,7 @@ function normalizeTab(page: SpacePage, tab: string | null): NestedHostTab | unde
   if (page === "activity" && (tab === "activity" || tab === "scheduler" || tab === "improvement")) {
     return tab;
   }
-  if (page === "artifacts" && (tab === "memory" || tab === "files")) {
+  if (page === "artifacts" && (tab === "memory" || tab === "files" || tab === "generated")) {
     return tab;
   }
   if (
@@ -334,6 +336,7 @@ export function readRouteFromLocation(): ResolvedRoute {
   const url = new URL(window.location.href);
   const sessionId = url.searchParams.get("sessionId")?.trim() || undefined;
   const turnId = url.searchParams.get("turnId")?.trim() || undefined;
+  const artifactId = url.searchParams.get("artifactId")?.trim() || undefined;
   const approvalId = url.searchParams.get("approvalId")?.trim() || undefined;
   const legacyTab = url.searchParams.get("tab");
   if (legacyTab && legacyTab in LEGACY_TAB_REDIRECTS) {
@@ -351,6 +354,7 @@ export function readRouteFromLocation(): ResolvedRoute {
       sessionId,
       turnId,
       approvalId,
+      artifactId,
     });
   }
 
@@ -367,6 +371,7 @@ export function readRouteFromLocation(): ResolvedRoute {
         surface: isWorkSurface(surface) ? surface : undefined,
         sessionId,
         turnId,
+        artifactId,
         approvalId,
       });
     }
@@ -376,6 +381,7 @@ export function readRouteFromLocation(): ResolvedRoute {
         page,
         tab: normalizeTab(page, nestedTab),
         sessionId,
+        artifactId,
       });
     }
     if (space === "configure" && isConfigurePage(page)) {
@@ -384,6 +390,7 @@ export function readRouteFromLocation(): ResolvedRoute {
         page,
         tab: normalizeTab(page, nestedTab),
         sessionId,
+        artifactId,
       });
     }
   }
@@ -407,6 +414,9 @@ export function buildRouteSearch(route: ResolvedRoute): string {
   }
   if (next.turnId) {
     params.set("turnId", next.turnId);
+  }
+  if (next.artifactId) {
+    params.set("artifactId", next.artifactId);
   }
   if (next.approvalId) {
     params.set("approvalId", next.approvalId);
@@ -476,6 +486,7 @@ export function buildRouteForVisiblePage(currentRoute: ResolvedRoute, targetPage
       surface: targetPage,
       sessionId: currentRoute.sessionId,
       turnId: currentRoute.turnId,
+      artifactId: currentRoute.artifactId,
       approvalId: currentRoute.approvalId,
     };
   }
@@ -496,7 +507,7 @@ export function buildRouteForVisiblePage(currentRoute: ResolvedRoute, targetPage
   }
   if (targetPage === "artifacts" || targetPage === "quality") {
     return targetPage === "artifacts"
-      ? { space: "observe", page: "artifacts", tab: "memory" }
+      ? { space: "observe", page: "artifacts", tab: "memory", artifactId: currentRoute.artifactId }
       : { space: "observe", page: "quality" };
   }
   if (targetPage === "integrations" || targetPage === "tools" || targetPage === "agents") {

@@ -5,6 +5,7 @@ export interface WorkTrustDescriptor {
   gatewayTone: WorkTrustTone;
   gatewayLabel: string;
   approvalsSummary: string;
+  runStateSummary?: string;
   activeModeLabel: string;
   providerModelSummary: string;
   runtimeSummary: string;

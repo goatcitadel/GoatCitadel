@@ -51,6 +51,8 @@ export class KnowledgeRepository {
   private readonly listDocumentsStmt;
   private readonly listDocumentsByNamespaceStmt;
   private readonly updateChunkEmbeddingStmt;
+  private readonly deleteChunksByNamespaceStmt;
+  private readonly deleteDocumentsByNamespaceStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertDocumentStmt = db.prepare(`
@@ -106,6 +108,18 @@ export class KnowledgeRepository {
       UPDATE knowledge_chunks
       SET embedding_json = @embeddingJson
       WHERE chunk_id = @chunkId
+    `);
+    this.deleteChunksByNamespaceStmt = db.prepare(`
+      DELETE FROM knowledge_chunks
+      WHERE doc_id IN (
+        SELECT doc_id
+        FROM knowledge_documents
+        WHERE namespace = @namespace
+      )
+    `);
+    this.deleteDocumentsByNamespaceStmt = db.prepare(`
+      DELETE FROM knowledge_documents
+      WHERE namespace = @namespace
     `);
   }
 
@@ -221,6 +235,15 @@ export class KnowledgeRepository {
     this.updateChunkEmbeddingStmt.run({
       chunkId,
       embeddingJson: JSON.stringify(embedding),
+    });
+  }
+
+  public deleteNamespace(namespace: string): void {
+    this.deleteChunksByNamespaceStmt.run({
+      namespace,
+    });
+    this.deleteDocumentsByNamespaceStmt.run({
+      namespace,
     });
   }
 }

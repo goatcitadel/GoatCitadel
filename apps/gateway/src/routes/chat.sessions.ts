@@ -5,6 +5,8 @@ const listChatSessionsSchema = z.object({
   scope: z.enum(["mission", "external", "all"]).optional(),
   workspaceId: z.string().min(1).optional(),
   projectId: z.string().min(1).optional(),
+  folderId: z.string().min(1).optional(),
+  tag: z.string().min(1).optional(),
   q: z.string().optional(),
   view: z.enum(["active", "archived", "all"]).optional(),
   limit: z.coerce.number().int().positive().max(1000).default(200),
@@ -19,9 +21,21 @@ const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
 });
 
+const sessionTurnParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  turnId: z.string().min(1),
+});
+
+const artifactParamsSchema = z.object({
+  artifactId: z.string().min(1),
+});
+
 const createSessionSchema = z.object({
   workspaceId: z.string().min(1).optional(),
   title: z.string().optional(),
+  folderId: z.string().optional(),
+  folderName: z.string().optional(),
+  tags: z.array(z.string()).max(32).optional(),
   projectId: z.string().optional(),
   mode: z.enum(["chat", "cowork", "code"]).optional(),
   origin: z.enum(["operator", "prompt_pack", "system"]).optional(),
@@ -36,6 +50,9 @@ const bulkArchiveSessionsSchema = z.object({
 
 const updateSessionSchema = z.object({
   title: z.string().optional(),
+  folderId: z.string().optional(),
+  folderName: z.string().optional(),
+  tags: z.array(z.string()).max(32).optional(),
 });
 
 const assignProjectSchema = z.object({
@@ -57,7 +74,58 @@ const workbenchFileQuerySchema = z.object({
   path: z.string().min(1),
 });
 
+const generatedArtifactsQuerySchema = z.object({
+  sessionId: z.string().min(1).optional(),
+  workspaceId: z.string().min(1).optional(),
+  sourceSurface: z.enum(["chat", "cowork", "code"]).optional(),
+  kind: z.enum(["markdown", "html", "mermaid", "code", "text"]).optional(),
+  limit: z.coerce.number().int().positive().max(1000).default(300),
+});
+
+const createGeneratedArtifactSchema = z.object({
+  supersedeLatest: z.boolean().optional(),
+});
+
+const attachKnowledgeSchema = z
+  .object({
+    chatAttachmentId: z.string().min(1).optional(),
+    url: z.string().url().optional(),
+    title: z.string().optional(),
+    retrievalMode: z.enum(["full_text", "retrieval"]),
+  })
+  .refine((value) => Boolean(value.chatAttachmentId || value.url), {
+    message: "chatAttachmentId or url is required",
+  });
+
 export function registerChatSessionRoutes(fastify: FastifyInstance): void {
+  fastify.get("/api/v1/chat/generated-artifacts", async (request, reply) => {
+    const parsed = generatedArtifactsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: fastify.gateway.listChatGeneratedArtifacts(parsed.data),
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/generated-artifacts/:artifactId", async (request, reply) => {
+    const params = artifactParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({
+        item: fastify.gateway.getChatGeneratedArtifact(params.data.artifactId),
+      });
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.get("/api/v1/chat/sessions", async (request, reply) => {
     const parsed = listChatSessionsSchema.safeParse(request.query);
     if (!parsed.success) {
@@ -310,6 +378,106 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(await fastify.gateway.getChatSessionWorkbenchOutput(params.data.sessionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/generated-artifacts", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const query = generatedArtifactsQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send({
+        items: fastify.gateway.listChatGeneratedArtifacts({
+          ...query.data,
+          sessionId: params.data.sessionId,
+        }),
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/turns/:turnId/generated-artifact", async (request, reply) => {
+    const params = sessionTurnParamsSchema.safeParse(request.params);
+    const body = createGeneratedArtifactSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.code(201).send({
+        item: fastify.gateway.createChatGeneratedArtifactFromTurn({
+          sessionId: params.data.sessionId,
+          turnId: params.data.turnId,
+          supersedeLatest: body.data.supersedeLatest,
+        }),
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/knowledge-attachments", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send({
+        items: fastify.gateway.listChatThreadKnowledgeAttachments(params.data.sessionId),
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/knowledge-attachments", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = attachKnowledgeSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.code(201).send({
+        item: await fastify.gateway.attachChatThreadKnowledgeAttachment(params.data.sessionId, body.data),
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.delete("/api/v1/chat/sessions/:sessionId/knowledge-attachments/:attachmentId", async (request, reply) => {
+    const params = z
+      .object({
+        sessionId: z.string().min(1),
+        attachmentId: z.string().min(1),
+      })
+      .safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(
+        fastify.gateway.removeChatThreadKnowledgeAttachment(params.data.sessionId, params.data.attachmentId),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

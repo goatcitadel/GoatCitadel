@@ -21,6 +21,7 @@ import {
   type ChatSessionPrefsPatch,
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
+  type ChatSessionSearchHitRecord,
   type SessionMeta,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -30,6 +31,7 @@ import {
   splitChatPrefsPatch,
   toChatSessionRecord,
 } from "./chat-session-utils.js";
+import { buildGeneratedArtifactReference } from "./chat-generated-artifact-service.js";
 
 const log = logger.child("chat-session-service");
 
@@ -47,10 +49,7 @@ export interface ChatSessionHost {
   removeChatSessionStoredFile(storageRelPath: string): Promise<void>;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
   hydrateChatPrefsWithAutonomy(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
-  patchSessionAutonomyPrefs(
-    sessionId: string,
-    patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"],
-  ): void;
+  patchSessionAutonomyPrefs(sessionId: string, patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"]): void;
 }
 
 export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQuery = {}): ChatSessionRecord[] {
@@ -65,6 +64,7 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
   const sessionIds = allSessions.map((session) => session.sessionId);
   const metaBySessionId = host.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
   const projectLinkBySessionId = host.storage.chatSessionProjects.listBySessionIds(sessionIds);
+  const generatedArtifactsBySessionId = host.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
 
   let records = allSessions.map((session) => {
     const meta = metaBySessionId.get(session.sessionId) ?? {
@@ -72,10 +72,15 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
       includeInHistory: true,
       pinned: false,
       lifecycleStatus: "active" as const,
+      tags: [],
     };
     const link = projectLinkBySessionId.get(session.sessionId);
     const project = link ? projectById.get(link.projectId) : undefined;
-    return toChatSessionRecord(session, meta, project);
+    return toChatSessionRecord(session, meta, project, {
+      generatedArtifacts: (generatedArtifactsBySessionId.get(session.sessionId) ?? [])
+        .slice(0, 6)
+        .map(buildGeneratedArtifactReference),
+    });
   });
 
   records = records.filter((record) => host.normalizeWorkspaceId(record.workspaceId) === workspaceId);
@@ -92,19 +97,58 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
   if (query.projectId) {
     records = records.filter((record) => record.projectId === query.projectId);
   }
+  if (query.folderId?.trim()) {
+    records = records.filter((record) => record.folderId === query.folderId?.trim());
+  }
+  if (query.tag?.trim()) {
+    const tag = query.tag.trim().toLowerCase();
+    records = records.filter((record) => (record.tags ?? []).some((item) => item.toLowerCase() === tag));
+  }
+
+  const searchHitsBySessionId = query.q?.trim()
+    ? buildSessionSearchHits(
+        host,
+        records.map((record) => record.sessionId),
+        query.q.trim(),
+      )
+    : new Map<string, ChatSessionSearchHitRecord[]>();
+  const searchScoreBySessionId = new Map<string, number>();
   if (query.q?.trim()) {
-    const q = query.q.trim().toLowerCase();
+    const searchQuery = query.q.trim().toLowerCase();
     records = records.filter((record) => {
-      const haystack = [record.title ?? "", record.sessionKey, record.channel, record.account, record.projectName ?? ""]
+      const metadataHaystack = [
+        record.title ?? "",
+        record.sessionKey,
+        record.channel,
+        record.account,
+        record.projectName ?? "",
+        record.folderName ?? "",
+        ...(record.tags ?? []),
+      ]
         .join(" ")
         .toLowerCase();
-      return haystack.includes(q);
+      const metadataMatched = metadataHaystack.includes(searchQuery);
+      const hits = searchHitsBySessionId.get(record.sessionId) ?? [];
+      if (!metadataMatched && hits.length === 0) {
+        return false;
+      }
+      searchScoreBySessionId.set(
+        record.sessionId,
+        (metadataMatched ? 10 : 0) + hits.reduce((sum, hit) => sum + hit.score, 0),
+      );
+      record.searchHits = hits;
+      return true;
     });
   }
 
   records.sort((left, right) => {
     if (left.pinned !== right.pinned) {
       return left.pinned ? -1 : 1;
+    }
+    const searchDelta =
+      (searchScoreBySessionId.get(right.sessionId) ?? 0) - (searchScoreBySessionId.get(left.sessionId) ?? 0);
+    if (searchDelta !== 0) {
+      return searchDelta;
     }
     const byUpdated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
     if (byUpdated !== 0) {
@@ -165,6 +209,9 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
       title: input.title?.trim() ? input.title.trim() : undefined,
       origin: input.origin,
       includeInHistory: input.includeInHistory,
+      folderId: input.folderId,
+      folderName: input.folderName,
+      tags: input.tags,
     },
     now,
   );
@@ -202,17 +249,23 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
 export function updateChatSession(
   host: ChatSessionHost,
   sessionId: string,
-  input: { title?: string },
+  input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
 ): ChatSessionRecord {
   host.getSession(sessionId);
   host.storage.chatSessionMeta.patch(sessionId, {
     title: input.title,
+    folderId: input.folderId,
+    folderName: input.folderName,
+    tags: input.tags,
   });
   const updated = host.requireChatSession(sessionId);
   host.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
     sessionId: updated.sessionId,
     title: updated.title,
+    folderId: updated.folderId,
+    folderName: updated.folderName,
+    tags: updated.tags ?? [],
   });
   return updated;
 }
@@ -452,4 +505,109 @@ export function updateChatSessionPrefs(
     prefs: hydrated,
   });
   return hydrated;
+}
+
+interface SessionMessageSearchHitRow {
+  session_id: string;
+  message_id: string;
+  turn_id: string | null;
+  content: string;
+  timestamp: string;
+}
+
+function buildSessionSearchHits(
+  host: ChatSessionHost,
+  sessionIds: string[],
+  query: string,
+  limit = 160,
+): Map<string, ChatSessionSearchHitRecord[]> {
+  if (!query.trim() || sessionIds.length === 0) {
+    return new Map();
+  }
+  const placeholders = sessionIds.map(() => "?").join(", ");
+  const rows = host.storage.gatewaySql
+    .prepare(
+      `
+        SELECT
+          m.session_id,
+          m.message_id,
+          COALESCE(user_turn.turn_id, assistant_turn.turn_id) AS turn_id,
+          m.content,
+          m.timestamp
+        FROM chat_messages AS m
+        LEFT JOIN chat_turn_traces AS user_turn
+          ON user_turn.user_message_id = m.message_id
+        LEFT JOIN chat_turn_traces AS assistant_turn
+          ON assistant_turn.assistant_message_id = m.message_id
+        WHERE m.session_id IN (${placeholders})
+          AND LOWER(m.content) LIKE ?
+        ORDER BY m.timestamp DESC
+        LIMIT ?
+      `,
+    )
+    .all(...sessionIds, `%${query.trim().toLowerCase()}%`, limit) as SessionMessageSearchHitRow[];
+
+  const grouped = new Map<string, ChatSessionSearchHitRecord[]>();
+  for (const row of rows) {
+    if (!row?.session_id || !row.message_id || typeof row.content !== "string") {
+      continue;
+    }
+    const hits = grouped.get(row.session_id) ?? [];
+    hits.push({
+      messageId: row.message_id,
+      turnId: row.turn_id ?? undefined,
+      excerpt: buildSearchExcerpt(row.content, query),
+      score: scoreSearchHit(row.content, query),
+      matchedText: query,
+      timestamp: row.timestamp,
+    });
+    grouped.set(row.session_id, hits);
+  }
+
+  for (const [sessionId, hits] of grouped) {
+    hits.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return Date.parse(right.timestamp ?? "") - Date.parse(left.timestamp ?? "");
+    });
+    grouped.set(sessionId, hits.slice(0, 3));
+  }
+
+  return grouped;
+}
+
+function buildSearchExcerpt(content: string, query: string): string {
+  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedContent = content.replace(/\s+/g, " ").trim();
+  if (!normalizedQuery) {
+    return normalizedContent.slice(0, 180);
+  }
+  const matchIndex = normalizedContent.toLowerCase().indexOf(normalizedQuery);
+  if (matchIndex < 0) {
+    return normalizedContent.slice(0, 180);
+  }
+  const start = Math.max(0, matchIndex - 48);
+  const end = Math.min(normalizedContent.length, matchIndex + normalizedQuery.length + 96);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < normalizedContent.length ? "..." : "";
+  return `${prefix}${normalizedContent.slice(start, end)}${suffix}`;
+}
+
+function scoreSearchHit(content: string, query: string): number {
+  const normalizedContent = content.toLowerCase();
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return 0;
+  }
+  if (normalizedContent.startsWith(normalizedQuery)) {
+    return 6;
+  }
+  if (normalizedContent.includes(` ${normalizedQuery}`)) {
+    return 4;
+  }
+  if (normalizedContent.includes(normalizedQuery)) {
+    return 2;
+  }
+  return 1;
 }

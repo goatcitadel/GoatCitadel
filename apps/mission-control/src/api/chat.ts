@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Chat API helpers intentionally centralize chat surface transport contracts and request wiring. */
 import type {
   ChatAttachmentPreviewResponse,
   ChatAttachmentRecord,
@@ -9,6 +10,9 @@ import type {
   ChatDelegateSuggestResponse,
   ChatDelegationRunRecord,
   ChatDelegationStepRecord,
+  ChatGeneratedArtifactKind,
+  ChatGeneratedArtifactRecord,
+  ChatGeneratedArtifactSourceSurface,
   ChatMessageRecord,
   ChatMode,
   ChatProjectRecord,
@@ -42,6 +46,8 @@ import type {
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
+  ThreadKnowledgeAttachmentRecord,
+  ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
 
 import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagnostics-store";
@@ -76,6 +82,18 @@ export interface ChatToolArtifactResponse {
     createdAt: string;
   };
   content: string;
+}
+
+export interface ChatGeneratedArtifactsResponse {
+  items: ChatGeneratedArtifactRecord[];
+}
+
+export interface ChatGeneratedArtifactResponse {
+  item: ChatGeneratedArtifactRecord;
+}
+
+export interface ChatThreadKnowledgeAttachmentsResponse {
+  items: ThreadKnowledgeAttachmentRecord[];
 }
 
 export async function fetchChatProjects(
@@ -151,6 +169,8 @@ export async function fetchChatSessions(input?: {
   scope?: "mission" | "external" | "all";
   workspaceId?: string;
   projectId?: string;
+  folderId?: string;
+  tag?: string;
   q?: string;
   view?: "active" | "archived" | "all";
   limit?: number;
@@ -161,6 +181,8 @@ export async function fetchChatSessions(input?: {
   if (input?.scope) query.set("scope", input.scope);
   if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input?.projectId) query.set("projectId", input.projectId);
+  if (input?.folderId) query.set("folderId", input.folderId);
+  if (input?.tag) query.set("tag", input.tag);
   if (input?.q) query.set("q", input.q);
   if (input?.view) query.set("view", input.view);
   if (input?.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
@@ -172,6 +194,9 @@ export async function fetchChatSessions(input?: {
 export async function createChatSession(input?: {
   workspaceId?: string;
   title?: string;
+  folderId?: string;
+  folderName?: string;
+  tags?: string[];
   projectId?: string;
   mode?: ChatMode;
   origin?: ChatSessionOrigin;
@@ -194,7 +219,10 @@ export async function archiveWorkspaceChatSessions(input?: {
   });
 }
 
-export async function updateChatSession(sessionId: string, input: { title?: string }): Promise<ChatSessionRecord> {
+export async function updateChatSession(
+  sessionId: string,
+  input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
+): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
@@ -322,6 +350,97 @@ export async function fetchChatMessages(
   }
   return request<ChatMessagesResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages?${query.toString()}`,
+  );
+}
+
+export async function fetchChatGeneratedArtifacts(input?: {
+  sessionId?: string;
+  workspaceId?: string;
+  sourceSurface?: ChatGeneratedArtifactSourceSurface;
+  kind?: ChatGeneratedArtifactKind;
+  limit?: number;
+}): Promise<ChatGeneratedArtifactsResponse> {
+  const query = new URLSearchParams();
+  if (input?.sessionId) query.set("sessionId", input.sessionId);
+  if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
+  if (input?.sourceSurface) query.set("sourceSurface", input.sourceSurface);
+  if (input?.kind) query.set("kind", input.kind);
+  query.set("limit", String(input?.limit ?? 300));
+  return request<ChatGeneratedArtifactsResponse>(`/api/v1/chat/generated-artifacts?${query.toString()}`);
+}
+
+export async function fetchChatGeneratedArtifact(artifactId: string): Promise<ChatGeneratedArtifactResponse> {
+  return request<ChatGeneratedArtifactResponse>(`/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}`);
+}
+
+export async function fetchChatSessionGeneratedArtifacts(
+  sessionId: string,
+  input?: {
+    kind?: ChatGeneratedArtifactKind;
+    sourceSurface?: ChatGeneratedArtifactSourceSurface;
+    limit?: number;
+  },
+): Promise<ChatGeneratedArtifactsResponse> {
+  const query = new URLSearchParams();
+  if (input?.kind) query.set("kind", input.kind);
+  if (input?.sourceSurface) query.set("sourceSurface", input.sourceSurface);
+  query.set("limit", String(input?.limit ?? 300));
+  return request<ChatGeneratedArtifactsResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/generated-artifacts?${query.toString()}`,
+  );
+}
+
+export async function createChatGeneratedArtifact(
+  sessionId: string,
+  turnId: string,
+  input?: {
+    supersedeLatest?: boolean;
+  },
+): Promise<ChatGeneratedArtifactResponse> {
+  return request<ChatGeneratedArtifactResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/generated-artifact`,
+    {
+      method: "POST",
+      body: JSON.stringify(input ?? {}),
+    },
+  );
+}
+
+export async function fetchThreadKnowledgeAttachments(
+  sessionId: string,
+): Promise<ChatThreadKnowledgeAttachmentsResponse> {
+  return request<ChatThreadKnowledgeAttachmentsResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/knowledge-attachments`,
+  );
+}
+
+export async function attachThreadKnowledgeAttachment(
+  sessionId: string,
+  input: {
+    chatAttachmentId?: string;
+    url?: string;
+    title?: string;
+    retrievalMode: ThreadKnowledgeRetrievalMode;
+  },
+): Promise<{ item: ThreadKnowledgeAttachmentRecord }> {
+  return request<{ item: ThreadKnowledgeAttachmentRecord }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/knowledge-attachments`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function removeThreadKnowledgeAttachment(
+  sessionId: string,
+  attachmentId: string,
+): Promise<{ deleted: boolean; attachmentId: string }> {
+  return request<{ deleted: boolean; attachmentId: string }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/knowledge-attachments/${encodeURIComponent(attachmentId)}`,
+    {
+      method: "DELETE",
+    },
   );
 }
 

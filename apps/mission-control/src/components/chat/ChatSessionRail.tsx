@@ -9,6 +9,9 @@ interface ChatSessionRailRow {
   sessionId?: string;
   subtitle?: string;
   meta?: string;
+  folderName?: string;
+  tags?: string[];
+  searchHits?: Array<{ turnId?: string; excerpt: string }>;
   pinned?: boolean;
 }
 
@@ -78,12 +81,17 @@ export function ChatSessionRail({
   externalSessions,
   selectedSessionId,
   onSelectSession,
+  selectedTag,
+  onSelectTag,
   renderSessionLabel,
   mode,
 }: {
   missionSessions: Array<{
     sessionId: string;
     projectName?: string | null;
+    folderName?: string | null;
+    tags?: string[];
+    searchHits?: Array<{ turnId?: string; excerpt: string }>;
     pinned?: boolean;
     lastActivityAt?: string;
   }>;
@@ -91,11 +99,16 @@ export function ChatSessionRail({
     sessionId: string;
     channel?: string | null;
     account?: string | null;
+    folderName?: string | null;
+    tags?: string[];
+    searchHits?: Array<{ turnId?: string; excerpt: string }>;
     pinned?: boolean;
     lastActivityAt?: string;
   }>;
   selectedSessionId: string | null;
-  onSelectSession: (sessionId: string) => void;
+  onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
+  selectedTag: string | null;
+  onSelectTag: (tag: string | null) => void;
   renderSessionLabel: (sessionId: string) => string;
   mode: SessionRailMode;
 }) {
@@ -114,6 +127,9 @@ export function ChatSessionRail({
       sessionId: session.sessionId,
       subtitle: session.projectName ?? "No project yet",
       meta: describeMissionSessionMeta(session, mode),
+      folderName: session.folderName ?? undefined,
+      tags: session.tags ?? [],
+      searchHits: session.searchHits ?? [],
       pinned: session.pinned,
     })),
     ...(missionSessions.length === 0
@@ -139,6 +155,9 @@ export function ChatSessionRail({
       sessionId: session.sessionId,
       subtitle: [session.channel, session.account].filter(Boolean).join("/") || "External session",
       meta: describeExternalSessionMeta(session, mode),
+      folderName: session.folderName ?? undefined,
+      tags: session.tags ?? [],
+      searchHits: session.searchHits ?? [],
       pinned: session.pinned,
     })),
     ...(externalSessions.length === 0
@@ -188,10 +207,49 @@ export function ChatSessionRail({
                   {row.pinned ? <StatusChip tone="warning">Pinned</StatusChip> : null}
                 </span>
                 {row.meta ? <span className="chat-v11-session-row-meta">{row.meta}</span> : null}
-                {isSelected && row.subtitle ? (
-                  <span className="chat-v11-session-row-preview">{row.subtitle}</span>
+                {row.subtitle ? <span className="chat-v11-session-row-preview">{row.subtitle}</span> : null}
+                {row.folderName || (row.tags?.length ?? 0) > 0 ? (
+                  <span className="chat-v11-session-row-taxonomy">
+                    {row.folderName ? <StatusChip tone="muted">{row.folderName}</StatusChip> : null}
+                    {(row.tags ?? []).slice(0, 3).map((tag) => (
+                      <span
+                        key={`${row.key}-${tag}`}
+                        role="button"
+                        tabIndex={0}
+                        className={`chat-v11-session-tag${selectedTag?.toLowerCase() === tag.toLowerCase() ? " active" : ""}`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onSelectTag(selectedTag?.toLowerCase() === tag.toLowerCase() ? null : tag);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onSelectTag(selectedTag?.toLowerCase() === tag.toLowerCase() ? null : tag);
+                          }
+                        }}
+                      >
+                        #{tag}
+                      </span>
+                    ))}
+                  </span>
                 ) : null}
               </button>
+              {(row.searchHits?.length ?? 0) > 0 ? (
+                <div className="chat-v11-session-search-hits">
+                  {row.searchHits?.map((hit, index) => (
+                    <button
+                      key={`${row.key}-hit-${index}`}
+                      type="button"
+                      className="chat-v11-session-search-hit"
+                      onClick={() => row.sessionId && onSelectSession(row.sessionId, { turnId: hit.turnId ?? null })}
+                    >
+                      {hit.excerpt}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           );
         })}

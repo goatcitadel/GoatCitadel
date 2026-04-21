@@ -62,6 +62,10 @@ import type { HealthTab } from "./pages/HealthPage";
 import type { TimelineTab } from "./pages/TimelinePage";
 import type { WorkspacesTab } from "./pages/WorkspacesHubPage";
 import { type WorkTrustDescriptor } from "./pages/chat/work-trust";
+import { AgentsHubPage } from "./pages/AgentsHubPage";
+import { ArtifactsPage } from "./pages/ArtifactsPage";
+import { ChatPage } from "./pages/ChatPage";
+import { HealthPage } from "./pages/HealthPage";
 import { emitRefresh, type RefreshTopic } from "./state/refresh-bus";
 import { useUiPreferences } from "./state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "./state/effects-mode";
@@ -82,6 +86,14 @@ type LazyPageExport<TModule, TExport extends keyof TModule> =
   TModule[TExport] extends ComponentType<infer TProps> ? ComponentType<TProps> : never;
 type LazyPageComponent<TModule, TExport extends keyof TModule> = LazyExoticComponent<LazyPageExport<TModule, TExport>>;
 
+interface BeforeInstallPromptEvent extends Event {
+  readonly platforms: string[];
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
+const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
+
 function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof TModule>(
   loader: () => Promise<TModule>,
   exportName: TExport,
@@ -100,14 +112,10 @@ function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof
   }) as LazyPageComponent<TModule, TExport>;
 }
 
-const loadAgentsHubPage = () => import("./pages/AgentsHubPage");
 const loadApprovalsPage = () => import("./pages/ApprovalsPage");
-const loadArtifactsPage = () => import("./pages/ArtifactsPage");
-const loadChatPage = () => import("./pages/ChatPage");
 const loadCommandPalette = () => import("./components/CommandPalette");
 const loadDevDiagnosticsPanel = () => import("./components/DevDiagnosticsPanel");
 const loadGeneralHubPage = () => import("./pages/GeneralHubPage");
-const loadHealthPage = () => import("./pages/HealthPage");
 const loadIntegrationsHubPage = () => import("./pages/IntegrationsHubPage");
 const loadPromptLabPage = () => import("./pages/PromptLabPage");
 const loadRuntimeHubPage = () => import("./pages/RuntimeHubPage");
@@ -116,14 +124,10 @@ const loadTimelinePage = () => import("./pages/TimelinePage");
 const loadToolsPage = () => import("./pages/ToolsPage");
 const loadWorkspacesHubPage = () => import("./pages/WorkspacesHubPage");
 
-const AgentsHubPage = lazyPage(loadAgentsHubPage, "AgentsHubPage");
 const ApprovalsPage = lazyPage(loadApprovalsPage, "ApprovalsPage");
-const ArtifactsPage = lazyPage(loadArtifactsPage, "ArtifactsPage");
-const ChatPage = lazyPage(loadChatPage, "ChatPage");
 const CommandPalette = lazyPage(loadCommandPalette, "CommandPalette");
 const DevDiagnosticsPanel = lazyPage(loadDevDiagnosticsPanel, "DevDiagnosticsPanel");
 const GeneralHubPage = lazyPage(loadGeneralHubPage, "GeneralHubPage");
-const HealthPage = lazyPage(loadHealthPage, "HealthPage");
 const IntegrationsHubPage = lazyPage(loadIntegrationsHubPage, "IntegrationsHubPage");
 const PromptLabPage = lazyPage(loadPromptLabPage, "PromptLabPage");
 const RuntimeHubPage = lazyPage(loadRuntimeHubPage, "RuntimeHubPage");
@@ -132,14 +136,10 @@ const TimelinePage = lazyPage(loadTimelinePage, "TimelinePage");
 const ToolsPage = lazyPage(loadToolsPage, "ToolsPage");
 const WorkspacesHubPage = lazyPage(loadWorkspacesHubPage, "WorkspacesHubPage");
 const PRELOAD_ROUTE_MODULES = [
-  loadAgentsHubPage,
   loadApprovalsPage,
-  loadArtifactsPage,
-  loadChatPage,
   loadCommandPalette,
   loadDevDiagnosticsPanel,
   loadGeneralHubPage,
-  loadHealthPage,
   loadIntegrationsHubPage,
   loadPromptLabPage,
   loadRuntimeHubPage,
@@ -388,6 +388,7 @@ export function App() {
     setTheme,
   } = useUiPreferences();
   const [route, setRoute] = useState<ResolvedRoute>(() => readRouteFromLocation());
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -939,9 +940,47 @@ export function App() {
     if (typeof window === "undefined") {
       return;
     }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("source") !== "pwa" || params.size !== 1) {
+      return;
+    }
+    const savedSearch = window.localStorage.getItem(LAST_ROUTE_STORAGE_KEY)?.trim();
+    if (!savedSearch || savedSearch === window.location.search) {
+      return;
+    }
+    const url = new URL(window.location.href);
+    window.history.replaceState(null, "", `${url.pathname}${savedSearch}${url.hash}`);
+    setRoute(readRouteFromLocation());
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as BeforeInstallPromptEvent);
+    };
+    const handleAppInstalled = () => {
+      setInstallPromptEvent(null);
+      pushNotification("success", "Mission Control installed and ready from your launcher.", "pwa-install");
+    };
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, [pushNotification]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
     const url = new URL(window.location.href);
     const search = buildRouteSearch(route);
     window.history.replaceState(null, "", `${url.pathname}${search}${url.hash}`);
+    window.localStorage.setItem(LAST_ROUTE_STORAGE_KEY, search);
     setDevDiagnosticsCurrentRoute(`${url.pathname}${search}${url.hash}`);
     recordClientDiagnostic({
       level: "info",
@@ -1077,10 +1116,19 @@ export function App() {
 
   const visiblePage = getVisiblePage(route);
   const currentPageLabel = getVisiblePageLabel(route);
+  const currentPageDescription = PAGE_META[route.page].description;
   const detailPanelVisible = Boolean(detailPanelEntry) && (detailPanelPinned || detailPanelOpen);
   const handleToggleDetailPanel = useCallback(() => {
     setDetailPanelOpen((current) => !current);
   }, []);
+  const handleInstallApp = useCallback(async () => {
+    if (!installPromptEvent) {
+      return;
+    }
+    await installPromptEvent.prompt();
+    await installPromptEvent.userChoice.catch(() => undefined);
+    setInstallPromptEvent(null);
+  }, [installPromptEvent]);
   const handleTogglePinnedDetailPanel = useCallback(() => {
     setDetailPanelPinned(!detailPanelPinned);
     if (!detailPanelPinned) {
@@ -1395,6 +1443,16 @@ export function App() {
               onOpenCode={() => navigate({ space: "operate", page: "surface", surface: "code" })}
               onOpenTasks={() => navigate({ space: "operate", page: "tasks" })}
               onOpenApprovals={() => navigate({ space: "operate", page: "approvals" })}
+              onNavigateSurface={(surface, options) =>
+                navigate({
+                  space: "operate",
+                  page: "surface",
+                  surface,
+                  sessionId: options?.sessionId ?? undefined,
+                  turnId: options?.turnId ?? undefined,
+                  artifactId: options?.artifactId ?? undefined,
+                })
+              }
             />
           </section>
         );
@@ -1439,6 +1497,16 @@ export function App() {
             workspaceId={activeWorkspaceId}
             activeTab={observeArtifactsTab}
             onTabChange={(tab: ArtifactsTab) => navigate({ space: "observe", page: "artifacts", tab })}
+            onOpenGeneratedArtifact={(artifact) =>
+              navigate({
+                space: "operate",
+                page: "surface",
+                surface: artifact.sourceSurface,
+                sessionId: artifact.sessionId,
+                turnId: artifact.turnId,
+                artifactId: artifact.artifactId,
+              })
+            }
           />
         );
       }
@@ -1573,7 +1641,14 @@ export function App() {
           <div className="shell-bar-brand">
             <div className="shell-bar-brand-copy">
               <p className="shell-bar-kicker">GoatCitadel</p>
-              <h1 className="shell-bar-title">Mission Control</h1>
+              <div className="shell-bar-title-row">
+                <h1 className="shell-bar-title">Mission Control</h1>
+                <div className="shell-bar-route-pills" aria-label="Current location">
+                  <span className="shell-bar-route-pill">{SPACE_META[route.space].label}</span>
+                  <span className="shell-bar-route-pill secondary">{currentPageLabel}</span>
+                </div>
+              </div>
+              <p className="shell-bar-page-note shell-bar-page-note-inline">{currentPageDescription}</p>
             </div>
           </div>
           <div className="shell-bar-actions mc-shell-bar-actions">
@@ -1594,6 +1669,15 @@ export function App() {
               <GCSelect value={activeWorkspaceId} onChange={setActiveWorkspaceId} options={workspaceSelectOptions} />
             </label>
             <div className="shell-bar-utility mc-shell-bar-utility">
+              {installPromptEvent ? (
+                <button
+                  type="button"
+                  className="gc-nav-button gc-nav-tier-chip mc-shell-chip"
+                  onClick={() => void handleInstallApp()}
+                >
+                  Install app
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="shell-command-trigger-topbar gc-nav-button gc-nav-tier-chip mc-shell-chip"
@@ -1676,12 +1760,8 @@ export function App() {
             </div>
           </div>
         ) : (
-          <div className="shell-secondary-nav mc-shell-secondary-nav">
+          <div className="shell-secondary-nav mc-shell-secondary-nav is-rail-driven">
             <div className="shell-secondary-nav-primary mc-shell-secondary-nav-primary">
-              <div className="shell-context-summary">
-                <p className="shell-bar-page-label">{SPACE_META[route.space].label}</p>
-                <p className="shell-bar-page-note">{PAGE_META[route.page].description}</p>
-              </div>
               <nav
                 className={route.space === "operate" ? "surface-nav" : "secondary-page-nav"}
                 aria-label={`${SPACE_META[route.space].label} pages`}

@@ -1,3 +1,4 @@
+import { GeneratedArtifactViewer } from "../../components/chat/GeneratedArtifactViewer";
 import { MissionControlContextDock } from "./MissionControlContextDock";
 import { ChatDockMemorySection } from "./ChatDockMemorySection";
 import { ChatDockRunTraceSection } from "./ChatDockRunTraceSection";
@@ -12,6 +13,7 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
     dockOpen,
     dockSectionStyle,
     isCodeSurface,
+    activeGeneratedArtifact,
     selectedTurn,
     showTracePanel,
     showSuggestionsPanel,
@@ -23,6 +25,25 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
       <div className="mission-dock-section" style={dockSectionStyle("surface")}>
         <ChatDockSurfaceSection {...props} />
       </div>
+
+      {!isCodeSurface && activeGeneratedArtifact ? (
+        <div className="mission-dock-section" style={dockSectionStyle("artifact")}>
+          <section className="mission-dock-panel">
+            <div className="chat-dock-section-head">
+              <div>
+                <p className="chat-dock-section-kicker">Generated output</p>
+                <h4>Artifact viewer</h4>
+              </div>
+              {props.onCloseGeneratedArtifact ? (
+                <button type="button" className="gc-button" onClick={props.onCloseGeneratedArtifact}>
+                  Close
+                </button>
+              ) : null}
+            </div>
+            <GeneratedArtifactViewer artifact={activeGeneratedArtifact} />
+          </section>
+        </div>
+      ) : null}
 
       {showTracePanel && selectedTurn ? (
         <div className="mission-dock-section" style={dockSectionStyle("trace")}>
@@ -77,15 +98,21 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
           selectedSession={props.selectedSession}
           renameTitle={props.renameTitle}
           onRenameTitleChange={props.onRenameTitleChange}
+          folderName={props.folderName}
+          onFolderNameChange={props.onFolderNameChange}
+          tagsValue={props.tagsValue}
+          onTagsValueChange={props.onTagsValueChange}
           sending={props.sending}
           sessionControlPending={props.sessionControlPending}
           selectedSessionProjectValue={props.selectedSessionProjectValue}
           projectOptions={props.projectOptions}
           onRenameSession={props.onRenameSession}
+          onSaveOrganization={props.onSaveOrganization}
           onTogglePinSession={props.onTogglePinSession}
           onToggleArchiveSession={props.onToggleArchiveSession}
           onDeleteSession={props.onDeleteSession}
           onAssignProject={props.onAssignProject}
+          onExportSnapshot={props.onExportSnapshot}
           binding={props.binding}
           integrationConnectionId={props.integrationConnectionId}
           onIntegrationConnectionIdChange={props.onIntegrationConnectionIdChange}

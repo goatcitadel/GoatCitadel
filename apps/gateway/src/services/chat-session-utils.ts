@@ -10,10 +10,7 @@ import type {
   SessionMeta,
 } from "@goatcitadel/contracts";
 
-export function assertChatSessionActive(
-  sessionId: string,
-  lifecycleStatus: ChatSessionLifecycleStatus,
-): void {
+export function assertChatSessionActive(sessionId: string, lifecycleStatus: ChatSessionLifecycleStatus): void {
   if (lifecycleStatus === "archived") {
     throw new Error(`Session ${sessionId} is archived`);
   }
@@ -89,8 +86,12 @@ export function toChatSessionRecord(
     pinned: boolean;
     lifecycleStatus: "active" | "archived";
     archivedAt?: string;
+    folderId?: string;
+    folderName?: string;
+    tags?: string[];
   },
   project?: ChatProjectRecord,
+  extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "generatedArtifacts">>,
 ): ChatSessionRecord {
   return {
     sessionId: session.sessionId,
@@ -103,8 +104,14 @@ export function toChatSessionRecord(
     pinned: meta.pinned,
     lifecycleStatus: meta.lifecycleStatus,
     archivedAt: meta.archivedAt,
+    folderId: meta.folderId,
+    folderName: meta.folderName,
+    tags: meta.tags ?? [],
     projectId: project?.projectId,
     projectName: project?.name,
+    searchHits: extras?.searchHits,
+    lastHandoff: extras?.lastHandoff,
+    generatedArtifacts: extras?.generatedArtifacts,
     channel: session.channel,
     account: session.account,
     updatedAt: session.updatedAt,

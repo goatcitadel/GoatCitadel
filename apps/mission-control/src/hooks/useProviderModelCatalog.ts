@@ -20,6 +20,7 @@ export interface ProviderModelCatalogOption {
   apiKeyRef?: string;
   apiKeySource?: string;
   hasApiKey?: boolean;
+  capabilities?: RuntimeSettingsResponse["llm"]["providers"][number]["capabilities"];
   models: string[];
   modelProbeState?: "not_checked" | "ready" | "empty" | "error";
   modelProbeCheckedAt?: string;
@@ -86,6 +87,7 @@ function buildProviderCatalog(
       apiKeyRef: provider.apiKeyRef,
       apiKeySource: provider.apiKeySource,
       hasApiKey: provider.hasApiKey,
+      capabilities: provider.capabilities,
       models: dedupeProviderModels([
         provider.defaultModel,
         provider.providerId === config.activeProviderId ? config.activeModel : undefined,

@@ -6,15 +6,16 @@
   --space-5: 24px;
   --space-6: 32px;
   --space-7: 48px;
-  --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
   --radius-pill: 999px;
-  --shadow-1: 0 2px 8px rgba(6, 12, 23, 0.12);
-  --shadow-2: 0 8px 24px rgba(6, 12, 23, 0.2);
-  --shadow-3: 0 16px 48px rgba(6, 12, 23, 0.3);
-  --font-display: "Rajdhani", "Segoe UI", sans-serif;
-  --font-body: "Inter", "Segoe UI", sans-serif;
+  --shadow-1: 0 10px 28px rgba(6, 12, 23, 0.1);
+  --shadow-2: 0 18px 44px rgba(6, 12, 23, 0.16);
+  --shadow-3: 0 28px 72px rgba(6, 12, 23, 0.22);
+  --font-display: "Geist Variable", "Inter", "Segoe UI", sans-serif;
+  --font-body: "Geist Variable", "Inter", "Segoe UI", sans-serif;
+  --font-reading: "Geist Variable", "Inter", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", monospace;
   --surface-app: var(--gc-bg-app, var(--background, var(--bg)));
   --surface-shell: var(--gc-bg-shell, var(--surface-app));
@@ -39,6 +40,12 @@
   --shadow-sm: var(--shadow-1);
   --shadow-md: var(--shadow-2);
   --density-scale: 1;
+  --shell-gutter: clamp(14px, 1.8vw, 24px);
+  --shell-chrome-radius: 18px;
+  --shell-chrome-blur: 22px;
+  --shell-chrome-padding: clamp(14px, 1.8vw, 20px);
+  --chat-thread-max-width: 920px;
+  --chat-compose-max-width: 920px;
 
   /* Page-level spacing rhythm */
   --page-gap-tight: 14px;

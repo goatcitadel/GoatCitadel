@@ -16,6 +16,12 @@ if (!root) {
   throw new Error("Root element not found");
 }
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js");
+  });
+}
+
 createRoot(root).render(
   <React.StrictMode>
     <UiPreferencesProvider>

@@ -657,6 +657,45 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 66,
+    name: "chat_session_organization",
+    up: migrateChatSessionOrganization,
+  },
+  {
+    version: 67,
+    name: "agent_profile_preset_defaults",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "agent_profiles", "preset_defaults_json", "TEXT");
+    },
+  },
+  {
+    version: 68,
+    name: "chat_generated_artifacts_and_thread_knowledge",
+    up: createChatGeneratedArtifactsAndThreadKnowledgeSchema,
+  },
+  {
+    version: 69,
+    name: "mutation_idempotency_runtime_repairs",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mutation_idempotency (
+          method TEXT NOT NULL,
+          route_path TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          actor_scope TEXT NOT NULL DEFAULT '',
+          payload_hash TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (method, route_path, idempotency_key, actor_scope)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mutation_idempotency_updated
+          ON mutation_idempotency(updated_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1561,6 +1600,7 @@ function createAgentProfilesSchema(db: DatabaseSync): void {
       specialties_json TEXT NOT NULL,
       default_tools_json TEXT NOT NULL,
       aliases_json TEXT NOT NULL,
+      preset_defaults_json TEXT,
       is_builtin INTEGER NOT NULL,
       lifecycle_status TEXT NOT NULL DEFAULT 'active',
       archived_at TEXT,
@@ -1738,6 +1778,9 @@ function createChatWorkspaceSchema(db: DatabaseSync): void {
       pinned INTEGER NOT NULL DEFAULT 0,
       lifecycle_status TEXT NOT NULL DEFAULT 'active',
       archived_at TEXT,
+      folder_id TEXT,
+      folder_name TEXT,
+      tags_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1750,6 +1793,8 @@ function createChatWorkspaceSchema(db: DatabaseSync): void {
       ON chat_session_meta(pinned DESC, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_session_meta_history_visibility
       ON chat_session_meta(workspace_id, include_in_history, lifecycle_status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_meta_folder
+      ON chat_session_meta(workspace_id, folder_id, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS chat_session_projects (
       session_id TEXT PRIMARY KEY,
@@ -4580,6 +4625,78 @@ function createChatSessionWorkbenchSchema(db: DatabaseSync): void {
       ON chat_session_workbench(project_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_session_workbench_status
       ON chat_session_workbench(worktree_status, validation_status, updated_at DESC);
+  `);
+}
+
+function migrateChatSessionOrganization(db: DatabaseSync): void {
+  addColumnIfMissing(db, "chat_session_meta", "folder_id", "TEXT");
+  addColumnIfMissing(db, "chat_session_meta", "folder_name", "TEXT");
+  addColumnIfMissing(db, "chat_session_meta", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
+  if (tableExists(db, "chat_session_meta")) {
+    db.exec(`
+      UPDATE chat_session_meta
+      SET tags_json = '[]'
+      WHERE tags_json IS NULL OR TRIM(tags_json) = '';
+
+      CREATE INDEX IF NOT EXISTS idx_chat_session_meta_folder
+        ON chat_session_meta(workspace_id, folder_id, updated_at DESC);
+    `);
+  }
+}
+
+function createChatGeneratedArtifactsAndThreadKnowledgeSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_generated_artifacts (
+      artifact_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT,
+      turn_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      content TEXT NOT NULL,
+      language TEXT,
+      source_surface TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      supersedes_artifact_id TEXT,
+      provider_id TEXT,
+      model TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_session_created
+      ON chat_generated_artifacts(session_id, created_at DESC, version DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_turn_created
+      ON chat_generated_artifacts(turn_id, version DESC, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_workspace_created
+      ON chat_generated_artifacts(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_surface_kind_created
+      ON chat_generated_artifacts(source_surface, kind, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_thread_knowledge_attachments (
+      attachment_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_ref TEXT NOT NULL,
+      title TEXT NOT NULL,
+      retrieval_mode TEXT NOT NULL,
+      ingest_status TEXT NOT NULL,
+      chunk_count INTEGER,
+      namespace TEXT,
+      chat_attachment_id TEXT,
+      document_id TEXT,
+      error_message TEXT,
+      last_ingest_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_session_created
+      ON chat_thread_knowledge_attachments(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_session_mode
+      ON chat_thread_knowledge_attachments(session_id, retrieval_mode, ingest_status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_document
+      ON chat_thread_knowledge_attachments(document_id, updated_at DESC);
   `);
 }
 

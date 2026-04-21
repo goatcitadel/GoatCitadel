@@ -3,6 +3,9 @@ import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
 import type { EventStreamStatus } from "../../api/shell-client";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../components/ui";
+import { GeneratedArtifactViewer } from "../../components/chat/GeneratedArtifactViewer";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { ChatComposerShell } from "./ChatComposerShell";
 import { ChatThreadShell } from "./ChatThreadShell";
 import { MissionControlSurfaceHeader } from "./MissionControlSurfaceHeader";
@@ -16,6 +19,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   trust: WorkTrustDescriptor;
   dockOpen: boolean;
   onToggleDock: () => void;
+  onNavigateSurface: (surface: ChatMode) => void;
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
@@ -37,6 +41,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifactVersion: (turnId: string) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onSubmitUserInput: Parameters<typeof ChatThreadShell>[0]["onSubmitUserInput"];
@@ -50,6 +56,11 @@ export interface MissionControlActiveSessionSurfaceProps {
   commandSuggestions: Parameters<typeof ChatComposerShell>[0]["commandSuggestions"];
   commandIndex: number;
   pendingAttachments: Parameters<typeof ChatComposerShell>[0]["pendingAttachments"];
+  pendingAttachmentModes: Parameters<typeof ChatComposerShell>[0]["pendingAttachmentModes"];
+  threadKnowledgeAttachments: Parameters<typeof ChatComposerShell>[0]["threadKnowledgeAttachments"];
+  presetOptions: Parameters<typeof ChatComposerShell>[0]["presetOptions"];
+  selectedPresetId: Parameters<typeof ChatComposerShell>[0]["selectedPresetId"];
+  presetApplyWarning: Parameters<typeof ChatComposerShell>[0]["presetApplyWarning"];
   selectedTurnRecovery: Parameters<typeof ChatComposerShell>[0]["selectedTurnRecovery"];
   selectedTurn: Parameters<typeof ChatComposerShell>[0]["selectedTurn"];
   selectedSessionId: string | null;
@@ -63,6 +74,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   activeStreamTurnAssigned: boolean;
   composerRef: Parameters<typeof ChatComposerShell>[0]["composerRef"];
   fileInputRef: Parameters<typeof ChatComposerShell>[0]["fileInputRef"];
+  audioInputRef: Parameters<typeof ChatComposerShell>[0]["audioInputRef"];
   onDragEnter: React.DragEventHandler<HTMLElement>;
   onDragOver: React.DragEventHandler<HTMLElement>;
   onDragLeave: React.DragEventHandler<HTMLElement>;
@@ -78,10 +90,39 @@ export interface MissionControlActiveSessionSurfaceProps {
   onComposerKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
   onComposerPaste: React.ClipboardEventHandler<HTMLTextAreaElement>;
   onApplyDraftCommand: (command: string) => void;
+  onPresetChange: Parameters<typeof ChatComposerShell>[0]["onPresetChange"];
+  onApplyPreset: Parameters<typeof ChatComposerShell>[0]["onApplyPreset"];
+  onDismissPresetWarning: Parameters<typeof ChatComposerShell>[0]["onDismissPresetWarning"];
+  onSetAttachmentMode: Parameters<typeof ChatComposerShell>[0]["onSetAttachmentMode"];
+  onRemoveThreadKnowledgeAttachment: Parameters<typeof ChatComposerShell>[0]["onRemoveThreadKnowledgeAttachment"];
+  knowledgeUrlDraft: Parameters<typeof ChatComposerShell>[0]["knowledgeUrlDraft"];
+  knowledgeUrlMode: Parameters<typeof ChatComposerShell>[0]["knowledgeUrlMode"];
+  onKnowledgeUrlDraftChange: Parameters<typeof ChatComposerShell>[0]["onKnowledgeUrlDraftChange"];
+  onKnowledgeUrlModeChange: Parameters<typeof ChatComposerShell>[0]["onKnowledgeUrlModeChange"];
+  onAttachKnowledgeUrl: Parameters<typeof ChatComposerShell>[0]["onAttachKnowledgeUrl"];
   onRemoveAttachment: (attachmentId: string) => void;
   onAttachFiles: () => void;
   onUploadFiles: (files: FileList | null) => void;
   onRunQuickResearch: () => void;
+  voiceBusy: Parameters<typeof ChatComposerShell>[0]["voiceBusy"];
+  voiceInputAvailable: Parameters<typeof ChatComposerShell>[0]["voiceInputAvailable"];
+  voiceOutputAvailable: Parameters<typeof ChatComposerShell>[0]["voiceOutputAvailable"];
+  voiceTalkActive: Parameters<typeof ChatComposerShell>[0]["voiceTalkActive"];
+  voiceStatusLabel: Parameters<typeof ChatComposerShell>[0]["voiceStatusLabel"];
+  voiceUnavailableReason: Parameters<typeof ChatComposerShell>[0]["voiceUnavailableReason"];
+  speakResponsesEnabled: Parameters<typeof ChatComposerShell>[0]["speakResponsesEnabled"];
+  imageBusy: Parameters<typeof ChatComposerShell>[0]["imageBusy"];
+  imageGenerationAvailable: Parameters<typeof ChatComposerShell>[0]["imageGenerationAvailable"];
+  imageEditAvailable: Parameters<typeof ChatComposerShell>[0]["imageEditAvailable"];
+  imageRouteLabel: Parameters<typeof ChatComposerShell>[0]["imageRouteLabel"];
+  onToggleVoiceTalk: Parameters<typeof ChatComposerShell>[0]["onToggleVoiceTalk"];
+  onOpenAudioTranscribe: Parameters<typeof ChatComposerShell>[0]["onOpenAudioTranscribe"];
+  onAudioFileSelected: Parameters<typeof ChatComposerShell>[0]["onAudioFileSelected"];
+  onToggleSpeakResponses: Parameters<typeof ChatComposerShell>[0]["onToggleSpeakResponses"];
+  onGenerateImage: Parameters<typeof ChatComposerShell>[0]["onGenerateImage"];
+  onEditImage: Parameters<typeof ChatComposerShell>[0]["onEditImage"];
+  activeGeneratedArtifact?: import("@goatcitadel/contracts").ChatGeneratedArtifactRecord | null;
+  onCloseGeneratedArtifact?: () => void;
   onStopActiveTurn: () => void;
   onSend: () => void;
 }
@@ -93,6 +134,7 @@ export function MissionControlActiveSessionSurface({
   trust,
   dockOpen,
   onToggleDock,
+  onNavigateSurface,
   loading,
   thread,
   selectedTurnId,
@@ -114,6 +156,8 @@ export function MissionControlActiveSessionSurface({
   onRetryTurn,
   onEditTurn,
   onOpenRunDetails,
+  onOpenGeneratedArtifact,
+  onCreateGeneratedArtifactVersion,
   onApprovePending,
   onDenyPending,
   onSubmitUserInput,
@@ -127,6 +171,11 @@ export function MissionControlActiveSessionSurface({
   commandSuggestions,
   commandIndex,
   pendingAttachments,
+  pendingAttachmentModes,
+  threadKnowledgeAttachments,
+  presetOptions,
+  selectedPresetId,
+  presetApplyWarning,
   selectedTurnRecovery,
   selectedTurn,
   selectedSessionId,
@@ -140,6 +189,7 @@ export function MissionControlActiveSessionSurface({
   activeStreamTurnAssigned,
   composerRef,
   fileInputRef,
+  audioInputRef,
   onDragEnter,
   onDragOver,
   onDragLeave,
@@ -155,14 +205,44 @@ export function MissionControlActiveSessionSurface({
   onComposerKeyDown,
   onComposerPaste,
   onApplyDraftCommand,
+  onPresetChange,
+  onApplyPreset,
+  onDismissPresetWarning,
+  onSetAttachmentMode,
+  onRemoveThreadKnowledgeAttachment,
+  knowledgeUrlDraft,
+  knowledgeUrlMode,
+  onKnowledgeUrlDraftChange,
+  onKnowledgeUrlModeChange,
+  onAttachKnowledgeUrl,
   onRemoveAttachment,
   onAttachFiles,
   onUploadFiles,
   onRunQuickResearch,
+  voiceBusy,
+  voiceInputAvailable,
+  voiceOutputAvailable,
+  voiceTalkActive,
+  voiceStatusLabel,
+  voiceUnavailableReason,
+  speakResponsesEnabled,
+  imageBusy,
+  imageGenerationAvailable,
+  imageEditAvailable,
+  imageRouteLabel,
+  onToggleVoiceTalk,
+  onOpenAudioTranscribe,
+  onAudioFileSelected,
+  onToggleSpeakResponses,
+  onGenerateImage,
+  onEditImage,
+  activeGeneratedArtifact,
+  onCloseGeneratedArtifact,
   onStopActiveTurn,
   onSend,
 }: MissionControlActiveSessionSurfaceProps) {
   const threadPanelRank = getMissionControlSurfaceConfig(mode).layout.threadPanelRank;
+  const compactArtifactSheet = useMediaQuery("(max-width: 840px)");
 
   return (
     <>
@@ -173,6 +253,7 @@ export function MissionControlActiveSessionSurface({
         trust={trust}
         dockOpen={dockOpen}
         onToggleDock={onToggleDock}
+        onNavigateSurface={onNavigateSurface}
       />
       <article
         className={`panel panel-${threadPanelRank} chat-v11-thread mode-${mode}`}
@@ -201,6 +282,8 @@ export function MissionControlActiveSessionSurface({
           onRetryTurn={onRetryTurn}
           onEditTurn={onEditTurn}
           onOpenRunDetails={onOpenRunDetails}
+          onOpenGeneratedArtifact={onOpenGeneratedArtifact}
+          onCreateGeneratedArtifactVersion={onCreateGeneratedArtifactVersion}
           onApprovePending={onApprovePending}
           onDenyPending={onDenyPending}
           onSubmitUserInput={onSubmitUserInput}
@@ -218,6 +301,11 @@ export function MissionControlActiveSessionSurface({
           commandSuggestions={commandSuggestions}
           commandIndex={commandIndex}
           pendingAttachments={pendingAttachments}
+          pendingAttachmentModes={pendingAttachmentModes}
+          threadKnowledgeAttachments={threadKnowledgeAttachments}
+          presetOptions={presetOptions}
+          selectedPresetId={selectedPresetId}
+          presetApplyWarning={presetApplyWarning}
           selectedTurnRecovery={selectedTurnRecovery}
           selectedTurn={selectedTurn}
           selectedSessionId={selectedSessionId}
@@ -231,6 +319,7 @@ export function MissionControlActiveSessionSurface({
           activeStreamTurnAssigned={activeStreamTurnAssigned}
           composerRef={composerRef}
           fileInputRef={fileInputRef}
+          audioInputRef={audioInputRef}
           onDragEnter={onDragEnter}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
@@ -247,14 +336,54 @@ export function MissionControlActiveSessionSurface({
           onComposerKeyDown={onComposerKeyDown}
           onComposerPaste={onComposerPaste}
           onApplyDraftCommand={onApplyDraftCommand}
+          onPresetChange={onPresetChange}
+          onApplyPreset={onApplyPreset}
+          onDismissPresetWarning={onDismissPresetWarning}
+          onSetAttachmentMode={onSetAttachmentMode}
+          onRemoveThreadKnowledgeAttachment={onRemoveThreadKnowledgeAttachment}
+          knowledgeUrlDraft={knowledgeUrlDraft}
+          knowledgeUrlMode={knowledgeUrlMode}
+          onKnowledgeUrlDraftChange={onKnowledgeUrlDraftChange}
+          onKnowledgeUrlModeChange={onKnowledgeUrlModeChange}
+          onAttachKnowledgeUrl={onAttachKnowledgeUrl}
           onRemoveAttachment={onRemoveAttachment}
           onAttachFiles={onAttachFiles}
           onUploadFiles={onUploadFiles}
           onRunQuickResearch={onRunQuickResearch}
+          voiceBusy={voiceBusy}
+          voiceInputAvailable={voiceInputAvailable}
+          voiceOutputAvailable={voiceOutputAvailable}
+          voiceTalkActive={voiceTalkActive}
+          voiceStatusLabel={voiceStatusLabel}
+          voiceUnavailableReason={voiceUnavailableReason}
+          speakResponsesEnabled={speakResponsesEnabled}
+          imageBusy={imageBusy}
+          imageGenerationAvailable={imageGenerationAvailable}
+          imageEditAvailable={imageEditAvailable}
+          imageRouteLabel={imageRouteLabel}
+          onToggleVoiceTalk={onToggleVoiceTalk}
+          onOpenAudioTranscribe={onOpenAudioTranscribe}
+          onAudioFileSelected={onAudioFileSelected}
+          onToggleSpeakResponses={onToggleSpeakResponses}
+          onGenerateImage={onGenerateImage}
+          onEditImage={onEditImage}
           onStopActiveTurn={onStopActiveTurn}
           onSend={onSend}
         />
       </article>
+      {compactArtifactSheet && activeGeneratedArtifact ? (
+        <Sheet open onOpenChange={(nextOpen) => !nextOpen && onCloseGeneratedArtifact?.()}>
+          <SheetContent side="bottom" className="generated-artifact-sheet">
+            <SheetHeader>
+              <SheetTitle>{activeGeneratedArtifact.title}</SheetTitle>
+              <SheetDescription>
+                Generated {activeGeneratedArtifact.kind} artifact from {activeGeneratedArtifact.sourceSurface}.
+              </SheetDescription>
+            </SheetHeader>
+            <GeneratedArtifactViewer artifact={activeGeneratedArtifact} compact />
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </>
   );
 }

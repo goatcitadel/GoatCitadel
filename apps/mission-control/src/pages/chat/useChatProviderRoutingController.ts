@@ -99,6 +99,12 @@ export function useChatProviderRoutingController(input: {
     defaultModel?: string;
     hasApiKey?: boolean;
     baseUrl?: string;
+    capabilities?: {
+      voiceInput?: boolean;
+      voiceOutput?: boolean;
+      imageGenerate?: boolean;
+      imageEdit?: boolean;
+    };
     models: string[];
     modelProbeState?: "not_checked" | "ready" | "empty" | "error";
     modelProbeCheckedAt?: string;
@@ -133,6 +139,7 @@ export function useChatProviderRoutingController(input: {
           !provider.hasApiKey && !isLocalRuntime
             ? `${provider.label} is not configured yet. Add an API key before using it.`
             : undefined,
+        capabilities: provider.capabilities,
         models: dedupeStrings([
           ...provider.models,
           provider.providerId === activeProviderId ? activeModel : undefined,
