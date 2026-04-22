@@ -32,7 +32,6 @@ export function useRefreshSubscription(
   const staleMs = options.staleMs;
   const pollIntervalMs = options.pollIntervalMs ?? 15000;
   const runWhenHidden = options.runWhenHidden ?? false;
-  const debug = Boolean(import.meta.env.DEV);
 
   useEffect(() => {
     callbackRef.current = callback;
@@ -62,9 +61,6 @@ export function useRefreshSubscription(
           message: `Refresh for ${topic} queued while callback was in-flight`,
           context: { topic },
         });
-        if (debug) {
-          console.debug(`[refresh:${topic}] skipped while in-flight; queued follow-up refresh`);
-        }
         return;
       }
 
@@ -89,13 +85,6 @@ export function useRefreshSubscription(
           eventType: signal.eventType,
         },
       });
-      if (debug) {
-        console.debug(
-          `[refresh:${topic}] started`,
-          signal.reason,
-          signal.eventType ?? signal.source ?? "unknown",
-        );
-      }
       try {
         await callbackRef.current(signal);
       } catch (error) {
@@ -109,17 +98,11 @@ export function useRefreshSubscription(
             error: (error as Error).message,
           },
         });
-        if (debug) {
-          console.warn(`[refresh:${topic}] callback failed`, error);
-        }
       } finally {
         if (source === "fallback") {
           fallbackPollLastRanAtRef.current = Date.now();
         }
         inFlightRef.current = false;
-        if (debug) {
-          console.debug(`[refresh:${topic}] completed`);
-        }
         recordClientDiagnostic({
           level: "debug",
           category: "refresh",
@@ -153,13 +136,6 @@ export function useRefreshSubscription(
           source: signal.source,
         },
       });
-      if (debug) {
-        console.debug(
-          `[refresh:${topic}] event`,
-          signal.reason,
-          signal.eventType ?? signal.source ?? "unknown",
-        );
-      }
       if (timerRef.current !== null) {
         return;
       }
@@ -170,23 +146,26 @@ export function useRefreshSubscription(
     });
 
     if (typeof staleMs === "number" && staleMs > 0) {
-      fallbackTimerRef.current = window.setInterval(() => {
-        if (!enabled) {
-          return;
-        }
-        if (!runWhenHidden && typeof document !== "undefined" && document.hidden) {
-          return;
-        }
-        const now = Date.now();
-        if (now - lastSignalAtRef.current < staleMs) {
-          return;
-        }
-        if (now - fallbackPollLastRanAtRef.current < pollIntervalMs) {
-          return;
-        }
-        setFallbackActive(true);
-        void runLatest("fallback");
-      }, Math.max(1000, pollIntervalMs));
+      fallbackTimerRef.current = window.setInterval(
+        () => {
+          if (!enabled) {
+            return;
+          }
+          if (!runWhenHidden && typeof document !== "undefined" && document.hidden) {
+            return;
+          }
+          const now = Date.now();
+          if (now - lastSignalAtRef.current < staleMs) {
+            return;
+          }
+          if (now - fallbackPollLastRanAtRef.current < pollIntervalMs) {
+            return;
+          }
+          setFallbackActive(true);
+          void runLatest("fallback");
+        },
+        Math.max(1000, pollIntervalMs),
+      );
     }
 
     return () => {
@@ -204,13 +183,5 @@ export function useRefreshSubscription(
       latestSignalRef.current = null;
       setFallbackActive(false);
     };
-  }, [
-    coalesceMs,
-    enabled,
-    pollIntervalMs,
-    runWhenHidden,
-    staleMs,
-    topic,
-    options.onFallbackStateChange,
-  ]);
+  }, [coalesceMs, enabled, pollIntervalMs, runWhenHidden, staleMs, topic, options.onFallbackStateChange]);
 }

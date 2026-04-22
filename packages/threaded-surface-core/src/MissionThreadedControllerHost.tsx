@@ -1,5 +1,16 @@
 /* eslint-disable max-lines -- Shared threaded controller host centralizes session/thread behavior for both Mission Control apps. */
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps, type DragEventHandler, type ReactNode, type RefObject } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type DragEventHandler,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import type {
   ChatAttachmentRecord,
   ChatGeneratedArtifactRecord,
@@ -46,10 +57,7 @@ import type { ChatContextDockPanelsProps } from "./chat/ChatContextDockPanels.ty
 import type { MissionControlActiveSessionSurfaceProps } from "./chat/MissionControlActiveSessionSurface";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
-import {
-  formatWorkProviderModelSummary,
-  type WorkTrustDescriptor,
-} from "./chat/work-trust";
+import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat/work-trust";
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
@@ -79,7 +87,6 @@ import { useChatSessionControls } from "./chat/useChatSessionControls";
 import { useChatDockWorkbenchController } from "./chat/useChatDockWorkbenchController";
 import { useChatProviderRoutingController } from "./chat/useChatProviderRoutingController";
 import { useChatRoutePreflight } from "./chat/useChatRoutePreflight";
-import type { ActiveChatDelegationRun } from "./chat/useChatDelegationPolicyActions";
 import {
   resolveOutboundDraftContent,
   useChatSurfaceOrchestration,

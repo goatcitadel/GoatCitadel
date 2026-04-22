@@ -3,7 +3,6 @@ import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
   type ChatMode,
-  type ChatThreadResponse,
   type ChatThreadTurnRecord,
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
@@ -126,13 +125,23 @@ function ThreadBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; 
     currentIndex < turn.branch.siblingTurnIds.length - 1 ? turn.branch.siblingTurnIds[currentIndex + 1] : undefined;
   return (
     <div className="mc-next-thread-branch-switcher">
-      <button type="button" className="mc-next-thread-inline-button" disabled={!previousTurnId} onClick={() => previousTurnId && onSwitch(previousTurnId)}>
+      <button
+        type="button"
+        className="mc-next-thread-inline-button"
+        disabled={!previousTurnId}
+        onClick={() => previousTurnId && onSwitch(previousTurnId)}
+      >
         Previous
       </button>
       <span>
         {currentIndex + 1} / {turn.branch.siblingCount}
       </span>
-      <button type="button" className="mc-next-thread-inline-button" disabled={!nextTurnId} onClick={() => nextTurnId && onSwitch(nextTurnId)}>
+      <button
+        type="button"
+        className="mc-next-thread-inline-button"
+        disabled={!nextTurnId}
+        onClick={() => nextTurnId && onSwitch(nextTurnId)}
+      >
         Next
       </button>
     </div>
@@ -196,7 +205,8 @@ function ThreadTurnCard({
         </div>
         <div className="mc-next-thread-bubble assistant">
           <p className="mc-next-thread-meta">
-            <strong>GoatCitadel</strong> · {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
+            <strong>GoatCitadel</strong> ·{" "}
+            {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
             {turnHasRepairedAssistantOutput(turn) ? (
               <>
                 {" "}
@@ -209,7 +219,13 @@ function ThreadTurnCard({
           {turn.assistantMessage ? (
             <AssistantMessageRenderer role="assistant" content={turn.assistantMessage.content} />
           ) : (
-            <p>{isChatTurnActiveStatus(turn.trace.status) || turn.trace.status === "cancelled" || turn.trace.status === "failed" ? getTurnPendingLabel(turn.trace) : "No assistant output yet."}</p>
+            <p>
+              {isChatTurnActiveStatus(turn.trace.status) ||
+              turn.trace.status === "cancelled" ||
+              turn.trace.status === "failed"
+                ? getTurnPendingLabel(turn.trace)
+                : "No assistant output yet."}
+            </p>
           )}
         </div>
       </div>
@@ -247,7 +263,11 @@ function ThreadTurnCard({
             </button>
           ) : null}
           {hasGeneratedArtifact ? (
-            <button type="button" className="mc-next-thread-inline-button" onClick={() => onCreateGeneratedArtifactVersion(turn.turnId)}>
+            <button
+              type="button"
+              className="mc-next-thread-inline-button"
+              onClick={() => onCreateGeneratedArtifactVersion(turn.turnId)}
+            >
               New version
             </button>
           ) : null}
@@ -331,7 +351,9 @@ function ThreadDelegationSummary({
             </li>
           ))}
         </ol>
-        {delegationRun.stitchedOutput ? <AssistantMessageRenderer role="assistant" content={delegationRun.stitchedOutput} /> : null}
+        {delegationRun.stitchedOutput ? (
+          <AssistantMessageRenderer role="assistant" content={delegationRun.stitchedOutput} />
+        ) : null}
       </div>
     </section>
   );
@@ -345,7 +367,15 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
       return;
     }
     threadEndRef.current?.scrollIntoView({ block: "end" });
-  }, [props.followOutput, props.notices.length, props.queuedCount, props.selectedTurnId, props.streamError, props.streamStatus, props.thread]);
+  }, [
+    props.followOutput,
+    props.notices.length,
+    props.queuedCount,
+    props.selectedTurnId,
+    props.streamError,
+    props.streamStatus,
+    props.thread,
+  ]);
 
   useEffect(() => {
     props.onBottomStateChange(true);

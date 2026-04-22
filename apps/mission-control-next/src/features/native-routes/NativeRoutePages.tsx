@@ -1,22 +1,33 @@
+/* eslint-disable max-lines -- Native route shells intentionally co-locate next-native Library/Ops/Cowork views while the surface rewrite settles. */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowRight, Bot, BrainCircuit, Cable, CheckCircle2, FileText, FolderOpen, Gauge, Hammer, History, Plus, Radar, RefreshCw, Save, Search, Server, ShieldCheck, Sparkles, Undo2, Wallet, Workflow, Wrench } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Bot,
+  BrainCircuit,
+  CheckCircle2,
+  FileText,
+  FolderOpen,
+  History,
+  Plus,
+  Radar,
+  RefreshCw,
+  Save,
+  Server,
+  ShieldCheck,
+  Sparkles,
+  Undo2,
+  Wallet,
+  Workflow,
+} from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type {
   ApprovalRequest,
   ChatGeneratedArtifactRecord,
-  ImportedAgentCatalogRecord,
   McpServerRecord,
-  MemoryContextPack,
-  MemoryItemRecord,
-  MemoryMaintenanceRecommendationRecord,
-  MemoryMaintenanceStatusRecord,
-  SkillActivationPolicy,
-  SkillImportHistoryRecord,
   SkillListItem,
-  SkillSourceResultRecord,
 } from "@goatcitadel/contracts";
 import {
-  acceptMemoryMaintenanceRecommendation,
   archiveAgentProfile,
   createAgentProfile,
   createFileFromTemplate,
@@ -31,10 +42,6 @@ import {
   fetchImportedAgentCatalog,
   fetchMcpServers,
   fetchMemoryFiles,
-  fetchMemoryItemHistory,
-  fetchMemoryItems,
-  fetchMemoryMaintenanceRecommendations,
-  fetchMemoryMaintenanceStatus,
   fetchMemoryQmdStats,
   fetchOperators,
   fetchSkillActivationPolicies,
@@ -43,10 +50,7 @@ import {
   fetchSkills,
   fetchTasksByView,
   fetchTimelineSummary,
-  forgetMemoryItem,
   downloadFile,
-  patchMemoryItem,
-  rejectMemoryMaintenanceRecommendation,
   reloadSkills,
   restoreAgentProfile,
   updateAgentProfile,
@@ -104,10 +108,12 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
 
 function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
   const section = route.section ?? "workspace";
-  const [state, setState] = useState<LoadState<{
-    tasks: TaskCardRecord[];
-    operators: Array<{ operatorId: string; sessionCount: number; activeSessions: number; lastActivityAt?: string }>;
-  }>>({
+  const [state, setState] = useState<
+    LoadState<{
+      tasks: TaskCardRecord[];
+      operators: Array<{ operatorId: string; sessionCount: number; activeSessions: number; lastActivityAt?: string }>;
+    }>
+  >({
     loading: true,
     error: null,
     data: null,
@@ -160,7 +166,9 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
   const operators = state.data?.operators ?? [];
   const groupedTasks = useMemo(
     () => ({
-      planning: tasks.filter((item) => item.status === "planning" || item.status === "inbox" || item.status === "assigned"),
+      planning: tasks.filter(
+        (item) => item.status === "planning" || item.status === "inbox" || item.status === "assigned",
+      ),
       active: tasks.filter((item) => item.status === "in_progress" || item.status === "testing"),
       review: tasks.filter((item) => item.status === "review" || item.status === "blocked"),
       done: tasks.filter((item) => item.status === "done"),
@@ -190,7 +198,11 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
         </NativeCard>
         <NativeCard title="Work distribution" subtitle="Current task flow by status lane.">
           <div className="mc-next-board-lanes">
-            <NativeLane title="Planning" count={groupedTasks.planning.length} items={groupedTasks.planning.slice(0, 4)} />
+            <NativeLane
+              title="Planning"
+              count={groupedTasks.planning.length}
+              items={groupedTasks.planning.slice(0, 4)}
+            />
             <NativeLane title="Active" count={groupedTasks.active.length} items={groupedTasks.active.slice(0, 4)} />
             <NativeLane title="Review" count={groupedTasks.review.length} items={groupedTasks.review.slice(0, 4)} />
             <NativeLane title="Done" count={groupedTasks.done.length} items={groupedTasks.done.slice(0, 4)} />
@@ -218,7 +230,11 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
           ]}
         >
           <div className="mc-next-task-lanes">
-            <NativeLane title="Planning" count={groupedTasks.planning.length} items={groupedTasks.planning.slice(0, 5)} />
+            <NativeLane
+              title="Planning"
+              count={groupedTasks.planning.length}
+              items={groupedTasks.planning.slice(0, 5)}
+            />
             <NativeLane title="Active" count={groupedTasks.active.length} items={groupedTasks.active.slice(0, 5)} />
             <NativeLane title="Review" count={groupedTasks.review.length} items={groupedTasks.review.slice(0, 5)} />
           </div>
@@ -291,23 +307,20 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
     aliases: "",
     defaultTools: "",
   });
-  const { loading, error, data, reload } = useAsyncLoad(
-    async () => {
-      const [agents, catalog] = await Promise.all([
-        fetchAgents("all", 160).catch(() => ({ items: [] })),
-        fetchImportedAgentCatalog({
-          workspaceId: activeWorkspaceId,
-          limit: 40,
-          state: "all",
-        }).catch(() => ({ workspaceId: activeWorkspaceId, divisions: [], items: [] })),
-      ]);
-      return {
-        agents: agents.items,
-        catalog: catalog.items,
-      };
-    },
-    [activeWorkspaceId],
-  );
+  const { loading, error, data, reload } = useAsyncLoad(async () => {
+    const [agents, catalog] = await Promise.all([
+      fetchAgents("all", 160).catch(() => ({ items: [] })),
+      fetchImportedAgentCatalog({
+        workspaceId: activeWorkspaceId,
+        limit: 40,
+        state: "all",
+      }).catch(() => ({ workspaceId: activeWorkspaceId, divisions: [], items: [] })),
+    ]);
+    return {
+      agents: agents.items,
+      catalog: catalog.items,
+    };
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     if (!data?.agents.length) {
@@ -315,7 +328,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
       return;
     }
     setSelectedAgentId((current) =>
-      data.agents.some((item) => item.agentId === current) ? current : data.agents[0]?.agentId ?? "",
+      data.agents.some((item) => item.agentId === current) ? current : (data.agents[0]?.agentId ?? ""),
     );
   }, [data]);
 
@@ -445,7 +458,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
         </NativeCard>
         <div className="mc-next-settings-stack">
           <NativeCard
-            title={createMode ? "Create agent profile" : selectedAgent?.name ?? "Agent detail"}
+            title={createMode ? "Create agent profile" : (selectedAgent?.name ?? "Agent detail")}
             subtitle={
               createMode
                 ? "Create a reusable operator profile for Chat, Cowork, or Code."
@@ -458,36 +471,75 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
               <>
                 <LibraryFieldGrid>
                   <LibraryField label="Role ID">
-                    <input className="mc-next-settings-input" value={draft.roleId} onChange={(event) => setDraft((current) => ({ ...current, roleId: event.target.value }))} disabled={!createMode} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.roleId}
+                      onChange={(event) => setDraft((current) => ({ ...current, roleId: event.target.value }))}
+                      disabled={!createMode}
+                    />
                   </LibraryField>
                   <LibraryField label="Name">
-                    <input className="mc-next-settings-input" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} disabled={!createMode && !selectedAgent?.editable} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.name}
+                      onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                      disabled={!createMode && !selectedAgent?.editable}
+                    />
                   </LibraryField>
                   <LibraryField label="Title">
-                    <input className="mc-next-settings-input" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} disabled={!createMode && !selectedAgent?.editable} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.title}
+                      onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+                      disabled={!createMode && !selectedAgent?.editable}
+                    />
                   </LibraryField>
                   <LibraryField label="Specialties">
-                    <input className="mc-next-settings-input" value={draft.specialties} onChange={(event) => setDraft((current) => ({ ...current, specialties: event.target.value }))} disabled={!createMode && !selectedAgent?.editable} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.specialties}
+                      onChange={(event) => setDraft((current) => ({ ...current, specialties: event.target.value }))}
+                      disabled={!createMode && !selectedAgent?.editable}
+                    />
                   </LibraryField>
                   <LibraryField label="Aliases">
-                    <input className="mc-next-settings-input" value={draft.aliases} onChange={(event) => setDraft((current) => ({ ...current, aliases: event.target.value }))} disabled={!createMode && !selectedAgent?.editable} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.aliases}
+                      onChange={(event) => setDraft((current) => ({ ...current, aliases: event.target.value }))}
+                      disabled={!createMode && !selectedAgent?.editable}
+                    />
                   </LibraryField>
                   <LibraryField label="Default tools">
-                    <input className="mc-next-settings-input" value={draft.defaultTools} onChange={(event) => setDraft((current) => ({ ...current, defaultTools: event.target.value }))} disabled={!createMode && !selectedAgent?.editable} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.defaultTools}
+                      onChange={(event) => setDraft((current) => ({ ...current, defaultTools: event.target.value }))}
+                      disabled={!createMode && !selectedAgent?.editable}
+                    />
                   </LibraryField>
                   <LibraryField label="Summary" span={2}>
-                    <textarea className="mc-next-settings-textarea" value={draft.summary} onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))} disabled={!createMode && !selectedAgent?.editable} />
+                    <textarea
+                      className="mc-next-settings-textarea"
+                      value={draft.summary}
+                      onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))}
+                      disabled={!createMode && !selectedAgent?.editable}
+                    />
                   </LibraryField>
                 </LibraryFieldGrid>
                 <LibraryButtonRow>
-                  {(createMode || selectedAgent?.editable) ? (
+                  {createMode || selectedAgent?.editable ? (
                     <button type="button" className="mc-next-settings-filter" onClick={() => void handleSave()}>
                       <Save className="h-4 w-4" />
                       {createMode ? "Create agent" : "Save changes"}
                     </button>
                   ) : null}
                   {!createMode && selectedAgent ? (
-                    <button type="button" className="mc-next-settings-filter" onClick={() => void handleArchiveToggle()}>
+                    <button
+                      type="button"
+                      className="mc-next-settings-filter"
+                      onClick={() => void handleArchiveToggle()}
+                    >
                       <Undo2 className="h-4 w-4" />
                       {selectedAgent.lifecycleStatus === "archived" ? "Restore" : "Archive"}
                     </button>
@@ -531,23 +583,20 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
 function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
-  const { loading, error, data, reload } = useAsyncLoad(
-    async () => {
-      const [skills, sources, history, policy] = await Promise.all([
-        fetchSkills().catch(() => ({ items: [] })),
-        fetchSkillSources({ limit: 10 }).catch(() => ({ items: [] })),
-        fetchSkillImportHistory(10).catch(() => ({ items: [] })),
-        fetchSkillActivationPolicies().catch(() => null),
-      ]);
-      return {
-        skills: skills.items,
-        sources: sources.items,
-        history: history.items,
-        policy,
-      };
-    },
-    [],
-  );
+  const { loading, error, data, reload } = useAsyncLoad(async () => {
+    const [skills, sources, history, policy] = await Promise.all([
+      fetchSkills().catch(() => ({ items: [] })),
+      fetchSkillSources({ limit: 10 }).catch(() => ({ items: [] })),
+      fetchSkillImportHistory(10).catch(() => ({ items: [] })),
+      fetchSkillActivationPolicies().catch(() => null),
+    ]);
+    return {
+      skills: skills.items,
+      sources: sources.items,
+      history: history.items,
+      policy,
+    };
+  }, []);
 
   useEffect(() => {
     if (!data?.skills.length) {
@@ -555,7 +604,7 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
       return;
     }
     setSelectedSkillId((current) =>
-      data.skills.some((item) => item.skillId === current) ? current : data.skills[0]?.skillId ?? "",
+      data.skills.some((item) => item.skillId === current) ? current : (data.skills[0]?.skillId ?? ""),
     );
   }, [data]);
 
@@ -624,8 +673,16 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
                 <LibraryMetricGrid
                   items={[
                     { label: "State", value: selectedSkill.state, meta: selectedSkill.trustLabel ?? "Runtime posture" },
-                    { label: "Source", value: selectedSkill.source, meta: selectedSkill.lifecycleState ?? "Skill source" },
-                    { label: "Callable", value: selectedSkill.callable ? "Yes" : "No", meta: selectedSkill.capabilityCategory ?? "Capability category" },
+                    {
+                      label: "Source",
+                      value: selectedSkill.source,
+                      meta: selectedSkill.lifecycleState ?? "Skill source",
+                    },
+                    {
+                      label: "Callable",
+                      value: selectedSkill.callable ? "Yes" : "No",
+                      meta: selectedSkill.capabilityCategory ?? "Capability category",
+                    },
                     { label: "Requires", value: String(selectedSkill.requires.length), meta: selectedSkill.dir },
                   ]}
                 />
@@ -636,9 +693,27 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
                   {selectedSkill.declaredTools.length ? selectedSkill.declaredTools.join(", ") : "No declared tools"}
                 </LibraryCodeBlock>
                 <LibraryButtonRow>
-                  <button type="button" className="mc-next-settings-filter" onClick={() => void handleSkillState("enabled")}>Enable</button>
-                  <button type="button" className="mc-next-settings-filter" onClick={() => void handleSkillState("sleep")}>Sleep</button>
-                  <button type="button" className="mc-next-settings-filter" onClick={() => void handleSkillState("disabled")}>Disable</button>
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void handleSkillState("enabled")}
+                  >
+                    Enable
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void handleSkillState("sleep")}
+                  >
+                    Sleep
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void handleSkillState("disabled")}
+                  >
+                    Disable
+                  </button>
                 </LibraryButtonRow>
               </>
             ) : (
@@ -651,9 +726,19 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
           >
             <LibraryMetricGrid
               items={[
-                { label: "Source matches", value: String(data?.sources.length ?? 0), meta: "Search providers currently responding" },
+                {
+                  label: "Source matches",
+                  value: String(data?.sources.length ?? 0),
+                  meta: "Search providers currently responding",
+                },
                 { label: "Import history", value: String(data?.history.length ?? 0), meta: "Recent install attempts" },
-                { label: "Auto threshold", value: String(data?.policy?.guardedAutoThreshold ?? "n/a"), meta: data?.policy?.requireFirstUseConfirmation ? "First use confirmation on" : "First use confirmation off" },
+                {
+                  label: "Auto threshold",
+                  value: String(data?.policy?.guardedAutoThreshold ?? "n/a"),
+                  meta: data?.policy?.requireFirstUseConfirmation
+                    ? "First use confirmation on"
+                    : "First use confirmation off",
+                },
               ]}
             />
             <LibraryActionList
@@ -701,19 +786,16 @@ function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
     error: null,
     data: null,
   });
-  const { loading, error, data, reload } = useAsyncLoad(
-    async () => {
-      const [files, qmd] = await Promise.all([
-        fetchMemoryFiles("memory").catch(() => ({ items: [] })),
-        fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
-      ]);
-      return {
-        files: files.items,
-        qmd,
-      };
-    },
-    [],
-  );
+  const { loading, error, data, reload } = useAsyncLoad(async () => {
+    const [files, qmd] = await Promise.all([
+      fetchMemoryFiles("memory").catch(() => ({ items: [] })),
+      fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
+    ]);
+    return {
+      files: files.items,
+      qmd,
+    };
+  }, []);
 
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -725,7 +807,9 @@ function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
       setSelectedFilePath("");
       return;
     }
-    setSelectedFilePath((current) => visibleFiles.some((item) => item.relativePath === current) ? current : visibleFiles[0]?.relativePath ?? "");
+    setSelectedFilePath((current) =>
+      visibleFiles.some((item) => item.relativePath === current) ? current : (visibleFiles[0]?.relativePath ?? ""),
+    );
   }, [visibleFiles]);
 
   useEffect(() => {
@@ -789,7 +873,12 @@ function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
           <div className="mc-next-settings-field-grid">
             <label className="mc-next-settings-field span-2">
               <span>Filter memory files</span>
-              <input className="mc-next-settings-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the memory directory" />
+              <input
+                className="mc-next-settings-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search the memory directory"
+              />
             </label>
           </div>
           <LibrarySelectableList
@@ -815,7 +904,11 @@ function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
               <>
                 <LibraryFieldGrid>
                   <LibraryField label="Content" span={2}>
-                    <textarea className="mc-next-settings-textarea" value={draftContent} onChange={(event) => setDraftContent(event.target.value)} />
+                    <textarea
+                      className="mc-next-settings-textarea"
+                      value={draftContent}
+                      onChange={(event) => setDraftContent(event.target.value)}
+                    />
                   </LibraryField>
                 </LibraryFieldGrid>
                 <LibraryButtonRow>
@@ -826,7 +919,9 @@ function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
                 </LibraryButtonRow>
               </>
             ) : null}
-            {!preview.loading && !preview.error && !preview.data ? <LibraryEmptyState label="Select a memory file to inspect it." /> : null}
+            {!preview.loading && !preview.error && !preview.data ? (
+              <LibraryEmptyState label="Select a memory file to inspect it." />
+            ) : null}
           </NativeCard>
           <NativeCard
             title="Recent distilled context"
@@ -834,9 +929,21 @@ function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
           >
             <LibraryMetricGrid
               items={[
-                { label: "Total runs", value: String(data?.qmd?.totalRuns ?? 0), meta: `${data?.qmd?.generatedRuns ?? 0} generated` },
-                { label: "Cache hits", value: String(data?.qmd?.cacheHitRuns ?? 0), meta: `${data?.qmd?.fallbackRuns ?? 0} fallback` },
-                { label: "Compression", value: `${data?.qmd?.compressionPercent ?? 0}%`, meta: data?.qmd?.efficiencyLabel ?? "Unknown" },
+                {
+                  label: "Total runs",
+                  value: String(data?.qmd?.totalRuns ?? 0),
+                  meta: `${data?.qmd?.generatedRuns ?? 0} generated`,
+                },
+                {
+                  label: "Cache hits",
+                  value: String(data?.qmd?.cacheHitRuns ?? 0),
+                  meta: `${data?.qmd?.fallbackRuns ?? 0} fallback`,
+                },
+                {
+                  label: "Compression",
+                  value: `${data?.qmd?.compressionPercent ?? 0}%`,
+                  meta: data?.qmd?.efficiencyLabel ?? "Unknown",
+                },
               ]}
             />
             <LibraryActionList
@@ -863,19 +970,16 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
     error: null,
     data: null,
   });
-  const { loading, error, data } = useAsyncLoad(
-    async () => {
-      const [files, qmd] = await Promise.all([
-        fetchMemoryFiles("memory").catch(() => ({ items: [] })),
-        fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
-      ]);
-      return {
-        files: files.items,
-        qmd,
-      };
-    },
-    [],
-  );
+  const { loading, error, data } = useAsyncLoad(async () => {
+    const [files, qmd] = await Promise.all([
+      fetchMemoryFiles("memory").catch(() => ({ items: [] })),
+      fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
+    ]);
+    return {
+      files: files.items,
+      qmd,
+    };
+  }, []);
 
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -887,7 +991,9 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
       setSelectedFilePath("");
       return;
     }
-    setSelectedFilePath((current) => visibleFiles.some((item) => item.relativePath === current) ? current : visibleFiles[0]?.relativePath ?? "");
+    setSelectedFilePath((current) =>
+      visibleFiles.some((item) => item.relativePath === current) ? current : (visibleFiles[0]?.relativePath ?? ""),
+    );
   }, [visibleFiles]);
 
   useEffect(() => {
@@ -934,7 +1040,12 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
           <div className="mc-next-settings-field-grid">
             <label className="mc-next-settings-field span-2">
               <span>Filter files</span>
-              <input className="mc-next-settings-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the knowledge file list" />
+              <input
+                className="mc-next-settings-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search the knowledge file list"
+              />
             </label>
           </div>
           <LibrarySelectableList
@@ -957,11 +1068,11 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
             {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
             {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
             {!preview.loading && !preview.error && preview.data ? (
-              <LibraryCodeBlock label="Preview">
-                {truncateText(preview.data.content, 2400)}
-              </LibraryCodeBlock>
+              <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2400)}</LibraryCodeBlock>
             ) : null}
-            {!preview.loading && !preview.error && !preview.data ? <LibraryEmptyState label="Select a knowledge file to preview it." /> : null}
+            {!preview.loading && !preview.error && !preview.data ? (
+              <LibraryEmptyState label="Select a knowledge file to preview it." />
+            ) : null}
           </NativeCard>
           <NativeCard
             title="Recent context packs"
@@ -969,9 +1080,21 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
           >
             <LibraryMetricGrid
               items={[
-                { label: "Total runs", value: String(data?.qmd?.totalRuns ?? 0), meta: `${data?.qmd?.generatedRuns ?? 0} generated` },
-                { label: "Cache hits", value: String(data?.qmd?.cacheHitRuns ?? 0), meta: `${data?.qmd?.fallbackRuns ?? 0} fallback` },
-                { label: "Compression", value: `${data?.qmd?.compressionPercent ?? 0}%`, meta: data?.qmd?.efficiencyLabel ?? "Unknown" },
+                {
+                  label: "Total runs",
+                  value: String(data?.qmd?.totalRuns ?? 0),
+                  meta: `${data?.qmd?.generatedRuns ?? 0} generated`,
+                },
+                {
+                  label: "Cache hits",
+                  value: String(data?.qmd?.cacheHitRuns ?? 0),
+                  meta: `${data?.qmd?.fallbackRuns ?? 0} fallback`,
+                },
+                {
+                  label: "Compression",
+                  value: `${data?.qmd?.compressionPercent ?? 0}%`,
+                  meta: data?.qmd?.efficiencyLabel ?? "Unknown",
+                },
               ]}
             />
             <LibraryActionList
@@ -1001,19 +1124,16 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
     error: null,
     data: null,
   });
-  const { loading, error, data, reload } = useAsyncLoad(
-    async () => {
-      const [files, templates] = await Promise.all([
-        fetchFilesList(".", 120).catch(() => ({ items: [] })),
-        fetchFileTemplates().catch(() => ({ items: [] })),
-      ]);
-      return {
-        files: files.items,
-        templates: templates.items,
-      };
-    },
-    [],
-  );
+  const { loading, error, data, reload } = useAsyncLoad(async () => {
+    const [files, templates] = await Promise.all([
+      fetchFilesList(".", 120).catch(() => ({ items: [] })),
+      fetchFileTemplates().catch(() => ({ items: [] })),
+    ]);
+    return {
+      files: files.items,
+      templates: templates.items,
+    };
+  }, []);
 
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1025,7 +1145,9 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
       setSelectedFilePath("");
       return;
     }
-    setSelectedFilePath((current) => visibleFiles.some((item) => item.relativePath === current) ? current : visibleFiles[0]?.relativePath ?? "");
+    setSelectedFilePath((current) =>
+      visibleFiles.some((item) => item.relativePath === current) ? current : (visibleFiles[0]?.relativePath ?? ""),
+    );
   }, [visibleFiles]);
 
   useEffect(() => {
@@ -1034,7 +1156,7 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
       return;
     }
     setSelectedTemplateId((current) =>
-      data.templates.some((item) => item.templateId === current) ? current : data.templates[0]?.templateId ?? "",
+      data.templates.some((item) => item.templateId === current) ? current : (data.templates[0]?.templateId ?? ""),
     );
   }, [data?.templates]);
 
@@ -1099,7 +1221,12 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
           <div className="mc-next-settings-field-grid">
             <label className="mc-next-settings-field span-2">
               <span>Filter files</span>
-              <input className="mc-next-settings-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search relative path" />
+              <input
+                className="mc-next-settings-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search relative path"
+              />
             </label>
           </div>
           <LibrarySelectableList
@@ -1122,11 +1249,11 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
             {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
             {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
             {!preview.loading && !preview.error && preview.data ? (
-              <LibraryCodeBlock label="Preview">
-                {truncateText(preview.data.content, 2600)}
-              </LibraryCodeBlock>
+              <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2600)}</LibraryCodeBlock>
             ) : null}
-            {!preview.loading && !preview.error && !preview.data ? <LibraryEmptyState label="Select a file to preview it." /> : null}
+            {!preview.loading && !preview.error && !preview.data ? (
+              <LibraryEmptyState label="Select a file to preview it." />
+            ) : null}
           </NativeCard>
           <NativeCard
             title="Create from template"
@@ -1134,7 +1261,11 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
           >
             <LibraryFieldGrid>
               <LibraryField label="Template">
-                <select className="mc-next-settings-input" value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)}>
+                <select
+                  className="mc-next-settings-input"
+                  value={selectedTemplateId}
+                  onChange={(event) => setSelectedTemplateId(event.target.value)}
+                >
                   {(data?.templates ?? []).map((item) => (
                     <option key={item.templateId} value={item.templateId}>
                       {item.title}
@@ -1143,7 +1274,12 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
                 </select>
               </LibraryField>
               <LibraryField label="Target path">
-                <input className="mc-next-settings-input" value={targetPath} onChange={(event) => setTargetPath(event.target.value)} placeholder="Optional target path override" />
+                <input
+                  className="mc-next-settings-input"
+                  value={targetPath}
+                  onChange={(event) => setTargetPath(event.target.value)}
+                  placeholder="Optional target path override"
+                />
               </LibraryField>
             </LibraryFieldGrid>
             <LibraryActionList
@@ -1172,18 +1308,15 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [surfaceFilter, setSurfaceFilter] = useState<ChatGeneratedArtifactRecord["sourceSurface"] | "all">("all");
   const [search, setSearch] = useState("");
-  const { loading, error, data, reload } = useAsyncLoad(
-    async () => {
-      const artifacts = await fetchChatGeneratedArtifacts({
-        workspaceId: activeWorkspaceId,
-        limit: 80,
-      }).catch(() => ({ items: [] }));
-      return {
-        artifacts: artifacts.items,
-      };
-    },
-    [activeWorkspaceId],
-  );
+  const { loading, error, data, reload } = useAsyncLoad(async () => {
+    const artifacts = await fetchChatGeneratedArtifacts({
+      workspaceId: activeWorkspaceId,
+      limit: 80,
+    }).catch(() => ({ items: [] }));
+    return {
+      artifacts: artifacts.items,
+    };
+  }, [activeWorkspaceId]);
 
   const visibleArtifacts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1201,7 +1334,7 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
       return;
     }
     setSelectedArtifactId((current) =>
-      visibleArtifacts.some((item) => item.artifactId === current) ? current : visibleArtifacts[0]?.artifactId ?? "",
+      visibleArtifacts.some((item) => item.artifactId === current) ? current : (visibleArtifacts[0]?.artifactId ?? ""),
     );
   }, [visibleArtifacts]);
 
@@ -1221,7 +1354,12 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
           <div className="mc-next-settings-field-grid">
             <label className="mc-next-settings-field span-2">
               <span>Filter artifacts</span>
-              <input className="mc-next-settings-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search title or kind" />
+              <input
+                className="mc-next-settings-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search title or kind"
+              />
             </label>
           </div>
           <LibraryFilterBar
@@ -1255,21 +1393,27 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
         <div className="mc-next-settings-stack">
           <NativeCard
             title={selectedArtifact?.title ?? "Artifact detail"}
-            subtitle={selectedArtifact ? `${selectedArtifact.kind} from ${selectedArtifact.sourceSurface}` : "Select an artifact to inspect it."}
+            subtitle={
+              selectedArtifact
+                ? `${selectedArtifact.kind} from ${selectedArtifact.sourceSurface}`
+                : "Select an artifact to inspect it."
+            }
           >
             {selectedArtifact ? (
               <>
                 <LibraryMetricGrid
                   items={[
                     { label: "Kind", value: selectedArtifact.kind, meta: `v${selectedArtifact.version}` },
-                    { label: "Provider", value: selectedArtifact.providerId ?? "Unknown", meta: selectedArtifact.model ?? "No model metadata" },
+                    {
+                      label: "Provider",
+                      value: selectedArtifact.providerId ?? "Unknown",
+                      meta: selectedArtifact.model ?? "No model metadata",
+                    },
                     { label: "Session", value: selectedArtifact.sessionId, meta: selectedArtifact.turnId },
                     { label: "Updated", value: formatDateTime(selectedArtifact.updatedAt), meta: "Artifact timestamp" },
                   ]}
                 />
-                <LibraryCodeBlock label="Content">
-                  {truncateText(selectedArtifact.content, 2800)}
-                </LibraryCodeBlock>
+                <LibraryCodeBlock label="Content">{truncateText(selectedArtifact.content, 2800)}</LibraryCodeBlock>
               </>
             ) : (
               <LibraryEmptyState label="Select an artifact to inspect it." />
@@ -1282,14 +1426,16 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
 }
 
 function OpsNativePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
-  const [state, setState] = useState<LoadState<{
-    dashboard: Awaited<ReturnType<typeof fetchDashboardState>> | null;
-    timeline: Awaited<ReturnType<typeof fetchTimelineSummary>> | null;
-    health: Awaited<ReturnType<typeof fetchHealthSummary>> | null;
-    cost: Awaited<ReturnType<typeof fetchCostSummary>> | null;
-    approvals: ApprovalRequest[];
-    mcpServers: McpServerRecord[];
-  }>>({
+  const [state, setState] = useState<
+    LoadState<{
+      dashboard: Awaited<ReturnType<typeof fetchDashboardState>> | null;
+      timeline: Awaited<ReturnType<typeof fetchTimelineSummary>> | null;
+      health: Awaited<ReturnType<typeof fetchHealthSummary>> | null;
+      cost: Awaited<ReturnType<typeof fetchCostSummary>> | null;
+      approvals: ApprovalRequest[];
+      mcpServers: McpServerRecord[];
+    }>
+  >({
     loading: true,
     error: null,
     data: null,
@@ -1356,13 +1502,13 @@ function OpsNativePage({ route, activeWorkspaceName, pendingApprovals, navigate 
             ]}
           >
             <NativeList
-                items={data.approvals.slice(0, 12).map((item) => ({
-                  title: item.kind || item.linkage?.toolName || item.approvalId,
-                  meta: item.riskLevel ?? item.status,
-                  body: item.explanation?.summary || item.resolutionNote || "Operator decision required",
-                }))}
-                emptyLabel="No pending approvals."
-              />
+              items={data.approvals.slice(0, 12).map((item) => ({
+                title: item.kind || item.linkage?.toolName || item.approvalId,
+                meta: item.riskLevel ?? item.status,
+                body: item.explanation?.summary || item.resolutionNote || "Operator decision required",
+              }))}
+              emptyLabel="No pending approvals."
+            />
           </NativeCard>
         );
       case "costs":
@@ -1482,9 +1628,21 @@ function OpsNativePage({ route, activeWorkspaceName, pendingApprovals, navigate 
             >
               <NativeList
                 items={[
-                  { title: "Gateway health", meta: data.health ? "Ready" : "Unknown", body: "Observe host vitals and daemon posture." },
-                  { title: "MCP servers", meta: String(data.mcpServers.length), body: "Inspect integration runtime posture." },
-                  { title: "Recent events", meta: String(data.timeline?.events.items.length ?? 0), body: "Operational signals available to inspect." },
+                  {
+                    title: "Gateway health",
+                    meta: data.health ? "Ready" : "Unknown",
+                    body: "Observe host vitals and daemon posture.",
+                  },
+                  {
+                    title: "MCP servers",
+                    meta: String(data.mcpServers.length),
+                    body: "Inspect integration runtime posture.",
+                  },
+                  {
+                    title: "Recent events",
+                    meta: String(data.timeline?.events.items.length ?? 0),
+                    body: "Operational signals available to inspect.",
+                  },
                 ]}
               />
             </NativeCard>
@@ -1517,7 +1675,9 @@ function OpsNativePage({ route, activeWorkspaceName, pendingApprovals, navigate 
 
   return (
     <NativePageFrame
-      icon={section === "approvals" ? ShieldCheck : section === "costs" ? Wallet : section === "runtime" ? Server : Radar}
+      icon={
+        section === "approvals" ? ShieldCheck : section === "costs" ? Wallet : section === "runtime" ? Server : Radar
+      }
       kicker="Ops"
       title={labelForOpsSection(section)}
       description={descriptionForOpsSection(section)}
@@ -1529,7 +1689,13 @@ function OpsNativePage({ route, activeWorkspaceName, pendingApprovals, navigate 
   );
 }
 
-function SettingsNativePage({ route, activeWorkspaceId, activeWorkspaceName, navigate, setActiveWorkspaceId }: NativeRoutePagesProps) {
+function SettingsNativePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  navigate,
+  setActiveWorkspaceId,
+}: NativeRoutePagesProps) {
   return (
     <NextSettingsNativePage
       route={route}
@@ -1644,15 +1810,7 @@ function NativeList({
   );
 }
 
-function NativeLane({
-  title,
-  count,
-  items,
-}: {
-  title: string;
-  count: number;
-  items: TaskCardRecord[];
-}) {
+function NativeLane({ title, count, items }: { title: string; count: number; items: TaskCardRecord[] }) {
   return (
     <section className="mc-next-directory-lane">
       <div className="mc-next-directory-lane-head">
@@ -1750,15 +1908,7 @@ function LibraryFieldGrid({ children }: { children: React.ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
 
-function LibraryField({
-  label,
-  children,
-  span = 1,
-}: {
-  label: string;
-  children: React.ReactNode;
-  span?: 1 | 2;
-}) {
+function LibraryField({ label, children, span = 1 }: { label: string; children: React.ReactNode; span?: 1 | 2 }) {
   return (
     <label className={`mc-next-settings-field${span === 2 ? " span-2" : ""}`}>
       <span>{label}</span>
@@ -1771,11 +1921,7 @@ function LibraryButtonRow({ children }: { children: React.ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
 }
 
-function LibraryMetricGrid({
-  items,
-}: {
-  items: Array<{ label: string; value: string; meta?: string }>;
-}) {
+function LibraryMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
   return (
     <div className="mc-next-settings-metric-grid">
       {items.map((item) => (
@@ -2042,52 +2188,6 @@ function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
       return "Diagnostics, docs, and integration runtime signal in one quieter route.";
     default:
       return "Operational signal grouped for quick scanning.";
-  }
-}
-
-function labelForSettingsSection(section: NonNullable<AppRoute["section"]>) {
-  switch (section) {
-    case "providers":
-      return "Providers";
-    case "access":
-      return "Access";
-    case "budget":
-      return "Budget";
-    case "onboarding":
-      return "Onboarding";
-    case "runtime":
-      return "Runtime";
-    case "workspaces":
-      return "Workspaces";
-    case "addons":
-      return "Add-ons";
-    case "integrations":
-      return "Integrations";
-    case "channels":
-      return "Channels";
-    case "mcp":
-      return "MCP";
-    case "tools":
-      return "Tools";
-    default:
-      return "General";
-  }
-}
-
-function descriptionForSettingsSection(section: NonNullable<AppRoute["section"]>) {
-  switch (section) {
-    case "providers":
-      return "Review provider availability and model posture without old settings chrome.";
-    case "workspaces":
-      return "Workspace-scoped settings and context selection.";
-    case "integrations":
-    case "channels":
-    case "mcp":
-      return "Connections and external systems in the new shell language.";
-    case "tools":
-      return "Policy-aware tool catalog for the active workspace.";
-    default:
-      return "Core settings aligned with the updated Mission Control UI.";
   }
 }
 

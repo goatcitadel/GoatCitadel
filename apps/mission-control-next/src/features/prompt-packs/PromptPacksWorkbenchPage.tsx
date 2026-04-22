@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- PromptPacksWorkbenchPage keeps the full quality workbench in one place until the page is split into smaller route-scoped panels. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
@@ -138,11 +139,11 @@ export function PromptPacksWorkbenchPage({
   const running = activeRun !== null;
   const benchmarkActive = Boolean(
     benchmarkRunId &&
-      (benchmarkPending || benchmarkStatus?.run.status === "queued" || benchmarkStatus?.run.status === "running"),
+    (benchmarkPending || benchmarkStatus?.run.status === "queued" || benchmarkStatus?.run.status === "running"),
   );
   const regressionActive = Boolean(
     regressionRunId &&
-      (regressionPending || regressionStatus?.run.status === "queued" || regressionStatus?.run.status === "running"),
+    (regressionPending || regressionStatus?.run.status === "queued" || regressionStatus?.run.status === "running"),
   );
 
   const {
@@ -739,11 +740,7 @@ export function PromptPacksWorkbenchPage({
     async (runId: string) => {
       const status = await fetchPromptPackBenchmark(runId);
       setBenchmarkStatus(status);
-      if (
-        status.run.status === "completed" ||
-        status.run.status === "failed" ||
-        status.run.status === "cancelled"
-      ) {
+      if (status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled") {
         setBenchmarkPending(false);
         await loadPack(status.run.packId);
       } else {
@@ -936,10 +933,9 @@ export function PromptPacksWorkbenchPage({
   ];
 
   const title = isOpsVariant ? "Quality workbench" : "Prompt packs";
-  const subtitle =
-    isOpsVariant
-      ? "Run quality checks, compare regressions, and keep evidence focused on the selected case."
-      : "Manage packs, run tests, and review one selected case at a time.";
+  const subtitle = isOpsVariant
+    ? "Run quality checks, compare regressions, and keep evidence focused on the selected case."
+    : "Manage packs, run tests, and review one selected case at a time.";
 
   if (initialLoading) {
     return (
@@ -1027,7 +1023,7 @@ export function PromptPacksWorkbenchPage({
         </div>
       ) : null}
 
-      {(activeRun || benchmarkStatus || regressionStatus || isFallbackRefreshing) ? (
+      {activeRun || benchmarkStatus || regressionStatus || isFallbackRefreshing ? (
         <section className="mc-pp-status-row" aria-label="Prompt pack status">
           {activeRun ? (
             <div className="mc-pp-status-pill">
@@ -1485,7 +1481,9 @@ export function PromptPacksWorkbenchPage({
                       </div>
                       <strong>{test.title}</strong>
                       <div className="mc-pp-test-meta">
-                        <span className={`mc-pp-chip ${score || assessment?.legacyScore ? "score-ready" : "score-missing"}`}>
+                        <span
+                          className={`mc-pp-chip ${score || assessment?.legacyScore ? "score-ready" : "score-missing"}`}
+                        >
                           {score
                             ? `${formatWeightedScore(score.weightedScore)} • ${assessment?.effectiveVerdict ?? score.autoVerdict}`
                             : assessment?.legacyScore
@@ -1506,7 +1504,11 @@ export function PromptPacksWorkbenchPage({
                     onClick={() => void runOne(test, "single")}
                     disabled={running && activeRun?.testId !== test.testId}
                   >
-                    {activeRun?.testId === test.testId ? <LoaderCircle size={15} className="mc-spin" /> : <Play size={15} />}
+                    {activeRun?.testId === test.testId ? (
+                      <LoaderCircle size={15} className="mc-spin" />
+                    ) : (
+                      <Play size={15} />
+                    )}
                     Run
                   </button>
                 </article>
@@ -1572,12 +1574,16 @@ export function PromptPacksWorkbenchPage({
                     )}
                   </strong>
                   <p>
-                    {selectedRun?.finishedAt ? `Finished ${formatDateTime(selectedRun.finishedAt)}` : "Waiting for run output"}
+                    {selectedRun?.finishedAt
+                      ? `Finished ${formatDateTime(selectedRun.finishedAt)}`
+                      : "Waiting for run output"}
                   </p>
                 </div>
                 <div className="mc-pp-detail-card">
                   <span>Effective verdict</span>
-                  <strong>{selectedAssessment?.effectiveVerdict ?? selectedAutoScore?.autoVerdict ?? "Unscored"}</strong>
+                  <strong>
+                    {selectedAssessment?.effectiveVerdict ?? selectedAutoScore?.autoVerdict ?? "Unscored"}
+                  </strong>
                   <p>
                     {selectedHumanReview?.overrideVerdict
                       ? `Human override: ${selectedHumanReview.overrideVerdict}`
@@ -1851,13 +1857,19 @@ export function PromptPacksWorkbenchPage({
                       <div className="mc-pp-assessment-grid">
                         <article className="mc-pp-metric-card">
                           <span>Draft score</span>
-                          <strong>{draftWeightedScore === null ? "Incomplete" : formatWeightedScore(draftWeightedScore)}</strong>
+                          <strong>
+                            {draftWeightedScore === null ? "Incomplete" : formatWeightedScore(draftWeightedScore)}
+                          </strong>
                           <p>{completedDraftDimensions}/5 dimensions set</p>
                         </article>
                         <article className="mc-pp-metric-card">
                           <span>Draft verdict</span>
                           <strong>{draftVerdict}</strong>
-                          <p>{scoreDraft.overrideVerdict ? `Override ${scoreDraft.overrideVerdict}` : "No override selected"}</p>
+                          <p>
+                            {scoreDraft.overrideVerdict
+                              ? `Override ${scoreDraft.overrideVerdict}`
+                              : "No override selected"}
+                          </p>
                         </article>
                       </div>
                       <div className="mc-pp-review-grid">
@@ -1969,7 +1981,9 @@ export function PromptPacksWorkbenchPage({
                       {selectedRun?.status === "failed" ? (
                         <div className="mc-pp-alert warning">
                           <AlertTriangle size={16} />
-                          <span>Latest run failed. Rerun the test and inspect trace or tool grants before scoring.</span>
+                          <span>
+                            Latest run failed. Rerun the test and inspect trace or tool grants before scoring.
+                          </span>
                         </div>
                       ) : null}
                     </section>
@@ -2004,15 +2018,24 @@ export function PromptPacksWorkbenchPage({
                         <article className="mc-pp-metric-card">
                           <span>Effective pass rate</span>
                           <strong>{report ? `${(report.summary.effectivePassRate * 100).toFixed(1)}%` : "n/a"}</strong>
-                          <p>{report?.summary.reviewRate ? `${(report.summary.reviewRate * 100).toFixed(1)}% review rate` : "No review rate yet"}</p>
+                          <p>
+                            {report?.summary.reviewRate
+                              ? `${(report.summary.reviewRate * 100).toFixed(1)}% review rate`
+                              : "No review rate yet"}
+                          </p>
                         </article>
                       </div>
                       {trendSeries.length > 0 ? (
                         <div className="mc-pp-trend-row">
                           {trendSeries.map((series) => (
-                            <span key={series.capability} className={`mc-pp-chip trend${series.breached ? " breached" : ""}`}>
+                            <span
+                              key={series.capability}
+                              className={`mc-pp-chip trend${series.breached ? " breached" : ""}`}
+                            >
                               {series.capability}:{" "}
-                              {series.points.length > 0 ? series.points[series.points.length - 1]?.value.toFixed(2) : "n/a"}
+                              {series.points.length > 0
+                                ? series.points[series.points.length - 1]?.value.toFixed(2)
+                                : "n/a"}
                             </span>
                           ))}
                         </div>
@@ -2125,15 +2148,18 @@ const DIMENSION_ROWS: Array<{
 const FILTER_OPTIONS: Array<{
   value: TestResultFilter;
   label: string;
-  count: (summary: {
-    approvalPausedCount: number;
-    runFailureCount: number;
-    scoreFailureCount: number;
-    reviewCount: number;
-    needsScoreCount: number;
-    notRunCount: number;
-    passingCount: number;
-  }, totalTests: number) => number;
+  count: (
+    summary: {
+      approvalPausedCount: number;
+      runFailureCount: number;
+      scoreFailureCount: number;
+      reviewCount: number;
+      needsScoreCount: number;
+      notRunCount: number;
+      passingCount: number;
+    },
+    totalTests: number,
+  ) => number;
 }> = [
   { value: "all", label: "All", count: (_summary, total) => total },
   { value: "approval_paused", label: "Paused", count: (summary) => summary.approvalPausedCount },

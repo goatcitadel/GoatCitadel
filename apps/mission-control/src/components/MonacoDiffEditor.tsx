@@ -1,11 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
 import { shouldRenderMonacoRuntime } from "./monaco-runtime";
-import {
-  loadMonacoEditorRuntime,
-  normalizeMonacoLoaderLanguage,
-  type MonacoEditorApiModule,
-} from "./monaco-loader";
+import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
 
 interface MonacoDiffEditorProps {
   original: string;
@@ -84,7 +80,7 @@ export function MonacoDiffEditor({ original, modified, language, height = "100%"
       modifiedModelRef.current = null;
       editorRef.current = null;
     };
-  }, []);
+  }, [language]);
 
   useEffect(() => {
     applyDiffModel(original, modified, language);

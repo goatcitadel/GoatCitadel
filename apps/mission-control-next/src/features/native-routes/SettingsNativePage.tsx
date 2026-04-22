@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- SettingsNativePage intentionally keeps the new settings routes in one editable module while the product surface is still settling. */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -196,8 +197,16 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
           >
             <SettingsMetricGrid
               items={[
-                { label: "Workspaces", value: String(data.workspaces.length), meta: "Contexts available to switch or edit" },
-                { label: "Integrations", value: String(data.integrations.length), meta: "Configured external connections" },
+                {
+                  label: "Workspaces",
+                  value: String(data.workspaces.length),
+                  meta: "Contexts available to switch or edit",
+                },
+                {
+                  label: "Integrations",
+                  value: String(data.integrations.length),
+                  meta: "Configured external connections",
+                },
                 { label: "MCP", value: String(data.mcpServers.length), meta: "External tool servers" },
                 { label: "Tools", value: String(data.tools.length), meta: "Catalog entries with policy posture" },
                 { label: "Add-ons", value: String(data.addons.length), meta: "Installed extensions" },
@@ -215,14 +224,46 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
           >
             <SettingsActionList
               items={[
-                { label: "Providers", description: "Choose active model routing and manage provider secrets.", onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }) },
-                { label: "Runtime", description: "Configure daemon, llama.cpp, NPU, and voice runtime posture.", onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }) },
-                { label: "Workspaces", description: "Create, edit, archive, restore, and switch workspaces.", onClick: () => navigate({ area: "settings", section: "workspaces", theme: route.theme }) },
-                { label: "Integrations", description: "Create and manage app connections and diagnostics.", onClick: () => navigate({ area: "settings", section: "integrations", theme: route.theme }) },
-                { label: "Channels", description: "Run guided channel setup drafts, test them, and finalize.", onClick: () => navigate({ area: "settings", section: "channels", theme: route.theme }) },
-                { label: "MCP", description: "Create and connect MCP servers with transport-specific config.", onClick: () => navigate({ area: "settings", section: "mcp", theme: route.theme }) },
-                { label: "Tools", description: "Review tool catalog coverage and manage grants.", onClick: () => navigate({ area: "settings", section: "tools", theme: route.theme }) },
-                { label: "Add-ons", description: "Install and control optional add-on runtimes.", onClick: () => navigate({ area: "settings", section: "addons", theme: route.theme }) },
+                {
+                  label: "Providers",
+                  description: "Choose active model routing and manage provider secrets.",
+                  onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+                },
+                {
+                  label: "Runtime",
+                  description: "Configure daemon, llama.cpp, NPU, and voice runtime posture.",
+                  onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
+                },
+                {
+                  label: "Workspaces",
+                  description: "Create, edit, archive, restore, and switch workspaces.",
+                  onClick: () => navigate({ area: "settings", section: "workspaces", theme: route.theme }),
+                },
+                {
+                  label: "Integrations",
+                  description: "Create and manage app connections and diagnostics.",
+                  onClick: () => navigate({ area: "settings", section: "integrations", theme: route.theme }),
+                },
+                {
+                  label: "Channels",
+                  description: "Run guided channel setup drafts, test them, and finalize.",
+                  onClick: () => navigate({ area: "settings", section: "channels", theme: route.theme }),
+                },
+                {
+                  label: "MCP",
+                  description: "Create and connect MCP servers with transport-specific config.",
+                  onClick: () => navigate({ area: "settings", section: "mcp", theme: route.theme }),
+                },
+                {
+                  label: "Tools",
+                  description: "Review tool catalog coverage and manage grants.",
+                  onClick: () => navigate({ area: "settings", section: "tools", theme: route.theme }),
+                },
+                {
+                  label: "Add-ons",
+                  description: "Install and control optional add-on runtimes.",
+                  onClick: () => navigate({ area: "settings", section: "addons", theme: route.theme }),
+                },
               ]}
             />
           </SettingsPanel>
@@ -369,7 +410,10 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           />
         </SettingsPanel>
         <SettingsStack>
-          <SettingsPanel title="Active routing" subtitle="Change the provider/model pair Mission Control uses by default.">
+          <SettingsPanel
+            title="Active routing"
+            subtitle="Change the provider/model pair Mission Control uses by default."
+          >
             <SettingsFieldGrid>
               <SettingsField label="Provider">
                 <select
@@ -410,7 +454,10 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               </button>
             </SettingsButtonRow>
           </SettingsPanel>
-          <SettingsPanel title={selectedProvider?.label ?? "Provider detail"} subtitle="Credential posture and provider metadata.">
+          <SettingsPanel
+            title={selectedProvider?.label ?? "Provider detail"}
+            subtitle="Credential posture and provider metadata."
+          >
             {selectedProvider ? (
               <>
                 <SettingsMetricGrid
@@ -469,7 +516,10 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
 
 function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [settings, grants] = await Promise.all([fetchSettings(), fetchDeviceAccessGrants("all").catch(() => ({ items: [] }))]);
+    const [settings, grants] = await Promise.all([
+      fetchSettings(),
+      fetchDeviceAccessGrants("all").catch(() => ({ items: [] })),
+    ]);
     return {
       settings,
       grants: grants.items,
@@ -619,7 +669,11 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                   <Save size={16} />
                   Save access settings
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void handleGenerateInstallToken()}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void handleGenerateInstallToken()}
+                >
                   <RefreshCw size={16} />
                   Generate install token
                 </button>
@@ -634,7 +688,10 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                   {
                     label: "Loopback bypass",
                     value: data.settings.auth.allowLoopbackBypass ? "Enabled" : "Disabled",
-                    meta: data.settings.auth.tokenConfigured || data.settings.auth.basicConfigured ? "Protected mode configured" : "No persisted credentials",
+                    meta:
+                      data.settings.auth.tokenConfigured || data.settings.auth.basicConfigured
+                        ? "Protected mode configured"
+                        : "No persisted credentials",
                   },
                   {
                     label: "Token auth",
@@ -659,7 +716,10 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
               items={data.grants.map((grant) => ({
                 label: grant.deviceLabel || grant.grantId,
                 description: `${grant.deviceType || "device"} · ${grant.revokedAt ? "revoked" : "active"} · ${formatDateTime(grant.createdAt)}`,
-                meta: (typeof grant.metadata.origin === "string" ? grant.metadata.origin : undefined) || grant.platform || "Unknown origin",
+                meta:
+                  (typeof grant.metadata.origin === "string" ? grant.metadata.origin : undefined) ||
+                  grant.platform ||
+                  "Unknown origin",
                 onClick: grant.revokedAt ? undefined : () => void handleRevokeGrant(grant.grantId),
                 actionLabel: grant.revokedAt ? "Revoked" : "Revoke",
               }))}
@@ -776,20 +836,40 @@ function RuntimeSection(_props: SettingsSectionProps) {
             <SettingsPanel title="Gateway daemon" subtitle="Control the background runtime serving Mission Control.">
               <SettingsMetricGrid
                 items={[
-                  { label: "State", value: data.daemon?.state ?? "unknown", meta: data.daemon?.running ? "Running" : "Stopped" },
-                  { label: "Host", value: data.daemon?.host ?? "n/a", meta: data.daemon?.controllable ? "Controllable" : "Read-only" },
+                  {
+                    label: "State",
+                    value: data.daemon?.state ?? "unknown",
+                    meta: data.daemon?.running ? "Running" : "Stopped",
+                  },
+                  {
+                    label: "Host",
+                    value: data.daemon?.host ?? "n/a",
+                    meta: data.daemon?.controllable ? "Controllable" : "Read-only",
+                  },
                 ]}
               />
               <SettingsButtonRow>
-                <button type="button" className="mc-next-button" onClick={() => void runAndReload(startDaemon, "Gateway daemon start requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button"
+                  onClick={() => void runAndReload(startDaemon, "Gateway daemon start requested.")}
+                >
                   <Play size={16} />
                   Start
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(stopDaemon, "Gateway daemon stop requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(stopDaemon, "Gateway daemon stop requested.")}
+                >
                   <Square size={16} />
                   Stop
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(restartDaemon, "Gateway daemon restart requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(restartDaemon, "Gateway daemon restart requested.")}
+                >
                   <RotateCcw size={16} />
                   Restart
                 </button>
@@ -798,29 +878,59 @@ function RuntimeSection(_props: SettingsSectionProps) {
             <SettingsPanel title="llama.cpp runtime" subtitle="Configure and control the local llama.cpp runtime.">
               <SettingsFieldGrid>
                 <SettingsField label="Base URL">
-                  <input className="mc-next-settings-input" value={llamaForm.baseUrl} onChange={(event) => setLlamaForm((current) => ({ ...current, baseUrl: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={llamaForm.baseUrl}
+                    onChange={(event) => setLlamaForm((current) => ({ ...current, baseUrl: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Command">
-                  <input className="mc-next-settings-input" value={llamaForm.command} onChange={(event) => setLlamaForm((current) => ({ ...current, command: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={llamaForm.command}
+                    onChange={(event) => setLlamaForm((current) => ({ ...current, command: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Models root">
-                  <input className="mc-next-settings-input" value={llamaForm.modelsRootPath} onChange={(event) => setLlamaForm((current) => ({ ...current, modelsRootPath: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={llamaForm.modelsRootPath}
+                    onChange={(event) =>
+                      setLlamaForm((current) => ({ ...current, modelsRootPath: event.target.value }))
+                    }
+                  />
                 </SettingsField>
                 <SettingsField label="Model path">
-                  <input className="mc-next-settings-input" value={llamaForm.modelPath} onChange={(event) => setLlamaForm((current) => ({ ...current, modelPath: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={llamaForm.modelPath}
+                    onChange={(event) => setLlamaForm((current) => ({ ...current, modelPath: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Alias">
-                  <input className="mc-next-settings-input" value={llamaForm.alias} onChange={(event) => setLlamaForm((current) => ({ ...current, alias: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={llamaForm.alias}
+                    onChange={(event) => setLlamaForm((current) => ({ ...current, alias: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Enabled">
                   <label className="mc-next-settings-toggle">
-                    <input type="checkbox" checked={llamaForm.enabled} onChange={(event) => setLlamaForm((current) => ({ ...current, enabled: event.target.checked }))} />
+                    <input
+                      type="checkbox"
+                      checked={llamaForm.enabled}
+                      onChange={(event) => setLlamaForm((current) => ({ ...current, enabled: event.target.checked }))}
+                    />
                     <span>Enable llama.cpp runtime</span>
                   </label>
                 </SettingsField>
                 <SettingsField label="Auto start">
                   <label className="mc-next-settings-toggle">
-                    <input type="checkbox" checked={llamaForm.autoStart} onChange={(event) => setLlamaForm((current) => ({ ...current, autoStart: event.target.checked }))} />
+                    <input
+                      type="checkbox"
+                      checked={llamaForm.autoStart}
+                      onChange={(event) => setLlamaForm((current) => ({ ...current, autoStart: event.target.checked }))}
+                    />
                     <span>Auto-start with the gateway</span>
                   </label>
                 </SettingsField>
@@ -850,40 +960,72 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   <Save size={16} />
                   Save
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(startLlamaCppRuntime, "llama.cpp start requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(startLlamaCppRuntime, "llama.cpp start requested.")}
+                >
                   <Play size={16} />
                   Start
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(stopLlamaCppRuntime, "llama.cpp stop requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(stopLlamaCppRuntime, "llama.cpp stop requested.")}
+                >
                   <Square size={16} />
                   Stop
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(refreshLlamaCppRuntime, "llama.cpp refresh requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(refreshLlamaCppRuntime, "llama.cpp refresh requested.")}
+                >
                   <RefreshCw size={16} />
                   Refresh
                 </button>
               </SettingsButtonRow>
               <SettingsMetricGrid
                 items={[
-                  { label: "Process", value: data.settings.llamaCpp.status.processState, meta: data.settings.llamaCpp.status.healthy ? "Healthy" : "Needs attention" },
-                  { label: "Active model", value: data.settings.llamaCpp.status.activeModelId ?? "n/a", meta: data.settings.llamaCpp.status.commandSource ?? "source unknown" },
+                  {
+                    label: "Process",
+                    value: data.settings.llamaCpp.status.processState,
+                    meta: data.settings.llamaCpp.status.healthy ? "Healthy" : "Needs attention",
+                  },
+                  {
+                    label: "Active model",
+                    value: data.settings.llamaCpp.status.activeModelId ?? "n/a",
+                    meta: data.settings.llamaCpp.status.commandSource ?? "source unknown",
+                  },
                 ]}
               />
             </SettingsPanel>
             <SettingsPanel title="NPU runtime" subtitle="Manage the Windows NPU sidecar and its serving posture.">
               <SettingsFieldGrid>
                 <SettingsField label="Sidecar URL">
-                  <input className="mc-next-settings-input" value={npuForm.sidecarUrl} onChange={(event) => setNpuForm((current) => ({ ...current, sidecarUrl: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={npuForm.sidecarUrl}
+                    onChange={(event) => setNpuForm((current) => ({ ...current, sidecarUrl: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Enabled">
                   <label className="mc-next-settings-toggle">
-                    <input type="checkbox" checked={npuForm.enabled} onChange={(event) => setNpuForm((current) => ({ ...current, enabled: event.target.checked }))} />
+                    <input
+                      type="checkbox"
+                      checked={npuForm.enabled}
+                      onChange={(event) => setNpuForm((current) => ({ ...current, enabled: event.target.checked }))}
+                    />
                     <span>Enable NPU runtime</span>
                   </label>
                 </SettingsField>
                 <SettingsField label="Auto start">
                   <label className="mc-next-settings-toggle">
-                    <input type="checkbox" checked={npuForm.autoStart} onChange={(event) => setNpuForm((current) => ({ ...current, autoStart: event.target.checked }))} />
+                    <input
+                      type="checkbox"
+                      checked={npuForm.autoStart}
+                      onChange={(event) => setNpuForm((current) => ({ ...current, autoStart: event.target.checked }))}
+                    />
                     <span>Auto-start with the gateway</span>
                   </label>
                 </SettingsField>
@@ -909,31 +1051,59 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   <Save size={16} />
                   Save
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(startNpuRuntime, "NPU start requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(startNpuRuntime, "NPU start requested.")}
+                >
                   <Play size={16} />
                   Start
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(stopNpuRuntime, "NPU stop requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(stopNpuRuntime, "NPU stop requested.")}
+                >
                   <Square size={16} />
                   Stop
                 </button>
-                <button type="button" className="mc-next-button-secondary" onClick={() => void runAndReload(refreshNpuRuntime, "NPU refresh requested.")}>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void runAndReload(refreshNpuRuntime, "NPU refresh requested.")}
+                >
                   <RefreshCw size={16} />
                   Refresh
                 </button>
               </SettingsButtonRow>
               <SettingsMetricGrid
                 items={[
-                  { label: "Process", value: data.settings.npu.status.processState, meta: data.settings.npu.status.healthy ? "Healthy" : "Needs attention" },
-                  { label: "Backend", value: data.settings.npu.status.backend, meta: data.settings.npu.status.activeModelId ?? "No active model" },
+                  {
+                    label: "Process",
+                    value: data.settings.npu.status.processState,
+                    meta: data.settings.npu.status.healthy ? "Healthy" : "Needs attention",
+                  },
+                  {
+                    label: "Backend",
+                    value: data.settings.npu.status.backend,
+                    meta: data.settings.npu.status.activeModelId ?? "No active model",
+                  },
                 ]}
               />
             </SettingsPanel>
             <SettingsPanel title="Voice runtime" subtitle="Install or activate the local voice transcription runtime.">
               <SettingsMetricGrid
                 items={[
-                  { label: "Readiness", value: data.voiceRuntime?.readiness ?? "unknown", meta: data.voiceRuntime?.provider ?? "whisper.cpp" },
-                  { label: "Active model", value: data.voiceRuntime?.selectedModelId ?? "none", meta: `${data.voiceRuntime?.installedModels.length ?? 0} installed` },
+                  {
+                    label: "Readiness",
+                    value: data.voiceRuntime?.readiness ?? "unknown",
+                    meta: data.voiceRuntime?.provider ?? "whisper.cpp",
+                  },
+                  {
+                    label: "Active model",
+                    value: data.voiceRuntime?.selectedModelId ?? "none",
+                    meta: `${data.voiceRuntime?.installedModels.length ?? 0} installed`,
+                  },
                 ]}
               />
               <SettingsButtonRow>
@@ -941,8 +1111,9 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   type="button"
                   className="mc-next-button"
                   onClick={() => {
-                    const recommended = data.voiceRuntime?.catalog.find((item) => item.defaultInstall)?.id
-                      ?? data.voiceRuntime?.catalog[0]?.id;
+                    const recommended =
+                      data.voiceRuntime?.catalog.find((item) => item.defaultInstall)?.id ??
+                      data.voiceRuntime?.catalog[0]?.id;
                     void runAndReload(
                       () => installVoiceRuntime(recommended ? { modelId: recommended, activate: true } : {}),
                       "Voice runtime install requested.",
@@ -973,7 +1144,8 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   label: item.label,
                   description: `${item.languageScope} · ${item.approxSizeLabel}`,
                   meta: item.id,
-                  onClick: () => void runAndReload(() => selectVoiceRuntimeModel(item.id), `Voice model ${item.id} selected.`),
+                  onClick: () =>
+                    void runAndReload(() => selectVoiceRuntimeModel(item.id), `Voice model ${item.id} selected.`),
                   actionLabel: data.voiceRuntime?.selectedModelId === item.id ? "Active" : "Use",
                 }))}
                 emptyLabel="No voice model catalog available."
@@ -1145,13 +1317,25 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
           <SettingsPanel title="Create workspace" subtitle="Add a new workspace without leaving Settings.">
             <SettingsFieldGrid>
               <SettingsField label="Name">
-                <input className="mc-next-settings-input" value={createForm.name} onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))} />
+                <input
+                  className="mc-next-settings-input"
+                  value={createForm.name}
+                  onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))}
+                />
               </SettingsField>
               <SettingsField label="Slug">
-                <input className="mc-next-settings-input" value={createForm.slug} onChange={(event) => setCreateForm((current) => ({ ...current, slug: event.target.value }))} />
+                <input
+                  className="mc-next-settings-input"
+                  value={createForm.slug}
+                  onChange={(event) => setCreateForm((current) => ({ ...current, slug: event.target.value }))}
+                />
               </SettingsField>
               <SettingsField label="Description" span={2}>
-                <textarea className="mc-next-settings-textarea" value={createForm.description} onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))} />
+                <textarea
+                  className="mc-next-settings-textarea"
+                  value={createForm.description}
+                  onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))}
+                />
               </SettingsField>
             </SettingsFieldGrid>
             <SettingsButtonRow>
@@ -1170,19 +1354,39 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
             <>
               <SettingsFieldGrid>
                 <SettingsField label="Name">
-                  <input className="mc-next-settings-input" value={editForm.name} onChange={(event) => setEditForm((current) => ({ ...current, name: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={editForm.name}
+                    onChange={(event) => setEditForm((current) => ({ ...current, name: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Slug">
-                  <input className="mc-next-settings-input" value={editForm.slug} onChange={(event) => setEditForm((current) => ({ ...current, slug: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={editForm.slug}
+                    onChange={(event) => setEditForm((current) => ({ ...current, slug: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Description" span={2}>
-                  <textarea className="mc-next-settings-textarea" value={editForm.description} onChange={(event) => setEditForm((current) => ({ ...current, description: event.target.value }))} />
+                  <textarea
+                    className="mc-next-settings-textarea"
+                    value={editForm.description}
+                    onChange={(event) => setEditForm((current) => ({ ...current, description: event.target.value }))}
+                  />
                 </SettingsField>
               </SettingsFieldGrid>
               <SettingsMetricGrid
                 items={[
-                  { label: "Workspace ID", value: selectedWorkspace.workspaceId, meta: selectedWorkspace.lifecycleStatus },
-                  { label: "Created", value: formatDateTime(selectedWorkspace.createdAt), meta: `Updated ${formatDateTime(selectedWorkspace.updatedAt)}` },
+                  {
+                    label: "Workspace ID",
+                    value: selectedWorkspace.workspaceId,
+                    meta: selectedWorkspace.lifecycleStatus,
+                  },
+                  {
+                    label: "Created",
+                    value: formatDateTime(selectedWorkspace.createdAt),
+                    meta: `Updated ${formatDateTime(selectedWorkspace.updatedAt)}`,
+                  },
                 ]}
               />
               <SettingsButtonRow>
@@ -1247,9 +1451,9 @@ function IntegrationsSection(_props: SettingsSectionProps) {
   const selectedConnection =
     data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? data?.connections[0] ?? null;
   const selectedCatalog =
-    data?.catalog.find((item) => item.catalogId === selectedConnection?.catalogId)
-    ?? data?.catalog.find((item) => item.catalogId === createCatalogId)
-    ?? null;
+    data?.catalog.find((item) => item.catalogId === selectedConnection?.catalogId) ??
+    data?.catalog.find((item) => item.catalogId === createCatalogId) ??
+    null;
 
   useEffect(() => {
     if (!data?.catalog.length) {
@@ -1359,7 +1563,10 @@ function IntegrationsSection(_props: SettingsSectionProps) {
     }
     try {
       const result = await invokeIntegrationConnectionAction(selectedConnection.connectionId, actionId, {});
-      setNotice({ tone: result.status === "failed" ? "error" : result.status === "blocked" ? "warning" : "success", message: result.message });
+      setNotice({
+        tone: result.status === "failed" ? "error" : result.status === "blocked" ? "warning" : "success",
+        message: result.message,
+      });
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
     }
@@ -1397,7 +1604,11 @@ function IntegrationsSection(_props: SettingsSectionProps) {
             <SettingsPanel title="Create connection" subtitle="Create a new integration connection from the catalog.">
               <SettingsFieldGrid>
                 <SettingsField label="Catalog">
-                  <select className="mc-next-settings-input" value={createCatalogId} onChange={(event) => setCreateCatalogId(event.target.value)}>
+                  <select
+                    className="mc-next-settings-input"
+                    value={createCatalogId}
+                    onChange={(event) => setCreateCatalogId(event.target.value)}
+                  >
                     {data.catalog.map((item) => (
                       <option key={item.catalogId} value={item.catalogId}>
                         {item.label}
@@ -1406,17 +1617,30 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                   </select>
                 </SettingsField>
                 <SettingsField label="Label">
-                  <input className="mc-next-settings-input" value={createLabel} onChange={(event) => setCreateLabel(event.target.value)} placeholder="Optional connection label" />
+                  <input
+                    className="mc-next-settings-input"
+                    value={createLabel}
+                    onChange={(event) => setCreateLabel(event.target.value)}
+                    placeholder="Optional connection label"
+                  />
                 </SettingsField>
                 <SettingsField label="Config JSON" span={2}>
-                  <textarea className="mc-next-settings-textarea mc-next-settings-code" value={createConfig} onChange={(event) => setCreateConfig(event.target.value)} />
+                  <textarea
+                    className="mc-next-settings-textarea mc-next-settings-code"
+                    value={createConfig}
+                    onChange={(event) => setCreateConfig(event.target.value)}
+                  />
                 </SettingsField>
               </SettingsFieldGrid>
               {selectedCatalog ? (
                 <SettingsMetricGrid
                   items={[
                     { label: "Kind", value: selectedCatalog.kind, meta: selectedCatalog.key },
-                    { label: "Capabilities", value: String(selectedCatalog.capabilities.length), meta: selectedCatalog.authMethods.join(", ") || "No auth methods listed" },
+                    {
+                      label: "Capabilities",
+                      value: String(selectedCatalog.capabilities.length),
+                      meta: selectedCatalog.authMethods.join(", ") || "No auth methods listed",
+                    },
                   ]}
                 />
               ) : null}
@@ -1428,15 +1652,26 @@ function IntegrationsSection(_props: SettingsSectionProps) {
               </SettingsButtonRow>
             </SettingsPanel>
           </SettingsStack>
-          <SettingsPanel title={selectedConnection?.label ?? "Connection detail"} subtitle="Update, diagnose, or remove the selected integration connection.">
+          <SettingsPanel
+            title={selectedConnection?.label ?? "Connection detail"}
+            subtitle="Update, diagnose, or remove the selected integration connection."
+          >
             {selectedConnection ? (
               <>
                 <SettingsFieldGrid>
                   <SettingsField label="Label">
-                    <input className="mc-next-settings-input" value={detailForm.label} onChange={(event) => setDetailForm((current) => ({ ...current, label: event.target.value }))} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={detailForm.label}
+                      onChange={(event) => setDetailForm((current) => ({ ...current, label: event.target.value }))}
+                    />
                   </SettingsField>
                   <SettingsField label="Status">
-                    <select className="mc-next-settings-input" value={detailForm.status} onChange={(event) => setDetailForm((current) => ({ ...current, status: event.target.value }))}>
+                    <select
+                      className="mc-next-settings-input"
+                      value={detailForm.status}
+                      onChange={(event) => setDetailForm((current) => ({ ...current, status: event.target.value }))}
+                    >
                       <option value="connected">Connected</option>
                       <option value="disconnected">Disconnected</option>
                       <option value="paused">Paused</option>
@@ -1445,18 +1680,32 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                   </SettingsField>
                   <SettingsField label="Enabled">
                     <label className="mc-next-settings-toggle">
-                      <input type="checkbox" checked={detailForm.enabled} onChange={(event) => setDetailForm((current) => ({ ...current, enabled: event.target.checked }))} />
+                      <input
+                        type="checkbox"
+                        checked={detailForm.enabled}
+                        onChange={(event) =>
+                          setDetailForm((current) => ({ ...current, enabled: event.target.checked }))
+                        }
+                      />
                       <span>Connection can be used by the operator.</span>
                     </label>
                   </SettingsField>
                   <SettingsField label="Config JSON" span={2}>
-                    <textarea className="mc-next-settings-textarea mc-next-settings-code" value={detailForm.configText} onChange={(event) => setDetailForm((current) => ({ ...current, configText: event.target.value }))} />
+                    <textarea
+                      className="mc-next-settings-textarea mc-next-settings-code"
+                      value={detailForm.configText}
+                      onChange={(event) => setDetailForm((current) => ({ ...current, configText: event.target.value }))}
+                    />
                   </SettingsField>
                 </SettingsFieldGrid>
                 <SettingsMetricGrid
                   items={[
                     { label: "Catalog key", value: selectedConnection.key, meta: selectedConnection.kind },
-                    { label: "Last sync", value: formatDateTime(selectedConnection.lastSyncAt), meta: selectedConnection.lastError || "No recent error" },
+                    {
+                      label: "Last sync",
+                      value: formatDateTime(selectedConnection.lastSyncAt),
+                      meta: selectedConnection.lastError || "No recent error",
+                    },
                   ]}
                 />
                 <SettingsButtonRow>
@@ -1518,7 +1767,8 @@ function ChannelsSection(_props: SettingsSectionProps) {
   const [draftJson, setDraftJson] = useState("{}");
   const [validationResult, setValidationResult] = useState<{ kind: "validate" | "test"; items: string[] } | null>(null);
   const selectedDraft = data?.drafts.find((item) => item.draftId === selectedDraftId) ?? data?.drafts[0] ?? null;
-  const selectedDefinition = data?.definitions.find((item) => item.catalog.catalogId === (selectedDraft?.catalogId || createCatalogId)) ?? null;
+  const selectedDefinition =
+    data?.definitions.find((item) => item.catalog.catalogId === (selectedDraft?.catalogId || createCatalogId)) ?? null;
 
   useEffect(() => {
     if (!data?.definitions.length) {
@@ -1592,7 +1842,10 @@ function ChannelsSection(_props: SettingsSectionProps) {
         kind: "validate",
         items: result.issues.map((item) => `${item.level.toUpperCase()}: ${item.message}`),
       });
-      setNotice({ tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success", message: "Channel draft validated." });
+      setNotice({
+        tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success",
+        message: "Channel draft validated.",
+      });
       await reload();
     } catch (validateError) {
       setNotice({ tone: "error", message: getErrorMessage(validateError) });
@@ -1609,7 +1862,10 @@ function ChannelsSection(_props: SettingsSectionProps) {
         kind: "test",
         items: result.issues.map((item) => `${item.level.toUpperCase()}: ${item.message}`),
       });
-      setNotice({ tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success", message: result.recommendedNextAction || "Channel draft tested." });
+      setNotice({
+        tone: result.status === "error" ? "error" : result.status === "warn" ? "warning" : "success",
+        message: result.recommendedNextAction || "Channel draft tested.",
+      });
       await reload();
     } catch (testError) {
       setNotice({ tone: "error", message: getErrorMessage(testError) });
@@ -1644,7 +1900,11 @@ function ChannelsSection(_props: SettingsSectionProps) {
               ]}
             >
               <SettingsField label="Create draft from">
-                <select className="mc-next-settings-input" value={createCatalogId} onChange={(event) => setCreateCatalogId(event.target.value)}>
+                <select
+                  className="mc-next-settings-input"
+                  value={createCatalogId}
+                  onChange={(event) => setCreateCatalogId(event.target.value)}
+                >
                   {data.definitions.map((item) => (
                     <option key={item.catalog.catalogId} value={item.catalog.catalogId}>
                       {item.catalog.label}
@@ -1686,28 +1946,51 @@ function ChannelsSection(_props: SettingsSectionProps) {
               />
             </SettingsPanel>
           </SettingsStack>
-          <SettingsPanel title={selectedDraft?.label || selectedDefinition?.catalog.label || "Channel draft"} subtitle="Edit the draft payload, then validate, test, and finalize it.">
+          <SettingsPanel
+            title={selectedDraft?.label || selectedDefinition?.catalog.label || "Channel draft"}
+            subtitle="Edit the draft payload, then validate, test, and finalize it."
+          >
             {selectedDraft ? (
               <>
                 <SettingsFieldGrid>
                   <SettingsField label="Label">
-                    <input className="mc-next-settings-input" value={draftLabel} onChange={(event) => setDraftLabel(event.target.value)} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={draftLabel}
+                      onChange={(event) => setDraftLabel(event.target.value)}
+                    />
                   </SettingsField>
                   <SettingsField label="Enabled">
                     <label className="mc-next-settings-toggle">
-                      <input type="checkbox" checked={draftEnabled} onChange={(event) => setDraftEnabled(event.target.checked)} />
+                      <input
+                        type="checkbox"
+                        checked={draftEnabled}
+                        onChange={(event) => setDraftEnabled(event.target.checked)}
+                      />
                       <span>Enable the connection after finalize</span>
                     </label>
                   </SettingsField>
                   <SettingsField label="Draft JSON" span={2}>
-                    <textarea className="mc-next-settings-textarea mc-next-settings-code" value={draftJson} onChange={(event) => setDraftJson(event.target.value)} />
+                    <textarea
+                      className="mc-next-settings-textarea mc-next-settings-code"
+                      value={draftJson}
+                      onChange={(event) => setDraftJson(event.target.value)}
+                    />
                   </SettingsField>
                 </SettingsFieldGrid>
                 {selectedDefinition ? (
                   <SettingsMetricGrid
                     items={[
-                      { label: "Difficulty", value: selectedDefinition.wizard.difficulty, meta: selectedDefinition.catalog.key },
-                      { label: "Validation levels", value: String(selectedDefinition.validation.levels.length), meta: selectedDefinition.testing.levels.join(", ") },
+                      {
+                        label: "Difficulty",
+                        value: selectedDefinition.wizard.difficulty,
+                        meta: selectedDefinition.catalog.key,
+                      },
+                      {
+                        label: "Validation levels",
+                        value: String(selectedDefinition.validation.levels.length),
+                        meta: selectedDefinition.testing.levels.join(", "),
+                      },
                     ]}
                   />
                 ) : null}
@@ -1740,7 +2023,9 @@ function ChannelsSection(_props: SettingsSectionProps) {
                   />
                 ) : null}
                 {validationResult ? (
-                  <SettingsCodeBlock label={validationResult.kind === "validate" ? "Validation results" : "Test results"}>
+                  <SettingsCodeBlock
+                    label={validationResult.kind === "validate" ? "Validation results" : "Test results"}
+                  >
                     {validationResult.items.join("\n") || "No issues returned."}
                   </SettingsCodeBlock>
                 ) : null}
@@ -1811,7 +2096,9 @@ function McpSection(_props: SettingsSectionProps) {
       category: selectedServer.category,
     });
     void fetchMcpTools(selectedServer.serverId)
-      .then((result) => setTools(result.items.map((item) => ({ toolName: item.toolName, description: item.description }))))
+      .then((result) =>
+        setTools(result.items.map((item) => ({ toolName: item.toolName, description: item.description }))),
+      )
       .catch(() => setTools([]));
   }, [selectedServer]);
 
@@ -1898,10 +2185,18 @@ function McpSection(_props: SettingsSectionProps) {
             <SettingsPanel title="Create MCP server" subtitle="Set up a new stdio or URL-based MCP server.">
               <SettingsFieldGrid>
                 <SettingsField label="Label">
-                  <input className="mc-next-settings-input" value={createForm.label} onChange={(event) => setCreateForm((current) => ({ ...current, label: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={createForm.label}
+                    onChange={(event) => setCreateForm((current) => ({ ...current, label: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Transport">
-                  <select className="mc-next-settings-input" value={createForm.transport} onChange={(event) => setCreateForm((current) => ({ ...current, transport: event.target.value }))}>
+                  <select
+                    className="mc-next-settings-input"
+                    value={createForm.transport}
+                    onChange={(event) => setCreateForm((current) => ({ ...current, transport: event.target.value }))}
+                  >
                     <option value="stdio">stdio</option>
                     <option value="http">http</option>
                     <option value="sse">sse</option>
@@ -1909,16 +2204,28 @@ function McpSection(_props: SettingsSectionProps) {
                 </SettingsField>
                 {createForm.transport === "stdio" ? (
                   <SettingsField label="Command" span={2}>
-                    <input className="mc-next-settings-input" value={createForm.command} onChange={(event) => setCreateForm((current) => ({ ...current, command: event.target.value }))} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={createForm.command}
+                      onChange={(event) => setCreateForm((current) => ({ ...current, command: event.target.value }))}
+                    />
                   </SettingsField>
                 ) : (
                   <SettingsField label="URL" span={2}>
-                    <input className="mc-next-settings-input" value={createForm.url} onChange={(event) => setCreateForm((current) => ({ ...current, url: event.target.value }))} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={createForm.url}
+                      onChange={(event) => setCreateForm((current) => ({ ...current, url: event.target.value }))}
+                    />
                   </SettingsField>
                 )}
                 <SettingsField label="Enabled">
                   <label className="mc-next-settings-toggle">
-                    <input type="checkbox" checked={createForm.enabled} onChange={(event) => setCreateForm((current) => ({ ...current, enabled: event.target.checked }))} />
+                    <input
+                      type="checkbox"
+                      checked={createForm.enabled}
+                      onChange={(event) => setCreateForm((current) => ({ ...current, enabled: event.target.checked }))}
+                    />
                     <span>Enable immediately after create</span>
                   </label>
                 </SettingsField>
@@ -1949,15 +2256,26 @@ function McpSection(_props: SettingsSectionProps) {
               ) : null}
             </SettingsPanel>
           </SettingsStack>
-          <SettingsPanel title={selectedServer?.label ?? "Server detail"} subtitle="Edit, connect, diagnose, or delete the selected MCP server.">
+          <SettingsPanel
+            title={selectedServer?.label ?? "Server detail"}
+            subtitle="Edit, connect, diagnose, or delete the selected MCP server."
+          >
             {selectedServer ? (
               <>
                 <SettingsFieldGrid>
                   <SettingsField label="Label">
-                    <input className="mc-next-settings-input" value={editForm.label} onChange={(event) => setEditForm((current) => ({ ...current, label: event.target.value }))} />
+                    <input
+                      className="mc-next-settings-input"
+                      value={editForm.label}
+                      onChange={(event) => setEditForm((current) => ({ ...current, label: event.target.value }))}
+                    />
                   </SettingsField>
                   <SettingsField label="Category">
-                    <select className="mc-next-settings-input" value={editForm.category} onChange={(event) => setEditForm((current) => ({ ...current, category: event.target.value }))}>
+                    <select
+                      className="mc-next-settings-input"
+                      value={editForm.category}
+                      onChange={(event) => setEditForm((current) => ({ ...current, category: event.target.value }))}
+                    >
                       <option value="development">development</option>
                       <option value="browser">browser</option>
                       <option value="automation">automation</option>
@@ -1970,16 +2288,28 @@ function McpSection(_props: SettingsSectionProps) {
                   </SettingsField>
                   {selectedServer.transport === "stdio" ? (
                     <SettingsField label="Command" span={2}>
-                      <input className="mc-next-settings-input" value={editForm.command} onChange={(event) => setEditForm((current) => ({ ...current, command: event.target.value }))} />
+                      <input
+                        className="mc-next-settings-input"
+                        value={editForm.command}
+                        onChange={(event) => setEditForm((current) => ({ ...current, command: event.target.value }))}
+                      />
                     </SettingsField>
                   ) : (
                     <SettingsField label="URL" span={2}>
-                      <input className="mc-next-settings-input" value={editForm.url} onChange={(event) => setEditForm((current) => ({ ...current, url: event.target.value }))} />
+                      <input
+                        className="mc-next-settings-input"
+                        value={editForm.url}
+                        onChange={(event) => setEditForm((current) => ({ ...current, url: event.target.value }))}
+                      />
                     </SettingsField>
                   )}
                   <SettingsField label="Enabled">
                     <label className="mc-next-settings-toggle">
-                      <input type="checkbox" checked={editForm.enabled} onChange={(event) => setEditForm((current) => ({ ...current, enabled: event.target.checked }))} />
+                      <input
+                        type="checkbox"
+                        checked={editForm.enabled}
+                        onChange={(event) => setEditForm((current) => ({ ...current, enabled: event.target.checked }))}
+                      />
                       <span>Server can be used by the operator.</span>
                     </label>
                   </SettingsField>
@@ -1987,7 +2317,11 @@ function McpSection(_props: SettingsSectionProps) {
                 <SettingsMetricGrid
                   items={[
                     { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
-                    { label: "Status", value: selectedServer.status, meta: selectedServer.lastError || "No recent error" },
+                    {
+                      label: "Status",
+                      value: selectedServer.status,
+                      meta: selectedServer.lastError || "No recent error",
+                    },
                   ]}
                 />
                 <SettingsButtonRow>
@@ -1995,15 +2329,42 @@ function McpSection(_props: SettingsSectionProps) {
                     <Save size={16} />
                     Save changes
                   </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void runServerAction(() => connectMcpServer(selectedServer.serverId), "MCP server connect requested.")}>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runServerAction(
+                        () => connectMcpServer(selectedServer.serverId),
+                        "MCP server connect requested.",
+                      )
+                    }
+                  >
                     <Plug2 size={16} />
                     Connect
                   </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void runServerAction(() => disconnectMcpServer(selectedServer.serverId), "MCP server disconnect requested.")}>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runServerAction(
+                        () => disconnectMcpServer(selectedServer.serverId),
+                        "MCP server disconnect requested.",
+                      )
+                    }
+                  >
                     <Square size={16} />
                     Disconnect
                   </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void runServerAction(async () => setHealthReport(await runMcpServerHealthCheck(selectedServer.serverId)), "MCP health check complete.")}>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runServerAction(
+                        async () => setHealthReport(await runMcpServerHealthCheck(selectedServer.serverId)),
+                        "MCP health check complete.",
+                      )
+                    }
+                  >
                     <RefreshCw size={16} />
                     Health check
                   </button>
@@ -2145,7 +2506,12 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               ]}
             >
               <SettingsField label="Search">
-                <input className="mc-next-settings-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tool name, category, or description" />
+                <input
+                  className="mc-next-settings-input"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search tool name, category, or description"
+                />
               </SettingsField>
               <SettingsSelectableList
                 items={filteredTools.map((item) => ({
@@ -2159,13 +2525,24 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 emptyLabel="No tools match the current search."
               />
             </SettingsPanel>
-            <SettingsPanel title="Create tool grant" subtitle="Create a workspace or global policy grant for the selected tool.">
+            <SettingsPanel
+              title="Create tool grant"
+              subtitle="Create a workspace or global policy grant for the selected tool."
+            >
               <SettingsFieldGrid>
                 <SettingsField label="Tool pattern">
-                  <input className="mc-next-settings-input" value={grantForm.toolPattern} onChange={(event) => setGrantForm((current) => ({ ...current, toolPattern: event.target.value }))} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={grantForm.toolPattern}
+                    onChange={(event) => setGrantForm((current) => ({ ...current, toolPattern: event.target.value }))}
+                  />
                 </SettingsField>
                 <SettingsField label="Decision">
-                  <select className="mc-next-settings-input" value={grantForm.decision} onChange={(event) => setGrantForm((current) => ({ ...current, decision: event.target.value }))}>
+                  <select
+                    className="mc-next-settings-input"
+                    value={grantForm.decision}
+                    onChange={(event) => setGrantForm((current) => ({ ...current, decision: event.target.value }))}
+                  >
                     <option value="allow">Allow</option>
                     <option value="deny">Deny</option>
                   </select>
@@ -2190,10 +2567,19 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   </select>
                 </SettingsField>
                 <SettingsField label="Scope ref">
-                  <input className="mc-next-settings-input" value={grantForm.scopeRef} onChange={(event) => setGrantForm((current) => ({ ...current, scopeRef: event.target.value }))} disabled={grantForm.scope === "global"} />
+                  <input
+                    className="mc-next-settings-input"
+                    value={grantForm.scopeRef}
+                    onChange={(event) => setGrantForm((current) => ({ ...current, scopeRef: event.target.value }))}
+                    disabled={grantForm.scope === "global"}
+                  />
                 </SettingsField>
                 <SettingsField label="Grant type">
-                  <select className="mc-next-settings-input" value={grantForm.grantType} onChange={(event) => setGrantForm((current) => ({ ...current, grantType: event.target.value }))}>
+                  <select
+                    className="mc-next-settings-input"
+                    value={grantForm.grantType}
+                    onChange={(event) => setGrantForm((current) => ({ ...current, grantType: event.target.value }))}
+                  >
                     <option value="persistent">Persistent</option>
                     <option value="ttl">TTL</option>
                     <option value="one_time">One time</option>
@@ -2208,16 +2594,29 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               </SettingsButtonRow>
             </SettingsPanel>
           </SettingsStack>
-          <SettingsPanel title={selectedTool?.toolName ?? "Tool detail"} subtitle="Selected catalog entry and active grants.">
+          <SettingsPanel
+            title={selectedTool?.toolName ?? "Tool detail"}
+            subtitle="Selected catalog entry and active grants."
+          >
             {selectedTool ? (
               <>
                 <SettingsMetricGrid
                   items={[
-                    { label: "Category", value: selectedTool.category || "tool", meta: `${selectedTool.pack} pack · ${selectedTool.riskLevel} risk` },
-                    { label: "Available grants", value: String(data.grants.filter((item) => matchesToolGrant(item, selectedTool.toolName)).length), meta: "Matched by tool pattern" },
+                    {
+                      label: "Category",
+                      value: selectedTool.category || "tool",
+                      meta: `${selectedTool.pack} pack · ${selectedTool.riskLevel} risk`,
+                    },
+                    {
+                      label: "Available grants",
+                      value: String(data.grants.filter((item) => matchesToolGrant(item, selectedTool.toolName)).length),
+                      meta: "Matched by tool pattern",
+                    },
                   ]}
                 />
-                <SettingsCodeBlock label="Tool description">{selectedTool.description || "No tool description provided."}</SettingsCodeBlock>
+                <SettingsCodeBlock label="Tool description">
+                  {selectedTool.description || "No tool description provided."}
+                </SettingsCodeBlock>
               </>
             ) : (
               <SettingsEmptyState label="Choose a tool from the catalog to inspect it." />
@@ -2260,7 +2659,10 @@ function AddonsSection(_props: SettingsSectionProps) {
     data: null,
   });
 
-  const installedById = useMemo(() => new Map((data?.installed ?? []).map((item) => [item.addonId, item])), [data?.installed]);
+  const installedById = useMemo(
+    () => new Map((data?.installed ?? []).map((item) => [item.addonId, item])),
+    [data?.installed],
+  );
   const selectedAddon = data?.catalog.find((item) => item.addonId === selectedAddonId) ?? data?.catalog[0] ?? null;
 
   useEffect(() => {
@@ -2335,35 +2737,81 @@ function AddonsSection(_props: SettingsSectionProps) {
               emptyLabel="No add-ons returned from the catalog."
             />
           </SettingsPanel>
-          <SettingsPanel title={selectedAddon?.label ?? "Add-on detail"} subtitle="Install, update, launch, stop, or remove the selected add-on.">
+          <SettingsPanel
+            title={selectedAddon?.label ?? "Add-on detail"}
+            subtitle="Install, update, launch, stop, or remove the selected add-on."
+          >
             {selectedAddon ? (
               <>
                 <SettingsCodeBlock label="Description">{selectedAddon.description}</SettingsCodeBlock>
                 <SettingsMetricGrid
                   items={[
                     { label: "Trust tier", value: selectedAddon.trustTier, meta: selectedAddon.owner },
-                    { label: "Runtime", value: status.data?.status ?? installedById.get(selectedAddon.addonId)?.runtimeStatus ?? "not_installed", meta: selectedAddon.runtimeType },
-                    { label: "Web entry", value: selectedAddon.webEntryMode, meta: selectedAddon.launchUrl ?? "No launch URL" },
+                    {
+                      label: "Runtime",
+                      value:
+                        status.data?.status ??
+                        installedById.get(selectedAddon.addonId)?.runtimeStatus ??
+                        "not_installed",
+                      meta: selectedAddon.runtimeType,
+                    },
+                    {
+                      label: "Web entry",
+                      value: selectedAddon.webEntryMode,
+                      meta: selectedAddon.launchUrl ?? "No launch URL",
+                    },
                   ]}
                 />
                 <SettingsButtonRow>
                   <button
                     type="button"
                     className="mc-next-button"
-                    onClick={() => void runAddonAction(() => installAddon(selectedAddon.addonId, { confirmRepoDownload: true, actorId: "operator" }), `${selectedAddon.label} install requested.`)}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => installAddon(selectedAddon.addonId, { confirmRepoDownload: true, actorId: "operator" }),
+                        `${selectedAddon.label} install requested.`,
+                      )
+                    }
                   >
                     <Plus size={16} />
                     Install
                   </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void runAddonAction(() => updateAddon(selectedAddon.addonId), `${selectedAddon.label} update requested.`)}>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runAddonAction(
+                        () => updateAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} update requested.`,
+                      )
+                    }
+                  >
                     <RefreshCw size={16} />
                     Update
                   </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void runAddonAction(() => launchAddon(selectedAddon.addonId), `${selectedAddon.label} launch requested.`)}>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runAddonAction(
+                        () => launchAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} launch requested.`,
+                      )
+                    }
+                  >
                     <Play size={16} />
                     Launch
                   </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void runAddonAction(() => stopAddon(selectedAddon.addonId), `${selectedAddon.label} stop requested.`)}>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      void runAddonAction(
+                        () => stopAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} stop requested.`,
+                      )
+                    }
+                  >
                     <Square size={16} />
                     Stop
                   </button>
@@ -2374,7 +2822,10 @@ function AddonsSection(_props: SettingsSectionProps) {
                       if (!window.confirm(`Uninstall ${selectedAddon.label}?`)) {
                         return;
                       }
-                      void runAddonAction(() => uninstallAddon(selectedAddon.addonId), `${selectedAddon.label} uninstalled.`);
+                      void runAddonAction(
+                        () => uninstallAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} uninstalled.`,
+                      );
                     }}
                   >
                     <Trash2 size={16} />
@@ -2546,15 +2997,7 @@ function SettingsFieldGrid({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-field-grid">{children}</div>;
 }
 
-function SettingsField({
-  label,
-  children,
-  span = 1,
-}: {
-  label: string;
-  children: ReactNode;
-  span?: 1 | 2;
-}) {
+function SettingsField({ label, children, span = 1 }: { label: string; children: ReactNode; span?: 1 | 2 }) {
   return (
     <label className={`mc-next-settings-field${span === 2 ? " span-2" : ""}`}>
       <span>{label}</span>
@@ -2567,11 +3010,7 @@ function SettingsButtonRow({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-button-row">{children}</div>;
 }
 
-function SettingsMetricGrid({
-  items,
-}: {
-  items: Array<{ label: string; value: string; meta?: string }>;
-}) {
+function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
   return (
     <div className="mc-next-settings-metric-grid">
       {items.map((item) => (

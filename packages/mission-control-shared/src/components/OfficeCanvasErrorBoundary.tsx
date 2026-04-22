@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
 
 interface OfficeCanvasErrorBoundaryProps {
   children: ReactNode;
@@ -22,9 +23,15 @@ export class OfficeCanvasErrorBoundary extends Component<
   }
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    console.error("[OfficeCanvasErrorBoundary] render failed", {
-      error,
-      componentStack: errorInfo.componentStack,
+    recordClientDiagnostic({
+      level: "error",
+      category: "ui",
+      event: "office_canvas.render_failed",
+      message: "Office scene failed to render.",
+      context: {
+        error: error.message,
+        componentStack: errorInfo.componentStack,
+      },
     });
   }
 
@@ -38,7 +45,10 @@ export class OfficeCanvasErrorBoundary extends Component<
     if (this.state.hasError) {
       return (
         <div className="office-webgl-stage office-webgl-stage-v5 office-stage-loading">
-          <p>Office scene failed to render. Changing motion settings or goat asset inputs will retry the scene. Reload if WebGL is unavailable in this browser.</p>
+          <p>
+            Office scene failed to render. Changing motion settings or goat asset inputs will retry the scene. Reload if
+            WebGL is unavailable in this browser.
+          </p>
         </div>
       );
     }

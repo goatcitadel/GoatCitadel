@@ -1,11 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
 import { shouldRenderMonacoRuntime } from "./monaco-runtime";
-import {
-  loadMonacoEditorRuntime,
-  normalizeMonacoLoaderLanguage,
-  type MonacoEditorApiModule,
-} from "./monaco-loader";
+import { loadMonacoEditorRuntime, normalizeMonacoLoaderLanguage, type MonacoEditorApiModule } from "./monaco-loader";
 
 interface WorkbenchMonacoEditorProps {
   value: string;
@@ -85,7 +81,7 @@ export function WorkbenchMonacoEditor({
       editorRef.current = null;
       modelRef.current = null;
     };
-  }, [resolvedLanguage]);
+  }, [resolvedLanguage, usesDiffLayout]);
 
   useEffect(() => {
     const monaco = monacoRef.current;
@@ -125,5 +121,11 @@ export function WorkbenchMonacoEditor({
     );
   }
 
-  return <div ref={containerRef} className={className} style={{ minHeight: typeof height === "number" ? `${height}px` : height }} />;
+  return (
+    <div
+      ref={containerRef}
+      className={className}
+      style={{ minHeight: typeof height === "number" ? `${height}px` : height }}
+    />
+  );
 }
