@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -20,6 +20,12 @@ import {
   buildVisualBaselineFileName,
   RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
+  resolveLegacyRedirectManifest,
+  resolveShellContract,
+  resolveSurfaceRegressionManifest,
+  resolveVisualBaselineNamespace,
+  resolveVisualRegressionManifest,
+  resolveVisualRegressionVariants,
 } from "./release-surface-manifest.mjs";
 import {
   delay,
@@ -29,6 +35,7 @@ import {
   stopProcess,
   stopVerificationStack,
 } from "./runtime.mjs";
+import { DEFAULT_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
 
 const PROVIDER_SCENARIOS = ["simple", "stream", "structured", "tools"];
 const UNSUPPORTED_PROVIDER_SCENARIOS = {
@@ -49,13 +56,40 @@ const SURFACE_REGRESSION_ROUTES = RELEASE_SURFACE_MANIFEST;
 const VISUAL_REGRESSION_ROUTES = RELEASE_SURFACE_MANIFEST;
 const VISUAL_REGRESSION_VARIANTS = RELEASE_SURFACE_VARIANTS;
 
-const VISUAL_BASELINE_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
+const NEXT_UI_PACKAGE = "@goatcitadel/mission-control-next";
+const VISUAL_BASELINE_ROOT_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
 const API_COMPAT_BASELINE_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "rest-sse.json");
 const API_COMPAT_ALLOWLIST_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "allowlist.json");
 const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.005;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
+
+function resolveVerificationTargetContext() {
+  const uiTarget = resolveUiTarget(repoRoot, process.env);
+  const packageName = uiTarget.packageName || DEFAULT_UI_PACKAGE;
+  const surfaceRoutes = resolveSurfaceRegressionManifest(packageName);
+  return {
+    uiTarget,
+    packageName,
+    isNext: packageName === NEXT_UI_PACKAGE,
+    shellContract: resolveShellContract(packageName),
+    surfaceRoutes,
+    visualRoutes: resolveVisualRegressionManifest(packageName),
+    visualVariants: resolveVisualRegressionVariants(packageName),
+    redirectRoutes: resolveLegacyRedirectManifest(packageName),
+    routeByHref: new Map(surfaceRoutes.map((route) => [route.href, route])),
+  };
+}
+
+function resolveVisualBaselineDir(packageName = DEFAULT_UI_PACKAGE) {
+  const namespace = resolveVisualBaselineNamespace(packageName);
+  return namespace ? path.join(VISUAL_BASELINE_ROOT_DIR, namespace) : VISUAL_BASELINE_ROOT_DIR;
+}
+
+function buildVerificationUiUrl(uiUrl, href) {
+  return href.startsWith("/") ? `${uiUrl}${href}` : `${uiUrl}/${href}`;
+}
 
 export async function runFastLane(context) {
   const commands = [
@@ -1540,6 +1574,7 @@ export async function runDurableRecoveryLane(context, options = {}) {
 }
 
 export async function runSurfaceRegressionLane(context, options = {}) {
+  const verificationTarget = resolveVerificationTargetContext();
   const stack = await startVerificationStack(context, {
     includeUi: true,
     gatewayEnv: {
@@ -1553,16 +1588,22 @@ export async function runSurfaceRegressionLane(context, options = {}) {
   });
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-surface-regression");
+    const fixture = verificationTarget.isNext
+      ? await seedMissionControlNextFixture(stack.gatewayUrl)
+      : null;
     const browser = await chromium.launch({ headless: true });
     try {
       const browserContext = await browser.newContext({
         viewport: { width: 1440, height: 1024 },
         colorScheme: "dark",
       });
+      if (fixture && verificationTarget.isNext) {
+        await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
+      }
       const page = await browserContext.newPage();
       const browserLog = attachBrowserLogging(page);
 
-      for (const route of SURFACE_REGRESSION_ROUTES) {
+      for (const route of verificationTarget.surfaceRoutes) {
         await runScenario(
           context,
           {
@@ -1572,15 +1613,12 @@ export async function runSurfaceRegressionLane(context, options = {}) {
             subsystem: "mission-control",
           },
           async ({ correlationId }) => {
-            await page.goto(`${stack.uiUrl}/${route.href}`, { waitUntil: "domcontentloaded" });
-            await waitForMissionControlShell(page);
-            await setBrowserCorrelation(page, correlationId);
-            if (route.readySelector) {
-              await page.waitForSelector(route.readySelector, { timeout: 30000 });
-            }
-            if (route.readyText) {
-              await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: 30000 });
-            }
+            const browserLogCursor = browserLog.mark();
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, route.href), { waitUntil: "domcontentloaded" });
+            await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+            await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+            await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
+            const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, verificationTarget.packageName);
             await page.waitForTimeout(250);
             const artifacts = await captureBrowserArtifacts(context, {
               slug: `surface-regression-${route.slug}`,
@@ -1588,11 +1626,58 @@ export async function runSurfaceRegressionLane(context, options = {}) {
               browserLog,
               gatewayUrl: stack.gatewayUrl,
               correlationId,
+              logCursor: browserLogCursor,
             });
             return {
               status: "passed",
               metrics: {
                 route: route.href,
+                consoleErrors: browserSanity.consoleErrors.length,
+                pageErrors: browserSanity.pageErrors.length,
+              },
+              artifacts,
+            };
+          },
+        );
+      }
+
+      for (const redirect of verificationTarget.redirectRoutes) {
+        const route = verificationTarget.routeByHref.get(redirect.expectedPath);
+        if (!route) {
+          throw new Error(`verification redirect target was not mapped: ${redirect.expectedPath}`);
+        }
+        await runScenario(
+          context,
+          {
+            id: `surface-regression.redirect.${redirect.slug}`,
+            lane: "surface-regression",
+            title: `${redirect.slug} redirects into Mission Control Next`,
+            subsystem: "mission-control",
+          },
+          async ({ correlationId }) => {
+            const browserLogCursor = browserLog.mark();
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, redirect.href), { waitUntil: "domcontentloaded" });
+            await waitForMissionControlShell(page, { packageName: verificationTarget.packageName });
+            await assertLegacyRedirectResolution(page, redirect.expectedPath);
+            await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+            await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+            await performVerificationInteraction(page, redirect.interaction ?? route.interaction, verificationTarget.packageName);
+            const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, verificationTarget.packageName);
+            const artifacts = await captureBrowserArtifacts(context, {
+              slug: `surface-regression-redirect-${redirect.slug}`,
+              page,
+              browserLog,
+              gatewayUrl: stack.gatewayUrl,
+              correlationId,
+              logCursor: browserLogCursor,
+            });
+            return {
+              status: "passed",
+              metrics: {
+                href: redirect.href,
+                expectedPath: redirect.expectedPath,
+                consoleErrors: browserSanity.consoleErrors.length,
+                pageErrors: browserSanity.pageErrors.length,
               },
               artifacts,
             };
@@ -1601,6 +1686,17 @@ export async function runSurfaceRegressionLane(context, options = {}) {
       }
 
       await browserContext.close();
+
+      if (verificationTarget.isNext) {
+        await runMissionControlNextMobileShellProof(context, {
+          browser,
+          gatewayUrl: stack.gatewayUrl,
+          uiUrl: stack.uiUrl,
+          workspaceId: fixture?.workspaceId ?? "default",
+          sessionId: fixture?.sessionId,
+          packageName: verificationTarget.packageName,
+        });
+      }
     } finally {
       await browser.close();
     }
@@ -2200,9 +2296,10 @@ export async function runBackupRoundtripLane(context, options = {}) {
 }
 
 export async function runVisualRegressionLane(context, options = {}) {
+  const verificationTarget = resolveVerificationTargetContext();
   const updateBaselines = maybeParseBool(options.updateBaselines, false);
   if (!updateBaselines) {
-    await assertVisualBaselineCoverage(context);
+    await assertVisualBaselineCoverage(context, { packageName: verificationTarget.packageName });
   }
   const stack = await startVerificationStack(context, {
     includeUi: true,
@@ -2219,18 +2316,25 @@ export async function runVisualRegressionLane(context, options = {}) {
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
     await pinVisualRegressionProvider(stack.gatewayUrl);
+    const fixture = verificationTarget.isNext
+      ? await seedMissionControlNextFixture(stack.gatewayUrl)
+      : null;
+    const manualProofArtifacts = [];
     const browser = await chromium.launch({ headless: true });
     try {
-      for (const variant of VISUAL_REGRESSION_VARIANTS) {
+      for (const variant of verificationTarget.visualVariants) {
         const browserContext = await browser.newContext({
           viewport: variant.viewport,
           colorScheme: variant.colorScheme,
         });
+        if (fixture && verificationTarget.isNext) {
+          await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
+        }
         try {
           const page = await browserContext.newPage();
           const browserLog = attachBrowserLogging(page);
-          for (const route of VISUAL_REGRESSION_ROUTES) {
-            await runScenario(
+          for (const route of verificationTarget.visualRoutes) {
+            const scenarioRecord = await runScenario(
               context,
               {
                 id: `visual-regression.${route.slug}.${variant.slug}`,
@@ -2239,15 +2343,13 @@ export async function runVisualRegressionLane(context, options = {}) {
                 subsystem: "mission-control",
               },
               async ({ correlationId }) => {
-                await page.goto(`${stack.uiUrl}/${appendQuery(route.href, variant.themeQuery)}`, { waitUntil: "domcontentloaded" });
-                await waitForMissionControlShell(page);
-                await setBrowserCorrelation(page, correlationId);
-                if (route.readySelector) {
-                  await page.waitForSelector(route.readySelector, { timeout: 30000 });
-                }
-                if (route.readyText) {
-                  await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: 30000 });
-                }
+                const browserLogCursor = browserLog.mark();
+                await page.goto(buildVerificationUiUrl(stack.uiUrl, appendQuery(route.href, variant.themeQuery)), {
+                  waitUntil: "domcontentloaded",
+                });
+                await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+                await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+                const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, verificationTarget.packageName);
                 await page.evaluate(async () => {
                   if (document.fonts?.ready) {
                     await document.fonts.ready;
@@ -2261,9 +2363,11 @@ export async function runVisualRegressionLane(context, options = {}) {
                   browserLog,
                   gatewayUrl: stack.gatewayUrl,
                   correlationId,
+                  logCursor: browserLogCursor,
                 });
                 const comparison = await compareVisualBaseline(context, artifactSlug, {
                   updateBaselines,
+                  packageName: verificationTarget.packageName,
                 });
                 const failed = comparison.diffRatio > VISUAL_DIFF_RATIO_THRESHOLD;
                 return {
@@ -2276,6 +2380,8 @@ export async function runVisualRegressionLane(context, options = {}) {
                     variant: variant.slug,
                     diffRatio: comparison.diffRatio,
                     changedPixels: comparison.changedPixels,
+                    consoleErrors: browserSanity.consoleErrors.length,
+                    pageErrors: browserSanity.pageErrors.length,
                   },
                   artifacts: {
                     ...artifacts,
@@ -2285,6 +2391,13 @@ export async function runVisualRegressionLane(context, options = {}) {
                 };
               },
             );
+            if (verificationTarget.isNext && scenarioRecord?.artifacts?.screenshots?.length) {
+              manualProofArtifacts.push({
+                routeSlug: route.slug,
+                variantSlug: variant.slug,
+                screenshots: scenarioRecord.artifacts.screenshots,
+              });
+            }
           }
         } finally {
           await browserContext.close();
@@ -2292,6 +2405,10 @@ export async function runVisualRegressionLane(context, options = {}) {
       }
     } finally {
       await browser.close();
+    }
+
+    if (verificationTarget.isNext) {
+      await writeMissionControlNextManualProofChecklist(context, manualProofArtifacts);
     }
   } finally {
     await stopVerificationStack(stack);
@@ -2684,16 +2801,144 @@ async function runLiveProviderScenarios(context, gatewayUrl) {
   }
 }
 
-async function waitForMissionControlShell(page, timeoutMs = 30000) {
+async function waitForMissionControlShell(page, options = {}) {
+  const timeoutMs = typeof options === "number" ? options : (options.timeoutMs ?? 30000);
+  const packageName =
+    typeof options === "number" ? DEFAULT_UI_PACKAGE : (options.packageName ?? DEFAULT_UI_PACKAGE);
+  const shellContract = resolveShellContract(packageName);
   await page.waitForFunction(
-    () => {
-      const shell = document.querySelector(".layout-shell");
-      const accessGate = document.querySelector(".gateway-access-shell");
+    ({ shellSelector, forbiddenSelector }) => {
+      const shell = document.querySelector(shellSelector);
+      const accessGate = document.querySelector(forbiddenSelector);
       return Boolean(shell) && !accessGate;
+    },
+    {
+      shellSelector: shellContract.shellSelector,
+      forbiddenSelector: shellContract.forbiddenSelector,
     },
     { timeout: timeoutMs },
   );
-  await page.waitForSelector(".shell-bar", { timeout: timeoutMs });
+  await page.waitForSelector(shellContract.chromeSelector, { timeout: timeoutMs });
+}
+
+async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_UI_PACKAGE, timeoutMs = 30000) {
+  await waitForMissionControlShell(page, { packageName, timeoutMs });
+  if (packageName === NEXT_UI_PACKAGE) {
+    await page.waitForFunction(
+      ({ area, section, loadingSelector }) => {
+        const shell = document.querySelector(".mc-next-shell");
+        if (!(shell instanceof HTMLElement)) {
+          return false;
+        }
+        const fallback = document.querySelector(loadingSelector);
+        return (
+          !fallback &&
+          shell.dataset.area === area &&
+          shell.dataset.section === (section ?? "root")
+        );
+      },
+      {
+        area: route.expectedArea ?? "chat",
+        section: route.expectedSection ?? "root",
+        loadingSelector: resolveShellContract(packageName).loadingSelector,
+      },
+      { timeout: timeoutMs },
+    );
+  }
+  if (route.readySelector) {
+    await page.waitForSelector(route.readySelector, { timeout: timeoutMs });
+  }
+  if (route.readyText) {
+    await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: timeoutMs });
+  }
+}
+
+async function performVerificationInteraction(page, interaction, packageName = DEFAULT_UI_PACKAGE) {
+  if (!interaction) {
+    return;
+  }
+  if (interaction === "open-inspector" && packageName === NEXT_UI_PACKAGE) {
+    const contextButton = page
+      .locator(".mc-next-topbar-right .mc-next-wa-button")
+      .filter({ hasText: /Open Context|Hide Context/i })
+      .first();
+    await contextButton.waitFor({ timeout: 15000 });
+    const inspector = page.locator(".mc-next-shell-inspector");
+    const deadline = Date.now() + 15000;
+    let attemptedClick = false;
+
+    while (Date.now() < deadline) {
+      if (await inspector.isVisible().catch(() => false)) {
+        return;
+      }
+
+      const label = (await contextButton.textContent())?.trim() ?? "";
+      if (!/hide context/i.test(label) || !attemptedClick) {
+        try {
+          await contextButton.click({ timeout: 5000 });
+        } catch {
+          await contextButton.evaluate((element) => {
+            element.click();
+          });
+        }
+        attemptedClick = true;
+      }
+
+      if (await inspector.isVisible().catch(() => false)) {
+        return;
+      }
+      await page.waitForTimeout(250);
+    }
+
+    await page.waitForSelector(".mc-next-shell-inspector", { state: "visible", timeout: 1500 });
+  }
+}
+
+async function assertLegacyRedirectResolution(page, expectedPath, timeoutMs = 30000) {
+  await page.waitForFunction((pathName) => window.location.pathname === pathName, expectedPath, {
+    timeout: timeoutMs,
+  });
+  const leakedParams = await page.evaluate(() => {
+    const params = new URLSearchParams(window.location.search);
+    return ["tab", "space", "page", "surface"].filter((key) => params.has(key));
+  });
+  if (leakedParams.length > 0) {
+    throw new Error(`legacy redirect left old search params in place: ${leakedParams.join(", ")}`);
+  }
+}
+
+function assertBrowserConsoleHealthy(browserLog, cursor, packageName = DEFAULT_UI_PACKAGE) {
+  const snapshot = browserLog.getSnapshot(cursor);
+  const consoleErrors = snapshot.consoleMessages.filter(
+    (message) => message.type === "error" && !isAllowedBrowserConsoleMessage(message.text),
+  );
+  const pageErrors = snapshot.pageErrors.filter((message) => !isAllowedBrowserPageError(message.message));
+  if (packageName === NEXT_UI_PACKAGE && (consoleErrors.length > 0 || pageErrors.length > 0)) {
+    throw new Error(
+      [
+        consoleErrors.length > 0
+          ? `console errors: ${consoleErrors.map((item) => item.text).join(" | ")}`
+          : null,
+        pageErrors.length > 0
+          ? `page errors: ${pageErrors.map((item) => item.message).join(" | ")}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ; "),
+    );
+  }
+  return {
+    consoleErrors,
+    pageErrors,
+  };
+}
+
+function isAllowedBrowserConsoleMessage(text) {
+  return /favicon\.ico|Download the React DevTools|React Router Future Flag/i.test(text ?? "");
+}
+
+function isAllowedBrowserPageError(_message) {
+  return false;
 }
 
 async function waitForTabReady(page, tab, timeoutMs = 30000) {
@@ -2938,9 +3183,13 @@ function attachBrowserLogging(page) {
     });
   });
   return {
-    getSnapshot: () => ({
-      consoleMessages: [...consoleMessages],
-      pageErrors: [...pageErrors],
+    mark: () => ({
+      consoleMessages: consoleMessages.length,
+      pageErrors: pageErrors.length,
+    }),
+    getSnapshot: (cursor = null) => ({
+      consoleMessages: [...consoleMessages.slice(cursor?.consoleMessages ?? 0)],
+      pageErrors: [...pageErrors.slice(cursor?.pageErrors ?? 0)],
     }),
   };
 }
@@ -2980,7 +3229,7 @@ async function captureBrowserArtifacts(context, input) {
     return window.__goatcitadelDevDiagnostics?.buildBundle(gatewayItems) ?? null;
   }, gatewayDiagnostics.body?.items ?? []);
   await writeJson(browserDiagnosticsPath, browserBundle);
-  await writeJson(consoleLogPath, input.browserLog.getSnapshot());
+  await writeJson(consoleLogPath, input.browserLog.getSnapshot(input.logCursor));
   return {
     diagnostics: [relativeToRun(context, browserDiagnosticsPath), relativeToRun(context, gatewayDiagnosticsPath)],
     screenshots: [relativeToRun(context, screenshotPath)],
@@ -2991,9 +3240,422 @@ async function captureBrowserArtifacts(context, input) {
   };
 }
 
+async function seedMissionControlNextFixture(gatewayUrl) {
+  const seedResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/seed", {
+    method: "POST",
+    body: {
+      workspaceName: "Mission Control Next Verification Workspace",
+      sessionTitle: "Mission Control Next Verification Session",
+      sessionCount: 8,
+      longThreadTurns: 20,
+    },
+  });
+  assertOk(seedResponse, "seed mission-control-next verification data");
+
+  const workspaceId = seedResponse.body?.workspaceId;
+  const sessionId = seedResponse.body?.sessionId;
+  if (!workspaceId || !sessionId) {
+    throw new Error("mission-control-next verification seed did not return workspaceId/sessionId");
+  }
+
+  const threadResponse = await requestJson(
+    gatewayUrl,
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`,
+  );
+  assertOk(threadResponse, "read mission-control-next verification thread");
+  const artifactTurnId =
+    threadResponse.body?.selectedTurnId ??
+    threadResponse.body?.activeLeafTurnId ??
+    threadResponse.body?.turns?.at?.(-1)?.turnId;
+
+  if (artifactTurnId) {
+    const artifactResponse = await requestJson(
+      gatewayUrl,
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(artifactTurnId)}/generated-artifact`,
+      {
+        method: "POST",
+        body: {
+          supersedeLatest: true,
+        },
+      },
+    );
+    assertOk(artifactResponse, "create mission-control-next generated artifact");
+  }
+
+  const approvalResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
+    method: "POST",
+    body: {
+      sessionId,
+      workspaceId,
+    },
+  });
+  assertOk(approvalResponse, "create mission-control-next chat approval");
+
+  const agentSpecs = [
+    {
+      roleId: `mc-next-operator-${randomUUID().slice(0, 8)}`,
+      name: "Operator Scout",
+      title: "Evidence Scout",
+      summary: "Keeps route proof legible and traces noteworthy activity.",
+      specialties: ["verification", "summaries"],
+      defaultTools: ["fs.read", "fs.list"],
+      aliases: ["scout"],
+    },
+    {
+      roleId: `mc-next-builder-${randomUUID().slice(0, 8)}`,
+      name: "Builder Pair",
+      title: "Workbench Pair",
+      summary: "Owns code posture and implementation reviews in shared workspaces.",
+      specialties: ["code", "review"],
+      defaultTools: ["fs.read", "fs.write", "git.status"],
+      aliases: ["pair"],
+    },
+  ];
+
+  const createdAgents = [];
+  for (const agentSpec of agentSpecs) {
+    const response = await requestJson(gatewayUrl, "/api/v1/agents", {
+      method: "POST",
+      body: agentSpec,
+    });
+    assertOk(response, `create mission-control-next agent ${agentSpec.name}`);
+    createdAgents.push(response.body);
+  }
+
+  const tasks = [];
+  const taskSpecs = [
+    {
+      title: "Validate the new Chat/Cowork/Code shell",
+      description: "Check the default operator path, context panel, and visual hierarchy.",
+      status: "planning",
+      priority: "high",
+      assignedAgentId: createdAgents[0]?.agentId,
+    },
+    {
+      title: "Review task board and agent board cohesion",
+      description: "Make sure orchestration state stays visible without clutter.",
+      status: "in_progress",
+      priority: "urgent",
+      assignedAgentId: createdAgents[1]?.agentId,
+    },
+    {
+      title: "Capture prompt-pack quality posture",
+      description: "Benchmark the quality route without leaving the new shell.",
+      status: "review",
+      priority: "normal",
+      assignedAgentId: createdAgents[0]?.agentId,
+    },
+    {
+      title: "Watch runtime approvals and costs",
+      description: "Keep Ops readable while approvals and spend update.",
+      status: "blocked",
+      priority: "normal",
+      assignedAgentId: createdAgents[1]?.agentId,
+    },
+  ];
+
+  for (const taskSpec of taskSpecs) {
+    const response = await requestJson(gatewayUrl, "/api/v1/tasks", {
+      method: "POST",
+      body: {
+        workspaceId,
+        ...taskSpec,
+      },
+    });
+    assertOk(response, `create mission-control-next task ${taskSpec.title}`);
+    tasks.push(response.body);
+  }
+
+  if (tasks[0]?.taskId) {
+    const taskId = tasks[0].taskId;
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, {
+        method: "POST",
+        body: {
+          activityType: "comment",
+          message: "Surface proof fixture loaded with deterministic activity.",
+          agentId: createdAgents[0]?.agentId ?? "operator",
+        },
+      }),
+      "append mission-control-next task activity",
+    );
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, {
+        method: "POST",
+        body: {
+          deliverableType: "artifact",
+          title: "Mission Control Next proof artifact",
+          path: "workspace/verification/mission-control-next-proof.md",
+          description: "Seeded deliverable for task detail proof.",
+        },
+      }),
+      "append mission-control-next task deliverable",
+    );
+    assertOk(
+      await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, {
+        method: "POST",
+        body: {
+          agentSessionId: `agent-session-${randomUUID().slice(0, 8)}`,
+          agentName: createdAgents[1]?.name ?? "Builder Pair",
+        },
+      }),
+      "append mission-control-next task subagent",
+    );
+  }
+
+  assertOk(
+    await requestJson(gatewayUrl, "/api/v1/knowledge/memory/write", {
+      method: "POST",
+      body: {
+        namespace: "mission-control-next",
+        title: "Mission Control Next shell posture",
+        content: "Chat is the default lane, Cowork owns structured work, and Code stays workbench-first.",
+        tags: ["verification", "ui"],
+        source: "verification",
+        sessionId,
+      },
+    }),
+    "write mission-control-next memory item",
+  );
+
+  assertOk(
+    await requestJson(gatewayUrl, "/api/v1/files/upload", {
+      method: "POST",
+      body: {
+        relativePath: "workspace/verification/mission-control-next-proof.md",
+        content: "# Mission Control Next\n\n- Seeded for visual proof.\n- Safe to overwrite.\n",
+      },
+    }),
+    "upload mission-control-next file fixture",
+  );
+
+  assertOk(
+    await requestJson(gatewayUrl, "/api/v1/prompt-packs/import", {
+      method: "POST",
+      body: {
+        name: "Mission Control Next Verification Pack",
+        sourceLabel: "verification",
+        content: [
+          "[TEST-01] Mission Control Next shell posture",
+          "Confirm the new shell is calmer than the legacy frame.",
+          "",
+          "[TEST-02] Context panel posture",
+          "Explain what the context panel should reveal without overwhelming the operator.",
+        ].join("\n"),
+      },
+    }),
+    "import mission-control-next prompt pack",
+  );
+
+  return {
+    workspaceId,
+    sessionId,
+    sessionIds: seedResponse.body?.sessionIds ?? [],
+    agentIds: createdAgents.map((agent) => agent?.agentId).filter(Boolean),
+    taskIds: tasks.map((task) => task?.taskId).filter(Boolean),
+  };
+}
+
+async function installMissionControlNextBrowserState(browserContext, workspaceId) {
+  await browserContext.addInitScript(
+    ({ activeWorkspaceId }) => {
+      window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
+      window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
+      window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
+    },
+    { activeWorkspaceId: workspaceId },
+  );
+}
+
+async function runMissionControlNextMobileShellProof(context, input) {
+  const browserContext = await input.browser.newContext({
+    viewport: { width: 390, height: 844 },
+    colorScheme: "dark",
+  });
+  await installMissionControlNextBrowserState(browserContext, input.workspaceId);
+  const page = await browserContext.newPage();
+  const browserLog = attachBrowserLogging(page);
+  try {
+    await runScenario(
+      context,
+      {
+        id: "surface-regression.mobile.chat-shell",
+        lane: "surface-regression",
+        title: "Mission Control Next mobile shell drawers stay usable",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const browserLogCursor = browserLog.mark();
+        await page.goto(buildVerificationUiUrl(input.uiUrl, "/chat"), { waitUntil: "domcontentloaded" });
+        await waitForVerificationRouteReady(
+          page,
+          { expectedArea: "chat", expectedSection: "root", readySelector: ".mc-next-threaded-surface[data-mode=\"chat\"]" },
+          input.packageName,
+        );
+        await setBrowserCorrelation(page, correlationId, input.sessionId);
+        await assertNoHorizontalOverflow(page, "mobile chat shell");
+        const menuButton = page.locator(".mc-next-nav-toggle").first();
+        await assertLocatorFullyVisible(page, menuButton, "mobile menu toggle");
+        await menuButton.click();
+        await page.waitForSelector(".mc-next-rail.open", { timeout: 15000 });
+        const railCloseButton = page.locator(".mc-next-rail-close").first();
+        await assertLocatorFullyVisible(page, railCloseButton, "mobile rail close button");
+        await railCloseButton.click();
+        await page.waitForFunction(() => !document.querySelector(".mc-next-rail.open"), { timeout: 15000 });
+        const contextButton = page
+          .locator(".mc-next-topbar-right .mc-next-wa-button")
+          .filter({ hasText: /Open Context|Hide Context/i })
+          .first();
+        await assertLocatorFullyVisible(page, contextButton, "mobile open context button");
+        await contextButton.click();
+        await page.waitForSelector(".mc-next-shell-inspector", { state: "visible", timeout: 15000 });
+        await assertNoHorizontalOverflow(page, "mobile chat shell with inspector");
+        const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
+        const artifacts = await captureBrowserArtifacts(context, {
+          slug: "surface-regression-mobile-chat-shell",
+          page,
+          browserLog,
+          gatewayUrl: input.gatewayUrl,
+          correlationId,
+          logCursor: browserLogCursor,
+        });
+        return {
+          status: "passed",
+          metrics: {
+            consoleErrors: browserSanity.consoleErrors.length,
+            pageErrors: browserSanity.pageErrors.length,
+          },
+          artifacts,
+        };
+      },
+    );
+
+    await runScenario(
+      context,
+      {
+        id: "surface-regression.mobile.cowork-tasks",
+        lane: "surface-regression",
+        title: "Mission Control Next mobile task board avoids overflow and clipped primary actions",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const browserLogCursor = browserLog.mark();
+        await page.goto(buildVerificationUiUrl(input.uiUrl, "/cowork/tasks"), { waitUntil: "domcontentloaded" });
+        await waitForVerificationRouteReady(
+          page,
+          { expectedArea: "cowork", expectedSection: "tasks", readySelector: ".mc-next-directory-page" },
+          input.packageName,
+        );
+        await setBrowserCorrelation(page, correlationId, input.sessionId);
+        await assertNoHorizontalOverflow(page, "mobile cowork tasks");
+        const primaryTaskAction = page
+          .locator(".mc-next-directory-page button, .mc-next-directory-action")
+          .first();
+        await assertLocatorFullyVisible(page, primaryTaskAction, "task board primary action");
+        await performVerificationInteraction(page, "open-inspector", input.packageName);
+        await assertNoHorizontalOverflow(page, "mobile cowork tasks with inspector");
+        const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, input.packageName);
+        const artifacts = await captureBrowserArtifacts(context, {
+          slug: "surface-regression-mobile-cowork-tasks",
+          page,
+          browserLog,
+          gatewayUrl: input.gatewayUrl,
+          correlationId,
+          logCursor: browserLogCursor,
+        });
+        return {
+          status: "passed",
+          metrics: {
+            consoleErrors: browserSanity.consoleErrors.length,
+            pageErrors: browserSanity.pageErrors.length,
+          },
+          artifacts,
+        };
+      },
+    );
+  } finally {
+    await browserContext.close();
+  }
+}
+
+async function assertNoHorizontalOverflow(page, label) {
+  const overflow = await page.evaluate(() => {
+    const doc = document.documentElement;
+    const body = document.body;
+    return {
+      doc: doc ? doc.scrollWidth - window.innerWidth : 0,
+      body: body ? body.scrollWidth - window.innerWidth : 0,
+    };
+  });
+  if (overflow.doc > 1 || overflow.body > 1) {
+    throw new Error(`${label} overflowed horizontally (doc=${overflow.doc}, body=${overflow.body})`);
+  }
+}
+
+async function assertLocatorFullyVisible(page, locator, label) {
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    return;
+  }
+  const deadline = Date.now() + 15000;
+  let lastBox = null;
+  await locator.waitFor({ state: "visible", timeout: 15000 });
+  while (Date.now() < deadline) {
+    const box = await locator.boundingBox();
+    if (box) {
+      lastBox = box;
+      const horizontallyVisible = box.x >= 0 && box.x + box.width <= viewport.width + 1;
+      const verticallyVisible = box.y >= 0 && box.y + box.height <= viewport.height + 1;
+      if (horizontallyVisible && verticallyVisible) {
+        return;
+      }
+    }
+    await page.waitForTimeout(50);
+  }
+  if (!lastBox) {
+    throw new Error(`${label} did not expose a visible bounding box`);
+  }
+  throw new Error(
+    `${label} was clipped in the viewport (x=${lastBox.x}, y=${lastBox.y}, width=${lastBox.width}, height=${lastBox.height})`,
+  );
+}
+
+async function writeMissionControlNextManualProofChecklist(context, entries) {
+  const checklistPath = path.join(context.artifactRoot, "diagnostics", "mission-control-next-manual-proof.md");
+  const normalizedEntries = entries
+    .filter((entry) => Array.isArray(entry.screenshots) && entry.screenshots.length > 0)
+    .map((entry) => ({
+      routeSlug: entry.routeSlug,
+      variantSlug: entry.variantSlug,
+      screenshots: [...new Set(entry.screenshots)],
+    }));
+  const lines = [
+    "# Mission Control Next manual proof checklist",
+    "",
+    "Review these generated artifacts before promoting Mission Control Next:",
+    "",
+    "- Check for horizontal overflow or clipped controls.",
+    "- Confirm sticky regions stay stable on desktop and mobile.",
+    "- Confirm drawer usability at 390x844.",
+    "- Confirm the context inspector opens cleanly on wide and narrow layouts.",
+    "- Confirm dark/light contrast remains readable without neon overload.",
+    "",
+    "## Captured screenshots",
+  ];
+  for (const entry of normalizedEntries) {
+    lines.push(
+      `- ${entry.routeSlug} / ${entry.variantSlug}: ${entry.screenshots.join(", ")}`,
+    );
+  }
+  lines.push("");
+  lines.push(`Generated at ${new Date().toISOString()}`);
+  await writeText(checklistPath, `${lines.join("\n")}\n`);
+  return checklistPath;
+}
+
 async function compareVisualBaseline(context, slug, options = {}) {
   const screenshotPath = path.join(context.artifactRoot, "screenshots", `${slug}.png`);
-  const baselinePath = path.join(VISUAL_BASELINE_DIR, `${slug}.png`);
+  const baselinePath = path.join(resolveVisualBaselineDir(options.packageName ?? DEFAULT_UI_PACKAGE), `${slug}.png`);
   const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", `${slug}-visual-compare.json`);
   const diffPath = path.join(context.artifactRoot, "screenshots", `${slug}-diff.png`);
   const baselineArtifactPath = path.join(context.artifactRoot, "screenshots", `${slug}-baseline.png`);
@@ -3114,14 +3776,19 @@ async function loadVisualComparisonImage(filePath) {
     .toBuffer({ resolveWithObject: true });
 }
 
-async function assertVisualBaselineCoverage(context) {
-  const expectedFiles = RELEASE_SURFACE_MANIFEST.flatMap((route) =>
-    RELEASE_SURFACE_VARIANTS.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),
+async function assertVisualBaselineCoverage(context, options = {}) {
+  const packageName = options.packageName ?? DEFAULT_UI_PACKAGE;
+  const routes = packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionManifest(packageName) : RELEASE_SURFACE_MANIFEST;
+  const variants =
+    packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionVariants(packageName) : RELEASE_SURFACE_VARIANTS;
+  const baselineDir = resolveVisualBaselineDir(packageName);
+  const expectedFiles = routes.flatMap((route) =>
+    variants.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),
   );
   const missing = [];
   for (const fileName of expectedFiles) {
     try {
-      await fs.access(path.join(VISUAL_BASELINE_DIR, fileName));
+      await fs.access(path.join(baselineDir, fileName));
     } catch {
       missing.push(fileName);
     }
@@ -3131,7 +3798,7 @@ async function assertVisualBaselineCoverage(context) {
   }
   const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", "visual-baseline-coverage.json");
   await writeJson(diagnosticsPath, {
-    baselineDirectory: VISUAL_BASELINE_DIR,
+    baselineDirectory: baselineDir,
     expectedFiles,
     missingFiles: missing,
   });

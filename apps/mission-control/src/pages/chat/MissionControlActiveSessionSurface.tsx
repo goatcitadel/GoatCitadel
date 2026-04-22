@@ -1,4 +1,5 @@
 import type { ChatMode, ChatThreadResponse, RoutingPreflightResult } from "@goatcitadel/contracts";
+import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { ChatThreadNotice } from "../../components/chat/ChatThreadView";
@@ -17,9 +18,15 @@ export interface MissionControlActiveSessionSurfaceProps {
   sessionTitle: string;
   summary: string;
   trust: WorkTrustDescriptor;
+  providerOptions: ChatModelProviderOption[];
+  selectedProviderId?: string;
+  selectedModel?: string;
+  modelSwitchDisabled: boolean;
   dockOpen: boolean;
   onToggleDock: () => void;
   onNavigateSurface: (surface: ChatMode) => void;
+  onRequestProviderChange: (providerId: string) => void;
+  onRequestModelChange: (model: string) => void;
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
@@ -133,9 +140,15 @@ export function MissionControlActiveSessionSurface({
   sessionTitle,
   summary,
   trust,
+  providerOptions,
+  selectedProviderId,
+  selectedModel,
+  modelSwitchDisabled,
   dockOpen,
   onToggleDock,
   onNavigateSurface,
+  onRequestProviderChange,
+  onRequestModelChange,
   loading,
   thread,
   selectedTurnId,
@@ -253,9 +266,15 @@ export function MissionControlActiveSessionSurface({
         sessionTitle={sessionTitle}
         summary={summary}
         trust={trust}
+        providerOptions={providerOptions}
+        selectedProviderId={selectedProviderId}
+        selectedModel={selectedModel}
+        modelSwitchDisabled={modelSwitchDisabled}
         dockOpen={dockOpen}
         onToggleDock={onToggleDock}
         onNavigateSurface={onNavigateSurface}
+        onRequestProviderChange={onRequestProviderChange}
+        onRequestModelChange={onRequestModelChange}
       />
       <article
         className={`panel panel-${threadPanelRank} chat-v11-thread mode-${mode}`}

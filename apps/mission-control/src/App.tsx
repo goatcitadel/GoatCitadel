@@ -62,10 +62,6 @@ import type { HealthTab } from "./pages/HealthPage";
 import type { TimelineTab } from "./pages/TimelinePage";
 import type { WorkspacesTab } from "./pages/WorkspacesHubPage";
 import { type WorkTrustDescriptor } from "./pages/chat/work-trust";
-import { AgentsHubPage } from "./pages/AgentsHubPage";
-import { ArtifactsPage } from "./pages/ArtifactsPage";
-import { ChatPage } from "./pages/ChatPage";
-import { HealthPage } from "./pages/HealthPage";
 import { emitRefresh, type RefreshTopic } from "./state/refresh-bus";
 import { useUiPreferences } from "./state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "./state/effects-mode";
@@ -123,10 +119,14 @@ function lazyPage<TModule extends Record<string, unknown>, TExport extends keyof
   }) as LazyPageComponent<TModule, TExport>;
 }
 
+const loadAgentsHubPage = () => import("./pages/AgentsHubPage");
 const loadApprovalsPage = () => import("./pages/ApprovalsPage");
+const loadArtifactsPage = () => import("./pages/ArtifactsPage");
+const loadChatPage = () => import("./pages/ChatPage");
 const loadCommandPalette = () => import("./components/CommandPalette");
 const loadDevDiagnosticsPanel = () => import("./components/DevDiagnosticsPanel");
 const loadGeneralHubPage = () => import("./pages/GeneralHubPage");
+const loadHealthPage = () => import("./pages/HealthPage");
 const loadIntegrationsHubPage = () => import("./pages/IntegrationsHubPage");
 const loadPromptLabPage = () => import("./pages/PromptLabPage");
 const loadRuntimeHubPage = () => import("./pages/RuntimeHubPage");
@@ -135,10 +135,14 @@ const loadTimelinePage = () => import("./pages/TimelinePage");
 const loadToolsPage = () => import("./pages/ToolsPage");
 const loadWorkspacesHubPage = () => import("./pages/WorkspacesHubPage");
 
+const AgentsHubPage = lazyPage(loadAgentsHubPage, "AgentsHubPage");
 const ApprovalsPage = lazyPage(loadApprovalsPage, "ApprovalsPage");
+const ArtifactsPage = lazyPage(loadArtifactsPage, "ArtifactsPage");
+const ChatPage = lazyPage(loadChatPage, "ChatPage");
 const CommandPalette = lazyPage(loadCommandPalette, "CommandPalette");
 const DevDiagnosticsPanel = lazyPage(loadDevDiagnosticsPanel, "DevDiagnosticsPanel");
 const GeneralHubPage = lazyPage(loadGeneralHubPage, "GeneralHubPage");
+const HealthPage = lazyPage(loadHealthPage, "HealthPage");
 const IntegrationsHubPage = lazyPage(loadIntegrationsHubPage, "IntegrationsHubPage");
 const PromptLabPage = lazyPage(loadPromptLabPage, "PromptLabPage");
 const RuntimeHubPage = lazyPage(loadRuntimeHubPage, "RuntimeHubPage");
@@ -147,10 +151,14 @@ const TimelinePage = lazyPage(loadTimelinePage, "TimelinePage");
 const ToolsPage = lazyPage(loadToolsPage, "ToolsPage");
 const WorkspacesHubPage = lazyPage(loadWorkspacesHubPage, "WorkspacesHubPage");
 const PRELOAD_ROUTE_MODULES = [
+  loadAgentsHubPage,
   loadApprovalsPage,
+  loadArtifactsPage,
+  loadChatPage,
   loadCommandPalette,
   loadDevDiagnosticsPanel,
   loadGeneralHubPage,
+  loadHealthPage,
   loadIntegrationsHubPage,
   loadPromptLabPage,
   loadRuntimeHubPage,

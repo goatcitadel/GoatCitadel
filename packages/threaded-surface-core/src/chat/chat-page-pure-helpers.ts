@@ -1,0 +1,304 @@
+import type { Dispatch, SetStateAction } from "react";
+/**
+ * Pure helpers and types extracted from ChatPage.tsx as part of Step 10
+ * (page decomposition). No React/DOM/state dependencies — safely
+ * unit-testable in isolation. Re-exported from ChatPage for backward
+ * compatibility with existing tests.
+ */
+
+import {
+  applyChatModePresetToPatch,
+  CHAT_MODE_PRESETS,
+  type ChatCapabilityUpgradeSuggestion,
+  type ChatGeneratedArtifactRecord,
+  type ChatMode,
+  type ChatSessionPrefsPatch,
+  type ChatSessionPrefsRecord,
+} from "@goatcitadel/contracts";
+import type { ChatMessagesResponse } from "@goatcitadel/mission-control-shared/api/client";
+import type { RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import { normalizeComparableAssistantContent } from "./chat-page-normalizers";
+import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+
+export type ChatRefreshPlan = {
+  refreshSidebar: boolean;
+  refreshSession: "none" | "light" | "full";
+};
+
+export type ConfirmableCapabilityAction =
+  | "enable_skill"
+  | "install_skill_disabled"
+  | "install_skill_enable"
+  | "add_mcp_template";
+
+export interface CapabilitySuggestionConfirmationCopy {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger: boolean;
+}
+
+export interface FinalizedStreamMessageState {
+  sessionId: string;
+  placeholderId: string;
+  messageId?: string;
+  content: string;
+}
+
+export interface RevealGeneratedArtifactInput {
+  artifact: ChatGeneratedArtifactRecord;
+  compactSurfaceLayout: boolean;
+  messageMode: ChatMode;
+  loadSessionCoreState: (
+    sessionId: string,
+    options?: { background?: boolean; includeThread?: boolean },
+  ) => Promise<void>;
+  setSessionRailOpen: (open: boolean) => void;
+  setDockOpen: (open: boolean) => void;
+  setActiveGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord | null) => void;
+  setSelectedTurnId: (turnId: string | null) => void;
+  setGeneratedArtifacts: Dispatch<
+    SetStateAction<{
+      items: ChatGeneratedArtifactRecord[];
+    } | null>
+  >;
+  handleNavigateSurface: (
+    surface: ChatMode,
+    options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
+  ) => void;
+}
+
+export function resolveChatRefreshPlan(
+  signal: Pick<RefreshSignal, "eventType" | "reason" | "source">,
+  recentLocalPrefMutation = false,
+): ChatRefreshPlan {
+  const eventType = (signal.eventType ?? "").toLowerCase();
+  const haystack = `${signal.reason} ${signal.eventType ?? ""} ${signal.source ?? ""}`.toLowerCase();
+  const isPrefEcho =
+    recentLocalPrefMutation && /\b(pref|policy|session|proactive|retrieval|reflection|mode)\b/.test(haystack);
+  if (eventType === "fallback_poll") {
+    return {
+      refreshSidebar: true,
+      refreshSession: "light",
+    };
+  }
+  if (isPrefEcho) {
+    return {
+      refreshSidebar: false,
+      refreshSession: "none",
+    };
+  }
+  if (eventType === "chat_thread_updated") {
+    return {
+      refreshSidebar: false,
+      refreshSession: "full",
+    };
+  }
+  if (eventType === "chat_session_title_updated") {
+    return {
+      refreshSidebar: true,
+      refreshSession: "none",
+    };
+  }
+  if (eventType === "memory_qmd_generated") {
+    return {
+      refreshSidebar: false,
+      refreshSession: "light",
+    };
+  }
+  if (eventType === "tool_invoked" || eventType === "session_event") {
+    return {
+      refreshSidebar: false,
+      refreshSession: "none",
+    };
+  }
+  const refreshSidebar =
+    /\b(project|archive|restore|pin|unpin|binding|workspace|external|session_created|session_deleted|title|rename|chat_session_title_updated|chat_session_updated)\b/.test(
+      haystack,
+    );
+  const refreshSession = /\b(chat_thread_updated|message|thread|turn|assistant|user)\b/.test(haystack)
+    ? "full"
+    : /\b(pref|policy|proactive|retrieval|reflection|mode|learned_memory)\b/.test(haystack)
+      ? "light"
+      : "none";
+  return {
+    refreshSidebar,
+    refreshSession,
+  };
+}
+
+export function isConfirmableCapabilityAction(
+  action: ChatCapabilityUpgradeSuggestion["recommendedAction"],
+): action is ConfirmableCapabilityAction {
+  return (
+    action === "enable_skill" ||
+    action === "install_skill_disabled" ||
+    action === "install_skill_enable" ||
+    action === "add_mcp_template"
+  );
+}
+
+export function getCapabilitySuggestionConfirmationCopy(
+  suggestion: ChatCapabilityUpgradeSuggestion,
+): CapabilitySuggestionConfirmationCopy | null {
+  if (!isConfirmableCapabilityAction(suggestion.recommendedAction)) {
+    return null;
+  }
+
+  switch (suggestion.recommendedAction) {
+    case "enable_skill":
+      return {
+        title: "Enable skill",
+        message: `Enable ${suggestion.title}? GoatCitadel will turn it on and then resume the original request.`,
+        confirmLabel: "Enable and resume",
+        danger: false,
+      };
+    case "install_skill_disabled":
+      return {
+        title: "Install skill for review",
+        message: `Install ${suggestion.title} in a disabled state first? You can review it in Skills before enabling live use.`,
+        confirmLabel: "Install disabled",
+        danger: false,
+      };
+    case "install_skill_enable":
+      return {
+        title: "Install and enable hosted skill",
+        message: `Approve GoatCitadel to install and enable ${suggestion.title} now? The original request will resume automatically afterward.`,
+        confirmLabel: "Install and enable",
+        danger: suggestion.riskLevel === "high",
+      };
+    case "add_mcp_template":
+      return {
+        title: "Add MCP template",
+        message: `Add MCP template "${suggestion.title}" now? Review trust and auth details in MCP Servers before first live use.`,
+        confirmLabel: "Add template",
+        danger: false,
+      };
+    default:
+      return null;
+  }
+}
+
+export function getDeleteSessionConfirmationMessage(label: string): string {
+  return `Delete "${label}" permanently? This removes its messages, traces, session history, and attached files.`;
+}
+
+export function resolveOptimisticChatPrefs(
+  current: ChatSessionPrefsRecord,
+  patch: ChatSessionPrefsPatch,
+): ChatSessionPrefsRecord {
+  const normalizedPatch = applyChatModePresetToPatch(patch);
+  const presetAutonomyBudget = CHAT_MODE_PRESETS[current.mode].defaultPrefs.autonomyBudget;
+  const baseAutonomyBudget = current.autonomyBudget ?? presetAutonomyBudget;
+  const providerChanged = normalizedPatch.providerId !== undefined && normalizedPatch.providerId !== current.providerId;
+  return {
+    ...current,
+    mode: normalizedPatch.mode ?? current.mode,
+    planningMode: normalizedPatch.planningMode ?? current.planningMode,
+    providerId: normalizedPatch.providerId ?? current.providerId,
+    model: normalizedPatch.model ?? (providerChanged ? undefined : current.model),
+    webMode: normalizedPatch.webMode ?? current.webMode,
+    memoryMode: normalizedPatch.memoryMode ?? current.memoryMode,
+    thinkingLevel: normalizedPatch.thinkingLevel ?? current.thinkingLevel,
+    toolAutonomy: normalizedPatch.toolAutonomy ?? current.toolAutonomy,
+    visionFallbackModel: normalizedPatch.visionFallbackModel ?? current.visionFallbackModel,
+    orchestrationEnabled: normalizedPatch.orchestrationEnabled ?? current.orchestrationEnabled,
+    orchestrationIntensity: normalizedPatch.orchestrationIntensity ?? current.orchestrationIntensity,
+    orchestrationVisibility: normalizedPatch.orchestrationVisibility ?? current.orchestrationVisibility,
+    orchestrationProviderPreference:
+      normalizedPatch.orchestrationProviderPreference ?? current.orchestrationProviderPreference,
+    orchestrationReviewDepth: normalizedPatch.orchestrationReviewDepth ?? current.orchestrationReviewDepth,
+    orchestrationParallelism: normalizedPatch.orchestrationParallelism ?? current.orchestrationParallelism,
+    codeAutoApply: normalizedPatch.codeAutoApply ?? current.codeAutoApply,
+    proactiveMode: normalizedPatch.proactiveMode ?? current.proactiveMode,
+    autonomyBudget: normalizedPatch.autonomyBudget
+      ? {
+          ...baseAutonomyBudget,
+          ...normalizedPatch.autonomyBudget,
+        }
+      : (current.autonomyBudget ?? presetAutonomyBudget),
+    retrievalMode: normalizedPatch.retrievalMode ?? current.retrievalMode,
+    reflectionMode: normalizedPatch.reflectionMode ?? current.reflectionMode,
+  };
+}
+
+export function resolveSelectedTurnId(
+  thread: {
+    selectedTurnId?: string | null;
+    activeLeafTurnId?: string | null;
+    turns: Array<{ turnId: string }>;
+  } | null,
+  currentTurnId: string | null,
+  pendingRouteTurnId: string | null = null,
+): string | null {
+  if (!thread?.turns.length) {
+    return null;
+  }
+  if (pendingRouteTurnId && thread.turns.some((turn) => turn.turnId === pendingRouteTurnId)) {
+    return pendingRouteTurnId;
+  }
+  if (currentTurnId && thread.turns.some((turn) => turn.turnId === currentTurnId)) {
+    return currentTurnId;
+  }
+  return thread.selectedTurnId ?? thread.activeLeafTurnId ?? thread.turns.at(-1)?.turnId ?? null;
+}
+
+export function shouldApplyFetchedMessagesAfterStream(
+  currentMessages: ChatMessagesResponse["items"],
+  fetchedMessages: ChatMessagesResponse["items"],
+  finalizedStreamMessage: FinalizedStreamMessageState | null,
+): boolean {
+  if (!finalizedStreamMessage) {
+    return true;
+  }
+  const currentPlaceholder = currentMessages.find(
+    (item) =>
+      item.messageId === finalizedStreamMessage.messageId || item.messageId === finalizedStreamMessage.placeholderId,
+  );
+  if (!currentPlaceholder) {
+    return true;
+  }
+  if (finalizedStreamMessage.messageId) {
+    return fetchedMessages.some(
+      (item) => item.role === "assistant" && item.messageId === finalizedStreamMessage.messageId,
+    );
+  }
+  const finalizedContent = normalizeComparableAssistantContent(finalizedStreamMessage.content);
+  if (!finalizedContent) {
+    return true;
+  }
+  const fetchedHasEquivalentAssistant = fetchedMessages.some(
+    (item) => item.role === "assistant" && normalizeComparableAssistantContent(item.content) === finalizedContent,
+  );
+  return fetchedHasEquivalentAssistant;
+}
+
+export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"], content: string): boolean {
+  return action === "send" && content.trim().startsWith("/");
+}
+
+export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArtifactInput): Promise<void> {
+  if (input.compactSurfaceLayout) {
+    input.setSessionRailOpen(false);
+    input.setDockOpen(false);
+  }
+  input.setActiveGeneratedArtifact(input.artifact);
+  input.setSelectedTurnId(input.artifact.turnId);
+  await input.loadSessionCoreState(input.artifact.sessionId, {
+    background: true,
+    includeThread: true,
+  });
+  input.setGeneratedArtifacts((current) =>
+    current
+      ? {
+          ...current,
+          items: [input.artifact, ...current.items.filter((item) => item.artifactId !== input.artifact.artifactId)],
+        }
+      : current,
+  );
+  input.handleNavigateSurface(input.messageMode, {
+    sessionId: input.artifact.sessionId,
+    turnId: input.artifact.turnId,
+    artifactId: input.artifact.artifactId,
+  });
+}

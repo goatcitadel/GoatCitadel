@@ -2555,6 +2555,17 @@ export class GatewayService {
     return this.chatProjectService.createChatProject(input);
   }
 
+  public importChatProject(input: {
+    workspaceId?: string;
+    name?: string;
+    sourceType: "local_folder" | "github_repo";
+    sourcePath?: string;
+    repoUrl?: string;
+    ref?: string;
+  }) {
+    return this.chatProjectService.importChatProject(input);
+  }
+
   public updateChatProject(
     projectId: string,
     input: {
@@ -11226,6 +11237,7 @@ export class GatewayService {
     const session = this.getSession(sessionId);
     const projectLink = this.storage.chatSessionProjects.get(sessionId);
     const project = projectLink ? this.storage.chatProjects.find(projectLink.projectId) : undefined;
+    const prefs = this.storage.chatSessionPrefs.get(sessionId);
     const generatedArtifacts = this.storage.chatGeneratedArtifacts
       .listBySession(sessionId, 12)
       .slice(0, 6)
@@ -11233,7 +11245,7 @@ export class GatewayService {
     const meta =
       this.storage.chatSessionMeta.get(sessionId) ??
       this.storage.chatSessionMeta.ensure(sessionId, undefined, project?.workspaceId ?? DEFAULT_WORKSPACE_ID);
-    return toChatSessionRecord(session, meta, project, { generatedArtifacts });
+    return toChatSessionRecord(session, { ...meta, mode: prefs?.mode ?? "chat" }, project, { generatedArtifacts });
   }
 
   /** @internal */ public isReplayScratchSession(sessionId: string): boolean {
@@ -12224,6 +12236,7 @@ export function toChatSessionRecord(
   session: SessionMeta,
   meta: {
     workspaceId?: string;
+    mode?: ChatMode;
     title?: string;
     origin?: "operator" | "prompt_pack" | "system";
     includeInHistory: boolean;
@@ -12242,6 +12255,7 @@ export function toChatSessionRecord(
     sessionKey: session.sessionKey,
     workspaceId: meta.workspaceId ?? project?.workspaceId,
     scope: session.channel === "mission" ? "mission" : "external",
+    mode: meta.mode,
     origin: meta.origin,
     includeInHistory: meta.includeInHistory,
     title: meta.title ?? session.displayName,

@@ -211,9 +211,9 @@ function emitTerminalLine(
   const bindingLabel = formatBindingLabel(bindings);
   const baseMessage = message.trim() || fallbackMessageForLevel(level);
   const allowDetail = verbose || level === "warn" || level === "error" || level === "fatal";
-  const detail = allowDetail ? formatMetaDetail(meta, verbose, bindings) : "";
+  const detail = allowDetail ? formatMetaDetail(meta, verbose, bindings, level, variant) : "";
   const line = [timestamp, levelLabel, scopeLabel, bindingLabel, baseMessage].filter(Boolean).join(" ");
-  const output = detail ? `${line}\n${detail}` : line;
+  const output = colorizeTerminalLine(level, variant, detail ? `${line}\n${detail}` : line);
 
   if (level === "warn") {
     // eslint-disable-next-line no-console -- terminal reporter is the sink for gateway runtime logs.
@@ -261,7 +261,13 @@ function formatBindingLabel(bindings: Record<string, unknown>): string {
   return "";
 }
 
-function formatMetaDetail(meta: unknown, verbose: boolean, bindings: Record<string, unknown>): string {
+function formatMetaDetail(
+  meta: unknown,
+  verbose: boolean,
+  bindings: Record<string, unknown>,
+  level: TerminalLevel,
+  variant: "default" | "success",
+): string {
   const merged = mergeMeta(bindings, meta);
   if (!merged) {
     return "";
@@ -270,7 +276,27 @@ function formatMetaDetail(meta: unknown, verbose: boolean, bindings: Record<stri
   if (!normalized || (typeof normalized === "object" && Object.keys(normalized).length === 0)) {
     return "";
   }
-  return chalk.dim(JSON.stringify(normalized));
+  return colorizeTerminalLine(level, variant, chalk.dim(JSON.stringify(normalized)));
+}
+
+function colorizeTerminalLine(
+  level: TerminalLevel,
+  variant: "default" | "success",
+  value: string,
+): string {
+  if (variant === "success") {
+    return chalk.green(value);
+  }
+  switch (level) {
+    case "warn":
+      return chalk.yellow(value);
+    case "error":
+      return chalk.red(value);
+    case "fatal":
+      return chalk.bgRed.white(value);
+    default:
+      return value;
+  }
 }
 
 function mergeMeta(bindings: Record<string, unknown>, meta: unknown): Record<string, unknown> | undefined {

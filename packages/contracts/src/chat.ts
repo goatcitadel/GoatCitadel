@@ -71,6 +71,25 @@ export interface ChatProjectRecord {
   updatedAt: string;
 }
 
+export type ChatProjectImportSource = "local_folder" | "github_repo";
+
+export interface ChatProjectImportInput {
+  workspaceId?: string;
+  name?: string;
+  sourceType: ChatProjectImportSource;
+  sourcePath?: string;
+  repoUrl?: string;
+  ref?: string;
+}
+
+export interface ChatProjectImportResult {
+  project: ChatProjectRecord;
+  sourceType: ChatProjectImportSource;
+  materializedPath: string;
+  repoReady: boolean;
+  imported: boolean;
+}
+
 export interface ChatFolderRecord {
   folderId: string;
   workspaceId?: string;
@@ -143,6 +162,7 @@ export interface ChatSessionRecord {
   sessionKey: string;
   workspaceId?: string;
   scope: ChatSessionScope;
+  mode?: ChatMode;
   origin?: ChatSessionOrigin;
   includeInHistory: boolean;
   title?: string;

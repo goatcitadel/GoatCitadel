@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
   MessagePrimitive,
@@ -8,6 +8,7 @@ import {
   type ThreadMessage,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
+import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
@@ -79,7 +80,7 @@ export function AssistantMessageRenderer({
   if (shouldUseFallback) {
     return (
       <div className={cn("mc-assistant-renderer mc-assistant-renderer-fallback", className)}>
-        <div className="mc-assistant-renderer-message">
+        <AssistantMessageContainer role={role} content={content}>
           <div
             className={cn(
               "mc-assistant-markdown",
@@ -88,7 +89,7 @@ export function AssistantMessageRenderer({
           >
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           </div>
-        </div>
+        </AssistantMessageContainer>
       </div>
     );
   }
@@ -130,18 +131,20 @@ function AssistantMessageRuntimeRenderer({
           <ThreadPrimitive.Messages>
             {() => (
               <MessagePrimitive.Root className="mc-assistant-renderer-message">
-                <MessagePrimitive.Parts
-                  components={{
-                    Text: () => (
-                      <MarkdownTextPrimitive
-                        className={cn(
-                          "mc-assistant-markdown",
-                          role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
-                        )}
-                      />
-                    ),
-                  }}
-                />
+                <AssistantMessageContainer role={role} content={content}>
+                  <MessagePrimitive.Parts
+                    components={{
+                      Text: () => (
+                        <MarkdownTextPrimitive
+                          className={cn(
+                            "mc-assistant-markdown",
+                            role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
+                          )}
+                        />
+                      ),
+                    }}
+                  />
+                </AssistantMessageContainer>
               </MessagePrimitive.Root>
             )}
           </ThreadPrimitive.Messages>
@@ -149,4 +152,81 @@ function AssistantMessageRuntimeRenderer({
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider>
   );
+}
+
+function AssistantMessageContainer({
+  role,
+  content,
+  children,
+}: {
+  role: "user" | "assistant";
+  content: string;
+  children: React.ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+  const resetTimerRef = useRef<number | null>(null);
+  const copyDisabled = role !== "assistant" || !content.trim();
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current !== null && typeof window !== "undefined") {
+        window.clearTimeout(resetTimerRef.current);
+      }
+    };
+  }, []);
+
+  async function handleCopy(): Promise<void> {
+    if (copyDisabled) {
+      return;
+    }
+    await copyTextToClipboard(content);
+    setCopied(true);
+    if (typeof window !== "undefined") {
+      if (resetTimerRef.current !== null) {
+        window.clearTimeout(resetTimerRef.current);
+      }
+      resetTimerRef.current = window.setTimeout(() => {
+        setCopied(false);
+        resetTimerRef.current = null;
+      }, 1800);
+    }
+  }
+
+  return (
+    <div className="mc-assistant-renderer-shell">
+      {role === "assistant" ? (
+        <button
+          type="button"
+          className={cn("mc-assistant-copy-button", copied ? "copied" : "")}
+          onClick={() => void handleCopy()}
+          aria-label={copied ? "Response copied to clipboard" : "Copy response to clipboard"}
+          title={copied ? "Copied" : "Copy"}
+        >
+          {copied ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2.2} />}
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      ) : null}
+      <div className="mc-assistant-renderer-body">{children}</div>
+    </div>
+  );
+}
+
+async function copyTextToClipboard(content: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content);
+    return;
+  }
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard is unavailable.");
+  }
+  const textArea = document.createElement("textarea");
+  textArea.value = content;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  textArea.style.pointerEvents = "none";
+  document.body.appendChild(textArea);
+  textArea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textArea);
 }

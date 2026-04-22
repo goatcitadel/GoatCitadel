@@ -242,11 +242,20 @@
   display: contents;
 }
 
+.mc-assistant-renderer-shell {
+  position: relative;
+}
+
+.mc-assistant-renderer-body {
+  display: block;
+}
+
 .mc-assistant-markdown {
   display: grid;
   gap: 0.6rem;
   color: inherit;
   line-height: 1.55;
+  padding-top: 0.15rem;
 }
 
 .mc-assistant-markdown p,
@@ -286,6 +295,62 @@
   border-left: 2px solid color-mix(in srgb, var(--accent-primary) 54%, transparent);
   padding-left: 0.85rem;
   color: var(--text-secondary);
+}
+
+.mc-assistant-copy-button {
+  position: absolute;
+  top: -0.2rem;
+  right: 0;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.9rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  color: var(--text-secondary);
+  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(12px);
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.mc-assistant-copy-button:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border));
+  background: color-mix(in srgb, var(--panel-elevated) 88%, transparent);
+}
+
+.mc-assistant-copy-button:active {
+  transform: translateY(1px);
+}
+
+.mc-assistant-copy-button.copied {
+  color: color-mix(in srgb, var(--accent-primary) 76%, white 24%);
+  border-color: color-mix(in srgb, var(--accent-primary) 46%, var(--border));
+}
+
+.mc-assistant-copy-button svg {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .mc-assistant-copy-button {
+    position: static;
+    margin-bottom: 0.55rem;
+  }
+
+  .mc-assistant-markdown {
+    padding-top: 0;
+  }
 }
 
 @media (max-width: 960px) {

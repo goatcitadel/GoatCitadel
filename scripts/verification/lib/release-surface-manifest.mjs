@@ -47,6 +47,387 @@ export const RELEASE_SURFACE_VARIANTS = [
   },
 ];
 
+export const NEXT_RELEASE_SURFACE_MANIFEST = [
+  {
+    slug: "chat",
+    href: "/chat",
+    readySelector: ".mc-next-threaded-surface[data-mode=\"chat\"]",
+    expectedArea: "chat",
+    expectedSection: "root",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "cowork",
+    href: "/cowork",
+    readySelector: ".mc-next-threaded-surface[data-mode=\"cowork\"]",
+    expectedArea: "cowork",
+    expectedSection: "workspace",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "cowork-tasks",
+    href: "/cowork/tasks",
+    readySelector: ".mc-next-directory-page",
+    expectedArea: "cowork",
+    expectedSection: "tasks",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "cowork-board",
+    href: "/cowork/board",
+    readySelector: ".mc-next-directory-page",
+    expectedArea: "cowork",
+    expectedSection: "board",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "code",
+    href: "/code",
+    readySelector: ".mc-next-threaded-surface[data-mode=\"code\"]",
+    expectedArea: "code",
+    expectedSection: "root",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-agents",
+    href: "/library/agents",
+    readyText: "Agents",
+    expectedArea: "library",
+    expectedSection: "agents",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-skills",
+    href: "/library/skills",
+    readyText: "Skills",
+    expectedArea: "library",
+    expectedSection: "skills",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-memory",
+    href: "/library/memory",
+    readyText: "Memory posture",
+    expectedArea: "library",
+    expectedSection: "memory",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-knowledge",
+    href: "/library/knowledge",
+    readyText: "Knowledge sources",
+    expectedArea: "library",
+    expectedSection: "knowledge",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-files",
+    href: "/library/files",
+    readySelector: ".mc-next-directory-page",
+    expectedArea: "library",
+    expectedSection: "files",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-artifacts",
+    href: "/library/artifacts",
+    readyText: "Generated artifacts",
+    expectedArea: "library",
+    expectedSection: "artifacts",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-prompt-packs",
+    href: "/library/prompt-packs",
+    readySelector: ".mc-pp-layout",
+    expectedArea: "library",
+    expectedSection: "prompt-packs",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-activity",
+    href: "/ops/activity",
+    readyText: "Activity feed",
+    expectedArea: "ops",
+    expectedSection: "activity",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-sessions",
+    href: "/ops/sessions",
+    readyText: "Sessions",
+    expectedArea: "ops",
+    expectedSection: "sessions",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-schedules",
+    href: "/ops/schedules",
+    readySelector: ".mc-next-directory-page",
+    expectedArea: "ops",
+    expectedSection: "schedules",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-improvement",
+    href: "/ops/improvement",
+    readyText: "Improvement",
+    expectedArea: "ops",
+    expectedSection: "improvement",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-approvals",
+    href: "/ops/approvals",
+    readyText: "Approval inbox",
+    expectedArea: "ops",
+    expectedSection: "approvals",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-costs",
+    href: "/ops/costs",
+    readyText: "Spend breakdown",
+    expectedArea: "ops",
+    expectedSection: "costs",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-runtime",
+    href: "/ops/runtime",
+    readyText: "Runtime",
+    expectedArea: "ops",
+    expectedSection: "runtime",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-diagnostics",
+    href: "/ops/diagnostics",
+    readyText: "Diagnostics directory",
+    expectedArea: "ops",
+    expectedSection: "diagnostics",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-general",
+    href: "/settings/general",
+    readyText: "General",
+    expectedArea: "settings",
+    expectedSection: "general",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-providers",
+    href: "/settings/providers",
+    readyText: "Providers",
+    expectedArea: "settings",
+    expectedSection: "providers",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-access",
+    href: "/settings/access",
+    readyText: "Access",
+    expectedArea: "settings",
+    expectedSection: "access",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-runtime",
+    href: "/settings/runtime",
+    readyText: "Runtime posture",
+    expectedArea: "settings",
+    expectedSection: "runtime",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-workspaces",
+    href: "/settings/workspaces",
+    readyText: "Workspaces",
+    expectedArea: "settings",
+    expectedSection: "workspaces",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-addons",
+    href: "/settings/addons",
+    readyText: "Add-ons",
+    expectedArea: "settings",
+    expectedSection: "addons",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-integrations",
+    href: "/settings/integrations",
+    readyText: "Integrations",
+    expectedArea: "settings",
+    expectedSection: "integrations",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-channels",
+    href: "/settings/channels",
+    readyText: "Channels",
+    expectedArea: "settings",
+    expectedSection: "channels",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-mcp",
+    href: "/settings/mcp",
+    readyText: "MCP",
+    expectedArea: "settings",
+    expectedSection: "mcp",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-tools",
+    href: "/settings/tools",
+    readyText: "Tool catalog",
+    expectedArea: "settings",
+    expectedSection: "tools",
+    interaction: "open-inspector",
+  },
+];
+
+const NEXT_VISUAL_ROUTE_SLUGS = new Set([
+  "chat",
+  "cowork",
+  "cowork-tasks",
+  "code",
+  "library-agents",
+  "library-memory",
+  "library-files",
+  "library-prompt-packs",
+  "ops-activity",
+  "ops-approvals",
+  "ops-runtime",
+  "ops-diagnostics",
+  "settings-general",
+  "settings-providers",
+  "settings-integrations",
+  "settings-tools",
+  "settings-workspaces",
+]);
+
+export const NEXT_VISUAL_REGRESSION_MANIFEST = NEXT_RELEASE_SURFACE_MANIFEST.filter((route) =>
+  NEXT_VISUAL_ROUTE_SLUGS.has(route.slug),
+);
+
+export const NEXT_LEGACY_REDIRECT_MANIFEST = [
+  { slug: "legacy-tab-chat", href: "/?tab=chat&surface=chat", expectedPath: "/chat", interaction: "open-inspector" },
+  { slug: "legacy-tab-assembly", href: "/?tab=assembly", expectedPath: "/cowork", interaction: "open-inspector" },
+  { slug: "legacy-tab-tasks", href: "/?tab=tasks", expectedPath: "/cowork/tasks", interaction: "open-inspector" },
+  { slug: "legacy-tab-board", href: "/?tab=herd-live", expectedPath: "/cowork/board", interaction: "open-inspector" },
+  { slug: "legacy-surface-chat", href: "/?surface=chat", expectedPath: "/chat", interaction: "open-inspector" },
+  { slug: "legacy-surface-cowork", href: "/?surface=cowork", expectedPath: "/cowork", interaction: "open-inspector" },
+  { slug: "legacy-surface-code", href: "/?surface=code", expectedPath: "/code", interaction: "open-inspector" },
+  {
+    slug: "legacy-space-code",
+    href: "/?space=operate&page=surface&surface=code",
+    expectedPath: "/code",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-activity",
+    href: "/?space=observe&page=activity&tab=activity",
+    expectedPath: "/ops/activity",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-scheduler",
+    href: "/?space=observe&page=activity&tab=scheduler",
+    expectedPath: "/ops/schedules",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-improvement",
+    href: "/?space=observe&page=activity&tab=improvement",
+    expectedPath: "/ops/improvement",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-memory",
+    href: "/?space=observe&page=artifacts&tab=memory",
+    expectedPath: "/library/memory",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-artifacts",
+    href: "/?space=observe&page=artifacts&tab=generated",
+    expectedPath: "/library/artifacts",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-quality",
+    href: "/?space=observe&page=quality",
+    expectedPath: "/library/prompt-packs",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-settings-runtime",
+    href: "/?space=configure&page=settings&tab=runtime",
+    expectedPath: "/settings/runtime",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-channels",
+    href: "/?space=configure&page=integrations&tab=channels",
+    expectedPath: "/settings/channels",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-mcp",
+    href: "/?space=configure&page=integrations&tab=mcp",
+    expectedPath: "/settings/mcp",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-skills",
+    href: "/?space=configure&page=agents&tab=skills",
+    expectedPath: "/library/skills",
+    interaction: "open-inspector",
+  },
+];
+
+export const CURRENT_SHELL_CONTRACT = {
+  shellSelector: ".layout-shell",
+  chromeSelector: ".shell-bar",
+  forbiddenSelector: ".gateway-access-shell",
+  loadingSelector: ".shell-page-loading",
+};
+
+export const NEXT_SHELL_CONTRACT = {
+  shellSelector: ".mc-next-shell",
+  chromeSelector: ".mc-next-topbar",
+  forbiddenSelector: ".gateway-access-shell",
+  loadingSelector: ".mc-next-route-fallback",
+};
+
 export function buildVisualBaselineFileName(routeSlug, variantSlug) {
   return `visual-regression-${routeSlug}-${variantSlug}.png`;
+}
+
+export function resolveShellContract(packageName) {
+  return packageName === "@goatcitadel/mission-control-next" ? NEXT_SHELL_CONTRACT : CURRENT_SHELL_CONTRACT;
+}
+
+export function resolveSurfaceRegressionManifest(packageName) {
+  return packageName === "@goatcitadel/mission-control-next" ? NEXT_RELEASE_SURFACE_MANIFEST : RELEASE_SURFACE_MANIFEST;
+}
+
+export function resolveVisualRegressionManifest(packageName) {
+  return packageName === "@goatcitadel/mission-control-next" ? NEXT_VISUAL_REGRESSION_MANIFEST : RELEASE_SURFACE_MANIFEST;
+}
+
+export function resolveVisualRegressionVariants(_packageName) {
+  return RELEASE_SURFACE_VARIANTS;
+}
+
+export function resolveVisualBaselineNamespace(packageName) {
+  return packageName === "@goatcitadel/mission-control-next" ? "mission-control-next" : "";
+}
+
+export function resolveLegacyRedirectManifest(packageName) {
+  return packageName === "@goatcitadel/mission-control-next" ? NEXT_LEGACY_REDIRECT_MANIFEST : [];
 }

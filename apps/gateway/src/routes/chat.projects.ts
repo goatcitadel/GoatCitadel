@@ -15,6 +15,32 @@ const createProjectSchema = z.object({
   color: z.string().optional(),
 });
 
+const importProjectSchema = z
+  .object({
+    workspaceId: z.string().min(1).optional(),
+    name: z.string().optional(),
+    sourceType: z.enum(["local_folder", "github_repo"]),
+    sourcePath: z.string().optional(),
+    repoUrl: z.string().url().optional(),
+    ref: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.sourceType === "local_folder" && !value.sourcePath?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "sourcePath is required for local_folder imports",
+        path: ["sourcePath"],
+      });
+    }
+    if (value.sourceType === "github_repo" && !value.repoUrl?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "repoUrl is required for github_repo imports",
+        path: ["repoUrl"],
+      });
+    }
+  });
+
 const updateProjectSchema = z.object({
   workspaceId: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
@@ -51,6 +77,18 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     try {
       const created = fastify.gateway.createChatProject(parsed.data);
       return reply.code(201).send(created);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/projects/import", async (request, reply) => {
+    const parsed = importProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(await fastify.gateway.importChatProject(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

@@ -11,6 +11,7 @@ export type ChatSessionControlPending =
   | "delete"
   | "project"
   | "binding"
+  | "code_source"
   | null;
 
 export interface ChatSessionManagementPanelProps {

@@ -29,19 +29,14 @@ export function GeneralHubPage({ activeTab, onTabChange, onOnboardingCompleted }
         : activeTab === "budget"
           ? "Keep spend and read access defaults aligned with runtime risk."
           : activeTab === "onboarding"
-            ? "Use onboarding to tighten defaults before the workspace gets busy."
-            : "Set the base defaults Mission Control will reuse everywhere else.";
+        ? "Use onboarding to tighten defaults before the workspace gets busy."
+        : "Set the base defaults Mission Control will reuse everywhere else.";
+  const subtitle = `${activeLabel} · ${decisionSummary}`;
 
   return (
     <ConfigureHubLayout
       title="General"
-      subtitle={
-        <>
-          <strong>{activeLabel}</strong>
-          {" · "}
-          {decisionSummary}
-        </>
-      }
+      subtitle={subtitle}
       guideTitle="What this controls"
       guideBody="Use General to lock the defaults that other surfaces inherit. Reach for this before you debug behavior downstream."
       tabItems={ITEMS}

@@ -1,7 +1,18 @@
+import { Suspense, lazy } from "react";
 import type { ChatMode } from "@goatcitadel/contracts";
-import { CodeWorkbenchPanel } from "../../components/CodeWorkbenchPanel";
-import { CoworkCanvasPanel } from "../../components/CoworkCanvasPanel";
+import type { CodeWorkbenchPanel as CodeWorkbenchPanelComponent } from "../../components/CodeWorkbenchPanel";
+import type { CoworkCanvasPanel as CoworkCanvasPanelComponent } from "../../components/CoworkCanvasPanel";
 import { ChatSurfaceLayout } from "./ChatSurfaceLayout";
+
+const LazyCoworkCanvasPanel = lazy(async () => {
+  const module = await import("../../components/CoworkCanvasPanel");
+  return { default: module.CoworkCanvasPanel };
+});
+
+const LazyCodeWorkbenchPanel = lazy(async () => {
+  const module = await import("../../components/CodeWorkbenchPanel");
+  return { default: module.CodeWorkbenchPanel };
+});
 
 interface BaseWorkSurfaceProps {
   mode: ChatMode;
@@ -35,7 +46,7 @@ export function ChatWorkSurface(props: BaseWorkSurfaceProps) {
 
 export function CoworkWorkSurface(
   props: BaseWorkSurfaceProps & {
-    coworkPanel: React.ComponentProps<typeof CoworkCanvasPanel>;
+    coworkPanel: React.ComponentProps<typeof CoworkCanvasPanelComponent>;
   },
 ) {
   return (
@@ -43,7 +54,13 @@ export function CoworkWorkSurface(
       mode={props.mode}
       sessionRail={props.sessionRail}
       primaryColumn={props.primaryColumn}
-      workflowColumn={props.workflowColumn ?? <CoworkCanvasPanel {...props.coworkPanel} />}
+      workflowColumn={
+        props.workflowColumn ?? (
+          <Suspense fallback={<div className="panel panel-pad" aria-hidden="true" />}>
+            <LazyCoworkCanvasPanel {...props.coworkPanel} />
+          </Suspense>
+        )
+      }
       contextDock={props.contextDock}
       dockOpen={props.dockOpen}
       onDockOpenChange={props.onDockOpenChange}
@@ -56,7 +73,7 @@ export function CoworkWorkSurface(
 
 export function CodeWorkSurface(
   props: BaseWorkSurfaceProps & {
-    codePanel: React.ComponentProps<typeof CodeWorkbenchPanel>;
+    codePanel: React.ComponentProps<typeof CodeWorkbenchPanelComponent>;
   },
 ) {
   return (
@@ -64,7 +81,13 @@ export function CodeWorkSurface(
       mode={props.mode}
       sessionRail={props.sessionRail}
       primaryColumn={props.primaryColumn}
-      workflowColumn={props.workflowColumn ?? <CodeWorkbenchPanel {...props.codePanel} />}
+      workflowColumn={
+        props.workflowColumn ?? (
+          <Suspense fallback={<div className="panel panel-pad" aria-hidden="true" />}>
+            <LazyCodeWorkbenchPanel {...props.codePanel} />
+          </Suspense>
+        )
+      }
       contextDock={props.contextDock}
       dockOpen={props.dockOpen}
       onDockOpenChange={props.onDockOpenChange}

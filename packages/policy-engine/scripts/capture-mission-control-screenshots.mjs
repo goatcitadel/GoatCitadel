@@ -6,11 +6,13 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { Storage } from "@goatcitadel/storage";
+import { resolveUiTarget } from "../../../scripts/lib/ui-target.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 const tmpDir = path.join(repoRoot, ".tmp", "public-share-screenshots");
 const runtimeRoot = path.join(tmpDir, "runtime");
-const outputDir = path.join(repoRoot, "docs", "screenshots", "mission-control");
+const uiTarget = resolveUiTarget(repoRoot, process.env);
+const outputDir = path.join(repoRoot, "docs", "screenshots", uiTarget.screenshotDirName);
 const gatewayPort = 18787;
 const uiPort = 15173;
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
@@ -154,7 +156,7 @@ async function main() {
   });
   const ui = await startProcess(
     "ui",
-    [pnpmCommand(), "--dir", repoRoot, "--filter", "@goatcitadel/mission-control", "exec", "vite", "--host", "127.0.0.1", "--port", String(uiPort)],
+    [pnpmCommand(), "--dir", repoRoot, "--filter", uiTarget.packageName, "exec", "vite", "--host", "127.0.0.1", "--port", String(uiPort)],
     {
       VITE_GATEWAY_URL: gatewayUrl,
     },
@@ -662,8 +664,8 @@ async function writeGalleryIndex() {
   </head>
   <body>
     <main class="wrap">
-      <h1>GoatCitadel Mission Control Screenshots</h1>
-      <p>Regenerated from a sanitized 1.0 release demo runtime. Folder: <code>docs/screenshots/mission-control</code></p>
+      <h1>GoatCitadel ${escapeHtml(uiTarget.displayName)} Screenshots</h1>
+      <p>Regenerated from a sanitized 1.0 release demo runtime. Folder: <code>docs/screenshots/${escapeHtml(uiTarget.screenshotDirName)}</code></p>
       <div class="grid">
 ${cards}
       </div>

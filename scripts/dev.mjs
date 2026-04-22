@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { resolveUiTarget } from "./lib/ui-target.mjs";
 
 const bootstrapPackages = [
   "@goatcitadel/contracts",
   "@goatcitadel/extensions-sdk",
   "@goatcitadel/gateway-core",
   "@goatcitadel/memory-core",
+  "@goatcitadel/mission-control-shared",
   "@goatcitadel/mesh-core",
   "@goatcitadel/orchestration",
   "@goatcitadel/policy-engine",
   "@goatcitadel/skills",
   "@goatcitadel/storage",
+  "@goatcitadel/threaded-surface-core",
 ];
 
 console.log(`[dev] syncing runtime workspace packages: ${bootstrapPackages.join(", ")}`);
@@ -33,6 +36,7 @@ if (bootstrapResult.status !== 0) {
 
 const rawArgs = process.argv.slice(2);
 const { verbose, passthrough } = extractVerboseFlag(rawArgs);
+const uiTarget = resolveUiTarget(process.cwd(), process.env);
 
 setTerminalTitle("Dev");
 
@@ -41,7 +45,7 @@ const commandArgs = [
   "--filter",
   "@goatcitadel/gateway",
   "--filter",
-  "@goatcitadel/mission-control",
+  uiTarget.packageName,
   "dev",
   ...passthrough,
 ];

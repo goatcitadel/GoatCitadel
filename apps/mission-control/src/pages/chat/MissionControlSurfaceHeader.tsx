@@ -1,4 +1,6 @@
 import type { ChatMode } from "@goatcitadel/contracts";
+import { useState } from "react";
+import { ChatModelPicker, type ChatModelProviderOption } from "../../components/ChatModelPicker";
 import type { WorkTrustDescriptor } from "./work-trust";
 
 export function MissionControlSurfaceHeader({
@@ -6,23 +8,37 @@ export function MissionControlSurfaceHeader({
   sessionTitle,
   summary,
   trust,
+  providerOptions = [],
+  selectedProviderId,
+  selectedModel,
+  modelSwitchDisabled = false,
   dockOpen,
   onToggleDock,
   onNavigateSurface,
+  onRequestProviderChange,
+  onRequestModelChange,
 }: {
   mode: ChatMode;
   sessionTitle: string;
   summary: string;
   trust: WorkTrustDescriptor;
+  providerOptions?: ChatModelProviderOption[];
+  selectedProviderId?: string;
+  selectedModel?: string;
+  modelSwitchDisabled?: boolean;
   dockOpen: boolean;
   onToggleDock: () => void;
   onNavigateSurface?: (surface: ChatMode) => void;
+  onRequestProviderChange?: (providerId: string) => void;
+  onRequestModelChange?: (model: string) => void;
 }) {
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const routingSummary =
     trust.effectiveProviderModelSummary ??
     trust.requestedProviderModelSummary ??
     trust.providerModelSummary ??
     "Provider routing pending";
+  const canSwitchModel = providerOptions.length > 0 && onRequestProviderChange && onRequestModelChange;
 
   return (
     <header className={`mission-surface-header mode-${mode}`} aria-label={`${trust.activeModeLabel} session surface`}>
@@ -41,6 +57,22 @@ export function MissionControlSurfaceHeader({
           {trust.fallbackSummary ? <span>{trust.fallbackSummary}</span> : null}
           <span>{trust.runtimeSummary}</span>
         </div>
+        {canSwitchModel && modelPickerOpen ? (
+          <div className="mission-surface-model-strip">
+            <div className="mission-surface-model-strip-copy">
+              <span className="mission-surface-model-strip-label">Thread model</span>
+              <p>Changing the provider or model mid-thread can weaken continuity. Re-send important instructions after switching.</p>
+            </div>
+            <ChatModelPicker
+              providers={providerOptions}
+              providerId={selectedProviderId}
+              model={selectedModel}
+              disabled={modelSwitchDisabled}
+              onChangeProvider={onRequestProviderChange}
+              onChangeModel={onRequestModelChange}
+            />
+          </div>
+        ) : null}
       </div>
       <div className="mission-surface-header-actions">
         {mode !== "chat" ? (
@@ -68,6 +100,23 @@ export function MissionControlSurfaceHeader({
             onClick={() => onNavigateSurface?.("code")}
           >
             Open in Code
+          </button>
+        ) : null}
+        {canSwitchModel ? (
+          <button
+            type="button"
+            className={[
+              "gc-nav-button",
+              "gc-nav-tier-chip",
+              "mission-surface-route-button",
+              modelPickerOpen ? "active" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => setModelPickerOpen((current) => !current)}
+            aria-expanded={modelPickerOpen}
+          >
+            {modelPickerOpen ? "Hide model switcher" : "Switch model"}
           </button>
         ) : null}
         <button

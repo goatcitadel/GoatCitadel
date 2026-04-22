@@ -48,6 +48,19 @@ async function main() {
   if (!VALID_LANES.has(lane)) {
     throw new Error(`Unknown verification lane: ${lane}`);
   }
+  const requestedUiPackage = typeof options["ui-package"] === "string" ? options["ui-package"].trim() : "";
+  if (requestedUiPackage) {
+    process.env.GOATCITADEL_UI_PACKAGE = requestedUiPackage;
+  }
+  const effectiveUiPackage = process.env.GOATCITADEL_UI_PACKAGE?.trim();
+  if (
+    effectiveUiPackage === "@goatcitadel/mission-control-next" &&
+    !["surface-regression", "visual-regression", "visual-rebaseline", "review"].includes(lane)
+  ) {
+    throw new Error(
+      "Mission Control Next verification currently supports surface-regression, visual-regression, visual-rebaseline, and review lanes only.",
+    );
+  }
 
   if (lane === "review") {
     const latestPointer = parseLatestRunPointer(await readRunJson(path.join(artifactsRoot, "latest-run.json")));

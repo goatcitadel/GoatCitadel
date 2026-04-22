@@ -4,19 +4,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b tsconfig.json tsconfig.node.json && vite build",
+    "build": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build && tsc -b tsconfig.json tsconfig.node.json && vite build",
     "perf:check": "node ../../scripts/check-mission-control-budgets.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -b tsconfig.json tsconfig.node.json",
+    "typecheck": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build && tsc -b tsconfig.json tsconfig.node.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
-    "lint": "tsc -b tsconfig.json tsconfig.node.json"
+    "lint": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build && tsc -b tsconfig.json tsconfig.node.json"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.12.25",
     "@assistant-ui/react-markdown": "^0.12.9",
     "@fontsource-variable/geist": "^5.2.8",
     "@goatcitadel/contracts": "workspace:*",
+    "@goatcitadel/threaded-surface-core": "workspace:*",
+    "@monaco-editor/loader": "^1.7.0",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-popover": "^1.1.2",
     "@radix-ui/react-select": "^2.1.2",

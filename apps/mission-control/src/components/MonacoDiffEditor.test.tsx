@@ -18,12 +18,20 @@ const createDiffEditorMock = vi.fn(() => ({
   dispose: disposeEditorMock,
 }));
 
-vi.mock("monaco-editor", () => ({
-  editor: {
-    createDiffEditor: createDiffEditorMock,
-    createModel: createModelMock,
-    setTheme: setThemeMock,
-  },
+vi.mock("./monaco-loader", () => ({
+  loadMonacoEditorRuntime: vi.fn(async () => ({
+    editor: {
+      createDiffEditor: createDiffEditorMock,
+      createModel: createModelMock,
+      setTheme: setThemeMock,
+    },
+  })),
+  normalizeMonacoLoaderLanguage: vi.fn((language?: string) => {
+    if (language === "ts") {
+      return "typescript";
+    }
+    return language ?? "plaintext";
+  }),
 }));
 
 describe("MonacoDiffEditor", () => {

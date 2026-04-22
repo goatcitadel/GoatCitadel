@@ -63,6 +63,9 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
   const sessionIds = allSessions.map((session) => session.sessionId);
   const metaBySessionId = host.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
+  const prefsModeBySessionId = new Map(
+    sessionIds.map((sessionId) => [sessionId, host.storage.chatSessionPrefs.get(sessionId)?.mode ?? "chat"]),
+  );
   const projectLinkBySessionId = host.storage.chatSessionProjects.listBySessionIds(sessionIds);
   const generatedArtifactsBySessionId = host.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
 
@@ -76,7 +79,7 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
     };
     const link = projectLinkBySessionId.get(session.sessionId);
     const project = link ? projectById.get(link.projectId) : undefined;
-    return toChatSessionRecord(session, meta, project, {
+    return toChatSessionRecord(session, { ...meta, mode: prefsModeBySessionId.get(session.sessionId) ?? "chat" }, project, {
       generatedArtifacts: (generatedArtifactsBySessionId.get(session.sessionId) ?? [])
         .slice(0, 6)
         .map(buildGeneratedArtifactReference),
@@ -418,6 +421,7 @@ export function assignChatSessionProject(
   const workspaceId = host.normalizeWorkspaceId(meta.workspaceId);
   if (!projectId) {
     host.storage.chatSessionProjects.unassign(sessionId);
+    resetWorkbenchForProjectChange(host, sessionId, undefined);
     const updated = host.requireChatSession(sessionId);
     host.publishRealtime(
       "chat_session_updated",
@@ -430,7 +434,11 @@ export function assignChatSessionProject(
   if (host.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
     throw new Error("project workspace does not match session workspace");
   }
+  const currentProjectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
   host.storage.chatSessionProjects.assign(sessionId, projectId);
+  if (currentProjectId !== projectId) {
+    resetWorkbenchForProjectChange(host, sessionId, projectId);
+  }
   const updated = host.requireChatSession(sessionId);
   host.publishRealtime(
     "chat_session_updated",
@@ -438,6 +446,19 @@ export function assignChatSessionProject(
     buildChatSessionUpdatedPayload("chat_session_project_assigned", updated),
   );
   return updated;
+}
+
+function resetWorkbenchForProjectChange(host: ChatSessionHost, sessionId: string, projectId?: string): void {
+  host.storage.chatSessionWorkbench.patch(sessionId, {
+    projectId,
+    baseRef: undefined,
+    worktreePath: undefined,
+    worktreeStatus: "uninitialized",
+    activeFilePath: undefined,
+    diffArtifactId: undefined,
+    outputArtifactId: undefined,
+    validationStatus: "idle",
+  });
 }
 
 export function getChatSessionBinding(host: ChatSessionHost, sessionId: string): ChatSessionBindingRecord | undefined {

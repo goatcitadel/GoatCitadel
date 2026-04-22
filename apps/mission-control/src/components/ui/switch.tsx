@@ -1,19 +1,19 @@
 "use client";
 
 import * as React from "react";
-import { Switch as SwitchPrimitive } from "radix-ui";
+import * as SwitchPrimitive from "@radix-ui/react-switch";
 
 import { cn } from "@/lib/utils";
 
-function Switch({
-  className,
-  size = "default",
-  ...props
-}: React.ComponentProps<typeof SwitchPrimitive.Root> & {
-  size?: "sm" | "default";
-}) {
+const Switch = React.forwardRef<
+  React.ElementRef<typeof SwitchPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root> & {
+    size?: "sm" | "default";
+  }
+>(function Switch({ className, size = "default", ...props }, ref) {
   return (
     <SwitchPrimitive.Root
+      ref={ref}
       data-slot="switch"
       data-size={size}
       className={cn(
@@ -28,6 +28,6 @@ function Switch({
       />
     </SwitchPrimitive.Root>
   );
-}
+});
 
 export { Switch };

@@ -1,0 +1,102 @@
+{
+  "name": "@goatcitadel/mission-control-shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./api/*": {
+      "types": "./dist/api/*.d.ts",
+      "default": "./dist/api/*.js"
+    },
+    "./components/*": {
+      "types": "./dist/components/*.d.ts",
+      "default": "./dist/components/*.js"
+    },
+    "./components/chat/*": {
+      "types": "./dist/components/chat/*.d.ts",
+      "default": "./dist/components/chat/*.js"
+    },
+    "./components/ui": {
+      "types": "./dist/components/ui/index.d.ts",
+      "default": "./dist/components/ui/index.js"
+    },
+    "./components/ui/*": {
+      "types": "./dist/components/ui/*.d.ts",
+      "default": "./dist/components/ui/*.js"
+    },
+    "./content/*": {
+      "types": "./dist/content/*.d.ts",
+      "default": "./dist/content/*.js"
+    },
+    "./hooks/*": {
+      "types": "./dist/hooks/*.d.ts",
+      "default": "./dist/hooks/*.js"
+    },
+    "./pages/chat/*": {
+      "types": "./dist/pages/chat/*.d.ts",
+      "default": "./dist/pages/chat/*.js"
+    },
+    "./pages/prompt-lab/*": {
+      "types": "./dist/pages/prompt-lab/*.d.ts",
+      "default": "./dist/pages/prompt-lab/*.js"
+    },
+    "./state/*": {
+      "types": "./dist/state/*.d.ts",
+      "default": "./dist/state/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@assistant-ui/react": "^0.12.25",
+    "@assistant-ui/react-markdown": "^0.12.9",
+    "@fontsource-variable/geist": "^5.2.8",
+    "@goatcitadel/contracts": "workspace:*",
+    "@monaco-editor/loader": "^1.7.0",
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-popover": "^1.1.2",
+    "@radix-ui/react-select": "^2.1.2",
+    "@radix-ui/react-separator": "^1.1.7",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-switch": "^1.1.1",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.1.4",
+    "@tanstack/react-table": "^8.21.3",
+    "@uiw/react-monacoeditor": "^3.6.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.0.0",
+    "lucide-react": "^0.542.0",
+    "mermaid": "^11.14.0",
+    "monaco-editor": "^0.55.1",
+    "next-themes": "^0.4.6",
+    "radix-ui": "^1.4.3",
+    "react": "^19.1.1",
+    "react-arborist": "^3.5.0",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "react-virtuoso": "^4.10.5",
+    "remark-gfm": "^4.0.1",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.3.1",
+    "vaul": "^1.1.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/three": "^0.183.1"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -b tsconfig.json"
+  }
+}

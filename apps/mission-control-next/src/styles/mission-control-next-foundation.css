@@ -1,0 +1,80 @@
+@import "@fontsource-variable/geist";
+
+:root {
+  color-scheme: dark;
+  font-family: "Geist Variable", sans-serif;
+  --mc-font-sans: "Geist Variable", sans-serif;
+  --mc-font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --mc-radius-sm: 0.8rem;
+  --mc-radius-md: 1rem;
+  --mc-radius-lg: 1.25rem;
+  --mc-radius-xl: 1.5rem;
+  --mc-radius-pill: 999px;
+  --mc-shadow-soft: 0 18px 44px rgba(15, 23, 42, 0.08);
+  --mc-shadow-strong: 0 28px 60px rgba(15, 23, 42, 0.18);
+  --background: oklch(0.18 0.01 255);
+  --foreground: oklch(0.97 0.004 255);
+  --card: oklch(0.24 0.01 255);
+  --muted: oklch(0.28 0.008 255);
+  --muted-foreground: oklch(0.72 0.01 250);
+  --border: oklch(0.42 0.01 255 / 26%);
+  --input: oklch(0.42 0.01 255 / 30%);
+  --primary: oklch(0.72 0.11 240);
+  --primary-foreground: oklch(0.16 0.01 255);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--mc-font-sans);
+}
+
+body {
+  min-height: 100vh;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--mc-font-mono);
+}
+
+.theme-signal-noir,
+.mc-next-shell.theme-signal-noir,
+.gateway-access-shell.theme-signal-noir {
+  color-scheme: dark;
+}
+
+.theme-citadel-light,
+.mc-next-shell.theme-citadel-light,
+.gateway-access-shell.theme-citadel-light {
+  color-scheme: light;
+}

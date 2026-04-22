@@ -2,8 +2,10 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { resolveUiTarget } from "./lib/ui-target.mjs";
 
 const rootDir = process.cwd();
+const uiTarget = resolveUiTarget(rootDir, process.env);
 const gatewayPort = process.env.GATEWAY_PORT ?? "8787";
 const gatewayHost = process.env.GATEWAY_HOST ?? "0.0.0.0";
 const missionControlPort = process.env.MISSION_CONTROL_PORT ?? "4173";
@@ -28,8 +30,8 @@ const gateway = launch(
 );
 
 const missionControl = launch(
-  "mission-control",
-  path.join(rootDir, "apps", "mission-control", "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite"),
+  uiTarget.packageDirName,
+  path.join(uiTarget.appDir, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite"),
   [
     "preview",
     "--host",
@@ -39,7 +41,7 @@ const missionControl = launch(
     "--strictPort",
   ],
   {
-    cwd: path.join(rootDir, "apps", "mission-control"),
+    cwd: uiTarget.appDir,
     env: {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "production",

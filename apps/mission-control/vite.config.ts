@@ -1,16 +1,107 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ResolvedConfig, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
+const MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
+const CONTENT_TYPES = new Map<string, string>([
+  [".css", "text/css; charset=utf-8"],
+  [".html", "text/html; charset=utf-8"],
+  [".js", "text/javascript; charset=utf-8"],
+  [".json", "application/json; charset=utf-8"],
+  [".map", "application/json; charset=utf-8"],
+  [".svg", "image/svg+xml"],
+  [".ttf", "font/ttf"],
+  [".txt", "text/plain; charset=utf-8"],
+  [".woff", "font/woff"],
+  [".woff2", "font/woff2"],
+]);
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(configDir, "./package.json"), "utf8")) as {
   version?: string;
 };
+
+function getContentType(filePath: string): string {
+  return CONTENT_TYPES.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream";
+}
+
+function copyDirectory(sourceDir: string, targetDir: string): void {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectory(sourcePath, targetPath);
+      continue;
+    }
+    fs.copyFileSync(sourcePath, targetPath);
+  }
+}
+
+function resolveMonacoVsDirectory(packageRoot: string): string {
+  const candidateDirectories = [
+    path.resolve(packageRoot, "node_modules/monaco-editor/min/vs"),
+    path.resolve(packageRoot, "../../node_modules/monaco-editor/min/vs"),
+  ];
+  for (const candidate of candidateDirectories) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(`Unable to resolve Monaco AMD assets for ${packageRoot}.`);
+}
+
+function sanitizeRelativeAssetPath(requestPath: string): string {
+  return requestPath
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("/");
+}
+
+function monacoAmdAssetsPlugin(packageRoot: string): Plugin {
+  const sourceDir = resolveMonacoVsDirectory(packageRoot);
+  let viteConfig: ResolvedConfig | null = null;
+
+  return {
+    name: "goatcitadel-monaco-amd-assets",
+    configResolved(config) {
+      viteConfig = config;
+    },
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use((req, res, next) => {
+        const requestUrl = req.url?.split("?")[0] ?? "";
+        if (!requestUrl.startsWith(`${MONACO_PUBLIC_BASE}/`)) {
+          next();
+          return;
+        }
+
+        const relativeAssetPath = sanitizeRelativeAssetPath(requestUrl.slice(MONACO_PUBLIC_BASE.length));
+        const resolvedAssetPath = path.resolve(sourceDir, `.${path.sep}${relativeAssetPath}`);
+        if (!resolvedAssetPath.startsWith(sourceDir) || !fs.existsSync(resolvedAssetPath) || !fs.statSync(resolvedAssetPath).isFile()) {
+          res.statusCode = 404;
+          res.end();
+          return;
+        }
+
+        res.setHeader("Content-Type", getContentType(resolvedAssetPath));
+        fs.createReadStream(resolvedAssetPath).pipe(res);
+      });
+    },
+    writeBundle() {
+      if (!viteConfig) {
+        return;
+      }
+      const outputDir = path.resolve(viteConfig.root, viteConfig.build.outDir);
+      const targetDir = path.join(outputDir, "vendor", "monaco", "vs");
+      copyDirectory(sourceDir, targetDir);
+    },
+  };
+}
 
 export function resolveViteAllowedHosts(env: Record<string, string | undefined> = process.env): string[] {
   const raw = env.GOATCITADEL_VITE_ALLOWED_HOSTS?.trim();
@@ -37,7 +128,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __GC_BUILD_ID__: JSON.stringify(buildId),
     },
-    plugins: [tailwindcss(), react()],
+    plugins: [monacoAmdAssetsPlugin(configDir), tailwindcss(), react()],
     resolve: {
       // Fresh installer-based copies may not have workspace package dist output yet.
       // Resolve contracts from source so Mission Control stays bootable in dev mode.
@@ -46,10 +137,6 @@ export default defineConfig(({ mode }) => {
         {
           find: "@",
           replacement: path.resolve(configDir, "./src"),
-        },
-        {
-          find: "@goatcitadel/contracts",
-          replacement: path.resolve(configDir, "../../packages/contracts/src/index.ts"),
         },
       ],
     },

@@ -1,0 +1,156 @@
+import type {
+  ChatAttachmentRecord,
+  ChatGeneratedArtifactRecord,
+  ChatMode,
+  ChatThreadResponse,
+  RoutingPreflightResult,
+  ThreadKnowledgeAttachmentRecord,
+  ThreadKnowledgeRetrievalMode,
+} from "@goatcitadel/contracts";
+import type {
+  ClipboardEventHandler,
+  DragEventHandler,
+  KeyboardEventHandler,
+  RefObject,
+} from "react";
+import type { EventStreamStatus } from "@goatcitadel/mission-control-shared/api/shell-client";
+import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
+import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
+import type { ChatQueueItemView } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
+import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
+import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
+import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
+import type { PendingUserInputState } from "./useChatOutboundExecution";
+import type { WorkTrustDescriptor } from "./work-trust";
+
+export interface MissionControlActiveSessionSurfaceProps {
+  mode: ChatMode;
+  sessionTitle: string;
+  summary: string;
+  trust: WorkTrustDescriptor;
+  providerOptions: ChatModelProviderOption[];
+  selectedProviderId?: string;
+  selectedModel?: string;
+  modelSwitchDisabled: boolean;
+  dockOpen: boolean;
+  onToggleDock: () => void;
+  onNavigateSurface: (surface: ChatMode) => void;
+  onRequestProviderChange: (providerId: string) => void;
+  onRequestModelChange: (model: string) => void;
+  loading: boolean;
+  thread: ChatThreadResponse | null;
+  selectedTurnId: string | null;
+  delegationRun: ActiveChatDelegationRun | null;
+  notices: ChatThreadNotice[];
+  followOutput: boolean;
+  streamStatus: ChatStreamStatus;
+  queuedCount: number;
+  streamError: string | null;
+  pendingApproval: ChatPendingApprovalState | null;
+  pendingUserInput: PendingUserInputState | null;
+  workspaceId: string;
+  approvalPending: boolean;
+  userInputPending: boolean;
+  eventStreamStatus: EventStreamStatus;
+  onBottomStateChange: (next: boolean) => void;
+  onSelectTurn: (turnId: string | null) => void;
+  onSwitchBranch: (turnId: string) => void;
+  onRetryTurn: (turnId: string) => void;
+  onEditTurn: (turnId: string) => void;
+  onOpenRunDetails: (turnId: string) => void;
+  onOpenGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifact: (turnId: string) => void;
+  onCreateGeneratedArtifactVersion: (turnId: string) => void;
+  onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
+  onDenyPending: () => void;
+  onSubmitUserInput: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
+  onRefreshThread: () => void;
+  isDragActive: boolean;
+  queueItems: ChatQueueItemView[];
+  editingTurnId: string | null;
+  planningMode: "off" | "advisory";
+  effectiveToolAutonomy?: string;
+  draft: string;
+  commandSuggestions: Array<{ key: string; command: string; description: string; applyValue: string }>;
+  commandIndex: number;
+  pendingAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
+  pendingAttachmentModes?: Record<string, "message" | ThreadKnowledgeRetrievalMode>;
+  threadKnowledgeAttachments?: ThreadKnowledgeAttachmentRecord[];
+  presetOptions?: Array<{
+    value: string;
+    label: string;
+    summary?: string;
+    routeHint?: ChatMode;
+    toolsPosture?: "safe_auto" | "manual";
+  }>;
+  selectedPresetId?: string;
+  presetApplyWarning?: string | null;
+  selectedTurnRecovery: {
+    action?: string;
+    label: string;
+    summary: string;
+  } | null;
+  selectedTurn: ChatThreadResponse["turns"][number] | null;
+  selectedSessionId: string | null;
+  currentWebMode: "auto" | "off" | "quick" | "deep";
+  routePreflight: RoutingPreflightResult | null;
+  routeBoundaryAckRequired: boolean;
+  routeBoundaryAcknowledged: boolean;
+  sending: boolean;
+  canSend: boolean;
+  hasActiveStream: boolean;
+  activeStreamTurnAssigned: boolean;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  audioInputRef?: RefObject<HTMLInputElement | null>;
+  onDragEnter: DragEventHandler<HTMLElement>;
+  onDragOver: DragEventHandler<HTMLElement>;
+  onDragLeave: DragEventHandler<HTMLElement>;
+  onDrop: DragEventHandler<HTMLElement>;
+  onResumeAll: () => void;
+  onRemoveQueuedItem: (id: string) => void;
+  onCancelEdit: () => void;
+  onDismissError: () => void;
+  onAcknowledgeRouteBoundary: () => void;
+  onSetDeepMode: () => void;
+  onReviewRunDetails: () => void;
+  onDraftChange: (next: string) => void;
+  onComposerKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
+  onComposerPaste: ClipboardEventHandler<HTMLTextAreaElement>;
+  onApplyDraftCommand: (command: string) => void;
+  onPresetChange?: (value: string) => void;
+  onApplyPreset?: () => void;
+  onDismissPresetWarning?: () => void;
+  onSetAttachmentMode?: (attachmentId: string, mode: "message" | ThreadKnowledgeRetrievalMode) => void;
+  onRemoveThreadKnowledgeAttachment?: (attachmentId: string) => void;
+  knowledgeUrlDraft?: string;
+  knowledgeUrlMode?: ThreadKnowledgeRetrievalMode;
+  onKnowledgeUrlDraftChange?: (value: string) => void;
+  onKnowledgeUrlModeChange?: (value: ThreadKnowledgeRetrievalMode) => void;
+  onAttachKnowledgeUrl?: () => void;
+  onRemoveAttachment: (attachmentId: string) => void;
+  onAttachFiles: () => void;
+  onUploadFiles: (files: FileList | null) => void;
+  onRunQuickResearch: () => void;
+  voiceBusy?: boolean;
+  voiceInputAvailable?: boolean;
+  voiceOutputAvailable?: boolean;
+  voiceTalkActive?: boolean;
+  voiceStatusLabel?: string;
+  voiceUnavailableReason?: string | null;
+  speakResponsesEnabled?: boolean;
+  imageBusy?: boolean;
+  imageGenerationAvailable?: boolean;
+  imageEditAvailable?: boolean;
+  imageRouteLabel?: string | null;
+  onToggleVoiceTalk?: () => void;
+  onOpenAudioTranscribe?: () => void;
+  onAudioFileSelected?: (files: FileList | null) => void;
+  onToggleSpeakResponses?: () => void;
+  onGenerateImage?: () => void;
+  onEditImage?: () => void;
+  activeGeneratedArtifact?: ChatGeneratedArtifactRecord | null;
+  onCloseGeneratedArtifact?: () => void;
+  onStopActiveTurn: () => void;
+  onSend: () => void;
+}

@@ -5,6 +5,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { resolveUiTarget } from "../../lib/ui-target.mjs";
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
@@ -24,8 +25,9 @@ export async function prepareVerificationRuntime(runId) {
 
 export async function startVerificationStack(context, options = {}) {
   await ensureGatewayWorkspaceBuild(context);
+  const uiTarget = resolveUiTarget(repoRoot, process.env);
   const runtimeRoot = options.runtimeRoot ?? await prepareVerificationRuntime(context.runId);
-  const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 8787));
+  const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
   const gatewayEnv = {
     GOATCITADEL_ROOT_DIR: runtimeRoot,
@@ -46,7 +48,7 @@ export async function startVerificationStack(context, options = {}) {
   try {
     await waitForHttp(`${gatewayUrl}/health`, "Gateway health", 180000, gateway);
     if (options.includeUi !== false) {
-      uiPort = await resolveAvailablePort(Number(options.uiPort ?? 5173));
+      uiPort = await resolveAvailablePort(Number(options.uiPort ?? 0));
       uiUrl = `http://127.0.0.1:${uiPort}`;
       const uiEnv = {
         VITE_GATEWAY_URL: gatewayUrl,
@@ -62,7 +64,7 @@ export async function startVerificationStack(context, options = {}) {
           "--dir",
           repoRoot,
           "--filter",
-          "@goatcitadel/mission-control",
+          uiTarget.packageName,
           "exec",
           "vite",
           "--host",
@@ -72,7 +74,7 @@ export async function startVerificationStack(context, options = {}) {
         ],
         uiEnv,
       );
-      await waitForHttp(uiUrl, "Mission Control UI", 180000, ui);
+      await waitForHttp(uiUrl, `${uiTarget.displayName} UI`, 180000, ui);
     }
     return {
       runtimeRoot,
@@ -237,16 +239,26 @@ async function ensureGatewayWorkspaceBuild(context) {
         outputPath: path.join(repoRoot, "packages", packageName, "dist", "index.js"),
       };
     });
+  workspacePackages.push(
+    {
+      dependency: "@goatcitadel/mission-control-shared",
+      packageName: "mission-control-shared",
+      outputPath: path.join(repoRoot, "packages", "mission-control-shared", "dist", "index.js"),
+    },
+    {
+      dependency: "@goatcitadel/threaded-surface-core",
+      packageName: "threaded-surface-core",
+      outputPath: path.join(repoRoot, "packages", "threaded-surface-core", "dist", "index.js"),
+    },
+  );
   const missingWorkspacePackages = workspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
 
-  if (missingWorkspacePackages.length === 0) {
-    gatewayWorkspaceBuildEnsured = true;
-    return;
-  }
-
   const logLines = [
-    "missing outputs detected:",
-    ...missingWorkspacePackages.map(({ outputPath }) => outputPath),
+    "verification startup refreshes gateway workspace builds to avoid stale package outputs.",
+    missingWorkspacePackages.length > 0 ? "" : "all expected workspace outputs already existed before refresh.",
+    ...(missingWorkspacePackages.length > 0
+      ? ["", "missing outputs detected:", ...missingWorkspacePackages.map(({ outputPath }) => outputPath)]
+      : []),
     "",
     "$ pnpm --dir <repoRoot> --filter @goatcitadel/gateway... build",
     "",

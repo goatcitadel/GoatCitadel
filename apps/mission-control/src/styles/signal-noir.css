@@ -70,6 +70,76 @@
   font-family: var(--font-body);
 }
 
+.mc-next-shell.theme-signal-noir {
+  --snr-bg-core: #0f1419;
+  --snr-bg-shell: #131920;
+  --snr-bg-sidebar: #151d27;
+  --snr-panel: rgba(21, 29, 39, 0.96);
+  --snr-panel-elevated: rgba(25, 33, 47, 0.98);
+  --snr-panel-inset: rgba(13, 17, 25, 0.97);
+  --snr-panel-line: rgba(255, 255, 255, 0.07);
+  --snr-panel-line-strong: rgba(34, 211, 238, 0.28);
+  --snr-text-primary: #f5f7fa;
+  --snr-text-secondary: #a8b1bf;
+  --snr-text-muted: #738293;
+  --snr-text-dim: #556373;
+  --snr-cyan: #22d3ee;
+  --snr-crimson: #f43f5e;
+  --snr-success: #34d399;
+  --snr-grid: rgba(255, 255, 255, 0.03);
+  --gc-bg-app: var(--snr-bg-core);
+  --gc-bg-shell: var(--snr-bg-shell);
+  --gc-bg-sidebar: var(--snr-bg-sidebar);
+  --gc-bg-panel: rgba(21, 29, 39, 0.96);
+  --gc-bg-panel-elevated: rgba(25, 33, 47, 0.98);
+  --gc-bg-panel-muted: rgba(30, 39, 54, 0.99);
+  --gc-bg-inset: var(--snr-panel-inset);
+  --gc-border-quiet: rgba(255, 255, 255, 0.05);
+  --gc-border-default: rgba(255, 255, 255, 0.09);
+  --gc-border-strong: rgba(34, 211, 238, 0.24);
+  --gc-border-live: rgba(34, 211, 238, 0.44);
+  --gc-text-primary: var(--snr-text-primary);
+  --gc-text-secondary: var(--snr-text-secondary);
+  --gc-text-muted: var(--snr-text-muted);
+  --gc-text-disabled: var(--snr-text-dim);
+  --gc-accent: var(--snr-cyan);
+  --gc-accent-strong: #67e8f9;
+  --gc-accent-cyan: var(--snr-cyan);
+  --gc-accent-success: var(--snr-success);
+  --gc-accent-warning: #fbbf24;
+  --gc-accent-danger: var(--snr-crimson);
+  --mission-surface-glass-bg:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, rgba(13, 21, 33, 0.92) 90%, var(--surface-posture-accent, transparent) 10%),
+      rgba(10, 17, 28, 0.9)
+    ),
+    radial-gradient(circle at top, rgba(95, 240, 255, 0.08), transparent 45%);
+  --mission-surface-glass-border: rgba(125, 238, 255, 0.14);
+  --mission-surface-glass-shadow: 0 24px 60px rgba(2, 8, 18, 0.38);
+  --mission-surface-rail-bg:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, rgba(12, 18, 28, 0.96) 90%, var(--surface-rail-accent, transparent) 10%),
+      rgba(8, 13, 21, 0.9)
+    ),
+    radial-gradient(circle at top left, var(--surface-rail-accent, rgba(95, 240, 255, 0.04)), transparent 42%);
+  --mission-surface-rail-chat-bg:
+    linear-gradient(180deg, rgba(11, 17, 26, 0.92), rgba(8, 13, 21, 0.9)),
+    radial-gradient(circle at top, rgba(95, 240, 255, 0.04), transparent 40%);
+  --mission-surface-posture-text: rgba(223, 237, 248, 0.86);
+  --mission-surface-rail-posture-text: rgba(209, 224, 237, 0.82);
+  --mission-surface-pill-bg: rgba(26, 40, 56, 0.78);
+  --mission-surface-pill-border: rgba(125, 238, 255, 0.14);
+  --panel: rgba(12, 18, 28, 0.94);
+  --panel-alt: rgba(16, 25, 39, 0.96);
+  --panel-border: rgba(87, 116, 141, 0.22);
+  --text-muted: var(--snr-text-muted);
+  --accent: var(--snr-cyan);
+  color: var(--snr-text-primary);
+  font-family: var(--font-body);
+}
+
 /* Consumes posture/rail accent variables defined in chat-surface.css. */
 .theme-signal-noir .mission-surface-header,
 .theme-signal-noir .mission-context-dock,

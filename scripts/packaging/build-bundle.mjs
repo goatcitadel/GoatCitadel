@@ -5,6 +5,7 @@ import os from "node:os";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveUiTarget } from "../lib/ui-target.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -32,6 +33,7 @@ const missionControlDistDir = path.join(appRoot, "mission-control", "dist");
 const runtimeNodeDir = path.join(appRoot, "runtime", "node");
 const templatesRoot = path.join(appRoot, "templates");
 const nodeVersion = args.nodeVersion || process.version;
+const uiTarget = resolveUiTarget(repoRoot, process.env);
 
 await main();
 
@@ -49,7 +51,7 @@ async function main() {
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));
   copyFile(path.join(repoRoot, "package.json"), path.join(appRoot, "package.json"));
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
-  copyDirectory(path.join(repoRoot, "apps", "mission-control", "dist"), missionControlDistDir);
+  copyDirectory(uiTarget.distDir, missionControlDistDir);
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
   copyIfExists(path.join(repoRoot, ".env.example"), path.join(templatesRoot, ".env.example"));
   copyIfExists(path.join(repoRoot, "skills"), path.join(templatesRoot, "skills"));
@@ -232,7 +234,7 @@ function writeReleaseManifest({ bundleRoot: bundleRootPath, appRoot: packagedApp
         id: "mission-control",
         required: true,
         path: "app/mission-control/dist",
-        description: "Built Mission Control operator surface.",
+        description: `Built ${uiTarget.displayName} operator surface.`,
       },
       {
         id: "embedded-node",

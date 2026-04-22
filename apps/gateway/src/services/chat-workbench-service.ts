@@ -72,7 +72,7 @@ export async function createChatSessionWorkbenchWorktree(
 
   if (!fsSync.existsSync(targetPath)) {
     const manager = new WorktreeManager({
-      repoRoot: host.config.rootDir,
+      repoRoot: context.repoRoot,
       worktreesRoot,
     });
     await manager.create(sessionId, baseRef);
@@ -383,6 +383,7 @@ function resolveWorkbenchContext(
   repoScopePath: string;
 } {
   const project = resolveProjectContext(host, sessionId, true).project;
+  const projectContext = resolveProjectContext(host, sessionId, true);
   const worktreePath = state.worktreePath ? deserializeWorkbenchPath(host, state.worktreePath) : undefined;
   if (!worktreePath || state.worktreeStatus !== "ready") {
     if (requireWorktree) {
@@ -390,10 +391,13 @@ function resolveWorkbenchContext(
     }
     throw new ValidationError({ message: "Workbench context is not ready." });
   }
-  const repoScopePath = toRepoScopedProjectPath(host.config.assistant.workspaceDir, project.workspacePath);
+  const repoScopePath =
+    projectContext.kind === "standalone_repo"
+      ? "."
+      : toRepoScopedProjectPath(host.config.assistant.workspaceDir, project.workspacePath);
   return {
     project,
-    projectRoot: path.resolve(worktreePath, repoScopePath),
+    projectRoot: projectContext.kind === "standalone_repo" ? worktreePath : path.resolve(worktreePath, repoScopePath),
     worktreePath,
     repoScopePath,
   };
@@ -405,6 +409,8 @@ function resolveProjectContext(
   required: boolean,
 ): {
   project: { projectId: string; workspacePath: string };
+  repoRoot: string;
+  kind: "workspace_subpath" | "standalone_repo";
 } {
   const projectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
   if (!projectId) {
@@ -414,11 +420,18 @@ function resolveProjectContext(
     throw new ValidationError({ message: "Project context is unavailable." });
   }
   const project = host.storage.chatProjects.get(projectId);
+  const workspaceRoot = path.resolve(host.config.rootDir, host.config.assistant.workspaceDir);
+  const absoluteProjectPath = path.resolve(workspaceRoot, project.workspacePath);
+  const standaloneRepoRoot = isStandaloneProjectRepoRoot(workspaceRoot, absoluteProjectPath)
+    ? absoluteProjectPath
+    : undefined;
   return {
     project: {
       projectId: project.projectId,
       workspacePath: project.workspacePath,
     },
+    repoRoot: standaloneRepoRoot ?? host.config.rootDir,
+    kind: standaloneRepoRoot ? "standalone_repo" : "workspace_subpath",
   };
 }
 
@@ -586,6 +599,14 @@ function toRepoScopedProjectPath(workspaceDir: string, projectWorkspacePath: str
   const normalizedWorkspaceDir = workspaceDir.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
   const normalizedProjectPath = projectWorkspacePath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/^\/+/, "");
   return path.posix.join(normalizedWorkspaceDir, normalizedProjectPath);
+}
+
+function isStandaloneProjectRepoRoot(workspaceRoot: string, projectRoot: string): boolean {
+  const relative = path.relative(workspaceRoot, projectRoot);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false;
+  }
+  return fsSync.existsSync(path.join(projectRoot, ".git"));
 }
 
 export function resolveWorkbenchPathStatus(worktreePath?: string): ChatSessionWorkbenchRecord["worktreeStatus"] {

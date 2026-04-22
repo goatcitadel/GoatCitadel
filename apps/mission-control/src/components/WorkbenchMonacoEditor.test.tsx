@@ -5,25 +5,55 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkbenchMonacoEditor } from "./WorkbenchMonacoEditor";
 import { setMonacoTestRuntimeEnabled } from "./monaco-runtime";
 
-let resolveModuleLoad: (() => void) | null = null;
-let moduleLoadPromise = new Promise<void>((resolve) => {
-  resolveModuleLoad = resolve;
-});
-const renderedMonacoEditorMock = vi.fn();
-
-function resetModuleLoadPromise(): void {
-  moduleLoadPromise = new Promise<void>((resolve) => {
+const monacoLoaderState = vi.hoisted(() => {
+  let resolveModuleLoad: (() => void) | null = null;
+  let moduleLoadPromise = new Promise<void>((resolve) => {
     resolveModuleLoad = resolve;
   });
-}
 
-vi.mock("@uiw/react-monacoeditor", async () => {
-  await moduleLoadPromise;
   return {
-    default: (props: { value: string }) => {
-      renderedMonacoEditorMock(props.value);
-      return <div data-testid="mock-monaco-editor">{props.value}</div>;
+    wait() {
+      return moduleLoadPromise;
     },
+    resolve() {
+      resolveModuleLoad?.();
+    },
+    reset() {
+      moduleLoadPromise = new Promise<void>((resolve) => {
+        resolveModuleLoad = resolve;
+      });
+    },
+  };
+});
+
+const renderedMonacoEditorMock = vi.fn();
+const createEditorMock = vi.fn();
+const createModelMock = vi.fn();
+const setModelLanguageMock = vi.fn();
+const setThemeMock = vi.fn();
+
+vi.mock("./monaco-loader", () => {
+  return {
+    loadMonacoEditorRuntime: vi.fn(async () => {
+      await monacoLoaderState.wait();
+      return {
+        editor: {
+          create: (...args: unknown[]) => {
+            renderedMonacoEditorMock(args[1]);
+            return createEditorMock(...args);
+          },
+          createModel: createModelMock,
+          setModelLanguage: setModelLanguageMock,
+          setTheme: setThemeMock,
+        },
+      };
+    }),
+    normalizeMonacoLoaderLanguage: vi.fn((language?: string) => {
+      if (language === "ts") {
+        return "typescript";
+      }
+      return language ?? "plaintext";
+    }),
   };
 });
 
@@ -32,8 +62,23 @@ describe("WorkbenchMonacoEditor", () => {
   let root: Root | null = null;
 
   beforeEach(() => {
+    createEditorMock.mockReturnValue({
+      onDidChangeModelContent: vi.fn(),
+      dispose: vi.fn(),
+      updateOptions: vi.fn(),
+      getValue: vi.fn(() => "const answer = 42;"),
+    });
+    createModelMock.mockReturnValue({
+      getValue: vi.fn(() => "const answer = 42;"),
+      setValue: vi.fn(),
+      dispose: vi.fn(),
+    });
+    createEditorMock.mockClear();
+    createModelMock.mockClear();
+    setModelLanguageMock.mockClear();
+    setThemeMock.mockClear();
     setMonacoTestRuntimeEnabled(true);
-    resetModuleLoadPromise();
+    monacoLoaderState.reset();
     renderedMonacoEditorMock.mockClear();
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -62,11 +107,12 @@ describe("WorkbenchMonacoEditor", () => {
     });
 
     await act(async () => {
-      resolveModuleLoad?.();
+      monacoLoaderState.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
 
+    expect(createEditorMock).not.toHaveBeenCalled();
     expect(renderedMonacoEditorMock).not.toHaveBeenCalled();
   });
 });

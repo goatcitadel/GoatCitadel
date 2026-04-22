@@ -39,7 +39,16 @@ export interface ChatContextDockPanelsProps {
   selectedProjectBindingCandidateId?: string;
   selectedProjectBindingCandidateName?: string;
   sending: boolean;
-  sessionControlPending: "rename" | "organization" | "pin" | "archive" | "delete" | "project" | "binding" | null;
+  sessionControlPending:
+    | "rename"
+    | "organization"
+    | "pin"
+    | "archive"
+    | "delete"
+    | "project"
+    | "binding"
+    | "code_source"
+    | null;
   providerOptions: ChatModelProviderOption[];
   selectedProviderId?: string;
   selectedModel?: string;

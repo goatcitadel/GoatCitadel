@@ -1,0 +1,946 @@
+.mc-next-threaded-surface {
+  display: grid;
+  grid-template-columns: 20.5rem minmax(0, 1fr);
+  gap: 1rem;
+  min-height: calc(100dvh - 8.5rem);
+}
+
+.mc-next-threaded-scrim {
+  display: none;
+}
+
+.mc-next-threaded-rail,
+.mc-next-threaded-thread-card,
+.mc-next-threaded-composer-card,
+.mc-next-threaded-side-panel,
+.mc-next-threaded-context-panel,
+.mc-next-threaded-header,
+.mc-next-threaded-empty {
+  border-radius: 1.25rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+  box-shadow: var(--mc-shadow-soft);
+}
+
+.mc-next-threaded-dropzone {
+  position: relative;
+}
+
+.mc-next-threaded-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  border-radius: 1.25rem;
+  border: 1px dashed color-mix(in oklab, var(--mc-area-color) 48%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--card));
+  color: var(--foreground);
+  font-weight: 700;
+  text-align: center;
+  backdrop-filter: blur(8px);
+}
+
+.mc-next-threaded-rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  max-height: calc(100dvh - 8.75rem);
+  overflow: auto;
+}
+
+.mc-next-threaded-rail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.mc-next-threaded-rail-head p,
+.mc-next-threaded-header-copy p,
+.mc-next-threaded-group-head span {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--mc-area-color) 58%, var(--foreground));
+}
+
+.mc-next-threaded-rail-head h2,
+.mc-next-threaded-header-copy h1,
+.mc-next-threaded-empty h2 {
+  margin: 0.18rem 0 0;
+  font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+}
+
+.mc-next-threaded-rail-head span,
+.mc-next-threaded-header-copy span,
+.mc-next-threaded-empty p,
+.mc-next-threaded-empty-copy {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.mc-next-threaded-menu-button,
+.mc-next-threaded-secondary,
+.mc-next-threaded-primary,
+.mc-next-threaded-filter,
+.mc-next-threaded-archive {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.mc-next-threaded-primary {
+  background: color-mix(in oklab, var(--mc-area-color) 17%, var(--card));
+  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border));
+}
+
+.mc-next-threaded-secondary.active,
+.mc-next-threaded-filter.active,
+.mc-next-threaded-session-row.active {
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--card));
+  border-color: color-mix(in oklab, var(--mc-area-color) 28%, var(--border));
+}
+
+.mc-next-threaded-rail-actions,
+.mc-next-threaded-action-row,
+.mc-next-threaded-filters,
+.mc-next-threaded-folder-row,
+.mc-next-threaded-empty-actions {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-threaded-search {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0 0.85rem;
+  min-height: 2.75rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-threaded-search input,
+.mc-next-threaded-project-card input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  outline: none;
+}
+
+.mc-next-threaded-project-card {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-threaded-project-card h3,
+.mc-next-threaded-group-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.mc-next-threaded-project-card input {
+  min-height: 2.55rem;
+  padding: 0 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: color-mix(in oklab, var(--background) 86%, var(--mc-surface-1));
+}
+
+.mc-next-threaded-archive {
+  justify-content: flex-start;
+}
+
+.mc-next-threaded-session-group {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mc-next-threaded-group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.mc-next-threaded-session-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mc-next-threaded-session-tree-node {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.mc-next-threaded-session-row-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+.mc-next-threaded-session-row-shell.nested {
+  position: relative;
+  padding-left: 0.9rem;
+}
+
+.mc-next-threaded-session-row-shell.nested::before {
+  content: "";
+  position: absolute;
+  left: 0.32rem;
+  top: 0.3rem;
+  bottom: 0.3rem;
+  width: 1px;
+  background: color-mix(in oklab, var(--mc-area-color) 24%, var(--border-subtle));
+}
+
+.mc-next-threaded-session-row {
+  appearance: none;
+  display: grid;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.75rem 0.82rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  justify-items: stretch;
+}
+
+.mc-next-threaded-session-toggle {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: center;
+  min-height: 2.45rem;
+  padding: 0 0.6rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.mc-next-threaded-session-toggle svg {
+  transition: transform 180ms ease;
+}
+
+.mc-next-threaded-session-toggle svg.open {
+  transform: rotate(90deg);
+}
+
+.mc-next-threaded-session-children {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.mc-next-threaded-session-row-main,
+.mc-next-threaded-session-row-copy {
+  min-width: 0;
+}
+
+.mc-next-threaded-session-row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.mc-next-threaded-session-row-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.mc-next-threaded-session-row strong {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 0.9rem;
+  line-height: 1.3;
+}
+
+.mc-next-threaded-session-row span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.mc-next-threaded-session-time {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-area-color) 10%, transparent);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.mc-next-threaded-stage {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.mc-next-threaded-stage.has-workbench {
+  grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.95fr);
+}
+
+.mc-next-threaded-stage.has-context {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.88fr);
+}
+
+.mc-next-threaded-stage.has-workbench.has-context {
+  grid-template-columns: minmax(0, 1.3fr) minmax(20rem, 0.9fr) minmax(18rem, 0.72fr);
+}
+
+.mc-next-threaded-primary-column {
+  min-width: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.mc-next-threaded-mobile-bar {
+  display: none;
+}
+
+.mc-next-threaded-header {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem;
+}
+
+.mc-next-threaded-header-meta,
+.mc-next-threaded-model-picker {
+  min-width: 0;
+}
+
+.mc-next-threaded-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.mc-next-threaded-header-actions {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: start;
+}
+
+.mc-next-threaded-model-picker .chat-model-picker {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(9.75rem, 11.5rem) minmax(12.5rem, 16rem);
+  justify-content: start;
+  align-items: start;
+}
+
+.mc-next-threaded-model-picker .gc-select-shell,
+.mc-next-threaded-model-picker .gc-combobox-trigger {
+  width: 100%;
+  min-width: 0;
+}
+
+.mc-next-threaded-model-picker .gc-combobox-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-threaded-model-picker .chat-model-picker-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  max-width: 28rem;
+}
+
+.mc-next-threaded-conversation {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.mc-next-threaded-thread-card,
+.mc-next-threaded-composer-card,
+.mc-next-threaded-side-panel,
+.mc-next-threaded-context-panel {
+  min-width: 0;
+  padding: 0.9rem;
+}
+
+.mc-next-threaded-side-panel,
+.mc-next-threaded-context-panel {
+  align-self: start;
+  position: sticky;
+  top: 0;
+  max-height: calc(100dvh - 8.75rem);
+  overflow: auto;
+}
+
+.mc-next-threaded-panel-fallback {
+  min-height: 18rem;
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-thread-shell,
+.mc-next-composer,
+.mc-next-cowork-panel,
+.mc-next-workbench-panel,
+.mc-next-context-drawer {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.mc-next-code-source-picker,
+.mc-next-code-source-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mc-next-code-source-picker {
+  padding: 0.1rem 0;
+}
+
+.mc-next-code-source-field {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.mc-next-code-source-field span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.mc-next-code-source-field input,
+.mc-next-code-source-field select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.85rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+}
+
+.mc-next-thread-status-lane,
+.mc-next-thread-scroll {
+  min-width: 0;
+}
+
+.mc-next-thread-scroll {
+  max-height: min(58dvh, 44rem);
+  overflow: auto;
+}
+
+.mc-next-thread-view,
+.mc-next-context-section-stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.mc-next-thread-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.mc-next-thread-turn {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-thread-turn.selected {
+  border-color: color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 8%, var(--card));
+}
+
+.mc-next-thread-turn-surface,
+.mc-next-thread-bubble,
+.mc-next-context-card,
+.mc-next-panel-list,
+.mc-next-cowork-action-callout,
+.mc-next-cowork-now {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mc-next-thread-turn-surface {
+  cursor: pointer;
+  outline: none;
+}
+
+.mc-next-thread-bubble {
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-thread-bubble.user {
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
+}
+
+.mc-next-thread-meta,
+.mc-next-thread-note,
+.mc-next-thread-notices p,
+.mc-next-panel-kicker,
+.mc-next-context-field span,
+.mc-next-panel-list li p,
+.mc-next-workbench-empty,
+.mc-next-composer-helper,
+.mc-next-composer-attachment p,
+.mc-next-composer-knowledge-chip p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.mc-next-panel-kicker {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--mc-area-color) 58%, var(--foreground));
+}
+
+.mc-next-thread-strip,
+.mc-next-thread-actions,
+.mc-next-thread-action-row,
+.mc-next-thread-branch-switcher,
+.mc-next-context-chip-row,
+.mc-next-context-actions,
+.mc-next-panel-tab-row,
+.mc-next-workbench-action-row,
+.mc-next-cowork-toolbar,
+.mc-next-composer-chip-row,
+.mc-next-composer-action-row,
+.mc-next-composer-controls,
+.mc-next-composer-controls-start,
+.mc-next-composer-controls-end,
+.mc-next-composer-multimodal-row {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mc-next-thread-inline-button,
+.mc-next-panel-button,
+.mc-next-panel-tab,
+.mc-next-command-item,
+.mc-next-composer-inline-button,
+.mc-next-composer-primary {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  color: var(--foreground);
+  border-radius: 0.9rem;
+  min-height: 2.2rem;
+  padding: 0 0.8rem;
+  cursor: pointer;
+}
+
+.mc-next-panel-button.primary,
+.mc-next-composer-primary,
+.mc-next-panel-tab.active,
+.mc-next-command-item.active {
+  background: color-mix(in oklab, var(--mc-area-color) 14%, var(--card));
+  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border));
+}
+
+.mc-next-panel-button.danger {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 28%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
+}
+
+.mc-next-thread-notices,
+.mc-next-context-list,
+.mc-next-workbench-helper-list,
+.mc-next-thread-step-list,
+.mc-next-panel-list ul {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-thread-notices li,
+.mc-next-context-list li,
+.mc-next-workbench-helper-list li,
+.mc-next-panel-list li,
+.mc-next-cowork-blocker {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border-radius: 0.95rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-thread-notices li.tone-warning,
+.mc-next-panel-banner.warning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 28%, var(--border));
+}
+
+.mc-next-thread-notices li.tone-critical,
+.mc-next-composer-banner.error {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 28%, var(--border));
+}
+
+.mc-next-composer-banner {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-composer-banner.warning,
+.mc-next-composer-banner.planning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 22%, var(--border));
+}
+
+.mc-next-composer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  align-items: flex-start;
+}
+
+.mc-next-composer-head h3,
+.mc-next-context-card h4,
+.mc-next-cowork-head h4,
+.mc-next-workbench-head h4 {
+  margin: 0.18rem 0 0;
+  font-size: 1.02rem;
+  line-height: 1.2;
+}
+
+.mc-next-composer-input-shell textarea,
+.mc-next-context-field input,
+.mc-next-context-field select,
+.mc-next-composer-knowledge-url-row input,
+.mc-next-composer-knowledge-url-row select,
+.mc-next-composer-preset-row select {
+  width: 100%;
+  min-height: 2.7rem;
+  border-radius: 0.95rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
+  color: var(--foreground);
+  padding: 0.75rem 0.85rem;
+}
+
+.mc-next-composer-input-shell textarea {
+  min-height: 8.75rem;
+  resize: vertical;
+}
+
+.mc-next-command-popover,
+.mc-next-composer-attachments,
+.mc-next-composer-knowledge-strip,
+.mc-next-cowork-grid,
+.mc-next-workbench-body {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mc-next-command-item {
+  display: grid;
+  justify-items: start;
+  gap: 0.2rem;
+  padding: 0.75rem 0.9rem;
+  text-align: left;
+}
+
+.mc-next-command-item span {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+}
+
+.mc-next-composer-attachment,
+.mc-next-composer-knowledge-chip {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.8rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-composer-knowledge-url-row,
+.mc-next-composer-preset-row {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.mc-next-hidden-file {
+  display: none;
+}
+
+.mc-next-context-card,
+.mc-next-panel-list,
+.mc-next-cowork-action-callout,
+.mc-next-cowork-now,
+.mc-next-cowork-blockers,
+.mc-next-workbench-pane {
+  padding: 0.9rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-context-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mc-next-context-list li strong,
+.mc-next-panel-list li strong,
+.mc-next-cowork-blocker strong,
+.mc-next-thread-step-head strong,
+.mc-next-panel-list-head strong {
+  color: var(--foreground);
+}
+
+.mc-next-panel-list-head,
+.mc-next-thread-step-head,
+.mc-next-cowork-blocker-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.mc-next-cowork-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.65rem;
+}
+
+.mc-next-cowork-stage-card {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.75rem 0.8rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-cowork-stage-card span,
+.mc-next-cowork-facts dt {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.mc-next-cowork-facts {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin: 0;
+}
+
+.mc-next-cowork-facts dd {
+  margin: 0.12rem 0 0;
+}
+
+.mc-next-workbench-body {
+  grid-template-columns: minmax(14rem, 0.7fr) minmax(0, 1.2fr);
+}
+
+.mc-next-workbench-sidebar,
+.mc-next-workbench-main {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mc-next-workbench-empty {
+  padding: 0.9rem;
+  border-radius: 0.95rem;
+  border: 1px dashed color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-threaded-empty {
+  display: grid;
+  gap: 0.85rem;
+  place-items: start;
+  padding: 1.35rem;
+}
+
+.mc-next-threaded-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+}
+
+@media (max-width: 1360px) {
+  .mc-next-threaded-surface {
+    grid-template-columns: 18.75rem minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-stage.has-workbench.has-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-stage.has-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1023px) {
+  .mc-next-threaded-surface {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: auto;
+  }
+
+  .mc-next-threaded-mobile-bar {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+
+  .mc-next-threaded-rail {
+    position: fixed;
+    top: 5.2rem;
+    left: 0.9rem;
+    bottom: 0.9rem;
+    z-index: 72;
+    width: min(22rem, calc(100vw - 1.8rem));
+    max-height: none;
+    transform: translateX(-108%);
+    transition: transform 180ms ease;
+  }
+
+  .mc-next-threaded-rail.open {
+    transform: translateX(0);
+  }
+
+  .mc-next-threaded-scrim.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 68;
+    border: 0;
+    background: rgba(15, 23, 42, 0.32);
+  }
+
+  .mc-next-threaded-stage,
+  .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-stage.has-context,
+  .mc-next-threaded-stage.has-workbench.has-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-side-panel,
+  .mc-next-threaded-context-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .mc-next-threaded-menu-button span {
+    display: inline;
+  }
+
+  .mc-next-workbench-body {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-composer-head {
+    flex-direction: column;
+  }
+
+  .mc-next-threaded-model-picker .chat-model-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .mc-next-threaded-header,
+  .mc-next-threaded-thread-card,
+  .mc-next-threaded-composer-card,
+  .mc-next-threaded-side-panel,
+  .mc-next-threaded-context-panel,
+  .mc-next-threaded-empty {
+    padding: 0.85rem;
+  }
+
+  .mc-next-threaded-rail {
+    left: 0.6rem;
+    right: 0.6rem;
+    width: auto;
+  }
+
+  .mc-next-composer-knowledge-url-row,
+  .mc-next-composer-preset-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,4 +1,5 @@
 import type {
+  ChatMode,
   ChatProjectRecord,
   ChatProactiveMode,
   ChatReflectionMode,
@@ -80,6 +81,7 @@ export function toChatSessionRecord(
   session: SessionMeta,
   meta: {
     workspaceId?: string;
+    mode?: ChatMode;
     title?: string;
     origin?: "operator" | "prompt_pack" | "system";
     includeInHistory: boolean;
@@ -98,6 +100,7 @@ export function toChatSessionRecord(
     sessionKey: session.sessionKey,
     workspaceId: meta.workspaceId ?? project?.workspaceId,
     scope: session.channel === "mission" ? "mission" : "external",
+    mode: meta.mode,
     origin: meta.origin,
     includeInHistory: meta.includeInHistory,
     title: meta.title ?? session.displayName,

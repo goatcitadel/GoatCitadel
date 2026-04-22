@@ -1348,6 +1348,8 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
             />
             <OnboardingProgressPanel
               stepTitle={STEP_TITLES[step]}
+              currentStep={step + 1}
+              totalSteps={STEP_TITLES.length}
               checklist={state?.checklist ?? []}
               onRefresh={async () => {
                 await load();

@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "rootDir": "src",
+    "outDir": "dist",
+    "ignoreDeprecations": "6.0",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "types": ["node", "react", "react-dom"],
+    "paths": {
+      "@goatcitadel/contracts": ["../../packages/contracts/src/index.ts"],
+      "react": ["../../node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["../../node_modules/@types/react/jsx-runtime.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/**/*.coverage.test.tsx"],
+  "references": [{ "path": "../contracts" }, { "path": "../mission-control-shared" }]
+}

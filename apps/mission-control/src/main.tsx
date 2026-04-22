@@ -1,7 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import "react-reflex/styles.css";
-import "./lib/configure-monaco";
 import { App } from "./App";
 import { UiPreferencesProvider } from "./state/ui-preferences";
 import "./styles.css";

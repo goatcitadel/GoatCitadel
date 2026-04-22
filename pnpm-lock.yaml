@@ -146,6 +146,169 @@ importers:
       '@goatcitadel/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@goatcitadel/threaded-surface-core':
+        specifier: workspace:*
+        version: link:../../packages/threaded-surface-core
+      '@monaco-editor/loader':
+        specifier: ^1.7.0
+        version: 1.7.0
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.2
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-popover':
+        specifier: ^1.1.2
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-select':
+        specifier: ^2.1.2
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-separator':
+        specifier: ^1.1.7
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-slot':
+        specifier: ^1.2.4
+        version: 1.2.4(@types/react@19.2.14)(react@19.2.5)
+      '@radix-ui/react-switch':
+        specifier: ^1.1.1
+        version: 1.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-tabs':
+        specifier: ^1.1.13
+        version: 1.1.13(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-tooltip':
+        specifier: ^1.1.4
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@react-three/drei':
+        specifier: ^10.7.7
+        version: 10.7.7(@react-three/fiber@9.6.0(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(three@0.183.1))(@types/react@19.2.14)(@types/three@0.183.1)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(three@0.183.1)
+      '@react-three/fiber':
+        specifier: ^9.6.0
+        version: 9.6.0(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(three@0.183.1)
+      '@tailwindcss/vite':
+        specifier: ^4.1.11
+        version: 4.2.2(vite@5.4.21(@types/node@24.10.15)(lightningcss@1.32.0))
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@uiw/react-monacoeditor':
+        specifier: ^3.6.1
+        version: 3.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      cmdk:
+        specifier: ^1.0.0
+        version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      lucide-react:
+        specifier: ^0.542.0
+        version: 0.542.0(react@19.2.5)
+      mermaid:
+        specifier: ^11.14.0
+        version: 11.14.0
+      monaco-editor:
+        specifier: ^0.55.1
+        version: 0.55.1
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      react:
+        specifier: ^19.1.1
+        version: 19.2.5
+      react-arborist:
+        specifier: ^3.5.0
+        version: 3.5.0(@types/node@24.10.15)(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.5(react@19.2.5)
+      react-markdown:
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.2.14)(react@19.2.5)
+      react-reflex:
+        specifier: ^5.0.5
+        version: 5.0.5
+      react-virtuoso:
+        specifier: ^4.10.5
+        version: 4.18.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      shadcn:
+        specifier: ^4.2.0
+        version: 4.2.0(@types/node@24.10.15)(typescript@6.0.2)
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.5.0
+      tailwindcss:
+        specifier: ^4.1.11
+        version: 4.2.2
+      three:
+        specifier: ^0.183.1
+        version: 0.183.1
+      tw-animate-css:
+        specifier: ^1.3.6
+        version: 1.4.0
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.10
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.7
+        version: 19.2.3(@types/react@19.2.14)
+      '@types/react-test-renderer':
+        specifier: ^19.1.0
+        version: 19.1.0
+      '@types/three':
+        specifier: ^0.183.1
+        version: 0.183.1
+      '@vitejs/plugin-react':
+        specifier: ^4.3.4
+        version: 4.7.0(vite@5.4.21(@types/node@24.10.15)(lightningcss@1.32.0))
+      happy-dom:
+        specifier: ^20.9.0
+        version: 20.9.0
+      react-test-renderer:
+        specifier: ^19.1.1
+        version: 19.2.5(react@19.2.5)
+      vite:
+        specifier: ^5.4.10
+        version: 5.4.21(@types/node@24.10.15)(lightningcss@1.32.0)
+
+  apps/mission-control-next:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: ^0.12.25
+        version: 0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
+      '@assistant-ui/react-markdown':
+        specifier: ^0.12.9
+        version: 0.12.9(@assistant-ui/react@0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5)))(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@awesome.me/webawesome':
+        specifier: ^3.0.0
+        version: 3.5.0(@floating-ui/utils@0.2.11)(@types/react@19.2.14)
+      '@fontsource-variable/geist':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@goatcitadel/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@goatcitadel/mission-control-shared':
+        specifier: workspace:*
+        version: link:../../packages/mission-control-shared
+      '@goatcitadel/threaded-surface-core':
+        specifier: workspace:*
+        version: link:../../packages/threaded-surface-core
+      '@monaco-editor/loader':
+        specifier: ^1.7.0
+        version: 1.7.0
       '@radix-ui/react-dialog':
         specifier: ^1.1.2
         version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -319,6 +482,115 @@ importers:
         specifier: workspace:*
         version: link:../storage
 
+  packages/mission-control-shared:
+    dependencies:
+      '@assistant-ui/react':
+        specifier: ^0.12.25
+        version: 0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5))
+      '@assistant-ui/react-markdown':
+        specifier: ^0.12.9
+        version: 0.12.9(@assistant-ui/react@0.12.25(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(use-sync-external-store@1.6.0(react@19.2.5)))(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@fontsource-variable/geist':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@goatcitadel/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@monaco-editor/loader':
+        specifier: ^1.7.0
+        version: 1.7.0
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.2
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-popover':
+        specifier: ^1.1.2
+        version: 1.1.15(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-select':
+        specifier: ^2.1.2
+        version: 2.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-separator':
+        specifier: ^1.1.7
+        version: 1.1.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-slot':
+        specifier: ^1.2.4
+        version: 1.2.4(@types/react@19.2.14)(react@19.2.5)
+      '@radix-ui/react-switch':
+        specifier: ^1.1.1
+        version: 1.2.6(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-tabs':
+        specifier: ^1.1.13
+        version: 1.1.13(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@radix-ui/react-tooltip':
+        specifier: ^1.1.4
+        version: 1.2.8(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@tanstack/react-table':
+        specifier: ^8.21.3
+        version: 8.21.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@uiw/react-monacoeditor':
+        specifier: ^3.6.1
+        version: 3.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      cmdk:
+        specifier: ^1.0.0
+        version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      lucide-react:
+        specifier: ^0.542.0
+        version: 0.542.0(react@19.2.5)
+      mermaid:
+        specifier: ^11.14.0
+        version: 11.14.0
+      monaco-editor:
+        specifier: ^0.55.1
+        version: 0.55.1
+      next-themes:
+        specifier: ^0.4.6
+        version: 0.4.6(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      react:
+        specifier: ^19.1.1
+        version: 19.2.5
+      react-arborist:
+        specifier: ^3.5.0
+        version: 3.5.0(@types/node@24.10.15)(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.5(react@19.2.5)
+      react-markdown:
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.2.14)(react@19.2.5)
+      react-virtuoso:
+        specifier: ^4.10.5
+        version: 4.18.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
+      sonner:
+        specifier: ^2.0.7
+        version: 2.0.7(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.5.0
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.10
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.7
+        version: 19.2.3(@types/react@19.2.14)
+      '@types/three':
+        specifier: ^0.183.1
+        version: 0.183.1
+
   packages/orchestration:
     dependencies:
       '@goatcitadel/contracts':
@@ -361,6 +633,25 @@ importers:
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
+
+  packages/threaded-surface-core:
+    dependencies:
+      '@goatcitadel/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@goatcitadel/mission-control-shared':
+        specifier: workspace:*
+        version: link:../mission-control-shared
+      react:
+        specifier: ^19.1.1
+        version: 19.2.5
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.10
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.7
+        version: 19.2.3(@types/react@19.2.14)
 
 packages:
 
@@ -448,6 +739,10 @@ packages:
         optional: true
       react:
         optional: true
+
+  '@awesome.me/webawesome@3.5.0':
+    resolution: {integrity: sha512-/hJOe5vsKu9GejyTB3xFyQvvGRzXCLqdOGtBa4a+ifDNPRwzQLR3bzxcEpJsLmVfOhhem1XGbyOD9cMwefuAlA==}
+    engines: {node: '>=14.17.0'}
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -658,6 +953,10 @@ packages:
   '@csstools/css-tokenizer@4.0.0':
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
+
+  '@ctrl/tinycolor@4.1.0':
+    resolution: {integrity: sha512-WyOx8cJQ+FQus4Mm4uPIZA64gbk3Wxh0so5Lcii0aJifqwoVOlfFtorjLE0Hen4OYyHZMXDWqMmaQemBhgxFRQ==}
+    engines: {node: '>=14'}
 
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
@@ -1426,6 +1725,17 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@lit-labs/ssr-dom-shim@1.5.1':
+    resolution: {integrity: sha512-Aou5UdlSpr5whQe8AA/bZG0jMj96CoJIWbGfZ91qieWu5AWUMKw8VR/pAkQkJYvBNhmCcWnZlyyk5oze8JIqYA==}
+
+  '@lit/react@1.0.8':
+    resolution: {integrity: sha512-p2+YcF+JE67SRX3mMlJ1TKCSTsgyOVdAwd/nxp3NuV1+Cb6MWALbN6nT7Ld4tpmYofcE5kcaSY1YBB9erY+6fw==}
+    peerDependencies:
+      '@types/react': 17 || 18 || 19
+
+  '@lit/reactive-element@2.1.2':
+    resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
+
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
@@ -1445,6 +1755,9 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@monaco-editor/loader@1.7.0':
+    resolution: {integrity: sha512-gIwR1HrJrrx+vfyOhYmCZ0/JcWqG5kbfG7+d3f/C1LXk2EvzAbHSg3MQ5lO2sMlo9izoAZ04shohfKLVT6crVA==}
 
   '@monogrid/gainmap-js@3.4.0':
     resolution: {integrity: sha512-2Z0FATFHaoYJ8b+Y4y4Hgfn3FRFwuU5zRrk+9dFWp4uGAdHGqVEdP7HP+gLA3X469KXHmfupJaUbKo1b/aDKIg==}
@@ -2434,6 +2747,12 @@ packages:
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
 
+  '@shoelace-style/animations@1.2.0':
+    resolution: {integrity: sha512-avvo1xxkLbv2dgtabdewBbqcJfV0e0zCwFqkPMnHFGbJbBHorRFfMAHh1NG9ymmXn0jW95ibUVH03E1NYXD6Gw==}
+
+  '@shoelace-style/localize@3.2.1':
+    resolution: {integrity: sha512-r4C9C/5kSfMBIr0D9imvpRdCNXtUNgyYThc4YlS6K5Hchv1UyxNQ9mxwj+BTRH2i1Neits260sR3OjKMnplsFA==}
+
   '@sindresorhus/merge-streams@4.0.0':
     resolution: {integrity: sha512-tlqY9xq5ukxTUZBmoOp+m61cqwQD5pHJtFY3Mn8CA8ps6yghLH/Hw8UPdqg4OLmFW3IFlcXnQNmo/dh8HzXYIQ==}
     engines: {node: '>=18'}
@@ -3159,6 +3478,11 @@ packages:
   commander@8.3.0:
     resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
     engines: {node: '>= 12'}
+
+  composed-offset-position@0.0.6:
+    resolution: {integrity: sha512-Q7dLompI6lUwd7LWyIcP66r4WcS9u7AL2h8HaeipiRfCRPLMWqRx8fYsjb4OHi6UQFifO7XtNC2IlEJ1ozIFxw==}
+    peerDependencies:
+      '@floating-ui/utils': ^0.2.5
 
   confbox@0.1.8:
     resolution: {integrity: sha512-RMtmw0iFkeR4YV+fUOSucriAQNb9g8zFR52MWCtl+cCZOFRNL6zeB395vPzFhEjjn4fMxXudmELnl/KF/WrK6w==}
@@ -4313,6 +4637,15 @@ packages:
     resolution: {integrity: sha512-ME4Fb83LgEgwNw96RKNvKV4VTLuXfoKudAmm2lP8Kk87KaMK0/Xrx/aAkMWmT8mDb+3MlFDspfbCs7adjRxA2g==}
     engines: {node: '>=20.0.0'}
 
+  lit-element@4.2.2:
+    resolution: {integrity: sha512-aFKhNToWxoyhkNDmWZwEva2SlQia+jfG0fjIWV//YeTaWrVnOxD89dPKfigCUspXFmjzOEUQpOkejH5Ly6sG0w==}
+
+  lit-html@3.3.2:
+    resolution: {integrity: sha512-Qy9hU88zcmaxBXcc10ZpdK7cOLXvXpRoBxERdtqV9QOrfpMZZ6pSYP91LhpPtap3sFMUiL7Tw2RImbe0Al2/kw==}
+
+  lit@3.3.2:
+    resolution: {integrity: sha512-NF9zbsP79l4ao2SNrH3NkfmFgN/hBYSQo90saIVI1o5GpjAdCPVstVzO1MrLOakHoEhYkrtRjPK6Ob521aoYWQ==}
+
   locate-path@6.0.0:
     resolution: {integrity: sha512-iPZK6eYjbxRu3uB4/WZ3EsEIMJFMqAoopl3R+zuq0UjcAm/MO6KCweDgPfP3elTztoKP3KtnVHxTn2NHBSDVUw==}
     engines: {node: '>=10'}
@@ -4380,6 +4713,11 @@ packages:
 
   markdown-table@3.0.4:
     resolution: {integrity: sha512-wiYz4+JrLyb/DqW2hkFJxP7Vd7JuTDm77fvbM8VfEQdmSMqcImWeeRbHwZjBjIFki/VaMK2BhFi7oUUZeM5bqw==}
+
+  marked@11.2.0:
+    resolution: {integrity: sha512-HR0m3bvu0jAPYiIvLUUQtdg1g6D247//lvcekpHO1WMvbwDlwSkZAX9Lw4F4YHE1T0HaaNve0tuAWuV1UJ6vtw==}
+    engines: {node: '>= 18'}
+    hasBin: true
 
   marked@14.0.0:
     resolution: {integrity: sha512-uIj4+faQ+MgHgwUW1l2PsPglZLOLOT1uErt06dAPtx2kjteLAkbsd/0FiYg/MGS+i7ZKLb7w2WClxHkzOOuryQ==}
@@ -4941,6 +5279,9 @@ packages:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
 
+  qr-creator@1.0.0:
+    resolution: {integrity: sha512-C0cqfbS1P5hfqN4NhsYsUXePlk9BO+a45bAQ3xLYjBL3bOIFzoVEjs79Fado9u9BPBD3buHi3+vY+C8tHh4qMQ==}
+
   qs@6.15.1:
     resolution: {integrity: sha512-6YHEFRL9mfgcAvql/XhwTvf5jKcOiiupt2FiJxHkiX1z4j7WL8J/jRHYLluORvc1XxB5rV20KoeK00gVJamspg==}
     engines: {node: '>=0.6'}
@@ -5293,6 +5634,9 @@ packages:
 
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
+
+  state-local@1.0.7:
+    resolution: {integrity: sha512-HTEHMNieakEnoe33shBYcZ7NX83ACUjCu8c40iOGEZsngj9zRnkqS9j1pqQPXwobB0ZcVTk27REb7COQ0UR59w==}
 
   stats-gl@2.4.2:
     resolution: {integrity: sha512-g5O9B0hm9CvnM36+v7SFl39T7hmAlv541tU81ME8YeSb3i1CIP5/QdDeSB3A0la0bKNHpxpwxOVRo2wFTYEosQ==}
@@ -6069,6 +6413,22 @@ snapshots:
       '@types/react': 19.2.14
       react: 19.2.5
 
+  '@awesome.me/webawesome@3.5.0(@floating-ui/utils@0.2.11)(@types/react@19.2.14)':
+    dependencies:
+      '@ctrl/tinycolor': 4.1.0
+      '@floating-ui/dom': 1.7.6
+      '@lit/react': 1.0.8(@types/react@19.2.14)
+      '@shoelace-style/animations': 1.2.0
+      '@shoelace-style/localize': 3.2.1
+      composed-offset-position: 0.0.6(@floating-ui/utils@0.2.11)
+      lit: 3.3.2
+      marked: 11.2.0
+      nanoid: 5.1.7
+      qr-creator: 1.0.0
+    transitivePeerDependencies:
+      - '@floating-ui/utils'
+      - '@types/react'
+
   '@babel/code-frame@7.29.0':
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
@@ -6322,6 +6682,8 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0':
     optional: true
+
+  '@ctrl/tinycolor@4.1.0': {}
 
   '@dimforge/rapier3d-compat@0.12.0': {}
 
@@ -6909,6 +7271,16 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  '@lit-labs/ssr-dom-shim@1.5.1': {}
+
+  '@lit/react@1.0.8(@types/react@19.2.14)':
+    dependencies:
+      '@types/react': 19.2.14
+
+  '@lit/reactive-element@2.1.2':
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.5.1
+
   '@lukeed/ms@2.0.2': {}
 
   '@mediapipe/tasks-vision@0.10.17': {}
@@ -6938,6 +7310,10 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
+
+  '@monaco-editor/loader@1.7.0':
+    dependencies:
+      state-local: 1.0.7
 
   '@monogrid/gainmap-js@3.4.0(three@0.183.1)':
     dependencies:
@@ -7914,6 +8290,10 @@ snapshots:
 
   '@sec-ant/readable-stream@0.4.1': {}
 
+  '@shoelace-style/animations@1.2.0': {}
+
+  '@shoelace-style/localize@3.2.1': {}
+
   '@sindresorhus/merge-streams@4.0.0': {}
 
   '@standard-schema/spec@1.1.0': {}
@@ -8216,8 +8596,7 @@ snapshots:
       fflate: 0.8.2
       meshoptimizer: 1.0.1
 
-  '@types/trusted-types@2.0.7':
-    optional: true
+  '@types/trusted-types@2.0.7': {}
 
   '@types/unist@2.0.11': {}
 
@@ -8686,6 +9065,10 @@ snapshots:
   commander@7.2.0: {}
 
   commander@8.3.0: {}
+
+  composed-offset-position@0.0.6(@floating-ui/utils@0.2.11):
+    dependencies:
+      '@floating-ui/utils': 0.2.11
 
   confbox@0.1.8: {}
 
@@ -9923,6 +10306,22 @@ snapshots:
       rfdc: 1.4.1
       wrap-ansi: 9.0.2
 
+  lit-element@4.2.2:
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.5.1
+      '@lit/reactive-element': 2.1.2
+      lit-html: 3.3.2
+
+  lit-html@3.3.2:
+    dependencies:
+      '@types/trusted-types': 2.0.7
+
+  lit@3.3.2:
+    dependencies:
+      '@lit/reactive-element': 2.1.2
+      lit-element: 4.2.2
+      lit-html: 3.3.2
+
   locate-path@6.0.0:
     dependencies:
       p-locate: 5.0.0
@@ -9990,6 +10389,8 @@ snapshots:
       semver: 7.7.4
 
   markdown-table@3.0.4: {}
+
+  marked@11.2.0: {}
 
   marked@14.0.0: {}
 
@@ -10768,6 +11169,8 @@ snapshots:
 
   punycode@2.3.1: {}
 
+  qr-creator@1.0.0: {}
+
   qs@6.15.1:
     dependencies:
       side-channel: 1.1.0
@@ -11297,6 +11700,8 @@ snapshots:
   split2@4.2.0: {}
 
   stackback@0.0.2: {}
+
+  state-local@1.0.7: {}
 
   stats-gl@2.4.2(@types/three@0.183.1)(three@0.183.1):
     dependencies:

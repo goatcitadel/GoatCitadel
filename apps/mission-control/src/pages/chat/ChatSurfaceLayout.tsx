@@ -1,7 +1,18 @@
 import type { ChatMode } from "@goatcitadel/contracts";
 import type { ReactNode } from "react";
 import { ResizablePaneLayout } from "../../components/ResizablePaneLayout";
-import { Drawer, DrawerContent, Sheet, SheetContent } from "../../components/ui";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../../components/ui";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { getMissionControlSurfaceConfig } from "./surface-config";
 
@@ -74,6 +85,10 @@ export function ChatSurfaceLayout({
         {compactSecondaryPanels ? (
           <Sheet open={sessionRailOpen} onOpenChange={onSessionRailOpenChange}>
             <SheetContent side="left" className="chat-v11-session-sheet">
+              <SheetHeader className="sr-only">
+                <SheetTitle>Conversation history</SheetTitle>
+                <SheetDescription>Browse recent sessions and switch context without leaving the current surface.</SheetDescription>
+              </SheetHeader>
               {sessionRail}
             </SheetContent>
           </Sheet>
@@ -231,6 +246,10 @@ export function ChatSurfaceLayout({
       {compactSecondaryPanels ? (
         <Sheet open={sessionRailOpen} onOpenChange={onSessionRailOpenChange}>
           <SheetContent side="left" className="chat-v11-session-sheet">
+            <SheetHeader className="sr-only">
+              <SheetTitle>Conversation history</SheetTitle>
+              <SheetDescription>Browse recent sessions and switch context without leaving the current surface.</SheetDescription>
+            </SheetHeader>
             {sessionRail}
           </SheetContent>
         </Sheet>
@@ -238,13 +257,25 @@ export function ChatSurfaceLayout({
       {desktopDrawerDock ? (
         <Sheet open={effectiveDockOpen} onOpenChange={onDockOpenChange}>
           <SheetContent side="right" className="mission-context-dock-drawer">
+            <SheetHeader className="sr-only">
+              <SheetTitle>Context dock</SheetTitle>
+              <SheetDescription>Review supporting context, artifacts, and operator controls for the active session.</SheetDescription>
+            </SheetHeader>
             {contextDock}
           </SheetContent>
         </Sheet>
       ) : null}
       {compactSecondaryPanels && hasActiveSession ? (
         <Drawer open={effectiveDockOpen} onOpenChange={onDockOpenChange} shouldScaleBackground={false}>
-          <DrawerContent className="mission-context-dock-drawer">{contextDock}</DrawerContent>
+          <DrawerContent className="mission-context-dock-drawer">
+            <DrawerHeader className="sr-only">
+              <DrawerTitle>Context dock</DrawerTitle>
+              <DrawerDescription>
+                Review supporting context, artifacts, and operator controls for the active session.
+              </DrawerDescription>
+            </DrawerHeader>
+            {contextDock}
+          </DrawerContent>
         </Drawer>
       ) : null}
     </div>

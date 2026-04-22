@@ -1,0 +1,36 @@
+{
+  "name": "@goatcitadel/threaded-surface-core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./pure-helpers": {
+      "types": "./dist/pure-helpers.d.ts",
+      "default": "./dist/pure-helpers.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@goatcitadel/contracts": "workspace:*",
+    "@goatcitadel/mission-control-shared": "workspace:*",
+    "react": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -b tsconfig.json"
+  }
+}

@@ -76,20 +76,20 @@ export function SettingsAccessSection(props: SettingsAccessSectionProps) {
           />
         </div>
         <div className="controls-row">
+          <label htmlFor="allowLoopbackBypassToggle">Allow loopback bypass</label>
           <GCSwitch
-            id="allowLoopbackBypass"
+            id="allowLoopbackBypassToggle"
             checked={allowLoopbackBypass}
             onCheckedChange={onAllowLoopbackBypassChange}
-            label="Allow loopback bypass"
           />
         </div>
         {authMode !== "none" ? (
           <div className="controls-row">
+            <label htmlFor="authRememberMeToggle">Remember credentials on this browser (less secure)</label>
             <GCSwitch
-              id="authRememberMe"
+              id="authRememberMeToggle"
               checked={authStorageMode === "persistent"}
               onCheckedChange={(checked) => onAuthStorageModeChange(checked ? "persistent" : "session")}
-              label="Remember credentials on this browser (less secure)"
             />
           </div>
         ) : null}

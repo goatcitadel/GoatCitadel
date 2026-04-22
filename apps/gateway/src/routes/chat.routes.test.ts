@@ -69,6 +69,52 @@ describe("chat routes additional coverage", () => {
     });
   });
 
+  it("imports a chat project from a code source", async () => {
+    const importChatProject = vi.fn(async () => ({
+      project: {
+        projectId: "proj-imported",
+        workspaceId: "default",
+        name: "demo-repo",
+        workspacePath: "imports/demo-repo",
+        lifecycleStatus: "active",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      },
+      sourceType: "github_repo",
+      materializedPath: "imports/demo-repo",
+      repoReady: true,
+      imported: true,
+    }));
+    app = Fastify();
+    app.decorate("gateway", {
+      importChatProject,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/projects/import",
+      payload: {
+        sourceType: "github_repo",
+        repoUrl: "https://github.com/example/demo-repo.git",
+        ref: "main",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(importChatProject).toHaveBeenCalledWith({
+      sourceType: "github_repo",
+      repoUrl: "https://github.com/example/demo-repo.git",
+      ref: "main",
+    });
+    expect(response.json()).toMatchObject({
+      project: {
+        projectId: "proj-imported",
+      },
+      repoReady: true,
+    });
+  });
+
   it("archives workspace chat sessions through the bulk archive route", async () => {
     const archiveChatSessionsBulk = vi.fn(async () => ({
       workspaceId: "default",
