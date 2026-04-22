@@ -39,6 +39,9 @@ describe("provider templates", () => {
       "models/gemini-2.5-flash-lite",
       "models/gemini-2.5-pro",
       "models/gemini-flash-latest",
+      "gemini-3.1-flash-image-preview",
+      "gemini-3-pro-image-preview",
+      "gemini-2.5-flash-image",
     ]);
   });
 
@@ -78,6 +81,7 @@ describe("provider templates", () => {
     expect(inferProviderForModelId("gpt-5.4-mini")).toBe("openai");
     expect(inferProviderForModelId("claude-sonnet-4-6")).toBe("anthropic");
     expect(inferProviderForModelId("models/gemini-2.5-flash")).toBe("google");
+    expect(inferProviderForModelId("gemini-3-pro-image-preview")).toBe("google");
     expect(inferProviderForModelId("openai/gpt-5.4-mini")).toBe("openai");
     expect(inferProviderForModelId("anthropic/claude-sonnet-4")).toBe("anthropic");
     expect(inferProviderForModelId("zai/glm-5v-turbo")).toBe("glm");

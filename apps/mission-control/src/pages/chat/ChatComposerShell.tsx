@@ -7,6 +7,7 @@ import type {
   RoutingPreflightResult,
 } from "@goatcitadel/contracts";
 import type { ClipboardEvent, DragEvent, KeyboardEvent, RefObject } from "react";
+import { ChatModelPicker, type ChatModelProviderOption } from "../../components/ChatModelPicker";
 import { ChatComposerPlusMenu } from "../../components/ChatComposerPlusMenu";
 import { ChatQueueBar, type ChatQueueItemView } from "../../components/chat/ChatQueueBar";
 import { StatusChip } from "../../components/StatusChip";
@@ -147,7 +148,13 @@ export function ChatComposerShell(props: {
   imageBusy?: boolean;
   imageGenerationAvailable?: boolean;
   imageEditAvailable?: boolean;
+  imageProviderOptions?: ChatModelProviderOption[];
+  selectedImageProviderId?: string;
+  selectedImageModel?: string;
+  imageRouteSwitchDisabled?: boolean;
   imageRouteLabel?: string | null;
+  onRequestImageProviderChange?: (providerId: string) => void;
+  onRequestImageModelChange?: (model: string) => void;
   onToggleVoiceTalk?: () => void;
   onOpenAudioTranscribe?: () => void;
   onAudioFileSelected?: (files: FileList | null) => void;
@@ -228,7 +235,13 @@ export function ChatComposerShell(props: {
     imageBusy = false,
     imageGenerationAvailable = false,
     imageEditAvailable = false,
+    imageProviderOptions = [],
+    selectedImageProviderId,
+    selectedImageModel,
+    imageRouteSwitchDisabled = false,
     imageRouteLabel = null,
+    onRequestImageProviderChange = () => undefined,
+    onRequestImageModelChange = () => undefined,
     onToggleVoiceTalk = () => undefined,
     onOpenAudioTranscribe = () => undefined,
     onAudioFileSelected = () => undefined,
@@ -579,6 +592,19 @@ export function ChatComposerShell(props: {
                 selectedPresetId={selectedPresetId}
                 onPresetChange={onPresetChange}
                 onApplyPreset={onApplyPreset}
+              />
+            </div>
+          ) : null}
+          {imageProviderOptions.length > 0 ? (
+            <div className="chat-v11-composer-image-route" aria-label="Image generation route">
+              <span className="chat-v11-composer-kicker">Image route</span>
+              <ChatModelPicker
+                providers={imageProviderOptions}
+                providerId={selectedImageProviderId}
+                model={selectedImageModel}
+                disabled={imageRouteSwitchDisabled || imageBusy}
+                onChangeProvider={onRequestImageProviderChange}
+                onChangeModel={onRequestImageModelChange}
               />
             </div>
           ) : null}

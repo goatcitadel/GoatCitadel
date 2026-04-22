@@ -76,6 +76,7 @@ function Harness() {
       {
         providerId: "openai",
         label: "OpenAI",
+        models: ["gpt-image-2"],
         capabilities: {
           voiceOutput: true,
         },

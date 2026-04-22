@@ -1,12 +1,4 @@
-import {
-  Suspense,
-  startTransition,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { Suspense, startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   Bot,
@@ -25,7 +17,11 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import type { DashboardStateResponse, HealthSummaryResponse, RealtimeEvent } from "@goatcitadel/mission-control-shared/api/types";
+import type {
+  DashboardStateResponse,
+  HealthSummaryResponse,
+  RealtimeEvent,
+} from "@goatcitadel/mission-control-shared/api/types";
 import {
   connectEventStream,
   consumeGatewayAccessBootstrapFromLocation,
@@ -59,6 +55,7 @@ import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
   LazyThreadedSurfaceRoute,
+  preloadThreadedSurfaceRoute,
 } from "./lazy-legacy-pages";
 import { BlocksShuffleLoader } from "../components/BlocksShuffleLoader";
 import {
@@ -154,7 +151,10 @@ export function MissionControlNextApp() {
   const shellThemeClass = resolveShellThemeClass(route.theme === "light" ? "light" : theme);
   const currentAreaMeta = AREA_META[route.area];
   const currentRailItems = RAIL_ITEMS[route.area];
-  const groupedRailItems = useMemo(() => buildRailSections(route.area, currentRailItems), [route.area, currentRailItems]);
+  const groupedRailItems = useMemo(
+    () => buildRailSections(route.area, currentRailItems),
+    [route.area, currentRailItems],
+  );
   const currentRouteLabel = getRouteLabel(route);
   const currentRouteDescription = getRouteDescription(route);
   const isWorkArea = route.area === "chat" || route.area === "cowork" || route.area === "code";
@@ -211,7 +211,15 @@ export function MissionControlNextApp() {
         </div>
       ),
     };
-  }, [activeWorkspaceName, currentAreaMeta.kicker, currentAreaMeta.label, currentRouteDescription, currentRouteLabel, status.dashboard, streamState]);
+  }, [
+    activeWorkspaceName,
+    currentAreaMeta.kicker,
+    currentAreaMeta.label,
+    currentRouteDescription,
+    currentRouteLabel,
+    status.dashboard,
+    streamState,
+  ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
@@ -327,6 +335,12 @@ export function MissionControlNextApp() {
   }, [navigate, route]);
 
   useEffect(() => {
+    if (route.area === "chat" || route.area === "cowork" || route.area === "code") {
+      void preloadThreadedSurfaceRoute();
+    }
+  }, [route.area]);
+
+  useEffect(() => {
     void retryGatewayAccess();
   }, [retryGatewayAccess]);
 
@@ -390,7 +404,8 @@ export function MissionControlNextApp() {
 
     const close = connectEventStream(
       (event) => {
-        for (const topic of deriveRefreshTopics(event)) {
+        const refreshTopics = deriveRefreshTopics(event);
+        for (const topic of refreshTopics) {
           emitRefresh(topic, {
             reason: event.eventType,
             source: event.source,
@@ -398,6 +413,9 @@ export function MissionControlNextApp() {
             eventId: event.eventId,
             timestamp: Date.now(),
           });
+        }
+        if (event.eventAuthority === "durable_history") {
+          return;
         }
         if (event.links?.approvalId || event.eventType.includes("approval")) {
           pushNotification("warning", "Approval state changed. Review the inbox in Ops.", "ops-approvals");
@@ -495,8 +513,7 @@ export function MissionControlNextApp() {
                         theme: route.theme ?? theme,
                         sessionId:
                           area === "chat" || area === "cowork" || area === "code" ? route.sessionId : undefined,
-                        turnId:
-                          area === "chat" || area === "cowork" || area === "code" ? route.turnId : undefined,
+                        turnId: area === "chat" || area === "cowork" || area === "code" ? route.turnId : undefined,
                         artifactId:
                           area === "chat" || area === "cowork" || area === "code" ? route.artifactId : undefined,
                       })
@@ -513,7 +530,10 @@ export function MissionControlNextApp() {
                 <span>Workspace</span>
                 <select value={activeWorkspaceId} onChange={(event) => setActiveWorkspaceId(event.target.value)}>
                   {[...workspaceOptions, { workspaceId: activeWorkspaceId, name: activeWorkspaceName }]
-                    .filter((item, index, items) => items.findIndex((candidate) => candidate.workspaceId === item.workspaceId) === index)
+                    .filter(
+                      (item, index, items) =>
+                        items.findIndex((candidate) => candidate.workspaceId === item.workspaceId) === index,
+                    )
                     .map((item) => (
                       <option key={item.workspaceId} value={item.workspaceId}>
                         {item.name}
@@ -585,7 +605,9 @@ export function MissionControlNextApp() {
                               <strong>{item.label}</strong>
                               <span>{item.description}</span>
                             </div>
-                            {typeof backlogCount === "number" ? <span className="mc-next-rail-count">{backlogCount}</span> : null}
+                            {typeof backlogCount === "number" ? (
+                              <span className="mc-next-rail-count">{backlogCount}</span>
+                            ) : null}
                           </button>
                         );
                       })}
@@ -619,7 +641,9 @@ export function MissionControlNextApp() {
                     <span className="mc-next-stage-chip">
                       {streamState === "open" ? "Realtime connected" : "Realtime degraded"}
                     </span>
-                    {status.error ? <span className="mc-next-stage-chip warning">Shell status needs refresh</span> : null}
+                    {status.error ? (
+                      <span className="mc-next-stage-chip warning">Shell status needs refresh</span>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
@@ -629,9 +653,7 @@ export function MissionControlNextApp() {
                 onReturnToChat={() => navigate({ area: "chat", theme: route.theme ?? theme })}
               >
                 <Suspense
-                  fallback={
-                    <RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />
-                  }
+                  fallback={<RouteSurfaceFallback label={currentRouteLabel} description={currentRouteDescription} />}
                 >
                   <div className="mc-next-stage-scroll">
                     <section
@@ -677,11 +699,7 @@ export function MissionControlNextApp() {
               label="Live updates"
               value={streamState === "open" ? "Streaming" : "Polling fallback"}
             />
-            <StatusPill
-              icon={<Workflow size={15} />}
-              label="Approvals"
-              value={`${pendingApprovals} pending`}
-            />
+            <StatusPill icon={<Workflow size={15} />} label="Approvals" value={`${pendingApprovals} pending`} />
             <StatusPill
               icon={<BookOpenText size={15} />}
               label="Sessions"
@@ -793,7 +811,13 @@ function renderRouteContent(input: {
 
   if (route.area === "library") {
     if (route.section === "prompt-packs") {
-      return <LazyPromptPacksWorkbenchPage workspaceId={input.activeWorkspaceId} variant="library" />;
+      return (
+        <LazyPromptPacksWorkbenchPage
+          workspaceId={input.activeWorkspaceId}
+          variant="library"
+          navigate={input.navigate}
+        />
+      );
     }
     return <LazyNativeRoutePages {...input} route={route} />;
   }
@@ -821,19 +845,20 @@ function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] 
       {
         id: "settings-core",
         label: "Configuration",
-        items: items.filter((item) =>
-          item.section === "general" ||
-          item.section === "providers" ||
-          item.section === "access" ||
-          item.section === "runtime" ||
-          item.section === "workspaces",
+        items: items.filter(
+          (item) =>
+            item.section === "general" ||
+            item.section === "providers" ||
+            item.section === "access" ||
+            item.section === "runtime" ||
+            item.section === "workspaces",
         ),
       },
       {
         id: "settings-connections",
         label: "Connections",
-        items: items.filter((item) =>
-          item.section === "integrations" || item.section === "channels" || item.section === "mcp",
+        items: items.filter(
+          (item) => item.section === "integrations" || item.section === "channels" || item.section === "mcp",
         ),
       },
       {
@@ -849,18 +874,19 @@ function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] 
       {
         id: "library-knowledge",
         label: "Knowledge",
-        items: items.filter((item) =>
-          item.section === "agents" ||
-          item.section === "skills" ||
-          item.section === "memory" ||
-          item.section === "knowledge",
+        items: items.filter(
+          (item) =>
+            item.section === "agents" ||
+            item.section === "skills" ||
+            item.section === "memory" ||
+            item.section === "knowledge",
         ),
       },
       {
         id: "library-assets",
         label: "Assets",
-        items: items.filter((item) =>
-          item.section === "files" || item.section === "artifacts" || item.section === "prompt-packs",
+        items: items.filter(
+          (item) => item.section === "files" || item.section === "artifacts" || item.section === "prompt-packs",
         ),
       },
     ].filter((group) => group.items.length);
@@ -871,19 +897,20 @@ function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] 
       {
         id: "ops-observe",
         label: "Observe",
-        items: items.filter((item) =>
-          item.section === "activity" || item.section === "sessions" || item.section === "schedules",
+        items: items.filter(
+          (item) => item.section === "activity" || item.section === "sessions" || item.section === "schedules",
         ),
       },
       {
         id: "ops-control",
         label: "Operate",
-        items: items.filter((item) =>
-          item.section === "improvement" ||
-          item.section === "approvals" ||
-          item.section === "costs" ||
-          item.section === "runtime" ||
-          item.section === "diagnostics",
+        items: items.filter(
+          (item) =>
+            item.section === "improvement" ||
+            item.section === "approvals" ||
+            item.section === "costs" ||
+            item.section === "runtime" ||
+            item.section === "diagnostics",
         ),
       },
     ].filter((group) => group.items.length);
@@ -905,6 +932,9 @@ function StatusPill({ icon, label, value }: { icon: ReactNode; label: string; va
 }
 
 function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
+  if (event.eventAuthority === "durable_history") {
+    return [];
+  }
   const topics = new Set<RefreshTopic>(["surface"]);
   const haystack = `${event.eventType} ${event.source}`.toLowerCase();
 

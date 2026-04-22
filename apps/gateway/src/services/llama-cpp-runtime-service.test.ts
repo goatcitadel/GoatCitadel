@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LlamaCppHardwareProfile } from "@goatcitadel/contracts";
 import type { LlamaCppConfig } from "../config.js";
 import {
+  LlamaCppRuntimeService,
   buildLlamaCppLaunchArgs,
   normalizeLlamaCppProviderBaseUrl,
   parseAmdGpuTelemetryJson,
@@ -110,6 +113,44 @@ describe("llama.cpp runtime helpers", () => {
       "--mlock",
       "--no-warmup",
     ]);
+  });
+
+  it("discovers local gguf files from modelsRootPath before relying on the runtime endpoint", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llamacpp-models-"));
+    try {
+      const modelsRoot = path.join(tempRoot, "models");
+      const nestedModel = path.join(modelsRoot, "Gemma-E4B-Opus", "gemma-4-E4B-it.Q8_0.gguf");
+      const flatModel = path.join(modelsRoot, "Mistral-Small.gguf");
+      await fs.mkdir(path.dirname(nestedModel), { recursive: true });
+      await fs.writeFile(nestedModel, "model", "utf8");
+      await fs.writeFile(flatModel, "model", "utf8");
+
+      const service = new LlamaCppRuntimeService({
+        rootDir: tempRoot,
+        config: createConfig({
+          launch: {
+            modelsRootPath: modelsRoot,
+          },
+        }),
+      });
+
+      await expect(service.listModels()).resolves.toEqual([
+        {
+          modelId: "Gemma-E4B-Opus/gemma-4-E4B-it.Q8_0",
+          filePath: nestedModel,
+          relativePath: "Gemma-E4B-Opus/gemma-4-E4B-it.Q8_0.gguf",
+          source: "filesystem",
+        },
+        {
+          modelId: "Mistral-Small",
+          filePath: flatModel,
+          relativePath: "Mistral-Small.gguf",
+          source: "filesystem",
+        },
+      ]);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("parses NVIDIA telemetry from nvidia-smi CSV output", () => {

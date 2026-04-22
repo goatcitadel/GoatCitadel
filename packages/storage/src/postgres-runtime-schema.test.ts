@@ -143,4 +143,13 @@ describe("Postgres runtime schema generation", () => {
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_agent_catalog_source_path/,
     );
   });
+
+  it("repairs chat image route preference columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 20);
+
+    assert.equal(repairMigration?.name, "chat_image_route_preference_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_session_prefs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS image_provider_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS image_model TEXT/);
+  });
 });

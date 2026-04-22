@@ -122,7 +122,13 @@ export interface MissionControlActiveSessionSurfaceProps {
   imageBusy: Parameters<typeof ChatComposerShell>[0]["imageBusy"];
   imageGenerationAvailable: Parameters<typeof ChatComposerShell>[0]["imageGenerationAvailable"];
   imageEditAvailable: Parameters<typeof ChatComposerShell>[0]["imageEditAvailable"];
+  imageProviderOptions: Parameters<typeof ChatComposerShell>[0]["imageProviderOptions"];
+  selectedImageProviderId: Parameters<typeof ChatComposerShell>[0]["selectedImageProviderId"];
+  selectedImageModel: Parameters<typeof ChatComposerShell>[0]["selectedImageModel"];
+  imageRouteSwitchDisabled: Parameters<typeof ChatComposerShell>[0]["imageRouteSwitchDisabled"];
   imageRouteLabel: Parameters<typeof ChatComposerShell>[0]["imageRouteLabel"];
+  onRequestImageProviderChange: Parameters<typeof ChatComposerShell>[0]["onRequestImageProviderChange"];
+  onRequestImageModelChange: Parameters<typeof ChatComposerShell>[0]["onRequestImageModelChange"];
   onToggleVoiceTalk: Parameters<typeof ChatComposerShell>[0]["onToggleVoiceTalk"];
   onOpenAudioTranscribe: Parameters<typeof ChatComposerShell>[0]["onOpenAudioTranscribe"];
   onAudioFileSelected: Parameters<typeof ChatComposerShell>[0]["onAudioFileSelected"];
@@ -244,7 +250,13 @@ export function MissionControlActiveSessionSurface({
   imageBusy,
   imageGenerationAvailable,
   imageEditAvailable,
+  imageProviderOptions,
+  selectedImageProviderId,
+  selectedImageModel,
+  imageRouteSwitchDisabled,
   imageRouteLabel,
+  onRequestImageProviderChange,
+  onRequestImageModelChange,
   onToggleVoiceTalk,
   onOpenAudioTranscribe,
   onAudioFileSelected,
@@ -382,7 +394,13 @@ export function MissionControlActiveSessionSurface({
           imageBusy={imageBusy}
           imageGenerationAvailable={imageGenerationAvailable}
           imageEditAvailable={imageEditAvailable}
+          imageProviderOptions={imageProviderOptions}
+          selectedImageProviderId={selectedImageProviderId}
+          selectedImageModel={selectedImageModel}
+          imageRouteSwitchDisabled={imageRouteSwitchDisabled}
           imageRouteLabel={imageRouteLabel}
+          onRequestImageProviderChange={onRequestImageProviderChange}
+          onRequestImageModelChange={onRequestImageModelChange}
           onToggleVoiceTalk={onToggleVoiceTalk}
           onOpenAudioTranscribe={onOpenAudioTranscribe}
           onAudioFileSelected={onAudioFileSelected}

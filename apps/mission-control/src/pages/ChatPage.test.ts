@@ -62,6 +62,8 @@ function makePrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSession
     planningMode: "off",
     providerId: "openai",
     model: "gpt-4.1-mini",
+    imageProviderId: "openai",
+    imageModel: "gpt-image-2",
     webMode: "auto",
     memoryMode: "auto",
     thinkingLevel: "standard",
@@ -401,6 +403,13 @@ describe("resolveOptimisticChatPrefs", () => {
 
     expect(nextPrefs.providerId).toBe("anthropic");
     expect(nextPrefs.model).toBeUndefined();
+  });
+
+  it("clears the optimistic image model when the image provider changes without an explicit replacement model", () => {
+    const nextPrefs = resolveOptimisticChatPrefs(makePrefs(), { imageProviderId: "google" });
+
+    expect(nextPrefs.imageProviderId).toBe("google");
+    expect(nextPrefs.imageModel).toBeUndefined();
   });
 
   it("applies code-mode guardrails without dropping the current provider and model", () => {

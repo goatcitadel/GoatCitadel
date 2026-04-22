@@ -48,6 +48,71 @@ export interface CommandCatalogItem {
 
 export type ChatHistoryView = "active" | "archived";
 
+const INITIAL_ACTIVE_SESSION_LIMIT = 100;
+const INITIAL_ARCHIVED_SESSION_LIMIT = 150;
+const SEARCH_SESSION_LIMIT = 250;
+const DEV_BOOTSTRAP_CACHE_TTL_MS = 5000;
+const SHOULD_REUSE_DEV_BOOTSTRAP_FETCHES = process.env.NODE_ENV !== "production";
+
+type BootstrapCacheEntry<T> = {
+  expiresAt: number;
+  promise: Promise<T>;
+};
+
+type SidebarBootstrapResult = {
+  projects: ChatProjectsResponse;
+  sessions: ChatSessionsResponse;
+};
+
+type RuntimeCatalogBootstrapResult = {
+  runtimeSettings: RuntimeSettingsResponse;
+  commands: { items: CommandCatalogItem[] };
+  skills: { items: SkillListItem[] };
+  servers: { items: McpServerRecord[] };
+  templates: { items: Array<McpServerTemplateRecord & { installed: boolean }> };
+};
+
+const sidebarBootstrapCache = new Map<string, BootstrapCacheEntry<SidebarBootstrapResult>>();
+const runtimeCatalogBootstrapCache = new Map<string, BootstrapCacheEntry<RuntimeCatalogBootstrapResult>>();
+
+function resolveSidebarSessionLimit(historyView: ChatHistoryView, searchQuery: string): number {
+  if (searchQuery.trim()) {
+    return SEARCH_SESSION_LIMIT;
+  }
+  return historyView === "archived" ? INITIAL_ARCHIVED_SESSION_LIMIT : INITIAL_ACTIVE_SESSION_LIMIT;
+}
+
+function getDevBootstrapPromise<T>(
+  cache: Map<string, BootstrapCacheEntry<T>>,
+  key: string,
+  factory: () => Promise<T>,
+): Promise<T> {
+  if (!SHOULD_REUSE_DEV_BOOTSTRAP_FETCHES) {
+    return factory();
+  }
+
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.promise;
+  }
+
+  const promise = factory().finally(() => {
+    globalThis.setTimeout(() => {
+      const current = cache.get(key);
+      if (current?.promise === promise && current.expiresAt <= Date.now()) {
+        cache.delete(key);
+      }
+    }, DEV_BOOTSTRAP_CACHE_TTL_MS);
+  });
+
+  cache.set(key, {
+    promise,
+    expiresAt: now + DEV_BOOTSTRAP_CACHE_TTL_MS,
+  });
+  return promise;
+}
+
 export function useChatSessionData(input: {
   workspaceId: string;
   historyView: ChatHistoryView;
@@ -99,26 +164,37 @@ export function useChatSessionData(input: {
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
   const lastLoadedSessionIdRef = useRef<string | null>(null);
+  const refreshSubscriptionStartedAtRef = useRef<number>(0);
 
   const loadSidebar = useCallback(
     async (nextHistoryView: ChatHistoryView = historyView) => {
+      const trimmedSearchQuery = searchQuery.trim();
+      const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
       recordClientDiagnostic({
         level: "debug",
         category: "chat",
         event: "sidebar.load",
         message: "Refreshing chat sidebar data",
-        context: { workspaceId, historyView: nextHistoryView },
+        context: { workspaceId, historyView: nextHistoryView, sessionLimit },
       });
-      const [nextProjects, nextSessions] = await Promise.all([
-        fetchChatProjects("all", 250, workspaceId),
-        fetchChatSessions({
-          scope: "all",
-          view: nextHistoryView,
-          limit: 250,
-          workspaceId,
-          q: searchQuery.trim() || undefined,
-        }),
-      ]);
+      const cacheKey = `${workspaceId}:${nextHistoryView}:${trimmedSearchQuery}:${sessionLimit}`;
+      const { projects: nextProjects, sessions: nextSessions } = await getDevBootstrapPromise(
+        sidebarBootstrapCache,
+        cacheKey,
+        async () => {
+          const [projects, sessions] = await Promise.all([
+            fetchChatProjects("all", sessionLimit, workspaceId),
+            fetchChatSessions({
+              scope: "all",
+              view: nextHistoryView,
+              limit: sessionLimit,
+              workspaceId,
+              q: trimmedSearchQuery || undefined,
+            }),
+          ]);
+          return { projects, sessions };
+        },
+      );
       setProjects(nextProjects);
       setSessions(nextSessions);
       setSelectedSessionId((current) => {
@@ -134,13 +210,26 @@ export function useChatSessionData(input: {
   );
 
   const loadRuntimeCatalog = useCallback(async () => {
-    const [runtimeSettings, commands, skills, servers, templates] = await Promise.all([
-      fetchSettings(),
-      fetchChatCommandCatalog(),
-      fetchSkills(),
-      fetchMcpServers(),
-      fetchMcpTemplates(),
-    ]);
+    const { runtimeSettings, commands, skills, servers, templates } = await getDevBootstrapPromise(
+      runtimeCatalogBootstrapCache,
+      "runtime-catalog",
+      async () => {
+        const [nextRuntimeSettings, nextCommands, nextSkills, nextServers, nextTemplates] = await Promise.all([
+          fetchSettings(),
+          fetchChatCommandCatalog(),
+          fetchSkills(),
+          fetchMcpServers(),
+          fetchMcpTemplates(),
+        ]);
+        return {
+          runtimeSettings: nextRuntimeSettings,
+          commands: nextCommands,
+          skills: nextSkills,
+          servers: nextServers,
+          templates: nextTemplates,
+        };
+      },
+    );
     setSettings(runtimeSettings);
     setCommandCatalog(commands.items);
     setInstalledSkills(skills.items);
@@ -346,9 +435,34 @@ export function useChatSessionData(input: {
     };
   }, [loadRuntimeCatalog, loadSidebar, setError]);
 
+  useEffect(() => {
+    if (!loading) {
+      refreshSubscriptionStartedAtRef.current = Date.now();
+    }
+  }, [loading]);
+
   useRefreshSubscription(
     "chat",
     async (signal) => {
+      if (
+        signal.eventId &&
+        signal.eventType !== "fallback_poll" &&
+        refreshSubscriptionStartedAtRef.current > 0 &&
+        signal.timestamp < refreshSubscriptionStartedAtRef.current
+      ) {
+        recordClientDiagnostic({
+          level: "debug",
+          category: "refresh",
+          event: "ignored_prebootstrap_signal",
+          message: "Ignored replayed chat refresh signal during initial hydrate",
+          context: {
+            eventId: signal.eventId,
+            eventType: signal.eventType,
+            source: signal.source,
+          },
+        });
+        return;
+      }
       const now = Date.now();
       const plan = resolveChatRefreshPlan(signal, now - lastLocalPrefMutationAtRef.current < 2500);
       recordChatRefreshPhase({

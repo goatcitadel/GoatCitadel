@@ -40,6 +40,9 @@ export interface LlamaCppModelManifest {
   object?: string;
   created?: number;
   ownedBy?: string;
+  filePath?: string;
+  relativePath?: string;
+  source?: "runtime" | "filesystem";
 }
 
 export interface LlamaCppRuntimeStatus {

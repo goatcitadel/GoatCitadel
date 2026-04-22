@@ -21,6 +21,8 @@ interface ChatSessionPrefsRow {
   planning_mode: ChatPlanningMode;
   provider_id: string | null;
   model: string | null;
+  image_provider_id: string | null;
+  image_model: string | null;
   web_mode: ChatWebMode;
   memory_mode: ChatMemoryMode;
   thinking_level: ChatThinkingLevel;
@@ -42,6 +44,8 @@ export interface ChatSessionPrefsPatchInput {
   planningMode?: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  imageProviderId?: string;
+  imageModel?: string;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
@@ -61,6 +65,8 @@ const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "createdAt" | "u
   planningMode: "off",
   providerId: undefined,
   model: undefined,
+  imageProviderId: undefined,
+  imageModel: undefined,
   webMode: "auto",
   memoryMode: "auto",
   thinkingLevel: "standard",
@@ -83,12 +89,14 @@ export class ChatSessionPrefsRepository {
     this.getStmt = db.prepare("SELECT * FROM chat_session_prefs WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_prefs (
-        session_id, mode, planning_mode, provider_id, model, web_mode, memory_mode, thinking_level,
+        session_id, mode, planning_mode, provider_id, model, image_provider_id, image_model,
+        web_mode, memory_mode, thinking_level,
         tool_autonomy, vision_fallback_model, orchestration_enabled, orchestration_intensity,
         orchestration_visibility, orchestration_provider_preference, orchestration_review_depth,
         orchestration_parallelism, code_auto_apply, created_at, updated_at
       ) VALUES (
-        @sessionId, @mode, @planningMode, @providerId, @model, @webMode, @memoryMode, @thinkingLevel,
+        @sessionId, @mode, @planningMode, @providerId, @model, @imageProviderId, @imageModel,
+        @webMode, @memoryMode, @thinkingLevel,
         @toolAutonomy, @visionFallbackModel, @orchestrationEnabled, @orchestrationIntensity,
         @orchestrationVisibility, @orchestrationProviderPreference, @orchestrationReviewDepth,
         @orchestrationParallelism, @codeAutoApply, @createdAt, @updatedAt
@@ -98,6 +106,8 @@ export class ChatSessionPrefsRepository {
         planning_mode = excluded.planning_mode,
         provider_id = excluded.provider_id,
         model = excluded.model,
+        image_provider_id = excluded.image_provider_id,
+        image_model = excluded.image_model,
         web_mode = excluded.web_mode,
         memory_mode = excluded.memory_mode,
         thinking_level = excluded.thinking_level,
@@ -130,6 +140,8 @@ export class ChatSessionPrefsRepository {
       planningMode: DEFAULT_PREFS.planningMode,
       providerId: null,
       model: null,
+      imageProviderId: null,
+      imageModel: null,
       webMode: DEFAULT_PREFS.webMode,
       memoryMode: DEFAULT_PREFS.memoryMode,
       thinkingLevel: DEFAULT_PREFS.thinkingLevel,
@@ -148,24 +160,51 @@ export class ChatSessionPrefsRepository {
     return mapRow(this.requireRow(sessionId));
   }
 
-  public patch(sessionId: string, input: ChatSessionPrefsPatchInput, now = new Date().toISOString()): ChatSessionPrefsRecord {
+  public patch(
+    sessionId: string,
+    input: ChatSessionPrefsPatchInput,
+    now = new Date().toISOString(),
+  ): ChatSessionPrefsRecord {
     const current = this.ensure(sessionId, now);
+    const nextProviderId =
+      input.providerId !== undefined ? normalizeOptional(input.providerId) : (current.providerId ?? null);
+    const providerChanged = input.providerId !== undefined && nextProviderId !== (current.providerId ?? null);
+    const nextImageProviderId =
+      input.imageProviderId !== undefined
+        ? normalizeOptional(input.imageProviderId)
+        : (current.imageProviderId ?? null);
+    const imageProviderChanged =
+      input.imageProviderId !== undefined && nextImageProviderId !== (current.imageProviderId ?? null);
     this.upsertStmt.run({
       sessionId,
       mode: input.mode ?? current.mode,
       planningMode: input.planningMode ?? current.planningMode,
-      providerId: input.providerId !== undefined ? normalizeOptional(input.providerId) : (current.providerId ?? null),
-      model: input.model !== undefined ? normalizeOptional(input.model) : (current.model ?? null),
+      providerId: nextProviderId,
+      model:
+        input.model !== undefined ? normalizeOptional(input.model) : providerChanged ? null : (current.model ?? null),
+      imageProviderId: nextImageProviderId,
+      imageModel:
+        input.imageModel !== undefined
+          ? normalizeOptional(input.imageModel)
+          : imageProviderChanged
+            ? null
+            : (current.imageModel ?? null),
       webMode: input.webMode ?? current.webMode,
       memoryMode: input.memoryMode ?? current.memoryMode,
       thinkingLevel: input.thinkingLevel ?? current.thinkingLevel,
       toolAutonomy: input.toolAutonomy ?? current.toolAutonomy,
-      visionFallbackModel: input.visionFallbackModel !== undefined
-        ? normalizeOptional(input.visionFallbackModel)
-        : (current.visionFallbackModel ?? null),
-      orchestrationEnabled: input.orchestrationEnabled !== undefined
-        ? (input.orchestrationEnabled ? 1 : 0)
-        : (current.orchestrationEnabled ? 1 : 0),
+      visionFallbackModel:
+        input.visionFallbackModel !== undefined
+          ? normalizeOptional(input.visionFallbackModel)
+          : (current.visionFallbackModel ?? null),
+      orchestrationEnabled:
+        input.orchestrationEnabled !== undefined
+          ? input.orchestrationEnabled
+            ? 1
+            : 0
+          : current.orchestrationEnabled
+            ? 1
+            : 0,
       orchestrationIntensity: input.orchestrationIntensity ?? current.orchestrationIntensity,
       orchestrationVisibility: input.orchestrationVisibility ?? current.orchestrationVisibility,
       orchestrationProviderPreference: input.orchestrationProviderPreference ?? current.orchestrationProviderPreference,
@@ -194,6 +233,8 @@ function mapRow(row: ChatSessionPrefsRow): ChatSessionPrefsRecord {
     planningMode: row.planning_mode,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,
+    imageProviderId: row.image_provider_id ?? undefined,
+    imageModel: row.image_model ?? undefined,
     webMode: row.web_mode,
     memoryMode: row.memory_mode,
     thinkingLevel: row.thinking_level,
@@ -224,29 +265,31 @@ function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.session_id === "string"
-    && typeof value.mode === "string"
-    && typeof value.planning_mode === "string"
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && typeof value.web_mode === "string"
-    && typeof value.memory_mode === "string"
-    && typeof value.thinking_level === "string"
-    && typeof value.tool_autonomy === "string"
-    && (typeof value.vision_fallback_model === "string" || value.vision_fallback_model === null)
-    && typeof value.orchestration_enabled === "number"
-    && typeof value.orchestration_intensity === "string"
-    && typeof value.orchestration_visibility === "string"
-    && typeof value.orchestration_provider_preference === "string"
-    && typeof value.orchestration_review_depth === "string"
-    && typeof value.orchestration_parallelism === "string"
-    && typeof value.code_auto_apply === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.session_id === "string" &&
+    typeof value.mode === "string" &&
+    typeof value.planning_mode === "string" &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    (typeof value.image_provider_id === "string" || value.image_provider_id === null) &&
+    (typeof value.image_model === "string" || value.image_model === null) &&
+    typeof value.web_mode === "string" &&
+    typeof value.memory_mode === "string" &&
+    typeof value.thinking_level === "string" &&
+    typeof value.tool_autonomy === "string" &&
+    (typeof value.vision_fallback_model === "string" || value.vision_fallback_model === null) &&
+    typeof value.orchestration_enabled === "number" &&
+    typeof value.orchestration_intensity === "string" &&
+    typeof value.orchestration_visibility === "string" &&
+    typeof value.orchestration_provider_preference === "string" &&
+    typeof value.orchestration_review_depth === "string" &&
+    typeof value.orchestration_parallelism === "string" &&
+    typeof value.code_auto_apply === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

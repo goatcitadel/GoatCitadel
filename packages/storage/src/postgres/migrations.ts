@@ -671,4 +671,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON imported_agent_catalog(workspace_id, provenance_provider, COALESCE(provenance_repo_url, ''), provenance_path);
     `,
   },
+  {
+    version: 20,
+    name: "chat_image_route_preference_repairs",
+    sql: `
+      ALTER TABLE chat_session_prefs
+        ADD COLUMN IF NOT EXISTS image_provider_id TEXT,
+        ADD COLUMN IF NOT EXISTS image_model TEXT;
+    `,
+  },
 ];

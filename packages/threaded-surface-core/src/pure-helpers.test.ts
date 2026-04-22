@@ -17,6 +17,8 @@ describe("threaded-surface-core pure helpers", () => {
       planningMode: "off",
       providerId: "openai",
       model: "gpt-5.4-mini",
+      imageProviderId: "openai",
+      imageModel: "gpt-image-2",
       webMode: "auto",
       memoryMode: "workspace",
       thinkingLevel: "balanced",
@@ -41,6 +43,8 @@ describe("threaded-surface-core pure helpers", () => {
 
     expect(nextPrefs.providerId).toBe("anthropic");
     expect(nextPrefs.model).toBeUndefined();
+    expect(nextPrefs.imageProviderId).toBe("openai");
+    expect(nextPrefs.imageModel).toBe("gpt-image-2");
   });
 
   it("merges autonomy budget patches without dropping the existing budget fields", () => {
@@ -49,6 +53,8 @@ describe("threaded-surface-core pure helpers", () => {
       planningMode: "off",
       providerId: "openai",
       model: "gpt-5.4-mini",
+      imageProviderId: "openai",
+      imageModel: "gpt-image-2",
       webMode: "auto",
       memoryMode: "workspace",
       thinkingLevel: "balanced",
@@ -76,6 +82,40 @@ describe("threaded-surface-core pure helpers", () => {
       maxActionsPerTurn: 4,
       cooldownSeconds: 30,
     });
+  });
+
+  it("clears the selected image model when the image provider changes without an explicit model patch", () => {
+    const currentPrefs = {
+      mode: "chat",
+      planningMode: "off",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+      imageProviderId: "openai",
+      imageModel: "gpt-image-2",
+      webMode: "auto",
+      memoryMode: "workspace",
+      thinkingLevel: "balanced",
+      toolAutonomy: "manual",
+      visionFallbackModel: undefined,
+      orchestrationEnabled: false,
+      orchestrationIntensity: "normal",
+      orchestrationVisibility: "summary",
+      orchestrationProviderPreference: "speed",
+      orchestrationReviewDepth: "standard",
+      orchestrationParallelism: "balanced",
+      codeAutoApply: false,
+      proactiveMode: "off",
+      autonomyBudget: { maxActionsPerHour: 12, maxActionsPerTurn: 4, cooldownSeconds: 30 },
+      retrievalMode: "auto",
+      reflectionMode: "auto",
+    } as const;
+
+    const nextPrefs = resolveOptimisticChatPrefs(currentPrefs as never, {
+      imageProviderId: "google",
+    });
+
+    expect(nextPrefs.imageProviderId).toBe("google");
+    expect(nextPrefs.imageModel).toBeUndefined();
   });
 
   it("prefers a matching pending route turn before current or selected turn ids", () => {

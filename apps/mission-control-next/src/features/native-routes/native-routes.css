@@ -203,7 +203,10 @@
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   cursor: pointer;
-  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
 }
 
 .mc-next-directory-action:hover {
@@ -335,6 +338,11 @@
   outline: none;
 }
 
+.mc-next-settings-input:is(select) {
+  min-height: 3rem;
+  line-height: 1.25;
+}
+
 .mc-next-settings-input:focus,
 .mc-next-settings-textarea:focus {
   border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
@@ -382,7 +390,10 @@
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   cursor: pointer;
-  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
 }
 
 .mc-next-settings-filter.active {
@@ -435,7 +446,10 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
 }
 
 .mc-next-settings-selectable:hover,
@@ -454,6 +468,14 @@
   margin: 0;
   color: var(--text-secondary);
   line-height: 1.45;
+}
+
+.mc-next-settings-field-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .mc-next-settings-selectable-head {

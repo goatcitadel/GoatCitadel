@@ -65,6 +65,7 @@ import {
   type ActiveRunState,
   type ScoreDraft,
 } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
+import { buildAppHref, type AppRoute } from "@next/app/route-model";
 import "./prompt-packs-workbench.css";
 
 const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
@@ -74,11 +75,13 @@ type DetailTab = "prompt" | "output" | "assessment" | "review" | "insights";
 interface PromptPacksWorkbenchPageProps {
   workspaceId?: string;
   variant?: "library" | "ops";
+  navigate?: (route: AppRoute, options?: { replace?: boolean }) => void;
 }
 
 export function PromptPacksWorkbenchPage({
   workspaceId: _workspaceId,
   variant = "library",
+  navigate,
 }: PromptPacksWorkbenchPageProps) {
   const isOpsVariant = variant === "ops";
   const v2UiEnabled = isPromptPackV2UiEnabled();
@@ -296,6 +299,14 @@ export function PromptPacksWorkbenchPage({
   const selectedRun = selectedTest ? latestRunByTest.get(selectedTest.testId) : undefined;
   const selectedAssessment = selectedTest ? latestAssessmentByTest.get(selectedTest.testId) : undefined;
   const selectedRunModelUsage = useMemo(() => resolvePromptPackRunModelUsage(selectedRun), [selectedRun]);
+  const selectedRunRoute = useMemo(() => buildPromptPackRunRoute(selectedRun), [selectedRun]);
+  const selectedRunHref = useMemo(() => (selectedRunRoute ? buildAppHref(selectedRunRoute) : null), [selectedRunRoute]);
+  const selectedRunLink = useMemo(() => {
+    if (!selectedRunHref || typeof window === "undefined") {
+      return selectedRunHref;
+    }
+    return new URL(selectedRunHref, window.location.origin).toString();
+  }, [selectedRunHref]);
   const passThreshold = report?.summary.passThreshold ?? PROMPT_PACK_PASS_THRESHOLD;
   const selectedPlaceholders = useMemo(
     () => (selectedTest ? extractPromptPlaceholders(selectedTest.prompt) : []),
@@ -667,6 +678,26 @@ export function PromptPacksWorkbenchPage({
       setError("Failed to copy export path.");
     }
   }, [exportInfo?.path]);
+
+  const openSelectedRun = useCallback(() => {
+    if (!selectedRunRoute || !navigate) {
+      return;
+    }
+    navigate(selectedRunRoute);
+  }, [navigate, selectedRunRoute]);
+
+  const copySelectedRunLink = useCallback(async () => {
+    if (!selectedRunLink) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(selectedRunLink);
+      setSuccess("Copied run link.");
+      setError(null);
+    } catch {
+      setError("Failed to copy run link.");
+    }
+  }, [selectedRunLink]);
 
   const submitScore = useCallback(async () => {
     if (!selectedPackId || !selectedTest || !selectedRun) {
@@ -1082,10 +1113,10 @@ export function PromptPacksWorkbenchPage({
                     setDetailTab("prompt");
                   }}
                 >
-                  <div>
+                  <span className="mc-pp-pack-copy">
                     <strong>{pack.name}</strong>
                     <span>{pack.testCount} tests</span>
-                  </div>
+                  </span>
                 </button>
               ))}
             </div>
@@ -1463,41 +1494,52 @@ export function PromptPacksWorkbenchPage({
                   className={`mc-pp-test-row${selected ? " active" : ""}`}
                   data-category={category}
                 >
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={selected}
                     className="mc-pp-test-select"
                     onClick={() => {
                       setSelectedTestId(test.testId);
                       setDetailTab("prompt");
                     }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedTestId(test.testId);
+                        setDetailTab("prompt");
+                      }
+                    }}
                   >
-                    <span className={`mc-pp-status-dot ${resultCategoryClass(category)}`} aria-hidden="true" />
-                    <div className="mc-pp-test-copy">
-                      <div className="mc-pp-test-headline">
-                        <span className="mc-pp-test-code">{test.code}</span>
-                        <span className={`mc-pp-chip ${statusChipClass(run?.status)}`}>
-                          {formatRunStatus(run?.status)}
-                        </span>
-                      </div>
-                      <strong>{test.title}</strong>
-                      <div className="mc-pp-test-meta">
-                        <span
-                          className={`mc-pp-chip ${score || assessment?.legacyScore ? "score-ready" : "score-missing"}`}
-                        >
-                          {score
-                            ? `${formatWeightedScore(score.weightedScore)} • ${assessment?.effectiveVerdict ?? score.autoVerdict}`
-                            : assessment?.legacyScore
-                              ? `Legacy ${assessment.legacyScore.totalScore}/10`
-                              : "Needs score"}
-                        </span>
-                        {formatResultCategory(category) !== formatRunStatus(run?.status) ? (
-                          <span className={`mc-pp-chip ${resultCategoryClass(category)}`}>
-                            {formatResultCategory(category)}
+                    <span className="mc-pp-test-select-content">
+                      <span className={`mc-pp-status-dot ${resultCategoryClass(category)}`} aria-hidden="true" />
+                      <span className="mc-pp-test-copy">
+                        <span className="mc-pp-test-headline">
+                          <span className="mc-pp-test-code">{test.code}</span>
+                          <span className={`mc-pp-chip ${statusChipClass(run?.status)}`}>
+                            {formatRunStatus(run?.status)}
                           </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  </button>
+                        </span>
+                        <strong>{test.title}</strong>
+                        <span className="mc-pp-test-meta">
+                          <span
+                            className={`mc-pp-chip ${score || assessment?.legacyScore ? "score-ready" : "score-missing"}`}
+                          >
+                            {score
+                              ? `${formatWeightedScore(score.weightedScore)} • ${assessment?.effectiveVerdict ?? score.autoVerdict}`
+                              : assessment?.legacyScore
+                                ? `Legacy ${assessment.legacyScore.totalScore}/10`
+                                : "Needs score"}
+                          </span>
+                          {formatResultCategory(category) !== formatRunStatus(run?.status) ? (
+                            <span className={`mc-pp-chip ${resultCategoryClass(category)}`}>
+                              {formatResultCategory(category)}
+                            </span>
+                          ) : null}
+                        </span>
+                      </span>
+                    </span>
+                  </div>
                   <button
                     type="button"
                     className="mc-next-button mc-next-button-secondary mc-pp-run-button"
@@ -1558,6 +1600,24 @@ export function PromptPacksWorkbenchPage({
                   Run selected
                 </button>
               </header>
+
+              {selectedRunLink ? (
+                <div className="mc-pp-detail-actions">
+                  {navigate ? (
+                    <button type="button" className="mc-next-button mc-next-button-secondary" onClick={openSelectedRun}>
+                      Open run thread
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="mc-next-button mc-next-button-secondary"
+                    onClick={() => void copySelectedRunLink()}
+                  >
+                    <ClipboardCopy size={15} />
+                    Copy run link
+                  </button>
+                </div>
+              ) : null}
 
               <div className="mc-pp-detail-summary">
                 <div className="mc-pp-detail-card">
@@ -2238,6 +2298,16 @@ function computeDraftVerdict(
     return "review";
   }
   return "fail";
+}
+
+function buildPromptPackRunRoute(run?: PromptPackRunRecord): AppRoute | null {
+  if (!run?.sessionId) {
+    return null;
+  }
+  return {
+    area: run.mode === "cowork" ? "cowork" : run.mode === "code" ? "code" : "chat",
+    sessionId: run.sessionId,
+  };
 }
 
 function isPromptPackV2UiEnabled(): boolean {

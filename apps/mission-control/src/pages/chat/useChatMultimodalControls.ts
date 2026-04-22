@@ -15,9 +15,28 @@ import {
   stopVoiceTalkSession,
   transcribeVoice,
 } from "../../api/client";
+import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 import { fileToBase64 } from "../settings-page-utils";
+import { formatChatUiError } from "./chat-error-copy";
 
 const SPEAK_REPLIES_PREF_KEY = "goatcitadel.chat.speak-replies.enabled";
+const OPENAI_IMAGE_MODEL_PREFERENCES = ["gpt-image-2", "gpt-image-1"] as const;
+const GOOGLE_IMAGE_MODEL_PREFERENCES = [
+  "gemini-3.1-flash-image-preview",
+  "gemini-3-pro-image-preview",
+  "gemini-2.5-flash-image",
+] as const;
+const IMAGE_MODEL_PREFERENCES: Record<"openai" | "google", readonly string[]> = {
+  openai: OPENAI_IMAGE_MODEL_PREFERENCES,
+  google: GOOGLE_IMAGE_MODEL_PREFERENCES,
+};
+
+interface ChatImageRoute {
+  providerId: "openai" | "google";
+  model: string;
+  label: string;
+  supportsEdit: boolean;
+}
 
 function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
   return attachment.mediaType === "image" || attachment.mimeType.startsWith("image/");
@@ -49,18 +68,109 @@ function base64ToFile(base64: string, fileName: string, mimeType = "image/png"):
   return new File([out], fileName, { type: mimeType });
 }
 
-export function useChatMultimodalControls(input: {
-  providerOptions: Array<{
-    providerId: string;
-    label: string;
-    capabilities?: {
-      voiceInput?: boolean;
-      voiceOutput?: boolean;
-      imageGenerate?: boolean;
-      imageEdit?: boolean;
+function normalizeOptionalString(value?: string | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function getImageModelPreferences(providerId: string): readonly string[] {
+  return providerId === "openai"
+    ? OPENAI_IMAGE_MODEL_PREFERENCES
+    : providerId === "google"
+      ? GOOGLE_IMAGE_MODEL_PREFERENCES
+      : [];
+}
+
+function getImageModelOptions(provider: ChatModelProviderOption): string[] {
+  const available = new Set<string>();
+  for (const value of [provider.defaultModel, ...provider.models]) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized && normalized.toLowerCase().includes("image")) {
+      available.add(normalized);
+    }
+  }
+  for (const model of getImageModelPreferences(provider.providerId)) {
+    available.add(model);
+  }
+  return [...available];
+}
+
+function resolveImageModel(provider: ChatModelProviderOption, preferredModel?: string): string | null {
+  const normalizedPreferred = normalizeOptionalString(preferredModel);
+  const availableModels = getImageModelOptions(provider);
+  if (normalizedPreferred) {
+    if (availableModels.includes(normalizedPreferred)) {
+      return normalizedPreferred;
+    }
+    if (normalizedPreferred.toLowerCase().includes("image")) {
+      return normalizedPreferred;
+    }
+  }
+  return availableModels[0] ?? null;
+}
+
+function toImageProviderOption(provider: ChatModelProviderOption | null | undefined): ChatModelProviderOption | null {
+  if (!provider || provider.disabled || provider.capabilities?.imageGenerate === false) {
+    return null;
+  }
+  const models = getImageModelOptions(provider);
+  if (models.length === 0 && !IMAGE_MODEL_PREFERENCES[provider.providerId as keyof typeof IMAGE_MODEL_PREFERENCES]) {
+    return null;
+  }
+  return {
+    ...provider,
+    defaultModel: models[0] ?? provider.defaultModel,
+    models,
+  };
+}
+
+function buildImageRoute(
+  provider: ChatModelProviderOption | null | undefined,
+  preferredModel?: string,
+): ChatImageRoute | null {
+  if (!provider || provider.disabled || provider.capabilities?.imageGenerate === false) {
+    return null;
+  }
+  const model = resolveImageModel(provider, preferredModel);
+  if (!model) {
+    return null;
+  }
+  if (provider.providerId === "openai") {
+    return {
+      providerId: "openai",
+      model,
+      label: `OpenAI / ${model}`,
+      supportsEdit: true,
     };
-  }>;
+  }
+  if (provider.providerId === "google") {
+    return {
+      providerId: "google",
+      model,
+      label: `Google / ${model}`,
+      supportsEdit: false,
+    };
+  }
+  return null;
+}
+
+function shouldRetryImageGenerationWithGoogleFallback(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return (
+    normalized.includes("organization must be verified") ||
+    (normalized.includes("verify organization") && normalized.includes("gpt-image-2")) ||
+    (normalized.includes("403") && normalized.includes("gpt-image-2"))
+  );
+}
+
+export function useChatMultimodalControls(input: {
+  providerOptions: ChatModelProviderOption[];
   selectedProviderId?: string;
+  preferredImageProviderId?: string;
+  preferredImageModel?: string;
   routePreflight: RoutingPreflightResult | null;
   selectedSessionId: string | null;
   activeThreadSessionId?: string | null;
@@ -77,6 +187,8 @@ export function useChatMultimodalControls(input: {
   const {
     providerOptions,
     selectedProviderId,
+    preferredImageProviderId,
+    preferredImageModel,
     routePreflight,
     selectedSessionId,
     activeThreadSessionId,
@@ -111,6 +223,36 @@ export function useChatMultimodalControls(input: {
     () => providerOptions.find((provider) => provider.providerId === activeProviderId) ?? null,
     [activeProviderId, providerOptions],
   );
+  const imageProviderOptions = useMemo(
+    () =>
+      providerOptions.map((provider) => toImageProviderOption(provider)).filter(Boolean) as ChatModelProviderOption[],
+    [providerOptions],
+  );
+  const preferredImageProvider = useMemo(
+    () => imageProviderOptions.find((provider) => provider.providerId === preferredImageProviderId) ?? null,
+    [imageProviderOptions, preferredImageProviderId],
+  );
+  const primaryImageRoute = useMemo(() => {
+    const preferredRoute = buildImageRoute(preferredImageProvider, preferredImageModel);
+    if (preferredRoute) {
+      return preferredRoute;
+    }
+    const activeRoute = buildImageRoute(toImageProviderOption(activeProvider) ?? undefined);
+    if (activeRoute) {
+      return activeRoute;
+    }
+    return (
+      buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "openai")) ??
+      buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "google")) ??
+      null
+    );
+  }, [activeProvider, imageProviderOptions, preferredImageModel, preferredImageProvider]);
+  const googleFallbackImageRoute = useMemo(() => {
+    if (primaryImageRoute?.providerId !== "openai") {
+      return null;
+    }
+    return buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "google"));
+  }, [imageProviderOptions, primaryImageRoute]);
   const latestImageAttachment = useMemo(
     () => [...pendingAttachments].reverse().find(isImageAttachment) ?? null,
     [pendingAttachments],
@@ -122,10 +264,13 @@ export function useChatMultimodalControls(input: {
   const voiceReady = voiceRuntime?.readiness === "ready";
   const voiceInputAvailable = voiceReady && activeProvider?.capabilities?.voiceInput !== false;
   const voiceOutputAvailable = supportsSpeechSynthesis && activeProvider?.capabilities?.voiceOutput !== false;
-  const imageGenerationAvailable =
-    activeProviderId === "openai" && (activeProvider?.capabilities?.imageGenerate ?? true);
-  const imageEditAvailable = imageGenerationAvailable && Boolean(latestImageAttachment);
-  const imageRouteLabel = imageGenerationAvailable ? "OpenAI / gpt-image-1" : null;
+  const imageGenerationAvailable = Boolean(primaryImageRoute);
+  const imageEditAvailable = Boolean(primaryImageRoute?.supportsEdit && latestImageAttachment);
+  const imageRouteLabel = primaryImageRoute
+    ? googleFallbackImageRoute
+      ? `${primaryImageRoute.label} with ${googleFallbackImageRoute.label} fallback`
+      : primaryImageRoute.label
+    : null;
   const voiceStatusLabel = voiceStatus?.talk.activeSessionId
     ? "Talk mode live"
     : voiceReady
@@ -273,6 +418,12 @@ export function useChatMultimodalControls(input: {
       setImageBusy(true);
       setError(null);
       try {
+        if (!primaryImageRoute) {
+          throw new Error("Image generation is unavailable on the current routes.");
+        }
+        if (mode === "edit" && !primaryImageRoute.supportsEdit) {
+          throw new Error("Image editing is unavailable on the current image route.");
+        }
         const referenceImages =
           mode === "edit" && latestImageAttachment
             ? [
@@ -285,14 +436,37 @@ export function useChatMultimodalControls(input: {
                 ),
               ]
             : undefined;
-        const response = await generateLlmImage({
-          providerId: "openai",
-          model: "gpt-image-1",
-          prompt,
-          referenceImages,
-          responseFormat: "b64_json",
-          outputFormat: "png",
-        });
+        const runRequest = async (route: ChatImageRoute) =>
+          generateLlmImage({
+            providerId: route.providerId,
+            model: route.model,
+            prompt,
+            referenceImages,
+            ...(route.providerId === "openai"
+              ? { outputFormat: "png" as const }
+              : { responseFormat: "b64_json" as const }),
+          });
+        let routeUsed = primaryImageRoute;
+        let response;
+        try {
+          response = await runRequest(primaryImageRoute);
+        } catch (error) {
+          const message = (error as Error).message;
+          if (
+            mode === "generate" &&
+            googleFallbackImageRoute &&
+            shouldRetryImageGenerationWithGoogleFallback(message)
+          ) {
+            routeUsed = googleFallbackImageRoute;
+            pushLocalNotice(
+              `OpenAI image route unavailable. Retrying via ${googleFallbackImageRoute.label}.`,
+              "warning",
+            );
+            response = await runRequest(googleFallbackImageRoute);
+          } else {
+            throw error;
+          }
+        }
         const first = response.data[0];
         if (!first?.b64Json) {
           throw new Error("Image generation returned no image payload.");
@@ -306,16 +480,26 @@ export function useChatMultimodalControls(input: {
         pushLocalNotice(
           response.operation === "edit"
             ? "Edited image added to the draft attachments."
-            : "Generated image added to the draft attachments.",
+            : routeUsed.providerId === "google"
+              ? `Generated image added to the draft attachments via ${routeUsed.label}.`
+              : "Generated image added to the draft attachments.",
           "success",
         );
       } catch (error) {
-        setError((error as Error).message);
+        setError(formatChatUiError((error as Error).message));
       } finally {
         setImageBusy(false);
       }
     },
-    [draft, latestImageAttachment, pushLocalNotice, setError, uploadAttachments],
+    [
+      draft,
+      googleFallbackImageRoute,
+      latestImageAttachment,
+      primaryImageRoute,
+      pushLocalNotice,
+      setError,
+      uploadAttachments,
+    ],
   );
 
   return {
@@ -331,6 +515,9 @@ export function useChatMultimodalControls(input: {
     imageBusy,
     imageGenerationAvailable,
     imageEditAvailable,
+    imageProviderOptions,
+    selectedImageProviderId: primaryImageRoute?.providerId,
+    selectedImageModel: primaryImageRoute?.model,
     imageRouteLabel,
     handleToggleVoiceTalk,
     handleOpenAudioTranscribe,

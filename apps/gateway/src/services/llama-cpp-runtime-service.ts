@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Runtime service intentionally centralizes platform-specific llama.cpp detection and launch logic. */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -20,6 +21,7 @@ import type { LlamaCppConfig } from "../config.js";
 const execFileAsync = promisify(execFile);
 const DEFAULT_LLAMACPP_ALIAS = "gemma-4-local";
 const DEFAULT_LLAMACPP_REASONING_ARGS = ["--reasoning", "off"] as const;
+const MAX_DISCOVERED_LLAMACPP_MODELS = 512;
 
 export interface LlamaCppInstallDetection {
   found: boolean;
@@ -320,6 +322,14 @@ export class LlamaCppRuntimeService {
   }
 
   public async listModels(): Promise<LlamaCppModelManifest[]> {
+    const localModels = await this.listLocalModels();
+    if (localModels.length > 0) {
+      return localModels;
+    }
+    return this.listRemoteModels();
+  }
+
+  private async listRemoteModels(): Promise<LlamaCppModelManifest[]> {
     const url = joinUrl(
       normalizeLlamaCppServerRoot(this.options.config.server.baseUrl),
       this.options.config.server.modelsPath,
@@ -350,6 +360,20 @@ export class LlamaCppRuntimeService {
               : undefined,
       }))
       .filter((item) => item.modelId.length > 0);
+  }
+
+  private async listLocalModels(): Promise<LlamaCppModelManifest[]> {
+    const modelsRoot = resolveLlamaCppModelsRoot(this.options.rootDir, this.options.config);
+    if (!fsSync.existsSync(modelsRoot)) {
+      return [];
+    }
+    const files = await discoverLlamaCppModelFiles(modelsRoot, MAX_DISCOVERED_LLAMACPP_MODELS);
+    return files.map((file) => ({
+      modelId: file.relativeId,
+      filePath: file.filePath,
+      relativePath: file.relativePath,
+      source: "filesystem",
+    }));
   }
 
   public async detectLocalInstall(): Promise<LlamaCppInstallDetection> {
@@ -401,7 +425,9 @@ export class LlamaCppRuntimeService {
   public async startHuggingFaceDownload(
     input: LlamaCppHuggingFaceDownloadRequest,
   ): Promise<LlamaCppHuggingFaceDownloadJobStatus> {
-    const running = [...this.hfDownloadJobs.values()].find((job) => job.status === "queued" || job.status === "running");
+    const running = [...this.hfDownloadJobs.values()].find(
+      (job) => job.status === "queued" || job.status === "running",
+    );
     if (running) {
       throw new Error(`A llama.cpp Hugging Face download is already in progress (${running.jobId}).`);
     }
@@ -485,7 +511,10 @@ export class LlamaCppRuntimeService {
       const mmprojFilename = mmprojFilenameInput ? normalizeHuggingFacePath(mmprojFilenameInput) : undefined;
       const expectedSha256 = normalizeSha256(input.sha256);
       const expectedMmprojSha256 = normalizeSha256(input.mmprojSha256);
-      const targetDir = path.join(resolveLlamaCppModelsRoot(this.options.rootDir, this.options.config), sanitizeHuggingFaceRepo(repo));
+      const targetDir = path.join(
+        resolveLlamaCppModelsRoot(this.options.rootDir, this.options.config),
+        sanitizeHuggingFaceRepo(repo),
+      );
       const modelPath = path.join(targetDir, ...filename.split("/"));
       const sourceUrl = buildHuggingFaceResolveUrl(repo, filename);
       const controller = this.hfDownloadControllers.get(jobId);
@@ -578,10 +607,7 @@ export class LlamaCppRuntimeService {
     }
   }
 
-  private updateHuggingFaceDownloadJob(
-    jobId: string,
-    patch: Partial<LlamaCppHuggingFaceDownloadJobStatus>,
-  ): void {
+  private updateHuggingFaceDownloadJob(jobId: string, patch: Partial<LlamaCppHuggingFaceDownloadJobStatus>): void {
     const current = this.hfDownloadJobs.get(jobId);
     if (!current) {
       return;
@@ -630,7 +656,7 @@ export class LlamaCppRuntimeService {
     }
 
     try {
-      const models = await this.listModels();
+      const models = await this.listRemoteModels();
       activeModelId = models[0]?.modelId ?? activeModelId;
     } catch {
       // keep alias fallback
@@ -1293,6 +1319,52 @@ function resolveConfiguredPath(rootDir: string, configuredPath: string | undefin
 
 function resolveLlamaCppModelsRoot(rootDir: string, config: LlamaCppConfig | ContractLlamaCppConfig): string {
   return resolveConfiguredPath(rootDir, config.launch.modelsRootPath) ?? path.resolve(rootDir, "models", "llamacpp");
+}
+
+async function discoverLlamaCppModelFiles(
+  modelsRoot: string,
+  limit: number,
+): Promise<Array<{ filePath: string; relativePath: string; relativeId: string }>> {
+  const queue = [modelsRoot];
+  const discovered: Array<{ filePath: string; relativePath: string; relativeId: string }> = [];
+
+  while (queue.length > 0 && discovered.length < limit) {
+    const currentDir = queue.shift();
+    if (!currentDir) {
+      break;
+    }
+
+    let entries: fsSync.Dirent[];
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      if (discovered.length >= limit) {
+        break;
+      }
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".gguf")) {
+        continue;
+      }
+      const relativePath = path.relative(modelsRoot, fullPath).replaceAll("\\", "/");
+      const relativeId = relativePath.replace(/\.gguf$/i, "");
+      discovered.push({
+        filePath: fullPath,
+        relativePath,
+        relativeId,
+      });
+    }
+  }
+
+  return discovered.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
 function joinUrl(baseUrl: string, routePath: string): string {

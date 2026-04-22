@@ -740,8 +740,11 @@ pnpm up
 pnpm dev:gateway
 pnpm dev:gateway:watch
 pnpm dev:ui
+pnpm dev:ui:legacy
 pnpm config:sync
 ```
+
+`pnpm dev` and `pnpm dev:ui` default to `@goatcitadel/mission-control-next`; `pnpm dev:ui:legacy` keeps the prior shell available for rollback or comparison.
 
 ### 12.2 Quality Gates
 

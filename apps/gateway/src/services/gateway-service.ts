@@ -5765,6 +5765,8 @@ export class GatewayService {
       planningMode: sourcePrefs.planningMode,
       providerId: sourcePrefs.providerId,
       model: sourcePrefs.model,
+      imageProviderId: sourcePrefs.imageProviderId,
+      imageModel: sourcePrefs.imageModel,
       webMode: sourcePrefs.webMode,
       memoryMode: sourcePrefs.memoryMode,
       thinkingLevel: sourcePrefs.thinkingLevel,
@@ -13201,6 +13203,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "planningMode"
     | "providerId"
     | "model"
+    | "imageProviderId"
+    | "imageModel"
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
@@ -13229,6 +13233,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "planningMode"
     | "providerId"
     | "model"
+    | "imageProviderId"
+    | "imageModel"
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
@@ -13246,6 +13252,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     planningMode: input.planningMode,
     providerId: input.providerId,
     model: input.model,
+    imageProviderId: input.imageProviderId,
+    imageModel: input.imageModel,
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,

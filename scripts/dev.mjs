@@ -2,6 +2,8 @@
 import { spawnSync } from "node:child_process";
 import { resolveUiTarget } from "./lib/ui-target.mjs";
 
+const DEFAULT_DEV_UI_PACKAGE = "@goatcitadel/mission-control-next";
+
 const bootstrapPackages = [
   "@goatcitadel/contracts",
   "@goatcitadel/extensions-sdk",
@@ -36,9 +38,13 @@ if (bootstrapResult.status !== 0) {
 
 const rawArgs = process.argv.slice(2);
 const { verbose, passthrough } = extractVerboseFlag(rawArgs);
-const uiTarget = resolveUiTarget(process.cwd(), process.env);
+const devEnv = process.env.GOATCITADEL_UI_PACKAGE?.trim()
+  ? process.env
+  : { ...process.env, GOATCITADEL_UI_PACKAGE: DEFAULT_DEV_UI_PACKAGE };
+const uiTarget = resolveUiTarget(process.cwd(), devEnv);
 
 setTerminalTitle("Dev");
+console.log(`[dev] starting gateway + ${uiTarget.displayName} (${uiTarget.packageName})`);
 
 const commandArgs = [
   "--parallel",
@@ -54,7 +60,7 @@ const result = process.platform === "win32"
   ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...commandArgs])], {
       stdio: "inherit",
       env: {
-        ...process.env,
+        ...devEnv,
         GOATCITADEL_TERMINAL_TASK: "Dev",
         ...(verbose ? { GOATCITADEL_VERBOSE: "1" } : {}),
       },
@@ -62,7 +68,7 @@ const result = process.platform === "win32"
   : spawnSync("pnpm", commandArgs, {
       stdio: "inherit",
       env: {
-        ...process.env,
+        ...devEnv,
         GOATCITADEL_TERMINAL_TASK: "Dev",
         ...(verbose ? { GOATCITADEL_VERBOSE: "1" } : {}),
       },

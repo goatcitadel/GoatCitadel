@@ -951,6 +951,16 @@
   min-width: min(100%, 240px);
 }
 
+.chat-v11-composer-image-route {
+  display: grid;
+  gap: 6px;
+  min-width: min(100%, 320px);
+}
+
+.chat-v11-composer-image-route .chat-model-picker {
+  min-width: min(100%, 320px);
+}
+
 .chat-preset-picker-trigger {
   min-height: 40px;
   min-width: min(100%, 220px);

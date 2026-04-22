@@ -11,6 +11,8 @@ const prefsPatchSchema = z.object({
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
   thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
   toolAutonomy: z.enum(["safe_auto", "manual"]).optional(),
+  imageProviderId: z.string().optional(),
+  imageModel: z.string().optional(),
   visionFallbackModel: z.string().optional(),
   orchestrationEnabled: z.boolean().optional(),
   orchestrationIntensity: z.enum(["minimal", "balanced", "deep"]).optional(),

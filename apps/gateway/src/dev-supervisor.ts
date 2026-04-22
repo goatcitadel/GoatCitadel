@@ -30,7 +30,12 @@ setGoatcitadelTerminalTitle(process.env.GOATCITADEL_TERMINAL_TASK?.trim() || "Ga
 const gatewayHost = process.env.GATEWAY_HOST ?? "127.0.0.1";
 const gatewayHealthHost = resolveGatewayHealthHost(gatewayHost);
 const gatewayPort = Number(process.env.GATEWAY_PORT ?? 8787);
-const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 30_000);
+// Bundled Postgres crash recovery on Windows can legitimately take well over a
+// minute after an interrupted shutdown, especially when the data directory is
+// under active file indexing or antivirus scanning. Keep the dev supervisor
+// patient enough to wait for recovery instead of restarting a gateway that is
+// still making forward progress toward readiness.
+const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 120_000);
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
 const pollMs = Number(process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS ?? 1200);
 const restartWindowMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_WINDOW_MS ?? 60_000);
@@ -231,12 +236,16 @@ function ensureGatewayProjectReferencesBuilt(): boolean {
   };
   const result =
     process.platform === "win32"
-      ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "pnpm exec tsc -b tsconfig.json --pretty false"], {
-          cwd: gatewayDir,
-          env,
-          stdio: "pipe",
-          encoding: "utf8",
-        })
+      ? spawnSync(
+          process.env.ComSpec || "cmd.exe",
+          ["/d", "/s", "/c", "pnpm exec tsc -b tsconfig.json --pretty false"],
+          {
+            cwd: gatewayDir,
+            env,
+            stdio: "pipe",
+            encoding: "utf8",
+          },
+        )
       : spawnSync("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"], {
           cwd: gatewayDir,
           env,

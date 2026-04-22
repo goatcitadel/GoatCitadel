@@ -31,6 +31,7 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 ### Apps
 
+- [apps/mission-control-next](./apps/mission-control-next): current React/Vite operator console used by `pnpm dev`
 - [apps/mission-control](./apps/mission-control): React/Vite operator console
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
 - [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
@@ -60,6 +61,8 @@ pnpm install --frozen-lockfile
 pnpm config:sync
 pnpm dev
 ```
+
+`pnpm dev` now starts the gateway plus `@goatcitadel/mission-control-next` by default. Use `pnpm dev:ui:legacy` if you need to launch the previous Mission Control shell directly.
 
 ### Useful commands
 

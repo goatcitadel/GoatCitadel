@@ -735,15 +735,12 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
 function RuntimeSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const settings = await fetchSettings();
-    const shouldLoadLlamaModels =
-      settings.llamaCpp.enabled &&
-      (settings.llamaCpp.status.healthy || settings.llamaCpp.status.processState === "running");
     const shouldLoadNpuModels =
       settings.npu.enabled && (settings.npu.status.healthy || settings.npu.status.processState === "running");
     const [daemon, voiceRuntime, llamaModels, npuModels] = await Promise.all([
       fetchDaemonStatus().catch(() => null),
       fetchVoiceRuntimeStatus().catch(() => null),
-      shouldLoadLlamaModels ? fetchLlamaCppModels().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      fetchLlamaCppModels().catch(() => ({ items: [] })),
       shouldLoadNpuModels ? fetchNpuModels().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
     ]);
     return {
@@ -770,6 +767,51 @@ function RuntimeSection(_props: SettingsSectionProps) {
     autoStart: false,
     sidecarUrl: "",
   });
+  const discoveredLlamaModels = useMemo(
+    () => (data?.llamaModels ?? []).filter((item) => typeof item.filePath === "string" && item.filePath.length > 0),
+    [data],
+  );
+  const selectedDiscoveredModelPath = useMemo(
+    () => (discoveredLlamaModels.some((item) => item.filePath === llamaForm.modelPath) ? llamaForm.modelPath : ""),
+    [discoveredLlamaModels, llamaForm.modelPath],
+  );
+  const selectedDiscoveredModel = useMemo(
+    () => discoveredLlamaModels.find((item) => item.filePath === selectedDiscoveredModelPath),
+    [discoveredLlamaModels, selectedDiscoveredModelPath],
+  );
+
+  const buildLlamaSettingsPatch = useCallback(
+    () => ({
+      enabled: llamaForm.enabled,
+      autoStart: llamaForm.autoStart,
+      baseUrl: llamaForm.baseUrl,
+      command: llamaForm.command,
+      modelsRootPath: llamaForm.modelsRootPath || undefined,
+      modelPath: llamaForm.modelPath || undefined,
+      alias: llamaForm.alias,
+    }),
+    [llamaForm],
+  );
+
+  const saveLlamaSettings = useCallback(
+    () =>
+      patchSettings({
+        llamaCpp: buildLlamaSettingsPatch(),
+      }),
+    [buildLlamaSettingsPatch],
+  );
+
+  const handleDiscoveredModelChange = useCallback(
+    (nextModelPath: string) => {
+      const nextModel = discoveredLlamaModels.find((item) => item.filePath === nextModelPath);
+      setLlamaForm((current) => ({
+        ...current,
+        modelPath: nextModelPath,
+        alias: nextModel ? deriveLlamaCppAlias(nextModel.relativePath ?? nextModel.modelId) : current.alias,
+      }));
+    },
+    [discoveredLlamaModels],
+  );
 
   useEffect(() => {
     if (!data) {
@@ -907,6 +949,32 @@ function RuntimeSection(_props: SettingsSectionProps) {
                     onChange={(event) => setLlamaForm((current) => ({ ...current, modelPath: event.target.value }))}
                   />
                 </SettingsField>
+                <SettingsField label="Discovered models" span={2}>
+                  <>
+                    <select
+                      className="mc-next-settings-input"
+                      value={selectedDiscoveredModelPath}
+                      onChange={(event) => handleDiscoveredModelChange(event.target.value)}
+                      disabled={!discoveredLlamaModels.length}
+                    >
+                      <option value="">
+                        {discoveredLlamaModels.length
+                          ? `Choose from ${discoveredLlamaModels.length} models under ${llamaForm.modelsRootPath || "the default models root"}`
+                          : "No local .gguf models discovered under Models root yet"}
+                      </option>
+                      {discoveredLlamaModels.map((model) => (
+                        <option key={model.filePath} value={model.filePath}>
+                          {model.relativePath ?? model.modelId}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedDiscoveredModel ? (
+                      <p className="mc-next-settings-field-note">
+                        {selectedDiscoveredModel.relativePath ?? selectedDiscoveredModel.modelId}
+                      </p>
+                    ) : null}
+                  </>
+                </SettingsField>
                 <SettingsField label="Alias">
                   <input
                     className="mc-next-settings-input"
@@ -939,23 +1007,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 <button
                   type="button"
                   className="mc-next-button"
-                  onClick={() =>
-                    void runAndReload(
-                      () =>
-                        patchSettings({
-                          llamaCpp: {
-                            enabled: llamaForm.enabled,
-                            autoStart: llamaForm.autoStart,
-                            baseUrl: llamaForm.baseUrl,
-                            command: llamaForm.command,
-                            modelsRootPath: llamaForm.modelsRootPath || undefined,
-                            modelPath: llamaForm.modelPath || undefined,
-                            alias: llamaForm.alias,
-                          },
-                        }),
-                      "llama.cpp settings saved.",
-                    )
-                  }
+                  onClick={() => void runAndReload(saveLlamaSettings, "llama.cpp settings saved.")}
                 >
                   <Save size={16} />
                   Save
@@ -963,7 +1015,12 @@ function RuntimeSection(_props: SettingsSectionProps) {
                 <button
                   type="button"
                   className="mc-next-button-secondary"
-                  onClick={() => void runAndReload(startLlamaCppRuntime, "llama.cpp start requested.")}
+                  onClick={() =>
+                    void runAndReload(async () => {
+                      await saveLlamaSettings();
+                      await startLlamaCppRuntime();
+                    }, "llama.cpp start requested.")
+                  }
                 >
                   <Play size={16} />
                   Start
@@ -3220,6 +3277,15 @@ function formatCapabilities(
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function deriveLlamaCppAlias(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const filename = trimmed.split(/[\\/]/).pop() ?? trimmed;
+  return filename.replace(/\.(gguf|bin)$/i, "") || trimmed;
 }
 
 function formatDateTime(value?: string | null) {

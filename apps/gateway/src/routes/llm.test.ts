@@ -52,16 +52,18 @@ describe("llm routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(createChatCompletion).toHaveBeenCalledWith(expect.objectContaining({
-      messages: [
-        { role: "developer", content: "Be terse." },
-        { role: "user", content: "hello" },
-      ],
-      reasoning: { effort: "none" },
-      verbosity: "low",
-      service_tier: "flex",
-      prompt_cache_retention: "in_memory",
-    }));
+    expect(createChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          { role: "developer", content: "Be terse." },
+          { role: "user", content: "hello" },
+        ],
+        reasoning: { effort: "none" },
+        verbosity: "low",
+        service_tier: "flex",
+        prompt_cache_retention: "in_memory",
+      }),
+    );
   });
 
   it("rejects invalid reasoning controls", async () => {
@@ -136,17 +138,19 @@ describe("llm routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(updateLlmConfig).toHaveBeenCalledWith(expect.objectContaining({
-      upsertProvider: expect.objectContaining({
-        apiStyle: "anthropic-messages",
-        request: expect.objectContaining({
-          headers: { "X-Trace": "1" },
-          proxy: expect.objectContaining({
-            url: "http://proxy.internal:8080",
+    expect(updateLlmConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upsertProvider: expect.objectContaining({
+          apiStyle: "anthropic-messages",
+          request: expect.objectContaining({
+            headers: { "X-Trace": "1" },
+            proxy: expect.objectContaining({
+              url: "http://proxy.internal:8080",
+            }),
           }),
         }),
       }),
-    }));
+    );
   });
 
   it("accepts apiStyle in model preview payloads", async () => {
@@ -184,15 +188,17 @@ describe("llm routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(previewLlmModels).toHaveBeenCalledWith(expect.objectContaining({
-      apiStyle: "openai-responses",
-      request: expect.objectContaining({
-        headers: { "X-Preview": "1" },
-        proxy: expect.objectContaining({
-          url: "http://proxy.internal:8080",
+    expect(previewLlmModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiStyle: "openai-responses",
+        request: expect.objectContaining({
+          headers: { "X-Preview": "1" },
+          proxy: expect.objectContaining({
+            url: "http://proxy.internal:8080",
+          }),
         }),
       }),
-    }));
+    );
   });
 
   it("returns provider config details on llm config reads", async () => {
@@ -277,7 +283,7 @@ describe("llm routes", () => {
       },
       payload: JSON.stringify({
         providerId: "openai",
-        model: "gpt-image-1",
+        model: "gpt-image-2",
         prompt: "Edit this image",
         referenceImages: [
           {
@@ -290,14 +296,16 @@ describe("llm routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: "openai",
-      model: "gpt-image-1",
-      referenceImages: [
-        expect.objectContaining({
-          fileName: "reference.png",
-        }),
-      ],
-    }));
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-image-2",
+        referenceImages: [
+          expect.objectContaining({
+            fileName: "reference.png",
+          }),
+        ],
+      }),
+    );
   });
 });

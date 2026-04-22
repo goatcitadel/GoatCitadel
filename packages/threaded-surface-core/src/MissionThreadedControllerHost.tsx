@@ -1843,6 +1843,9 @@ export function MissionThreadedControllerHost({
     imageBusy,
     imageGenerationAvailable,
     imageEditAvailable,
+    imageProviderOptions,
+    selectedImageProviderId,
+    selectedImageModel,
     imageRouteLabel,
     handleToggleVoiceTalk,
     handleOpenAudioTranscribe,
@@ -1852,6 +1855,8 @@ export function MissionThreadedControllerHost({
   } = useChatMultimodalControls({
     providerOptions,
     selectedProviderId,
+    preferredImageProviderId: prefs?.imageProviderId,
+    preferredImageModel: prefs?.imageModel,
     routePreflight: currentRoutePreflight,
     selectedSessionId,
     activeThreadSessionId: thread?.sessionId,
@@ -2056,7 +2061,24 @@ export function MissionThreadedControllerHost({
         imageBusy,
         imageGenerationAvailable,
         imageEditAvailable,
+        imageProviderOptions,
+        selectedImageProviderId,
+        selectedImageModel,
+        imageRouteSwitchDisabled: !selectedSessionId || sending,
         imageRouteLabel,
+        onRequestImageProviderChange: (providerId) => {
+          const provider = imageProviderOptions.find((item) => item.providerId === providerId);
+          void loadModelsForProvider(providerId);
+          void handlePrefPatch({
+            imageProviderId: providerId,
+            imageModel: provider?.defaultModel ?? provider?.models[0] ?? "",
+          });
+        },
+        onRequestImageModelChange: (model) =>
+          void handlePrefPatch({
+            imageProviderId: selectedImageProviderId ?? "",
+            imageModel: model,
+          }),
         onToggleVoiceTalk: () => void handleToggleVoiceTalk(),
         onOpenAudioTranscribe: handleOpenAudioTranscribe,
         onAudioFileSelected: handleAudioFileSelected,

@@ -704,6 +704,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "chat_generated_artifacts", "content_hash", "TEXT");
     },
   },
+  {
+    version: 71,
+    name: "chat_image_route_preferences",
+    up: createChatImageRoutePreferenceSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1362,6 +1367,11 @@ function createChatModeOrchestrationFoundationSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "summary", "TEXT");
 }
 
+function createChatImageRoutePreferenceSchema(db: DatabaseSync): void {
+  addColumnIfMissing(db, "chat_session_prefs", "image_provider_id", "TEXT");
+  addColumnIfMissing(db, "chat_session_prefs", "image_model", "TEXT");
+}
+
 function createChatSpecialistCandidateSchema(db: DatabaseSync): void {
   addColumnIfMissing(db, "chat_turn_traces", "specialist_candidate_suggestions_json", "TEXT");
 
@@ -2001,6 +2011,8 @@ function createAgenticChatSchema(db: DatabaseSync): void {
       planning_mode TEXT NOT NULL DEFAULT 'off',
       provider_id TEXT,
       model TEXT,
+      image_provider_id TEXT,
+      image_model TEXT,
       web_mode TEXT NOT NULL DEFAULT 'auto',
       memory_mode TEXT NOT NULL DEFAULT 'auto',
       thinking_level TEXT NOT NULL DEFAULT 'standard',

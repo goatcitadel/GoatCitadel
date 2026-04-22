@@ -190,18 +190,29 @@ export function resolveOptimisticChatPrefs(
   const normalizedPatch = applyChatModePresetToPatch(patch);
   const presetAutonomyBudget = CHAT_MODE_PRESETS[current.mode].defaultPrefs.autonomyBudget;
   const baseAutonomyBudget = current.autonomyBudget ?? presetAutonomyBudget;
-  const providerChanged = normalizedPatch.providerId !== undefined && normalizedPatch.providerId !== current.providerId;
+  const nextProviderId = normalizeOptionalPatchString(normalizedPatch.providerId);
+  const nextModel = normalizeOptionalPatchString(normalizedPatch.model);
+  const nextImageProviderId = normalizeOptionalPatchString(normalizedPatch.imageProviderId);
+  const nextImageModel = normalizeOptionalPatchString(normalizedPatch.imageModel);
+  const nextVisionFallbackModel = normalizeOptionalPatchString(normalizedPatch.visionFallbackModel);
+  const providerChanged = normalizedPatch.providerId !== undefined && nextProviderId !== current.providerId;
+  const imageProviderChanged =
+    normalizedPatch.imageProviderId !== undefined && nextImageProviderId !== current.imageProviderId;
   return {
     ...current,
     mode: normalizedPatch.mode ?? current.mode,
     planningMode: normalizedPatch.planningMode ?? current.planningMode,
-    providerId: normalizedPatch.providerId ?? current.providerId,
-    model: normalizedPatch.model ?? (providerChanged ? undefined : current.model),
+    providerId: normalizedPatch.providerId !== undefined ? nextProviderId : current.providerId,
+    model: normalizedPatch.model !== undefined ? nextModel : providerChanged ? undefined : current.model,
+    imageProviderId: normalizedPatch.imageProviderId !== undefined ? nextImageProviderId : current.imageProviderId,
+    imageModel:
+      normalizedPatch.imageModel !== undefined ? nextImageModel : imageProviderChanged ? undefined : current.imageModel,
     webMode: normalizedPatch.webMode ?? current.webMode,
     memoryMode: normalizedPatch.memoryMode ?? current.memoryMode,
     thinkingLevel: normalizedPatch.thinkingLevel ?? current.thinkingLevel,
     toolAutonomy: normalizedPatch.toolAutonomy ?? current.toolAutonomy,
-    visionFallbackModel: normalizedPatch.visionFallbackModel ?? current.visionFallbackModel,
+    visionFallbackModel:
+      normalizedPatch.visionFallbackModel !== undefined ? nextVisionFallbackModel : current.visionFallbackModel,
     orchestrationEnabled: normalizedPatch.orchestrationEnabled ?? current.orchestrationEnabled,
     orchestrationIntensity: normalizedPatch.orchestrationIntensity ?? current.orchestrationIntensity,
     orchestrationVisibility: normalizedPatch.orchestrationVisibility ?? current.orchestrationVisibility,
@@ -220,6 +231,14 @@ export function resolveOptimisticChatPrefs(
     retrievalMode: normalizedPatch.retrievalMode ?? current.retrievalMode,
     reflectionMode: normalizedPatch.reflectionMode ?? current.reflectionMode,
   };
+}
+
+function normalizeOptionalPatchString(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 export function resolveSelectedTurnId(

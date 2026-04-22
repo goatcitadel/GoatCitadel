@@ -60,6 +60,8 @@ const sendMessageSchema = z.object({
       mode: z.enum(["chat", "cowork", "code"]).optional(),
       providerId: z.string().optional(),
       model: z.string().optional(),
+      imageProviderId: z.string().optional(),
+      imageModel: z.string().optional(),
       webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
       memoryMode: z.enum(["auto", "on", "off"]).optional(),
       thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),

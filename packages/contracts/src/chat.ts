@@ -377,6 +377,8 @@ export interface ChatSessionPrefsRecord {
   planningMode: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  imageProviderId?: string;
+  imageModel?: string;
   webMode: ChatWebMode;
   memoryMode: ChatMemoryMode;
   thinkingLevel: ChatThinkingLevel;
@@ -408,6 +410,8 @@ export interface ChatSessionPrefsPatch {
   planningMode?: ChatPlanningMode;
   providerId?: string;
   model?: string;
+  imageProviderId?: string;
+  imageModel?: string;
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;

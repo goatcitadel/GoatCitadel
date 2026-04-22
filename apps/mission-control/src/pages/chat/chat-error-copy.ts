@@ -9,7 +9,13 @@ export function describeChatUiError(value?: string | null): ChatUiErrorDescripto
   }
   const normalized = value.toLowerCase();
   let summary = value;
-  if (normalized.includes("approval")) {
+  if (
+    normalized.includes("organization must be verified") ||
+    (normalized.includes("verify organization") && normalized.includes("gpt-image-2"))
+  ) {
+    summary =
+      "OpenAI blocked image generation because this API organization is not verified for gpt-image-2. Verify the organization in OpenAI Platform Settings > Organization > General, then wait a bit and retry.";
+  } else if (normalized.includes("approval")) {
     summary = "The run is waiting for approval before it can continue.";
   } else if (normalized.includes("user input")) {
     summary = "The run is waiting for operator input before it can continue.";

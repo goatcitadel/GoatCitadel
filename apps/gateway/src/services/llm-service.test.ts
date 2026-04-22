@@ -2282,6 +2282,7 @@ describe("LlmService", () => {
         providerId: "openai",
         prompt: "Generate a goat citadel poster",
         size: "1024x1024",
+        responseFormat: "b64_json",
       });
       expect(response.operation).toBe("generate");
     } finally {
@@ -2290,10 +2291,11 @@ describe("LlmService", () => {
 
     expect(requestedUrl).toBe("https://api.openai.com/v1/images/generations");
     expect(payloadBody).toMatchObject({
-      model: "gpt-image-1",
+      model: "gpt-image-2",
       prompt: "Generate a goat citadel poster",
       size: "1024x1024",
     });
+    expect(payloadBody).not.toHaveProperty("response_format");
   });
 
   it("uses multipart image edits without inferring a size", async () => {
@@ -2337,6 +2339,7 @@ describe("LlmService", () => {
       const response = await service.generateImage({
         providerId: "openai",
         prompt: "Edit the uploaded reference image",
+        responseFormat: "b64_json",
         referenceImages: [
           {
             bytesBase64: "aGVsbG8=",
@@ -2353,12 +2356,66 @@ describe("LlmService", () => {
     expect(requestedUrl).toBe("https://api.openai.com/v1/images/edits");
     expect(bodyEntries).toEqual(
       expect.arrayContaining([
-        ["model", "gpt-image-1"],
+        ["model", "gpt-image-2"],
         ["prompt", "Edit the uploaded reference image"],
       ]),
     );
+    expect(bodyEntries.some(([key]) => key === "response_format")).toBe(false);
     expect(bodyEntries.some(([key]) => key === "size")).toBe(false);
     expect(bodyEntries.some(([key]) => key === "image" || key === "image[]")).toBe(true);
+  });
+
+  it("supports Google-compatible image generation routes", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "google",
+      providers: [
+        {
+          providerId: "google",
+          label: "Google",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "models/gemini-2.5-flash",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let payloadBody: Record<string, unknown> | undefined;
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requestedUrl = String(input);
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        JSON.stringify({
+          created: 789,
+          data: [{ b64_json: "google-image-bytes" }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const response = await service.generateImage({
+        providerId: "google",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "Generate a neon goat citadel skyline",
+        responseFormat: "b64_json",
+      });
+      expect(response.operation).toBe("generate");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestedUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai/images/generations");
+    expect(payloadBody).toMatchObject({
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "Generate a neon goat citadel skyline",
+      response_format: "b64_json",
+    });
   });
 
   it("routes provider requests through a proxy dispatcher when configured", async () => {

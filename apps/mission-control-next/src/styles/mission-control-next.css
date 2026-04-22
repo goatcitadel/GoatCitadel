@@ -15,6 +15,7 @@
   overflow-x: clip;
   background: var(--mc-shell-bg);
   color: var(--foreground);
+  font-size: 15px;
 }
 
 .mc-next-shell[data-area="chat"] {
@@ -357,7 +358,10 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
 
 .mc-next-primary-link:hover,
@@ -453,15 +457,14 @@
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background:
-    linear-gradient(
-      115deg,
-      transparent 8%,
-      color-mix(in oklab, white 54%, var(--mc-area-color)) 24%,
-      color-mix(in oklab, white 84%, var(--mc-area-color)) 40%,
-      color-mix(in oklab, white 54%, var(--mc-area-color)) 56%,
-      transparent 76%
-    );
+  background: linear-gradient(
+    115deg,
+    transparent 8%,
+    color-mix(in oklab, white 54%, var(--mc-area-color)) 24%,
+    color-mix(in oklab, white 84%, var(--mc-area-color)) 40%,
+    color-mix(in oklab, white 54%, var(--mc-area-color)) 56%,
+    transparent 76%
+  );
   background-size: 220% 100%;
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -478,13 +481,12 @@
   position: absolute;
   inset: 1px;
   border-radius: inherit;
-  background:
-    linear-gradient(
-      105deg,
-      transparent 24%,
-      color-mix(in oklab, white 24%, transparent) 46%,
-      transparent 68%
-    );
+  background: linear-gradient(
+    105deg,
+    transparent 24%,
+    color-mix(in oklab, white 24%, transparent) 46%,
+    transparent 68%
+  );
   background-size: 220% 100%;
   opacity: 0.42;
   pointer-events: none;

@@ -7,12 +7,7 @@ import type {
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-import type {
-  ClipboardEventHandler,
-  DragEventHandler,
-  KeyboardEventHandler,
-  RefObject,
-} from "react";
+import type { ClipboardEventHandler, DragEventHandler, KeyboardEventHandler, RefObject } from "react";
 import type { EventStreamStatus } from "@goatcitadel/mission-control-shared/api/shell-client";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
@@ -142,7 +137,13 @@ export interface MissionControlActiveSessionSurfaceProps {
   imageBusy?: boolean;
   imageGenerationAvailable?: boolean;
   imageEditAvailable?: boolean;
+  imageProviderOptions?: ChatModelProviderOption[];
+  selectedImageProviderId?: string;
+  selectedImageModel?: string;
+  imageRouteSwitchDisabled?: boolean;
   imageRouteLabel?: string | null;
+  onRequestImageProviderChange?: (providerId: string) => void;
+  onRequestImageModelChange?: (model: string) => void;
   onToggleVoiceTalk?: () => void;
   onOpenAudioTranscribe?: () => void;
   onAudioFileSelected?: (files: FileList | null) => void;

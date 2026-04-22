@@ -5,6 +5,7 @@ import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
 import { GatewayService } from "../services/gateway-service.js";
 import type { GatewayRuntimeConfig } from "../config.js";
+import { shouldStopBundledPostgresOnClose } from "./storage-runtime.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -17,6 +18,7 @@ export const gatewayPlugin = fp(async (fastify) => {
   const rootDir = detectRootDir();
   const config = await loadGatewayConfig(rootDir);
   const bundledPostgres = await ensureBundledPostgresRuntime(config);
+  const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
   const gateway = new GatewayService(config);
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gateway", gateway);
@@ -29,7 +31,9 @@ export const gatewayPlugin = fp(async (fastify) => {
 
   fastify.addHook("onClose", async () => {
     await gateway.close();
-    await bundledPostgres?.stop();
+    if (shouldStopBundledPostgres) {
+      await bundledPostgres?.stop();
+    }
   });
 });
 

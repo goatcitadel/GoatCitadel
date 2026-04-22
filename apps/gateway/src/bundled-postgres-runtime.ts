@@ -6,10 +6,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "./config.js";
-import {
-  isBundledPostgresMode,
-  resolveGatewayPostgresConnectionOptions,
-} from "./postgres-runtime-config.js";
+import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "./postgres-runtime-config.js";
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
@@ -41,7 +38,9 @@ export async function ensureBundledPostgresRuntime(
 
   const nativeRuntime = await tryStartNativeBundledPostgres(config);
   if (nativeRuntime) {
-    await waitForBundledPostgres(config);
+    // `pg_ctl -w start` already blocks until Postgres is accepting
+    // connections, so a second readiness wait here only adds avoidable delay
+    // and can race with dev restarts on Windows.
     await ensureDatabaseExists(config);
     return nativeRuntime;
   }
@@ -70,41 +69,45 @@ async function tryStartNativeBundledPostgres(
   await fs.mkdir(dataDir, { recursive: true });
   const initialized = fsSync.existsSync(path.join(dataDir, "PG_VERSION"));
   if (!initialized) {
-    execFileSync(commands.initdb, [
-      "-D",
-      dataDir,
-      "-U",
-      "postgres",
-      "-A",
-      "trust",
-      "--encoding",
-      "UTF8",
-    ], {
+    execFileSync(commands.initdb, ["-D", dataDir, "-U", "postgres", "-A", "trust", "--encoding", "UTF8"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
 
-  const logFile = path.join(dataDir, "goatcitadel-postgres.log");
+  // Keep the native Postgres log outside PGDATA on Windows. When the log file
+  // lives inside the cluster directory, crash recovery can hit sharing
+  // violations while syncing the data directory if indexing, antivirus, or
+  // backup software touches that file mid-startup.
+  const logFile = path.resolve(config.rootDir, config.assistant.dataDir, "logs", "goatcitadel-postgres.log");
+  await fs.mkdir(path.dirname(logFile), { recursive: true });
   try {
-    execFileSync(commands.pgCtl, [
-      "-D",
-      dataDir,
-      "-l",
-      logFile,
-      "-w",
-      "start",
-      "-o",
-      `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
-    ], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    execFileSync(
+      commands.pgCtl,
+      [
+        "-D",
+        dataDir,
+        "-l",
+        logFile,
+        "-w",
+        "start",
+        "-o",
+        `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   } catch (error) {
-    if (!(await canReachPostgres(resolveGatewayPostgresConnectionOptions(config, {
-      applicationName: "goatcitadel-bundled-native-fallback",
-      databaseOverride: "postgres",
-    })))) {
+    if (
+      !(await canReachPostgres(
+        resolveGatewayPostgresConnectionOptions(config, {
+          applicationName: "goatcitadel-bundled-native-fallback",
+          databaseOverride: "postgres",
+        }),
+      ))
+    ) {
       throw error;
     }
   }
@@ -113,14 +116,7 @@ async function tryStartNativeBundledPostgres(
     strategy: "native",
     stop: async () => {
       try {
-        execFileSync(commands.pgCtl, [
-          "-D",
-          dataDir,
-          "-w",
-          "stop",
-          "-m",
-          "fast",
-        ], {
+        execFileSync(commands.pgCtl, ["-D", dataDir, "-w", "stop", "-m", "fast"], {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -167,26 +163,30 @@ async function tryStartDockerBundledPostgres(
     };
   }
 
-  execFileSync("docker", [
-    "run",
-    "--detach",
-    "--name",
-    containerName,
-    "--publish",
-    `${config.assistant.database.bundledPostgres.port}:5432`,
-    "--volume",
-    `${dataDir}:/var/lib/postgresql/data`,
-    "--env",
-    "POSTGRES_USER=postgres",
-    "--env",
-    "POSTGRES_HOST_AUTH_METHOD=trust",
-    "--env",
-    "POSTGRES_DB=postgres",
-    POSTGRES_IMAGE,
-  ], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  execFileSync(
+    "docker",
+    [
+      "run",
+      "--detach",
+      "--name",
+      containerName,
+      "--publish",
+      `${config.assistant.database.bundledPostgres.port}:5432`,
+      "--volume",
+      `${dataDir}:/var/lib/postgresql/data`,
+      "--env",
+      "POSTGRES_USER=postgres",
+      "--env",
+      "POSTGRES_HOST_AUTH_METHOD=trust",
+      "--env",
+      "POSTGRES_DB=postgres",
+      POSTGRES_IMAGE,
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
 
   return {
     strategy: "docker",
@@ -247,16 +247,12 @@ async function ensureDatabaseExists(config: GatewayRuntimeConfig): Promise<void>
   }
 }
 
-function resolveNativePostgresCommands(
-  config: GatewayRuntimeConfig,
-): { initdb: string; pgCtl: string } | undefined {
+function resolveNativePostgresCommands(config: GatewayRuntimeConfig): { initdb: string; pgCtl: string } | undefined {
   const configuredBinDir = config.assistant.database.bundledPostgres.binDir?.trim();
   if (!configuredBinDir) {
     return undefined;
   }
-  const binDir = path.isAbsolute(configuredBinDir)
-    ? configuredBinDir
-    : path.resolve(config.rootDir, configuredBinDir);
+  const binDir = path.isAbsolute(configuredBinDir) ? configuredBinDir : path.resolve(config.rootDir, configuredBinDir);
   const exe = process.platform === "win32" ? ".exe" : "";
   const initdb = path.join(binDir, `initdb${exe}`);
   const pgCtl = path.join(binDir, `pg_ctl${exe}`);
@@ -290,17 +286,16 @@ function canUseDocker(): boolean {
 
 function inspectDockerContainerState(containerName: string): "missing" | "running" | "stopped" {
   try {
-    const output = execFileSync("docker", [
-      "ps",
-      "--all",
-      "--filter",
-      `name=^/${containerName}$`,
-      "--format",
-      "{{.State}}",
-    ], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim().toLowerCase();
+    const output = execFileSync(
+      "docker",
+      ["ps", "--all", "--filter", `name=^/${containerName}$`, "--format", "{{.State}}"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    )
+      .trim()
+      .toLowerCase();
     if (!output) {
       return "missing";
     }
@@ -315,12 +310,16 @@ function inspectDockerContainerState(containerName: string): "missing" | "runnin
 
 export function buildBundledDockerContainerName(rootDir: string): string {
   const hash = createHash("sha1").update(rootDir).digest("hex").slice(0, 10);
-  const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const hostname = os
+    .hostname()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
   return `goatcitadel-postgres-${hostname || "local"}-${hash}`;
 }
 
 function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll("\"", "\"\"")}"`;
+  return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 function wait(ms: number): Promise<void> {

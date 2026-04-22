@@ -127,6 +127,7 @@ const updateSettingsSchema = z.object({
       baseUrl: z.string().url().optional(),
       command: z.string().min(1).optional(),
       extraArgs: z.array(z.string()).optional(),
+      modelsRootPath: z.string().optional(),
       modelPath: z.string().optional(),
       alias: z.string().min(1).optional(),
       ctxSize: z.number().int().positive().nullable().optional(),

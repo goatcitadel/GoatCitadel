@@ -453,11 +453,11 @@ export class LlmService {
 
     const resolved = this.resolveProvider(request.providerId);
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
-    if (resolved.provider.providerId !== "openai") {
-      throw new Error("Image generation currently requires the OpenAI provider.");
+    if (!supportsImageGenerationProvider(resolved.provider.providerId)) {
+      throw new Error("Image generation currently requires an OpenAI- or Google-compatible provider.");
     }
 
-    const model = request.model?.trim() || "gpt-image-1";
+    const model = request.model?.trim() || defaultImageModelForProvider(resolved.provider.providerId);
     const operation =
       Array.isArray(request.referenceImages) && request.referenceImages.length > 0 ? "edit" : "generate";
 
@@ -472,7 +472,9 @@ export class LlmService {
       formData.set("model", model);
       formData.set("prompt", prompt);
       if (request.n !== undefined) formData.set("n", String(request.n));
-      if (request.responseFormat) formData.set("response_format", request.responseFormat);
+      if (request.responseFormat && supportsImageResponseFormat(model)) {
+        formData.set("response_format", request.responseFormat);
+      }
       if (request.quality) formData.set("quality", request.quality);
       if (request.background) formData.set("background", request.background);
       if (request.outputFormat) formData.set("output_format", request.outputFormat);
@@ -512,7 +514,9 @@ export class LlmService {
     if (request.quality) payload.quality = request.quality;
     if (request.background) payload.background = request.background;
     if (request.outputFormat) payload.output_format = request.outputFormat;
-    if (request.responseFormat) payload.response_format = request.responseFormat;
+    if (request.responseFormat && supportsImageResponseFormat(model)) {
+      payload.response_format = request.responseFormat;
+    }
     if (request.moderation) payload.moderation = request.moderation;
 
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
@@ -2504,6 +2508,19 @@ function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string 
   return new Blob([Buffer.from(input.bytesBase64, "base64")], {
     type: input.mimeType?.trim() || "image/png",
   });
+}
+
+function supportsImageGenerationProvider(providerId: string): boolean {
+  const normalized = providerId.trim().toLowerCase();
+  return normalized === "openai" || normalized === "google";
+}
+
+function defaultImageModelForProvider(providerId: string): string {
+  return providerId.trim().toLowerCase() === "google" ? "gemini-3.1-flash-image-preview" : "gpt-image-2";
+}
+
+function supportsImageResponseFormat(model: string): boolean {
+  return !model.toLowerCase().startsWith("gpt-image-2");
 }
 
 function adaptImageGenerationResponse(

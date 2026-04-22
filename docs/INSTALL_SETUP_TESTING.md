@@ -376,12 +376,16 @@ Manual repo path:
 pnpm dev
 ```
 
+`pnpm dev` starts the gateway plus `@goatcitadel/mission-control-next` by default.
+
 Split terminals if needed:
 
 ```bash
 pnpm dev:gateway
 pnpm dev:ui
 ```
+
+Use `pnpm dev:ui:legacy` when you intentionally want the older `@goatcitadel/mission-control` shell.
 
 Default local endpoints:
 

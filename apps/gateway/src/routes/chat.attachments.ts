@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
+const MAX_ATTACHMENT_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES = Math.ceil((MAX_ATTACHMENT_UPLOAD_BYTES * 4) / 3) + 16 * 1024;
+
 const attachmentUploadSchema = z.object({
   sessionId: z.string().min(1),
   projectId: z.string().optional(),
@@ -18,18 +21,24 @@ const attachmentContentQuerySchema = z.object({
 });
 
 export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
-  fastify.post("/api/v1/chat/attachments", async (request, reply) => {
-    const parsed = attachmentUploadSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      const uploaded = await fastify.gateway.uploadChatAttachment(parsed.data);
-      return reply.code(201).send(uploaded);
-    } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
-    }
-  });
+  fastify.post(
+    "/api/v1/chat/attachments",
+    {
+      bodyLimit: MAX_ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES,
+    },
+    async (request, reply) => {
+      const parsed = attachmentUploadSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+      try {
+        const uploaded = await fastify.gateway.uploadChatAttachment(parsed.data);
+        return reply.code(201).send(uploaded);
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
 
   fastify.get("/api/v1/chat/attachments/:attachmentId", async (request, reply) => {
     const params = attachmentParamsSchema.safeParse(request.params);

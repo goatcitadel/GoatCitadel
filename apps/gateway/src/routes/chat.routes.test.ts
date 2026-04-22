@@ -827,6 +827,41 @@ describe("chat routes additional coverage", () => {
     expect(updateChatSessionPrefs).toHaveBeenCalledWith("sess-1", { planningMode: "advisory" });
   });
 
+  it("accepts attachment payloads larger than Fastify's default JSON body limit", async () => {
+    const uploadChatAttachment = vi.fn(async (input: Record<string, unknown>) => ({
+      attachmentId: "att-1",
+      sessionId: input.sessionId,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+    }));
+    const largeBase64 = "a".repeat(1_500_000);
+
+    app = Fastify();
+    app.decorate("gateway", {
+      uploadChatAttachment,
+    } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/attachments",
+      payload: {
+        sessionId: "sess-1",
+        fileName: "large-image.png",
+        mimeType: "image/png",
+        bytesBase64: largeBase64,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(uploadChatAttachment).toHaveBeenCalledWith({
+      sessionId: "sess-1",
+      fileName: "large-image.png",
+      mimeType: "image/png",
+      bytesBase64: largeBase64,
+    });
+  });
+
   it("answers pending user-input prompts through the gateway", async () => {
     const answerChatUserInputPrompt = vi.fn(async () => ({
       ok: true,

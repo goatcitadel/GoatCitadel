@@ -131,6 +131,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "planningMode"
     | "providerId"
     | "model"
+    | "imageProviderId"
+    | "imageModel"
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
@@ -159,6 +161,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "planningMode"
     | "providerId"
     | "model"
+    | "imageProviderId"
+    | "imageModel"
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
@@ -176,6 +180,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     planningMode: input.planningMode,
     providerId: input.providerId,
     model: input.model,
+    imageProviderId: input.imageProviderId,
+    imageModel: input.imageModel,
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,
