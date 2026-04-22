@@ -20,6 +20,12 @@ This document defines the minimum dependency hygiene expected for GoatCitadel `1
 - pnpm `10.31.0`
 - TypeScript as pinned in the workspace lockfile
 
+## Experimental Compiler Pilots
+
+- Preview compiler trials must run side-by-side with the workspace default compiler until the repo explicitly promotes them.
+- Preview compiler pilots must not replace required release or verification lanes by default.
+- The current TS7 beta pilot, including commands and benchmark artifacts, is documented in [docs/typescript-7-beta-pilot.md](./typescript-7-beta-pilot.md).
+
 ## Supported Runtime Surfaces
 
 - Windows x64 and arm64 installers
