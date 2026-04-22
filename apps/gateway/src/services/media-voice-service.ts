@@ -523,7 +523,7 @@ export class MediaVoiceService {
         `
       SELECT payload_json
       FROM voice_sessions
-      ORDER BY COALESCE(updated_at, created_at) DESC, rowid DESC
+      ORDER BY COALESCE(updated_at, created_at) DESC, voice_session_id DESC
       LIMIT ?
     `,
       )
