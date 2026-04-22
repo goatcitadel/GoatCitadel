@@ -27,6 +27,7 @@ data/npu-runtime-state.json
 workspace/chat/
 .goatcitadel/self-improvement/
 .assistant/
+.playwright-cli/
 .codex-tmp/
 .worktrees/*
 !.worktrees/.gitkeep
