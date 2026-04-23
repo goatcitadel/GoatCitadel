@@ -17,7 +17,8 @@ describe("orchestration routes", () => {
   it("validates orchestration plan creation", async () => {
     const createOrchestrationPlan = vi.fn();
     app = Fastify();
-    app.decorate("gateway", { createOrchestrationPlan } as never);
+    app.decorate("services", { orchestration: { createPlan: createOrchestrationPlan } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
 
     const response = await app.inject({
@@ -54,7 +55,8 @@ describe("orchestration routes", () => {
       worktreeBaseRef: "main",
     }));
     app = Fastify();
-    app.decorate("gateway", { createOrchestrationPlan } as never);
+    app.decorate("services", { orchestration: { createPlan: createOrchestrationPlan } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
 
     const response = await app.inject({
@@ -102,11 +104,14 @@ describe("orchestration routes", () => {
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
     const listRunContexts = vi.fn(() => [{ contextId: "ctx-1" }]);
     app = Fastify();
-    app.decorate("gateway", {
-      runOrchestrationPlan,
-      listRunCheckpoints,
-      listRunContexts,
+    app.decorate("services", {
+      orchestration: {
+        runPlan: runOrchestrationPlan,
+        listRunCheckpoints,
+        listRunContexts,
+      },
     } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
 
     const runResponse = await app.inject({
@@ -136,7 +141,8 @@ describe("orchestration routes", () => {
       throw new NotFoundError({ entity: "Orchestration run", id: "run-missing" });
     });
     app = Fastify();
-    app.decorate("gateway", { getRun } as never);
+    app.decorate("services", { orchestration: { getRun } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
 
     const response = await app.inject({
@@ -171,7 +177,8 @@ describe("orchestration routes", () => {
       checkpoints: [{ checkpointId: "cp-1", checkpointKind: "phase_approved" }],
     }));
     app = Fastify();
-    app.decorate("gateway", { approvePhase } as never);
+    app.decorate("services", { orchestration: { approvePhase } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
 
     const response = await app.inject({

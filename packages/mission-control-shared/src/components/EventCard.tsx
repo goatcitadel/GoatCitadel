@@ -1,5 +1,6 @@
 import type { RealtimeEvent } from "../api/client";
 import { StatusChip } from "./StatusChip";
+import { deriveRealtimeEventTone } from "../state/realtime-derived";
 
 interface EventCardProps {
   event: RealtimeEvent;
@@ -43,24 +44,8 @@ function formatEventLabel(eventType: string): string {
     .join(" ");
 }
 
-function getEventTone(eventType: string): "live" | "warning" | "critical" | "success" | "muted" {
-  if (eventType.includes("approval") || eventType.includes("auth_device")) {
-    return "warning";
-  }
-  if (eventType.includes("error") || eventType.includes("failed")) {
-    return "critical";
-  }
-  if (eventType.includes("task") || eventType.includes("deliverable")) {
-    return "success";
-  }
-  if (eventType.includes("tool") || eventType.includes("orchestration")) {
-    return "live";
-  }
-  return "muted";
-}
-
 export function EventCard({ event, summary, tracePreview, onLoadTracePreview }: EventCardProps) {
-  const eventTone = getEventTone(event.eventType);
+  const eventTone = deriveRealtimeEventTone(event);
   const links = event.links as Record<string, string | undefined> | undefined;
 
   return (

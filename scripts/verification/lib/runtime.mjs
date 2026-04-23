@@ -321,7 +321,7 @@ function runPnpmSync(args) {
   });
 }
 
-async function resolveAvailablePort(preferredPort) {
+export async function resolveAvailablePort(preferredPort) {
   if (!Number.isFinite(preferredPort) || preferredPort <= 0) {
     return await resolveEphemeralPort();
   }

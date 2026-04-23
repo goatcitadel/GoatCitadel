@@ -590,9 +590,15 @@ importers:
       '@types/react-dom':
         specifier: ^19.1.7
         version: 19.2.3(@types/react@19.2.14)
+      '@types/react-test-renderer':
+        specifier: ^19.1.0
+        version: 19.1.0
       '@types/three':
         specifier: ^0.183.1
         version: 0.183.1
+      react-test-renderer:
+        specifier: ^19.1.1
+        version: 19.2.5(react@19.2.5)
 
   packages/orchestration:
     dependencies:

@@ -4,6 +4,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { ChatCompletionRequest, ChatMessageRecord } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
+import { listMissingTrackedRouteAccessClasses } from "./route-access.js";
 
 const listDiagnosticsQuerySchema = z.object({
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
@@ -30,9 +31,19 @@ const chatApprovalScenarioSchema = z.object({
   workspaceId: z.string().trim().min(1),
 });
 
+const memoryItemSeedSchema = z.object({
+  namespace: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  content: z.string().trim().min(1),
+  metadata: z.record(z.unknown()).optional(),
+  pinned: z.boolean().optional(),
+});
+
 export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
+  const devVerificationEnabled = () => fastify.gateway.isDevDiagnosticsEnabled();
+
   fastify.get("/api/v1/dev/verification/status", async (_request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
     const llmConfig = fastify.gateway.getLlmConfig();
@@ -48,7 +59,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       };
     });
     return reply.send({
-      diagnosticsEnabled: fastify.gateway.isDevDiagnosticsEnabled(),
+      diagnosticsEnabled: devVerificationEnabled(),
       rootDir: fastify.gatewayConfig.rootDir,
       activeProviderId: llmConfig.activeProviderId,
       activeModel: llmConfig.activeModel,
@@ -58,7 +69,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/dev/verification/diagnostics-snapshot", async (request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
     const parsed = listDiagnosticsQuerySchema.safeParse(request.query);
@@ -68,8 +79,21 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(fastify.gateway.listDevDiagnostics(parsed.data));
   });
 
+  fastify.get("/api/v1/dev/verification/route-access-manifest", async (_request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const items = [...fastify.routeAccessManifest];
+    const accessClasses = [...new Set(items.map((item) => item.accessClass).filter(Boolean))];
+    return reply.send({
+      items,
+      accessClasses,
+      missingTracked: listMissingTrackedRouteAccessClasses(fastify),
+    });
+  });
+
   fastify.post("/api/v1/dev/verification/seed", async (request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
     const parsed = seedScenarioSchema.safeParse(request.body ?? {});
@@ -202,7 +226,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/dev/verification/chat-approval-scenario", async (request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
     const parsed = chatApprovalScenarioSchema.safeParse(request.body ?? {});
@@ -314,8 +338,75 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  fastify.post("/api/v1/dev/verification/memory-item-seed", async (request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const parsed = memoryItemSeedSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    const storage = fastify.gateway.storage;
+    const itemId = `mem_${randomUUID().replace(/-/g, "")}`;
+    const now = new Date().toISOString();
+    storage.db
+      .prepare(
+        `
+        INSERT INTO memory_items (
+          item_id,
+          namespace,
+          title,
+          content,
+          metadata_json,
+          pinned,
+          ttl_override_seconds,
+          expires_at,
+          status,
+          created_at,
+          updated_at,
+          forgotten_at
+        ) VALUES (
+          @itemId,
+          @namespace,
+          @title,
+          @content,
+          @metadataJson,
+          @pinned,
+          NULL,
+          NULL,
+          'active',
+          @createdAt,
+          @updatedAt,
+          NULL
+        )
+      `,
+      )
+      .run({
+        itemId,
+        namespace: parsed.data.namespace,
+        title: parsed.data.title,
+        content: parsed.data.content,
+        metadataJson: JSON.stringify(parsed.data.metadata ?? {}),
+        pinned: parsed.data.pinned ? 1 : 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+    return reply.code(201).send({
+      itemId,
+      namespace: parsed.data.namespace,
+      title: parsed.data.title,
+      content: parsed.data.content,
+      pinned: parsed.data.pinned ?? false,
+      lifecycleState: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+
   fastify.post("/api/v1/dev/verification/durable-recovery-seed", async (_request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
 
@@ -410,8 +501,56 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  fastify.post("/api/v1/dev/verification/realtime-truth-seed", async (_request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+
+    const storage = fastify.gateway.storage.realtimeEvents;
+    const oldCreatedAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // Use a near-future cutoff so the seed deterministically clears any retained preexisting
+    // events before appending the explicit verification events. That guarantees a real replay gap.
+    const pruneCutoff = new Date(Date.now() + 1000).toISOString();
+    const staleEvent = storage.append(
+      "verification_replay_gap_seed",
+      "events",
+      { kind: "verification_seed" },
+      undefined,
+      oldCreatedAt,
+    );
+    const prunedCount = storage.pruneOlderThan(pruneCutoff);
+    const explicitEvent = fastify.gateway.publishRealtime(
+      "verification_memory_refresh",
+      "memory",
+      {
+        kind: "verification_explicit_metadata",
+        workspaceId: "default",
+        summary: "Explicit metadata verification event.",
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          workspaceId: "default",
+        },
+      },
+    );
+    const compatibilityEvent = fastify.gateway.publishRealtime("approval_hint_emitted", "approvals", {
+      kind: "verification_compatibility_seed",
+      note: "Compatibility fallback verification event.",
+    });
+
+    return reply.code(201).send({
+      staleCursor: String(staleEvent.sequence),
+      prunedCount,
+      bounds: fastify.gateway.getRealtimeEventSequenceBounds(),
+      explicitEvent,
+      compatibilityEvent,
+    });
+  });
+
   fastify.post("/api/v1/dev/verification/provider-exercise", async (request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
     const parsed = providerExerciseSchema.safeParse(request.body ?? {});

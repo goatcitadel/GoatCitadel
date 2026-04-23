@@ -3117,6 +3117,10 @@ export class GatewayService {
     const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
     const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
     const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
+    const expiredMemoryItems = this.memoryLifecycleService.inspectExpiredActiveMemoryItems({
+      nowIso,
+      limit: 25,
+    });
 
     this.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
     const finishedAt = new Date().toISOString();
@@ -3132,6 +3136,9 @@ export class GatewayService {
       prunedExpiredContextPacks,
       prunedOldContextPacks,
       prunedOldQmdRuns,
+      expiredMemoryItemCount: expiredMemoryItems.totalCount,
+      expiredMemoryItemIds: expiredMemoryItems.items.map((item) => item.itemId),
+      expiredMemoryNamespacesSample: [...new Set(expiredMemoryItems.items.map((item) => item.namespace))],
     });
   }
 

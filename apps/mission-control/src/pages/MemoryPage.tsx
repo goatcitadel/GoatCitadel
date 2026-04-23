@@ -120,8 +120,10 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
       content: string;
       pinned: boolean;
       status: "active" | "forgotten";
+      lifecycleState: "active" | "expired" | "forgotten";
       updatedAt: string;
       ttlOverrideSeconds?: number;
+      expiresAt?: string;
     }>
   >([]);
   const [selectedMemoryItemId, setSelectedMemoryItemId] = useState<string | null>(null);
@@ -307,8 +309,10 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
                 content: item.content,
                 pinned: item.pinned,
                 status: item.status,
+                lifecycleState: item.lifecycleState,
                 updatedAt: item.updatedAt,
                 ttlOverrideSeconds: item.ttlOverrideSeconds,
+                expiresAt: item.expiresAt,
               })),
             );
             setSelectedMemoryItemId((current) => current ?? memoryRes.items[0]?.itemId ?? null);
@@ -479,8 +483,10 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
             ? {
                 ...item,
                 pinned: updated.pinned,
+                lifecycleState: updated.lifecycleState,
                 ttlOverrideSeconds: updated.ttlOverrideSeconds,
                 updatedAt: updated.updatedAt,
+                expiresAt: updated.expiresAt,
               }
             : item,
         ),
@@ -503,7 +509,9 @@ export function MemoryPage({ workspaceId = "default" }: { workspaceId?: string }
             ? {
                 ...item,
                 status: updated.status,
+                lifecycleState: updated.lifecycleState,
                 updatedAt: updated.updatedAt,
+                expiresAt: updated.expiresAt,
               }
             : item,
         ),

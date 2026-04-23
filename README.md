@@ -31,8 +31,8 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 ### Apps
 
-- [apps/mission-control-next](./apps/mission-control-next): current React/Vite operator console used by `pnpm dev`
-- [apps/mission-control](./apps/mission-control): React/Vite operator console
+- [apps/mission-control-next](./apps/mission-control-next): canonical `1.0` React/Vite operator console used by `pnpm dev`
+- [apps/mission-control](./apps/mission-control): compatibility-only React/Vite operator console retained for rollback, comparison, and inbound route continuity
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
 - [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
 
@@ -62,7 +62,7 @@ pnpm config:sync
 pnpm dev
 ```
 
-`pnpm dev` now starts the gateway plus `@goatcitadel/mission-control-next` by default. Use `pnpm dev:ui:legacy` if you need to launch the previous Mission Control shell directly.
+`pnpm dev` now starts the gateway plus `@goatcitadel/mission-control-next` by default. Use `pnpm dev:ui:legacy` only when you need the compatibility shell for rollback, comparison, or route-continuity checks.
 
 ### Useful commands
 
@@ -112,11 +112,18 @@ If you need a non-local hostname in the Mission Control preview image, rebuild w
 
 ## Current status
 
-GoatCitadel now ships at the `1.0.0` bar defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The repo contains the full Mission Control shell, the Fastify gateway, shared policy/orchestration packages, the published extensions SDK, and the blocking release-gate lanes required to keep the visible product contract honest.
+GoatCitadel now ships at the `1.0.0` bar defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The repo contains the canonical `mission-control-next` shell, the Fastify gateway, shared policy/orchestration packages, the published extensions SDK, and the blocking release lanes required to keep the visible product contract honest.
 
 This repository intentionally favors truthful product claims over aspirational parity language. If something is still experimental, optional, or only partially proven, the docs should say so plainly.
 
-The current `1.0` promise, visible scope, trust posture, additive API posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The proof map for those claims lives in [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md).
+The current `1.0` promise, visible scope, trust posture, additive API posture, backup guarantees, and release gates are defined in [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md). The evidence map for those claims lives in [docs/1_0_RELEASE_EVIDENCE.md](./docs/1_0_RELEASE_EVIDENCE.md).
+
+For public `1.0` wording:
+
+- `mission-control-next` is the canonical shell
+- `apps/mission-control` is compatibility-only
+- `proof` means a named end-to-end verification lane with a bespoke scenario body
+- supporting code paths, tests, manifests, and docs are `evidence`
 
 Safe claims today:
 

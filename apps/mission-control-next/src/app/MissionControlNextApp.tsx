@@ -17,11 +17,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import type {
-  DashboardStateResponse,
-  HealthSummaryResponse,
-  RealtimeEvent,
-} from "@goatcitadel/mission-control-shared/api/types";
+import type { DashboardStateResponse, HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import {
   connectEventStream,
   consumeGatewayAccessBootstrapFromLocation,
@@ -46,11 +42,16 @@ import {
 } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "@goatcitadel/mission-control-shared/state/effects-mode";
-import { emitRefresh, type RefreshTopic } from "@goatcitadel/mission-control-shared/state/refresh-bus";
+import { emitRefresh } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import {
   publishEventStreamStatus,
   resetEventStreamStatus,
 } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
+import {
+  deriveRealtimeNotification,
+  deriveRealtimeRefresh,
+  type RealtimeTruthMode,
+} from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
@@ -128,6 +129,7 @@ export function MissionControlNextApp() {
   });
   const [gatewayBusy, setGatewayBusy] = useState(true);
   const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
+  const [streamTruthMode, setStreamTruthMode] = useState<RealtimeTruthMode>("authoritative");
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [status, setStatus] = useState<ShellStatusState>({
@@ -157,6 +159,10 @@ export function MissionControlNextApp() {
   );
   const currentRouteLabel = getRouteLabel(route);
   const currentRouteDescription = getRouteDescription(route);
+  const realtimeStatusCopy = useMemo(
+    () => describeRealtimeTruthUi(streamState, streamTruthMode),
+    [streamState, streamTruthMode],
+  );
   const isWorkArea = route.area === "chat" || route.area === "cowork" || route.area === "code";
   const immersiveRoute = isImmersiveRoute(route);
   const usesFullStageLayout = isWorkArea || immersiveRoute;
@@ -205,7 +211,7 @@ export function MissionControlNextApp() {
             <ul className="mc-next-inspector-list">
               <li>Workspace: {activeWorkspaceName}</li>
               <li>Area: {currentAreaMeta.label}</li>
-              <li>Realtime: {streamState === "open" ? "Connected" : "Polling fallback"}</li>
+              <li>Realtime: {realtimeStatusCopy.inspector}</li>
             </ul>
           </section>
         </div>
@@ -217,19 +223,15 @@ export function MissionControlNextApp() {
     currentAreaMeta.label,
     currentRouteDescription,
     currentRouteLabel,
+    realtimeStatusCopy.inspector,
     status.dashboard,
-    streamState,
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
   const railSignalLines =
     route.area === "settings"
-      ? [
-          `${activeWorkspaceName} active`,
-          `${pendingApprovals} approvals waiting`,
-          streamState === "open" ? "Gateway live with streaming" : "Polling fallback active",
-        ]
+      ? [`${activeWorkspaceName} active`, `${pendingApprovals} approvals waiting`, realtimeStatusCopy.rail]
       : [
           `${status.dashboard?.sessions.length ?? 0} recent sessions`,
           `${status.dashboard?.activeSubagents ?? 0} active subagents`,
@@ -404,29 +406,27 @@ export function MissionControlNextApp() {
 
     const close = connectEventStream(
       (event) => {
-        const refreshTopics = deriveRefreshTopics(event);
-        for (const topic of refreshTopics) {
+        const derivedRefresh = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
+        for (const topic of derivedRefresh.topics) {
           emitRefresh(topic, {
-            reason: event.eventType,
+            reason: derivedRefresh.signalReason,
             source: event.source,
-            eventType: event.eventType,
+            eventType: derivedRefresh.signalEventType,
             eventId: event.eventId,
             timestamp: Date.now(),
           });
         }
-        if (event.eventAuthority === "durable_history") {
-          return;
-        }
-        if (event.links?.approvalId || event.eventType.includes("approval")) {
-          pushNotification("warning", "Approval state changed. Review the inbox in Ops.", "ops-approvals");
-        } else if (event.links?.taskId || event.eventType.includes("task")) {
-          pushNotification("info", "Task activity updated in Cowork.", "cowork-tasks");
-        } else if (event.links?.sessionId || event.eventType.includes("chat")) {
-          pushNotification("info", "Conversation state refreshed.", "chat-thread");
+        setStreamTruthMode(derivedRefresh.truthMode);
+        const notification = deriveRealtimeNotification(event);
+        if (notification) {
+          pushNotification(notification.tone, notification.message, notification.groupKey);
         }
       },
       (nextState) => {
         setStreamState(nextState);
+        if (nextState === "closed") {
+          setStreamTruthMode("authoritative");
+        }
       },
       publishEventStreamStatus,
     );
@@ -542,7 +542,7 @@ export function MissionControlNextApp() {
                 </select>
               </label>
               <div className="mc-next-topbar-status">
-                <span className="mc-next-badge">{streamState === "open" ? "Live" : "Polling"}</span>
+                <span className="mc-next-badge">{realtimeStatusCopy.badge}</span>
                 <span className="mc-next-badge">{pendingApprovals} approvals</span>
               </div>
               <button
@@ -638,8 +638,8 @@ export function MissionControlNextApp() {
                   </div>
                   <div className="mc-next-stage-chips">
                     <span className="mc-next-stage-chip">{activeWorkspaceName}</span>
-                    <span className="mc-next-stage-chip">
-                      {streamState === "open" ? "Realtime connected" : "Realtime degraded"}
+                    <span className={`mc-next-stage-chip${realtimeStatusCopy.degraded ? " warning" : ""}`}>
+                      {realtimeStatusCopy.stage}
                     </span>
                     {status.error ? (
                       <span className="mc-next-stage-chip warning">Shell status needs refresh</span>
@@ -694,11 +694,7 @@ export function MissionControlNextApp() {
 
           <footer className="mc-next-status-strip" aria-label="Mission Control status strip">
             <StatusPill icon={<ShieldCheck size={15} />} label={gatewayAccess.message} value="Gateway ready" />
-            <StatusPill
-              icon={<Activity size={15} />}
-              label="Live updates"
-              value={streamState === "open" ? "Streaming" : "Polling fallback"}
-            />
+            <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeStatusCopy.strip} />
             <StatusPill icon={<Workflow size={15} />} label="Approvals" value={`${pendingApprovals} pending`} />
             <StatusPill
               icon={<BookOpenText size={15} />}
@@ -931,62 +927,62 @@ function StatusPill({ icon, label, value }: { icon: ReactNode; label: string; va
   );
 }
 
-function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
-  if (event.eventAuthority === "durable_history") {
-    return [];
-  }
-  const topics = new Set<RefreshTopic>(["surface"]);
-  const haystack = `${event.eventType} ${event.source}`.toLowerCase();
-
-  if (event.links?.sessionId || haystack.includes("chat") || haystack.includes("delegate")) {
-    topics.add("chat");
-  }
-  if (event.links?.approvalId || haystack.includes("approval")) {
-    topics.add("approvals");
-  }
-  if (event.links?.taskId || haystack.includes("task")) {
-    topics.add("tasks");
-  }
-  if (haystack.includes("memory") || haystack.includes("context") || haystack.includes("qmd")) {
-    topics.add("memory");
-  }
-  if (haystack.includes("file") || haystack.includes("artifact")) {
-    topics.add("files");
-  }
-  if (haystack.includes("prompt") || haystack.includes("quality")) {
-    topics.add("quality");
-  }
-  if (haystack.includes("prompt")) {
-    topics.add("promptLab");
-  }
-  if (haystack.includes("replay") || haystack.includes("improvement")) {
-    topics.add("improvement");
-  }
-  if (haystack.includes("agent") || haystack.includes("herd")) {
-    topics.add("agents");
-  }
-  if (haystack.includes("skill")) {
-    topics.add("skills");
-  }
-  if (haystack.includes("tool") || haystack.includes("grant")) {
-    topics.add("tools");
-  }
-  if (haystack.includes("integration") || haystack.includes("connection")) {
-    topics.add("integrations");
-  }
-  if (haystack.includes("mcp")) {
-    topics.add("mcp");
-  }
-  if (haystack.includes("npu") || haystack.includes("voice") || haystack.includes("llama")) {
-    topics.add("npu");
-    topics.add("llamaCpp");
-  }
-
-  return [...topics];
-}
-
 function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   return theme === "light" ? "theme-citadel-light" : "theme-signal-noir";
+}
+
+function describeRealtimeTruthUi(
+  streamState: EventStreamConnectionState,
+  truthMode: RealtimeTruthMode,
+): {
+  badge: string;
+  inspector: string;
+  rail: string;
+  stage: string;
+  strip: string;
+  degraded: boolean;
+} {
+  if (streamState !== "open") {
+    return {
+      badge: "Polling",
+      inspector: "Polling fallback",
+      rail: "Polling fallback active",
+      stage: "Realtime degraded",
+      strip: "Polling fallback",
+      degraded: true,
+    };
+  }
+
+  if (truthMode === "replay-gap") {
+    return {
+      badge: "Live recovery",
+      inspector: "Streaming via replay recovery",
+      rail: "Streaming with replay recovery",
+      stage: "Realtime replay recovery",
+      strip: "Streaming (replay recovery)",
+      degraded: true,
+    };
+  }
+
+  if (truthMode === "compatibility") {
+    return {
+      badge: "Live fallback",
+      inspector: "Streaming with compatibility fallback",
+      rail: "Streaming with compatibility fallback",
+      stage: "Realtime compatibility fallback",
+      strip: "Streaming (compatibility fallback)",
+      degraded: true,
+    };
+  }
+
+  return {
+    badge: "Live",
+    inspector: "Connected",
+    rail: "Gateway live with streaming",
+    stage: "Realtime connected",
+    strip: "Streaming",
+    degraded: false,
+  };
 }
 
 function isImmersiveRoute(route: AppRoute): boolean {

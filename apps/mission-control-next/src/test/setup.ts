@@ -1,8 +1,19 @@
+/* eslint-disable no-console */
 import { createElement, type ReactNode } from "react";
 import type { ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, vi } from "vitest";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const originalConsoleError = console.error.bind(console);
+
+console.error = ((...args: unknown[]) => {
+  const [firstArg] = args;
+  if (typeof firstArg === "string" && firstArg.includes("react-test-renderer is deprecated")) {
+    return;
+  }
+  originalConsoleError(...args);
+}) as typeof console.error;
 
 function installBrowserPolyfills(): void {
   if (typeof globalThis.requestAnimationFrame !== "function") {

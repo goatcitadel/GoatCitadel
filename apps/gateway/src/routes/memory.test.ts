@@ -5,6 +5,27 @@ import { memoryRoutes } from "./memory.js";
 describe("memory routes", () => {
   let app: FastifyInstance | null = null;
 
+  function buildApp(gateway: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
+    const built = Fastify();
+    built.decorate("requireOperatorAuth", requireOperatorAuth as never);
+    built.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "none",
+        },
+      },
+    } as never);
+    built.decorate("services", {
+      memory: {
+        ...gateway,
+        forget: gateway.forget ?? gateway.forgetMemory,
+        runMaintenanceNow: gateway.runMaintenanceNow ?? gateway.runMemoryMaintenanceNow,
+        getContext: gateway.getContext ?? gateway.getMemoryContext,
+      },
+    } as never);
+    return { app: built, requireOperatorAuth };
+  }
+
   afterEach(async () => {
     if (!app) {
       return;
@@ -15,10 +36,10 @@ describe("memory routes", () => {
 
   it("rejects bulk forget without any criteria", async () => {
     const forgetMemory = vi.fn();
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       forgetMemory,
-    } as never);
+    });
+    app = built.app;
     await app.register(memoryRoutes);
 
     const response = await app.inject({
@@ -32,17 +53,13 @@ describe("memory routes", () => {
     expect(response.json()).toMatchObject({
       error: {
         fieldErrors: {
-          itemIds: expect.arrayContaining([
-            "Provide at least one criterion: itemIds, namespace, or query.",
-          ]),
+          itemIds: expect.arrayContaining(["Provide at least one criterion: itemIds, namespace, or query."]),
         },
       },
     });
     expect(response.json()).not.toMatchObject({
       error: {
-        formErrors: expect.arrayContaining([
-          "Provide at least one criterion: itemIds, namespace, or query.",
-        ]),
+        formErrors: expect.arrayContaining(["Provide at least one criterion: itemIds, namespace, or query."]),
       },
     });
   });
@@ -52,10 +69,10 @@ describe("memory routes", () => {
       forgottenCount: 1,
       itemIds: ["mem_1"],
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       forgetMemory,
-    } as never);
+    });
+    app = built.app;
     await app.register(memoryRoutes);
 
     const response = await app.inject({
@@ -78,13 +95,23 @@ describe("memory routes", () => {
       forgottenCount: 1,
       itemIds: ["mem_1"],
     });
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
   });
 
   it("validates memory context route params", async () => {
     const getMemoryContext = vi.fn(() => ({ contextId: "ctx-1", scope: "chat" }));
     app = Fastify();
-    app.decorate("gateway", {
-      getMemoryContext,
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "none",
+        },
+      },
+    } as never);
+    app.decorate("services", {
+      memory: {
+        getContext: getMemoryContext,
+      },
     } as never);
     await app.register(memoryRoutes);
 
@@ -116,10 +143,10 @@ describe("memory routes", () => {
       triggerSource: "manual",
       status: "queued",
     }));
-    app = Fastify();
-    app.decorate("gateway", {
+    const built = buildApp({
       runMemoryMaintenanceNow,
-    } as never);
+    });
+    app = built.app;
     await app.register(memoryRoutes);
 
     const canonical = await app.inject({
@@ -147,5 +174,6 @@ describe("memory routes", () => {
     expect(runMemoryMaintenanceNow).toHaveBeenNthCalledWith(2, {
       workspaceId: "default",
     });
+    expect(built.requireOperatorAuth).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { MemoryChangeEvent, MemoryItemRecord } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  deriveMemoryItemLifecycleState,
+  type MemoryChangeEvent,
+  type MemoryItemRecord,
+} from "@goatcitadel/contracts";
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
 export interface MemoryItemHost {
@@ -29,6 +34,9 @@ interface MemoryItemRow {
 }
 
 export function mapMemoryItemRow(host: MemoryItemHost, row: MemoryItemRow): MemoryItemRecord {
+  const status = MEMORY_ITEM_STATUS_VALUES.has(row.status) ? row.status : "active";
+  const expiresAt = row.expires_at ?? undefined;
+  const forgottenAt = row.forgotten_at ?? undefined;
   return {
     itemId: row.item_id,
     namespace: row.namespace,
@@ -37,11 +45,16 @@ export function mapMemoryItemRow(host: MemoryItemHost, row: MemoryItemRow): Memo
     metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
     pinned: Boolean(row.pinned),
     ttlOverrideSeconds: row.ttl_override_seconds ?? undefined,
-    expiresAt: row.expires_at ?? undefined,
-    status: MEMORY_ITEM_STATUS_VALUES.has(row.status) ? row.status : "active",
+    expiresAt,
+    status,
+    lifecycleState: deriveMemoryItemLifecycleState({
+      status,
+      expiresAt,
+      forgottenAt,
+    }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    forgottenAt: row.forgotten_at ?? undefined,
+    forgottenAt,
   };
 }
 
@@ -57,7 +70,7 @@ export function requireMemoryItem(host: MemoryItemHost, itemId: string): MemoryI
     )
     .get(itemId) as MemoryItemRow | undefined;
   if (!row) {
-    throw new Error(`Memory item not found: ${itemId}`);
+    throw new NotFoundError({ entity: "Memory item", id: itemId });
   }
   return mapMemoryItemRow(host, row);
 }

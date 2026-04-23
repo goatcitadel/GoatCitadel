@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const createSchema = z.object({
   kind: z.string().min(1),
@@ -48,11 +49,10 @@ const listQuerySchema = z.object({
 export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
-  const operatorOnly = {
-    preHandler: fastify.requireOperatorAuth,
-  };
+  const operatorOnly = withRouteAccess(fastify, "operator");
+  const approvals = fastify.services.approvals;
 
-  fastify.post("/api/v1/approvals", async (request, reply) => {
+  fastify.post("/api/v1/approvals", withRouteAccess(fastify, "public"), async (request, reply) => {
     const allowRemoteCreate = isTruthy(process.env.GOATCITADEL_ALLOW_REMOTE_APPROVAL_CREATE);
     if (!allowRemoteCreate && !isLoopbackRequest(request)) {
       return reply.code(403).send({
@@ -65,8 +65,12 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const approval = await fastify.gateway.createApproval(parsed.data);
-    return reply.code(201).send(approval);
+    try {
+      const approval = await approvals.createApproval(parsed.data);
+      return reply.code(201).send(approval);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/approvals", operatorOnly, async (request, reply) => {
@@ -75,8 +79,11 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const approvals = fastify.gateway.listApprovals(parsed.data.status, parsed.data.limit);
-    return reply.send({ items: approvals });
+    try {
+      return reply.send({ items: approvals.listApprovals(parsed.data.status, parsed.data.limit) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/approvals/bulk-resolve", operatorOnly, async (request, reply) => {
@@ -86,7 +93,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await fastify.gateway.resolveApprovalsBulk({
+      const result = await approvals.resolveApprovalsBulk({
         ...parsed.data,
         resolvedBy: parsed.data.resolvedBy ?? resolveActorId(request),
       });
@@ -108,7 +115,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await fastify.gateway.resolveApproval(approvalId, parsed.data);
+      const result = await approvals.resolveApproval(approvalId, parsed.data);
       return reply.send(result);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -126,7 +133,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const token = fastify.gateway.createApprovalRemoteActionToken(params.data.approvalId, {
+      const token = approvals.createApprovalRemoteActionToken(params.data.approvalId, {
         connectorId: parsed.data.connectorId,
         expiresInMs: parsed.data.expiresInMs,
         issuedBy: resolveActorId(request),
@@ -137,14 +144,14 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/approvals/remote-resolve", async (request, reply) => {
+  fastify.post("/api/v1/approvals/remote-resolve", withRouteAccess(fastify, "public"), async (request, reply) => {
     const parsed = remoteResolveSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
     try {
-      const result = await fastify.gateway.resolveApprovalWithRemoteToken(parsed.data);
+      const result = await approvals.resolveApprovalWithRemoteToken(parsed.data);
       return reply.send(result);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -158,8 +165,11 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     const approvalId = params.data.approvalId;
     const query = request.query as { replayedBy?: string };
-    const replay = fastify.gateway.getApprovalReplay(approvalId, query.replayedBy ?? "operator");
-    return reply.send(replay);
+    try {
+      return reply.send(approvals.getApprovalReplay(approvalId, query.replayedBy ?? "operator"));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 };
 

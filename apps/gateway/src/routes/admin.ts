@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { buildOfflineRestoreRequiredResponse, resolveBackupPathWithinDirectory } from "../services/backup-paths.js";
+import { withRouteAccess } from "./route-access.js";
 
 const retentionPatchSchema = z.object({
   realtimeEventsDays: z.coerce.number().int().positive().max(365).optional(),
@@ -43,12 +44,11 @@ const databaseVerifySchema = z.object({
 });
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
-  const operatorOnly = {
-    preHandler: fastify.requireOperatorAuth,
-  } as const;
+  const operatorOnly = withRouteAccess(fastify, "operator");
+  const authAdmin = fastify.services.authAdmin;
 
   fastify.get("/api/v1/admin/retention", operatorOnly, async (_request, reply) => {
-    return reply.send(fastify.gateway.getRetentionPolicy());
+    return reply.send(authAdmin.getRetentionPolicy());
   });
 
   fastify.patch("/api/v1/admin/retention", operatorOnly, async (request, reply) => {
@@ -75,7 +75,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (body.auditDays !== undefined) {
       patch.auditDays = body.auditDays === "off" ? undefined : (body.auditDays ?? undefined);
     }
-    const updated = fastify.gateway.updateRetentionPolicy(patch);
+    const updated = authAdmin.updateRetentionPolicy(patch);
     return reply.send(updated);
   });
 
@@ -84,7 +84,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const result = await fastify.gateway.pruneRetention({
+    const result = await authAdmin.pruneRetention({
       dryRun: parsed.data.dryRun ?? true,
     });
     return reply.send(result);
@@ -95,7 +95,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const items = await fastify.gateway.listBackups(parsed.data.limit);
+    const items = await authAdmin.listBackups(parsed.data.limit);
     return reply.send({ items });
   });
 
@@ -105,7 +105,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = await fastify.gateway.createBackup(parsed.data);
+      const created = await authAdmin.createBackup(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -134,7 +134,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: jailed.error });
     }
     try {
-      return reply.send(await fastify.gateway.verifyBackup(parsed.data));
+      return reply.send(await authAdmin.verifyBackup(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -146,7 +146,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const result = await fastify.gateway.runDatabaseCutover({
+      const result = await authAdmin.runDatabaseCutover({
         profile: parsed.data.profile,
         execute: parsed.data.execute ?? false,
         confirm: parsed.data.confirm,
@@ -163,7 +163,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.verifyDatabaseCutover(parsed.data));
+      return reply.send(await authAdmin.verifyDatabaseCutover(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

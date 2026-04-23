@@ -24,6 +24,10 @@ afterEach(() => {
 function createRepo(): ApprovalRepository {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-repo-${randomUUID()}.db`);
   createdFiles.push(dbPath);
+  return createRepoAtPath(dbPath);
+}
+
+function createRepoAtPath(dbPath: string): ApprovalRepository {
   const db = createDatabase({ dbPath });
   return new ApprovalRepository(db);
 }
@@ -118,6 +122,41 @@ describe("ApprovalRepository", () => {
         resolvedBy: "operator",
       });
     });
+  });
+
+  it("allows only one concurrent resolver to win the same approval", async () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-approval-repo-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const creatorRepo = createRepoAtPath(dbPath);
+    const resolverA = createRepoAtPath(dbPath);
+    const resolverB = createRepoAtPath(dbPath);
+    const created = creatorRepo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+    });
+
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() =>
+        resolverA.resolve(created.approvalId, {
+          decision: "approve",
+          resolvedBy: "operator-a",
+        }),
+      ),
+      Promise.resolve().then(() =>
+        resolverB.resolve(created.approvalId, {
+          decision: "approve",
+          resolvedBy: "operator-b",
+        }),
+      ),
+    ]);
+
+    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+    const final = creatorRepo.get(created.approvalId);
+    assert.equal(final.status, "approved");
+    assert.ok(final.resolvedBy === "operator-a" || final.resolvedBy === "operator-b");
   });
 
   it("persists explicit approval linkage separately from the public payload", () => {

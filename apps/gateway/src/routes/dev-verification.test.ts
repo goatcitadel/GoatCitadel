@@ -52,6 +52,7 @@ describe("dev verification routes", () => {
 
   it("returns provider readiness when enabled", async () => {
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       getLlmConfig: () => ({
@@ -132,6 +133,7 @@ describe("dev verification routes", () => {
     }));
 
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createWorkspace,
@@ -189,6 +191,7 @@ describe("dev verification routes", () => {
     const approvalWaitGetRunId = vi.fn(() => "approval-wait-1");
 
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createApproval,
@@ -280,6 +283,63 @@ describe("dev verification routes", () => {
     });
   });
 
+  it("seeds deterministic memory items for verification lanes", async () => {
+    const run = vi.fn();
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    app.decorate("gateway", {
+      isDevDiagnosticsEnabled: () => true,
+      storage: {
+        db: {
+          prepare: vi.fn(() => ({
+            run,
+          })),
+        },
+      },
+    } as never);
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/memory-item-seed",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({
+        namespace: "memory-truth",
+        title: "Verification memory item",
+        content: "This item is used by verification lanes.",
+        metadata: {
+          lane: "memory-truth",
+        },
+        pinned: true,
+      }),
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        itemId: expect.stringMatching(/^mem_/),
+        namespace: "memory-truth",
+        title: "Verification memory item",
+        content: "This item is used by verification lanes.",
+        metadataJson: JSON.stringify({ lane: "memory-truth" }),
+        pinned: 1,
+      }),
+    );
+    expect(response.json()).toMatchObject({
+      itemId: expect.stringMatching(/^mem_/),
+      namespace: "memory-truth",
+      title: "Verification memory item",
+      pinned: true,
+      lifecycleState: "active",
+    });
+  });
+
   it("seeds orphaned and dead-letter durable recovery scenarios", async () => {
     const createApproval = vi
       .fn()
@@ -313,6 +373,7 @@ describe("dev verification routes", () => {
     const upsertDeadLetter = vi.fn(() => ({ deadLetterId: "dead-letter-1" }));
 
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createApproval,
@@ -379,6 +440,7 @@ describe("dev verification routes", () => {
 
   it("wraps provider exercise failures in a successful response payload", async () => {
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion: vi.fn(async () => {
@@ -420,6 +482,7 @@ describe("dev verification routes", () => {
     }));
 
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion,
@@ -465,6 +528,7 @@ describe("dev verification routes", () => {
     }));
 
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion,
@@ -510,6 +574,7 @@ describe("dev verification routes", () => {
     }));
 
     app = Fastify();
+    app.decorate("routeAccessManifest", []);
     app.decorate("gateway", {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion,
@@ -550,5 +615,163 @@ describe("dev verification routes", () => {
         }),
       }),
     );
+  });
+
+  it("returns the tracked route-access manifest for verification lanes", async () => {
+    app = Fastify();
+    app.decorate("routeAccessManifest", [
+      {
+        method: "GET",
+        url: "/api/v1/events",
+        accessClass: "authenticated-read",
+        tracked: true,
+      },
+      {
+        method: "POST",
+        url: "/api/v1/auth/device-requests",
+        accessClass: "public",
+        tracked: true,
+      },
+    ] as never);
+    app.decorate("gateway", {
+      isDevDiagnosticsEnabled: () => true,
+    } as never);
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/dev/verification/route-access-manifest",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      items: [
+        {
+          method: "GET",
+          url: "/api/v1/events",
+          accessClass: "authenticated-read",
+          tracked: true,
+        },
+        {
+          method: "POST",
+          url: "/api/v1/auth/device-requests",
+          accessClass: "public",
+          tracked: true,
+        },
+      ],
+      accessClasses: ["authenticated-read", "public"],
+      missingTracked: [],
+    });
+  });
+
+  it("seeds deterministic realtime truth events and replay-gap cursor data", async () => {
+    const append = vi.fn().mockReturnValueOnce({
+      eventId: "evt-stale",
+      sequence: 7,
+      eventType: "verification_replay_gap_seed",
+      source: "events",
+      timestamp: "2026-04-21T00:00:00.000Z",
+      payload: { kind: "verification_seed" },
+    });
+    const pruneOlderThan = vi.fn(() => 1);
+    const publishRealtime = vi
+      .fn()
+      .mockReturnValueOnce({
+        eventId: "evt-explicit",
+        sequence: 8,
+        eventType: "verification_memory_refresh",
+        source: "memory",
+        timestamp: "2026-04-22T00:00:00.000Z",
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: { workspaceId: "default" },
+        payload: { kind: "verification_explicit_metadata" },
+      })
+      .mockReturnValueOnce({
+        eventId: "evt-compat",
+        sequence: 9,
+        eventType: "approval_hint_emitted",
+        source: "approvals",
+        timestamp: "2026-04-22T00:00:01.000Z",
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        payload: { kind: "verification_compatibility_seed" },
+      });
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    app.decorate("gateway", {
+      isDevDiagnosticsEnabled: () => true,
+      storage: {
+        realtimeEvents: {
+          append,
+          pruneOlderThan,
+        },
+      },
+      publishRealtime,
+      getRealtimeEventSequenceBounds: () => ({
+        oldestSequence: 8,
+        newestSequence: 9,
+      }),
+    } as never);
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/realtime-truth-seed",
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(append).toHaveBeenCalledWith(
+      "verification_replay_gap_seed",
+      "events",
+      { kind: "verification_seed" },
+      undefined,
+      expect.any(String),
+    );
+    expect(pruneOlderThan).toHaveBeenCalledWith(expect.any(String));
+    expect(publishRealtime).toHaveBeenNthCalledWith(
+      1,
+      "verification_memory_refresh",
+      "memory",
+      expect.objectContaining({
+        workspaceId: "default",
+      }),
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          workspaceId: "default",
+        },
+      },
+    );
+    expect(publishRealtime).toHaveBeenNthCalledWith(
+      2,
+      "approval_hint_emitted",
+      "approvals",
+      expect.objectContaining({
+        kind: "verification_compatibility_seed",
+      }),
+    );
+    expect(response.json()).toMatchObject({
+      staleCursor: "7",
+      prunedCount: 1,
+      bounds: {
+        oldestSequence: 8,
+        newestSequence: 9,
+      },
+      explicitEvent: {
+        eventId: "evt-explicit",
+      },
+      compatibilityEvent: {
+        eventId: "evt-compat",
+      },
+    });
   });
 });

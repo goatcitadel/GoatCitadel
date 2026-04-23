@@ -121,7 +121,37 @@ describe("MemoryLifecycleService", () => {
         if (sql.includes("FROM memory_items") && sql.includes("WHERE 1 = 1")) {
           return {
             get: vi.fn(),
-            all: vi.fn(() => [{ ...row }]),
+            all: vi.fn((params: Record<string, unknown>) => {
+              const status = params.status ? String(params.status) : null;
+              const now = params.now ? String(params.now) : null;
+              if (status && row.status !== status) {
+                return [];
+              }
+              if (status === "active" && now && row.expires_at && String(row.expires_at) <= now) {
+                return [];
+              }
+              return [{ ...row }];
+            }),
+            run: vi.fn(),
+          };
+        }
+        if (sql.includes("SELECT COUNT(*) AS count") && sql.includes("FROM memory_items")) {
+          return {
+            get: vi.fn((params: Record<string, unknown>) => ({
+              count: row.status === "active" && row.expires_at && String(row.expires_at) <= String(params.now) ? 1 : 0,
+            })),
+            all: vi.fn(() => []),
+            run: vi.fn(),
+          };
+        }
+        if (sql.includes("FROM memory_items") && sql.includes("expires_at <= @now")) {
+          return {
+            get: vi.fn(),
+            all: vi.fn((params: Record<string, unknown>) =>
+              row.status === "active" && row.expires_at && String(row.expires_at) <= String(params.now)
+                ? [{ ...row }]
+                : [],
+            ),
             run: vi.fn(),
           };
         }
@@ -136,6 +166,7 @@ describe("MemoryLifecycleService", () => {
                 row.metadata_json = String(params.metadataJson);
                 row.pinned = Number(params.pinned ?? 0);
                 row.ttl_override_seconds = (params.ttlOverrideSeconds as number | null | undefined) ?? null;
+                row.expires_at = (params.expiresAt as string | null | undefined) ?? null;
               }
               if (params.forgottenAt !== undefined) {
                 row.status = "forgotten";
@@ -197,12 +228,32 @@ describe("MemoryLifecycleService", () => {
       itemId: "item-1",
       title: "Updated title",
       pinned: true,
+      lifecycleState: "active",
+    });
+
+    const ttlUpdated = service.patchMemoryItem("item-1", { ttlOverrideSeconds: 3600 }, "operator-1");
+    expect(ttlUpdated.ttlOverrideSeconds).toBe(3600);
+    expect(ttlUpdated.expiresAt).toBeTruthy();
+    expect(ttlUpdated.lifecycleState).toBe("active");
+
+    row.expires_at = "2026-04-09T23:00:00.000Z";
+    expect(service.listMemoryItems({ status: "all" })).toHaveLength(1);
+    expect(service.listMemoryItems({ status: "active" })).toHaveLength(0);
+    const expiredSnapshot = service.inspectExpiredActiveMemoryItems({
+      nowIso: "2026-04-10T01:00:00.000Z",
+      limit: 10,
+    });
+    expect(expiredSnapshot.totalCount).toBe(1);
+    expect(expiredSnapshot.items[0]).toMatchObject({
+      itemId: "item-1",
+      lifecycleState: "expired",
     });
 
     const forgotten = service.forgetMemoryItem("item-1", "operator-1");
     expect(forgotten).toMatchObject({
       itemId: "item-1",
       status: "forgotten",
+      lifecycleState: "forgotten",
     });
 
     const history = service.listMemoryItemHistory("item-1");
@@ -213,7 +264,7 @@ describe("MemoryLifecycleService", () => {
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",
       "memory",
-      expect.objectContaining({ type: "memory_item_updated", itemId: "item-1" }),
+      expect.objectContaining({ type: "memory_item_updated", itemId: "item-1", lifecycleState: "active" }),
     );
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",

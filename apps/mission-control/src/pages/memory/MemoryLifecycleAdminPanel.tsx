@@ -9,8 +9,10 @@ type MemoryItemRecord = {
   content: string;
   pinned: boolean;
   status: "active" | "forgotten";
+  lifecycleState: "active" | "expired" | "forgotten";
   updatedAt: string;
   ttlOverrideSeconds?: number;
+  expiresAt?: string;
 };
 
 type MemoryHistoryRecord = {
@@ -93,6 +95,7 @@ export function MemoryLifecycleAdminPanel(props: {
                     <td>{item.namespace}</td>
                     <td>
                       {item.status}
+                      {item.lifecycleState !== item.status ? ` (${item.lifecycleState})` : ""}
                       {item.pinned ? " • pinned" : ""}
                     </td>
                     <td>{new Date(item.updatedAt).toLocaleString()}</td>
@@ -126,6 +129,9 @@ export function MemoryLifecycleAdminPanel(props: {
                   <strong>Status:</strong> {selectedMemoryItem.status}
                 </p>
                 <p>
+                  <strong>Lifecycle state:</strong> {selectedMemoryItem.lifecycleState}
+                </p>
+                <p>
                   <strong>
                     TTL Override
                     <HelpHint
@@ -134,6 +140,10 @@ export function MemoryLifecycleAdminPanel(props: {
                     />
                   </strong>
                   : {selectedMemoryItem.ttlOverrideSeconds ?? "-"}
+                </p>
+                <p>
+                  <strong>Expires At:</strong>{" "}
+                  {selectedMemoryItem.expiresAt ? new Date(selectedMemoryItem.expiresAt).toLocaleString() : "-"}
                 </p>
                 <pre>{selectedMemoryItem.content}</pre>
               </>
@@ -158,4 +168,3 @@ export function MemoryLifecycleAdminPanel(props: {
     </Panel>
   );
 }
-

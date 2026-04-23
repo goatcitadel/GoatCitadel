@@ -38,8 +38,8 @@ const requiredHeadings = {
   "docs/1_0_RELEASE_EVIDENCE.md": [
     "# GoatCitadel 1.0 Release Evidence",
     "## Recovery Truth",
-    "## Backup Contract Proof",
-    "## Visible Surface Proof",
+    "## Backup Contract Evidence",
+    "## Visible Surface Evidence",
   ],
 };
 

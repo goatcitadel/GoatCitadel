@@ -589,6 +589,48 @@ describe("MemoryPage", () => {
     }
   });
 
+  it("shows derived lifecycle truth for expired memory items", async () => {
+    apiMocks.fetchSettings.mockResolvedValue(
+      buildSettings({
+        durableKernelV1Enabled: true,
+        memoryMaintenanceV1Enabled: false,
+        memoryLifecycleAdminV1Enabled: true,
+      }),
+    );
+    apiMocks.fetchMemoryItems.mockResolvedValue({
+      items: [
+        {
+          itemId: "memory-item-1",
+          namespace: "workspace.default",
+          title: "Old preference",
+          content: "Use the archived workflow.",
+          metadata: {},
+          pinned: false,
+          status: "active",
+          lifecycleState: "expired",
+          ttlOverrideSeconds: 60,
+          expiresAt: "2026-04-01T09:00:00.000Z",
+          createdAt: "2026-04-01T08:00:00.000Z",
+          updatedAt: "2026-04-01T08:30:00.000Z",
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<MemoryPage workspaceId="default" />);
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("expired");
+      expect(text).toContain("Old preference");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
   it("re-checks capability settings during background refresh instead of reusing stale flags", async () => {
     apiMocks.fetchSettings
       .mockResolvedValueOnce(

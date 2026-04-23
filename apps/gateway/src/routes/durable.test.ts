@@ -30,8 +30,10 @@ describe("durable routes", () => {
 
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", {
-      getDurableDiagnostics,
+    app.decorate("services", {
+      durable: {
+        getDiagnostics: getDurableDiagnostics,
+      },
     } as never);
     await app.register(durableRoutes);
 
@@ -53,8 +55,10 @@ describe("durable routes", () => {
 
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", {
-      listDurableRunCheckpoints,
+    app.decorate("services", {
+      durable: {
+        listRunCheckpoints: listDurableRunCheckpoints,
+      },
     } as never);
     await app.register(durableRoutes);
 
@@ -88,8 +92,10 @@ describe("durable routes", () => {
 
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", {
-      recoverDurableDeadLetter,
+    app.decorate("services", {
+      durable: {
+        recoverDeadLetter: recoverDurableDeadLetter,
+      },
     } as never);
     await app.register(durableRoutes);
 
@@ -124,8 +130,10 @@ describe("durable routes", () => {
 
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", {
-      retryDurableRun,
+    app.decorate("services", {
+      durable: {
+        retryRun: retryDurableRun,
+      },
     } as never);
     await app.register(durableRoutes);
 

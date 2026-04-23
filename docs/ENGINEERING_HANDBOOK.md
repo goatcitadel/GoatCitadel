@@ -28,7 +28,7 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
 - Filesystem-backed backup restore is offline-only for `1.0`; operators must stop any gateway serving the same runtime root before invoking the CLI restore, and the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
 - Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
-- Surface-regression and visual-regression derive from the same canonical release-surface manifest so the visible `Work / Observe / Tune` proof set cannot drift silently.
+- Surface-regression and visual-regression derive from the same canonical release-surface manifest so the visible `Work / Observe / Tune` evidence set cannot drift silently.
 - Postgres backups participate in shipped create/verify coverage, but restore remains an operator-driven `pg_restore` workflow rather than the SQLite file-copy restore path.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
@@ -127,7 +127,7 @@ Development runtime:
 - Supervisor behavior: restart-on-change with explicit child process tree shutdown, port release wait, and health check before returning to ready state.
 - `pnpm dev:gateway:watch` is available as direct `tsx watch` fallback.
 
-### 3.2 Mission Control (`apps/mission-control`)
+### 3.2 Mission Control (`apps/mission-control-next` primary, `apps/mission-control` compatibility)
 
 Mission Control is an API client, not a backend extension. It:
 
@@ -136,6 +136,7 @@ Mission Control is an API client, not a backend extension. It:
 - Maintains local browser preferences for operator UX.
 - Never writes data directly to local storage files or SQLite.
 - Uses a topic-scoped refresh bus for SSE updates to avoid full-page refresh churn during active operations.
+- Treats `apps/mission-control-next` as the canonical `1.0` shell; the legacy shell remains available only for compatibility, rollback, and parity comparison.
 
 ### 3.3 Shared Domain Packages
 

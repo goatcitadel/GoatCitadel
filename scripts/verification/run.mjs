@@ -2,6 +2,8 @@
 import path from "node:path";
 import { generateVerificationReview, loadManifestForReview } from "./lib/review.mjs";
 import {
+  runArchitectureMetricsLane,
+  runAuthMatrixLane,
   runApiCompatibilityLane,
   runBackupRoundtripLane,
   runCatalogParityLane,
@@ -9,10 +11,14 @@ import {
   runDeepEcosystemLane,
   runDurableRecoveryLane,
   runFastLane,
+  runMemoryTruthLane,
   runOperatorProofLane,
+  runRealtimeTruthLane,
+  runRuntimeTruthLane,
   runVisualRegressionLane,
   runSurfaceRegressionLane,
   runSoakLane,
+  runUiParityLane,
 } from "./lib/scenarios.mjs";
 import {
   artifactsRoot,
@@ -38,6 +44,12 @@ const VALID_LANES = new Set([
   "visual-rebaseline",
   "backup-roundtrip",
   "soak",
+  "runtime-truth",
+  "auth-matrix",
+  "ui-parity",
+  "memory-truth",
+  "realtime-truth",
+  "architecture-metrics",
   "review",
   "all",
 ]);
@@ -51,15 +63,6 @@ async function main() {
   const requestedUiPackage = typeof options["ui-package"] === "string" ? options["ui-package"].trim() : "";
   if (requestedUiPackage) {
     process.env.GOATCITADEL_UI_PACKAGE = requestedUiPackage;
-  }
-  const effectiveUiPackage = process.env.GOATCITADEL_UI_PACKAGE?.trim();
-  if (
-    effectiveUiPackage === "@goatcitadel/mission-control-next" &&
-    !["surface-regression", "visual-regression", "visual-rebaseline", "review"].includes(lane)
-  ) {
-    throw new Error(
-      "Mission Control Next verification currently supports surface-regression, visual-regression, visual-rebaseline, and review lanes only.",
-    );
   }
 
   if (lane === "review") {
@@ -113,6 +116,18 @@ async function main() {
       await runBackupRoundtripLane(context, { profile });
     } else if (lane === "soak") {
       await runSoakLane(context, { profile, durationMs });
+    } else if (lane === "runtime-truth") {
+      await runRuntimeTruthLane(context, { profile });
+    } else if (lane === "auth-matrix") {
+      await runAuthMatrixLane(context, { profile });
+    } else if (lane === "ui-parity") {
+      await runUiParityLane(context, { profile });
+    } else if (lane === "memory-truth") {
+      await runMemoryTruthLane(context, { profile });
+    } else if (lane === "realtime-truth") {
+      await runRealtimeTruthLane(context, { profile });
+    } else if (lane === "architecture-metrics") {
+      await runArchitectureMetricsLane(context, { profile });
     } else if (lane === "all") {
       await runFastLane(context);
       await runDeepCoreLane(context, { profile });
@@ -124,6 +139,12 @@ async function main() {
       await runSurfaceRegressionLane(context, { profile });
       await runVisualRegressionLane(context, { profile, updateBaselines: false });
       await runBackupRoundtripLane(context, { profile });
+      await runRuntimeTruthLane(context, { profile });
+      await runAuthMatrixLane(context, { profile });
+      await runUiParityLane(context, { profile });
+      await runMemoryTruthLane(context, { profile });
+      await runRealtimeTruthLane(context, { profile });
+      await runArchitectureMetricsLane(context, { profile });
       if (includeSoak) {
         await runSoakLane(context, { profile, durationMs });
       }
@@ -171,6 +192,12 @@ function shouldGenerateReview(lane) {
     lane === "visual-regression" ||
     lane === "visual-rebaseline" ||
     lane === "backup-roundtrip" ||
+    lane === "runtime-truth" ||
+    lane === "auth-matrix" ||
+    lane === "ui-parity" ||
+    lane === "memory-truth" ||
+    lane === "realtime-truth" ||
+    lane === "architecture-metrics" ||
     lane === "all" ||
     lane === "soak"
   );

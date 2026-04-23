@@ -1,0 +1,544 @@
+import { useEffect, useMemo, useState } from "react";
+import { BrainCircuit, RefreshCw } from "lucide-react";
+import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import {
+  describeQmdImpact,
+  formatBytes,
+  formatMaybeDateTime,
+  formatShortDateTime,
+  formatTokenDelta,
+  shortId,
+  summarizeMemorySubspaces,
+} from "@goatcitadel/mission-control-shared/content/memory-helpers";
+import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot";
+import { NativeCard, NativeGrid, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
+import type { NativeRoutePagesProps } from "../types";
+import "../native-routes.css";
+
+export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
+  const memory = useMemoryOperatorSnapshot(activeWorkspaceId);
+  const [search, setSearch] = useState("");
+  const [draft, setDraft] = useState({
+    title: "",
+    content: "",
+    pinned: false,
+    ttlOverrideSeconds: "",
+  });
+
+  useEffect(() => {
+    const item = memory.selectedItem;
+    if (!item) {
+      setDraft({
+        title: "",
+        content: "",
+        pinned: false,
+        ttlOverrideSeconds: "",
+      });
+      return;
+    }
+    setDraft({
+      title: item.title,
+      content: item.content,
+      pinned: item.pinned,
+      ttlOverrideSeconds: item.ttlOverrideSeconds ? String(item.ttlOverrideSeconds) : "",
+    });
+  }, [memory.selectedItem]);
+
+  const visibleItems = useMemo(() => {
+    const items = memory.data?.memoryItems ?? [];
+    const query = search.trim().toLowerCase();
+    if (!query) {
+      return items;
+    }
+    return items.filter(
+      (item) =>
+        item.namespace.toLowerCase().includes(query) ||
+        item.title.toLowerCase().includes(query) ||
+        item.content.toLowerCase().includes(query),
+    );
+  }, [memory.data?.memoryItems, search]);
+
+  const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
+
+  return (
+    <NativePageFrame
+      icon={BrainCircuit}
+      kicker="Library"
+      title="Memory"
+      description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture in the canonical next shell."
+      loading={memory.loading}
+      error={memory.error}
+    >
+      {memory.notice ? (
+        <div className={`mc-next-runtime-notice tone-${memory.notice.tone}`}>
+          <span>{memory.notice.message}</span>
+        </div>
+      ) : null}
+      <NativeGrid>
+        <NativeCard
+          title="Memory items"
+          subtitle="Real memory item truth comes first; files and QMD stay secondary."
+          stats={[
+            { label: "Visible", value: String(visibleItems.length) },
+            { label: "Workspace", value: activeWorkspaceName },
+          ]}
+        >
+          <div className="mc-next-settings-field-grid">
+            <label className="mc-next-settings-field span-2">
+              <span>Search memory</span>
+              <input
+                className="mc-next-settings-input"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Namespace, title, or content"
+              />
+            </label>
+          </div>
+          <div className="mc-next-approvals-risk-strip">
+            <StatusChip tone="success">
+              Active {memory.data?.memoryItems.filter((item) => item.lifecycleState === "active").length ?? 0}
+            </StatusChip>
+            <StatusChip tone="warning">
+              Expired {memory.data?.memoryItems.filter((item) => item.lifecycleState === "expired").length ?? 0}
+            </StatusChip>
+            <StatusChip tone="muted">
+              Forgotten {memory.data?.memoryItems.filter((item) => item.lifecycleState === "forgotten").length ?? 0}
+            </StatusChip>
+          </div>
+          <div className="mc-next-approvals-list">
+            {visibleItems.length === 0 ? (
+              <p className="mc-next-directory-empty">No memory items match the current filter.</p>
+            ) : (
+              visibleItems.map((item) => (
+                <button
+                  key={item.itemId}
+                  type="button"
+                  className={`mc-next-approvals-list-item${memory.selectedItemId === item.itemId ? " is-selected" : ""}`}
+                  onClick={() => memory.setSelectedItemId(item.itemId)}
+                >
+                  <div className="mc-next-directory-list-head">
+                    <strong>{item.title}</strong>
+                    <span>{formatShortDateTime(item.updatedAt)}</span>
+                  </div>
+                  <div className="mc-next-approvals-chip-row">
+                    <StatusChip
+                      tone={
+                        item.lifecycleState === "active"
+                          ? "success"
+                          : item.lifecycleState === "expired"
+                            ? "warning"
+                            : "muted"
+                      }
+                    >
+                      {item.lifecycleState}
+                    </StatusChip>
+                    <StatusChip tone={item.pinned ? "default" : "muted"}>
+                      {item.pinned ? "pinned" : "unpinned"}
+                    </StatusChip>
+                  </div>
+                  <p>{item.namespace}</p>
+                </button>
+              ))
+            )}
+          </div>
+        </NativeCard>
+        <NativeCard
+          title={memory.selectedItem?.title ?? "Memory detail"}
+          subtitle={
+            memory.selectedItem
+              ? `Lifecycle ${memory.selectedItem.lifecycleState} · ${memory.selectedItem.namespace}`
+              : "Select a memory item to inspect lifecycle state, history, and patch actions."
+          }
+        >
+          {memory.selectedItem ? (
+            <>
+              <div className="mc-next-runtime-metric-grid">
+                <div className="mc-next-runtime-metric">
+                  <span>Lifecycle</span>
+                  <strong>{memory.selectedItem.lifecycleState}</strong>
+                  <p>{memory.selectedItem.status}</p>
+                </div>
+                <div className="mc-next-runtime-metric">
+                  <span>Expires</span>
+                  <strong>{formatMaybeDateTime(memory.selectedItem.expiresAt)}</strong>
+                  <p>TTL {memory.selectedItem.ttlOverrideSeconds ?? "default"}</p>
+                </div>
+                <div className="mc-next-runtime-metric">
+                  <span>Item ID</span>
+                  <strong>{shortId(memory.selectedItem.itemId)}</strong>
+                  <p>{formatShortDateTime(memory.selectedItem.updatedAt)}</p>
+                </div>
+              </div>
+              <div className="mc-next-settings-field-grid">
+                <label className="mc-next-settings-field span-2">
+                  <span>Title</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={draft.title}
+                    onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>TTL override seconds</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={draft.ttlOverrideSeconds}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, ttlOverrideSeconds: event.target.value }))
+                    }
+                    placeholder="empty = default"
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>Pinned</span>
+                  <select
+                    className="mc-next-settings-input"
+                    value={draft.pinned ? "true" : "false"}
+                    onChange={(event) => setDraft((current) => ({ ...current, pinned: event.target.value === "true" }))}
+                  >
+                    <option value="true">Pinned</option>
+                    <option value="false">Not pinned</option>
+                  </select>
+                </label>
+                <label className="mc-next-settings-field span-2">
+                  <span>Content</span>
+                  <textarea
+                    className="mc-next-settings-textarea"
+                    value={draft.content}
+                    onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
+                  />
+                </label>
+              </div>
+              <div className="mc-next-runtime-actions">
+                <button
+                  type="button"
+                  className="gc-button"
+                  disabled={memory.busyKey === `item:${memory.selectedItem.itemId}`}
+                  onClick={() =>
+                    void memory.saveItemPatch(memory.selectedItem!.itemId, {
+                      title: draft.title,
+                      content: draft.content,
+                      pinned: draft.pinned,
+                      ttlOverrideSeconds: draft.ttlOverrideSeconds.trim()
+                        ? Number.parseInt(draft.ttlOverrideSeconds, 10)
+                        : null,
+                    })
+                  }
+                >
+                  Save item
+                </button>
+                <button
+                  type="button"
+                  className="gc-button danger"
+                  disabled={memory.busyKey === `forget:${memory.selectedItem.itemId}`}
+                  onClick={() => void memory.forgetSelectedItem()}
+                >
+                  Forget item
+                </button>
+              </div>
+              <div className="mc-next-settings-code-block">
+                <span>Item history</span>
+                {memory.data?.memoryHistory.length ? (
+                  <ul className="mc-next-approvals-compact-list">
+                    {memory.data.memoryHistory.slice(0, 10).map((entry) => (
+                      <li key={entry.changeId}>
+                        <strong>{entry.changeType}</strong>
+                        {" · "}
+                        {formatShortDateTime(entry.createdAt)}
+                        {entry.actorId ? ` · ${entry.actorId}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mc-next-directory-empty">No item history loaded.</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <p className="mc-next-directory-empty">Select a memory item to inspect it.</p>
+          )}
+        </NativeCard>
+      </NativeGrid>
+      <NativeGrid>
+        <NativeCard
+          title="Maintenance posture"
+          subtitle="Policy, runs, recommendations, and durable linkage stay visible as operator truth."
+          stats={[
+            { label: "Enabled", value: memory.data?.maintenanceStatus?.policy.enabled ? "yes" : "no" },
+            { label: "Durable ready", value: memory.data?.maintenanceDurableReady ? "yes" : "no" },
+          ]}
+        >
+          {memory.data?.maintenanceEnabled ? (
+            <>
+              {memory.policyDraft ? (
+                <div className="mc-next-settings-field-grid">
+                  <label className="mc-next-settings-field">
+                    <span>Enabled</span>
+                    <select
+                      className="mc-next-settings-input"
+                      value={memory.policyDraft.enabled ? "true" : "false"}
+                      onChange={(event) => {
+                        memory.setPolicyDirty(true);
+                        memory.setPolicyDraft((current) =>
+                          current ? { ...current, enabled: event.target.value === "true" } : current,
+                        );
+                      }}
+                    >
+                      <option value="true">Enabled</option>
+                      <option value="false">Disabled</option>
+                    </select>
+                  </label>
+                  <label className="mc-next-settings-field">
+                    <span>Run mode</span>
+                    <select
+                      className="mc-next-settings-input"
+                      value={memory.policyDraft.runMode}
+                      onChange={(event) => {
+                        memory.setPolicyDirty(true);
+                        memory.setPolicyDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                runMode: event.target.value as typeof current.runMode,
+                              }
+                            : current,
+                        );
+                      }}
+                    >
+                      <option value="manual">manual</option>
+                      <option value="scheduled">scheduled</option>
+                      <option value="hybrid">hybrid</option>
+                    </select>
+                  </label>
+                  <label className="mc-next-settings-field">
+                    <span>Provider</span>
+                    <input
+                      className="mc-next-settings-input"
+                      value={memory.policyDraft.providerId}
+                      onChange={(event) => {
+                        memory.setPolicyDirty(true);
+                        memory.setPolicyDraft((current) =>
+                          current ? { ...current, providerId: event.target.value } : current,
+                        );
+                      }}
+                    />
+                  </label>
+                  <label className="mc-next-settings-field">
+                    <span>Model</span>
+                    <input
+                      className="mc-next-settings-input"
+                      value={memory.policyDraft.model}
+                      onChange={(event) => {
+                        memory.setPolicyDirty(true);
+                        memory.setPolicyDraft((current) =>
+                          current ? { ...current, model: event.target.value } : current,
+                        );
+                      }}
+                    />
+                  </label>
+                </div>
+              ) : null}
+              <div className="mc-next-runtime-actions">
+                <button
+                  type="button"
+                  className="gc-button"
+                  disabled={memory.busyKey === "maintenance:run"}
+                  onClick={() => void memory.runMaintenance()}
+                >
+                  Run maintenance now
+                </button>
+                <button
+                  type="button"
+                  className="gc-button"
+                  disabled={!memory.policyDirty || memory.busyKey === "maintenance:policy"}
+                  onClick={() => void memory.savePolicy()}
+                >
+                  Save policy
+                </button>
+                <button type="button" className="gc-button subtle" onClick={() => void memory.reload()}>
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh
+                </button>
+              </div>
+              <div className="mc-next-runtime-metric-grid">
+                <div className="mc-next-runtime-metric">
+                  <span>Changed sessions</span>
+                  <strong>{String(memory.data?.maintenanceStatus?.state.changedSessionCount ?? 0)}</strong>
+                  <p>waiting for next run</p>
+                </div>
+                <div className="mc-next-runtime-metric">
+                  <span>Next due</span>
+                  <strong>{formatMaybeDateTime(memory.data?.maintenanceStatus?.nextDueAt)}</strong>
+                  <p>{memory.data?.maintenanceStatus?.policy.timeZone ?? "No timezone"}</p>
+                </div>
+                <div className="mc-next-runtime-metric">
+                  <span>Last run</span>
+                  <strong>{memory.data?.maintenanceStatus?.lastRun?.status ?? "none"}</strong>
+                  <p>{formatMaybeDateTime(memory.data?.maintenanceStatus?.lastRun?.updatedAt)}</p>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="mc-next-directory-empty">Memory maintenance is not enabled in this workspace.</p>
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Runs and recommendations"
+          subtitle="Recommendation and durable-run linkage stays visible instead of being buried under files."
+        >
+          <div className="mc-next-settings-grid">
+            <div className="mc-next-settings-stack">
+              <div className="mc-next-settings-code-block">
+                <span>Recommendations</span>
+                {(memory.data?.maintenanceRecommendations.length ?? 0) > 0 ? (
+                  <ul className="mc-next-approvals-compact-list">
+                    {memory.data?.maintenanceRecommendations.slice(0, 8).map((item) => (
+                      <li key={item.recommendationId}>
+                        <strong>{item.kind}</strong>
+                        {" · "}
+                        {item.status}
+                        {" · "}
+                        {item.summary}
+                        <div className="mc-next-runtime-actions">
+                          <button
+                            type="button"
+                            className="gc-button subtle"
+                            onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            type="button"
+                            className="gc-button subtle"
+                            onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mc-next-directory-empty">No maintenance recommendations.</p>
+                )}
+              </div>
+              <div className="mc-next-settings-code-block">
+                <span>Recent runs</span>
+                {(memory.data?.maintenanceRuns.length ?? 0) > 0 ? (
+                  <div className="mc-next-settings-selectable-list">
+                    {memory.data?.maintenanceRuns.slice(0, 8).map((run) => (
+                      <button
+                        key={run.runId}
+                        type="button"
+                        className={`mc-next-settings-selectable${memory.selectedRunId === run.runId ? " active" : ""}`}
+                        onClick={() => memory.setSelectedRunId(run.runId)}
+                      >
+                        <div className="mc-next-settings-selectable-head">
+                          <strong>{run.status}</strong>
+                          <span>{formatShortDateTime(run.updatedAt)}</span>
+                        </div>
+                        <p>{run.summary || run.triggerSource}</p>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mc-next-directory-empty">No maintenance runs yet.</p>
+                )}
+              </div>
+            </div>
+            <div className="mc-next-settings-stack">
+              <div className="mc-next-settings-code-block">
+                <span>Selected run detail</span>
+                {memory.selectedRun ? (
+                  <>
+                    <p>
+                      {memory.selectedRun.status} · {formatMaybeDateTime(memory.selectedRun.updatedAt)}
+                    </p>
+                    <p>Durable run: {memory.selectedRun.durableRunId ?? "none"}</p>
+                    <p>
+                      Sources {memory.data?.selectedRunProvenance?.sources.length ?? 0} · Changes{" "}
+                      {memory.data?.selectedRunProvenance?.changes.length ?? 0}
+                    </p>
+                    {memory.data?.selectedDurableRun ? (
+                      <p>Durable status: {memory.data.selectedDurableRun.status}</p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="mc-next-directory-empty">Select a maintenance run to inspect provenance.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </NativeCard>
+      </NativeGrid>
+      <NativeGrid>
+        <NativeCard
+          title="QMD and context posture"
+          subtitle="Recent context packs and efficiency stay visible, but secondary to memory item truth."
+          stats={[
+            { label: "Runs", value: String(memory.data?.qmdStats?.totalRuns ?? 0) },
+            { label: "Impact", value: memory.data?.qmdStats ? describeQmdImpact(memory.data.qmdStats) : "Stable" },
+          ]}
+        >
+          <div className="mc-next-runtime-metric-grid">
+            <div className="mc-next-runtime-metric">
+              <span>Original tokens</span>
+              <strong>{String(memory.data?.qmdStats?.originalTokenEstimate ?? 0)}</strong>
+              <p>{formatTokenDelta(memory.data?.qmdStats?.netTokenDelta ?? 0)}</p>
+            </div>
+            <div className="mc-next-runtime-metric">
+              <span>Distilled tokens</span>
+              <strong>{String(memory.data?.qmdStats?.distilledTokenEstimate ?? 0)}</strong>
+              <p>{(memory.data?.qmdStats?.compressionPercent ?? 0).toFixed(1)}% compression</p>
+            </div>
+          </div>
+          {(memory.data?.qmdStats?.recent.length ?? 0) > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memory.data?.qmdStats?.recent.slice(0, 6).map((item) => (
+                <li key={item.contextId}>
+                  <strong>{item.scope}</strong>
+                  {" · "}
+                  {formatShortDateTime(item.createdAt)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mc-next-directory-empty">No recent context packs.</p>
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Memory files"
+          subtitle="File and QMD evidence stay available as secondary context, not the main memory story."
+        >
+          {(fileAreas.length ?? 0) > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {fileAreas.slice(0, 8).map((area) => (
+                <li key={area.area}>
+                  <strong>{area.area}</strong>
+                  {" · "}
+                  {area.files.length} files
+                  {" · "}
+                  {formatBytes(area.totalBytes)}
+                  {" · "}
+                  {formatMaybeDateTime(area.latestModifiedAt)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mc-next-directory-empty">No memory file subspaces discovered.</p>
+          )}
+        </NativeCard>
+        <QuickJumpCard
+          title="Related routes"
+          subtitle="Stay inside canonical next routes while moving between memory, approvals, and runtime."
+          actions={[
+            { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
+            { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
+            { label: "Knowledge", route: { area: "library", section: "knowledge", theme: route.theme } },
+          ]}
+          navigate={navigate}
+        />
+      </NativeGrid>
+    </NativePageFrame>
+  );
+}

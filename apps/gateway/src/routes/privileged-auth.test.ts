@@ -6,6 +6,8 @@ import { adminRoutes } from "./admin.js";
 import { approvalsRoutes } from "./approvals.js";
 import { authRoutes } from "./auth.js";
 import { durableRoutes } from "./durable.js";
+import { memoryRoutes } from "./memory.js";
+import { orchestrationRoutes } from "./orchestration.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -149,6 +151,58 @@ function createGatewayMocks() {
     events: [],
     durableRunId: "durable-run-42",
   }));
+  const getMemoryMaintenanceStatus = vi.fn(() => ({
+    policy: {
+      workspaceId: "default",
+      enabled: true,
+      runMode: "manual",
+      timingStrategy: "fixed",
+      timeZone: "America/Los_Angeles",
+      minHoursSinceLastSuccess: 24,
+      minChangedSessions: 1,
+      executionTarget: "auto",
+      unavailableModelPolicy: "skip",
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+    },
+    state: {
+      workspaceId: "default",
+      changedSessionCount: 0,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+    },
+    recommendationCount: 0,
+    enabled: true,
+    durableReady: true,
+  }));
+  const listMemoryItems = vi.fn(() => []);
+  const runMemoryMaintenanceNow = vi.fn(() => ({
+    runId: "mmrun-1",
+    workspaceId: "default",
+    triggerSource: "manual",
+    status: "queued",
+    policySnapshot: {},
+    sourceSessionCount: 0,
+    changedArtifactCount: 0,
+    createdAt: "2026-04-11T00:00:00.000Z",
+    updatedAt: "2026-04-11T00:00:00.000Z",
+  }));
+  const createOrchestrationPlan = vi.fn(async () => ({
+    runId: "orch-run-1",
+    planId: "plan-1",
+    status: "queued",
+    startedAt: "2026-04-11T00:00:00.000Z",
+    totalCostUsd: 0,
+    totalIterations: 0,
+  }));
+  const getRun = vi.fn(() => ({
+    runId: "orch-run-1",
+    planId: "plan-1",
+    status: "queued",
+    startedAt: "2026-04-11T00:00:00.000Z",
+    totalCostUsd: 0,
+    totalIterations: 0,
+  }));
 
   return {
     gateway: {
@@ -180,6 +234,11 @@ function createGatewayMocks() {
       resolveApproval,
       createApprovalRemoteActionToken,
       getApprovalReplay,
+      getMemoryMaintenanceStatus,
+      listMemoryItems,
+      runMemoryMaintenanceNow,
+      createOrchestrationPlan,
+      getRun,
       validateDeviceAccessToken: (token: string) =>
         token === "device-bearer"
           ? {
@@ -213,6 +272,11 @@ function createGatewayMocks() {
       resolveApproval,
       createApprovalRemoteActionToken,
       getApprovalReplay,
+      getMemoryMaintenanceStatus,
+      listMemoryItems,
+      runMemoryMaintenanceNow,
+      createOrchestrationPlan,
+      getRun,
     },
   };
 }
@@ -221,6 +285,36 @@ async function buildApp(mode: AuthConfig["mode"]) {
   const { gateway, spies } = createGatewayMocks();
   const app = Fastify();
   app.decorate("gateway", gateway as never);
+  app.decorate("services", {
+    authAdmin: {
+      getAuthCredentialPlan: gateway.getAuthCredentialPlan,
+      listDeviceAccessGrants: spies.listDeviceAccessGrants,
+      resolveGatewayInstallToken: spies.resolveGatewayInstallToken,
+      listCompanionSessions: spies.listCompanionSessions,
+      getRetentionPolicy: spies.getRetentionPolicy,
+      createBackup: spies.createBackup,
+    },
+    approvals: {
+      listApprovals: spies.listApprovals,
+      resolveApprovalsBulk: spies.resolveApprovalsBulk,
+      resolveApproval: spies.resolveApproval,
+      createApprovalRemoteActionToken: spies.createApprovalRemoteActionToken,
+      getApprovalReplay: spies.getApprovalReplay,
+    },
+    durable: {
+      getDiagnostics: spies.getDurableDiagnostics,
+      resumeRun: spies.resumeDurableRun,
+    },
+    memory: {
+      getMaintenanceStatus: spies.getMemoryMaintenanceStatus,
+      listItems: spies.listMemoryItems,
+      runMaintenanceNow: spies.runMemoryMaintenanceNow,
+    },
+    orchestration: {
+      createPlan: spies.createOrchestrationPlan,
+      getRun: spies.getRun,
+    },
+  } as never);
   app.decorate("gatewayConfig", {
     assistant: {
       auth: baseAuthConfig(mode),
@@ -231,6 +325,8 @@ async function buildApp(mode: AuthConfig["mode"]) {
   await app.register(adminRoutes);
   await app.register(approvalsRoutes);
   await app.register(durableRoutes);
+  await app.register(memoryRoutes);
+  await app.register(orchestrationRoutes);
   return { app, spies };
 }
 
@@ -311,6 +407,63 @@ describe("privileged auth boundary", () => {
         headers: { Authorization: "Bearer test-token" },
         payload: { generateWhenMissing: true },
       }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/memory/maintenance/status?workspaceId=default",
+        headers: { Authorization: "Bearer test-token" },
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/memory/items?limit=20",
+        headers: { Authorization: "Bearer test-token" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/memory/maintenance/run-now",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Idempotency-Key": "memory-maint-run-now",
+        },
+        payload: { workspaceId: "default" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/orchestration/plans",
+        headers: {
+          Authorization: "Bearer test-token",
+          "Idempotency-Key": "orch-plan-create",
+        },
+        payload: {
+          planId: "plan-1",
+          goal: "Ship safely",
+          mode: "auto",
+          maxIterations: 1,
+          maxRuntimeMinutes: 5,
+          maxCostUsd: 1,
+          waves: [
+            {
+              waveId: "wave-1",
+              verify: [],
+              budgetUsd: 1,
+              ownership: [{ agentId: "agent-1", paths: ["apps/**"] }],
+              phases: [
+                {
+                  phaseId: "phase-1",
+                  ownerAgentId: "agent-1",
+                  specPath: "spec.md",
+                  loopMode: "fresh-context",
+                  requiresApproval: false,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/orchestration/runs/orch-run-1",
+        headers: { Authorization: "Bearer test-token" },
+      }),
     ]);
 
     for (const response of responses) {
@@ -326,6 +479,11 @@ describe("privileged auth boundary", () => {
     expect(built.spies.resolveApprovalsBulk).toHaveBeenCalledTimes(1);
     expect(built.spies.createApprovalRemoteActionToken).toHaveBeenCalledTimes(1);
     expect(built.spies.resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
+    expect(built.spies.getMemoryMaintenanceStatus).toHaveBeenCalledTimes(1);
+    expect(built.spies.listMemoryItems).toHaveBeenCalledTimes(1);
+    expect(built.spies.runMemoryMaintenanceNow).toHaveBeenCalledTimes(1);
+    expect(built.spies.createOrchestrationPlan).toHaveBeenCalledTimes(1);
+    expect(built.spies.getRun).toHaveBeenCalledTimes(1);
   });
 
   it("preserves operator access for auth.mode=none installs", async () => {
@@ -340,6 +498,14 @@ describe("privileged auth boundary", () => {
       app.inject({
         method: "GET",
         url: "/api/v1/durable/diagnostics",
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/memory/maintenance/status?workspaceId=default",
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/orchestration/runs/orch-run-1",
       }),
       app.inject({
         method: "POST",
@@ -388,6 +554,53 @@ describe("privileged auth boundary", () => {
         headers: { Authorization: "Bearer device-bearer" },
         payload: { generateWhenMissing: true },
       }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/memory/items?limit=20",
+        headers: { Authorization: "Bearer device-bearer" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/memory/maintenance/run-now",
+        headers: {
+          Authorization: "Bearer device-bearer",
+          "Idempotency-Key": "memory-maint-run-device",
+        },
+        payload: { workspaceId: "default" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/v1/orchestration/plans",
+        headers: {
+          Authorization: "Bearer device-bearer",
+          "Idempotency-Key": "orch-plan-device",
+        },
+        payload: {
+          planId: "plan-1",
+          goal: "Ship safely",
+          mode: "auto",
+          maxIterations: 1,
+          maxRuntimeMinutes: 5,
+          maxCostUsd: 1,
+          waves: [
+            {
+              waveId: "wave-1",
+              verify: [],
+              budgetUsd: 1,
+              ownership: [{ agentId: "agent-1", paths: ["apps/**"] }],
+              phases: [
+                {
+                  phaseId: "phase-1",
+                  ownerAgentId: "agent-1",
+                  specPath: "spec.md",
+                  loopMode: "fresh-context",
+                  requiresApproval: false,
+                },
+              ],
+            },
+          ],
+        },
+      }),
     ]);
 
     for (const response of responses) {
@@ -398,6 +611,9 @@ describe("privileged auth boundary", () => {
     expect(built.spies.getApprovalReplay).not.toHaveBeenCalled();
     expect(built.spies.resolveApproval).not.toHaveBeenCalled();
     expect(built.spies.resolveGatewayInstallToken).not.toHaveBeenCalled();
+    expect(built.spies.listMemoryItems).not.toHaveBeenCalled();
+    expect(built.spies.runMemoryMaintenanceNow).not.toHaveBeenCalled();
+    expect(built.spies.createOrchestrationPlan).not.toHaveBeenCalled();
   });
 
   it("rejects companion bearer credentials on representative privileged GET routes", async () => {
@@ -413,6 +629,16 @@ describe("privileged auth boundary", () => {
       app.inject({
         method: "GET",
         url: "/api/v1/durable/diagnostics",
+        headers: { Authorization: "Bearer companion-bearer" },
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/memory/maintenance/status?workspaceId=default",
+        headers: { Authorization: "Bearer companion-bearer" },
+      }),
+      app.inject({
+        method: "GET",
+        url: "/api/v1/orchestration/runs/orch-run-1",
         headers: { Authorization: "Bearer companion-bearer" },
       }),
       app.inject({

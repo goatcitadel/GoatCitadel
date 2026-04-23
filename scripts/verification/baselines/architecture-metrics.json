@@ -1,0 +1,15 @@
+{
+  "generatedAt": "2026-04-23T04:46:18.540Z",
+  "fastifyGatewayCallSites": 441,
+  "gatewayInternalPublicCount": 145,
+  "totalHostCallbacks": 1247,
+  "hostCallbacksByFile": {},
+  "routeFacingServiceCount": 5,
+  "routeFacingServiceFiles": [
+    "apps/gateway/src/services/approvals-route-service.ts",
+    "apps/gateway/src/services/auth-admin-route-service.ts",
+    "apps/gateway/src/services/durable-route-service.ts",
+    "apps/gateway/src/services/memory-route-service.ts",
+    "apps/gateway/src/services/orchestration-route-service.ts"
+  ]
+}

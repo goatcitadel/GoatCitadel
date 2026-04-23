@@ -70,6 +70,7 @@ import { deriveShellGatewayAccessState } from "./state/gateway-shell-state";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useRefreshSubscription } from "./hooks/useRefreshSubscription";
 import { ResizablePaneLayout } from "./components/ResizablePaneLayout";
+import { deriveRealtimeRefresh } from "../../../packages/mission-control-shared/src/state/realtime-derived";
 import {
   isDevDiagnosticsEnabled,
   recordClientDiagnostic,
@@ -310,54 +311,6 @@ function resolveShellRailDefaultSize(navMode: "expanded" | "compact" | "icon"): 
   }
 }
 
-const refreshTopicRules: Array<{ topic: RefreshTopic; keywords: string[] }> = [
-  {
-    topic: "surface",
-    keywords: [
-      "dashboard",
-      "surface",
-      "operator",
-      "summit",
-      "cron",
-      "memory",
-      "settings",
-      "system",
-      "onboarding",
-      "llm",
-      "approval",
-    ],
-  },
-  { topic: "quality", keywords: ["prompt_pack", "promptlab", "prompt_lab", "prompt-pack", "quality"] },
-  {
-    topic: "chat",
-    keywords: [
-      "chat",
-      "message",
-      "session",
-      "delegate",
-      "proactive",
-      "learned_memory",
-      "llm",
-      "provider",
-      "model",
-      "onboarding",
-      "settings",
-    ],
-  },
-  { topic: "approvals", keywords: ["approval", "gatehouse"] },
-  { topic: "tools", keywords: ["tool", "grant", "policy"] },
-  { topic: "files", keywords: ["file", "artifact", "workspace"] },
-  { topic: "memory", keywords: ["memory", "qmd", "context"] },
-  { topic: "agents", keywords: ["agent", "goat", "herd"] },
-  { topic: "skills", keywords: ["skill", "bankr"] },
-  { topic: "mcp", keywords: ["mcp"] },
-  { topic: "tasks", keywords: ["task", "trailboard"] },
-  { topic: "improvement", keywords: ["improvement", "replay", "autotune", "self_improvement"] },
-  { topic: "integrations", keywords: ["integration", "plugin", "connection"] },
-  { topic: "npu", keywords: ["npu", "runtime", "sidecar", "model", "voice", "llm", "provider"] },
-  { topic: "llamaCpp", keywords: ["llamacpp", "llama.cpp"] },
-];
-
 type GatewayAccessViewState =
   | GatewayAccessPreflightResult
   | {
@@ -367,34 +320,7 @@ type GatewayAccessViewState =
     };
 
 export function deriveRefreshTopics(event: RealtimeEvent): RefreshTopic[] {
-  if (event.payload.kind === "replay_gap") {
-    return [...new Set(refreshTopicRules.map((rule) => rule.topic))];
-  }
-  const topics = new Set<RefreshTopic>();
-  if (event.links?.approvalId) {
-    topics.add("approvals");
-    topics.add("surface");
-  }
-  if (event.links?.sessionId) {
-    topics.add("chat");
-  }
-  if (event.links?.taskId) {
-    topics.add("tasks");
-    topics.add("surface");
-  }
-  if (event.source === "system") {
-    topics.add("system");
-    topics.add("surface");
-  }
-  const haystack = `${event.eventType} ${event.source}`.toLowerCase();
-
-  for (const rule of refreshTopicRules) {
-    if (rule.keywords.some((keyword) => haystack.includes(keyword))) {
-      topics.add(rule.topic);
-    }
-  }
-
-  return [...topics];
+  return deriveRealtimeRefresh(event).topics;
 }
 
 export function App() {
@@ -860,12 +786,12 @@ export function App() {
             eventId: event.eventId,
           },
         });
-        const topics = deriveRefreshTopics(event);
-        for (const topic of topics) {
+        const derivedRefresh = deriveRealtimeRefresh(event);
+        for (const topic of derivedRefresh.topics) {
           emitRefresh(topic, {
-            reason: event.payload.kind === "replay_gap" ? "replay_gap" : event.eventType,
+            reason: derivedRefresh.signalReason,
             source: event.source,
-            eventType: event.payload.kind === "replay_gap" ? "replay_gap" : event.eventType,
+            eventType: derivedRefresh.signalEventType,
             eventId: event.eventId,
             timestamp: Date.now(),
           });

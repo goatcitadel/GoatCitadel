@@ -1,8 +1,7 @@
-/* eslint-disable max-lines -- Native route shells intentionally co-locate next-native Library/Ops/Cowork views while the surface rewrite settles. */
+/* eslint-disable max-lines -- Native route shells intentionally co-locate the remaining next-native Library and Cowork views while extraction finishes. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowRight,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -10,37 +9,23 @@ import {
   FolderOpen,
   History,
   Plus,
-  Radar,
   RefreshCw,
   Save,
-  Server,
-  ShieldCheck,
   Sparkles,
   Undo2,
-  Wallet,
   Workflow,
 } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
-import type {
-  ApprovalRequest,
-  ChatGeneratedArtifactRecord,
-  McpServerRecord,
-  SkillListItem,
-} from "@goatcitadel/contracts";
+import type { ChatGeneratedArtifactRecord, SkillListItem } from "@goatcitadel/contracts";
 import {
   archiveAgentProfile,
   createAgentProfile,
   createFileFromTemplate,
   fetchAgents,
-  fetchApprovals,
   fetchChatGeneratedArtifacts,
-  fetchCostSummary,
-  fetchDashboardState,
   fetchFileTemplates,
   fetchFilesList,
-  fetchHealthSummary,
   fetchImportedAgentCatalog,
-  fetchMcpServers,
   fetchMemoryFiles,
   fetchMemoryQmdStats,
   fetchOperators,
@@ -49,26 +34,20 @@ import {
   fetchSkillSources,
   fetchSkills,
   fetchTasksByView,
-  fetchTimelineSummary,
   downloadFile,
   reloadSkills,
   restoreAgentProfile,
   updateAgentProfile,
   updateSkillState,
-  uploadFile,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
+import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "./NativeRoutePageLayout";
 import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
+import { MemoryRoutePage } from "./library/MemoryRoutePage";
+import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
+import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
+import type { NativeRoutePagesProps } from "./types";
 import "./native-routes.css";
-
-interface NativeRoutePagesProps {
-  route: AppRoute;
-  activeWorkspaceId: string;
-  activeWorkspaceName: string;
-  pendingApprovals: number;
-  navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
-  setActiveWorkspaceId: (workspaceId: string) => void;
-}
 
 type LoadState<T> = {
   loading: boolean;
@@ -101,7 +80,10 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     return <LibraryNativePage {...props} />;
   }
   if (route.area === "ops") {
-    return <OpsNativePage {...props} />;
+    if ((route.section ?? "activity") === "approvals") {
+      return <ApprovalsRoutePage {...props} />;
+    }
+    return <RuntimeRoutePage {...props} />;
   }
   return <SettingsNativePage {...props} />;
 }
@@ -282,7 +264,7 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
     case "skills":
       return <LibrarySkillsSection {...props} />;
     case "memory":
-      return <LibraryMemorySection {...props} />;
+      return <MemoryRoutePage {...props} />;
     case "knowledge":
       return <LibraryKnowledgeSection {...props} />;
     case "files":
@@ -776,192 +758,6 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
   );
 }
 
-function LibraryMemorySection({ activeWorkspaceName }: NativeRoutePagesProps) {
-  const [selectedFilePath, setSelectedFilePath] = useState("");
-  const [search, setSearch] = useState("");
-  const [draftContent, setDraftContent] = useState("");
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [preview, setPreview] = useState<LoadState<{ content: string; contentType: string }>>({
-    loading: false,
-    error: null,
-    data: null,
-  });
-  const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const [files, qmd] = await Promise.all([
-      fetchMemoryFiles("memory").catch(() => ({ items: [] })),
-      fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
-    ]);
-    return {
-      files: files.items,
-      qmd,
-    };
-  }, []);
-
-  const visibleFiles = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return (data?.files ?? []).filter((item) => !query || item.relativePath.toLowerCase().includes(query));
-  }, [data?.files, search]);
-
-  useEffect(() => {
-    if (!visibleFiles.length) {
-      setSelectedFilePath("");
-      return;
-    }
-    setSelectedFilePath((current) =>
-      visibleFiles.some((item) => item.relativePath === current) ? current : (visibleFiles[0]?.relativePath ?? ""),
-    );
-  }, [visibleFiles]);
-
-  useEffect(() => {
-    if (!selectedFilePath) {
-      setPreview({ loading: false, error: null, data: null });
-      setDraftContent("");
-      return;
-    }
-    let cancelled = false;
-    setPreview({ loading: true, error: null, data: null });
-    void downloadFile(selectedFilePath)
-      .then((file) => {
-        if (!cancelled) {
-          setPreview({
-            loading: false,
-            error: null,
-            data: {
-              content: file.content,
-              contentType: file.contentType,
-            },
-          });
-          setDraftContent(file.content);
-        }
-      })
-      .catch((previewError: Error) => {
-        if (!cancelled) {
-          setPreview({ loading: false, error: previewError.message, data: null });
-          setDraftContent("");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedFilePath]);
-
-  const handleSave = async () => {
-    if (!selectedFilePath) {
-      return;
-    }
-    try {
-      await uploadFile(selectedFilePath, draftContent);
-      setNotice({ tone: "success", message: "Memory file updated." });
-      await reload();
-    } catch (saveError) {
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    }
-  };
-
-  return (
-    <LibrarySectionShell loading={loading} error={error}>
-      {notice ? <LibraryNotice notice={notice} /> : null}
-      <div className="mc-next-settings-grid">
-        <NativeCard
-          title="Memory sources"
-          subtitle="The structured memory store is still stabilizing, so this route focuses on editable memory files and recent distilled context."
-          stats={[
-            { label: "Files", value: String(data?.files.length ?? 0) },
-            { label: "Workspace", value: activeWorkspaceName },
-          ]}
-        >
-          <div className="mc-next-settings-field-grid">
-            <label className="mc-next-settings-field span-2">
-              <span>Filter memory files</span>
-              <input
-                className="mc-next-settings-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search the memory directory"
-              />
-            </label>
-          </div>
-          <LibrarySelectableList
-            items={visibleFiles.map((item) => ({
-              id: item.relativePath,
-              title: item.relativePath,
-              meta: formatBytes(item.size),
-              body: formatDateTime(item.modifiedAt),
-            }))}
-            selectedId={selectedFilePath}
-            onSelect={setSelectedFilePath}
-            emptyLabel="No memory files are available in this workspace."
-          />
-        </NativeCard>
-        <div className="mc-next-settings-stack">
-          <NativeCard
-            title={selectedFilePath || "Memory file preview"}
-            subtitle={preview.data?.contentType ?? "Select a memory file to inspect or update it."}
-          >
-            {preview.loading ? <LibraryEmptyState label="Loading memory file…" /> : null}
-            {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
-            {!preview.loading && !preview.error && preview.data ? (
-              <>
-                <LibraryFieldGrid>
-                  <LibraryField label="Content" span={2}>
-                    <textarea
-                      className="mc-next-settings-textarea"
-                      value={draftContent}
-                      onChange={(event) => setDraftContent(event.target.value)}
-                    />
-                  </LibraryField>
-                </LibraryFieldGrid>
-                <LibraryButtonRow>
-                  <button type="button" className="mc-next-settings-filter" onClick={() => void handleSave()}>
-                    <Save className="h-4 w-4" />
-                    Save file
-                  </button>
-                </LibraryButtonRow>
-              </>
-            ) : null}
-            {!preview.loading && !preview.error && !preview.data ? (
-              <LibraryEmptyState label="Select a memory file to inspect it." />
-            ) : null}
-          </NativeCard>
-          <NativeCard
-            title="Recent distilled context"
-            subtitle="Recent QMD context packs remain visible here while the higher-level memory maintenance APIs stabilize."
-          >
-            <LibraryMetricGrid
-              items={[
-                {
-                  label: "Total runs",
-                  value: String(data?.qmd?.totalRuns ?? 0),
-                  meta: `${data?.qmd?.generatedRuns ?? 0} generated`,
-                },
-                {
-                  label: "Cache hits",
-                  value: String(data?.qmd?.cacheHitRuns ?? 0),
-                  meta: `${data?.qmd?.fallbackRuns ?? 0} fallback`,
-                },
-                {
-                  label: "Compression",
-                  value: `${data?.qmd?.compressionPercent ?? 0}%`,
-                  meta: data?.qmd?.efficiencyLabel ?? "Unknown",
-                },
-              ]}
-            />
-            <LibraryActionList
-              items={(data?.qmd?.recent ?? []).map((item) => ({
-                id: item.contextId,
-                label: item.contextId,
-                description: truncateText(item.contextText, 180),
-                meta: `${item.scope} · ${item.quality.status} · ${item.citations.length} citations`,
-              }))}
-              emptyLabel="No recent context packs are available."
-            />
-          </NativeCard>
-        </div>
-      </div>
-    </LibrarySectionShell>
-  );
-}
-
 function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps) {
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [search, setSearch] = useState("");
@@ -1425,270 +1221,6 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
   );
 }
 
-function OpsNativePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
-  const [state, setState] = useState<
-    LoadState<{
-      dashboard: Awaited<ReturnType<typeof fetchDashboardState>> | null;
-      timeline: Awaited<ReturnType<typeof fetchTimelineSummary>> | null;
-      health: Awaited<ReturnType<typeof fetchHealthSummary>> | null;
-      cost: Awaited<ReturnType<typeof fetchCostSummary>> | null;
-      approvals: ApprovalRequest[];
-      mcpServers: McpServerRecord[];
-    }>
-  >({
-    loading: true,
-    error: null,
-    data: null,
-  });
-
-  useEffect(() => {
-    let cancelled = false;
-    setState((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([
-      fetchDashboardState().catch(() => null),
-      fetchTimelineSummary().catch(() => null),
-      fetchHealthSummary().catch(() => null),
-      fetchCostSummary("day").catch(() => null),
-      fetchApprovals("pending").catch(() => ({ items: [] })),
-      fetchMcpServers().catch(() => ({ items: [] })),
-    ])
-      .then(([dashboard, timeline, health, cost, approvals, mcpServers]) => {
-        if (cancelled) {
-          return;
-        }
-        setState({
-          loading: false,
-          error: null,
-          data: {
-            dashboard,
-            timeline,
-            health,
-            cost,
-            approvals: approvals.items,
-            mcpServers: mcpServers.items,
-          },
-        });
-      })
-      .catch((error: Error) => {
-        if (cancelled) {
-          return;
-        }
-        setState({
-          loading: false,
-          error: error.message,
-          data: null,
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const section = route.section ?? "activity";
-  const data = state.data;
-  const content = (() => {
-    if (!data) {
-      return null;
-    }
-    switch (section) {
-      case "approvals":
-        return (
-          <NativeCard
-            title="Approval inbox"
-            subtitle="Pending operator decisions without the old split-screen density."
-            stats={[
-              { label: "Pending", value: String(data.approvals.length || pendingApprovals) },
-              { label: "Workspace", value: activeWorkspaceName },
-            ]}
-          >
-            <NativeList
-              items={data.approvals.slice(0, 12).map((item) => ({
-                title: item.kind || item.linkage?.toolName || item.approvalId,
-                meta: item.riskLevel ?? item.status,
-                body: item.explanation?.summary || item.resolutionNote || "Operator decision required",
-              }))}
-              emptyLabel="No pending approvals."
-            />
-          </NativeCard>
-        );
-      case "costs":
-        return (
-          <NativeGrid>
-            <NativeCard
-              title="Spend summary"
-              subtitle="Readable spend posture for the active observation window."
-              stats={[
-                { label: "Scope", value: data.cost?.scope ?? "day" },
-                {
-                  label: "Tracked",
-                  value: String(data.cost?.usageAvailability?.trackedEvents ?? 0),
-                },
-              ]}
-            >
-              <NativeList
-                items={(data.cost?.items ?? []).slice(0, 10).map((item) => ({
-                  title: item.key,
-                  meta: formatUsd(item.costUsd),
-                  body: `${item.tokenTotal.toLocaleString()} total tokens`,
-                }))}
-                emptyLabel="No spend breakdown available."
-              />
-            </NativeCard>
-            <QuickJumpCard
-              title="Related ops"
-              subtitle="Follow the signal without re-entering the old health shell."
-              actions={[
-                { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
-                { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
-              ]}
-              navigate={navigate}
-            />
-          </NativeGrid>
-        );
-      case "runtime":
-        return (
-          <NativeGrid>
-            <NativeCard
-              title="Runtime posture"
-              subtitle="Daemon, host vitals, and backup readiness in a lighter frame."
-              stats={[
-                { label: "Approvals", value: String(pendingApprovals) },
-                { label: "Subagents", value: String(data.dashboard?.activeSubagents ?? 0) },
-              ]}
-            >
-              <NativeList
-                items={[
-                  {
-                    title: data.health?.daemonStatus?.running ? "Runtime serving" : "Runtime needs attention",
-                    meta: data.health?.daemonStatus?.host ?? "Host unavailable",
-                    body: data.health?.backups.latest
-                      ? `Latest backup ${formatDateTime(data.health.backups.latest.createdAt)}`
-                      : "No backup loaded",
-                  },
-                ]}
-              />
-            </NativeCard>
-            <NativeCard title="MCP and connectors" subtitle="Operational integrations still visible from Ops.">
-              <NativeList
-                items={data.mcpServers.slice(0, 10).map((item) => ({
-                  title: item.label,
-                  meta: item.transport,
-                  body: `${item.category ?? "general"} · ${item.enabled ? "enabled" : "disabled"}`,
-                }))}
-                emptyLabel="No MCP servers configured."
-              />
-            </NativeCard>
-          </NativeGrid>
-        );
-      case "sessions":
-        return (
-          <NativeCard title="Session evidence" subtitle="Recent sessions with less wrapper chrome and faster scanning.">
-            <NativeList
-              items={(data.dashboard?.sessions ?? []).slice(0, 14).map((item) => ({
-                title: item.displayName || item.sessionId,
-                meta: item.channel,
-                body: formatDateTime(item.lastActivityAt),
-              }))}
-              emptyLabel="No recent sessions."
-            />
-          </NativeCard>
-        );
-      case "schedules":
-        return (
-          <NativeCard title="Scheduler review" subtitle="Scheduled work and items waiting on review.">
-            <NativeList
-              items={(data.timeline?.scheduler.reviewQueue ?? []).slice(0, 14).map((item) => ({
-                title: item.reason || item.itemId,
-                meta: item.status ?? "queued",
-                body: item.scheduledFor ? formatDateTime(item.scheduledFor) : "No schedule timestamp",
-              }))}
-              emptyLabel="No scheduler review items."
-            />
-          </NativeCard>
-        );
-      case "improvement":
-        return (
-          <NativeCard title="Improvement loop" subtitle="Recent replay and improvement signals in one quieter surface.">
-            <NativeList
-              items={(data.timeline?.improvement.reports ?? []).slice(0, 12).map((item) => ({
-                title: item.title || item.reportId,
-                meta: item.runId ?? "report",
-                body: item.createdAt ? formatDateTime(item.createdAt) : "No timestamp",
-              }))}
-              emptyLabel="No improvement reports yet."
-            />
-          </NativeCard>
-        );
-      case "diagnostics":
-        return (
-          <NativeGrid>
-            <NativeCard
-              title="Diagnostics directory"
-              subtitle="Runtime diagnostics, docs, and quality helpers gathered without the old admin body."
-            >
-              <NativeList
-                items={[
-                  {
-                    title: "Gateway health",
-                    meta: data.health ? "Ready" : "Unknown",
-                    body: "Observe host vitals and daemon posture.",
-                  },
-                  {
-                    title: "MCP servers",
-                    meta: String(data.mcpServers.length),
-                    body: "Inspect integration runtime posture.",
-                  },
-                  {
-                    title: "Recent events",
-                    meta: String(data.timeline?.events.items.length ?? 0),
-                    body: "Operational signals available to inspect.",
-                  },
-                ]}
-              />
-            </NativeCard>
-            <QuickJumpCard
-              title="Diagnostics routes"
-              subtitle="Keep the operator on a calm path through the system."
-              actions={[
-                { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
-                { label: "Prompt packs", route: { area: "library", section: "prompt-packs", theme: route.theme } },
-              ]}
-              navigate={navigate}
-            />
-          </NativeGrid>
-        );
-      default:
-        return (
-          <NativeCard title="Activity feed" subtitle="Recent operational signal without the old timeline wrapper.">
-            <NativeList
-              items={(data.timeline?.events.items ?? []).slice(0, 14).map((item) => ({
-                title: item.eventType,
-                meta: item.source,
-                body: formatDateTime(item.timestamp),
-              }))}
-              emptyLabel="No recent events."
-            />
-          </NativeCard>
-        );
-    }
-  })();
-
-  return (
-    <NativePageFrame
-      icon={
-        section === "approvals" ? ShieldCheck : section === "costs" ? Wallet : section === "runtime" ? Server : Radar
-      }
-      kicker="Ops"
-      title={labelForOpsSection(section)}
-      description={descriptionForOpsSection(section)}
-      loading={state.loading}
-      error={state.error}
-    >
-      {content}
-    </NativePageFrame>
-  );
-}
-
 function SettingsNativePage({
   route,
   activeWorkspaceId,
@@ -1704,109 +1236,6 @@ function SettingsNativePage({
       navigate={navigate}
       setActiveWorkspaceId={setActiveWorkspaceId}
     />
-  );
-}
-
-function NativePageFrame({
-  icon: Icon,
-  kicker,
-  title,
-  description,
-  loading,
-  error,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  kicker: string;
-  title: string;
-  description: string;
-  loading: boolean;
-  error: string | null;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="mc-next-directory-page">
-      <header className="mc-next-directory-header">
-        <div className="mc-next-directory-icon">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mc-next-directory-copy">
-          <p>{kicker}</p>
-          <h1>{title}</h1>
-          <span>{description}</span>
-        </div>
-      </header>
-      {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-      {loading ? <BlocksShuffleLoader compact label="Loading current route data…" /> : children}
-    </section>
-  );
-}
-
-function NativeGrid({ children }: { children: React.ReactNode }) {
-  return <div className="mc-next-directory-grid-native">{children}</div>;
-}
-
-function NativeCard({
-  title,
-  subtitle,
-  stats,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  stats?: Array<{ label: string; value: string }>;
-  children: React.ReactNode;
-}) {
-  return (
-    <article className="mc-next-directory-card">
-      <div className="mc-next-directory-card-head">
-        <div>
-          <h2>{title}</h2>
-          <p>{subtitle}</p>
-        </div>
-        {stats?.length ? (
-          <div className="mc-next-directory-stats">
-            {stats.map((item) => (
-              <div key={`${item.label}-${item.value}`}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      {children}
-    </article>
-  );
-}
-
-function NativeList({
-  items,
-  emptyLabel = "Nothing here yet.",
-}: {
-  items: Array<{ title: string; meta?: string; body?: string }>;
-  emptyLabel?: string;
-}) {
-  if (items.length === 0) {
-    return <p className="mc-next-directory-empty">{emptyLabel}</p>;
-  }
-  return (
-    <div className="mc-next-directory-list">
-      {items.map((item, index) => (
-        <div key={`${item.title}-${item.meta ?? ""}-${index}`} className="mc-next-directory-list-item">
-          <div className="mc-next-directory-list-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -1839,45 +1268,6 @@ function NativeLane({ title, count, items }: { title: string; count: number; ite
         </div>
       )}
     </section>
-  );
-}
-
-function QuickJumpCard({
-  title,
-  subtitle,
-  actions,
-  navigate,
-}: {
-  title: string;
-  subtitle: string;
-  actions: Array<{ label: string; route: AppRoute; onSelect?: () => void }>;
-  navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
-}) {
-  return (
-    <article className="mc-next-directory-card mc-next-directory-card-compact">
-      <div className="mc-next-directory-card-head">
-        <div>
-          <h2>{title}</h2>
-          <p>{subtitle}</p>
-        </div>
-      </div>
-      <div className="mc-next-directory-actions">
-        {actions.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            className="mc-next-directory-action"
-            onClick={() => {
-              item.onSelect?.();
-              navigate(item.route);
-            }}
-          >
-            <span>{item.label}</span>
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        ))}
-      </div>
-    </article>
   );
 }
 
@@ -2153,80 +1543,38 @@ function truncateText(value: string, limit: number) {
   return `${value.slice(0, limit).trimEnd()}\n\n…`;
 }
 
-function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
-  switch (section) {
-    case "sessions":
-      return "Sessions";
-    case "schedules":
-      return "Schedules";
-    case "improvement":
-      return "Improvement";
-    case "approvals":
-      return "Approvals";
-    case "costs":
-      return "Costs";
-    case "runtime":
-      return "Runtime";
-    case "quality":
-      return "Quality";
-    case "diagnostics":
-      return "Diagnostics";
-    default:
-      return "Activity";
-  }
-}
-
-function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
-  switch (section) {
-    case "approvals":
-      return "Review the operator decision queue in a calmer next-native layout.";
-    case "costs":
-      return "Spend and usage coverage without another dashboard maze.";
-    case "runtime":
-      return "Host and runtime posture that matches the new shell.";
-    case "diagnostics":
-      return "Diagnostics, docs, and integration runtime signal in one quieter route.";
-    default:
-      return "Operational signal grouped for quick scanning.";
-  }
-}
-
 function formatDateTime(value?: string | null) {
   if (!value) {
     return "Unknown";
   }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return "Unknown";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
   }
-  return new Date(parsed).toLocaleString();
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) {
     return "0 B";
   }
-  const units = ["B", "KB", "MB", "GB"];
-  let index = 0;
-  let current = value;
-  while (current >= 1024 && index < units.length - 1) {
-    current /= 1024;
-    index += 1;
-  }
-  return `${current.toFixed(current >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const scaled = value / 1024 ** exponent;
+  return `${scaled.toFixed(scaled >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
 
 function formatTaskStatus(value: string) {
-  return value.replaceAll("_", " ");
-}
-
-function formatUsd(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 4,
-  }).format(Number.isFinite(value) ? value : 0);
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function getErrorMessage(error: unknown) {

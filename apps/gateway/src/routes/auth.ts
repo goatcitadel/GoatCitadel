@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 
 const createDeviceRequestSchema = z.object({
   deviceLabel: z.string().trim().min(1).max(120).optional(),
@@ -61,11 +62,13 @@ const sseTokenIssueSchema = z.object({
 });
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
-  const operatorOnly = {
-    preHandler: fastify.requireOperatorAuth,
-  } as const;
+  const operatorOnly = withRouteAccess(fastify, "operator");
+  const publicRoute = withRouteAccess(fastify, "public");
+  const deviceOnly = withRouteAccess(fastify, "device");
+  const companionOnly = withRouteAccess(fastify, "companion");
+  const authAdmin = fastify.services.authAdmin;
 
-  fastify.post("/api/v1/auth/sse-token", async (request, reply) => {
+  fastify.post("/api/v1/auth/sse-token", operatorOnly, async (request, reply) => {
     const authMode = fastify.gatewayConfig.assistant.auth.mode;
     if (authMode === "none") {
       return reply.code(400).send({
@@ -82,13 +85,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     "/api/v1/auth/device-requests",
-    {
+    withRouteAccess(fastify, "public", {
       config: {
         rateLimit: {
           max: 5,
         },
       },
-    },
+    }),
     async (request, reply) => {
       const parsed = createDeviceRequestSchema.safeParse(request.body ?? {});
       if (!parsed.success) {
@@ -96,7 +99,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        const created = await fastify.gateway.createDeviceAccessRequest(parsed.data, {
+        const created = await authAdmin.createDeviceAccessRequest(parsed.data, {
           requestedOrigin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
           requestedIp: request.raw.socket.remoteAddress ?? request.ip,
           userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : undefined,
@@ -113,7 +116,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.post("/api/v1/auth/companion/session/exchange", async (request, reply) => {
+  fastify.post("/api/v1/auth/companion/session/exchange", deviceOnly, async (request, reply) => {
     if (request.authActorSource !== "device" || !request.authGrantId) {
       return reply.code(403).send({
         error: "Companion session exchange requires an approved device grant.",
@@ -124,34 +127,32 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(
-        await fastify.gateway.exchangeCompanionSessionFromDeviceGrant(request.authGrantId, parsed.data),
-      );
+      return reply.send(await authAdmin.exchangeCompanionSessionFromDeviceGrant(request.authGrantId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.post("/api/v1/auth/companion/session/refresh", async (request, reply) => {
+  fastify.post("/api/v1/auth/companion/session/refresh", publicRoute, async (request, reply) => {
     const parsed = companionSessionRefreshSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.rotateCompanionSession(parsed.data));
+      return reply.send(await authAdmin.rotateCompanionSession(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.get("/api/v1/auth/companion/session", async (request, reply) => {
+  fastify.get("/api/v1/auth/companion/session", companionOnly, async (request, reply) => {
     if (request.authActorSource !== "companion" || !request.authCompanionSessionId) {
       return reply.code(403).send({
         error: "Companion session access requires companion authentication.",
       });
     }
     try {
-      return reply.send(fastify.gateway.getCompanionSessionInfo(request.authCompanionSessionId));
+      return reply.send(authAdmin.getCompanionSessionInfo(request.authCompanionSessionId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -163,7 +164,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.listCompanionSessions(parsed.data));
+      return reply.send(authAdmin.listCompanionSessions(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -175,7 +176,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getCompanionSessionRecord(params.data.sessionId));
+      return reply.send(authAdmin.getCompanionSessionRecord(params.data.sessionId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -187,7 +188,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.revokeCompanionSession(params.data.sessionId, request.authActorId));
+      return reply.send(await authAdmin.revokeCompanionSession(params.data.sessionId, request.authActorId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -200,15 +201,15 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: await fastify.gateway.listCompanionAuditEvents(parsed.data),
+        items: await authAdmin.listCompanionAuditEvents(parsed.data),
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.get("/api/v1/auth/plan", async (_request, reply) => {
-    return reply.send(fastify.gateway.getAuthCredentialPlan());
+  fastify.get("/api/v1/auth/plan", publicRoute, async (_request, reply) => {
+    return reply.send(authAdmin.getAuthCredentialPlan());
   });
 
   fastify.get("/api/v1/auth/devices", operatorOnly, async (request, reply) => {
@@ -217,9 +218,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const items = fastify.gateway
-      .listDeviceAccessGrants()
-      .filter((item) => parsed.data.view === "all" || !item.revokedAt);
+    const items = authAdmin.listDeviceAccessGrants().filter((item) => parsed.data.view === "all" || !item.revokedAt);
     return reply.send({ items });
   });
 
@@ -230,7 +229,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const grant = await fastify.gateway.revokeDeviceAccessGrant(params.data.grantId, request.authActorId);
+      const grant = await authAdmin.revokeDeviceAccessGrant(params.data.grantId, request.authActorId);
       return reply.send({ grant });
     } catch (error) {
       const message = (error as Error).message;
@@ -241,14 +240,13 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     "/api/v1/auth/install-token",
-    {
-      preHandler: fastify.requireOperatorAuth,
+    withRouteAccess(fastify, "operator", {
       config: {
         rateLimit: {
           max: 5,
         },
       },
-    },
+    }),
     async (request, reply) => {
       const parsed = installTokenSchema.safeParse(request.body ?? {});
       if (!parsed.success) {
@@ -256,7 +254,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        return reply.send(await fastify.gateway.resolveGatewayInstallToken(parsed.data));
+        return reply.send(await authAdmin.resolveGatewayInstallToken(parsed.data));
       } catch (error) {
         return reply.code(400).send({
           error: (error as Error).message,
@@ -265,7 +263,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/api/v1/auth/device-requests/:requestId/status", async (request, reply) => {
+  fastify.get("/api/v1/auth/device-requests/:requestId/status", publicRoute, async (request, reply) => {
     const params = deviceRequestParamsSchema.safeParse(request.params);
     const headers = deviceRequestSecretHeaderSchema.safeParse(request.headers);
     if (!params.success || !headers.success) {
@@ -278,7 +276,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const status = await fastify.gateway.getDeviceAccessRequestStatus(
+      const status = await authAdmin.getDeviceAccessRequestStatus(
         params.data.requestId,
         headers.data["x-goatcitadel-device-request-secret"],
       );

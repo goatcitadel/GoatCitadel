@@ -1,8 +1,13 @@
 # GoatCitadel 1.0 Contract
 
-Last updated: 2026-04-12
+Last updated: 2026-04-22
 
 This document defines the product promise, visible scope, trust posture, upgrade guarantees, and release gates required before GoatCitadel may describe itself as `1.0`.
+
+For `1.0` governance language:
+
+- `proof` means a named end-to-end verification lane with a bespoke scenario body
+- `evidence` means the repo-visible code, tests, manifests, and supporting docs that anchor those claims
 
 ## Product Promise
 
@@ -28,10 +33,13 @@ Mission Control still contains compatibility labels such as `Operate / Observe /
 
 Release-target mappings for the current UI:
 
+- `apps/mission-control-next` is the canonical `1.0` operator shell.
+- `apps/mission-control` remains a compatibility shell for rollback, comparison, and inbound route continuity; it is compatibility-only and is not allowed to be the only complete implementation of a shipped operator-critical surface.
+
 - `Timeline` corresponds to the current Activity + Sessions story
 - `Health` corresponds to the current Costs + System story
 - `Artifacts` corresponds to the current Memory + Files story
-- `Quality` is centered on Prompt Lab and its adjacent improvement/proof workflows
+- `Quality` is centered on Prompt Lab and its adjacent improvement/validation workflows
 
 If a surface or sub-surface remains visible in the shipped UI, it must meet the same `1.0` operator bar as the rest of the product.
 
@@ -97,11 +105,17 @@ GoatCitadel may not claim `1.0` until all of these are true:
 - `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces derived from the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)
 - `verify:api:compat` is green and fails on breaking REST route/schema or realtime event-envelope diffs
+- `verify:runtime:truth` is green as a bespoke end-to-end proof lane for the canonical wait/resume/restart/recovery operator story in the current shell
+- `verify:auth:matrix` is green as a bespoke end-to-end proof lane for the privileged control-plane route set
+- `verify:ui:parity` is green as a bespoke end-to-end proof lane while the legacy compatibility shell remains shipped
+- `verify:memory:truth` is green as a bespoke end-to-end proof lane for TTL/lifecycle truth
+- `verify:realtime:truth` is green as a bespoke end-to-end proof lane for replay-gap, compatibility-fallback, and explicit-event-envelope behavior
+- `verify:architecture:metrics` is green and does not show coupling regressions relative to the accepted baseline
 - governance docs pass freshness validation against this contract
 - no visible primary surface still relies on raw JSON-only or raw table-only treatment as its main operator UI
 - Cowork and Code are visibly and functionally distinct from Chat
 - visible runtime and catalog surfaces expose readable health, diagnostics, and recovery actions
-- provider, channel, MCP, backup/restore, and extension/SDK claims for the visible catalog are backed by the proof map in [docs/1_0_RELEASE_EVIDENCE.md](./1_0_RELEASE_EVIDENCE.md) and its cited green lanes/tests
+- provider, channel, MCP, backup/restore, and extension/SDK claims for the visible catalog are backed by the evidence map in [docs/1_0_RELEASE_EVIDENCE.md](./1_0_RELEASE_EVIDENCE.md) and its cited green proof lanes/supporting tests
 - repo-visible PR workflows exist for the blocking release-gate lanes; branch protection still must mark them as required outside the repo
 
 ## Source of Truth Order

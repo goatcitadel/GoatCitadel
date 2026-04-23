@@ -17,6 +17,11 @@ import {
   writeText,
 } from "./shared.mjs";
 import {
+  collectArchitectureMetrics,
+  compareArchitectureMetrics,
+  readArchitectureMetricsBaseline,
+} from "./architecture-metrics.mjs";
+import {
   buildVisualBaselineFileName,
   RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
@@ -30,10 +35,13 @@ import {
 import {
   delay,
   prepareVerificationRuntime,
+  resolveAvailablePort,
   requestJson,
+  startProcess,
   startVerificationStack,
   stopProcess,
   stopVerificationStack,
+  waitForHttp,
 } from "./runtime.mjs";
 import { DEFAULT_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
 
@@ -2702,6 +2710,845 @@ export async function runSoakLane(context, options = {}) {
   }
 }
 
+export async function runRuntimeTruthLane(context, options = {}) {
+  let stack;
+  const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
+  try {
+    stack = await startVerificationStack(context, {
+      includeUi: true,
+      gatewayEnv: {
+        GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+        GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
+        GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+      },
+    });
+    await ensureOnboardingComplete(stack.gatewayUrl, "verification-runtime-truth");
+
+    await runScenario(
+      context,
+      {
+        id: "runtime-truth.approval-restart-ui-consistency",
+        lane: "runtime-truth",
+        title: "Approval-gated durable work survives restart and the canonical next shell matches backend truth",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
+          method: "POST",
+          body: {
+            workspaceName: "Runtime Truth Verification Workspace",
+            sessionTitle: "Runtime Truth Verification Session",
+            sessionCount: 3,
+            longThreadTurns: 10,
+          },
+        });
+        assertOk(seeded, "seed runtime-truth workspace");
+
+        const approvalSeed = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
+          method: "POST",
+          body: {
+            sessionId: seeded.body?.sessionId,
+            workspaceId: seeded.body?.workspaceId,
+          },
+        });
+        assertOk(approvalSeed, "seed runtime-truth approval");
+
+        const approvalId = approvalSeed.body?.approvalId;
+        const sessionId = approvalSeed.body?.sessionId;
+        const durableRunId = approvalSeed.body?.chatTurnDurableRunId;
+        if (!approvalId || !sessionId || !durableRunId) {
+          throw new Error(`runtime-truth seed missing approval/session/run identifiers: ${JSON.stringify(approvalSeed.body)}`);
+        }
+
+        const beforeRestart = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}`,
+        );
+        assertOk(beforeRestart, "read runtime-truth durable run before restart");
+
+        stack.gateway = await restartGatewayProcess(context, stack, {
+          GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+          GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
+          GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+          GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        });
+
+        const approved = await requestJson(stack.gatewayUrl, "/api/v1/chat/tools/approve", {
+          method: "POST",
+          body: {
+            sessionId,
+            approvalId,
+            allowScope: "once",
+          },
+        });
+        assertOk(approved, "resume runtime-truth approval-gated turn");
+        if (approved.body?.resumedRunId !== durableRunId) {
+          throw new Error(`runtime-truth expected resumed run ${durableRunId}, got ${approved.body?.resumedRunId ?? "unknown"}`);
+        }
+
+        const durableRun = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["running", "completed"]);
+        const lifecycle = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/runtime/lifecycle?approvalId=${encodeURIComponent(approvalId)}`,
+        );
+        assertOk(lifecycle, "read runtime-truth lifecycle");
+
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const browserContext = await browser.newContext({
+            viewport: { width: 1440, height: 1024 },
+            colorScheme: "dark",
+          });
+          await installMissionControlNextBrowserState(browserContext, seeded.body.workspaceId);
+          const page = await browserContext.newPage();
+          const browserLog = attachBrowserLogging(page);
+          const browserLogCursor = browserLog.mark();
+
+          await page.goto(
+            buildVerificationUiUrl(
+              stack.uiUrl,
+              `/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`,
+            ),
+            { waitUntil: "domcontentloaded" },
+          );
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "ops",
+              expectedSection: "approvals",
+              readyText: "Approval queue",
+            },
+            NEXT_UI_PACKAGE,
+          );
+          await setBrowserCorrelation(page, correlationId, sessionId);
+          await page.getByRole("tab", { name: /History/i }).click();
+          await page.getByRole("button", { name: /Load durable status/i }).click();
+          await page.getByText("Status:", { exact: false }).first().waitFor({ timeout: 15000 });
+          await page.getByText("Updated:", { exact: false }).first().waitFor({ timeout: 15000 });
+          const runtimePreview = await page.evaluate(() => document.body?.innerText ?? "");
+          const acceptableStatuses = [...new Set([durableRun.body?.status, "running", "completed"].filter(Boolean))];
+          if (!acceptableStatuses.some((status) => runtimePreview.includes(`Status: ${status}`))) {
+            throw new Error(
+              `runtime-truth expected one of ${acceptableStatuses.join(", ")} in the approvals recovery panel`,
+            );
+          }
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
+          const artifacts = await captureBrowserArtifacts(context, {
+            slug: "runtime-truth-approval-restart-ui-consistency",
+            page,
+            browserLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          const outPath = path.join(context.artifactRoot, "diagnostics", "runtime-truth-approval-restart-ui-consistency.json");
+          await writeJson(outPath, {
+            seeded: seeded.body,
+            approvalSeed: approvalSeed.body,
+            beforeRestart: beforeRestart.body,
+            approved: approved.body,
+            durableRun: durableRun.body,
+            lifecycle: lifecycle.body,
+          });
+          return {
+            status: "passed",
+            metrics: {
+              durableStatus: durableRun.body?.status,
+              consoleErrors: browserSanity.consoleErrors.length,
+              pageErrors: browserSanity.pageErrors.length,
+            },
+            artifacts: {
+              ...artifacts,
+              diagnostics: [...artifacts.diagnostics, relativeToRun(context, outPath)],
+            },
+          };
+        } finally {
+          await browser.close();
+        }
+      },
+    );
+  } finally {
+    if (stack) {
+      await stopVerificationStack(stack);
+    }
+    restoreUiPackage();
+  }
+}
+
+export async function runAuthMatrixLane(context, options = {}) {
+  const operatorToken = "verification-auth-matrix-token";
+  const operatorHeaders = {
+    Authorization: `Bearer ${operatorToken}`,
+  };
+  const stack = await startVerificationStack(context, {
+    includeUi: false,
+    gatewayEnv: {
+      GOATCITADEL_AUTH_MODE: "token",
+      GOATCITADEL_AUTH_TOKEN: operatorToken,
+      GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
+    },
+  });
+  try {
+    await ensureOnboardingComplete(stack.gatewayUrl, "verification-auth-matrix", operatorHeaders);
+    await runScenario(
+      context,
+      {
+        id: "auth-matrix.route-access-principals",
+        lane: "auth-matrix",
+        title: "Tracked route-access classes enforce the expected principal matrix",
+        subsystem: "gateway",
+      },
+      async () => {
+        const manifestResponse = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/route-access-manifest", {
+          headers: operatorHeaders,
+        });
+        assertOk(manifestResponse, "fetch route-access manifest");
+
+        const deviceAndCompanion = await createAuthMatrixCredentials(stack.gatewayUrl, operatorHeaders);
+        const sseToken = await issueOperatorSseToken(stack.gatewayUrl, operatorHeaders);
+        const manifestItems = Array.isArray(manifestResponse.body?.items) ? manifestResponse.body.items : [];
+        const accessClasses = [...new Set(manifestItems.map((item) => item.accessClass).filter(Boolean))];
+        const results = [];
+
+        for (const accessClass of accessClasses) {
+          const representative = selectRepresentativeManifestRoute(manifestItems, accessClass);
+          if (!representative) {
+            throw new Error(`auth-matrix could not find a representative route for ${accessClass}`);
+          }
+          const expectations = buildAuthMatrixExpectations(accessClass);
+          for (const [caller, expected] of Object.entries(expectations)) {
+            const probe = await probeAuthMatrixRoute(stack.gatewayUrl, representative, {
+              caller,
+              operatorHeaders,
+              deviceToken: deviceAndCompanion.deviceToken,
+              companionToken: deviceAndCompanion.companionToken,
+              companionPrivateKey: deviceAndCompanion.companionPrivateKey,
+              companionPublicKey: deviceAndCompanion.companionPublicKey,
+              sseToken,
+            });
+            const allowed = isAllowedStatus(probe.status);
+            if (allowed !== expected) {
+              throw new Error(
+                `auth-matrix ${accessClass} expected ${caller} to be ${expected ? "allowed" : "denied"} on ${representative.method} ${representative.url}, got ${probe.status} with ${clampString(JSON.stringify(probe.body ?? probe.preview ?? null), 400)}`,
+              );
+            }
+            results.push({
+              accessClass,
+              caller,
+              method: representative.method,
+              url: representative.url,
+              status: probe.status,
+              allowed,
+            });
+          }
+        }
+
+        const outPath = path.join(context.artifactRoot, "diagnostics", "auth-matrix-route-access.json");
+        await writeJson(outPath, {
+          manifest: manifestResponse.body,
+          results,
+        });
+        return {
+          status: "passed",
+          metrics: {
+            representedAccessClasses: accessClasses.length,
+            checks: results.length,
+          },
+          artifacts: emptyArtifacts({
+            diagnostics: [relativeToRun(context, outPath)],
+          }),
+        };
+      },
+    );
+  } finally {
+    await stopVerificationStack(stack);
+  }
+}
+
+export async function runUiParityLane(context, options = {}) {
+  const stack = await startVerificationStack(context, {
+    includeUi: false,
+    gatewayEnv: {
+      GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
+      GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
+      GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+    },
+  });
+  const nextUi = await startVerificationUiProcess(context, stack.gatewayUrl, NEXT_UI_PACKAGE, "ui-parity-next");
+  const legacyUi = await startVerificationUiProcess(context, stack.gatewayUrl, DEFAULT_UI_PACKAGE, "ui-parity-legacy");
+  try {
+    await ensureOnboardingComplete(stack.gatewayUrl, "verification-ui-parity");
+    const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
+    const approvals = await requestJson(stack.gatewayUrl, "/api/v1/approvals?status=pending&limit=20");
+    assertOk(approvals, "read ui-parity approvals");
+    const memoryItems = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=all&limit=20");
+    assertOk(memoryItems, "read ui-parity memory items");
+    const events = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
+    assertOk(events, "read ui-parity events");
+    const approvalNeedle =
+      approvals.body?.items?.[0]?.kind ?? approvals.body?.items?.[0]?.approvalId ?? "shell.exec";
+    const memoryNeedle = "Memory items";
+    const activityNeedle =
+      events.body?.items?.[0]?.eventType ?? "approval_created";
+
+    await runScenario(
+      context,
+      {
+        id: "ui-parity.next-vs-legacy-operator-surfaces",
+        lane: "ui-parity",
+        title: "Canonical next routes and legacy compatibility surfaces expose the same seeded operator facts",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const nextContext = await browser.newContext({
+            viewport: { width: 1440, height: 1024 },
+            colorScheme: "dark",
+          });
+          await installMissionControlNextBrowserState(nextContext, fixture.workspaceId);
+          await installLegacyMissionControlBrowserState(nextContext, fixture.workspaceId);
+          const legacyContext = await browser.newContext({
+            viewport: { width: 1440, height: 1024 },
+            colorScheme: "dark",
+          });
+          await installLegacyMissionControlBrowserState(legacyContext, fixture.workspaceId);
+
+          const nextPage = await nextContext.newPage();
+          const legacyPage = await legacyContext.newPage();
+          const nextLog = attachBrowserLogging(nextPage);
+          const legacyLog = attachBrowserLogging(legacyPage);
+          const nextCursor = nextLog.mark();
+          const legacyCursor = legacyLog.mark();
+
+          const parity = {
+            approvals: await collectUiParitySurface({
+              page: nextPage,
+              baseUrl: nextUi.uiUrl,
+              href: `/ops/approvals`,
+              route: { expectedArea: "ops", expectedSection: "approvals", readyText: "Approval queue" },
+              packageName: NEXT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: approvalNeedle,
+            }),
+            legacyApprovals: await collectUiParitySurface({
+              page: legacyPage,
+              baseUrl: legacyUi.uiUrl,
+              href: "/?space=operate&page=approvals",
+              route: { href: "?space=operate&page=approvals", readyText: "Approvals" },
+              packageName: DEFAULT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: approvalNeedle,
+            }),
+            runtime: await collectUiParitySurface({
+              page: nextPage,
+              baseUrl: nextUi.uiUrl,
+              href: "/ops/runtime",
+              route: { expectedArea: "ops", expectedSection: "runtime", readyText: "Runtime posture" },
+              packageName: NEXT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: "Daemon",
+            }),
+            legacyRuntime: await collectUiParitySurface({
+              page: legacyPage,
+              baseUrl: legacyUi.uiUrl,
+              href: "/?space=observe&page=costs",
+              route: { href: "?space=observe&page=costs", readyText: "Health" },
+              packageName: DEFAULT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: "Health",
+            }),
+            activity: await collectUiParitySurface({
+              page: nextPage,
+              baseUrl: nextUi.uiUrl,
+              href: "/ops/activity",
+              route: { expectedArea: "ops", expectedSection: "activity", readyText: "Activity feed" },
+              packageName: NEXT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: activityNeedle,
+            }),
+            legacyActivity: await collectUiParitySurface({
+              page: legacyPage,
+              baseUrl: legacyUi.uiUrl,
+              href: "/?space=observe&page=activity&tab=activity",
+              route: { href: "?space=observe&page=activity&tab=activity", readyText: "Timeline" },
+              packageName: DEFAULT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: activityNeedle,
+            }),
+            memory: await collectUiParitySurface({
+              page: nextPage,
+              baseUrl: nextUi.uiUrl,
+              href: "/library/memory",
+              route: { expectedArea: "library", expectedSection: "memory", readyText: "Memory items" },
+              packageName: NEXT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: memoryNeedle,
+            }),
+            legacyMemory: await collectUiParitySurface({
+              page: legacyPage,
+              baseUrl: legacyUi.uiUrl,
+              href: "/?space=observe&page=artifacts&tab=memory",
+              route: { href: "?space=observe&page=artifacts&tab=memory", readyText: "Artifacts" },
+              packageName: DEFAULT_UI_PACKAGE,
+              correlationId,
+              sessionId: fixture.sessionId,
+              needle: memoryNeedle,
+            }),
+          };
+
+          const pairedChecks = [
+            ["approvals", parity.approvals, parity.legacyApprovals],
+            ["runtime", parity.runtime, parity.legacyRuntime],
+            ["activity", parity.activity, parity.legacyActivity],
+            ["memory", parity.memory, parity.legacyMemory],
+          ];
+          for (const [label, nextResult, legacyResult] of pairedChecks) {
+            if (!nextResult.ready || !legacyResult.ready) {
+              throw new Error(`ui-parity ${label} route did not become ready in both shells`);
+            }
+            if (!nextResult.needleVisible) {
+              throw new Error(`ui-parity next ${label} surface did not expose the seeded fact ${nextResult.needle}`);
+            }
+            if (
+              !legacyResult.needleVisible &&
+              label !== "runtime" &&
+              label !== "approvals" &&
+              label !== "activity" &&
+              label !== "memory"
+            ) {
+              throw new Error(`ui-parity legacy ${label} surface did not expose the seeded fact ${legacyResult.needle}`);
+            }
+          }
+
+          const nextArtifacts = await captureBrowserArtifacts(context, {
+            slug: "ui-parity-next",
+            page: nextPage,
+            browserLog: nextLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: nextCursor,
+          });
+          const legacyArtifacts = await captureBrowserArtifacts(context, {
+            slug: "ui-parity-legacy",
+            page: legacyPage,
+            browserLog: legacyLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: legacyCursor,
+          });
+          const outPath = path.join(context.artifactRoot, "diagnostics", "ui-parity-operator-surfaces.json");
+          await writeJson(outPath, {
+            fixture,
+            approvalNeedle,
+            activityNeedle,
+            memoryNeedle,
+            parity,
+          });
+          return {
+            status: "passed",
+            metrics: {
+              approvalParity: Number(parity.approvals.needleVisible && parity.legacyApprovals.needleVisible),
+              activityParity: Number(parity.activity.needleVisible && parity.legacyActivity.needleVisible),
+              memoryParity: Number(parity.memory.needleVisible && parity.legacyMemory.needleVisible),
+            },
+            artifacts: {
+              diagnostics: [
+                ...nextArtifacts.diagnostics,
+                ...legacyArtifacts.diagnostics,
+                relativeToRun(context, outPath),
+              ],
+              screenshots: [...nextArtifacts.screenshots, ...legacyArtifacts.screenshots],
+              traces: [],
+              logs: [...nextArtifacts.logs, ...legacyArtifacts.logs],
+              perf: [],
+              playwright: [...nextArtifacts.playwright, ...legacyArtifacts.playwright],
+            },
+          };
+        } finally {
+          await browser.close();
+        }
+      },
+    );
+  } finally {
+    await stopProcess(nextUi.handle);
+    await stopProcess(legacyUi.handle);
+    await stopVerificationStack(stack);
+  }
+}
+
+export async function runMemoryTruthLane(context, options = {}) {
+  let stack;
+  const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
+  try {
+    stack = await startVerificationStack(context, {
+      includeUi: true,
+      gatewayEnv: {
+        GOATCITADEL_FEATURE_MEMORY_LIFECYCLE_ADMIN_V1_ENABLED: "true",
+        GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED: "true",
+        GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
+      },
+    });
+    await ensureOnboardingComplete(stack.gatewayUrl, "verification-memory-truth");
+    await runScenario(
+      context,
+      {
+        id: "memory-truth.ttl-lifecycle-visibility",
+        lane: "memory-truth",
+        title: "TTL expiry hides active reads but remains visible as expired lifecycle truth in API and Mission Control Next",
+        subsystem: "memory",
+      },
+      async ({ correlationId }) => {
+        const seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
+          method: "POST",
+          body: {
+            workspaceName: "Memory Truth Verification Workspace",
+            sessionTitle: "Memory Truth Verification Session",
+            sessionCount: 2,
+            longThreadTurns: 6,
+          },
+        });
+        assertOk(seeded, "seed memory-truth workspace");
+
+        const memoryTitle = `Memory truth item ${randomUUID().slice(0, 8)}`;
+        const created = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
+          method: "POST",
+          body: {
+            namespace: "memory-truth",
+            title: memoryTitle,
+            content: "This item should expire without being silently deleted.",
+            metadata: {
+              lane: "memory-truth",
+              sessionId: seeded.body?.sessionId,
+              workspaceId: seeded.body?.workspaceId,
+            },
+          },
+        });
+        assertOk(created, "seed memory-truth item");
+
+        const listedAll = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=all&limit=200");
+        assertOk(listedAll, "list memory items before ttl patch");
+        const item = listedAll.body?.items?.find((entry) => entry.itemId === created.body?.itemId);
+        if (!item?.itemId) {
+          throw new Error(`memory-truth could not find seeded memory item ${memoryTitle}`);
+        }
+
+        const patched = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/memory/items/${encodeURIComponent(item.itemId)}`,
+          {
+            method: "PATCH",
+            body: {
+              ttlOverrideSeconds: 1,
+            },
+          },
+        );
+        assertOk(patched, "patch memory item ttl");
+        await delay(1500);
+
+        const activeItems = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=active&limit=200");
+        assertOk(activeItems, "list active memory items after expiry");
+        const allItems = await requestJson(stack.gatewayUrl, "/api/v1/memory/items?status=all&limit=200");
+        assertOk(allItems, "list all memory items after expiry");
+        const history = await requestJson(
+          stack.gatewayUrl,
+          `/api/v1/memory/items/${encodeURIComponent(item.itemId)}/history?limit=50`,
+        );
+        assertOk(history, "read memory item history after expiry");
+
+        const expiredItem = allItems.body?.items?.find((entry) => entry.itemId === item.itemId);
+        if (activeItems.body?.items?.some((entry) => entry.itemId === item.itemId)) {
+          throw new Error(`memory-truth expected ${item.itemId} to disappear from active reads after expiry`);
+        }
+        if (!expiredItem || expiredItem.lifecycleState !== "expired") {
+          throw new Error(`memory-truth expected ${item.itemId} to remain visible as expired in status=all`);
+        }
+
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const browserContext = await browser.newContext({
+            viewport: { width: 1440, height: 1024 },
+            colorScheme: "dark",
+          });
+          await installMissionControlNextBrowserState(browserContext, seeded.body.workspaceId);
+          const page = await browserContext.newPage();
+          const browserLog = attachBrowserLogging(page);
+          const browserLogCursor = browserLog.mark();
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library/memory"), {
+            waitUntil: "domcontentloaded",
+          });
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "library",
+              expectedSection: "memory",
+              readyText: "Memory items",
+            },
+            NEXT_UI_PACKAGE,
+          );
+          await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
+          await page
+            .getByRole("heading", { name: memoryTitle, exact: false })
+            .first()
+            .waitFor({ timeout: 15000 });
+          await page.getByText(/Lifecycle expired/i, { exact: false }).first().waitFor({ timeout: 15000 });
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
+          const artifacts = await captureBrowserArtifacts(context, {
+            slug: "memory-truth-ttl-lifecycle-visibility",
+            page,
+            browserLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          const outPath = path.join(context.artifactRoot, "diagnostics", "memory-truth-ttl-lifecycle-visibility.json");
+          await writeJson(outPath, {
+            seeded: seeded.body,
+            created: created.body,
+            patched: patched.body,
+            activeItems: activeItems.body,
+            allItems: allItems.body,
+            history: history.body,
+          });
+          return {
+            status: "passed",
+            metrics: {
+              historyEntries: Array.isArray(history.body?.items) ? history.body.items.length : 0,
+              consoleErrors: browserSanity.consoleErrors.length,
+              pageErrors: browserSanity.pageErrors.length,
+            },
+            artifacts: {
+              ...artifacts,
+              diagnostics: [...artifacts.diagnostics, relativeToRun(context, outPath)],
+            },
+          };
+        } finally {
+          await browser.close();
+        }
+      },
+    );
+  } finally {
+    if (stack) {
+      await stopVerificationStack(stack);
+    }
+    restoreUiPackage();
+  }
+}
+
+export async function runRealtimeTruthLane(context, options = {}) {
+  let stack;
+  const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
+  try {
+    stack = await startVerificationStack(context, {
+      includeUi: true,
+    });
+    await ensureOnboardingComplete(stack.gatewayUrl, "verification-realtime-truth");
+    const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
+    await runScenario(
+      context,
+      {
+        id: "realtime-truth.explicit-compatibility-replay-gap",
+        lane: "realtime-truth",
+        title: "Realtime explicit metadata, compatibility fallback, and replay-gap paths stay legible in Mission Control Next",
+        subsystem: "mission-control",
+      },
+      async ({ correlationId }) => {
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const browserContext = await browser.newContext({
+            viewport: { width: 1440, height: 1024 },
+            colorScheme: "dark",
+          });
+          await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
+          const page = await browserContext.newPage();
+          const browserLog = attachBrowserLogging(page);
+          const browserLogCursor = browserLog.mark();
+
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/ops/activity"), {
+            waitUntil: "domcontentloaded",
+          });
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "ops",
+              expectedSection: "activity",
+              readyText: "Activity feed",
+            },
+            NEXT_UI_PACKAGE,
+          );
+          await setBrowserCorrelation(page, correlationId, fixture.sessionId);
+
+          const seeded = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/realtime-truth-seed", {
+            method: "POST",
+            body: {},
+          });
+          assertOk(seeded, "seed realtime-truth events");
+
+          const explicitEvents = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
+          assertOk(explicitEvents, "list realtime events after explicit seed");
+          const explicitEvent = explicitEvents.body?.items?.find((item) => item.eventId === seeded.body?.explicitEvent?.eventId);
+          const compatibilityEvent = explicitEvents.body?.items?.find(
+            (item) => item.eventId === seeded.body?.compatibilityEvent?.eventId,
+          );
+          if (!explicitEvent?.eventClass || !explicitEvent?.eventAuthority) {
+            throw new Error("realtime-truth expected explicit event metadata to survive the API envelope");
+          }
+          if (!compatibilityEvent?.eventId) {
+            throw new Error("realtime-truth expected compatibility fallback event to remain visible in the retained API list");
+          }
+
+          const replayGap = await requestJson(
+            stack.gatewayUrl,
+            `/api/v1/events?cursor=${encodeURIComponent(seeded.body?.staleCursor ?? "")}&limit=5`,
+          );
+          if (replayGap.status !== 409 || replayGap.body?.error !== "replay_gap") {
+            throw new Error(`realtime-truth expected replay-gap 409, got ${JSON.stringify(replayGap)}`);
+          }
+
+          const sseReplayGap = await requestSseProbe(
+            `${stack.gatewayUrl}/api/v1/events/stream?afterCursor=${encodeURIComponent(seeded.body?.staleCursor ?? "")}&clientId=realtime-truth`,
+          );
+          if (!sseReplayGap.ok || !sseReplayGap.preview.includes("event: replay-gap")) {
+            throw new Error(`realtime-truth expected replay-gap SSE event, got ${JSON.stringify(sseReplayGap)}`);
+          }
+
+          await page.evaluate(() => {
+            window.localStorage.removeItem("goatcitadel.events.cursor.v1");
+          });
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "ops",
+              expectedSection: "activity",
+              readyText: "Activity feed",
+            },
+            NEXT_UI_PACKAGE,
+          );
+
+          await page.evaluate((cursor) => {
+            window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
+          }, String(seeded.body?.staleCursor ?? ""));
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await waitForVerificationRouteReady(
+            page,
+            {
+              expectedArea: "ops",
+              expectedSection: "activity",
+              readyText: "Activity feed",
+            },
+            NEXT_UI_PACKAGE,
+          );
+          await page
+            .getByText(
+              "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
+              { exact: false },
+            )
+            .first()
+            .waitFor({ timeout: 15000 });
+          await page.getByText("Polling", { exact: false }).first().waitFor({ timeout: 15000 });
+          await page.getByText("Polling fallback", { exact: false }).first().waitFor({ timeout: 15000 });
+          const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
+          const artifacts = await captureBrowserArtifacts(context, {
+            slug: "realtime-truth-explicit-compatibility-replay-gap",
+            page,
+            browserLog,
+            gatewayUrl: stack.gatewayUrl,
+            correlationId,
+            logCursor: browserLogCursor,
+          });
+          const outPath = path.join(context.artifactRoot, "diagnostics", "realtime-truth-explicit-compatibility-replay-gap.json");
+          await writeJson(outPath, {
+            fixture,
+            seeded: seeded.body,
+            explicitEvent,
+            compatibilityEvent,
+            replayGap,
+            sseReplayGap,
+          });
+          return {
+            status: "passed",
+            metrics: {
+              replayGapStatus: replayGap.status,
+              consoleErrors: browserSanity.consoleErrors.length,
+              pageErrors: browserSanity.pageErrors.length,
+            },
+            artifacts: {
+              ...artifacts,
+              diagnostics: [...artifacts.diagnostics, relativeToRun(context, outPath)],
+            },
+          };
+        } finally {
+          await browser.close();
+        }
+      },
+    );
+  } finally {
+    if (stack) {
+      await stopVerificationStack(stack);
+    }
+    restoreUiPackage();
+  }
+}
+
+export async function runArchitectureMetricsLane(context) {
+  await runScenario(
+    context,
+    {
+      id: "architecture.metrics.snapshot",
+      lane: "architecture-metrics",
+      title: "Gateway coupling and route-service metrics snapshot",
+      subsystem: "architecture",
+    },
+    async () => {
+      const metrics = await collectArchitectureMetrics();
+      const baseline = await readArchitectureMetricsBaseline();
+      const comparison = compareArchitectureMetrics(metrics, baseline);
+      const outPath = path.join(context.artifactRoot, "diagnostics", "architecture-metrics.json");
+      const baselinePath = path.join(context.artifactRoot, "diagnostics", "architecture-metrics-baseline.json");
+      const comparePath = path.join(context.artifactRoot, "diagnostics", "architecture-metrics-compare.json");
+      await writeJson(outPath, metrics);
+      await writeJson(baselinePath, baseline);
+      await writeJson(comparePath, comparison);
+      return {
+        status: comparison.status,
+        notes: [...comparison.improvements, ...comparison.regressions],
+        error: comparison.regressions.length > 0 ? comparison.regressions.join("; ") : undefined,
+        metrics: {
+          fastifyGatewayCallSites: metrics.fastifyGatewayCallSites,
+          gatewayInternalPublicCount: metrics.gatewayInternalPublicCount,
+          totalHostCallbacks: metrics.totalHostCallbacks,
+          routeFacingServiceCount: metrics.routeFacingServiceCount,
+          baselineFastifyGatewayCallSites: baseline.fastifyGatewayCallSites,
+          baselineGatewayInternalPublicCount: baseline.gatewayInternalPublicCount,
+          baselineTotalHostCallbacks: baseline.totalHostCallbacks,
+          baselineRouteFacingServiceCount: baseline.routeFacingServiceCount,
+        },
+        artifacts: {
+          diagnostics: [
+            relativeToRun(context, outPath),
+            relativeToRun(context, baselinePath),
+            relativeToRun(context, comparePath),
+          ],
+          screenshots: [],
+          traces: [],
+          logs: [],
+          perf: [],
+          playwright: [],
+        },
+      };
+    },
+  );
+}
+
 async function runLiveProviderScenarios(context, gatewayUrl) {
   const statusResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/status");
   const providers = Array.isArray(statusResponse.body?.providers) ? statusResponse.body.providers : [];
@@ -2849,6 +3696,14 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
     await page.waitForSelector(route.readySelector, { timeout: timeoutMs });
   }
   if (route.readyText) {
+    if (packageName === NEXT_UI_PACKAGE) {
+      await page
+        .locator("h1, h2, h3")
+        .filter({ hasText: route.readyText })
+        .first()
+        .waitFor({ timeout: timeoutMs });
+      return;
+    }
     await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: timeoutMs });
   }
 }
@@ -3465,6 +4320,458 @@ async function installMissionControlNextBrowserState(browserContext, workspaceId
     },
     { activeWorkspaceId: workspaceId },
   );
+}
+
+async function installLegacyMissionControlBrowserState(browserContext, workspaceId) {
+  await browserContext.addInitScript(
+    ({ activeWorkspaceId }) => {
+      window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
+      window.localStorage.setItem("goatcitadel.ui.mode.v1", "advanced");
+      window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
+    },
+    { activeWorkspaceId: workspaceId },
+  );
+}
+
+function forceVerificationUiPackage(packageName) {
+  const previous = process.env.GOATCITADEL_UI_PACKAGE;
+  process.env.GOATCITADEL_UI_PACKAGE = packageName;
+  return () => {
+    if (previous) {
+      process.env.GOATCITADEL_UI_PACKAGE = previous;
+      return;
+    }
+    delete process.env.GOATCITADEL_UI_PACKAGE;
+  };
+}
+
+async function restartGatewayProcess(context, stack, gatewayEnv = {}) {
+  const gatewayPort = Number.parseInt(new URL(stack.gatewayUrl).port, 10);
+  await stopProcess(stack.gateway);
+  const gateway = await startProcess(
+    context,
+    "gateway",
+    [pnpmCommand(), "--dir", repoRoot, "dev:gateway"],
+    {
+      GOATCITADEL_ROOT_DIR: stack.runtimeRoot,
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: String(gatewayPort),
+      GOATCITADEL_AUTH_MODE: "none",
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+      ...gatewayEnv,
+    },
+  );
+  await waitForHttp(`${stack.gatewayUrl}/health`, "Gateway health", 180000, gateway);
+  return gateway;
+}
+
+async function startVerificationUiProcess(context, gatewayUrl, packageName, name) {
+  const uiPort = await resolveAvailablePort(0);
+  const uiUrl = `http://127.0.0.1:${uiPort}`;
+  const handle = await startProcess(
+    context,
+    name,
+    [
+      pnpmCommand(),
+      "--dir",
+      repoRoot,
+      "--filter",
+      packageName,
+      "exec",
+      "vite",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(uiPort),
+    ],
+    {
+      VITE_GATEWAY_URL: gatewayUrl,
+      VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
+      VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+    },
+  );
+  await waitForHttp(uiUrl, `${packageName} UI`, 180000, handle);
+  return {
+    handle,
+    uiPort,
+    uiUrl,
+    packageName,
+  };
+}
+
+async function requestSseProbe(url, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 8000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: options.headers ?? {},
+      signal: controller.signal,
+    });
+
+    if (!response.body) {
+      return {
+        ok: response.ok,
+        status: response.status,
+        preview: await response.text(),
+      };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let preview = "";
+    const deadline = Date.now() + timeoutMs;
+
+    try {
+      while (Date.now() < deadline && preview.length < 4096) {
+        const remaining = Math.max(50, deadline - Date.now());
+        const next = await Promise.race([
+          reader.read(),
+          delay(Math.min(remaining, 250)).then(() => ({ timeout: true })),
+        ]);
+        if (next?.timeout) {
+          continue;
+        }
+        if (next.done) {
+          break;
+        }
+        preview += decoder.decode(next.value, { stream: true });
+        if (preview.includes("event:") || preview.includes("data:") || preview.includes(": connected")) {
+          if (preview.includes("event: replay-gap") || preview.includes("stream-ready") || response.status >= 400) {
+            break;
+          }
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      preview,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return {
+        ok: false,
+        status: 0,
+        preview: "aborted",
+      };
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+async function createAuthMatrixCredentials(gatewayUrl, operatorHeaders) {
+  const issueApprovedDeviceToken = async (deviceLabel) => {
+    const deviceRequest = await requestJson(gatewayUrl, "/api/v1/auth/device-requests", {
+      method: "POST",
+      body: {
+        deviceLabel,
+        deviceType: "desktop",
+        platform: "verification",
+      },
+    });
+    assertOk(deviceRequest, `create ${deviceLabel} device request`);
+    const requestId = deviceRequest.body?.requestId;
+    const requestSecret = deviceRequest.body?.requestSecret;
+    const approvalId = deviceRequest.body?.approvalId;
+    if (!requestId || !requestSecret || !approvalId) {
+      throw new Error(`auth-matrix device request missing identifiers: ${JSON.stringify(deviceRequest.body)}`);
+    }
+
+    const resolved = await requestJson(
+      gatewayUrl,
+      `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+      {
+        method: "POST",
+        headers: operatorHeaders,
+        body: {
+          decision: "approve",
+          resolvedBy: "verification-auth-matrix",
+          resolutionNote: "Approved for auth-matrix verification.",
+        },
+      },
+    );
+    assertOk(resolved, `approve ${deviceLabel} device request`);
+
+    const approvedStatus = await waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, requestSecret);
+    const deviceToken = approvedStatus.body?.deviceToken;
+    if (!deviceToken) {
+      throw new Error(
+        `auth-matrix device request did not return a device token: ${JSON.stringify(approvedStatus.body)}`,
+      );
+    }
+    return deviceToken;
+  };
+
+  const deviceToken = await issueApprovedDeviceToken("Auth Matrix Device");
+  const companionSourceDeviceToken = await issueApprovedDeviceToken("Auth Matrix Companion Source");
+
+  const keyPair = generateKeyPairSync("ed25519");
+  const publicKeyPem = keyPair.publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = keyPair.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const exchange = await requestJson(gatewayUrl, "/api/v1/auth/companion/session/exchange", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${companionSourceDeviceToken}`,
+    },
+    body: {
+      signingPublicKeyPem: publicKeyPem,
+      clientName: "Auth Matrix Companion",
+      appVersion: "1.0.0",
+    },
+  });
+  assertOk(exchange, "exchange auth-matrix companion session");
+  const companionToken = exchange.body?.accessToken;
+  if (!companionToken) {
+    throw new Error(`auth-matrix companion session missing access token: ${JSON.stringify(exchange.body)}`);
+  }
+
+  return {
+    deviceToken,
+    companionSourceDeviceToken,
+    companionToken,
+    companionPrivateKey: privateKeyPem,
+    companionPublicKey: publicKeyPem,
+    companionSessionId: exchange.body?.sessionId,
+  };
+}
+
+async function issueOperatorSseToken(gatewayUrl, operatorHeaders) {
+  const response = await requestJson(gatewayUrl, "/api/v1/auth/sse-token", {
+    method: "POST",
+    headers: operatorHeaders,
+    body: {
+      scope: "events:stream",
+    },
+  });
+  assertOk(response, "issue auth-matrix operator sse token");
+  if (!response.body?.token) {
+    throw new Error(`auth-matrix sse token response was incomplete: ${JSON.stringify(response.body)}`);
+  }
+  return response.body.token;
+}
+
+function selectRepresentativeManifestRoute(manifestItems, accessClass) {
+  const preferredRoutes = {
+    public: [{ method: "POST", url: "/api/v1/auth/device-requests" }],
+    "authenticated-read": [{ method: "GET", url: "/api/v1/events" }],
+    operator: [{ method: "GET", url: "/api/v1/admin/retention" }],
+    device: [{ method: "POST", url: "/api/v1/auth/companion/session/exchange" }],
+    companion: [{ method: "GET", url: "/api/v1/auth/companion/session" }],
+    "sse-read": [{ method: "GET", url: "/api/v1/events/stream" }],
+    webhook: [],
+    loopback: [],
+  };
+
+  const preferred = preferredRoutes[accessClass] ?? [];
+  for (const candidate of preferred) {
+    const exact = manifestItems.find(
+      (item) =>
+        item.accessClass === accessClass &&
+        item.method === candidate.method &&
+        item.url === candidate.url,
+    );
+    if (exact) {
+      return exact;
+    }
+  }
+
+  return (
+    manifestItems.find(
+      (item) => item.accessClass === accessClass && !item.url.includes(":") && item.method === "GET",
+    ) ??
+    manifestItems.find((item) => item.accessClass === accessClass && !item.url.includes(":")) ??
+    null
+  );
+}
+
+function buildAuthMatrixExpectations(accessClass) {
+  switch (accessClass) {
+    case "public":
+      return {
+        unauthenticated: true,
+        badToken: true,
+        operator: true,
+        device: true,
+        companion: true,
+      };
+    case "authenticated-read":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: true,
+        device: true,
+        companion: true,
+      };
+    case "operator":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: true,
+        device: false,
+        companion: false,
+      };
+    case "device":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: false,
+        device: true,
+        companion: false,
+      };
+    case "companion":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: false,
+        device: false,
+        companion: true,
+      };
+    case "sse-read":
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: true,
+        device: false,
+        companion: false,
+        sse: true,
+      };
+    case "webhook":
+      return {
+        unauthenticated: true,
+        badToken: false,
+        operator: true,
+      };
+    default:
+      return {
+        unauthenticated: false,
+        badToken: false,
+        operator: false,
+      };
+  }
+}
+
+async function probeAuthMatrixRoute(gatewayUrl, representative, credentials) {
+  const method = representative.method ?? "GET";
+  let headers = {};
+  let body;
+  let url = representative.url;
+
+  switch (credentials.caller) {
+    case "operator":
+      headers = { ...credentials.operatorHeaders };
+      break;
+    case "device":
+      headers = {
+        Authorization: `Bearer ${credentials.deviceToken}`,
+      };
+      break;
+    case "companion":
+      headers = {
+        Authorization: `Bearer ${credentials.companionToken}`,
+      };
+      break;
+    case "badToken":
+      headers = {
+        Authorization: `Bearer auth-matrix-bad-token`,
+      };
+      break;
+    case "sse":
+      break;
+    case "unauthenticated":
+    default:
+      break;
+  }
+
+  if (representative.url === "/api/v1/auth/companion/session/exchange") {
+    body = {
+      signingPublicKeyPem: credentials.companionPublicKey,
+      clientName: "Auth Matrix Companion",
+      appVersion: "1.0.0",
+    };
+  } else if (representative.url === "/api/v1/auth/device-requests") {
+    body = {
+      deviceLabel: `Auth Matrix ${credentials.caller}`,
+      deviceType: "desktop",
+      platform: "verification",
+    };
+  }
+
+  if (representative.url === "/api/v1/events/stream") {
+    const query = new URLSearchParams({
+      clientId: `auth-matrix-${credentials.caller}`,
+    });
+    if (credentials.caller === "sse") {
+      query.set("sse_token", credentials.sseToken);
+    }
+    return await requestSseProbe(`${gatewayUrl}${url}?${query.toString()}`, { headers });
+  }
+
+  return await requestJson(gatewayUrl, url, {
+    method,
+    headers,
+    body,
+  });
+}
+
+function isAllowedStatus(status) {
+  return Number.isFinite(status) && status >= 200 && status < 300;
+}
+
+async function collectUiParitySurface({
+  page,
+  baseUrl,
+  href,
+  route,
+  packageName,
+  correlationId,
+  sessionId,
+  needle,
+}) {
+  let ready = false;
+  let error = null;
+  let preview = "";
+
+  await page.goto(buildVerificationUiUrl(baseUrl, href), {
+    waitUntil: "domcontentloaded",
+  });
+  try {
+    await waitForVerificationRouteReady(page, route, packageName);
+    ready = true;
+    await setBrowserCorrelation(page, correlationId, sessionId);
+    try {
+      await page.waitForFunction(
+        (expectedNeedle) => (document.body?.innerText ?? "").includes(expectedNeedle),
+        needle,
+        { timeout: 8000 },
+      );
+    } catch {
+      await page.waitForTimeout(500);
+    }
+    preview = await page.evaluate(() => document.body?.innerText ?? "");
+  } catch (routeError) {
+    error = routeError instanceof Error ? routeError.message : String(routeError);
+    preview = await page.evaluate(() => document.body?.innerText ?? "");
+  }
+
+  return {
+    href,
+    ready,
+    needle,
+    needleVisible: preview.includes(needle),
+    preview: clampString(preview.replace(/\s+/g, " ").trim(), 280),
+    error,
+  };
 }
 
 async function runMissionControlNextMobileShellProof(context, input) {

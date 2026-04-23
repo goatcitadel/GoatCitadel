@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { approvalsRoutes } from "./approvals.js";
 
-function buildApp(gateway: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
+function buildApp(approvals: Record<string, unknown>, requireOperatorAuth = vi.fn(async () => undefined)) {
   const app = Fastify();
-  app.decorate("gateway", gateway as never);
+  app.decorate("services", { approvals } as never);
   app.decorate("requireOperatorAuth", requireOperatorAuth as never);
   return {
     app,

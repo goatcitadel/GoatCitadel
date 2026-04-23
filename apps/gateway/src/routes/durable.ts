@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { withRouteAccess } from "./route-access.js";
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(50),
@@ -57,12 +58,11 @@ const deadLetterRecoverBodySchema = z.object({
 export const durableRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
-  const operatorOnly = {
-    preHandler: fastify.requireOperatorAuth,
-  } as const;
+  const operatorOnly = withRouteAccess(fastify, "operator");
+  const durable = fastify.services.durable;
 
   fastify.get("/api/v1/durable/diagnostics", operatorOnly, async () => {
-    return fastify.gateway.getDurableDiagnostics();
+    return durable.getDiagnostics();
   });
 
   fastify.get("/api/v1/durable/runs", operatorOnly, async (request, reply) => {
@@ -71,7 +71,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return {
-      items: fastify.gateway.listDurableRuns(parsed.data.limit),
+      items: durable.listRuns(parsed.data.limit),
     };
   });
 
@@ -81,7 +81,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return {
-      items: fastify.gateway.listDurableDeadLetters(parsed.data.limit),
+      items: durable.listDeadLetters(parsed.data.limit),
     };
   });
 
@@ -97,7 +97,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     return {
-      items: fastify.gateway.listDurableRunCheckpoints(params.data.runId, query.data.limit),
+      items: durable.listRunCheckpoints(params.data.runId, query.data.limit),
     };
   });
 
@@ -107,7 +107,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createDurableRun(body.data));
+      return reply.code(201).send(durable.createRun(body.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -119,7 +119,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getDurableRun(params.data.runId));
+      return reply.send(durable.getRun(params.data.runId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -139,7 +139,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send({ items: fastify.gateway.listDurableRunTimeline(params.data.runId, query.data.limit) });
+      return reply.send({ items: durable.listRunTimeline(params.data.runId, query.data.limit) });
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
@@ -159,7 +159,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.pauseDurableRun(params.data.runId, resolveActorId(request)));
+      return reply.send(durable.pauseRun(params.data.runId, resolveActorId(request)));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -177,7 +177,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.resumeDurableRun(params.data.runId, resolveActorId(request)));
+      return reply.send(durable.resumeRun(params.data.runId, resolveActorId(request)));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -195,7 +195,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.cancelDurableRun(params.data.runId, resolveActorId(request)));
+      return reply.send(durable.cancelRun(params.data.runId, resolveActorId(request)));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -213,7 +213,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.retryDurableRun(params.data.runId, body.data.reason, resolveActorId(request)));
+      return reply.send(durable.retryRun(params.data.runId, body.data.reason, resolveActorId(request)));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -231,7 +231,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.wakeDurableRun(params.data.runId, body.data));
+      return reply.send(durable.wakeRun(params.data.runId, body.data));
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -250,7 +250,7 @@ export const durableRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.gateway.recoverDurableDeadLetter(
+        durable.recoverDeadLetter(
           params.data.entryId,
           resolveActorId(request),
           body.data.maxAttempts ? { maxAttempts: body.data.maxAttempts } : undefined,

@@ -5,6 +5,7 @@ import rateLimit from "@fastify/rate-limit";
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { loadLocalEnvFile } from "./env-file.js";
 import { gatewayPlugin } from "./plugins/storage.js";
+import { routeServicesPlugin } from "./plugins/route-services.js";
 import { authPlugin } from "./plugins/auth.js";
 import { idempotencyHeaderPlugin } from "./plugins/idempotency.js";
 import { healthRoute } from "./routes/health.js";
@@ -57,6 +58,7 @@ import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowli
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 import { isSuspiciousEncodedPath } from "./path-guard.js";
 import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
+import { installRouteAccessTracking } from "./routes/route-access.js";
 
 loadLocalEnvFile();
 
@@ -79,6 +81,8 @@ export async function buildApp() {
   const allowTailnetDevOrigins = resolveAllowTailnetDevOrigins();
   const tailnetShortHostAllowlist = resolveTailnetShortHostAllowlist();
   const rateLimitConfig = resolveRateLimitConfig();
+
+  installRouteAccessTracking(app);
 
   /**
    * CORS origin validation — three-tier allowlist:
@@ -286,6 +290,7 @@ export async function buildApp() {
   }
 
   await app.register(gatewayPlugin);
+  await app.register(routeServicesPlugin);
   assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins);
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin, {

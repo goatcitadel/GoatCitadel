@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
+  MemoryItemLifecycleState,
   MemoryItemRecord,
   MemoryMaintenanceChangeRecord,
   MemoryMaintenancePolicyPatchInput,
@@ -11,7 +12,7 @@ import type {
   MemoryMaintenanceRunSourceRecord,
   MemoryMaintenanceStateRecord,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, deriveMemoryItemLifecycleState } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface MemoryMaintenancePolicyRow {
@@ -109,6 +110,8 @@ interface WorkspaceMemoryItemRow {
   content: string;
   metadata_json: string | null;
   pinned: number;
+  ttl_override_seconds: number | null;
+  expires_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -531,11 +534,12 @@ export class MemoryMaintenanceRepository {
       LIMIT @limit
     `);
     this.listActiveMemoryItemsStmt = db.prepare(`
-      SELECT item_id, namespace, title, content, metadata_json, pinned, created_at, updated_at
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, created_at, updated_at
       FROM memory_items
       WHERE status = 'active'
+        AND (expires_at IS NULL OR expires_at > @now)
       ORDER BY pinned DESC, updated_at DESC
-      LIMIT ?
+      LIMIT @limit
     `);
     this.listRecentToolArtifactsStmt = db.prepare(`
       SELECT
@@ -579,17 +583,24 @@ export class MemoryMaintenanceRepository {
 
   public countChangedSessions(workspaceId: string, since?: string): number {
     const stmt = since ? this.countChangedSessionsSinceStmt : this.countChangedSessionsStmt;
-    const row = stmt.get({ workspaceId, since }) as { count: number | null } | undefined;
+    const params: { workspaceId: string; since?: string } = { workspaceId };
+    if (since) {
+      params.since = since;
+    }
+    const row = stmt.get(params) as { count: number | null } | undefined;
     return Number(row?.count ?? 0);
   }
 
   public listEligibleSessions(workspaceId: string, since?: string, limit = 100): EligibleWorkspaceSessionRecord[] {
     const stmt = since ? this.listEligibleSessionsSinceStmt : this.listEligibleSessionsStmt;
-    const rows = stmt.all({
+    const params: { workspaceId: string; limit: number; since?: string } = {
       workspaceId,
-      since,
       limit: clampLimit(limit, 200),
-    }) as EligibleWorkspaceSessionRow[];
+    };
+    if (since) {
+      params.since = since;
+    }
+    const rows = stmt.all(params) as EligibleWorkspaceSessionRow[];
     return rows.map((row) => ({
       sessionId: row.session_id,
       modifiedAt: row.modified_at ?? new Date(0).toISOString(),
@@ -597,7 +608,11 @@ export class MemoryMaintenanceRepository {
   }
 
   public listActiveMemoryItems(limit = 200): MemoryItemRecord[] {
-    const rows = this.listActiveMemoryItemsStmt.all(clampLimit(limit, 500)) as WorkspaceMemoryItemRow[];
+    const nowIso = new Date().toISOString();
+    const rows = this.listActiveMemoryItemsStmt.all({
+      now: nowIso,
+      limit: clampLimit(limit, 500),
+    }) as WorkspaceMemoryItemRow[];
     return rows.map((row) => ({
       itemId: row.item_id,
       namespace: row.namespace,
@@ -605,7 +620,16 @@ export class MemoryMaintenanceRepository {
       content: row.content,
       metadata: parseObjectJson(row.metadata_json),
       pinned: row.pinned === 1,
+      ttlOverrideSeconds: row.ttl_override_seconds ?? undefined,
+      expiresAt: row.expires_at ?? undefined,
       status: "active",
+      lifecycleState: deriveMemoryItemLifecycleState(
+        {
+          status: "active",
+          expiresAt: row.expires_at ?? undefined,
+        },
+        nowIso,
+      ) as MemoryItemLifecycleState,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
@@ -613,11 +637,14 @@ export class MemoryMaintenanceRepository {
 
   public listRecentToolArtifacts(workspaceId: string, since?: string, limit = 100): WorkspaceToolArtifactRecord[] {
     const stmt = since ? this.listRecentToolArtifactsSinceStmt : this.listRecentToolArtifactsStmt;
-    const rows = stmt.all({
+    const params: { workspaceId: string; limit: number; since?: string } = {
       workspaceId,
-      since,
       limit: clampLimit(limit, 500),
-    }) as WorkspaceToolArtifactRow[];
+    };
+    if (since) {
+      params.since = since;
+    }
+    const rows = stmt.all(params) as WorkspaceToolArtifactRow[];
     return rows.map((row) => ({
       artifactId: row.artifact_id,
       toolName: row.tool_name,

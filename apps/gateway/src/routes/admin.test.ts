@@ -25,7 +25,7 @@ describe("admin routes", () => {
     }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { getRetentionPolicy } as never);
+    app.decorate("services", { authAdmin: { getRetentionPolicy } } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -42,7 +42,7 @@ describe("admin routes", () => {
     const pruneRetention = vi.fn(async () => ({ deletedEvents: 0, dryRun: false }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { pruneRetention } as never);
+    app.decorate("services", { authAdmin: { pruneRetention } } as never);
     await app.register(adminRoutes);
 
     const invalid = await app.inject({
@@ -67,7 +67,7 @@ describe("admin routes", () => {
     });
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { restoreBackup } as never);
+    app.decorate("services", { authAdmin: {} } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -92,7 +92,7 @@ describe("admin routes", () => {
     }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { restoreBackup } as never);
+    app.decorate("services", { authAdmin: {} } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -119,7 +119,7 @@ describe("admin routes", () => {
     process.env.GOATCITADEL_BACKUP_DIR = "C:/custom-backups";
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", {} as never);
+    app.decorate("services", { authAdmin: {} } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -147,7 +147,7 @@ describe("admin routes", () => {
     }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { verifyBackup } as never);
+    app.decorate("services", { authAdmin: { verifyBackup } } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -174,7 +174,7 @@ describe("admin routes", () => {
     }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { verifyBackup } as never);
+    app.decorate("services", { authAdmin: { verifyBackup } } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -210,7 +210,7 @@ describe("admin routes", () => {
     }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { runDatabaseCutover } as never);
+    app.decorate("services", { authAdmin: { runDatabaseCutover } } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({
@@ -247,7 +247,7 @@ describe("admin routes", () => {
     }));
     app = Fastify();
     app.decorate("requireOperatorAuth", async () => undefined);
-    app.decorate("gateway", { verifyDatabaseCutover } as never);
+    app.decorate("services", { authAdmin: { verifyDatabaseCutover } } as never);
     await app.register(adminRoutes);
 
     const response = await app.inject({

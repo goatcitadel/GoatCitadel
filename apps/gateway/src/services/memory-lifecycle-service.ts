@@ -21,6 +21,7 @@ import type {
   MemoryQmdStatsResponse,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
+import { deriveMemoryItemLifecycleState } from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
@@ -115,6 +116,7 @@ export class MemoryLifecycleService {
     const status = input.status && input.status !== "all" ? input.status : undefined;
     const query = input.query?.trim().toLowerCase();
     const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+    const nowIso = new Date().toISOString();
     const clauses = ["1 = 1"];
     const params: Record<string, string | number | null> = { limit };
     if (namespace) {
@@ -124,6 +126,10 @@ export class MemoryLifecycleService {
     if (status) {
       clauses.push("status = @status");
       params.status = status;
+      if (status === "active") {
+        params.now = nowIso;
+        clauses.push("(expires_at IS NULL OR expires_at > @now)");
+      }
     }
     if (query) {
       clauses.push(`(
@@ -163,21 +169,80 @@ export class MemoryLifecycleService {
     return rows.map((row) => mapMemoryItemRow(this.deps.admin, row));
   }
 
+  public inspectExpiredActiveMemoryItems(input: { limit?: number; nowIso?: string } = {}): {
+    totalCount: number;
+    items: MemoryItemRecord[];
+  } {
+    const nowIso = input.nowIso ?? new Date().toISOString();
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+    const countRow = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT COUNT(*) AS count
+      FROM memory_items
+      WHERE status = 'active'
+        AND expires_at IS NOT NULL
+        AND expires_at <= @now
+    `,
+      )
+      .get({ now: nowIso }) as { count?: number | null } | undefined;
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+             created_at, updated_at, forgotten_at
+      FROM memory_items
+      WHERE status = 'active'
+        AND expires_at IS NOT NULL
+        AND expires_at <= @now
+      ORDER BY expires_at ASC, updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all({ now: nowIso, limit }) as Array<{
+      item_id: string;
+      namespace: string;
+      title: string;
+      content: string;
+      metadata_json: string | null;
+      pinned: number;
+      ttl_override_seconds: number | null;
+      expires_at: string | null;
+      status: MemoryItemRecord["status"];
+      created_at: string;
+      updated_at: string;
+      forgotten_at: string | null;
+    }>;
+
+    return {
+      totalCount: Number(countRow?.count ?? 0),
+      items: rows.map((row) => mapMemoryItemRow(this.deps.admin, row)),
+    };
+  }
+
   public patchMemoryItem(itemId: string, patch: MemoryLifecyclePatch, actorId = "operator"): MemoryItemRecord {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = requireMemoryItem(this.deps.admin, itemId);
     const now = new Date().toISOString();
+    const nextTtlOverrideSeconds =
+      patch.ttlOverrideSeconds === null
+        ? null
+        : patch.ttlOverrideSeconds !== undefined
+          ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
+          : (current.ttlOverrideSeconds ?? null);
+    const nextExpiresAt =
+      patch.ttlOverrideSeconds === null
+        ? null
+        : patch.ttlOverrideSeconds !== undefined
+          ? new Date(Date.parse(now) + Number(nextTtlOverrideSeconds) * 1000).toISOString()
+          : (current.expiresAt ?? null);
     const next = {
       title: patch.title !== undefined ? patch.title.trim() : current.title,
       content: patch.content !== undefined ? patch.content : current.content,
       metadata: patch.metadata !== undefined ? patch.metadata : current.metadata,
       pinned: patch.pinned !== undefined ? patch.pinned : current.pinned,
-      ttlOverrideSeconds:
-        patch.ttlOverrideSeconds === null
-          ? null
-          : patch.ttlOverrideSeconds !== undefined
-            ? Math.max(1, Math.min(31_536_000, Math.floor(patch.ttlOverrideSeconds)))
-            : (current.ttlOverrideSeconds ?? null),
+      ttlOverrideSeconds: nextTtlOverrideSeconds,
+      expiresAt: nextExpiresAt,
     };
     this.deps.admin.gatewaySql
       .prepare(
@@ -188,6 +253,7 @@ export class MemoryLifecycleService {
           metadata_json = @metadataJson,
           pinned = @pinned,
           ttl_override_seconds = @ttlOverrideSeconds,
+          expires_at = @expiresAt,
           updated_at = @updatedAt
       WHERE item_id = @itemId
     `,
@@ -199,14 +265,25 @@ export class MemoryLifecycleService {
         metadataJson: JSON.stringify(next.metadata ?? {}),
         pinned: next.pinned ? 1 : 0,
         ttlOverrideSeconds: next.ttlOverrideSeconds,
+        expiresAt: next.expiresAt,
         updatedAt: now,
       });
     if (patch.pinned !== undefined) {
       recordMemoryChange(this.deps.admin, itemId, "pin_changed", actorId, { pinned: next.pinned });
     }
     if (patch.ttlOverrideSeconds !== undefined) {
+      const lifecycleState = deriveMemoryItemLifecycleState(
+        {
+          status: current.status,
+          expiresAt: next.expiresAt ?? undefined,
+          forgottenAt: current.forgottenAt,
+        },
+        now,
+      );
       recordMemoryChange(this.deps.admin, itemId, "ttl_changed", actorId, {
         ttlOverrideSeconds: next.ttlOverrideSeconds,
+        expiresAt: next.expiresAt,
+        lifecycleState,
       });
     }
     recordMemoryChange(this.deps.admin, itemId, "updated", actorId, {
@@ -218,6 +295,8 @@ export class MemoryLifecycleService {
       type: "memory_item_updated",
       itemId: updated.itemId,
       namespace: updated.namespace,
+      lifecycleState: updated.lifecycleState,
+      expiresAt: updated.expiresAt,
     });
     return updated;
   }
@@ -252,6 +331,7 @@ export class MemoryLifecycleService {
       type: "memory_item_forgotten",
       itemId,
       namespace: forgotten.namespace,
+      lifecycleState: forgotten.lifecycleState,
     });
     return forgotten;
   }

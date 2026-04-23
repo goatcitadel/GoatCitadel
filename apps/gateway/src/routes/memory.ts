@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
+import { withRouteAccess } from "./route-access.js";
 import { normalizeMemoryForgetCriteria } from "../services/security-utils.js";
 
 const composeSchema = z.object({
@@ -38,14 +40,22 @@ const maintenancePolicyPatchSchema = z.object({
   enabled: z.boolean().optional(),
   runMode: z.enum(["manual", "scheduled", "hybrid"]).optional(),
   timingStrategy: z.enum(["fixed", "recommendation_first"]).optional(),
-  schedule: z.object({
-    frequency: z.enum(["daily", "weekly"]),
-    hour: z.number().int().min(0).max(23),
-    minute: z.number().int().min(0).max(59),
-    weekday: z.number().int().min(0).max(6).optional(),
-  }).nullable().optional(),
+  schedule: z
+    .object({
+      frequency: z.enum(["daily", "weekly"]),
+      hour: z.number().int().min(0).max(23),
+      minute: z.number().int().min(0).max(59),
+      weekday: z.number().int().min(0).max(6).optional(),
+    })
+    .nullable()
+    .optional(),
   timeZone: z.string().trim().min(1).optional(),
-  minHoursSinceLastSuccess: z.number().int().min(0).max(24 * 365).optional(),
+  minHoursSinceLastSuccess: z
+    .number()
+    .int()
+    .min(0)
+    .max(24 * 365)
+    .optional(),
   minChangedSessions: z.number().int().min(1).max(10_000).optional(),
   providerId: z.string().trim().min(1).nullable().optional(),
   model: z.string().trim().min(1).nullable().optional(),
@@ -83,100 +93,115 @@ const patchItemSchema = z.object({
 
 const forgetItemSchema = z.object({});
 
-const forgetManySchema = z.object({
-  itemIds: z.array(z.string().min(1)).optional(),
-  namespace: z.string().optional(),
-  query: z.string().optional(),
-}).superRefine((value, ctx) => {
-  const criteria = normalizeMemoryForgetCriteria(value);
-  if (!criteria.hasCriteria) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Provide at least one criterion: itemIds, namespace, or query.",
-      path: ["itemIds"],
-    });
-  }
-});
+const forgetManySchema = z
+  .object({
+    itemIds: z.array(z.string().min(1)).optional(),
+    namespace: z.string().optional(),
+    query: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const criteria = normalizeMemoryForgetCriteria(value);
+    if (!criteria.hasCriteria) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide at least one criterion: itemIds, namespace, or query.",
+        path: ["itemIds"],
+      });
+    }
+  });
 
 export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
     request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+  const operatorOnly = withRouteAccess(fastify, "operator");
+  const memory = fastify.services.memory;
 
-  const sendMaintenanceError = (reply: { code: (status: number) => { send: (body: { error: string }) => unknown } }, error: unknown) => {
+  const sendMaintenanceError = (
+    reply: { code: (status: number) => { send: (body: { error: string }) => unknown } },
+    error: unknown,
+  ) => {
     const message = error instanceof Error ? error.message : "Memory maintenance request failed.";
     const lower = message.toLowerCase();
     const status = lower.includes("not found") ? 404 : 409;
     return reply.code(status).send({ error: message });
   };
 
-  fastify.post("/api/v1/memory/context/compose", async (request, reply) => {
-    const parsed = composeSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    return reply.send(await fastify.gateway.composeMemoryContext(parsed.data));
-  });
+  fastify.post(
+    "/api/v1/memory/context/compose",
+    withRouteAccess(fastify, "authenticated-read"),
+    async (request, reply) => {
+      const parsed = composeSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+      return reply.send(await memory.composeContext(parsed.data));
+    },
+  );
 
-  fastify.get("/api/v1/memory/context/:contextId", async (request, reply) => {
-    const params = contextParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
-    try {
-      return reply.send(fastify.gateway.getMemoryContext(params.data.contextId));
-    } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
-    }
-  });
+  fastify.get(
+    "/api/v1/memory/context/:contextId",
+    withRouteAccess(fastify, "authenticated-read"),
+    async (request, reply) => {
+      const params = contextParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+      try {
+        return reply.send(memory.getContext(params.data.contextId));
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+    },
+  );
 
-  fastify.get("/api/v1/memory/maintenance/policy", async (request, reply) => {
+  fastify.get("/api/v1/memory/maintenance/policy", operatorOnly, async (request, reply) => {
     const parsed = workspaceQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getMemoryMaintenancePolicy(parsed.data.workspaceId));
+      return reply.send(memory.getMaintenancePolicy(parsed.data.workspaceId));
     } catch (error) {
-      return sendMaintenanceError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.patch("/api/v1/memory/maintenance/policy", async (request, reply) => {
+  fastify.patch("/api/v1/memory/maintenance/policy", operatorOnly, async (request, reply) => {
     const parsed = maintenancePolicyPatchSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
       const { workspaceId, ...patch } = parsed.data;
-      return reply.send(fastify.gateway.patchMemoryMaintenancePolicy(workspaceId, patch));
+      return reply.send(memory.patchMaintenancePolicy(workspaceId, patch));
     } catch (error) {
-      return sendMaintenanceError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.get("/api/v1/memory/maintenance/status", async (request, reply) => {
+  fastify.get("/api/v1/memory/maintenance/status", operatorOnly, async (request, reply) => {
     const parsed = workspaceQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getMemoryMaintenanceStatus(parsed.data.workspaceId));
+      return reply.send(memory.getMaintenanceStatus(parsed.data.workspaceId));
     } catch (error) {
-      return sendMaintenanceError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.get("/api/v1/memory/maintenance/runs", async (request, reply) => {
+  fastify.get("/api/v1/memory/maintenance/runs", operatorOnly, async (request, reply) => {
     const parsed = workspaceQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
       return reply.send({
-        items: fastify.gateway.listMemoryMaintenanceRuns(parsed.data.workspaceId, parsed.data.limit ?? 50),
+        items: memory.listMaintenanceRuns(parsed.data.workspaceId, parsed.data.limit ?? 50),
       });
     } catch (error) {
-      return sendMaintenanceError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -192,66 +217,74 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.runMemoryMaintenanceNow(parsed.data));
+      return reply.send(memory.runMaintenanceNow(parsed.data));
     } catch (error) {
       return sendMaintenanceError(reply, error);
     }
   };
 
-  fastify.post("/api/v1/memory/maintenance/run-now", handleMaintenanceRunNow);
-  fastify.post("/api/v1/memory/maintenance/run", handleMaintenanceRunNow);
+  fastify.post("/api/v1/memory/maintenance/run-now", operatorOnly, handleMaintenanceRunNow);
+  fastify.post("/api/v1/memory/maintenance/run", operatorOnly, handleMaintenanceRunNow);
 
-  fastify.get("/api/v1/memory/maintenance/runs/:runId/provenance", async (request, reply) => {
+  fastify.get("/api/v1/memory/maintenance/runs/:runId/provenance", operatorOnly, async (request, reply) => {
     const parsed = maintenanceRunParamsSchema.safeParse(request.params);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getMemoryMaintenanceRunProvenance(parsed.data.runId));
+      return reply.send(memory.getMaintenanceRunProvenance(parsed.data.runId));
     } catch (error) {
-      return sendMaintenanceError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.get("/api/v1/memory/maintenance/recommendations", async (request, reply) => {
+  fastify.get("/api/v1/memory/maintenance/recommendations", operatorOnly, async (request, reply) => {
     const parsed = workspaceQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
       return reply.send({
-        items: fastify.gateway.listMemoryMaintenanceRecommendations(parsed.data.workspaceId, parsed.data.limit ?? 50),
+        items: memory.listMaintenanceRecommendations(parsed.data.workspaceId, parsed.data.limit ?? 50),
       });
     } catch (error) {
-      return sendMaintenanceError(reply, error);
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.post("/api/v1/memory/maintenance/recommendations/:recommendationId/accept", async (request, reply) => {
-    const parsed = maintenanceRecommendationParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply.send(fastify.gateway.acceptMemoryMaintenanceRecommendation(parsed.data.recommendationId));
-    } catch (error) {
-      return sendMaintenanceError(reply, error);
-    }
-  });
+  fastify.post(
+    "/api/v1/memory/maintenance/recommendations/:recommendationId/accept",
+    operatorOnly,
+    async (request, reply) => {
+      const parsed = maintenanceRecommendationParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+      try {
+        return reply.send(memory.acceptMaintenanceRecommendation(parsed.data.recommendationId));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
-  fastify.post("/api/v1/memory/maintenance/recommendations/:recommendationId/reject", async (request, reply) => {
-    const parsed = maintenanceRecommendationParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply.send(fastify.gateway.rejectMemoryMaintenanceRecommendation(parsed.data.recommendationId));
-    } catch (error) {
-      return sendMaintenanceError(reply, error);
-    }
-  });
+  fastify.post(
+    "/api/v1/memory/maintenance/recommendations/:recommendationId/reject",
+    operatorOnly,
+    async (request, reply) => {
+      const parsed = maintenanceRecommendationParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+      try {
+        return reply.send(memory.rejectMaintenanceRecommendation(parsed.data.recommendationId));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
-  fastify.get("/api/v1/memory/qmd/stats", async (request, reply) => {
+  fastify.get("/api/v1/memory/qmd/stats", withRouteAccess(fastify, "authenticated-read"), async (request, reply) => {
     const parsed = statsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -259,29 +292,29 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
 
     const to = parsed.data.to ?? new Date().toISOString();
     const from = parsed.data.from ?? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const stats = fastify.gateway.getMemoryQmdStats(from, to);
-    const recent = fastify.gateway.listRecentMemoryContexts(parsed.data.limit);
+    const stats = memory.getQmdStats(from, to);
+    const recent = memory.listRecentContexts(parsed.data.limit);
     return reply.send({
       ...stats,
       recent,
     });
   });
 
-  fastify.get("/api/v1/memory/items", async (request, reply) => {
+  fastify.get("/api/v1/memory/items", operatorOnly, async (request, reply) => {
     const parsed = listItemsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
       return reply.send({
-        items: fastify.gateway.listMemoryItems(parsed.data),
+        items: memory.listItems(parsed.data),
       });
     } catch (error) {
-      return reply.code(409).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.patch("/api/v1/memory/items/:itemId", async (request, reply) => {
+  fastify.patch("/api/v1/memory/items/:itemId", operatorOnly, async (request, reply) => {
     const params = itemParamsSchema.safeParse(request.params);
     const body = patchItemSchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
@@ -294,7 +327,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.gateway.patchMemoryItem(
+        memory.patchItem(
           params.data.itemId,
           {
             title: body.data.title,
@@ -307,13 +340,11 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
         ),
       );
     } catch (error) {
-      const message = (error as Error).message;
-      const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.post("/api/v1/memory/items/:itemId/forget", async (request, reply) => {
+  fastify.post("/api/v1/memory/items/:itemId/forget", operatorOnly, async (request, reply) => {
     const params = itemParamsSchema.safeParse(request.params);
     const body = forgetItemSchema.safeParse(request.body ?? {});
     if (!params.success || !body.success) {
@@ -325,15 +356,13 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.forgetMemoryItem(params.data.itemId, resolveActorId(request)));
+      return reply.send(memory.forgetItem(params.data.itemId, resolveActorId(request)));
     } catch (error) {
-      const message = (error as Error).message;
-      const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.get("/api/v1/memory/items/:itemId/history", async (request, reply) => {
+  fastify.get("/api/v1/memory/items/:itemId/history", operatorOnly, async (request, reply) => {
     const params = itemParamsSchema.safeParse(request.params);
     const query = statsQuerySchema.safeParse(request.query);
     if (!params.success || !query.success) {
@@ -346,33 +375,33 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: fastify.gateway.listMemoryItemHistory(params.data.itemId, query.data.limit),
+        items: memory.listItemHistory(params.data.itemId, query.data.limit),
       });
     } catch (error) {
-      const message = (error as Error).message;
-      const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 409).send({ error: message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
-  fastify.post("/api/v1/memory/forget", async (request, reply) => {
+  fastify.post("/api/v1/memory/forget", operatorOnly, async (request, reply) => {
     const body = forgetManySchema.safeParse(request.body ?? {});
     if (!body.success) {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.forgetMemory({
-        itemIds: body.data.itemIds,
-        namespace: body.data.namespace,
-        query: body.data.query,
-        actorId: resolveActorId(request),
-      }));
+      return reply.send(
+        memory.forget({
+          itemIds: body.data.itemIds,
+          namespace: body.data.namespace,
+          query: body.data.query,
+          actorId: resolveActorId(request),
+        }),
+      );
     } catch (error) {
       const message = (error as Error).message;
       if (message.toLowerCase().includes("at least one criterion")) {
         return reply.code(400).send({ error: message });
       }
-      return reply.code(409).send({ error: message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 };

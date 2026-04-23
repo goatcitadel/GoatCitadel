@@ -123,6 +123,9 @@ export interface ContextManifestDetail {
   entries: ContextManifestEntryRecord[];
 }
 
+export type MemoryItemStatus = "active" | "forgotten";
+export type MemoryItemLifecycleState = "active" | "expired" | "forgotten";
+
 export interface MemoryItemRecord {
   itemId: string;
   namespace: string;
@@ -132,7 +135,8 @@ export interface MemoryItemRecord {
   pinned: boolean;
   ttlOverrideSeconds?: number;
   expiresAt?: string;
-  status: "active" | "forgotten";
+  status: MemoryItemStatus;
+  lifecycleState: MemoryItemLifecycleState;
   createdAt: string;
   updatedAt: string;
   forgottenAt?: string;
@@ -160,13 +164,7 @@ export type MemoryMaintenanceTimingStrategy = "fixed" | "recommendation_first";
 export type MemoryMaintenanceExecutionTarget = "auto" | "local" | "cloud";
 export type MemoryMaintenanceUnavailableModelPolicy = "skip" | "error";
 export type MemoryMaintenanceTriggerSource = "manual" | "scheduled" | "hybrid_due" | "recommendation";
-export type MemoryMaintenanceRunStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "skipped";
+export type MemoryMaintenanceRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "skipped";
 export type MemoryMaintenanceRecommendationStatus = "queued" | "accepted" | "rejected" | "applied";
 export type MemoryMaintenanceSourceKind = "transcript" | "file" | "memory_item" | "artifact";
 export type MemoryMaintenanceChangeKind = "created" | "updated" | "mirrored";
@@ -298,4 +296,29 @@ export interface MemoryMaintenanceProvenanceRecord {
   run: MemoryMaintenanceRunRecord;
   sources: MemoryMaintenanceRunSourceRecord[];
   changes: MemoryMaintenanceChangeRecord[];
+}
+
+export function deriveMemoryItemLifecycleState(
+  input: {
+    status: MemoryItemStatus;
+    expiresAt?: string;
+    forgottenAt?: string;
+  },
+  now: string | Date = new Date(),
+): MemoryItemLifecycleState {
+  if (input.status === "forgotten" || input.forgottenAt) {
+    return "forgotten";
+  }
+  if (!input.expiresAt) {
+    return "active";
+  }
+  const expiresAtMs = Date.parse(input.expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    return "active";
+  }
+  const nowMs = typeof now === "string" ? Date.parse(now) : now.getTime();
+  if (!Number.isFinite(nowMs)) {
+    return "active";
+  }
+  return expiresAtMs <= nowMs ? "expired" : "active";
 }
