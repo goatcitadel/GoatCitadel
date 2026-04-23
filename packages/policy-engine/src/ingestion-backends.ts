@@ -11,7 +11,7 @@ import type {
   ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { stripHtmlNoiseTags } from "./html-noise.js";
+import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 
 const DEFAULT_URL_CACHE_TTL_SECONDS = 3600;
 
@@ -363,7 +363,7 @@ function normalizeText(rawText: string, contentType?: string): string {
 }
 
 function stripHtmlContent(input: string): string {
-  return stripHtmlNoiseTags(input, ["script", "style"]).replace(/<[^>]+>/g, " ");
+  return stripHtmlTags(stripHtmlNoiseTags(input, ["script", "style"]));
 }
 
 function chunkText(text: string, targetChars: number, overlapChars: number, maxChunks: number): string[] {

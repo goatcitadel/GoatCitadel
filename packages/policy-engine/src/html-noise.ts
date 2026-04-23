@@ -46,6 +46,34 @@ export function stripHtmlNoiseTags(input: string, tags: readonly string[]): stri
   return output;
 }
 
+export function stripHtmlTags(input: string): string {
+  if (!input) {
+    return input;
+  }
+
+  let cursor = 0;
+  let output = "";
+  while (cursor < input.length) {
+    const openTagIndex = input.indexOf("<", cursor);
+    if (openTagIndex < 0) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    const tagEnd = findTagEnd(input, openTagIndex + 1);
+    if (tagEnd < 0) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    output += input.slice(cursor, openTagIndex);
+    output += " ";
+    cursor = tagEnd + 1;
+  }
+
+  return output;
+}
+
 function matchNoiseTag(input: string, openTagIndex: number, tags: readonly string[]): string | undefined {
   for (const tagName of tags) {
     const openingToken = `<${tagName}`;
@@ -69,6 +97,27 @@ function findClosingTagIndex(input: string, tagName: string, searchFrom: number)
       return cursor;
     }
     cursor = input.indexOf(closingToken, cursor + 1);
+  }
+  return -1;
+}
+
+function findTagEnd(input: string, searchFrom: number): number {
+  let quote: '"' | "'" | undefined;
+  for (let index = searchFrom; index < input.length; index += 1) {
+    const char = input[index];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === ">") {
+      return index;
+    }
   }
   return -1;
 }

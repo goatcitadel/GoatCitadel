@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
-import { stripHtmlNoiseTags } from "./html-noise.js";
+import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertHostAllowedInDangerProfile } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 
@@ -2469,7 +2469,7 @@ function extractHtmlText(html: string, maxChars: number): string {
 }
 
 function stripHtml(input: string): string {
-  return input.replace(/<[^>]+>/g, " ");
+  return stripHtmlTags(input);
 }
 
 function stripHtmlNoise(input: string): string {
