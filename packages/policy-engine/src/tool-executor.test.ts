@@ -8,14 +8,15 @@ import type { Storage } from "@goatcitadel/storage";
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
-  executeBrowserTool: vi.fn<
-    (
-      toolName: string,
-      args: Record<string, unknown>,
-      config: ToolPolicyConfig,
-      executionContext?: { sessionId?: string; signal?: AbortSignal },
-    ) => Promise<Record<string, unknown>>
-  >(),
+  executeBrowserTool:
+    vi.fn<
+      (
+        toolName: string,
+        args: Record<string, unknown>,
+        config: ToolPolicyConfig,
+        executionContext?: { sessionId?: string; signal?: AbortSignal },
+      ) => Promise<Record<string, unknown>>
+    >(),
 }));
 
 vi.mock("./browser-tools.js", () => ({
@@ -24,6 +25,10 @@ vi.mock("./browser-tools.js", () => ({
 }));
 
 import { executeTool, resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
+
+const LOCALHOST_HOST = new URL("http://localhost").hostname;
+const EXAMPLE_HOST = new URL("https://example.com").hostname;
+const LOOPBACK_HOST = new URL("http://127.0.0.1").hostname;
 
 const storageStub = {
   pendingApprovalActions: {
@@ -44,7 +49,7 @@ const policyConfig: ToolPolicyConfig = {
   sandbox: {
     writeJailRoots: ["./workspace"],
     readOnlyRoots: ["./skills"],
-    networkAllowlist: ["localhost", "example.com", "127.0.0.1"],
+    networkAllowlist: [LOCALHOST_HOST, EXAMPLE_HOST, LOOPBACK_HOST],
     riskyShellPatterns: [],
     requireApprovalForRiskyShell: true,
   },
@@ -90,12 +95,10 @@ describe("executeTool", () => {
 
     const result = await executeTool(request, policyConfig, storageStub);
 
-    expect(mocked.executeBrowserTool).toHaveBeenCalledWith(
-      "browser.navigate",
-      request.args,
-      policyConfig,
-      { sessionId: "sess-1", signal: request.signal },
-    );
+    expect(mocked.executeBrowserTool).toHaveBeenCalledWith("browser.navigate", request.args, policyConfig, {
+      sessionId: "sess-1",
+      signal: request.signal,
+    });
     expect(result).toMatchObject({ action: "navigate", title: "Example" });
   });
 
@@ -118,7 +121,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const request: ToolInvokeRequest = {
       toolName: "shell.exec",
-      args: { command: 'node -e "process.stdout.write(\'ok\')"' },
+      args: { command: "node -e \"process.stdout.write('ok')\"" },
       agentId: "agent",
       sessionId: "sess-3",
     };
@@ -179,12 +182,16 @@ describe("executeTool", () => {
     } as unknown as Storage;
 
     try {
-      const result = await executeTool({
-        toolName: "file.read_range",
-        args: { path: filePath, startLine: 1, endLine: 2 },
-        agentId: "agent",
-        sessionId: "sess-grant",
-      }, policyConfig, storageWithGrant);
+      const result = await executeTool(
+        {
+          toolName: "file.read_range",
+          args: { path: filePath, startLine: 1, endLine: 2 },
+          agentId: "agent",
+          sessionId: "sess-grant",
+        },
+        policyConfig,
+        storageWithGrant,
+      );
 
       expect(result).toMatchObject({
         path: filePath,
@@ -215,16 +222,20 @@ describe("executeTool", () => {
     });
 
     try {
-      const result = await executeTool({
-        toolName: "file.read_range",
-        args: { path: filePath, startLine: 1, endLine: 2 },
-        agentId: "agent",
-        sessionId: "sess-approved-read",
-        consentContext: {
-          source: "ui",
-          reason: "approval:apr_read_123",
+      const result = await executeTool(
+        {
+          toolName: "file.read_range",
+          args: { path: filePath, startLine: 1, endLine: 2 },
+          agentId: "agent",
+          sessionId: "sess-approved-read",
+          consentContext: {
+            source: "ui",
+            reason: "approval:apr_read_123",
+          },
         },
-      }, policyConfig, storageStub);
+        policyConfig,
+        storageStub,
+      );
 
       expect(result).toMatchObject({
         path: filePath,
@@ -395,13 +406,21 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const packageDir = path.join(testWorkspaceRoot, "restricted-runner");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify({
-      name: "restricted-runner",
-      private: true,
-      scripts: {
-        test: 'node -e "process.stdout.write(process.cwd())"',
-      },
-    }, null, 2), "utf8");
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "restricted-runner",
+          private: true,
+          scripts: {
+            test: 'node -e "process.stdout.write(process.cwd())"',
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     const request: ToolInvokeRequest = {
       toolName: "tests.run",
@@ -459,13 +478,21 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const packageDir = path.join(testWorkspaceRoot, "restricted-pnpm-runner");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify({
-      name: "restricted-pnpm-runner",
-      private: true,
-      scripts: {
-        lint: 'node -e "process.stdout.write(\'lint-script\')"',
-      },
-    }, null, 2), "utf8");
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "restricted-pnpm-runner",
+          private: true,
+          scripts: {
+            lint: "node -e \"process.stdout.write('lint-script')\"",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     const request: ToolInvokeRequest = {
       toolName: "lint.run",
@@ -487,7 +514,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const request: ToolInvokeRequest = {
       toolName: "shell.exec",
-      args: { command: "echo \"unterminated" },
+      args: { command: 'echo "unterminated' },
       agentId: "agent",
       sessionId: "sess-4",
     };
@@ -567,9 +594,11 @@ describe("executeTool", () => {
       sessionId: "sess-7",
     };
 
-    await expect(executeTool(request, policyConfig, storageStub, {
-      bankrBuiltinEnabled: false,
-    })).rejects.toThrow("Bankr built-in is disabled.");
+    await expect(
+      executeTool(request, policyConfig, storageStub, {
+        bankrBuiltinEnabled: false,
+      }),
+    ).rejects.toThrow("Bankr built-in is disabled.");
   });
 
   it("rejects risky shell command with an unverified approval id", async () => {
@@ -647,16 +676,20 @@ describe("executeTool", () => {
       resolutionStatus: "pending",
     });
 
-    const result = await executeTool({
-      toolName: "shell.exec_background",
-      args: { command: "node --version" },
-      agentId: "agent",
-      sessionId: "sess-bg-approved",
-      consentContext: {
-        source: "ui",
-        reason: "approval:apr_bg_123",
+    const result = await executeTool(
+      {
+        toolName: "shell.exec_background",
+        args: { command: "node --version" },
+        agentId: "agent",
+        sessionId: "sess-bg-approved",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr_bg_123",
+        },
       },
-    }, riskyPolicy, storageStub);
+      riskyPolicy,
+      storageStub,
+    );
 
     expect(result).toMatchObject({
       command: "node --version",
@@ -668,13 +701,19 @@ describe("executeTool", () => {
   it("sends channel messages through Slack bot API with rendered attachments", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      ts: "1712345678.000100",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            ts: "1712345678.000100",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
@@ -704,26 +743,32 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-slack",
-        message: "Build green again.",
-        attachments: [{ title: "Runbook", url: "https://example.com/runbook" }],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-slack",
+          message: "Build green again.",
+          attachments: [{ title: "Runbook", url: "https://example.com/runbook" }],
+        },
+        agentId: "operator",
+        sessionId: "sess-slack",
       },
-      agentId: "operator",
-      sessionId: "sess-slack",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["slack.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
-    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({
-      target: "#build-alerts",
-    }));
+    expect(queuedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "#build-alerts",
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://slack.com/api/chat.postMessage",
       expect.objectContaining({
@@ -743,12 +788,18 @@ describe("executeTool", () => {
 
   it("sends Discord webhook messages with inline uploads and URL embeds", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      id: "discord-msg-123",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "discord-msg-123",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -776,25 +827,29 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-discord",
-        message: "Deployment artifacts attached.",
-        attachments: [
-          { title: "Screenshot", url: "https://example.com/screenshot.png", mimeType: "image/png" },
-          { title: "build.log", mimeType: "text/plain", dataBase64: Buffer.from("log-bytes").toString("base64") },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-discord",
+          message: "Deployment artifacts attached.",
+          attachments: [
+            { title: "Screenshot", url: "https://example.com/screenshot.png", mimeType: "image/png" },
+            { title: "build.log", mimeType: "text/plain", dataBase64: Buffer.from("log-bytes").toString("base64") },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-discord-send",
       },
-      agentId: "operator",
-      sessionId: "sess-discord-send",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["discord.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["discord.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/webhooks/123/abc?wait=true",
@@ -803,7 +858,7 @@ describe("executeTool", () => {
     const discordCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
     expect(discordCall?.[1]?.body).toBeInstanceOf(FormData);
     const formData = discordCall?.[1]?.body as FormData;
-    expect(String(formData.get("payload_json") ?? "")).toContain("\"content\":\"Deployment artifacts attached.\"");
+    expect(String(formData.get("payload_json") ?? "")).toContain('"content":"Deployment artifacts attached."');
     expect(String(formData.get("payload_json") ?? "")).toContain("https://example.com/screenshot.png");
     const uploadedFile = formData.get("files[0]");
     expect(uploadedFile).toBeInstanceOf(File);
@@ -817,13 +872,19 @@ describe("executeTool", () => {
   it("sends Telegram URL image attachments through sendPhoto with a caption", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.TELEGRAM_BOT_TOKEN = "tg-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      result: { message_id: 321 },
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: { message_id: 321 },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -851,33 +912,35 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-telegram",
-        message: "Screenshot attached.",
-        attachments: [
-          { title: "graph.png", url: "https://example.com/graph.png", mimeType: "image/png" },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-telegram",
+          message: "Screenshot attached.",
+          attachments: [{ title: "graph.png", url: "https://example.com/graph.png", mimeType: "image/png" }],
+        },
+        agentId: "operator",
+        sessionId: "sess-telegram-send",
       },
-      agentId: "operator",
-      sessionId: "sess-telegram-send",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["api.telegram.org"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.telegram.org"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telegram.org/bottg-token/sendPhoto",
       expect.objectContaining({ method: "POST" }),
     );
     const telegramCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"chat_id\":\"-1001234567890\"");
-    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"photo\":\"https://example.com/graph.png\"");
-    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"caption\":\"Screenshot attached.\"");
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain('"chat_id":"-1001234567890"');
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain('"photo":"https://example.com/graph.png"');
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain('"caption":"Screenshot attached."');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "321",
@@ -887,13 +950,19 @@ describe("executeTool", () => {
   it("sends Telegram replies with reply parameters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.TELEGRAM_BOT_TOKEN = "tg-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      result: { message_id: 654 },
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: { message_id: 654 },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -921,25 +990,29 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-telegram-reply",
-        message: "Following up in thread.",
-        replyToMessageId: "987654321",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-telegram-reply",
+          message: "Following up in thread.",
+          replyToMessageId: "987654321",
+        },
+        agentId: "operator",
+        sessionId: "sess-telegram-reply",
       },
-      agentId: "operator",
-      sessionId: "sess-telegram-reply",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["api.telegram.org"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.telegram.org"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     const telegramCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"message_id\":987654321");
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain('"message_id":987654321');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "654",
@@ -952,36 +1025,45 @@ describe("executeTool", () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url === "https://slack.com/api/chat.postMessage") {
-        return new Response(JSON.stringify({
-          ok: true,
-          ts: "1712345678.000200",
-          channel: "C123UPLOAD",
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            ts: "1712345678.000200",
+            channel: "C123UPLOAD",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       if (url === "https://slack.com/api/files.getUploadURLExternal") {
-        return new Response(JSON.stringify({
-          ok: true,
-          upload_url: "https://files.slack.com/upload/v1/test-upload",
-          file_id: "F123UPLOAD",
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            upload_url: "https://files.slack.com/upload/v1/test-upload",
+            file_id: "F123UPLOAD",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       if (url === "https://files.slack.com/upload/v1/test-upload") {
         return new Response("", { status: 200 });
       }
       if (url === "https://slack.com/api/files.completeUploadExternal") {
-        return new Response(JSON.stringify({
-          ok: true,
-          files: [{ id: "F123UPLOAD", title: "evidence.txt" }],
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            files: [{ id: "F123UPLOAD", title: "evidence.txt" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       throw new Error(`Unexpected fetch URL: ${url}`);
     });
@@ -1012,35 +1094,41 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-slack-inline",
-        message: "Evidence attached.",
-        attachments: [{
-          title: "evidence.txt",
-          mimeType: "text/plain",
-          dataBase64: Buffer.from("slack-inline-evidence", "utf8").toString("base64"),
-        }],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-slack-inline",
+          message: "Evidence attached.",
+          attachments: [
+            {
+              title: "evidence.txt",
+              mimeType: "text/plain",
+              dataBase64: Buffer.from("slack-inline-evidence", "utf8").toString("base64"),
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-inline",
       },
-      agentId: "operator",
-      sessionId: "sess-slack-inline",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["slack.com", "*.slack.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com", "*.slack.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
     const uploadMetaCall = fetchMock.mock.calls[1] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(uploadMetaCall?.[1]?.body ?? "")).toContain("\"filename\":\"evidence.txt\"");
-    expect(String(uploadMetaCall?.[1]?.body ?? "")).toContain("\"length\":21");
+    expect(String(uploadMetaCall?.[1]?.body ?? "")).toContain('"filename":"evidence.txt"');
+    expect(String(uploadMetaCall?.[1]?.body ?? "")).toContain('"length":21');
 
     const completeCall = fetchMock.mock.calls[3] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(completeCall?.[1]?.body ?? "")).toContain("\"channel_id\":\"C123UPLOAD\"");
-    expect(String(completeCall?.[1]?.body ?? "")).toContain("\"thread_ts\":\"1712345678.000200\"");
+    expect(String(completeCall?.[1]?.body ?? "")).toContain('"channel_id":"C123UPLOAD"');
+    expect(String(completeCall?.[1]?.body ?? "")).toContain('"thread_ts":"1712345678.000200"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "1712345678.000200",
@@ -1053,14 +1141,17 @@ describe("executeTool", () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url === "https://slack.com/api/chat.postMessage") {
-        return new Response(JSON.stringify({
-          ok: true,
-          ts: "1712345678.000300",
-          channel: "C123THREAD",
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            ts: "1712345678.000300",
+            channel: "C123THREAD",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       throw new Error(`Unexpected fetch URL: ${url}`);
     });
@@ -1091,26 +1182,30 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-slack-thread",
-        target: "C123THREAD",
-        message: "Thread reply",
-        replyToMessageId: "1712109984.100000",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-slack-thread",
+          target: "C123THREAD",
+          message: "Thread reply",
+          replyToMessageId: "1712109984.100000",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-thread",
       },
-      agentId: "operator",
-      sessionId: "sess-slack-thread",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["slack.com", "*.slack.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com", "*.slack.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     const chatPostCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(chatPostCall?.[1]?.body ?? "")).toContain("\"thread_ts\":\"1712109984.100000\"");
+    expect(String(chatPostCall?.[1]?.body ?? "")).toContain('"thread_ts":"1712109984.100000"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "1712345678.000300",
@@ -1147,22 +1242,26 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-teams",
-        target: "ops-room",
-        message: "Nightly validation passed.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-teams",
+          target: "ops-room",
+          message: "Nightly validation passed.",
+        },
+        agentId: "operator",
+        sessionId: "sess-teams",
       },
-      agentId: "operator",
-      sessionId: "sess-teams",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["outlook.office.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["outlook.office.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://outlook.office.com/webhook/example",
@@ -1207,41 +1306,51 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-teams-rich",
-        message: "Nightly validation passed.",
-        attachments: [
-          { title: "Graph", url: "https://example.com/graph.png", mimeType: "image/png" },
-          { title: "Runbook", url: "https://example.com/runbook", mimeType: "text/html" },
-        ],
+    await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-teams-rich",
+          message: "Nightly validation passed.",
+          attachments: [
+            { title: "Graph", url: "https://example.com/graph.png", mimeType: "image/png" },
+            { title: "Runbook", url: "https://example.com/runbook", mimeType: "text/html" },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-teams-rich",
       },
-      agentId: "operator",
-      sessionId: "sess-teams-rich",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["outlook.office.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["outlook.office.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     const teamsCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
     const teamsBody = String(teamsCall?.[1]?.body ?? "");
-    expect(teamsBody).toContain("\"type\":\"Image\"");
+    expect(teamsBody).toContain('"type":"Image"');
     expect(teamsBody).toContain("https://example.com/graph.png");
     expect(teamsBody).toContain("[Runbook](https://example.com/runbook)");
   });
 
   it("sends Google Chat webhook attachments as rich cards", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      name: "spaces/AAAA/messages/123",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            name: "spaces/AAAA/messages/123",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -1269,32 +1378,36 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-google-chat",
-        message: "Artifact summary attached.",
-        attachments: [
-          { title: "Screenshot", url: "https://example.com/screenshot.png", mimeType: "image/png" },
-          { title: "Runbook", url: "https://example.com/runbook", mimeType: "text/html" },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-google-chat",
+          message: "Artifact summary attached.",
+          attachments: [
+            { title: "Screenshot", url: "https://example.com/screenshot.png", mimeType: "image/png" },
+            { title: "Runbook", url: "https://example.com/runbook", mimeType: "text/html" },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-google-chat",
       },
-      agentId: "operator",
-      sessionId: "sess-google-chat",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["chat.googleapis.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["chat.googleapis.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     const googleChatCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
     expect(googleChatCall?.[0]).toContain("threadKey=ops-thread");
     const googleChatBody = String(googleChatCall?.[1]?.body ?? "");
-    expect(googleChatBody).toContain("\"cardsV2\"");
-    expect(googleChatBody).toContain("\"imageUrl\":\"https://example.com/screenshot.png\"");
-    expect(googleChatBody).toContain("\"text\":\"Runbook\"");
+    expect(googleChatBody).toContain('"cardsV2"');
+    expect(googleChatBody).toContain('"imageUrl":"https://example.com/screenshot.png"');
+    expect(googleChatBody).toContain('"text":"Runbook"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "spaces/AAAA/messages/123",
@@ -1363,25 +1476,31 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-mm",
-        message: "Deploy finished.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-mm",
+          message: "Deploy finished.",
+        },
+        agentId: "operator",
+        sessionId: "sess-mm",
       },
-      agentId: "operator",
-      sessionId: "sess-mm",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["chat.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["chat.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
-    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({
-      target: "town-square",
-    }));
+    expect(queuedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "town-square",
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://chat.example.com/api/v4/posts",
       expect.objectContaining({
@@ -1392,7 +1511,7 @@ describe("executeTool", () => {
     const postCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/posts"));
     const postCallArgs = postCall as unknown[] | undefined;
     const postBody = (postCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
-    expect(String(postBody ?? "")).toContain("\"channel_id\":\"channelid12345678901234567\"");
+    expect(String(postBody ?? "")).toContain('"channel_id":"channelid12345678901234567"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "post-123",
@@ -1465,30 +1584,36 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-mm",
-        message: "Deployment evidence attached.",
-        attachments: [
-          {
-            title: "evidence.txt",
-            mimeType: "text/plain",
-            dataBase64: Buffer.from("mattermost-bytes").toString("base64"),
-          },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-mm",
+          message: "Deployment evidence attached.",
+          attachments: [
+            {
+              title: "evidence.txt",
+              mimeType: "text/plain",
+              dataBase64: Buffer.from("mattermost-bytes").toString("base64"),
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-mm-attachment",
       },
-      agentId: "operator",
-      sessionId: "sess-mm-attachment",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["chat.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["chat.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
-    const uploadCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/files")) as [string, RequestInit & { body?: BodyInit | null }] | undefined;
+    const uploadCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/files")) as
+      | [string, RequestInit & { body?: BodyInit | null }]
+      | undefined;
     expect(uploadCall?.[1]?.body).toBeInstanceOf(FormData);
     const uploadBody = uploadCall?.[1]?.body as FormData;
     expect(uploadBody.get("channel_id")).toBe("channelid12345678901234567");
@@ -1496,8 +1621,10 @@ describe("executeTool", () => {
     expect(uploadedFile).toBeInstanceOf(File);
     expect((uploadedFile as File).name).toBe("evidence.txt");
 
-    const postCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/posts")) as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(postCall?.[1]?.body ?? "")).toContain("\"file_ids\":[\"file-123\"]");
+    const postCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/api/v4/posts")) as
+      | [string, RequestInit & { body?: BodyInit | null }]
+      | undefined;
+    expect(String(postCall?.[1]?.body ?? "")).toContain('"file_ids":["file-123"]');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "post-attachment-123",
@@ -1507,10 +1634,13 @@ describe("executeTool", () => {
   it("sends channel messages through LINE bot adapters using shared target keys", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.LINE_CHANNEL_ACCESS_TOKEN = "line-token";
-    const fetchMock = vi.fn(async () => new Response("", {
-      status: 200,
-      headers: { "x-line-request-id": "line-request-123" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("", {
+          status: 200,
+          headers: { "x-line-request-id": "line-request-123" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const queuedSpy = vi.fn((input: Record<string, unknown>) => ({
@@ -1540,25 +1670,31 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-line",
-        message: "Weekly digest is ready.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-line",
+          message: "Weekly digest is ready.",
+        },
+        agentId: "operator",
+        sessionId: "sess-line",
       },
-      agentId: "operator",
-      sessionId: "sess-line",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["api.line.me"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.line.me"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
-    expect(queuedSpy).toHaveBeenCalledWith(expect.objectContaining({
-      target: "line:group:C1234567890abcdef1234567890abcd",
-    }));
+    expect(queuedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "line:group:C1234567890abcdef1234567890abcd",
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.line.me/v2/bot/message/push",
       expect.objectContaining({
@@ -1567,7 +1703,7 @@ describe("executeTool", () => {
     );
     const lineCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
     const lineBody = (lineCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
-    expect(String(lineBody ?? "")).toContain("\"to\":\"C1234567890abcdef1234567890abcd\"");
+    expect(String(lineBody ?? "")).toContain('"to":"C1234567890abcdef1234567890abcd"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "line-request-123",
@@ -1577,12 +1713,18 @@ describe("executeTool", () => {
   it("sends channel messages through Nextcloud Talk bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ocs: { data: { id: 9988 } },
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ocs: { data: { id: 9988 } },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -1611,21 +1753,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-nextcloud",
-        message: "Room update complete.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-nextcloud",
+          message: "Room update complete.",
+        },
+        agentId: "operator",
+        sessionId: "sess-nextcloud",
       },
-      agentId: "operator",
-      sessionId: "sess-nextcloud",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["cloud.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["cloud.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/room-token-123/message",
@@ -1634,8 +1780,10 @@ describe("executeTool", () => {
       }),
     );
     const nextcloudCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const nextcloudInit = nextcloudCallArgs?.[1] as (RequestInit & { body?: BodyInit | null; headers?: HeadersInit }) | undefined;
-    expect(String(nextcloudInit?.body ?? "")).toContain("\"message\":\"Room update complete.\"");
+    const nextcloudInit = nextcloudCallArgs?.[1] as
+      | (RequestInit & { body?: BodyInit | null; headers?: HeadersInit })
+      | undefined;
+    expect(String(nextcloudInit?.body ?? "")).toContain('"message":"Room update complete."');
     const nextcloudHeaders = new Headers(nextcloudInit?.headers);
     expect(nextcloudHeaders.get("OCS-APIRequest")).toBe("true");
     expect(nextcloudHeaders.get("X-Nextcloud-Talk-Bot-Random")).toBeTruthy();
@@ -1649,12 +1797,18 @@ describe("executeTool", () => {
   it("forwards Nextcloud Talk reply targets for quoted replies", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ocs: { data: { id: 9988 } },
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ocs: { data: { id: 9988 } },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -1683,26 +1837,30 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-nextcloud",
-        message: "Quoted follow-up",
-        replyTo: "1567",
+    await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-nextcloud",
+          message: "Quoted follow-up",
+          replyTo: "1567",
+        },
+        agentId: "operator",
+        sessionId: "sess-nextcloud",
       },
-      agentId: "operator",
-      sessionId: "sess-nextcloud",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["cloud.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["cloud.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     const nextcloudCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
     const nextcloudInit = nextcloudCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined;
-    expect(String(nextcloudInit?.body ?? "")).toContain("\"replyTo\":\"1567\"");
+    expect(String(nextcloudInit?.body ?? "")).toContain('"replyTo":"1567"');
   });
 
   it("rejects Nextcloud Talk attachments because the adapter is send-only", async () => {
@@ -1737,22 +1895,26 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-nextcloud",
-        message: "Attachment check",
-        attachments: [{ url: "https://example.com/photo.png" }],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-nextcloud",
+          message: "Attachment check",
+          attachments: [{ url: "https://example.com/photo.png" }],
+        },
+        agentId: "operator",
+        sessionId: "sess-nextcloud",
       },
-      agentId: "operator",
-      sessionId: "sess-nextcloud",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["cloud.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["cloud.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({
@@ -1764,10 +1926,13 @@ describe("executeTool", () => {
   it("adds reactions through Nextcloud Talk bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
-    const fetchMock = vi.fn(async () => new Response("", {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -1796,23 +1961,27 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.react",
-      args: {
-        connectionId: "conn-nextcloud",
-        target: "room-token-123",
-        messageId: "1567",
-        reaction: "😆",
+    const result = await executeTool(
+      {
+        toolName: "channel.react",
+        args: {
+          connectionId: "conn-nextcloud",
+          target: "room-token-123",
+          messageId: "1567",
+          reaction: "😆",
+        },
+        agentId: "operator",
+        sessionId: "sess-nextcloud",
       },
-      agentId: "operator",
-      sessionId: "sess-nextcloud",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["cloud.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["cloud.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/room-token-123/reaction/1567",
@@ -1821,8 +1990,10 @@ describe("executeTool", () => {
       }),
     );
     const nextcloudCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const nextcloudInit = nextcloudCallArgs?.[1] as (RequestInit & { body?: BodyInit | null; headers?: HeadersInit }) | undefined;
-    expect(String(nextcloudInit?.body ?? "")).toContain("\"reaction\":\"😆\"");
+    const nextcloudInit = nextcloudCallArgs?.[1] as
+      | (RequestInit & { body?: BodyInit | null; headers?: HeadersInit })
+      | undefined;
+    expect(String(nextcloudInit?.body ?? "")).toContain('"reaction":"😆"');
     const nextcloudHeaders = new Headers(nextcloudInit?.headers);
     expect(nextcloudHeaders.get("OCS-APIRequest")).toBe("true");
     expect(nextcloudHeaders.get("X-Nextcloud-Talk-Bot-Random")).toBeTruthy();
@@ -1835,14 +2006,20 @@ describe("executeTool", () => {
 
   it("sends channel messages through Signal bridge adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      jsonrpc: "2.0",
-      result: { timestamp: 1712345678901 },
-      id: "rpc-1",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            result: { timestamp: 1712345678901 },
+            id: "rpc-1",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -1871,21 +2048,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-signal",
-        message: "Bridge delivery complete.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-signal",
+          message: "Bridge delivery complete.",
+        },
+        agentId: "operator",
+        sessionId: "sess-signal",
       },
-      agentId: "operator",
-      sessionId: "sess-signal",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["signal.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["signal.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://signal.example.com/api/v1/rpc",
@@ -1894,11 +2075,11 @@ describe("executeTool", () => {
       }),
     );
     const signalCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const signalBody = ((signalCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(signalBody ?? "")).toContain("\"method\":\"send\"");
-    expect(String(signalBody ?? "")).toContain("\"message\":\"Bridge delivery complete.\"");
-    expect(String(signalBody ?? "")).toContain("\"groupId\":\"group-123\"");
-    expect(String(signalBody ?? "")).toContain("\"account\":\"+15557654321\"");
+    const signalBody = (signalCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(signalBody ?? "")).toContain('"method":"send"');
+    expect(String(signalBody ?? "")).toContain('"message":"Bridge delivery complete."');
+    expect(String(signalBody ?? "")).toContain('"groupId":"group-123"');
+    expect(String(signalBody ?? "")).toContain('"account":"+15557654321"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "1712345678901",
@@ -1910,25 +2091,35 @@ describe("executeTool", () => {
     process.env.IMESSAGE_PASSWORD = "bb-password";
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
           {
-            guid: "iMessage;-;+15551234567",
-            participants: [{ address: "+15551234567" }],
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           },
-        ],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          guid: "bb-msg-123",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              guid: "bb-msg-123",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -1957,21 +2148,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-imessage",
-        message: "Blue bubble delivered.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-imessage",
+          message: "Blue bubble delivered.",
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage",
       },
-      agentId: "operator",
-      sessionId: "sess-imessage",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -1988,9 +2183,9 @@ describe("executeTool", () => {
       }),
     );
     const sendCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
-    const sendBody = ((sendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(sendBody ?? "")).toContain("\"chatGuid\":\"iMessage;-;+15551234567\"");
-    expect(String(sendBody ?? "")).toContain("\"message\":\"Blue bubble delivered.\"");
+    const sendBody = (sendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(sendBody ?? "")).toContain('"chatGuid":"iMessage;-;+15551234567"');
+    expect(String(sendBody ?? "")).toContain('"message":"Blue bubble delivered."');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "bb-msg-123",
@@ -2002,37 +2197,54 @@ describe("executeTool", () => {
     process.env.IMESSAGE_PASSWORD = "bb-password";
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
           {
-            guid: "iMessage;-;+15551234567",
-            participants: [{ address: "+15551234567" }],
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           },
-        ],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response("image-bytes", {
-        status: 200,
-        headers: { "Content-Type": "image/png" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          hash: "uploaded-hash-1",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          guid: "bb-msg-attachment-123",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("image-bytes", {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              hash: "uploaded-hash-1",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              guid: "bb-msg-attachment-123",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2061,27 +2273,31 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-imessage",
-        message: "See attached.",
-        attachments: [
-          {
-            url: "https://files.example.com/reports/goat.png",
-            mimeType: "image/png",
-          },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-imessage",
+          message: "See attached.",
+          attachments: [
+            {
+              url: "https://files.example.com/reports/goat.png",
+              mimeType: "image/png",
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage-attachment",
       },
-      agentId: "operator",
-      sessionId: "sess-imessage-attachment",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1", "files.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1", "files.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -2105,7 +2321,7 @@ describe("executeTool", () => {
       }),
     );
     const uploadCallArgs = fetchMock.mock.calls[2] as unknown[] | undefined;
-    const uploadBody = ((uploadCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
+    const uploadBody = (uploadCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
     expect(uploadBody).toBeInstanceOf(FormData);
     const uploadedAttachment = (uploadBody as FormData).get("attachment");
     expect(uploadedAttachment).toBeTruthy();
@@ -2117,11 +2333,11 @@ describe("executeTool", () => {
       }),
     );
     const multipartCallArgs = fetchMock.mock.calls[3] as unknown[] | undefined;
-    const multipartBody = ((multipartCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(multipartBody ?? "")).toContain("\"chatGuid\":\"iMessage;-;+15551234567\"");
-    expect(String(multipartBody ?? "")).toContain("\"text\":\"See attached.\"");
-    expect(String(multipartBody ?? "")).toContain("\"attachment\":\"uploaded-hash-1\"");
-    expect(String(multipartBody ?? "")).toContain("\"name\":\"goat.png\"");
+    const multipartBody = (multipartCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(multipartBody ?? "")).toContain('"chatGuid":"iMessage;-;+15551234567"');
+    expect(String(multipartBody ?? "")).toContain('"text":"See attached."');
+    expect(String(multipartBody ?? "")).toContain('"attachment":"uploaded-hash-1"');
+    expect(String(multipartBody ?? "")).toContain('"name":"goat.png"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "bb-msg-attachment-123",
@@ -2133,33 +2349,48 @@ describe("executeTool", () => {
     process.env.IMESSAGE_PASSWORD = "bb-password";
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
           {
-            guid: "iMessage;-;+15551234567",
-            participants: [{ address: "+15551234567" }],
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           },
-        ],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          hash: "uploaded-inline-hash",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          guid: "bb-msg-inline-attachment-123",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              hash: "uploaded-inline-hash",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              guid: "bb-msg-inline-attachment-123",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2188,28 +2419,32 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-imessage",
-        message: "",
-        attachments: [
-          {
-            title: "inline.png",
-            mimeType: "image/png",
-            dataBase64: Buffer.from("png-bytes").toString("base64"),
-          },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-imessage",
+          message: "",
+          attachments: [
+            {
+              title: "inline.png",
+              mimeType: "image/png",
+              dataBase64: Buffer.from("png-bytes").toString("base64"),
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage-inline-attachment",
       },
-      agentId: "operator",
-      sessionId: "sess-imessage-inline-attachment",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -2238,25 +2473,35 @@ describe("executeTool", () => {
     process.env.IMESSAGE_PASSWORD = "bb-password";
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
           {
-            guid: "iMessage;-;+15551234567",
-            participants: [{ address: "+15551234567" }],
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           },
-        ],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          guid: "bb-react-123",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              guid: "bb-react-123",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2285,23 +2530,27 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.react",
-      args: {
-        connectionId: "conn-imessage",
-        messageId: "msg-123",
-        reaction: "love",
-        partIndex: 1,
+    const result = await executeTool(
+      {
+        toolName: "channel.react",
+        args: {
+          connectionId: "conn-imessage",
+          messageId: "msg-123",
+          reaction: "love",
+          partIndex: 1,
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage-react",
       },
-      agentId: "operator",
-      sessionId: "sess-imessage-react",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
@@ -2309,10 +2558,10 @@ describe("executeTool", () => {
       expect.objectContaining({ method: "POST" }),
     );
     const reactCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
-    const reactBody = ((reactCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(reactBody ?? "")).toContain("\"selectedMessageGuid\":\"msg-123\"");
-    expect(String(reactBody ?? "")).toContain("\"reaction\":\"love\"");
-    expect(String(reactBody ?? "")).toContain("\"partIndex\":1");
+    const reactBody = (reactCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(reactBody ?? "")).toContain('"selectedMessageGuid":"msg-123"');
+    expect(String(reactBody ?? "")).toContain('"reaction":"love"');
+    expect(String(reactBody ?? "")).toContain('"partIndex":1');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "bb-react-123",
@@ -2351,30 +2600,34 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.unsend",
-      args: {
-        connectionId: "conn-imessage",
-        messageId: "msg-guid-456",
-        partIndex: 0,
+    const result = await executeTool(
+      {
+        toolName: "channel.unsend",
+        args: {
+          connectionId: "conn-imessage",
+          messageId: "msg-guid-456",
+          partIndex: 0,
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage-unsend",
       },
-      agentId: "operator",
-      sessionId: "sess-imessage-unsend",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:1234/api/v1/message/msg-guid-456/unsend?password=bb-password",
       expect.objectContaining({ method: "POST" }),
     );
     const unsendCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const unsendBody = ((unsendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(unsendBody ?? "")).toContain("\"partIndex\":0");
+    const unsendBody = (unsendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(unsendBody ?? "")).toContain('"partIndex":0');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "msg-guid-456",
@@ -2384,10 +2637,13 @@ describe("executeTool", () => {
   it("reacts to Slack messages through bot-token connectors", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2415,32 +2671,36 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.react",
-      args: {
-        connectionId: "conn-slack",
-        messageId: "1711111111.000100",
-        reaction: ":thumbsup:",
+    const result = await executeTool(
+      {
+        toolName: "channel.react",
+        args: {
+          connectionId: "conn-slack",
+          messageId: "1711111111.000100",
+          reaction: ":thumbsup:",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-react",
       },
-      agentId: "operator",
-      sessionId: "sess-slack-react",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["slack.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://slack.com/api/reactions.add",
       expect.objectContaining({ method: "POST" }),
     );
     const slackCall = fetchMock.mock.calls[0] as [string, RequestInit?] | undefined;
-    const slackBody = String((slackCall?.[1]?.body) ?? "");
-    expect(slackBody).toContain("\"channel\":\"C123\"");
-    expect(slackBody).toContain("\"timestamp\":\"1711111111.000100\"");
-    expect(slackBody).toContain("\"name\":\"thumbsup\"");
+    const slackBody = String(slackCall?.[1]?.body ?? "");
+    expect(slackBody).toContain('"channel":"C123"');
+    expect(slackBody).toContain('"timestamp":"1711111111.000100"');
+    expect(slackBody).toContain('"name":"thumbsup"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "1711111111.000100",
@@ -2450,10 +2710,13 @@ describe("executeTool", () => {
   it("unsends Slack messages through bot-token connectors", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2481,21 +2744,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.unsend",
-      args: {
-        connectionId: "conn-slack",
-        messageId: "1711111111.000100",
+    const result = await executeTool(
+      {
+        toolName: "channel.unsend",
+        args: {
+          connectionId: "conn-slack",
+          messageId: "1711111111.000100",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-unsend",
       },
-      agentId: "operator",
-      sessionId: "sess-slack-unsend",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["slack.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://slack.com/api/chat.delete",
@@ -2537,21 +2804,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.unsend",
-      args: {
-        connectionId: "conn-discord",
-        messageId: "msg-999",
+    const result = await executeTool(
+      {
+        toolName: "channel.unsend",
+        args: {
+          connectionId: "conn-discord",
+          messageId: "msg-999",
+        },
+        agentId: "operator",
+        sessionId: "sess-discord-unsend",
       },
-      agentId: "operator",
-      sessionId: "sess-discord-unsend",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["discord.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["discord.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/webhooks/123/abc/messages/msg-999",
@@ -2566,10 +2837,13 @@ describe("executeTool", () => {
   it("unsends Telegram bot messages", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.TELEGRAM_BOT_TOKEN = "tg-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, result: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2597,21 +2871,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.unsend",
-      args: {
-        connectionId: "conn-telegram",
-        messageId: "77",
+    const result = await executeTool(
+      {
+        toolName: "channel.unsend",
+        args: {
+          connectionId: "conn-telegram",
+          messageId: "77",
+        },
+        agentId: "operator",
+        sessionId: "sess-telegram-unsend",
       },
-      agentId: "operator",
-      sessionId: "sess-telegram-unsend",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["api.telegram.org"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.telegram.org"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telegram.org/bottg-token/deleteMessage",
@@ -2626,10 +2904,13 @@ describe("executeTool", () => {
   it("adds Telegram reactions through the bot API", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.TELEGRAM_BOT_TOKEN = "tg-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, result: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, result: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2657,30 +2938,34 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.react",
-      args: {
-        connectionId: "conn-telegram-react",
-        messageId: "987654321",
-        reaction: "👍",
+    const result = await executeTool(
+      {
+        toolName: "channel.react",
+        args: {
+          connectionId: "conn-telegram-react",
+          messageId: "987654321",
+          reaction: "👍",
+        },
+        agentId: "operator",
+        sessionId: "sess-telegram-react",
       },
-      agentId: "operator",
-      sessionId: "sess-telegram-react",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["api.telegram.org"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.telegram.org"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telegram.org/bottg-token/setMessageReaction",
       expect.objectContaining({ method: "POST" }),
     );
     const telegramCall = fetchMock.mock.calls[0] as [string, RequestInit & { body?: BodyInit | null }] | undefined;
-    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"message_id\":987654321");
-    expect(String(telegramCall?.[1]?.body ?? "")).toContain("\"emoji\":\"👍\"");
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain('"message_id":987654321');
+    expect(String(telegramCall?.[1]?.body ?? "")).toContain('"emoji":"👍"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "987654321",
@@ -2719,21 +3004,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.unsend",
-      args: {
-        connectionId: "conn-mattermost",
-        messageId: "post-123",
+    const result = await executeTool(
+      {
+        toolName: "channel.unsend",
+        args: {
+          connectionId: "conn-mattermost",
+          messageId: "post-123",
+        },
+        agentId: "operator",
+        sessionId: "sess-mattermost-unsend",
       },
-      agentId: "operator",
-      sessionId: "sess-mattermost-unsend",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:8065/api/v4/posts/post-123",
@@ -2750,49 +3039,73 @@ describe("executeTool", () => {
     process.env.IMESSAGE_PASSWORD = "bb-password";
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          guid: "bb-created-chat-msg",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              guid: "bb-created-chat-msg",
+            },
+          }),
           {
-            guid: "iMessage;-;+15551234567",
-            participants: [{ address: "+15551234567" }],
+            status: 200,
+            headers: { "Content-Type": "application/json" },
           },
-        ],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response("image-bytes", {
-        status: 200,
-        headers: { "Content-Type": "image/png" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          hash: "uploaded-hash-new-chat",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: {
-          guid: "bb-msg-new-chat-attachment",
-        },
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("image-bytes", {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              hash: "uploaded-hash-new-chat",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              guid: "bb-msg-new-chat-attachment",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2820,27 +3133,31 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-imessage-new-chat",
-        target: "imessage:+15551234567",
-        attachments: [
-          {
-            url: "https://files.example.com/reports/goat.png",
-            mimeType: "image/png",
-          },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-imessage-new-chat",
+          target: "imessage:+15551234567",
+          attachments: [
+            {
+              url: "https://files.example.com/reports/goat.png",
+              mimeType: "image/png",
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage-new-chat",
       },
-      agentId: "operator",
-      sessionId: "sess-imessage-new-chat",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1", "files.example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1", "files.example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -2857,9 +3174,9 @@ describe("executeTool", () => {
       }),
     );
     const createChatCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
-    const createChatBody = ((createChatCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(createChatBody ?? "")).toContain("\"addresses\":[\"+15551234567\"]");
-    expect(String(createChatBody ?? "")).not.toContain("\"message\":");
+    const createChatBody = (createChatCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(createChatBody ?? "")).toContain('"addresses":["+15551234567"]');
+    expect(String(createChatBody ?? "")).not.toContain('"message":');
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       "http://127.0.0.1:1234/api/v1/chat/query?password=bb-password",
@@ -2889,8 +3206,8 @@ describe("executeTool", () => {
       }),
     );
     const multipartCallArgs = fetchMock.mock.calls[5] as unknown[] | undefined;
-    const multipartBody = ((multipartCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(multipartBody ?? "")).toContain("\"attachment\":\"uploaded-hash-new-chat\"");
+    const multipartBody = (multipartCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(multipartBody ?? "")).toContain('"attachment":"uploaded-hash-new-chat"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "bb-msg-new-chat-attachment",
@@ -2900,13 +3217,19 @@ describe("executeTool", () => {
   it("sends channel messages through WhatsApp Cloud API adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      messaging_product: "whatsapp",
-      messages: [{ id: "wamid.12345" }],
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            messaging_product: "whatsapp",
+            messages: [{ id: "wamid.12345" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -2935,21 +3258,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-whatsapp",
-        message: "Cloud delivery complete.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-whatsapp",
+          message: "Cloud delivery complete.",
+        },
+        agentId: "operator",
+        sessionId: "sess-whatsapp",
       },
-      agentId: "operator",
-      sessionId: "sess-whatsapp",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["graph.facebook.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["graph.facebook.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://graph.facebook.com/v23.0/123456789012345/messages",
@@ -2958,10 +3285,10 @@ describe("executeTool", () => {
       }),
     );
     const whatsappCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const whatsappBody = ((whatsappCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(whatsappBody ?? "")).toContain("\"messaging_product\":\"whatsapp\"");
-    expect(String(whatsappBody ?? "")).toContain("\"to\":\"15551234567\"");
-    expect(String(whatsappBody ?? "")).toContain("\"body\":\"Cloud delivery complete.\"");
+    const whatsappBody = (whatsappCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(whatsappBody ?? "")).toContain('"messaging_product":"whatsapp"');
+    expect(String(whatsappBody ?? "")).toContain('"to":"15551234567"');
+    expect(String(whatsappBody ?? "")).toContain('"body":"Cloud delivery complete."');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "wamid.12345",
@@ -2974,13 +3301,16 @@ describe("executeTool", () => {
     let messageCounter = 0;
     const fetchMock = vi.fn(async () => {
       messageCounter += 1;
-      return new Response(JSON.stringify({
-        messaging_product: "whatsapp",
-        messages: [{ id: `wamid.rich.${messageCounter}` }],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          messaging_product: "whatsapp",
+          messages: [{ id: `wamid.rich.${messageCounter}` }],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -3010,32 +3340,38 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-whatsapp-rich",
-        message: "Cloud delivery with image.",
-        attachments: [{
-          url: "https://cdn.example.com/test-image.png",
-          title: "test-image.png",
-          mimeType: "image/png",
-        }],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-whatsapp-rich",
+          message: "Cloud delivery with image.",
+          attachments: [
+            {
+              url: "https://cdn.example.com/test-image.png",
+              title: "test-image.png",
+              mimeType: "image/png",
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-whatsapp-rich",
       },
-      agentId: "operator",
-      sessionId: "sess-whatsapp-rich",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["graph.facebook.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["graph.facebook.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const attachmentCall = fetchMock.mock.calls[1] as unknown[] | undefined;
-    const attachmentBody = ((attachmentCall?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(attachmentBody ?? "")).toContain("\"type\":\"image\"");
-    expect(String(attachmentBody ?? "")).toContain("\"link\":\"https://cdn.example.com/test-image.png\"");
+    const attachmentBody = (attachmentCall?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(attachmentBody ?? "")).toContain('"type":"image"');
+    expect(String(attachmentBody ?? "")).toContain('"link":"https://cdn.example.com/test-image.png"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "wamid.rich.2",
@@ -3048,21 +3384,27 @@ describe("executeTool", () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith("/media")) {
-        return new Response(JSON.stringify({
-          id: "media-inline-123",
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            id: "media-inline-123",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       if (url.endsWith("/messages")) {
-        return new Response(JSON.stringify({
-          messaging_product: "whatsapp",
-          messages: [{ id: "wamid.inline.123" }],
-        }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            messaging_product: "whatsapp",
+            messages: [{ id: "wamid.inline.123" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
       }
       throw new Error(`Unexpected fetch URL: ${url}`);
     });
@@ -3094,25 +3436,31 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-whatsapp-inline",
-        attachments: [{
-          title: "receipt.pdf",
-          mimeType: "application/pdf",
-          dataBase64: Buffer.from("inline-whatsapp-file").toString("base64"),
-        }],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-whatsapp-inline",
+          attachments: [
+            {
+              title: "receipt.pdf",
+              mimeType: "application/pdf",
+              dataBase64: Buffer.from("inline-whatsapp-file").toString("base64"),
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-whatsapp-inline",
       },
-      agentId: "operator",
-      sessionId: "sess-whatsapp-inline",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["graph.facebook.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["graph.facebook.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -3129,10 +3477,10 @@ describe("executeTool", () => {
       }),
     );
     const messageCall = fetchMock.mock.calls[1] as unknown[] | undefined;
-    const messageBody = ((messageCall?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(messageBody ?? "")).toContain("\"type\":\"document\"");
-    expect(String(messageBody ?? "")).toContain("\"id\":\"media-inline-123\"");
-    expect(String(messageBody ?? "")).toContain("\"filename\":\"receipt.pdf\"");
+    const messageBody = (messageCall?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(messageBody ?? "")).toContain('"type":"document"');
+    expect(String(messageBody ?? "")).toContain('"id":"media-inline-123"');
+    expect(String(messageBody ?? "")).toContain('"filename":"receipt.pdf"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "wamid.inline.123",
@@ -3142,13 +3490,19 @@ describe("executeTool", () => {
   it("adds WhatsApp reactions through the Cloud API", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      messaging_product: "whatsapp",
-      messages: [{ id: "wamid.react.123" }],
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            messaging_product: "whatsapp",
+            messages: [{ id: "wamid.react.123" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -3177,22 +3531,26 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.react",
-      args: {
-        connectionId: "conn-whatsapp-react",
-        messageId: "wamid.original.1",
-        reaction: "👍",
+    const result = await executeTool(
+      {
+        toolName: "channel.react",
+        args: {
+          connectionId: "conn-whatsapp-react",
+          messageId: "wamid.original.1",
+          reaction: "👍",
+        },
+        agentId: "operator",
+        sessionId: "sess-whatsapp-react",
       },
-      agentId: "operator",
-      sessionId: "sess-whatsapp-react",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["graph.facebook.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["graph.facebook.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://graph.facebook.com/v23.0/123456789012345/messages",
@@ -3201,10 +3559,10 @@ describe("executeTool", () => {
       }),
     );
     const whatsappCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const whatsappBody = ((whatsappCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(whatsappBody ?? "")).toContain("\"type\":\"reaction\"");
-    expect(String(whatsappBody ?? "")).toContain("\"message_id\":\"wamid.original.1\"");
-    expect(String(whatsappBody ?? "")).toContain("\"emoji\":\"👍\"");
+    const whatsappBody = (whatsappCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(whatsappBody ?? "")).toContain('"type":"reaction"');
+    expect(String(whatsappBody ?? "")).toContain('"message_id":"wamid.original.1"');
+    expect(String(whatsappBody ?? "")).toContain('"emoji":"👍"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "wamid.react.123",
@@ -3214,12 +3572,18 @@ describe("executeTool", () => {
   it("sends channel messages through Zalo Personal zca bridge adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      messageId: "zlu-msg-123",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            messageId: "zlu-msg-123",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -3249,21 +3613,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-zalouser",
-        message: "Zalo personal delivery complete.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-zalouser",
+          message: "Zalo personal delivery complete.",
+        },
+        agentId: "operator",
+        sessionId: "sess-zalouser",
       },
-      agentId: "operator",
-      sessionId: "sess-zalouser",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:56789/api/work/messages/text",
@@ -3275,10 +3643,10 @@ describe("executeTool", () => {
       }),
     );
     const zaloUserCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const zaloUserBody = ((zaloUserCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(zaloUserBody ?? "")).toContain("\"threadId\":\"g-987654321\"");
-    expect(String(zaloUserBody ?? "")).toContain("\"isGroup\":true");
-    expect(String(zaloUserBody ?? "")).toContain("\"message\":\"Zalo personal delivery complete.\"");
+    const zaloUserBody = (zaloUserCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(zaloUserBody ?? "")).toContain('"threadId":"g-987654321"');
+    expect(String(zaloUserBody ?? "")).toContain('"isGroup":true');
+    expect(String(zaloUserBody ?? "")).toContain('"message":"Zalo personal delivery complete."');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "zlu-msg-123",
@@ -3288,12 +3656,18 @@ describe("executeTool", () => {
   it("routes Zalo Personal image attachments to the zca media endpoint", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.ZALOUSER_AUTH_TOKEN = "zlu-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      messageId: "zlu-media-123",
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            messageId: "zlu-media-123",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -3323,28 +3697,32 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-zalouser-media",
-        message: "Photo attached.",
-        attachments: [
-          {
-            url: "https://example.com/photo.png",
-            title: "Screenshot",
-            mimeType: "image/png",
-          },
-        ],
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-zalouser-media",
+          message: "Photo attached.",
+          attachments: [
+            {
+              url: "https://example.com/photo.png",
+              title: "Screenshot",
+              mimeType: "image/png",
+            },
+          ],
+        },
+        agentId: "operator",
+        sessionId: "sess-zalouser-media",
       },
-      agentId: "operator",
-      sessionId: "sess-zalouser-media",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["127.0.0.1", "example.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1", "example.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:56789/api/work/messages/image",
@@ -3356,11 +3734,11 @@ describe("executeTool", () => {
       }),
     );
     const mediaCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const mediaBody = ((mediaCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(mediaBody ?? "")).toContain("\"threadId\":\"u-123456789\"");
-    expect(String(mediaBody ?? "")).toContain("\"isGroup\":false");
-    expect(String(mediaBody ?? "")).toContain("\"url\":\"https://example.com/photo.png\"");
-    expect(String(mediaBody ?? "")).toContain("\"message\":\"Photo attached.\"");
+    const mediaBody = (mediaCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(mediaBody ?? "")).toContain('"threadId":"u-123456789"');
+    expect(String(mediaBody ?? "")).toContain('"isGroup":false');
+    expect(String(mediaBody ?? "")).toContain('"url":"https://example.com/photo.png"');
+    expect(String(mediaBody ?? "")).toContain('"message":"Photo attached."');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "zlu-media-123",
@@ -3370,13 +3748,19 @@ describe("executeTool", () => {
   it("sends channel messages through Zalo bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.ZALO_ACCESS_TOKEN = "zalo-token";
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      result: { message_id: "zalo-msg-1" },
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            result: { message_id: "zalo-msg-1" },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const commsStorage = {
@@ -3404,21 +3788,25 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    const result = await executeTool({
-      toolName: "channel.send",
-      args: {
-        connectionId: "conn-zalo",
-        message: "Broadcast ready.",
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-zalo",
+          message: "Broadcast ready.",
+        },
+        agentId: "operator",
+        sessionId: "sess-zalo",
       },
-      agentId: "operator",
-      sessionId: "sess-zalo",
-    }, {
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        networkAllowlist: ["bot-api.zaloplatforms.com"],
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["bot-api.zaloplatforms.com"],
+        },
       },
-    }, commsStorage);
+      commsStorage,
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://bot-api.zaloplatforms.com/botzalo-token/sendMessage",
@@ -3427,8 +3815,8 @@ describe("executeTool", () => {
       }),
     );
     const zaloCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
-    const zaloBody = ((zaloCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body);
-    expect(String(zaloBody ?? "")).toContain("\"chat_id\":\"chat-123\"");
+    const zaloBody = (zaloCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(zaloBody ?? "")).toContain('"chat_id":"chat-123"');
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "zalo-msg-1",
@@ -3438,18 +3826,25 @@ describe("executeTool", () => {
   it("redacts secret-looking material from model-visible tool results", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async () => new Response("Authorization: Bearer token-12345678901234567890", {
-      status: 200,
-      headers: { "content-type": "text/plain" },
-    })) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("Authorization: Bearer token-12345678901234567890", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+    ) as unknown as typeof fetch;
 
     try {
-      const result = await executeTool({
-        toolName: "http.get",
-        args: { url: "https://example.com/secret" },
-        agentId: "agent",
-        sessionId: "sess-http-redact",
-      }, policyConfig, storageStub);
+      const result = await executeTool(
+        {
+          toolName: "http.get",
+          args: { url: "https://example.com/secret" },
+          agentId: "agent",
+          sessionId: "sess-http-redact",
+        },
+        policyConfig,
+        storageStub,
+      );
 
       expect(String(result.body ?? "")).toContain("[REDACTED]");
       expect(String(result.body ?? "")).not.toContain("token-12345678901234567890");
@@ -3469,7 +3864,9 @@ describe("executeTool", () => {
     let chunkSeq = 0;
     const storage = {
       knowledge: {
-        listDocuments: vi.fn((namespace?: string) => documents.filter((doc) => !namespace || doc.namespace === namespace)),
+        listDocuments: vi.fn((namespace?: string) =>
+          documents.filter((doc) => !namespace || doc.namespace === namespace),
+        ),
         createDocument: vi.fn((input: Record<string, unknown>) => {
           const doc = {
             docId: `doc-${++documentSeq}`,
@@ -3521,15 +3918,19 @@ describe("executeTool", () => {
 
     const first = await executeTool(ingestRequest, policyConfig, storage);
     const second = await executeTool(ingestRequest, policyConfig, storage);
-    const search = await executeTool({
-      toolName: "docs.search",
-      args: {
-        namespace: "research",
-        query: "native ingestion",
+    const search = await executeTool(
+      {
+        toolName: "docs.search",
+        args: {
+          namespace: "research",
+          query: "native ingestion",
+        },
+        agentId: "agent",
+        sessionId: "sess-docs",
       },
-      agentId: "agent",
-      sessionId: "sess-docs",
-    }, policyConfig, storage);
+      policyConfig,
+      storage,
+    );
 
     expect(first.cached).toBe(false);
     expect(second.cached).toBe(true);
@@ -3579,35 +3980,45 @@ describe("executeTool", () => {
       },
     } as unknown as Storage;
 
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      expect(url).toContain("/v2/scrape");
-      return new Response(JSON.stringify({
-        data: {
-          markdown: "# Firecrawl\n\nNormalized markdown content.",
-          metadata: {
-            title: "Firecrawl",
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        expect(url).toContain("/v2/scrape");
+        return new Response(
+          JSON.stringify({
+            data: {
+              markdown: "# Firecrawl\n\nNormalized markdown content.",
+              metadata: {
+                title: "Firecrawl",
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
           },
-        },
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch);
+        );
+      }) as typeof fetch,
+    );
 
-    const result = await executeTool({
-      toolName: "docs.ingest",
-      args: {
-        sourceType: "url",
-        source: "https://example.com/firecrawl",
-        namespace: "research",
-        backend: "firecrawl",
-        firecrawlBaseUrl: "http://127.0.0.1:3002",
+    const result = await executeTool(
+      {
+        toolName: "docs.ingest",
+        args: {
+          sourceType: "url",
+          source: "https://example.com/firecrawl",
+          namespace: "research",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+        },
+        agentId: "agent",
+        sessionId: "sess-firecrawl",
+        trustLevel: "trusted_workspace",
       },
-      agentId: "agent",
-      sessionId: "sess-firecrawl",
-      trustLevel: "trusted_workspace",
-    }, policyConfig, storage);
+      policyConfig,
+      storage,
+    );
 
     expect(result.backend).toMatchObject({ backend: "firecrawl" });
     expect(result.fetchResult).toMatchObject({

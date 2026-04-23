@@ -91,16 +91,16 @@ def detect_capabilities() -> Dict[str, Any]:
         providers = ort.get_available_providers()
         qnn_available = "QNNExecutionProvider" in providers
         details.append(f"onnxruntime providers={providers}")
-    except Exception as error:  # pragma: no cover - depends on host env
-        details.append(f"onnxruntime unavailable: {error}")
+    except Exception:  # pragma: no cover - depends on host env
+        details.append("onnxruntime unavailable")
 
     try:
         import onnxruntime_genai  # type: ignore  # noqa: F401
 
         onnxruntime_genai_available = True
         details.append("onnxruntime-genai available")
-    except Exception as error:  # pragma: no cover - depends on host env
-        details.append(f"onnxruntime-genai unavailable: {error}")
+    except Exception:  # pragma: no cover - depends on host env
+        details.append("onnxruntime-genai unavailable")
 
     machine = platform.machine().lower()
     system = platform.system().lower()

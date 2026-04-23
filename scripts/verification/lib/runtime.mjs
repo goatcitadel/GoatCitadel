@@ -9,6 +9,7 @@ import { resolveUiTarget } from "../../lib/ui-target.mjs";
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
+const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 export async function prepareVerificationRuntime(runId) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), `goatcitadel-verify-${sanitizeFilePart(runId)}-`));
@@ -26,7 +27,7 @@ export async function prepareVerificationRuntime(runId) {
 export async function startVerificationStack(context, options = {}) {
   await ensureGatewayWorkspaceBuild(context);
   const uiTarget = resolveUiTarget(repoRoot, process.env);
-  const runtimeRoot = options.runtimeRoot ?? await prepareVerificationRuntime(context.runId);
+  const runtimeRoot = options.runtimeRoot ?? (await prepareVerificationRuntime(context.runId));
   const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
   const gatewayEnv = {
@@ -168,7 +169,7 @@ export async function stopProcess(handle) {
     return;
   }
   if (process.platform === "win32") {
-    spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "taskkill", "/PID", String(handle.child.pid), "/T", "/F"], {
+    spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "taskkill", "/PID", String(handle.child.pid), "/T", "/F"], {
       stdio: "ignore",
     });
     await waitForExit(handle.child, 12000).catch(() => undefined);
@@ -264,7 +265,11 @@ async function ensureGatewayWorkspaceBuild(context) {
     "",
   ];
   const result = runPnpmSync(["--dir", repoRoot, "--filter", "@goatcitadel/gateway...", "build"]);
-  logLines.push(result.stdout ?? "", result.stderr ?? "", result.error ? `${result.error.name}: ${result.error.message}` : "");
+  logLines.push(
+    result.stdout ?? "",
+    result.stderr ?? "",
+    result.error ? `${result.error.name}: ${result.error.message}` : "",
+  );
 
   let remainingMissingPackages = missingWorkspacePackages.filter(({ outputPath }) => !existsSync(outputPath));
   for (const missingPackage of remainingMissingPackages) {
@@ -308,7 +313,7 @@ async function ensureGatewayWorkspaceBuild(context) {
 
 function runPnpmSync(args) {
   if (process.platform === "win32") {
-    return spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", pnpmCommand(), ...args], {
+    return spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", pnpmCommand(), ...args], {
       cwd: repoRoot,
       env: process.env,
       encoding: "utf8",

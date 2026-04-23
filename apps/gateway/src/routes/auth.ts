@@ -61,14 +61,63 @@ const sseTokenIssueSchema = z.object({
   scope: z.enum(["events:stream", "dev:diagnostics:stream"]).default("events:stream"),
 });
 
+const RATE_LIMIT_READ_MAX = 500;
+const RATE_LIMIT_MUTATION_MAX = 180;
+const RATE_LIMIT_AUTH_MAX = 60;
+
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
-  const operatorOnly = withRouteAccess(fastify, "operator");
-  const publicRoute = withRouteAccess(fastify, "public");
-  const deviceOnly = withRouteAccess(fastify, "device");
-  const companionOnly = withRouteAccess(fastify, "companion");
+  const operatorReadRoute = withRouteAccess(fastify, "operator", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_READ_MAX,
+      },
+    },
+  });
+  const operatorMutationRoute = withRouteAccess(fastify, "operator", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_MUTATION_MAX,
+      },
+    },
+  });
+  const operatorAuthRoute = withRouteAccess(fastify, "operator", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_AUTH_MAX,
+      },
+    },
+  });
+  const publicReadRoute = withRouteAccess(fastify, "public", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_READ_MAX,
+      },
+    },
+  });
+  const publicAuthRoute = withRouteAccess(fastify, "public", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_AUTH_MAX,
+      },
+    },
+  });
+  const deviceAuthRoute = withRouteAccess(fastify, "device", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_AUTH_MAX,
+      },
+    },
+  });
+  const companionReadRoute = withRouteAccess(fastify, "companion", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_READ_MAX,
+      },
+    },
+  });
   const authAdmin = fastify.services.authAdmin;
 
-  fastify.post("/api/v1/auth/sse-token", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/auth/sse-token", operatorAuthRoute, async (request, reply) => {
     const authMode = fastify.gatewayConfig.assistant.auth.mode;
     if (authMode === "none") {
       return reply.code(400).send({
@@ -116,7 +165,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.post("/api/v1/auth/companion/session/exchange", deviceOnly, async (request, reply) => {
+  fastify.post("/api/v1/auth/companion/session/exchange", deviceAuthRoute, async (request, reply) => {
     if (request.authActorSource !== "device" || !request.authGrantId) {
       return reply.code(403).send({
         error: "Companion session exchange requires an approved device grant.",
@@ -133,7 +182,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/auth/companion/session/refresh", publicRoute, async (request, reply) => {
+  fastify.post("/api/v1/auth/companion/session/refresh", publicAuthRoute, async (request, reply) => {
     const parsed = companionSessionRefreshSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -145,7 +194,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/session", companionOnly, async (request, reply) => {
+  fastify.get("/api/v1/auth/companion/session", companionReadRoute, async (request, reply) => {
     if (request.authActorSource !== "companion" || !request.authCompanionSessionId) {
       return reply.code(403).send({
         error: "Companion session access requires companion authentication.",
@@ -158,7 +207,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/sessions", operatorOnly, async (request, reply) => {
+  fastify.get("/api/v1/auth/companion/sessions", operatorReadRoute, async (request, reply) => {
     const parsed = companionSessionListQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -170,7 +219,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/sessions/:sessionId", operatorOnly, async (request, reply) => {
+  fastify.get("/api/v1/auth/companion/sessions/:sessionId", operatorReadRoute, async (request, reply) => {
     const params = companionSessionParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -182,7 +231,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/auth/companion/sessions/:sessionId/revoke", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/auth/companion/sessions/:sessionId/revoke", operatorMutationRoute, async (request, reply) => {
     const params = companionSessionParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -194,7 +243,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/companion/audit", operatorOnly, async (request, reply) => {
+  fastify.get("/api/v1/auth/companion/audit", operatorReadRoute, async (request, reply) => {
     const parsed = companionAuditQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -208,11 +257,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/auth/plan", publicRoute, async (_request, reply) => {
+  fastify.get("/api/v1/auth/plan", publicReadRoute, async (_request, reply) => {
     return reply.send(authAdmin.getAuthCredentialPlan());
   });
 
-  fastify.get("/api/v1/auth/devices", operatorOnly, async (request, reply) => {
+  fastify.get("/api/v1/auth/devices", operatorReadRoute, async (request, reply) => {
     const parsed = deviceGrantListQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -222,7 +271,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items });
   });
 
-  fastify.post("/api/v1/auth/devices/:grantId/revoke", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/auth/devices/:grantId/revoke", operatorMutationRoute, async (request, reply) => {
     const params = deviceGrantParamsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
@@ -263,7 +312,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   );
 
-  fastify.get("/api/v1/auth/device-requests/:requestId/status", publicRoute, async (request, reply) => {
+  fastify.get("/api/v1/auth/device-requests/:requestId/status", publicAuthRoute, async (request, reply) => {
     const params = deviceRequestParamsSchema.safeParse(request.params);
     const headers = deviceRequestSecretHeaderSchema.safeParse(request.headers);
     if (!params.success || !headers.success) {

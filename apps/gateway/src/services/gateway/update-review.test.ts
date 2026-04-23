@@ -13,17 +13,19 @@ import {
 
 describe("parsePnpmOutdatedOutput", () => {
   it("parses pnpm outdated table output with wrapped dependents", () => {
-    const rows = parsePnpmOutdatedOutput([
-      "┌──────────────────────────────────┬──────────┬─────────┬────────────────────────────────┐",
-      "│ Package                          │ Current  │ Latest  │ Dependents                     │",
-      "├──────────────────────────────────┼──────────┼─────────┼────────────────────────────────┤",
-      "│ @types/node (dev)                │ 24.10.15 │ 25.5.0  │ goatcitadel                    │",
-      "├──────────────────────────────────┼──────────┼─────────┼────────────────────────────────┤",
-      "│ zod                              │ 3.25.76  │ 4.3.6   │ @goatcitadel/contracts,        │",
-      "│                                  │          │         │ @goatcitadel/gateway,          │",
-      "│                                  │          │         │ @goatcitadel/orchestration     │",
-      "└──────────────────────────────────┴──────────┴─────────┴────────────────────────────────┘",
-    ].join("\n"));
+    const rows = parsePnpmOutdatedOutput(
+      [
+        "┌──────────────────────────────────┬──────────┬─────────┬────────────────────────────────┐",
+        "│ Package                          │ Current  │ Latest  │ Dependents                     │",
+        "├──────────────────────────────────┼──────────┼─────────┼────────────────────────────────┤",
+        "│ @types/node (dev)                │ 24.10.15 │ 25.5.0  │ goatcitadel                    │",
+        "├──────────────────────────────────┼──────────┼─────────┼────────────────────────────────┤",
+        "│ zod                              │ 3.25.76  │ 4.3.6   │ @goatcitadel/contracts,        │",
+        "│                                  │          │         │ @goatcitadel/gateway,          │",
+        "│                                  │          │         │ @goatcitadel/orchestration     │",
+        "└──────────────────────────────────┴──────────┴─────────┴────────────────────────────────┘",
+      ].join("\n"),
+    );
 
     expect(rows).toEqual([
       {
@@ -38,11 +40,7 @@ describe("parsePnpmOutdatedOutput", () => {
         dependencyType: undefined,
         currentVersion: "3.25.76",
         latestVersion: "4.3.6",
-        dependents: [
-          "@goatcitadel/contracts",
-          "@goatcitadel/gateway",
-          "@goatcitadel/orchestration",
-        ],
+        dependents: ["@goatcitadel/contracts", "@goatcitadel/gateway", "@goatcitadel/orchestration"],
       },
     ]);
   });
@@ -50,24 +48,21 @@ describe("parsePnpmOutdatedOutput", () => {
 
 describe("collectWorkspaceDependencyDrift", () => {
   it("uses stdout rows even when pnpm exits nonzero", async () => {
-    const result = await collectWorkspaceDependencyDrift(
-      "F:/code/personal-ai",
-      async () => {
-        const error = new Error("outdated found changes") as Error & {
-          stdout: string;
-          stderr: string;
-        };
-        error.stdout = [
-          "┌─────────┬─────────┬────────┬─────────────┐",
-          "│ Package │ Current │ Latest │ Dependents  │",
-          "├─────────┼─────────┼────────┼─────────────┤",
-          "│ nanoid  │ 5.1.6   │ 5.1.7  │ gateway-core │",
-          "└─────────┴─────────┴────────┴─────────────┘",
-        ].join("\n");
-        error.stderr = "";
-        throw error;
-      },
-    );
+    const result = await collectWorkspaceDependencyDrift("F:/code/personal-ai", async () => {
+      const error = new Error("outdated found changes") as Error & {
+        stdout: string;
+        stderr: string;
+      };
+      error.stdout = [
+        "┌─────────┬─────────┬────────┬─────────────┐",
+        "│ Package │ Current │ Latest │ Dependents  │",
+        "├─────────┼─────────┼────────┼─────────────┤",
+        "│ nanoid  │ 5.1.6   │ 5.1.7  │ gateway-core │",
+        "└─────────┴─────────┴────────┴─────────────┘",
+      ].join("\n");
+      error.stderr = "";
+      throw error;
+    });
 
     expect(result.warnings).toEqual([]);
     expect(result.items).toEqual([
@@ -90,26 +85,34 @@ describe("collectSkillSourceDrift", () => {
     fs.mkdirSync(path.join(rootDir, "skills", "extra", "cloudflare-api"), { recursive: true });
     fs.writeFileSync(
       path.join(rootDir, "skills", "extra", "cloudflare-api", "source.json"),
-      JSON.stringify({
-        manifestVersion: 2,
-        duplicateFamily: "cloudflare_dns",
-        resolvedUpstream: {
-          url: "https://github.com/example/cloudflare-api",
-          ref: "HEAD",
-          version: "abc123",
+      JSON.stringify(
+        {
+          manifestVersion: 2,
+          duplicateFamily: "cloudflare_dns",
+          resolvedUpstream: {
+            url: "https://github.com/example/cloudflare-api",
+            ref: "HEAD",
+            version: "abc123",
+          },
         },
-      }, null, 2),
+        null,
+        2,
+      ),
       "utf8",
     );
     fs.mkdirSync(path.join(rootDir, "skills", "extra", "local-only"), { recursive: true });
     fs.writeFileSync(
       path.join(rootDir, "skills", "extra", "local-only", "source.json"),
-      JSON.stringify({
-        manifestVersion: 2,
-        candidate: {
-          sourceRef: "C:/skills/local-only",
+      JSON.stringify(
+        {
+          manifestVersion: 2,
+          candidate: {
+            sourceRef: "C:/skills/local-only",
+          },
         },
-      }, null, 2),
+        null,
+        2,
+      ),
       "utf8",
     );
   });
@@ -129,18 +132,20 @@ describe("collectSkillSourceDrift", () => {
       throw new Error(`Unexpected command ${args.join(" ")}`);
     });
 
-    expect(result.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        skillId: "cloudflare-api",
-        status: "changed",
-        currentVersion: "abc123",
-        latestVersion: "def456",
-      }),
-      expect.objectContaining({
-        skillId: "local-only",
-        status: "warning",
-      }),
-    ]));
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          skillId: "cloudflare-api",
+          status: "changed",
+          currentVersion: "abc123",
+          latestVersion: "def456",
+        }),
+        expect.objectContaining({
+          skillId: "local-only",
+          status: "warning",
+        }),
+      ]),
+    );
     expect(result.warnings.some((warning) => warning.includes("local-only"))).toBe(true);
   });
 });
@@ -193,7 +198,8 @@ describe("renderUpdateReviewMarkdown", () => {
             preferredApiStyle: "openai-responses",
             preferredModel: "gpt-5.4",
             status: "stale",
-            message: "Configured default is gpt-4.1-mini on openai-chat-completions; preferred is gpt-5.4 on openai-responses.",
+            message:
+              "Configured default is gpt-4.1-mini on openai-chat-completions; preferred is gpt-5.4 on openai-responses.",
           },
         ],
         warnings: ["openai: stale default"],
@@ -212,7 +218,9 @@ describe("renderUpdateReviewMarkdown", () => {
     expect(markdown).toContain("| nanoid | 5.1.6 | 5.1.7 | @goatcitadel/gateway-core |");
     expect(markdown).toContain("| cloudflare-api | changed | abc123 | def456 |");
     expect(markdown).toContain("| openai | ok | - | March 17, 2026 |");
-    expect(markdown).toContain("| openai | stale | gpt-4.1-mini / openai-chat-completions | gpt-5.4 / openai-responses |");
+    expect(markdown).toContain(
+      "| openai | stale | gpt-4.1-mini / openai-chat-completions | gpt-5.4 / openai-responses |",
+    );
     expect(markdown).toContain("## Warnings");
   });
 });
@@ -221,10 +229,11 @@ describe("collectVendorChangelogDrift", () => {
   it("parses official changelog pages and the OpenClaw changelog source", async () => {
     const result = await collectVendorChangelogDrift("F:/code/personal-ai", async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("openai.com")) {
+      const hostname = new URL(url).hostname;
+      if (hostname === "openai.com" || hostname.endsWith(".openai.com")) {
         return new Response("<h2>March 17, 2026</h2>", { status: 200 });
       }
-      if (url.includes("claude.com")) {
+      if (hostname === "claude.com" || hostname.endsWith(".claude.com")) {
         return new Response("<h2>March 18, 2026</h2>", { status: 200 });
       }
       return new Response("## 2026.3.28.1\n\n- latest", {
@@ -236,24 +245,26 @@ describe("collectVendorChangelogDrift", () => {
     });
 
     expect(result.warnings).toEqual([]);
-    expect(result.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        sourceId: "openai",
-        latestUpdatedAt: "March 17, 2026",
-        status: "ok",
-      }),
-      expect.objectContaining({
-        sourceId: "anthropic",
-        latestUpdatedAt: "March 18, 2026",
-        status: "ok",
-      }),
-      expect.objectContaining({
-        sourceId: "openclaw",
-        latestVersion: "2026.3.28.1",
-        latestUpdatedAt: "Sat, 28 Mar 2026 21:45:58 GMT",
-        status: "ok",
-      }),
-    ]));
+    expect(result.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: "openai",
+          latestUpdatedAt: "March 17, 2026",
+          status: "ok",
+        }),
+        expect.objectContaining({
+          sourceId: "anthropic",
+          latestUpdatedAt: "March 18, 2026",
+          status: "ok",
+        }),
+        expect.objectContaining({
+          sourceId: "openclaw",
+          latestVersion: "2026.3.28.1",
+          latestUpdatedAt: "Sat, 28 Mar 2026 21:45:58 GMT",
+          status: "ok",
+        }),
+      ]),
+    );
   });
 });
 
@@ -263,36 +274,42 @@ describe("collectProviderModelStaleness", () => {
     fs.mkdirSync(path.join(rootDir, "config"), { recursive: true });
     fs.writeFileSync(
       path.join(rootDir, "config", "llm-providers.json"),
-      JSON.stringify({
-        activeProviderId: "openai",
-        providers: [
-          {
-            providerId: "openai",
-            apiStyle: "openai-chat-completions",
-            defaultModel: "gpt-4.1-mini",
-          },
-          {
-            providerId: "anthropic",
-            apiStyle: "anthropic-messages",
-            defaultModel: "claude-sonnet-4-6",
-          },
-        ],
-      }, null, 2),
+      JSON.stringify(
+        {
+          activeProviderId: "openai",
+          providers: [
+            {
+              providerId: "openai",
+              apiStyle: "openai-chat-completions",
+              defaultModel: "gpt-4.1-mini",
+            },
+            {
+              providerId: "anthropic",
+              apiStyle: "anthropic-messages",
+              defaultModel: "claude-sonnet-4-6",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
       "utf8",
     );
 
     try {
       const result = await collectProviderModelStaleness(rootDir);
-      expect(result.items).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          providerId: "openai",
-          status: "stale",
-        }),
-        expect.objectContaining({
-          providerId: "anthropic",
-          status: "current",
-        }),
-      ]));
+      expect(result.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            providerId: "openai",
+            status: "stale",
+          }),
+          expect.objectContaining({
+            providerId: "anthropic",
+            status: "current",
+          }),
+        ]),
+      );
       expect(result.warnings.some((warning) => warning.includes("openai"))).toBe(true);
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });

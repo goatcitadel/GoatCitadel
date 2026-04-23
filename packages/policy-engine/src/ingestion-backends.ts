@@ -38,7 +38,8 @@ export async function ingestDocumentViaBackend(input: {
   const source = requiredString(args.source, "source");
   const namespace = requiredString(args.namespace, "namespace");
   const backendName = normalizeBackend(args.backend);
-  const cacheTtlSeconds = positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
+  const cacheTtlSeconds =
+    positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
   const now = new Date();
   const cached = readCachedDocument({
     storage: input.storage,
@@ -81,9 +82,7 @@ export async function ingestDocumentViaBackend(input: {
     request: input.request,
     fetchUrl: input.fetchUrl,
   });
-  const title = optionalString(args.title)
-    ?? fetched.title
-    ?? `${sourceType}:${source.slice(0, 80)}`;
+  const title = optionalString(args.title) ?? fetched.title ?? `${sourceType}:${source.slice(0, 80)}`;
   const attribution: ContextSourceAttribution = {
     sourceType,
     sourceRef: source,
@@ -93,7 +92,7 @@ export async function ingestDocumentViaBackend(input: {
     trustLevel: input.request.trustLevel ?? "trusted_workspace",
   };
   const metadata = {
-    ...(record(args.metadata)),
+    ...record(args.metadata),
     ingestion: {
       backend: backendName,
       sourceHash: stableHash(source),
@@ -126,10 +125,13 @@ export async function ingestDocumentViaBackend(input: {
     title,
     metadata,
   });
-  const savedChunks = input.storage.knowledge.appendChunks(doc.docId, chunks.map((content) => ({
-    content,
-    embedding: pseudoEmbedding(content),
-  })));
+  const savedChunks = input.storage.knowledge.appendChunks(
+    doc.docId,
+    chunks.map((content) => ({
+      content,
+      embedding: pseudoEmbedding(content),
+    })),
+  );
   return {
     backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
     fetchResult: fetched,
@@ -146,12 +148,11 @@ export async function ingestDocumentViaBackend(input: {
   };
 }
 
-export function searchIngestedContext(input: {
-  storage: Storage;
-  namespace?: string;
+export function searchIngestedContext(input: { storage: Storage; namespace?: string; query: string; limit?: number }): {
+  namespace: string;
   query: string;
-  limit?: number;
-}): { namespace: string; query: string; items: RetrievedContextChunk[] } {
+  items: RetrievedContextChunk[];
+} {
   const namespace = input.namespace;
   const query = input.query.trim().toLowerCase();
   const limit = Math.max(1, Math.min(input.limit ?? 8, 50));
@@ -183,8 +184,7 @@ export function searchIngestedContext(input: {
       },
     });
   }
-  items
-    .sort((left, right) => right.score - left.score);
+  items.sort((left, right) => right.score - left.score);
   return {
     namespace: namespace ?? "all",
     query: input.query,
@@ -227,7 +227,8 @@ async function fetchDocument(input: {
   }
 
   if (input.backend === "firecrawl") {
-    const firecrawlBaseUrl = optionalString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002";
+    const firecrawlBaseUrl =
+      optionalString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002";
     const firecrawlTimeoutMs = positiveInt(args.firecrawlTimeoutMs) ?? 20_000;
     const firecrawlApiKeyEnv = optionalString(args.firecrawlApiKeyEnv) ?? "FIRECRAWL_API_KEY";
     const firecrawlApiKey = process.env[firecrawlApiKeyEnv]?.trim();
@@ -243,7 +244,7 @@ async function fetchDocument(input: {
         formats: ["markdown", "html"],
       }),
     });
-    const payload = await response.json() as Record<string, unknown>;
+    const payload = (await response.json()) as Record<string, unknown>;
     const data = record(payload.data);
     const metadata = record(data.metadata);
     const markdown = optionalString(data.markdown) ?? optionalString(data.content) ?? optionalString(data.html) ?? "";
@@ -284,14 +285,16 @@ function readCachedDocument(input: {
   source: string;
   backend: IngestionBackend["backend"];
   now: Date;
-}): {
-  title: string;
-  text: string;
-  metadata: Record<string, unknown>;
-  attribution: ContextSourceAttribution;
-  cacheExpiresAt?: string;
-  chunks: RetrievedContextChunk[];
-} | undefined {
+}):
+  | {
+      title: string;
+      text: string;
+      metadata: Record<string, unknown>;
+      attribution: ContextSourceAttribution;
+      cacheExpiresAt?: string;
+      chunks: RetrievedContextChunk[];
+    }
+  | undefined {
   const docs = input.storage.knowledge.listDocuments(input.namespace, 500);
   for (const doc of docs) {
     if (doc.sourceType !== input.sourceType || doc.sourceRef !== input.source) {
@@ -340,10 +343,7 @@ function normalizeBackend(value: unknown): IngestionBackend["backend"] {
   return optionalString(value) === "firecrawl" ? "firecrawl" : "native";
 }
 
-function buildBackendDescriptor(
-  backend: IngestionBackend["backend"],
-  cacheTtlSeconds: number,
-): IngestionBackend {
+function buildBackendDescriptor(backend: IngestionBackend["backend"], cacheTtlSeconds: number): IngestionBackend {
   return {
     backend,
     cacheTtlSeconds,
@@ -353,17 +353,19 @@ function buildBackendDescriptor(
 }
 
 function normalizeText(rawText: string, contentType?: string): string {
-  const normalized = contentType?.includes("html")
-    ? rawText
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-    : rawText;
+  const normalized = contentType?.includes("html") ? stripHtmlContent(rawText) : rawText;
   return normalized
     .replace(/\r\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+}
+
+function stripHtmlContent(input: string): string {
+  return input
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
 }
 
 function chunkText(text: string, targetChars: number, overlapChars: number, maxChunks: number): string[] {
@@ -428,5 +430,5 @@ function positiveInt(value: unknown): number | undefined {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }

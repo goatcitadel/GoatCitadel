@@ -147,12 +147,8 @@ function extractSections(bodyMarkdown: string): {
   let current: { heading: string; lines: string[] } | null = null;
 
   for (const line of lines) {
-    const headingMatch = /^##\s+(.+?)\s*$/.exec(line);
-    if (headingMatch) {
-      const heading = headingMatch[1]?.trim();
-      if (!heading) {
-        continue;
-      }
+    const heading = parseSectionHeading(line);
+    if (heading) {
       if (current) {
         sections.push(current);
       }
@@ -202,6 +198,22 @@ function extractSections(bodyMarkdown: string): {
     sectionMap,
     unknownHeadings,
   };
+}
+
+function parseSectionHeading(line: string): string | undefined {
+  if (!line.startsWith("##")) {
+    return undefined;
+  }
+  const nextChar = line.charCodeAt(2);
+  if (!Number.isFinite(nextChar) || !isMarkdownWhitespace(nextChar)) {
+    return undefined;
+  }
+  const heading = line.slice(2).trim();
+  return heading || undefined;
+}
+
+function isMarkdownWhitespace(code: number): boolean {
+  return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32;
 }
 
 function normalizeHeadingSlug(value: string): string {

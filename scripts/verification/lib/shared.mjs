@@ -10,6 +10,7 @@ import {
 
 export const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 export const artifactsRoot = path.join(repoRoot, "artifacts", "verification");
+const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 export function createRunId(lane) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -134,7 +135,7 @@ export async function runScenario(context, definition, fn) {
       finishedAt: new Date().toISOString(),
       durationMs: Date.now() - startMs,
       correlationId,
-      error: error instanceof Error ? error.stack ?? error.message : String(error),
+      error: error instanceof Error ? (error.stack ?? error.message) : String(error),
       notes: [],
       metrics: {},
       artifacts: {
@@ -190,8 +191,7 @@ export async function runCommand(command, args, options = {}) {
 
 export function spawnVerificationProcess(command, args, options = {}) {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
-    const cmd = process.env.ComSpec || "cmd.exe";
-    return spawn(cmd, ["/d", "/s", "/c", command, ...args], options);
+    return spawn(WINDOWS_CMD_PATH, ["/d", "/s", "/c", command, ...args], options);
   }
   return spawn(command, args, options);
 }
@@ -214,7 +214,11 @@ export async function readJson(filePath) {
 }
 
 export function sanitizeFilePart(value) {
-  return value.replace(/[^a-z0-9._-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+  return value
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
 }
 
 export function formatDuration(durationMs) {
@@ -248,26 +252,29 @@ export function deriveManifestStatus(manifest) {
 }
 
 function tallyScenarioCounts(scenarios) {
-  return scenarios.reduce((counts, item) => {
-    if (item.status === "passed") {
-      counts.passed += 1;
-    } else if (item.status === "failed") {
-      counts.failed += 1;
-    } else if (item.status === "skipped") {
-      counts.skipped += 1;
-    } else if (item.status === "degraded") {
-      counts.degraded += 1;
-    } else if (item.status === "not_configured") {
-      counts.notConfigured += 1;
-    }
-    return counts;
-  }, {
-    passed: 0,
-    failed: 0,
-    skipped: 0,
-    degraded: 0,
-    notConfigured: 0,
-  });
+  return scenarios.reduce(
+    (counts, item) => {
+      if (item.status === "passed") {
+        counts.passed += 1;
+      } else if (item.status === "failed") {
+        counts.failed += 1;
+      } else if (item.status === "skipped") {
+        counts.skipped += 1;
+      } else if (item.status === "degraded") {
+        counts.degraded += 1;
+      } else if (item.status === "not_configured") {
+        counts.notConfigured += 1;
+      }
+      return counts;
+    },
+    {
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      degraded: 0,
+      notConfigured: 0,
+    },
+  );
 }
 
 function buildSummaryMarkdown(manifest) {
@@ -292,9 +299,10 @@ function buildSummaryMarkdown(manifest) {
     "",
     "| ID | Subsystem | Status | Duration | Notes |",
     "| --- | --- | --- | ---: | --- |",
-    ...manifest.scenarios.map((item) => (
-      `| ${item.id} | ${item.subsystem} | ${item.status} | ${formatDuration(item.durationMs)} | ${escapeTable(item.notes.join("; ") || item.error || "")} |`
-    )),
+    ...manifest.scenarios.map(
+      (item) =>
+        `| ${item.id} | ${item.subsystem} | ${item.status} | ${formatDuration(item.durationMs)} | ${escapeTable(item.notes.join("; ") || item.error || "")} |`,
+    ),
     "",
   ];
   return lines.join("\n");
@@ -314,7 +322,7 @@ function buildJunitXml(manifest) {
     return `    <testcase classname="${classname}" name="${name}" time="${durationSeconds}" />`;
   });
   return [
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+    '<?xml version="1.0" encoding="UTF-8"?>',
     `<testsuite name="goatcitadel-verification" tests="${manifest.scenarios.length}" failures="${manifest.counts.failed}" skipped="${manifest.counts.skipped + manifest.counts.notConfigured}" time="${((manifest.durationMs ?? 0) / 1000).toFixed(3)}">`,
     ...testcases,
     "</testsuite>",
@@ -323,7 +331,9 @@ function buildJunitXml(manifest) {
 }
 
 function escapeTable(value) {
-  return clampString(value.replace(/\r?\n+/g, " "), 180).replace(/\|/g, "\\|");
+  return clampString(value.replace(/\r?\n+/g, " "), 180)
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|");
 }
 
 function escapeXml(value) {
@@ -331,7 +341,7 @@ function escapeXml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
+    .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
 }
 

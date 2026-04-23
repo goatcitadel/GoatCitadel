@@ -433,9 +433,18 @@ function isLoopbackAddress(ip: string): boolean {
 }
 
 function timingSafeStringEqual(left: string, right: string): boolean {
-  const leftDigest = hashForTimingCompare(left);
-  const rightDigest = hashForTimingCompare(right);
-  return timingSafeEqual(leftDigest, rightDigest);
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  if (leftBuffer.length !== rightBuffer.length) {
+    const comparableLength = Math.max(leftBuffer.length, rightBuffer.length, 1);
+    const leftComparable = Buffer.alloc(comparableLength);
+    const rightComparable = Buffer.alloc(comparableLength);
+    leftBuffer.copy(leftComparable);
+    rightBuffer.copy(rightComparable);
+    timingSafeEqual(leftComparable, rightComparable);
+    return false;
+  }
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function validateSseToken(
@@ -523,10 +532,6 @@ function setAuthActor(
 
 function isCompanionSignedMutationMethod(method: string): boolean {
   return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
-}
-
-function hashForTimingCompare(value: string): Buffer {
-  return createHash("sha256").update(value, "utf8").digest();
 }
 
 function tokenFingerprint(value: string): string {

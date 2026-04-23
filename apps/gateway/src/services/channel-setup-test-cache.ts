@@ -1,9 +1,5 @@
 import { createHash } from "node:crypto";
-import type {
-  ChannelSetupDraft,
-  ChannelSetupTestResult,
-  IntegrationConnection,
-} from "@goatcitadel/contracts";
+import type { ChannelSetupDraft, ChannelSetupTestResult, IntegrationConnection } from "@goatcitadel/contracts";
 
 export interface ChannelSetupRecentTestCacheEntry {
   signature: string;
@@ -15,21 +11,25 @@ export function buildChannelSetupRecentTestSignature(
   connection: IntegrationConnection,
   testVersion: string,
 ): string {
-  return createHash("sha1").update(stableStringifyForCache({
-    catalogId: draft.catalogId,
-    lifecycleMode: draft.lifecycleMode,
-    contentVersion: draft.contentVersion,
-    validationVersion: draft.validationVersion,
-    testVersion,
-    connection: {
-      catalogId: connection.catalogId,
-      kind: connection.kind,
-      key: connection.key,
-      label: connection.label,
-      enabled: connection.enabled,
-      config: connection.config,
-    },
-  })).digest("hex");
+  return createHash("sha256")
+    .update(
+      stableStringifyForCache({
+        catalogId: draft.catalogId,
+        lifecycleMode: draft.lifecycleMode,
+        contentVersion: draft.contentVersion,
+        validationVersion: draft.validationVersion,
+        testVersion,
+        connection: {
+          catalogId: connection.catalogId,
+          kind: connection.kind,
+          key: connection.key,
+          label: connection.label,
+          enabled: connection.enabled,
+          config: connection.config,
+        },
+      }),
+    )
+    .digest("hex");
 }
 
 export function resolveReusableChannelSetupTestResult(input: {
@@ -42,11 +42,7 @@ export function resolveReusableChannelSetupTestResult(input: {
   if (!cached || cached.result.status === "error") {
     return undefined;
   }
-  const signature = buildChannelSetupRecentTestSignature(
-    input.draft,
-    input.connection,
-    input.testVersion,
-  );
+  const signature = buildChannelSetupRecentTestSignature(input.draft, input.connection, input.testVersion);
   if (cached.signature !== signature) {
     input.cache.delete(input.draft.draftId);
     return undefined;

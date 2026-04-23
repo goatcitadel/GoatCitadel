@@ -46,14 +46,16 @@ const managedLocalConfigPaths = [
   "config/goatcitadel.json",
   "config/private-beta.profile.json",
 ];
+const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 const args = process.argv.slice(2);
 const command = args[0] || "help";
 const rawRest = args.slice(1);
 const runtimeArgs = extractVerboseFlag(rawRest);
-const installArgs = command === "install" || command === "update" || command === "uninstall"
-  ? parseInstallArgs(rawRest)
-  : { passthrough: runtimeArgs.passthrough, verbose: runtimeArgs.verbose };
+const installArgs =
+  command === "install" || command === "update" || command === "uninstall"
+    ? parseInstallArgs(rawRest)
+    : { passthrough: runtimeArgs.passthrough, verbose: runtimeArgs.verbose };
 const repoUrl = installArgs.repoUrl || defaultRepoUrl;
 const baseDir = resolveBaseDir(installArgs.installDir);
 const appDir = path.join(baseDir, "app");
@@ -161,11 +163,12 @@ async function main() {
     if (!supportedLanes.has(lane)) {
       throw new Error(`Unsupported verify lane: ${lane}`);
     }
-    const scriptName = lane === "deep:core"
-      ? "verify:deep:core"
-      : lane === "deep:ecosystem"
-        ? "verify:deep:ecosystem"
-        : `verify:${lane}`;
+    const scriptName =
+      lane === "deep:core"
+        ? "verify:deep:core"
+        : lane === "deep:ecosystem"
+          ? "verify:deep:ecosystem"
+          : `verify:${lane}`;
     runPnpm(["--dir", appDir, scriptName, ...laneArgs], { env: runtimeProcessEnv });
     return;
   }
@@ -222,7 +225,9 @@ function installOrUpdate() {
   });
   run(corepackCmd, ["enable"]);
   run(corepackCmd, ["prepare", `pnpm@${pnpmVersion}`, "--activate"]);
-  installWorkspaceDependencies("GoatCitadel needs its local workspace dependencies and command shims before it can build runtime packages and run diagnostics.");
+  installWorkspaceDependencies(
+    "GoatCitadel needs its local workspace dependencies and command shims before it can build runtime packages and run diagnostics.",
+  );
   buildWorkspaceRuntimePackages();
   console.log("Materializing local config from tracked examples...");
   runPnpm(["--dir", appDir, "config:sync"], {
@@ -244,23 +249,26 @@ function installOrUpdate() {
       why: "Voice transcription and local speech features need a downloaded runtime before GoatCitadel can use them.",
     });
     try {
-      runPnpm([
-        "--dir",
-        appDir,
-        "--filter",
-        "@goatcitadel/gateway",
-        "run",
-        "voice:runtime",
-        "install",
-        "--model",
-        installArgs.voiceModel,
-      ], {
-        env: runtimeProcessEnv,
-      });
+      runPnpm(
+        [
+          "--dir",
+          appDir,
+          "--filter",
+          "@goatcitadel/gateway",
+          "run",
+          "voice:runtime",
+          "install",
+          "--model",
+          installArgs.voiceModel,
+        ],
+        {
+          env: runtimeProcessEnv,
+        },
+      );
     } catch (error) {
       console.warn(
         `Managed voice runtime install failed: ${error instanceof Error ? error.message : String(error)}. ` +
-        "Core GoatCitadel install is complete. Repair later with `goatcitadel voice install`.",
+          "Core GoatCitadel install is complete. Repair later with `goatcitadel voice install`.",
       );
     }
   }
@@ -385,7 +393,9 @@ function preserveManagedConfigForUpdate(gitCmd, repositoryPath) {
     .map((line) => line.slice(3).trim());
   const unexpected = dirtyPaths.filter((item) => !managedLocalConfigPaths.includes(item));
   if (unexpected.length > 0) {
-    throw new Error(`Update blocked because the installed checkout has non-config tracked changes: ${unexpected.join(", ")}`);
+    throw new Error(
+      `Update blocked because the installed checkout has non-config tracked changes: ${unexpected.join(", ")}`,
+    );
   }
   const existingConfigPaths = managedLocalConfigPaths.filter((relativePath) =>
     fs.existsSync(path.join(repositoryPath, relativePath)),
@@ -482,9 +492,7 @@ async function launchGoatCitadel(extraArgs = []) {
   }
 
   const startupState = await fetchJson(`${gatewayUrl}/api/v1/onboarding/startup`);
-  const targetUrl = startupState?.completed
-    ? `${uiUrl}/?tab=dashboard`
-    : `${uiUrl}/?tab=onboarding`;
+  const targetUrl = startupState?.completed ? `${uiUrl}/?tab=dashboard` : `${uiUrl}/?tab=onboarding`;
   openBrowser(targetUrl);
 
   if (extraArgs.includes("--wait")) {
@@ -495,10 +503,12 @@ async function launchGoatCitadel(extraArgs = []) {
 }
 
 function isPackagedInstall() {
-  return fs.existsSync(packagedReleaseManifestPath) &&
+  return (
+    fs.existsSync(packagedReleaseManifestPath) &&
     fs.existsSync(packagedGatewayEntry) &&
     fs.existsSync(packagedUiDistDir) &&
-    fs.existsSync(packagedUiServerEntry);
+    fs.existsSync(packagedUiServerEntry)
+  );
 }
 
 function ensureLaunchRuntimeDirectories() {
@@ -582,89 +592,101 @@ async function ensureUiReady({ packaged, gatewayUrl, uiUrl, nodeExecutable }) {
 
 function startPackagedGateway(nodeExecutable, gatewayUrl) {
   const port = String(new URL(gatewayUrl).port || "8787");
-  writePidFile(gatewayPidPath, spawnDetachedProcess({
-    cmd: nodeExecutable,
-    args: [packagedGatewayEntry],
-    cwd: packagedGatewayDir,
-    env: {
-      ...runtimeProcessEnv,
-      GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
-      GOATCITADEL_DATABASE_DRIVER: "sqlite",
-      GATEWAY_HOST: "127.0.0.1",
-      GATEWAY_PORT: port,
-    },
-    stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
-    stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
-  }));
+  writePidFile(
+    gatewayPidPath,
+    spawnDetachedProcess({
+      cmd: nodeExecutable,
+      args: [packagedGatewayEntry],
+      cwd: packagedGatewayDir,
+      env: {
+        ...runtimeProcessEnv,
+        GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
+        GOATCITADEL_DATABASE_DRIVER: "sqlite",
+        GATEWAY_HOST: "127.0.0.1",
+        GATEWAY_PORT: port,
+      },
+      stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
+      stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
+    }),
+  );
 }
 
 function startPackagedUi(nodeExecutable, uiUrl) {
   const port = String(new URL(uiUrl).port || "5173");
-  writePidFile(uiPidPath, spawnDetachedProcess({
-    cmd: nodeExecutable,
-    args: [packagedUiServerEntry],
-    cwd: appDir,
-    env: {
-      ...runtimeProcessEnv,
-      GOATCITADEL_UI_DIST_DIR: packagedUiDistDir,
-      GOATCITADEL_UI_HOST: "127.0.0.1",
-      GOATCITADEL_UI_PORT: port,
-    },
-    stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
-    stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
-  }));
+  writePidFile(
+    uiPidPath,
+    spawnDetachedProcess({
+      cmd: nodeExecutable,
+      args: [packagedUiServerEntry],
+      cwd: appDir,
+      env: {
+        ...runtimeProcessEnv,
+        GOATCITADEL_UI_DIST_DIR: packagedUiDistDir,
+        GOATCITADEL_UI_HOST: "127.0.0.1",
+        GOATCITADEL_UI_PORT: port,
+      },
+      stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
+      stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
+    }),
+  );
 }
 
 function startSourceGateway(gatewayUrl) {
   const runner = resolvePnpmRunner();
   const port = String(new URL(gatewayUrl).port || "8787");
-  writePidFile(gatewayPidPath, spawnDetachedProcess({
-    cmd: runner.cmd,
-    args: [...runner.prefix, "--dir", appDir, "dev:gateway"],
-    cwd: appDir,
-    env: {
-      ...runtimeProcessEnv,
-      GATEWAY_HOST: "127.0.0.1",
-      GATEWAY_PORT: port,
-    },
-    stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
-    stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
-  }));
+  writePidFile(
+    gatewayPidPath,
+    spawnDetachedProcess({
+      cmd: runner.cmd,
+      args: [...runner.prefix, "--dir", appDir, "dev:gateway"],
+      cwd: appDir,
+      env: {
+        ...runtimeProcessEnv,
+        GATEWAY_HOST: "127.0.0.1",
+        GATEWAY_PORT: port,
+      },
+      stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
+      stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
+    }),
+  );
 }
 
 function startSourceUi(gatewayUrl, uiUrl) {
   const runner = resolvePnpmRunner();
   const port = String(new URL(uiUrl).port || "5173");
-  writePidFile(uiPidPath, spawnDetachedProcess({
-    cmd: runner.cmd,
-    args: [
-      ...runner.prefix,
-      "--dir",
-      appDir,
-      "--filter",
-      "@goatcitadel/mission-control",
-      "exec",
-      "vite",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      port,
-    ],
-    cwd: appDir,
-    env: {
-      ...runtimeProcessEnv,
-      VITE_GATEWAY_URL: gatewayUrl,
-    },
-    stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
-    stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
-  }));
+  writePidFile(
+    uiPidPath,
+    spawnDetachedProcess({
+      cmd: runner.cmd,
+      args: [
+        ...runner.prefix,
+        "--dir",
+        appDir,
+        "--filter",
+        "@goatcitadel/mission-control",
+        "exec",
+        "vite",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        port,
+      ],
+      cwd: appDir,
+      env: {
+        ...runtimeProcessEnv,
+        VITE_GATEWAY_URL: gatewayUrl,
+      },
+      stdoutPath: path.join(runtimeLogDir, "mission-control.stdout.log"),
+      stderrPath: path.join(runtimeLogDir, "mission-control.stderr.log"),
+    }),
+  );
 }
 
 function spawnDetachedProcess({ cmd, args, cwd, env, stdoutPath, stderrPath }) {
   const stdoutFd = fs.openSync(stdoutPath, "a");
   const stderrFd = fs.openSync(stderrPath, "a");
   const child = isWindowsBatchCommand(cmd)
-    ? spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], {
+    ? spawn(WINDOWS_CMD_PATH, ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], {
         cwd,
         env,
         detached: true,
@@ -725,7 +747,7 @@ async function sleep(ms) {
 function openBrowser(url) {
   try {
     if (process.platform === "win32") {
-      spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "start", "\"\"", url], {
+      spawn(WINDOWS_CMD_PATH, ["/d", "/s", "/c", "start", '""', url], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -789,21 +811,25 @@ async function removeLauncherPathRegistration() {
     const nextShellPath = removePathEntry(currentShellPath, normalizedBinDir, ";");
     process.env.Path = nextShellPath;
     process.env.PATH = nextShellPath;
-    run("powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      `$current = [Environment]::GetEnvironmentVariable('Path','User'); ` +
-      `$parts = @(); ` +
-      `if (-not [string]::IsNullOrWhiteSpace($current)) { ` +
-      `$parts = $current -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } } ` +
-      `$target = ${toPowershellSingleQuoted(binDir)}; ` +
-      `$next = @($parts | Where-Object { $_ -ne $target }) -join ';'; ` +
-      `[Environment]::SetEnvironmentVariable('Path', $next, 'User')`,
-    ], {
-      stdio: "ignore",
-    });
+    run(
+      "powershell",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$current = [Environment]::GetEnvironmentVariable('Path','User'); ` +
+          `$parts = @(); ` +
+          `if (-not [string]::IsNullOrWhiteSpace($current)) { ` +
+          `$parts = $current -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' } } ` +
+          `$target = ${toPowershellSingleQuoted(binDir)}; ` +
+          `$next = @($parts | Where-Object { $_ -ne $target }) -join ';'; ` +
+          `[Environment]::SetEnvironmentVariable('Path', $next, 'User')`,
+      ],
+      {
+        stdio: "ignore",
+      },
+    );
     return;
   }
 
@@ -875,7 +901,10 @@ function removePathEntry(currentPath, targetEntry, separator) {
 }
 
 function normalizePathForCompare(value) {
-  return path.resolve(value).replace(/[\\/]+$/, "").toLowerCase();
+  return path
+    .resolve(value)
+    .replace(/[\\/]+$/, "")
+    .toLowerCase();
 }
 
 function toPowershellSingleQuoted(value) {
@@ -984,9 +1013,7 @@ function commandAvailable(cmd) {
 }
 
 function resolveCommandExecutable(cmd) {
-  const candidates = process.platform === "win32"
-    ? [cmd, `${cmd}.cmd`, `${cmd}.exe`]
-    : [cmd];
+  const candidates = process.platform === "win32" ? [cmd, `${cmd}.cmd`, `${cmd}.exe`] : [cmd];
   for (const candidate of candidates) {
     const result = spawnCommandSync(candidate, ["--version"], { encoding: "utf8" });
     if (!result.error && result.status === 0) {
@@ -1005,9 +1032,7 @@ function resolvePnpmRunner() {
     };
   }
 
-  const candidates = process.platform === "win32"
-    ? ["pnpm.cmd", "pnpm", "pnpm.exe"]
-    : ["pnpm"];
+  const candidates = process.platform === "win32" ? ["pnpm.cmd", "pnpm", "pnpm.exe"] : ["pnpm"];
 
   for (const candidate of candidates) {
     const result = spawnCommandSync(candidate, ["--version"], { encoding: "utf8" });
@@ -1056,7 +1081,7 @@ function run(cmd, cmdArgs, options = {}) {
 
 function spawnCommandSync(cmd, cmdArgs, options = {}) {
   if (isWindowsBatchCommand(cmd)) {
-    return spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand([cmd, ...cmdArgs])], options);
+    return spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", buildWindowsCommand([cmd, ...cmdArgs])], options);
   }
   return spawnSync(cmd, cmdArgs, options);
 }
@@ -1067,10 +1092,12 @@ function inspectWorkspaceTooling(rootDir) {
   if (!fs.existsSync(nodeModulesRoot)) {
     return {
       needsInstall: true,
-      missing: [{
-        label: "workspace dependencies",
-        purpose: "GoatCitadel package commands and local tool binaries",
-      }],
+      missing: [
+        {
+          label: "workspace dependencies",
+          purpose: "GoatCitadel package commands and local tool binaries",
+        },
+      ],
     };
   }
   for (const tool of managedWorkspaceTooling) {
@@ -1122,7 +1149,7 @@ function buildWindowsCommand(parts) {
 
 function quoteWindowsCommandArg(value) {
   if (value.length === 0) {
-    return "\"\"";
+    return '""';
   }
   if (!/[\s"&()^<>|]/.test(value)) {
     return value;

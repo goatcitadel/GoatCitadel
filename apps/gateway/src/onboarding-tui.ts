@@ -101,6 +101,7 @@ const PROVIDER_TEMPLATE_META: Record<string, { envVar: string; note: string }> =
     note: "Inference router for supported HuggingFace-served models.",
   },
 };
+const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 const PROVIDER_TEMPLATES: ProviderTemplate[] = providerTemplates.map((template) => ({
   ...template,
@@ -920,7 +921,7 @@ function resolvePnpmCommand(appDir: string): { cmd: string; prefix: string[] } {
 
 function spawnCommand(cmd: string, args: string[], options: Parameters<typeof spawn>[2] = {}) {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(cmd)) {
-    return spawn(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], options);
+    return spawn(WINDOWS_CMD_PATH, ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], options);
   }
   return spawn(cmd, args, options);
 }

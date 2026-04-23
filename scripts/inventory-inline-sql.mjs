@@ -4,7 +4,8 @@ import path from "node:path";
 const repoRoot = process.cwd();
 const servicesRoot = path.join(repoRoot, "apps", "gateway", "src", "services");
 const outputPath = path.join(repoRoot, "artifacts", "architecture", "inline-sql-inventory.md");
-const pattern = /(storage\.db|gatewayDb|gatewaySql|ctx\.gatewaySql|this\.gatewaySql|this\.ctx\.gatewaySql)\.(prepare|exec)\(/g;
+const pattern =
+  /(storage\.db|gatewayDb|gatewaySql|ctx\.gatewaySql|this\.gatewaySql|this\.ctx\.gatewaySql)\.(prepare|exec)\(/g;
 const allowlist = new Set([
   "apps/gateway/src/services/backup-retention-service.ts",
   "apps/gateway/src/services/database-cutover-service.ts",
@@ -50,8 +51,9 @@ const markdown = [
   entries.length === 0
     ? "- none"
     : entries
-        .map((entry) =>
-          `- ${entry.allowlisted ? "[allowlisted]" : "[blocking]"} ${entry.file}:L${entry.line} [${entry.kind}] \`${entry.text.replace(/`/g, "\\`")}\``,
+        .map(
+          (entry) =>
+            `- ${entry.allowlisted ? "[allowlisted]" : "[blocking]"} ${entry.file}:L${entry.line} [${entry.kind}] \`${escapeMarkdownCodeSpan(entry.text)}\``,
         )
         .join("\n"),
   "",
@@ -80,4 +82,8 @@ async function collectFiles(root) {
 
 function normalizeRelPath(value) {
   return value.replaceAll("\\", "/");
+}
+
+function escapeMarkdownCodeSpan(value) {
+  return value.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
 }

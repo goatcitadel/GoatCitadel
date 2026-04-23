@@ -27,6 +27,7 @@ import {
 } from "../services/whatsapp-webhook.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
+  type WebhookRawBodyRequest,
   createIgnoredWebhookReply,
   createWebhookHandler,
   createWebhookPreParsing,
@@ -80,48 +81,63 @@ type NextcloudTalkDispatchPayload = Exclude<
   { kind: "ignore" } | { kind: "activity" }
 >;
 
-export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post(
-    "/api/v1/channels/:channel/inbound",
-    { bodyLimit: CHANNEL_INBOUND_MAX_BYTES },
-    async (request, reply) => {
-      const contentLength = parseContentLength(request.headers["content-length"]);
-      if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
-        return reply.code(413).send({
-          error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
-        });
-      }
-
-      const params = channelParamsSchema.safeParse(request.params);
-      const parsed = channelInboundSchema.safeParse(request.body);
-      if (!params.success || !parsed.success) {
-        return reply.code(400).send({
-          error: {
-            params: params.success ? undefined : params.error.flatten(),
-            body: parsed.success ? undefined : parsed.error.flatten(),
-          },
-        });
-      }
-
-      try {
-        const result = await fastify.gateway.ingestChannelMessage(
-          params.data.channel,
-          request.idempotencyKey,
-          parsed.data,
-        );
-        return reply.send(result);
-      } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
-      }
+function createWebhookRouteOptions(rawBodyKey?: keyof WebhookRawBodyRequest) {
+  return {
+    bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+    ...(rawBodyKey ? { preParsing: createWebhookPreParsing(rawBodyKey) } : {}),
+    config: {
+      rateLimit: {
+        max: 500,
+      },
     },
-  );
+  };
+}
+
+function createWebhookReadRouteOptions() {
+  return {
+    config: {
+      rateLimit: {
+        max: 500,
+      },
+    },
+  };
+}
+
+export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.post("/api/v1/channels/:channel/inbound", createWebhookRouteOptions(), async (request, reply) => {
+    const contentLength = parseContentLength(request.headers["content-length"]);
+    if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
+      return reply.code(413).send({
+        error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
+      });
+    }
+
+    const params = channelParamsSchema.safeParse(request.params);
+    const parsed = channelInboundSchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: parsed.success ? undefined : parsed.error.flatten(),
+        },
+      });
+    }
+
+    try {
+      const result = await fastify.gateway.ingestChannelMessage(
+        params.data.channel,
+        request.idempotencyKey,
+        parsed.data,
+      );
+      return reply.send(result);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/telegram/webhook",
-    {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("telegramRawBody"),
-    },
+    createWebhookRouteOptions("telegramRawBody"),
     createWebhookHandler<TelegramDispatchPayload>(fastify, {
       source: "telegram",
       connectorKey: "telegram",
@@ -180,47 +196,48 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
     }),
   );
 
-  fastify.get("/api/v1/integrations/connections/:connectionId/whatsapp/webhook", async (request, reply) => {
-    const params = connectionParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
+  fastify.get(
+    "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
+    createWebhookReadRouteOptions(),
+    async (request, reply) => {
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
 
-    let connection;
-    try {
-      connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
-    } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
-    }
-    if (connection.key !== "whatsapp") {
-      return reply.code(400).send({ error: "Integration connection is not a WhatsApp connector" });
-    }
+      let connection;
+      try {
+        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "whatsapp") {
+        return reply.code(400).send({ error: "Integration connection is not a WhatsApp connector" });
+      }
 
-    const verifyToken = resolveWhatsAppVerifyToken(connection.config);
-    if (!verifyToken) {
-      return reply.code(400).send({ error: "WhatsApp connection is missing a webhook verify token" });
-    }
+      const verifyToken = resolveWhatsAppVerifyToken(connection.config);
+      if (!verifyToken) {
+        return reply.code(400).send({ error: "WhatsApp connection is missing a webhook verify token" });
+      }
 
-    const query = request.query as Record<string, unknown>;
-    const mode = readQueryString(query, "hub.mode");
-    const providedVerifyToken = readQueryString(query, "hub.verify_token");
-    const challenge = readQueryString(query, "hub.challenge");
-    if (mode !== "subscribe" || !challenge) {
-      return reply.code(400).send({ error: "Invalid WhatsApp webhook verification query" });
-    }
-    if (providedVerifyToken !== verifyToken) {
-      return reply.code(401).send({ error: "Invalid WhatsApp webhook verify token" });
-    }
+      const query = request.query as Record<string, unknown>;
+      const mode = readQueryString(query, "hub.mode");
+      const providedVerifyToken = readQueryString(query, "hub.verify_token");
+      const challenge = readQueryString(query, "hub.challenge");
+      if (mode !== "subscribe" || !challenge) {
+        return reply.code(400).send({ error: "Invalid WhatsApp webhook verification query" });
+      }
+      if (providedVerifyToken !== verifyToken) {
+        return reply.code(401).send({ error: "Invalid WhatsApp webhook verify token" });
+      }
 
-    return reply.type("text/plain").send(challenge);
-  });
+      return reply.type("text/plain").send(challenge);
+    },
+  );
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
-    {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("whatsappRawBody"),
-    },
+    createWebhookRouteOptions("whatsappRawBody"),
     createWebhookHandler<WhatsAppDispatchPayload>(fastify, {
       source: "whatsapp",
       connectorKey: "whatsapp",
@@ -286,10 +303,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/slack/webhook",
-    {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("slackRawBody"),
-    },
+    createWebhookRouteOptions("slackRawBody"),
     createWebhookHandler<SlackDispatchPayload>(fastify, {
       source: "slack",
       connectorKey: "slack",
@@ -370,10 +384,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/line/webhook",
-    {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("lineRawBody"),
-    },
+    createWebhookRouteOptions("lineRawBody"),
     createWebhookHandler<LineDispatchPayload>(fastify, {
       source: "line",
       connectorKey: "line",
@@ -439,10 +450,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/nextcloud-talk/webhook",
-    {
-      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
-      preParsing: createWebhookPreParsing("nextcloudTalkRawBody"),
-    },
+    createWebhookRouteOptions("nextcloudTalkRawBody"),
     createWebhookHandler<NextcloudTalkDispatchPayload>(fastify, {
       source: "nextcloud-talk",
       connectorKey: "nextcloud-talk",

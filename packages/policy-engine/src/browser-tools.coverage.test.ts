@@ -21,6 +21,12 @@ vi.mock("node:child_process", () => ({
 
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 
+const EXAMPLE_HOST = new URL("https://example.com").hostname;
+const DUCKDUCKGO_HOST = new URL("https://duckduckgo.com").hostname;
+const LITE_DUCKDUCKGO_HOST = new URL("https://lite.duckduckgo.com").hostname;
+const GOOGLE_HOST = new URL("https://www.google.com").hostname;
+const BING_HOST = new URL("https://www.bing.com").hostname;
+
 function createConfig(root: string): ToolPolicyConfig {
   return {
     profiles: {
@@ -36,11 +42,11 @@ function createConfig(root: string): ToolPolicyConfig {
       writeJailRoots: [root],
       readOnlyRoots: [root],
       networkAllowlist: [
-        "example.com",
-        "duckduckgo.com",
-        "lite.duckduckgo.com",
-        "www.google.com",
-        "www.bing.com",
+        EXAMPLE_HOST,
+        DUCKDUCKGO_HOST,
+        LITE_DUCKDUCKGO_HOST,
+        GOOGLE_HOST,
+        BING_HOST,
         "127.0.0.1",
         "127.0.0.1:11434",
         "127.0.0.1:3002",
@@ -55,7 +61,7 @@ function createPlaywrightStub() {
   let currentUrl = "https://example.com/start";
   let cookies: Array<Record<string, unknown>> = [];
   let localStorageByOrigin: Record<string, Record<string, string>> = {};
-  let sessionStorageByOrigin: Record<string, Record<string, string>> = {};
+  const sessionStorageByOrigin: Record<string, Record<string, string>> = {};
   let pendingSessionStorageByOrigin: Record<string, Record<string, string>> = {};
   const page = {
     goto: async (url: string) => {
@@ -191,16 +197,19 @@ describe("browser tools coverage sweep", () => {
       }
       throw new Error(`Unexpected spawnSync call in test: ${command} ${(args ?? []).join(" ")}`);
     });
-    globalThis.fetch = vi.fn(async () => new Response(
-      [
-        '<a href="https://example.com/a">Result A</a>',
-        '<a href="/l/?uddg=https%3A%2F%2Fexample.com%2Fb">Result B</a>',
-      ].join("\n"),
-      {
-        status: 200,
-        headers: { "content-type": "text/html" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          [
+            '<a href="https://example.com/a">Result A</a>',
+            '<a href="/l/?uddg=https%3A%2F%2Fexample.com%2Fb">Result B</a>',
+          ].join("\n"),
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        ),
+    ) as unknown as typeof fetch;
   });
 
   afterEach(async () => {
@@ -294,18 +303,20 @@ describe("browser tools coverage sweep", () => {
 
   it("normalizes DuckDuckGo redirect-style search results when playwright is available", async () => {
     const config = createConfig(tempRoot);
-    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
-      {
-        href: "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle-a",
-        title: "Article A",
-        snippet: "Snippet A",
-      },
-      {
-        href: "/l/?uddg=https%3A%2F%2Fexample.com%2Farticle-b",
-        title: "Article B",
-        snippet: "Snippet B",
-      },
-    ]) as never);
+    mocked.launch.mockResolvedValueOnce(
+      createSearchPlaywrightStub(() => [
+        {
+          href: "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle-a",
+          title: "Article A",
+          snippet: "Snippet A",
+        },
+        {
+          href: "/l/?uddg=https%3A%2F%2Fexample.com%2Farticle-b",
+          title: "Article B",
+          snippet: "Snippet B",
+        },
+      ]) as never,
+    );
 
     const response = await executeBrowserTool(
       "browser.search",
@@ -323,34 +334,32 @@ describe("browser tools coverage sweep", () => {
 
   it("falls back from empty DuckDuckGo results to Bing and decodes Bing redirect targets", async () => {
     const config = createConfig(tempRoot);
-    globalThis.fetch = vi.fn(async () => new Response(
-      "<html><body><p>No usable results</p></body></html>",
-      {
-        status: 200,
-        headers: { "content-type": "text/html" },
-      },
-    )) as unknown as typeof fetch;
-    mocked.launch.mockResolvedValue(createSearchPlaywrightStub((url) => {
-      if (url.includes("lite.duckduckgo.com")) {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("<html><body><p>No usable results</p></body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+    ) as unknown as typeof fetch;
+    mocked.launch.mockResolvedValue(
+      createSearchPlaywrightStub((url) => {
+        if (new URL(url).hostname === LITE_DUCKDUCKGO_HOST) {
+          return [];
+        }
+        if (new URL(url).hostname === BING_HOST) {
+          return [
+            {
+              href: "https://www.bing.com/ck/a?!&u=a1aHR0cHM6Ly93d3cuYmJjLmNvbS9uZXdzL2xpdmUvY2pkOXk0azU1ODN0",
+              title: "BBC result",
+              snippet: "BBC snippet",
+            },
+          ];
+        }
         return [];
-      }
-      if (url.includes("bing.com")) {
-        return [
-          {
-            href: "https://www.bing.com/ck/a?!&u=a1aHR0cHM6Ly93d3cuYmJjLmNvbS9uZXdzL2xpdmUvY2pkOXk0azU1ODN0",
-            title: "BBC result",
-            snippet: "BBC snippet",
-          },
-        ];
-      }
-      return [];
-    }) as never);
-
-    const response = await executeBrowserTool(
-      "browser.search",
-      { query: "Kristi Noem latest news", limit: 2 },
-      config,
+      }) as never,
     );
+
+    const response = await executeBrowserTool("browser.search", { query: "Kristi Noem latest news", limit: 2 }, config);
 
     expect(response.engine).toBe("bing");
     expect(response.attemptedEngines).toEqual(["duckduckgo", "bing"]);
@@ -366,23 +375,25 @@ describe("browser tools coverage sweep", () => {
 
   it("filters obvious search-page chrome links before returning browser search results", async () => {
     const config = createConfig(tempRoot);
-    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
-      {
-        href: "https://accounts.google.com/signin",
-        title: "Sign in",
-        snippet: "",
-      },
-      {
-        href: "https://policies.google.com/privacy",
-        title: "Privacy",
-        snippet: "",
-      },
-      {
-        href: "https://www.bbc.com/news/articles/cx2xexample",
-        title: "Kristi Noem latest news",
-        snippet: "Coverage summary",
-      },
-    ]) as never);
+    mocked.launch.mockResolvedValueOnce(
+      createSearchPlaywrightStub(() => [
+        {
+          href: "https://accounts.google.com/signin",
+          title: "Sign in",
+          snippet: "",
+        },
+        {
+          href: "https://policies.google.com/privacy",
+          title: "Privacy",
+          snippet: "",
+        },
+        {
+          href: "https://www.bbc.com/news/articles/cx2xexample",
+          title: "Kristi Noem latest news",
+          snippet: "Coverage summary",
+        },
+      ]) as never,
+    );
 
     const response = await executeBrowserTool(
       "browser.search",
@@ -401,31 +412,31 @@ describe("browser tools coverage sweep", () => {
 
   it("fails when every search engine returns no usable results", async () => {
     const config = createConfig(tempRoot);
-    globalThis.fetch = vi.fn(async () => new Response(
-      "<html><body><p>No usable results</p></body></html>",
-      {
-        status: 200,
-        headers: { "content-type": "text/html" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("<html><body><p>No usable results</p></body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+    ) as unknown as typeof fetch;
     mocked.launch.mockResolvedValue(createSearchPlaywrightStub(() => []) as never);
 
-    await expect(executeBrowserTool(
-      "browser.search",
-      { query: "Kristi Noem latest news", limit: 2 },
-      config,
-    )).rejects.toThrow(/browser\.search failed/i);
+    await expect(
+      executeBrowserTool("browser.search", { query: "Kristi Noem latest news", limit: 2 }, config),
+    ).rejects.toThrow(/browser\.search failed/i);
   });
 
   it("uses the Ollama search backend when configured", async () => {
     const config = createConfig(tempRoot);
-    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
-      {
-        href: "https://example.com/result-a",
-        title: "Result A",
-        snippet: "Snippet A",
-      },
-    ]) as never);
+    mocked.launch.mockResolvedValueOnce(
+      createSearchPlaywrightStub(() => [
+        {
+          href: "https://example.com/result-a",
+          title: "Result A",
+          snippet: "Snippet A",
+        },
+      ]) as never,
+    );
     globalThis.fetch = vi.fn(async (input) => {
       const url = String(input);
       if (url.includes("/api/generate")) {
@@ -454,13 +465,15 @@ describe("browser tools coverage sweep", () => {
 
   it("keeps browser search results when the Ollama backend is unavailable", async () => {
     const config = createConfig(tempRoot);
-    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
-      {
-        href: "https://example.com/result-a",
-        title: "Result A",
-        snippet: "Snippet A",
-      },
-    ]) as never);
+    mocked.launch.mockResolvedValueOnce(
+      createSearchPlaywrightStub(() => [
+        {
+          href: "https://example.com/result-a",
+          title: "Result A",
+          snippet: "Snippet A",
+        },
+      ]) as never,
+    );
     globalThis.fetch = vi.fn(async (input) => {
       const url = String(input);
       if (url.includes("/api/generate")) {
@@ -497,31 +510,35 @@ describe("browser tools coverage sweep", () => {
       const url = String(input);
       if (url.endsWith("/v2/search")) {
         expect(init?.method).toBe("POST");
-        return new Response(JSON.stringify({
-          data: [
-            { url: "https://example.com/firecrawl-a", title: "Firecrawl A", description: "Snippet A" },
-          ],
-          summary: "Firecrawl summary",
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            data: [{ url: "https://example.com/firecrawl-a", title: "Firecrawl A", description: "Snippet A" }],
+            summary: "Firecrawl summary",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }
       if (url.endsWith("/v2/scrape")) {
-        return new Response(JSON.stringify({
-          data: {
-            markdown: "# Firecrawl Page\n\nCoverage text from markdown.",
-            html: "<html><head><title>Firecrawl Page</title></head><body><main>Coverage text from html.</main></body></html>",
-            metadata: {
-              title: "Firecrawl Page",
-              sourceURL: "https://example.com/firecrawl-page",
-              statusCode: 200,
+        return new Response(
+          JSON.stringify({
+            data: {
+              markdown: "# Firecrawl Page\n\nCoverage text from markdown.",
+              html: "<html><head><title>Firecrawl Page</title></head><body><main>Coverage text from html.</main></body></html>",
+              metadata: {
+                title: "Firecrawl Page",
+                sourceURL: "https://example.com/firecrawl-page",
+                statusCode: 200,
+              },
             },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
           },
-        }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        );
       }
       throw new Error(`Unexpected fetch URL: ${url}`);
     }) as unknown as typeof fetch;
@@ -548,7 +565,12 @@ describe("browser tools coverage sweep", () => {
 
     const extract = await executeBrowserTool(
       "browser.extract",
-      { url: "https://example.com/firecrawl-page", selector: "main", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002" },
+      {
+        url: "https://example.com/firecrawl-page",
+        selector: "main",
+        backend: "firecrawl",
+        firecrawlBaseUrl: "http://127.0.0.1:3002",
+      },
       config,
     );
     expect(extract.backend).toBe("firecrawl");
@@ -567,13 +589,20 @@ describe("browser tools coverage sweep", () => {
         headers: { "content-type": "text/html" },
       });
     }) as unknown as typeof fetch;
-    mocked.launch.mockResolvedValueOnce(createSearchPlaywrightStub(() => [
-      { href: "https://example.com/fallback", title: "Fallback Result", snippet: "Fallback snippet" },
-    ]) as never);
+    mocked.launch.mockResolvedValueOnce(
+      createSearchPlaywrightStub(() => [
+        { href: "https://example.com/fallback", title: "Fallback Result", snippet: "Fallback snippet" },
+      ]) as never,
+    );
 
     const response = await executeBrowserTool(
       "browser.search",
-      { query: "coverage", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002", firecrawlFallbackToNative: true },
+      {
+        query: "coverage",
+        backend: "firecrawl",
+        firecrawlBaseUrl: "http://127.0.0.1:3002",
+        firecrawlFallbackToNative: true,
+      },
       config,
     );
 
@@ -587,16 +616,19 @@ describe("browser tools coverage sweep", () => {
 
   it("uses HTML fetch fallback for navigate and extract when playwright runtime is unavailable", async () => {
     const config = createConfig(tempRoot);
-    globalThis.fetch = vi.fn(async () => new Response(
-      [
-        "<html><head><title>Kristi Noem latest</title></head>",
-        "<body><main><h1>Kristi Noem latest</h1><p>News coverage summary.</p></main></body></html>",
-      ].join(""),
-      {
-        status: 200,
-        headers: { "content-type": "text/html" },
-      },
-    )) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          [
+            "<html><head><title>Kristi Noem latest</title></head>",
+            "<body><main><h1>Kristi Noem latest</h1><p>News coverage summary.</p></main></body></html>",
+          ].join(""),
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        ),
+    ) as unknown as typeof fetch;
     mocked.launch.mockRejectedValue(new Error("missing browser runtime"));
 
     const nav = await executeBrowserTool(
@@ -620,11 +652,9 @@ describe("browser tools coverage sweep", () => {
   it("rejects browser.extract requests that omit selector", async () => {
     const config = createConfig(tempRoot);
 
-    await expect(executeBrowserTool(
-      "browser.extract",
-      { url: "https://example.com/news", maxChars: 400 },
-      config,
-    )).rejects.toThrow(/selector/i);
+    await expect(
+      executeBrowserTool("browser.extract", { url: "https://example.com/news", maxChars: 400 }, config),
+    ).rejects.toThrow(/selector/i);
   });
 
   it("auto-installs Playwright Chromium when the executable is missing and retries launch", async () => {
@@ -635,7 +665,10 @@ describe("browser tools coverage sweep", () => {
       if (Array.isArray(args) && args[0] === "--version") {
         return { status: 0, stdout: "10.29.3", stderr: "" };
       }
-      if (Array.isArray(args) && args.join(" ") === "--filter @goatcitadel/policy-engine exec playwright install chromium") {
+      if (
+        Array.isArray(args) &&
+        args.join(" ") === "--filter @goatcitadel/policy-engine exec playwright install chromium"
+      ) {
         return { status: 0, stdout: "", stderr: "" };
       }
       throw new Error(`Unexpected spawnSync call in test: ${command} ${(args ?? []).join(" ")}`);
@@ -665,9 +698,9 @@ describe("browser tools coverage sweep", () => {
   it("rejects disallowed hosts and invalid interact steps", async () => {
     const config = createConfig(tempRoot);
 
-    await expect(
-      executeBrowserTool("browser.navigate", { url: "https://blocked.invalid" }, config),
-    ).rejects.toThrow(/allowlist/i);
+    await expect(executeBrowserTool("browser.navigate", { url: "https://blocked.invalid" }, config)).rejects.toThrow(
+      /allowlist/i,
+    );
 
     await expect(
       executeBrowserTool(
@@ -766,20 +799,13 @@ describe("browser tools coverage sweep", () => {
     await executeBrowserTool(
       "browser.cookies.set",
       {
-        cookies: [
-          { name: "sid", value: "abc123", url: "https://example.com" },
-        ],
+        cookies: [{ name: "sid", value: "abc123", url: "https://example.com" }],
       },
       config,
       executionContext,
     );
 
-    const cookies = await executeBrowserTool(
-      "browser.cookies.get",
-      {},
-      config,
-      executionContext,
-    );
+    const cookies = await executeBrowserTool("browser.cookies.get", {}, config, executionContext);
     expect(cookies.cookies).toEqual([
       expect.objectContaining({ name: "sid", value: "abc123", url: "https://example.com" }),
     ]);
@@ -801,12 +827,7 @@ describe("browser tools coverage sweep", () => {
     );
     expect(clearedStorage.removed).toBe(1);
 
-    const clearedCookies = await executeBrowserTool(
-      "browser.cookies.clear",
-      { name: "sid" },
-      config,
-      executionContext,
-    );
+    const clearedCookies = await executeBrowserTool("browser.cookies.clear", { name: "sid" }, config, executionContext);
     expect(clearedCookies.removed).toBe(1);
   });
 
@@ -869,9 +890,7 @@ describe("browser tools coverage sweep", () => {
         origins: [
           {
             origin: "https://example.com",
-            localStorage: [
-              { name: "theme", value: "signal-noir" },
-            ],
+            localStorage: [{ name: "theme", value: "signal-noir" }],
           },
         ],
       },

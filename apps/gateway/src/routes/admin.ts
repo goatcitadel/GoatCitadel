@@ -43,15 +43,31 @@ const databaseVerifySchema = z.object({
   target: z.string().optional(),
 });
 
+const RATE_LIMIT_READ_MAX = 500;
+const RATE_LIMIT_MUTATION_MAX = 180;
+
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
-  const operatorOnly = withRouteAccess(fastify, "operator");
+  const operatorReadRoute = withRouteAccess(fastify, "operator", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_READ_MAX,
+      },
+    },
+  });
+  const operatorMutationRoute = withRouteAccess(fastify, "operator", {
+    config: {
+      rateLimit: {
+        max: RATE_LIMIT_MUTATION_MAX,
+      },
+    },
+  });
   const authAdmin = fastify.services.authAdmin;
 
-  fastify.get("/api/v1/admin/retention", operatorOnly, async (_request, reply) => {
+  fastify.get("/api/v1/admin/retention", operatorReadRoute, async (_request, reply) => {
     return reply.send(authAdmin.getRetentionPolicy());
   });
 
-  fastify.patch("/api/v1/admin/retention", operatorOnly, async (request, reply) => {
+  fastify.patch("/api/v1/admin/retention", operatorMutationRoute, async (request, reply) => {
     const parsed = retentionPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -79,7 +95,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(updated);
   });
 
-  fastify.post("/api/v1/admin/retention/prune", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/admin/retention/prune", operatorMutationRoute, async (request, reply) => {
     const parsed = pruneSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -90,7 +106,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(result);
   });
 
-  fastify.get("/api/v1/admin/backups", operatorOnly, async (request, reply) => {
+  fastify.get("/api/v1/admin/backups", operatorReadRoute, async (request, reply) => {
     const parsed = backupListQuery.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -99,7 +115,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items });
   });
 
-  fastify.post("/api/v1/admin/backups/create", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/admin/backups/create", operatorMutationRoute, async (request, reply) => {
     const parsed = backupCreateSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -112,7 +128,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/admin/backups/restore", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/admin/backups/restore", operatorMutationRoute, async (request, reply) => {
     const parsed = backupRestoreSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -124,7 +140,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.code(409).send(blocked.response);
   });
 
-  fastify.post("/api/v1/admin/backups/verify", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/admin/backups/verify", operatorMutationRoute, async (request, reply) => {
     const parsed = backupVerifySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -140,7 +156,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/admin/database/cutover", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/admin/database/cutover", operatorMutationRoute, async (request, reply) => {
     const parsed = databaseCutoverSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -157,7 +173,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/admin/database/verify", operatorOnly, async (request, reply) => {
+  fastify.post("/api/v1/admin/database/verify", operatorMutationRoute, async (request, reply) => {
     const parsed = databaseVerifySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

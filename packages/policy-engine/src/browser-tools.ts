@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -84,18 +85,18 @@ const MAX_BROWSER_SESSION_STATES = 128;
 
 export function isBrowserToolName(name: string): name is BrowserToolName {
   return (
-    name === "browser.search"
-    || name === "browser.navigate"
-    || name === "browser.extract"
-    || name === "browser.screenshot"
-    || name === "browser.interact"
-    || name === "browser.cookies.get"
-    || name === "browser.cookies.set"
-    || name === "browser.cookies.clear"
-    || name === "browser.storage.get"
-    || name === "browser.storage.set"
-    || name === "browser.storage.clear"
-    || name === "browser.context.configure"
+    name === "browser.search" ||
+    name === "browser.navigate" ||
+    name === "browser.extract" ||
+    name === "browser.screenshot" ||
+    name === "browser.interact" ||
+    name === "browser.cookies.get" ||
+    name === "browser.cookies.set" ||
+    name === "browser.cookies.clear" ||
+    name === "browser.storage.get" ||
+    name === "browser.storage.set" ||
+    name === "browser.storage.clear" ||
+    name === "browser.context.configure"
   );
 }
 
@@ -218,15 +219,11 @@ async function executeBrowserSearchNative(
     attemptedEngines.push(engine);
     const searchUrl = buildSearchUrl(engine, query);
     try {
-      const snapshot = await withBrowserPage(
-        searchUrl,
-        args,
-        config,
-        executionContext,
-        async (page) => {
-          await page.waitForLoadState("domcontentloaded");
-          await page.waitForTimeout(400);
-          const rawResults = await page.evaluate((maxItems: number) => {
+      const snapshot = await withBrowserPage(searchUrl, args, config, executionContext, async (page) => {
+        await page.waitForLoadState("domcontentloaded");
+        await page.waitForTimeout(400);
+        const rawResults = await page.evaluate(
+          (maxItems: number) => {
             const out: Array<{ href: string; title: string; snippet: string }> = [];
             const seen = new Set<string>();
             const searchRootSelectors = [
@@ -249,15 +246,23 @@ async function executeBrowserSearchNative(
                 scopedAnchors.push(...anchors);
               }
             }
-            const anchors = scopedAnchors.length > 0
-              ? scopedAnchors
-              : Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[];
+            const anchors =
+              scopedAnchors.length > 0
+                ? scopedAnchors
+                : (Array.from(document.querySelectorAll("a[href]")) as HTMLAnchorElement[]);
             for (const anchor of anchors) {
               if (out.length >= maxItems) {
                 break;
               }
               const href = anchor.getAttribute("href") ?? "";
-              if (!href || href.startsWith("#") || href.toLowerCase().startsWith("javascript:")) {
+              const normalizedHref = href.trim().toLowerCase();
+              if (
+                !href ||
+                href.startsWith("#") ||
+                normalizedHref.startsWith("javascript:") ||
+                normalizedHref.startsWith("data:") ||
+                normalizedHref.startsWith("vbscript:")
+              ) {
                 continue;
               }
               if (seen.has(href)) {
@@ -267,9 +272,7 @@ async function executeBrowserSearchNative(
               if (!title) {
                 continue;
               }
-              const containerText = (anchor.closest("article, li, div")?.textContent ?? "")
-                .replace(/\s+/g, " ")
-                .trim();
+              const containerText = (anchor.closest("article, li, div")?.textContent ?? "").replace(/\s+/g, " ").trim();
               out.push({
                 href: href.slice(0, 1200),
                 title: title.slice(0, 240),
@@ -278,19 +281,20 @@ async function executeBrowserSearchNative(
               seen.add(href);
             }
             return out;
-          }, Math.max(limit * 20, 80));
-          const finalUrl = page.url();
-          const filteredResults = filterLikelySearchResultCandidates(rawResults, finalUrl);
-          const results = normalizeBrowserSearchResults(filteredResults, finalUrl, limit);
+          },
+          Math.max(limit * 20, 80),
+        );
+        const finalUrl = page.url();
+        const filteredResults = filterLikelySearchResultCandidates(rawResults, finalUrl);
+        const results = normalizeBrowserSearchResults(filteredResults, finalUrl, limit);
 
-          return {
-            requestedEngine,
-            engine,
-            query,
-            results,
-          };
-        },
-      );
+        return {
+          requestedEngine,
+          engine,
+          query,
+          results,
+        };
+      });
 
       const normalizedSnapshot = {
         requestedEngine,
@@ -298,7 +302,7 @@ async function executeBrowserSearchNative(
         query,
         finalUrl: String(snapshot.finalUrl ?? searchUrl),
         results: Array.isArray(snapshot.results)
-          ? snapshot.results as Array<{ title: string; url: string; snippet: string }>
+          ? (snapshot.results as Array<{ title: string; url: string; snippet: string }>)
           : [],
       };
 
@@ -325,18 +329,21 @@ async function executeBrowserSearchNative(
     try {
       const fallback = await executeBrowserSearchFallback(query, limit, config, engine, executionContext?.signal);
       if (fallback.results.length > 0) {
-        const withBackend = await applySearchBackend({
-          requestedEngine,
-          engine,
-          query,
-          finalUrl: fallback.finalUrl,
-          results: fallback.results,
-        }, {
-          args,
-          config,
-          requestedBackend,
-          signal: executionContext?.signal,
-        });
+        const withBackend = await applySearchBackend(
+          {
+            requestedEngine,
+            engine,
+            query,
+            finalUrl: fallback.finalUrl,
+            results: fallback.results,
+          },
+          {
+            args,
+            config,
+            requestedBackend,
+            signal: executionContext?.signal,
+          },
+        );
         return {
           ...withBackend,
           action: "search",
@@ -410,17 +417,13 @@ async function executeBrowserNavigateNative(
       const title = await page.title();
       const domWeather = await extractWeatherSnapshot(page, title);
       let visualTextSnippet: string | undefined;
-      const visualWeather = domWeather
-        ? undefined
-        : await extractWeatherSnapshotFromVisualTree(page, title, maxChars);
+      const visualWeather = domWeather ? undefined : await extractWeatherSnapshotFromVisualTree(page, title, maxChars);
       if (visualWeather) {
         visualTextSnippet = visualWeather.visualTextSnippet;
       }
       const weather = domWeather ?? visualWeather?.weather;
       const bodyText = await extractText(page, "body", maxChars);
-      const textSnippet = weather
-        ? `${weather.summary}\n\n${bodyText}`.slice(0, maxChars)
-        : bodyText;
+      const textSnippet = weather ? `${weather.summary}\n\n${bodyText}`.slice(0, maxChars) : bodyText;
       return {
         action: "navigate",
         title,
@@ -454,7 +457,14 @@ async function executeBrowserExtract(
   const backend = normalizeBrowserReadBackend(asString(args.backend));
   if (backend === "firecrawl") {
     try {
-      const firecrawl = await executeBrowserExtractViaFirecrawl(url, selector, maxChars, args, config, executionContext?.signal);
+      const firecrawl = await executeBrowserExtractViaFirecrawl(
+        url,
+        selector,
+        maxChars,
+        args,
+        config,
+        executionContext?.signal,
+      );
       return {
         ...firecrawl,
         action: "extract",
@@ -498,9 +508,7 @@ async function executeBrowserExtractNative(
       const title = await page.title();
       const domWeather = await extractWeatherSnapshot(page, title);
       let visualTextSnippet: string | undefined;
-      const visualWeather = domWeather
-        ? undefined
-        : await extractWeatherSnapshotFromVisualTree(page, title, maxChars);
+      const visualWeather = domWeather ? undefined : await extractWeatherSnapshotFromVisualTree(page, title, maxChars);
       if (visualWeather) {
         visualTextSnippet = visualWeather.visualTextSnippet;
       }
@@ -535,9 +543,8 @@ async function executeBrowserScreenshot(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const url = asNonEmptyString(args.url, "url");
-  const outputPath = asString(args.outputPath)
-    ?? asString(args.path)
-    ?? `workspace/artifacts/browser-shot-${Date.now()}.png`;
+  const outputPath =
+    asString(args.outputPath) ?? asString(args.path) ?? `workspace/artifacts/browser-shot-${Date.now()}.png`;
   assertWritePathInJail(outputPath, config.sandbox.writeJailRoots);
 
   return withBrowserPage(url, args, config, executionContext, async (page, responseStatus, finalUrl) => {
@@ -662,19 +669,15 @@ async function executeBrowserCookiesSet(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.cookies.set");
-  const rawCookies = Array.isArray(args.cookies)
-    ? args.cookies
-    : [args];
+  const rawCookies = Array.isArray(args.cookies) ? args.cookies : [args];
   if (rawCookies.length === 0) {
     throw new Error("browser.cookies.set requires a cookie object or cookies array");
   }
 
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
-  const normalizedCookies = rawCookies.map((cookie, index) => normalizeBrowserCookieRecord(
-    cookie,
-    config,
-    `cookies[${index}]`,
-  ));
+  const normalizedCookies = rawCookies.map((cookie, index) =>
+    normalizeBrowserCookieRecord(cookie, config, `cookies[${index}]`),
+  );
 
   for (const cookie of normalizedCookies) {
     const cookieKey = buildBrowserCookieKey(cookie);
@@ -869,18 +872,14 @@ function cloneBrowserSessionState(state: BrowserSessionState): BrowserSessionSta
 }
 
 function cloneBrowserStorageBucket(bucket: BrowserStorageBucket): BrowserStorageBucket {
-  return Object.fromEntries(
-    Object.entries(bucket).map(([origin, entries]) => [origin, { ...entries }]),
-  );
+  return Object.fromEntries(Object.entries(bucket).map(([origin, entries]) => [origin, { ...entries }]));
 }
 
 function resolveBrowserSessionId(
   args: Record<string, unknown>,
   executionContext?: BrowserExecutionContext,
 ): string | undefined {
-  return asString(args.browserSessionId)
-    ?? asString(args.sessionId)
-    ?? asString(executionContext?.sessionId);
+  return asString(args.browserSessionId) ?? asString(args.sessionId) ?? asString(executionContext?.sessionId);
 }
 
 function requireBrowserSessionId(
@@ -931,12 +930,7 @@ function evictOldestBrowserSessionStates(): void {
 }
 
 function buildBrowserCookieKey(cookie: BrowserCookieRecord): string {
-  return [
-    cookie.name,
-    cookie.domain ?? "",
-    cookie.path ?? "",
-    cookie.url ?? "",
-  ].join("::");
+  return [cookie.name, cookie.domain ?? "", cookie.path ?? "", cookie.url ?? ""].join("::");
 }
 
 function buildBrowserCookieFilter(args: Record<string, unknown>): {
@@ -953,12 +947,7 @@ function buildBrowserCookieFilter(args: Record<string, unknown>): {
   };
 }
 
-function hasBrowserCookieFilter(filter: {
-  name?: string;
-  domain?: string;
-  path?: string;
-  url?: string;
-}): boolean {
+function hasBrowserCookieFilter(filter: { name?: string; domain?: string; path?: string; url?: string }): boolean {
   return Boolean(filter.name || filter.domain || filter.path || filter.url);
 }
 
@@ -1140,11 +1129,7 @@ function selectBrowserStorageBuckets(
   return [storage === "local" ? state.localStorage : state.sessionStorage];
 }
 
-function clearBrowserStorageBucket(
-  bucket: BrowserStorageBucket,
-  origin: string,
-  key?: string,
-): number {
+function clearBrowserStorageBucket(bucket: BrowserStorageBucket, origin: string, key?: string): number {
   const existing = bucket[origin];
   if (!existing) {
     return 0;
@@ -1204,9 +1189,7 @@ function normalizeBrowserHeaders(value: unknown): Record<string, string> | undef
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-function normalizeBrowserHttpCredentials(
-  value: unknown,
-): BrowserSessionState["httpCredentials"] {
+function normalizeBrowserHttpCredentials(value: unknown): BrowserSessionState["httpCredentials"] {
   if (value == null) {
     return undefined;
   }
@@ -1253,9 +1236,7 @@ async function snapshotBrowserSessionStorage(
   return nextSessionStorage;
 }
 
-function buildPlaywrightStorageState(
-  state: BrowserSessionState | undefined,
-): PlaywrightStorageState | undefined {
+function buildPlaywrightStorageState(state: BrowserSessionState | undefined): PlaywrightStorageState | undefined {
   if (!state) {
     return undefined;
   }
@@ -1293,11 +1274,7 @@ async function withBrowserPage(
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
   executionContext: BrowserExecutionContext | undefined,
-  run: (
-    page: PlaywrightPage,
-    responseStatus: number | undefined,
-    finalUrl: string,
-  ) => Promise<Record<string, unknown>>,
+  run: (page: PlaywrightPage, responseStatus: number | undefined, finalUrl: string) => Promise<Record<string, unknown>>,
 ): Promise<Record<string, unknown>> {
   throwIfBrowserExecutionAborted(executionContext?.signal);
   assertAllowedHttpUrl(url);
@@ -1357,18 +1334,22 @@ async function withBrowserPage(
         cookies: (storageState?.cookies ?? previousSessionState?.cookies ?? []).map((cookie) => ({ ...cookie })),
         localStorage: storageState
           ? Object.fromEntries(
-            storageState.origins.map((originRecord) => [
-              originRecord.origin,
-              Object.fromEntries(originRecord.localStorage.map((entry) => [entry.name, entry.value])),
-            ]),
-          )
+              storageState.origins.map((originRecord) => [
+                originRecord.origin,
+                Object.fromEntries(originRecord.localStorage.map((entry) => [entry.name, entry.value])),
+              ]),
+            )
           : cloneBrowserStorageBucket(previousSessionState?.localStorage ?? {}),
         sessionStorage: await snapshotBrowserSessionStorage(page, finalUrl, previousSessionState),
         locale: previousSessionState?.locale,
         timezoneId: previousSessionState?.timezoneId,
         geolocation: previousSessionState?.geolocation ? { ...previousSessionState.geolocation } : undefined,
-        extraHTTPHeaders: previousSessionState?.extraHTTPHeaders ? { ...previousSessionState.extraHTTPHeaders } : undefined,
-        httpCredentials: previousSessionState?.httpCredentials ? { ...previousSessionState.httpCredentials } : undefined,
+        extraHTTPHeaders: previousSessionState?.extraHTTPHeaders
+          ? { ...previousSessionState.extraHTTPHeaders }
+          : undefined,
+        httpCredentials: previousSessionState?.httpCredentials
+          ? { ...previousSessionState.httpCredentials }
+          : undefined,
         updatedAt: Date.now(),
       };
       storeBrowserSessionState(browserSessionId, nextState);
@@ -1393,17 +1374,17 @@ async function loadPlaywright(): Promise<PlaywrightModule> {
     const loaded = await import(moduleName);
     return loaded as PlaywrightModule;
   } catch (error) {
-    const reason = (error as Error).message;
+    const reason = error instanceof Error ? error.message : String(error ?? "Unknown error");
     throw new Error(
       `Playwright runtime is unavailable: ${reason}. Install dependencies and run "pnpm --filter @goatcitadel/policy-engine exec playwright install chromium".`,
+      {
+        cause: error,
+      },
     );
   }
 }
 
-async function launchPlaywrightChromium(
-  playwright: PlaywrightModule,
-  headless: boolean,
-): Promise<PlaywrightBrowser> {
+async function launchPlaywrightChromium(playwright: PlaywrightModule, headless: boolean): Promise<PlaywrightBrowser> {
   try {
     return await playwright.chromium.launch({ headless });
   } catch (error) {
@@ -1469,9 +1450,7 @@ function resolvePlaywrightInstallDir(): string {
 }
 
 function resolvePnpmCommand(): string {
-  const candidates = process.platform === "win32"
-    ? ["pnpm.cmd", "pnpm", "pnpm.exe"]
-    : ["pnpm"];
+  const candidates = process.platform === "win32" ? ["pnpm.cmd", "pnpm", "pnpm.exe"] : ["pnpm"];
   for (const candidate of candidates) {
     const result = spawnSync(candidate, ["--version"], { encoding: "utf8" });
     if (!result.error && result.status === 0) {
@@ -1501,10 +1480,7 @@ interface WeatherSnapshot {
   temperature?: string;
 }
 
-async function extractWeatherSnapshot(
-  page: PlaywrightPage,
-  title: string,
-): Promise<WeatherSnapshot | undefined> {
+async function extractWeatherSnapshot(page: PlaywrightPage, title: string): Promise<WeatherSnapshot | undefined> {
   await page.waitForTimeout(900);
   const rawTemperature = await readFirstLocatorText(page, [
     "[data-testid='TemperatureValue']",
@@ -1530,15 +1506,9 @@ async function extractWeatherSnapshot(
   ]);
   const body = await extractText(page, "body", 3500);
 
-  const temperature = normalizeTemperature(rawTemperature)
-    ?? normalizeTemperature(title)
-    ?? normalizeTemperature(body);
-  const condition = normalizeCondition(rawCondition)
-    ?? normalizeCondition(title)
-    ?? normalizeCondition(body);
-  const location = normalizeLocation(rawLocation)
-    ?? extractLocationFromTitle(title)
-    ?? normalizeLocation(title);
+  const temperature = normalizeTemperature(rawTemperature) ?? normalizeTemperature(title) ?? normalizeTemperature(body);
+  const condition = normalizeCondition(rawCondition) ?? normalizeCondition(title) ?? normalizeCondition(body);
+  const location = normalizeLocation(rawLocation) ?? extractLocationFromTitle(title) ?? normalizeLocation(title);
 
   if (!temperature && !condition) {
     return undefined;
@@ -1598,10 +1568,7 @@ async function extractVisualTextFromAccessibilityTree(
     }
     const chunks: string[] = [];
     collectAccessibilityText(root, chunks);
-    const merged = chunks
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const merged = chunks.join(" ").replace(/\s+/g, " ").trim();
     return merged ? merged.slice(0, maxChars) : undefined;
   } catch {
     return undefined;
@@ -1622,10 +1589,7 @@ function collectAccessibilityText(node: AccessibilitySnapshotNode, output: strin
   }
 }
 
-async function readFirstLocatorText(
-  page: PlaywrightPage,
-  selectors: string[],
-): Promise<string | undefined> {
+async function readFirstLocatorText(page: PlaywrightPage, selectors: string[]): Promise<string | undefined> {
   for (const selector of selectors) {
     try {
       const value = await page.locator(selector).first().innerText({ timeout: 1200 });
@@ -1778,7 +1742,9 @@ function normalizeBrowserReadBackend(backend: string | undefined): "native" | "f
   return backend?.toLowerCase() === "firecrawl" ? "firecrawl" : "native";
 }
 
-function resolveSearchEngineCandidates(engine: "auto" | "duckduckgo" | "bing" | "google"): Array<"duckduckgo" | "bing" | "google"> {
+function resolveSearchEngineCandidates(
+  engine: "auto" | "duckduckgo" | "bing" | "google",
+): Array<"duckduckgo" | "bing" | "google"> {
   if (engine === "google") {
     return ["google", "bing", "duckduckgo"];
   }
@@ -1844,7 +1810,6 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-
 function assertAllowedHttpUrl(url: string): void {
   let parsed: URL;
   try {
@@ -1889,12 +1854,14 @@ async function applySearchBackend(
     requestedBackend?: "ollama";
     signal?: AbortSignal;
   },
-): Promise<typeof base & {
-  summaryBackend?: "ollama";
-  summaryBackendUsed?: boolean;
-  backendWarning?: string;
-  summary?: string;
-}> {
+): Promise<
+  typeof base & {
+    summaryBackend?: "ollama";
+    summaryBackendUsed?: boolean;
+    backendWarning?: string;
+    summary?: string;
+  }
+> {
   if (!input.requestedBackend || base.results.length === 0) {
     return base;
   }
@@ -1933,9 +1900,7 @@ async function summarizeSearchResultsWithOllama(
   assertAllowedHttpUrl(endpoint);
   assertHostAllowedForConfig(endpoint, input.config);
 
-  const model = asString(input.args.ollamaModel)
-    ?? process.env.GOATCITADEL_OLLAMA_SEARCH_MODEL?.trim()
-    ?? "llama3.2";
+  const model = asString(input.args.ollamaModel) ?? process.env.GOATCITADEL_OLLAMA_SEARCH_MODEL?.trim() ?? "llama3.2";
   const renderedResults = results
     .slice(0, 8)
     .map((result, index) => `${index + 1}. ${result.title}\nURL: ${result.url}\nSnippet: ${result.snippet}`)
@@ -1968,7 +1933,7 @@ async function summarizeSearchResultsWithOllama(
   if (!response.ok) {
     throw new Error(`Ollama search backend failed (${response.status} ${response.statusText}).`);
   }
-  const payload = await response.json() as Record<string, unknown>;
+  const payload = (await response.json()) as Record<string, unknown>;
   const summary = typeof payload.response === "string" ? payload.response.trim() : "";
   if (!summary) {
     throw new Error("Ollama search backend returned no summary.");
@@ -1982,7 +1947,7 @@ function resolveOllamaSearchEndpoint(args: Record<string, unknown>): string {
     return explicit;
   }
   const envHost = process.env.OLLAMA_HOST?.trim() || process.env.GOATCITADEL_OLLAMA_SEARCH_URL?.trim();
-  const base = envHost && envHost.length > 0 ? envHost.replace(/\/+$/u, "") : "http://127.0.0.1:11434";
+  const base = envHost && envHost.length > 0 ? trimTrailingSlashes(envHost) : "http://127.0.0.1:11434";
   return base.endsWith("/api/generate") ? base : `${base}/api/generate`;
 }
 
@@ -1991,19 +1956,24 @@ function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
   timeoutMs: number;
   apiKey?: string;
 } {
-  const baseUrl = asString(args.firecrawlBaseUrl)
-    ?? process.env.FIRECRAWL_BASE_URL?.trim()
-    ?? "http://127.0.0.1:3002";
+  const baseUrl = asString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL?.trim() ?? "http://127.0.0.1:3002";
   const timeoutMs = clampInt(args.firecrawlTimeoutMs, 20_000, 1_000, 120_000);
-  const apiKeyEnv = asString(args.firecrawlApiKeyEnv)
-    ?? process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV?.trim()
-    ?? "FIRECRAWL_API_KEY";
+  const apiKeyEnv =
+    asString(args.firecrawlApiKeyEnv) ?? process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV?.trim() ?? "FIRECRAWL_API_KEY";
   const apiKey = apiKeyEnv ? process.env[apiKeyEnv]?.trim() : undefined;
   return {
-    baseUrl: baseUrl.replace(/\/+$/u, ""),
+    baseUrl: trimTrailingSlashes(baseUrl),
     timeoutMs,
     apiKey: apiKey || undefined,
   };
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 async function executeBrowserSearchViaFirecrawl(
@@ -2031,12 +2001,12 @@ async function executeBrowserSearchViaFirecrawl(
   if (!response.ok) {
     throw new Error(`Firecrawl search failed (${response.status} ${response.statusText}).`);
   }
-  const payload = await response.json() as Record<string, unknown>;
+  const payload = (await response.json()) as Record<string, unknown>;
   const payloadData = asRecord(payload.data);
   const data = Array.isArray(payload.data)
     ? payload.data
     : Array.isArray(payloadData.results)
-      ? payloadData.results as unknown[]
+      ? (payloadData.results as unknown[])
       : [];
   const results = data
     .map((item) => normalizeFirecrawlSearchResult(item))
@@ -2134,15 +2104,12 @@ async function executeFirecrawlScrape(
   if (!response.ok) {
     throw new Error(`Firecrawl scrape failed (${response.status} ${response.statusText}).`);
   }
-  const payload = await response.json() as Record<string, unknown>;
+  const payload = (await response.json()) as Record<string, unknown>;
   const data = asRecord(payload.data);
   const metadata = asRecord(data.metadata);
   const html = asString(data.html) ?? "";
   const markdown = asString(data.markdown) ?? asString(data.content) ?? "";
-  const finalUrl = asString(metadata.sourceURL)
-    ?? asString(metadata.sourceUrl)
-    ?? asString(data.url)
-    ?? url;
+  const finalUrl = asString(metadata.sourceURL) ?? asString(metadata.sourceUrl) ?? asString(data.url) ?? url;
   return {
     finalUrl,
     title: asString(metadata.title) ?? asString(data.title) ?? extractHtmlTitle(html) ?? finalUrl,
@@ -2281,7 +2248,9 @@ function parseSearchResults(
       continue;
     }
 
-    const title = stripHtml(decodeHtmlEntities(match[2] ?? "")).replace(/\s+/g, " ").trim();
+    const title = stripHtml(decodeHtmlEntities(match[2] ?? ""))
+      .replace(/\s+/g, " ")
+      .trim();
     if (!title) {
       continue;
     }
@@ -2391,7 +2360,11 @@ function filterLikelySearchResultCandidates(
         return false;
       }
       const snippet = raw.snippet.replace(/\s+/g, " ").trim();
-      if (!snippet && title.split(/\s+/).length <= 2 && SEARCH_RESULT_PORTAL_HOST_PATTERNS.some((pattern) => pattern.test(hostname))) {
+      if (
+        !snippet &&
+        title.split(/\s+/).length <= 2 &&
+        SEARCH_RESULT_PORTAL_HOST_PATTERNS.some((pattern) => pattern.test(hostname))
+      ) {
         return false;
       }
       return true;
@@ -2490,10 +2463,7 @@ function extractHtmlTitle(html: string): string | undefined {
 }
 
 function extractHtmlText(html: string, maxChars: number): string {
-  const withoutNoise = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ");
+  const withoutNoise = stripHtmlNoise(html);
   return stripHtml(decodeHtmlEntities(withoutNoise)).replace(/\s+/g, " ").trim().slice(0, maxChars);
 }
 
@@ -2501,19 +2471,40 @@ function stripHtml(input: string): string {
   return input.replace(/<[^>]+>/g, " ");
 }
 
-function decodeHtmlEntities(input: string): string {
+function stripHtmlNoise(input: string): string {
   return input
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#x27;/gi, "'")
-    .replace(/&#x2F;/gi, "/")
-    .replace(/&#(\d+);/g, (_, code: string) => {
-      const numeric = Number(code);
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, " ");
+}
+
+function decodeHtmlEntities(input: string): string {
+  return input.replace(/&(?:amp|quot|#39|lt|gt|#x27|#x2F|#\d+);/gi, (entity) => {
+    const normalized = entity.slice(1, -1).toLowerCase();
+    if (normalized === "amp") {
+      return "&";
+    }
+    if (normalized === "quot") {
+      return '"';
+    }
+    if (normalized === "#39" || normalized === "#x27") {
+      return "'";
+    }
+    if (normalized === "lt") {
+      return "<";
+    }
+    if (normalized === "gt") {
+      return ">";
+    }
+    if (normalized === "#x2f") {
+      return "/";
+    }
+    if (normalized.startsWith("#")) {
+      const numeric = Number(normalized.slice(1));
       return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
-    });
+    }
+    return entity;
+  });
 }
 
 type PlaywrightModule = {
@@ -2554,7 +2545,10 @@ type PlaywrightBrowser = {
 type PlaywrightContext = {
   newPage: () => Promise<PlaywrightPage>;
   storageState?: () => Promise<PlaywrightStorageState>;
-  addInitScript?: (fn: (sessionStorageByOrigin: BrowserStorageBucket) => void, arg: BrowserStorageBucket) => Promise<void>;
+  addInitScript?: (
+    fn: (sessionStorageByOrigin: BrowserStorageBucket) => void,
+    arg: BrowserStorageBucket,
+  ) => Promise<void>;
   grantPermissions?: (permissions: string[], options?: { origin?: string }) => Promise<void>;
 };
 
@@ -2563,10 +2557,7 @@ type PlaywrightPage = {
     url: string,
     options: { timeout: number; waitUntil: "load" | "domcontentloaded" | "networkidle" },
   ) => Promise<{ status: () => number } | null>;
-  setContent?: (
-    html: string,
-    options?: { waitUntil?: "load" | "domcontentloaded" | "networkidle" },
-  ) => Promise<void>;
+  setContent?: (html: string, options?: { waitUntil?: "load" | "domcontentloaded" | "networkidle" }) => Promise<void>;
   waitForLoadState: (state: "domcontentloaded" | "load" | "networkidle") => Promise<void>;
   waitForSelector: (selector: string, options: { timeout: number }) => Promise<void>;
   waitForTimeout: (timeoutMs: number) => Promise<void>;

@@ -808,10 +808,17 @@ export function resolveExecutableCommand(
 }
 
 function quoteForCmd(value: string): string {
-  if (!/[\s"]/u.test(value)) {
+  if (value.length === 0) {
+    return '""';
+  }
+  if (!/[\s"&()^<>|]/u.test(value)) {
     return value;
   }
-  return `"${value.replace(/"/g, '\\"')}"`;
+  const escaped = value
+    .replace(/(\\*)"/g, (_match, slashes: string) => `${slashes}${slashes}\\"`)
+    .replace(/(\\+)$/g, "$1$1")
+    .replace(/([&()^<>|])/g, "^$1");
+  return `"${escaped}"`;
 }
 
 async function memoryWrite(args: Record<string, unknown>, storage: Storage, upsert: boolean) {

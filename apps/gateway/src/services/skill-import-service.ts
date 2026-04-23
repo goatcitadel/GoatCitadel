@@ -439,11 +439,14 @@ const REVIEW_POLICY_HINTS: Array<{
   },
 ];
 
-const NATIVE_OVERLAP_HINTS: Record<string, {
-  nativeAlternativeName: string;
-  nativeDestination: string;
-  blockingReason: string;
-}> = {
+const NATIVE_OVERLAP_HINTS: Record<
+  string,
+  {
+    nativeAlternativeName: string;
+    nativeDestination: string;
+    blockingReason: string;
+  }
+> = {
   harness_engineering: {
     nativeAlternativeName: "Native harness audit and operator governance",
     nativeDestination: "Configure > Agents > Skills",
@@ -1449,7 +1452,7 @@ function inferSourceType(sourceRef: string, explicit?: SkillImportSourceType): S
   if (isHostedSkillBundleUrl(trimmed)) {
     return "remote_bundle";
   }
-  if (/^https?:\/\//i.test(trimmed) || /^git@/i.test(trimmed)) {
+  if (parseSkillSourceLocation(trimmed)) {
     return "git_url";
   }
   if (trimmed.toLowerCase().endsWith(".zip")) {
@@ -1462,23 +1465,24 @@ function inferSourceProvider(sourceRef: string, explicit?: SkillSourceProvider):
   if (explicit) {
     return explicit;
   }
-  const lowered = sourceRef.toLowerCase();
-  if (lowered.includes("agentskill.sh")) {
+  const sourceLocation = parseSkillSourceLocation(sourceRef.trim());
+  const host = sourceLocation?.host;
+  if (host === "agentskill.sh") {
     return "agentskill";
   }
-  if (lowered.includes("skillsmp.com")) {
+  if (host === "skillsmp.com") {
     return "skillsmp";
   }
-  if (lowered.includes("clawhub.ai")) {
+  if (host === "clawhub.ai") {
     return "clawhub";
   }
-  if (lowered.includes("animalhouse.ai")) {
-    return "external";
-  }
-  if (lowered.includes("github.com") || lowered.startsWith("git@")) {
+  if (host === "github.com") {
     return "github";
   }
-  if (/^https?:\/\//i.test(lowered)) {
+  if (host === "animalhouse.ai") {
+    return "external";
+  }
+  if (sourceLocation) {
     return "external";
   }
   return "local";
@@ -1501,16 +1505,56 @@ function buildCanonicalKey(input: {
 }
 
 function normalizeRepoReference(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    const cleaned = url.pathname.replace(/\.git$/i, "").replace(/^\/+/, "");
-    if (!cleaned) {
-      return undefined;
-    }
-    return `${url.hostname.toLowerCase()}/${cleaned.toLowerCase()}`;
-  } catch {
+  const sourceLocation = parseSkillSourceLocation(value);
+  if (!sourceLocation) {
     return undefined;
   }
+  const cleaned = normalizeHostedRepoPath(sourceLocation.path);
+  if (!cleaned) {
+    return undefined;
+  }
+  return `${sourceLocation.host}/${cleaned}`;
+}
+
+function parseSkillSourceLocation(value: string): { kind: "url" | "ssh"; host: string; path: string } | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const sanitized = trimmed.replace(/^git\+/i, "");
+  try {
+    const url = new URL(sanitized);
+    if (!["http:", "https:", "ssh:"].includes(url.protocol)) {
+      return undefined;
+    }
+    return {
+      kind: "url",
+      host: url.hostname.toLowerCase(),
+      path: url.pathname,
+    };
+  } catch {
+    const sshMatch = /^(?:[^@\s]+)@([^:\s]+):(.+)$/.exec(trimmed);
+    const host = sshMatch?.[1];
+    const path = sshMatch?.[2];
+    if (!host || !path) {
+      return undefined;
+    }
+    return {
+      kind: "ssh",
+      host: host.toLowerCase(),
+      path,
+    };
+  }
+}
+
+function normalizeHostedRepoPath(value: string): string | undefined {
+  const cleaned = value
+    .split(/[?#]/, 1)[0]
+    ?.replace(/\.git$/i, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+  return cleaned || undefined;
 }
 
 function mergeSourceItems(items: SkillSourceResultRecord[]): SkillMergedSourceResult[] {
@@ -1769,12 +1813,14 @@ function buildNativeOverlapRecords(duplicateFamily?: string) {
   if (!overlap) {
     return undefined;
   }
-  return [{
-    overlapFamily: duplicateFamily,
-    nativeAlternativeName: overlap.nativeAlternativeName,
-    nativeDestination: overlap.nativeDestination,
-    blockingReason: overlap.blockingReason,
-  }];
+  return [
+    {
+      overlapFamily: duplicateFamily,
+      nativeAlternativeName: overlap.nativeAlternativeName,
+      nativeDestination: overlap.nativeDestination,
+      blockingReason: overlap.blockingReason,
+    },
+  ];
 }
 
 async function resolveGitHeadRevision(repoDir: string): Promise<string | undefined> {

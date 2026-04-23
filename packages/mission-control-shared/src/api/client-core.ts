@@ -310,19 +310,10 @@ function readGatewayAuthState(): GatewayAuthState | undefined {
     return undefined;
   }
   migrateLegacyGatewayAuthStorage();
-  try {
-    const sessionRaw = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
-    if (sessionRaw) {
-      return JSON.parse(sessionRaw) as GatewayAuthState;
-    }
-    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) {
-      return undefined;
-    }
-    return JSON.parse(raw) as GatewayAuthState;
-  } catch {
-    return undefined;
-  }
+  return (
+    readStoredGatewayAuthStateFromStorage(window.sessionStorage) ??
+    readStoredGatewayAuthStateFromStorage(window.localStorage)
+  );
 }
 
 export function getGatewayAuthStorageMode(): GatewayAuthStorageMode {
@@ -352,13 +343,7 @@ export function persistGatewayAuthState(state: GatewayAuthState, mode: GatewayAu
   if (typeof window === "undefined") {
     return;
   }
-  const payload: GatewayAuthState = {
-    mode: state.mode,
-    token: state.token?.trim() || undefined,
-    username: state.username?.trim() || undefined,
-    password: state.password || undefined,
-    tokenQueryParam: state.tokenQueryParam ?? "access_token",
-  };
+  const payload = buildPersistedGatewayAuthState(state);
   const raw = JSON.stringify(payload);
   window.sessionStorage.setItem(AUTH_STORAGE_KEY, raw);
   if (mode === "persistent") {
@@ -636,10 +621,18 @@ function migrateLegacyGatewayAuthStorage(): void {
   if (sessionRaw || !localRaw) {
     return;
   }
-  window.sessionStorage.setItem(AUTH_STORAGE_KEY, localRaw);
+  const sanitized = parseStoredGatewayAuthState(localRaw);
+  if (!sanitized) {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    return;
+  }
+  const raw = JSON.stringify(sanitized);
+  window.sessionStorage.setItem(AUTH_STORAGE_KEY, raw);
   if (getGatewayAuthStorageMode() !== "persistent") {
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    return;
   }
+  window.localStorage.setItem(AUTH_STORAGE_KEY, raw);
 }
 
 function readApiErrorMessage(body: unknown): string | undefined {
@@ -651,4 +644,60 @@ function readApiErrorMessage(body: unknown): string | undefined {
   }
   const candidate = (body as { error?: unknown }).error;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
+}
+
+function readStoredGatewayAuthStateFromStorage(storage: Storage): GatewayAuthState | undefined {
+  const raw = storage.getItem(AUTH_STORAGE_KEY);
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStoredGatewayAuthState(raw);
+  if (!parsed) {
+    storage.removeItem(AUTH_STORAGE_KEY);
+    return undefined;
+  }
+  const sanitizedRaw = JSON.stringify(parsed);
+  if (sanitizedRaw !== raw) {
+    storage.setItem(AUTH_STORAGE_KEY, sanitizedRaw);
+  }
+  return parsed;
+}
+
+function parseStoredGatewayAuthState(raw: string): GatewayAuthState | undefined {
+  try {
+    return normalizeStoredGatewayAuthState(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeStoredGatewayAuthState(value: unknown): GatewayAuthState | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as GatewayAuthState;
+  const normalized: GatewayAuthState = {
+    mode:
+      candidate.mode === "none" || candidate.mode === "token" || candidate.mode === "basic"
+        ? candidate.mode
+        : undefined,
+    token: trimStoredAuthField(candidate.token),
+    username: trimStoredAuthField(candidate.username),
+    tokenQueryParam: trimStoredAuthField(candidate.tokenQueryParam) ?? "access_token",
+  };
+  return normalized.mode || normalized.token || normalized.username ? normalized : undefined;
+}
+
+function buildPersistedGatewayAuthState(state: GatewayAuthState): GatewayAuthState {
+  return {
+    mode: state.mode,
+    token: trimStoredAuthField(state.token),
+    username: trimStoredAuthField(state.username),
+    tokenQueryParam: trimStoredAuthField(state.tokenQueryParam) ?? "access_token",
+  };
+}
+
+function trimStoredAuthField(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
