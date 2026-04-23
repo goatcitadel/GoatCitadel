@@ -46,6 +46,7 @@ const ARENA_REPO_URL = "https://github.com/spurnout/goatcitadel-arena";
 const ARENA_SERVER_PORT = 3099;
 const ARENA_SERVER_HEALTH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/health`;
 const ARENA_LAUNCH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/`;
+const COREPACK_ENTRYPOINT_RELATIVE_PATH = ["node_modules", "corepack", "dist", "corepack.js"] as const;
 const MANIFEST_VERSION: AddonManifestFile = {
   items: {},
 };
@@ -485,34 +486,34 @@ function resolveGoatCitadelHome(rootDir: string): string {
 }
 
 function runCommand(command: string, args: string[], cwd: string): void {
-  if (process.platform === "win32") {
-    const commandLine = buildWindowsCommand([command, ...args]);
-    execFileSync("cmd.exe", ["/d", "/s", "/c", commandLine], {
-      cwd,
-      stdio: "pipe",
-      encoding: "utf8",
-    });
-    return;
-  }
-  execFileSync(command, args, {
+  const resolved = resolveCommandInvocation(command, args);
+  execFileSync(resolved.file, resolved.args, {
     cwd,
     stdio: "pipe",
     encoding: "utf8",
   });
 }
 
-function buildWindowsCommand(parts: string[]): string {
-  return parts.map((value) => quoteWindowsCommandArg(value)).join(" ");
-}
+function resolveCommandInvocation(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+  nodeExecutable: string = process.execPath,
+): { file: string; args: string[] } {
+  if (platform !== "win32" || command !== "corepack") {
+    return { file: command, args };
+  }
 
-function quoteWindowsCommandArg(value: string): string {
-  if (value.length === 0) {
-    return '""';
+  const nodeDir = path.dirname(nodeExecutable);
+  const corepackEntrypoint = path.join(nodeDir, ...COREPACK_ENTRYPOINT_RELATIVE_PATH);
+  if (!fsSync.existsSync(corepackEntrypoint)) {
+    throw new Error(`Unable to resolve the Corepack entrypoint at ${corepackEntrypoint}.`);
   }
-  if (!/[\s"&()^<>|]/.test(value)) {
-    return value;
-  }
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+
+  return {
+    file: nodeExecutable,
+    args: [corepackEntrypoint, ...args],
+  };
 }
 
 function spawnDetachedCommand(
@@ -521,25 +522,8 @@ function spawnDetachedCommand(
   cwd: string,
   extraEnv: Record<string, string>,
 ): { pid: number } {
-  if (process.platform === "win32") {
-    const commandLine = buildWindowsCommand([command, ...args]);
-    const child = spawn("cmd.exe", ["/d", "/s", "/c", commandLine], {
-      cwd,
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...process.env,
-        ...extraEnv,
-      },
-    });
-    child.unref();
-    if (typeof child.pid !== "number") {
-      throw new Error("Failed to start add-on process.");
-    }
-    return { pid: child.pid };
-  }
-
-  const child = spawn(command, args, {
+  const resolved = resolveCommandInvocation(command, args);
+  const child = spawn(resolved.file, resolved.args, {
     cwd,
     detached: true,
     stdio: "ignore",
@@ -650,6 +634,5 @@ function rollbackAddonRepo(targetDir: string, previousRef: string | undefined): 
 export const __internal = {
   AddonManifestFileSchema,
   assertAddonPathWithinRoot,
-  buildWindowsCommand,
-  quoteWindowsCommandArg,
+  resolveCommandInvocation,
 };

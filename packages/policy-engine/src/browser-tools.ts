@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
+import { stripHtmlNoiseTags } from "./html-noise.js";
 import { assertHostAllowed, assertHostAllowedInDangerProfile } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 
@@ -2472,10 +2473,7 @@ function stripHtml(input: string): string {
 }
 
 function stripHtmlNoise(input: string): string {
-  return input
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, " ")
-    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, " ");
+  return stripHtmlNoiseTags(input, ["script", "style", "noscript"]);
 }
 
 function decodeHtmlEntities(input: string): string {
