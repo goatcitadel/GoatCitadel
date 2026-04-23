@@ -14,6 +14,12 @@ export {
   shouldShowSuggestionsPanel,
   shouldShowTracePanel,
 } from "./pure-helpers";
+export {
+  describeChatUiError,
+  formatChatUiError,
+  type ChatErrorSource,
+  type ChatUiErrorDescriptor,
+} from "./chat/chat-error-copy";
 
 export type {
   MissionThreadedActiveSessionSurfaceProps,

@@ -729,6 +729,42 @@
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
 
+.mc-next-composer-attachment-body {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.mc-next-composer-image-shell {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  border-radius: 0.95rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-composer-image-shell.loading {
+  padding: 1rem;
+}
+
+.mc-next-composer-image-shell p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.mc-next-composer-image-preview {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
 .mc-next-composer-knowledge-url-row,
 .mc-next-composer-preset-row {
   display: grid;

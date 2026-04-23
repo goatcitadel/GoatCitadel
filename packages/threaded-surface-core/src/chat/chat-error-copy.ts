@@ -3,11 +3,68 @@ export interface ChatUiErrorDescriptor {
   raw?: string;
 }
 
-export function describeChatUiError(value?: string | null): ChatUiErrorDescriptor | null {
+export type ChatErrorSource =
+  | "send"
+  | "edit"
+  | "image_generate"
+  | "image_edit"
+  | "approval"
+  | "user_input"
+  | "branch_select"
+  | "refresh"
+  | "other";
+
+const RETRY_NOTE = " Your prompt was kept in the composer so you can edit and resend it.";
+
+function cleanProviderMessage(value: string): string {
+  return value
+    .replace(/\\\\n/g, " ")
+    .replace(/\\n/g, " ")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractProviderMessage(value: string): string | null {
+  const patterns = [/\\"message\\"\s*:\s*\\"([^"]+)\\"/i, /"message"\s*:\s*"([^"]+)"/i, /'message'\s*:\s*'([^']+)'/i];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match?.[1]) {
+      return cleanProviderMessage(match[1]);
+    }
+  }
+  return null;
+}
+
+function looksLikePolicyRejection(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("policy") ||
+    normalized.includes("safety") ||
+    normalized.includes("copyright") ||
+    normalized.includes("copyrighted") ||
+    normalized.includes("disallowed") ||
+    normalized.includes("not allowed") ||
+    normalized.includes("violat") ||
+    normalized.includes("moderation") ||
+    normalized.includes("refused")
+  );
+}
+
+function shouldIncludeRetryNote(source: ChatErrorSource | null | undefined): boolean {
+  return source === "send" || source === "edit" || source === "image_generate" || source === "image_edit";
+}
+
+export function describeChatUiError(
+  value?: string | null,
+  source: ChatErrorSource | null = "other",
+): ChatUiErrorDescriptor | null {
   if (!value) {
     return null;
   }
   const normalized = value.toLowerCase();
+  const retryNote = shouldIncludeRetryNote(source) ? RETRY_NOTE : "";
   let summary = value;
   if (
     normalized.includes("organization must be verified") ||
@@ -15,6 +72,17 @@ export function describeChatUiError(value?: string | null): ChatUiErrorDescripto
   ) {
     summary =
       "OpenAI blocked image generation because this API organization is not verified for gpt-image-2. Verify the organization in OpenAI Platform Settings > Organization > General, then wait a bit and retry.";
+  } else if (normalized.startsWith("api error")) {
+    const providerMessage = extractProviderMessage(value);
+    if (providerMessage && looksLikePolicyRejection(providerMessage)) {
+      summary =
+        "The image prompt was rejected by the provider's policy checks. Try a more original description instead of naming a copyrighted character or exact likeness." +
+        retryNote;
+    } else if (providerMessage) {
+      summary = `${providerMessage}${retryNote}`;
+    } else {
+      summary = `The provider request failed before the current step could finish.${retryNote}`;
+    }
   } else if (normalized.includes("approval")) {
     summary = "The run is waiting for approval before it can continue.";
   } else if (normalized.includes("user input")) {
@@ -25,8 +93,6 @@ export function describeChatUiError(value?: string | null): ChatUiErrorDescripto
     normalized.includes("buffer limit")
   ) {
     summary = "The response stream interrupted before the run could finish updating.";
-  } else if (normalized.startsWith("api error")) {
-    summary = "The provider request failed before the current step could finish.";
   } else if (normalized.includes("no model provider")) {
     summary = "The run cannot start because no provider is configured.";
   } else if (normalized.includes("no model is selected")) {
@@ -49,6 +115,6 @@ export function describeChatUiError(value?: string | null): ChatUiErrorDescripto
   };
 }
 
-export function formatChatUiError(value?: string | null): string | null {
-  return describeChatUiError(value)?.summary ?? null;
+export function formatChatUiError(value?: string | null, source: ChatErrorSource | null = "other"): string | null {
+  return describeChatUiError(value, source)?.summary ?? null;
 }

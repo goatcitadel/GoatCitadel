@@ -17,7 +17,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { fileToBase64 } from "../settings-page-utils";
-import { formatChatUiError } from "./chat-error-copy";
+import type { ChatErrorSource } from "./chat-error-copy";
 
 const SPEAK_REPLIES_PREF_KEY = "goatcitadel.chat.speak-replies.enabled";
 const OPENAI_IMAGE_MODEL_PREFERENCES = ["gpt-image-2", "gpt-image-1"] as const;
@@ -180,7 +180,7 @@ export function useChatMultimodalControls(input: {
   latestAssistantContent?: string;
   latestAssistantStatus?: ChatTurnLifecycleStatus;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
-  setError: (value: string | null) => void;
+  setError: (value: string | null, source?: ChatErrorSource) => void;
   pushLocalNotice: (message: string, tone?: "neutral" | "warning" | "critical" | "success") => void;
   uploadAttachments: (files: File[]) => Promise<void>;
 }) {
@@ -486,7 +486,7 @@ export function useChatMultimodalControls(input: {
           "success",
         );
       } catch (error) {
-        setError(formatChatUiError((error as Error).message));
+        setError((error as Error).message, mode === "edit" ? "image_edit" : "image_generate");
       } finally {
         setImageBusy(false);
       }

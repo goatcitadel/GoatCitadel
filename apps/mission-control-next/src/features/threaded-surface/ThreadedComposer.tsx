@@ -1,8 +1,12 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
+import { useEffect, useState } from "react";
 import { describeThreadedUiError } from "./threaded-error-copy";
+
+type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
 
 function getSurfaceLabel(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): string {
   if (mode === "code") {
@@ -24,12 +28,107 @@ function getPlaceholder(mode: MissionThreadedActiveSessionSurfaceProps["mode"]):
   return "Ask GoatCitadel anything…";
 }
 
+function isImageAttachment(attachment: PendingAttachment): boolean {
+  const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType.trim().toLowerCase() : "";
+  const fileName = attachment.fileName.trim().toLowerCase();
+  return (
+    mimeType.startsWith("image/") ||
+    mimeType.includes("image") ||
+    /\.(png|apng|jpe?g|gif|webp|avif|bmp|svg)$/i.test(fileName)
+  );
+}
+
+function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) {
+  const contentPath = `/api/v1/chat/attachments/${encodeURIComponent(attachment.attachmentId)}/content?disposition=inline`;
+  const directPreviewUrl = buildGatewayUrl(contentPath);
+  const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
+  const [loadWithAuthHeaders, setLoadWithAuthHeaders] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBlobPreviewUrl(null);
+    setLoadWithAuthHeaders(false);
+    setError(null);
+  }, [attachment.attachmentId]);
+
+  useEffect(() => {
+    if (!loadWithAuthHeaders || blobPreviewUrl) {
+      return;
+    }
+    let active = true;
+    let objectUrl: string | null = null;
+
+    async function loadPreview(): Promise<void> {
+      try {
+        setError(null);
+        const response = await fetch(directPreviewUrl, {
+          headers: readGatewayAuthHeaders(contentPath),
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`API error ${response.status}: ${text}`);
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+          return;
+        }
+        setBlobPreviewUrl(objectUrl);
+      } catch (nextError) {
+        if (active) {
+          setError((nextError as Error).message);
+          setBlobPreviewUrl(null);
+        }
+      }
+    }
+
+    void loadPreview();
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [blobPreviewUrl, contentPath, directPreviewUrl, loadWithAuthHeaders]);
+
+  const previewUrl = blobPreviewUrl ?? directPreviewUrl;
+  const fallbackLoading = loadWithAuthHeaders && !blobPreviewUrl && !error;
+  const showImage = !error && !fallbackLoading;
+
+  if (showImage) {
+    return (
+      <div className="mc-next-composer-image-shell">
+        <img
+          src={previewUrl}
+          alt={attachment.fileName}
+          className="mc-next-composer-image-preview"
+          onError={() => {
+            if (blobPreviewUrl) {
+              setError("Preview unavailable.");
+              return;
+            }
+            setLoadWithAuthHeaders(true);
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mc-next-composer-image-shell loading">
+      <p>{fallbackLoading ? "Loading image preview..." : `Preview unavailable: ${error}`}</p>
+    </div>
+  );
+}
+
 export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const threadKnowledgeAttachments = props.threadKnowledgeAttachments ?? [];
   const presetOptions = props.presetOptions ?? [];
   const knowledgeUrlDraft = props.knowledgeUrlDraft ?? "";
   const knowledgeUrlMode = props.knowledgeUrlMode ?? "retrieval";
-  const mappedError = describeThreadedUiError(props.streamError);
+  const mappedError = describeThreadedUiError(props.streamError, props.streamErrorSource ?? "other");
   const currentRouteLabel = props.routePreflight
     ? [props.routePreflight.effectiveProviderId, props.routePreflight.effectiveModel].filter(Boolean).join(" / ")
     : null;
@@ -124,8 +223,14 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           </StatusChip>
           <p>{props.selectedTurnRecovery.summary}</p>
           <div className="mc-next-composer-action-row">
-            {props.selectedTurn && (props.selectedTurnRecovery.action === "retry" || props.selectedTurnRecovery.action === "retry_narrower") ? (
-              <button type="button" className="mc-next-composer-inline-button" onClick={() => props.onRetryTurn(props.selectedTurn!.turnId)}>
+            {props.selectedTurn &&
+            (props.selectedTurnRecovery.action === "retry" ||
+              props.selectedTurnRecovery.action === "retry_narrower") ? (
+              <button
+                type="button"
+                className="mc-next-composer-inline-button"
+                onClick={() => props.onRetryTurn(props.selectedTurn!.turnId)}
+              >
                 {props.mode === "cowork" ? "Retry run step" : "Retry turn"}
               </button>
             ) : null}
@@ -175,13 +280,20 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         <div className="mc-next-composer-attachments">
           {props.pendingAttachments.map((item) => (
             <div key={item.attachmentId} className="mc-next-composer-attachment">
-              <div>
-                <strong>{item.fileName}</strong>
-                <p>
-                  {item.mimeType} · {Math.max(1, Math.round(item.sizeBytes / 1024))} KB
-                </p>
+              <div className="mc-next-composer-attachment-body">
+                <div>
+                  <strong>{item.fileName}</strong>
+                  <p>
+                    {item.mimeType} · {Math.max(1, Math.round(item.sizeBytes / 1024))} KB
+                  </p>
+                </div>
+                {isImageAttachment(item) ? <PendingImagePreview attachment={item} /> : null}
               </div>
-              <button type="button" className="mc-next-composer-inline-button" onClick={() => props.onRemoveAttachment(item.attachmentId)}>
+              <button
+                type="button"
+                className="mc-next-composer-inline-button"
+                onClick={() => props.onRemoveAttachment(item.attachmentId)}
+              >
                 Remove
               </button>
             </div>
@@ -213,8 +325,18 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-controls">
         <div className="mc-next-composer-controls-start">
-          <ChatComposerPlusMenu disabled={props.sending} onAttachFiles={props.onAttachFiles} onRunQuickResearch={props.onRunQuickResearch} />
-          <input ref={props.audioInputRef} type="file" accept="audio/*" className="mc-next-hidden-file" onChange={(event) => props.onAudioFileSelected?.(event.target.files)} />
+          <ChatComposerPlusMenu
+            disabled={props.sending}
+            onAttachFiles={props.onAttachFiles}
+            onRunQuickResearch={props.onRunQuickResearch}
+          />
+          <input
+            ref={props.audioInputRef}
+            type="file"
+            accept="audio/*"
+            className="mc-next-hidden-file"
+            onChange={(event) => props.onAudioFileSelected?.(event.target.files)}
+          />
           {presetOptions.length > 0 ? (
             <div className="mc-next-composer-preset-row">
               <select value={props.selectedPresetId} onChange={(event) => props.onPresetChange?.(event.target.value)}>
@@ -225,28 +347,59 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                   </option>
                 ))}
               </select>
-              <button type="button" className="mc-next-composer-inline-button" disabled={!props.selectedPresetId} onClick={() => props.onApplyPreset?.()}>
+              <button
+                type="button"
+                className="mc-next-composer-inline-button"
+                disabled={!props.selectedPresetId}
+                onClick={() => props.onApplyPreset?.()}
+              >
                 Apply
               </button>
             </div>
           ) : null}
           <div className="mc-next-composer-multimodal-row">
-            <button type="button" className={`mc-next-composer-inline-button${props.voiceTalkActive ? " active" : ""}`} disabled={!props.voiceInputAvailable || props.voiceBusy || props.sending} onClick={props.onToggleVoiceTalk}>
+            <button
+              type="button"
+              className={`mc-next-composer-inline-button${props.voiceTalkActive ? " active" : ""}`}
+              disabled={!props.voiceInputAvailable || props.voiceBusy || props.sending}
+              onClick={props.onToggleVoiceTalk}
+            >
               {props.voiceBusy ? "Voice…" : props.voiceTalkActive ? "Stop talk" : "Start talk"}
             </button>
-            <button type="button" className="mc-next-composer-inline-button" disabled={!props.voiceInputAvailable || props.voiceBusy || props.sending} onClick={props.onOpenAudioTranscribe}>
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              disabled={!props.voiceInputAvailable || props.voiceBusy || props.sending}
+              onClick={props.onOpenAudioTranscribe}
+            >
               Transcript
             </button>
             {props.voiceOutputAvailable ? (
-              <button type="button" className={`mc-next-composer-inline-button${props.speakResponsesEnabled ? " active" : ""}`} onClick={() => props.onToggleSpeakResponses?.()}>
+              <button
+                type="button"
+                className={`mc-next-composer-inline-button${props.speakResponsesEnabled ? " active" : ""}`}
+                onClick={() => props.onToggleSpeakResponses?.()}
+              >
                 {props.speakResponsesEnabled ? "Speak on" : "Speak off"}
               </button>
             ) : null}
-            <button type="button" className="mc-next-composer-inline-button" disabled={!props.imageGenerationAvailable || props.imageBusy || props.sending || props.draft.trim().length === 0} onClick={() => props.onGenerateImage?.()}>
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              disabled={
+                !props.imageGenerationAvailable || props.imageBusy || props.sending || props.draft.trim().length === 0
+              }
+              onClick={() => props.onGenerateImage?.()}
+            >
               {props.imageBusy ? "Imaging…" : "Create image"}
             </button>
             {props.imageEditAvailable ? (
-              <button type="button" className="mc-next-composer-inline-button" disabled={props.imageBusy || props.sending || props.draft.trim().length === 0} onClick={() => props.onEditImage?.()}>
+              <button
+                type="button"
+                className="mc-next-composer-inline-button"
+                disabled={props.imageBusy || props.sending || props.draft.trim().length === 0}
+                onClick={() => props.onEditImage?.()}
+              >
                 {props.imageBusy ? "Imaging…" : "Edit image"}
               </button>
             ) : null}
@@ -257,11 +410,19 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               onChange={(event) => props.onKnowledgeUrlDraftChange?.(event.target.value)}
               placeholder="Attach a URL to thread knowledge"
             />
-            <select value={knowledgeUrlMode} onChange={(event) => props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode)}>
+            <select
+              value={knowledgeUrlMode}
+              onChange={(event) => props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode)}
+            >
               <option value="retrieval">Use retrieval</option>
               <option value="full_text">Read in full</option>
             </select>
-            <button type="button" className="mc-next-composer-inline-button" disabled={!knowledgeUrlDraft.trim()} onClick={() => props.onAttachKnowledgeUrl?.()}>
+            <button
+              type="button"
+              className="mc-next-composer-inline-button"
+              disabled={!knowledgeUrlDraft.trim()}
+              onClick={() => props.onAttachKnowledgeUrl?.()}
+            >
               Attach source
             </button>
           </div>
@@ -275,7 +436,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           ) : (
             <button type="button" className="mc-next-composer-primary" disabled={!props.canSend} onClick={props.onSend}>
               {props.mode === "cowork"
-                ? props.selectedTurn?.trace.status === "waiting_for_approval" || props.selectedTurn?.trace.status === "waiting_for_user_input"
+                ? props.selectedTurn?.trace.status === "waiting_for_approval" ||
+                  props.selectedTurn?.trace.status === "waiting_for_user_input"
                   ? "Resolve blocker"
                   : props.editingTurnId
                     ? "Edit and resend"

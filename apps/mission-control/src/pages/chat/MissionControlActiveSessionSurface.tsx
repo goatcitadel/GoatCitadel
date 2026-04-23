@@ -1,4 +1,5 @@
 import type { ChatMode, ChatThreadResponse, RoutingPreflightResult } from "@goatcitadel/contracts";
+import type { ChatErrorSource } from "@goatcitadel/threaded-surface-core";
 import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
@@ -36,6 +37,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   streamStatus: ChatStreamStatus;
   queuedCount: number;
   streamError: string | null;
+  streamErrorSource?: ChatErrorSource | null;
   pendingApproval: Parameters<typeof ChatThreadShell>[0]["pendingApproval"];
   pendingUserInput: Parameters<typeof ChatThreadShell>[0]["pendingUserInput"];
   workspaceId: string;
@@ -164,6 +166,7 @@ export function MissionControlActiveSessionSurface({
   streamStatus,
   queuedCount,
   streamError,
+  streamErrorSource,
   pendingApproval,
   pendingUserInput,
   workspaceId,
@@ -331,6 +334,7 @@ export function MissionControlActiveSessionSurface({
           planningMode={planningMode}
           effectiveToolAutonomy={effectiveToolAutonomy}
           error={streamError}
+          errorSource={streamErrorSource}
           draft={draft}
           commandSuggestions={commandSuggestions}
           commandIndex={commandIndex}

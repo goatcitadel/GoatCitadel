@@ -55,6 +55,7 @@ import {
 } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import type { ChatContextDockPanelsProps } from "./chat/ChatContextDockPanels.types";
 import type { MissionControlActiveSessionSurfaceProps } from "./chat/MissionControlActiveSessionSurface";
+import type { ChatErrorSource } from "./chat/chat-error-copy";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
 import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat/work-trust";
@@ -356,6 +357,7 @@ export function MissionThreadedControllerHost({
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorSource, setErrorSource] = useState<ChatErrorSource | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
   const [folderName, setFolderName] = useState("");
   const [tagsValue, setTagsValue] = useState("");
@@ -376,6 +378,10 @@ export function MissionThreadedControllerHost({
   const [knowledgeUrlDraft, setKnowledgeUrlDraft] = useState("");
   const [knowledgeUrlMode, setKnowledgeUrlMode] = useState<ThreadKnowledgeRetrievalMode>("retrieval");
   const [presetApplyWarning, setPresetApplyWarning] = useState<string | null>(null);
+  const setUiError = useCallback((value: string | null, source: ChatErrorSource = "other") => {
+    setError(value);
+    setErrorSource(value ? source : null);
+  }, []);
   const [presetProfiles, setPresetProfiles] = useState<
     Array<{
       agentId: string;
@@ -489,7 +495,7 @@ export function MissionThreadedControllerHost({
     selectedSessionId,
     setSelectedSessionId,
     runtimeLlmConfig,
-    setError,
+    setError: setUiError,
     applyFetchedThreadRef,
     messageMutationVersionRef,
     lastLocalPrefMutationAtRef,
@@ -588,7 +594,7 @@ export function MissionThreadedControllerHost({
     setSelectedProjectId,
     setSelectedSessionId,
     setHistoryView,
-    setError,
+    setError: setUiError,
     setSending,
     setQueuedOutbound: (value) => queuedOutboundSetterRef.current(value),
     setThread,
@@ -653,7 +659,7 @@ export function MissionThreadedControllerHost({
     setDraft,
     setPendingAttachments,
     setPendingApproval: () => undefined,
-    setError,
+    setError: setUiError,
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
@@ -776,7 +782,7 @@ export function MissionThreadedControllerHost({
     codeModeNeedsProjectBinding: Boolean(selectedSession && prefs?.mode === "code" && !selectedSession.projectId),
     loadSidebar,
     ensureSession,
-    setError,
+    setError: setUiError,
     setSending,
     setPrefs,
     setProactiveStatus,
@@ -833,7 +839,7 @@ export function MissionThreadedControllerHost({
     thread,
     messages,
     setThread,
-    setError,
+    setError: setUiError,
     setSending,
     setDraft,
     setPendingAttachments,
@@ -1384,10 +1390,10 @@ export function MissionThreadedControllerHost({
         const artifact = (await fetchChatGeneratedArtifact(existingArtifactId)).item;
         await revealGeneratedArtifact(artifact);
       } catch (err) {
-        setError((err as Error).message);
+        setUiError((err as Error).message);
       }
     },
-    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setError, thread?.turns],
+    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setUiError, thread?.turns],
   );
 
   const handleCreateGeneratedArtifactFromTurn = useCallback(
@@ -1407,10 +1413,10 @@ export function MissionThreadedControllerHost({
           "success",
         );
       } catch (err) {
-        setError((err as Error).message);
+        setUiError((err as Error).message);
       }
     },
-    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setError],
+    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setUiError],
   );
 
   const handleRemoveThreadKnowledge = useCallback(
@@ -1487,7 +1493,7 @@ export function MissionThreadedControllerHost({
         pushLocalNotice("Queued a code helper run for this snippet.", "success");
         await refreshWorkbench();
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Unable to start code helper run.");
+        setUiError(cause instanceof Error ? cause.message : "Unable to start code helper run.");
       }
     },
     [pushLocalNotice, refreshWorkbench, selectedSessionId, selectedTurn?.turnId],
@@ -1528,7 +1534,7 @@ export function MissionThreadedControllerHost({
           prefsRef.current = previousPrefs;
           setPrefs(previousPrefs);
         }
-        setError((err as Error).message);
+        setUiError((err as Error).message);
         throw err;
       }
     },
@@ -1552,7 +1558,7 @@ export function MissionThreadedControllerHost({
       }
       try {
         await applyPrefPatchToSession(selectedSession.sessionId, patch);
-        setError(null);
+        setUiError(null);
       } catch {
         // Errors already surface through page state.
       }
@@ -1673,9 +1679,9 @@ export function MissionThreadedControllerHost({
       await attachPendingKnowledgeSources();
       await handleSend();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
+      setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
     }
-  }, [attachPendingKnowledgeSources, handleSend, setError]);
+  }, [attachPendingKnowledgeSources, handleSend, setUiError]);
   const handleAttachKnowledgeUrl = useCallback(async () => {
     const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
     if (!normalizedKnowledgeUrl) {
@@ -1694,9 +1700,9 @@ export function MissionThreadedControllerHost({
       setKnowledgeUrlDraft("");
       pushLocalNotice("Attached a thread knowledge source.", "success");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to attach thread knowledge source.");
+      setUiError(cause instanceof Error ? cause.message : "Unable to attach thread knowledge source.");
     }
-  }, [ensureSession, knowledgeUrlDraft, knowledgeUrlMode, pushLocalNotice, setError, setThreadKnowledgeAttachments]);
+  }, [ensureSession, knowledgeUrlDraft, knowledgeUrlMode, pushLocalNotice, setUiError, setThreadKnowledgeAttachments]);
   const handleApplyPreset = useCallback(async () => {
     try {
       const preset = presetProfiles.find((item) => item.agentId === selectedPresetId);
@@ -1738,7 +1744,7 @@ export function MissionThreadedControllerHost({
       }
       pushLocalNotice(`Applied ${preset.label}.`, "success");
     } catch (err) {
-      setError((err as Error).message);
+      setUiError((err as Error).message);
     }
   }, [
     applyPrefPatchToSession,
@@ -1747,7 +1753,7 @@ export function MissionThreadedControllerHost({
     messageMode,
     presetProfiles,
     pushLocalNotice,
-    setError,
+    setUiError,
     setPresetApplyWarning,
     selectedPresetId,
     threadKnowledgeAttachments?.items,
@@ -1814,7 +1820,7 @@ export function MissionThreadedControllerHost({
     confirmCapabilitySuggestionAction,
     confirmDeleteSession,
     setSending,
-    setError,
+    setError: setUiError,
     setDraft,
     setCommandIndex,
     setPendingAttachments,
@@ -1866,7 +1872,7 @@ export function MissionThreadedControllerHost({
     latestAssistantContent: latestAssistantTurn?.assistantMessage?.content,
     latestAssistantStatus: latestAssistantTurn?.trace.status,
     setDraft,
-    setError,
+    setError: setUiError,
     pushLocalNotice,
     uploadAttachments,
   });
@@ -1955,6 +1961,7 @@ export function MissionThreadedControllerHost({
         streamStatus: streamStatus as ChatStreamStatus,
         queuedCount: queuedOutbound.length,
         streamError: error,
+        streamErrorSource: errorSource,
         pendingApproval,
         pendingUserInput,
         workspaceId: selectedSession.workspaceId ?? workspaceId,

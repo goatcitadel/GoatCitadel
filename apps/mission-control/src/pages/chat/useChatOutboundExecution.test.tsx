@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
@@ -39,6 +39,7 @@ type HarnessState = {
   pendingApproval: unknown;
   pendingUserInput: unknown;
   error: string | null;
+  errorSource: string | null;
   thread: ChatThreadResponse | null;
   loadSessionCoreStateMock: ReturnType<typeof vi.fn>;
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
@@ -104,7 +105,8 @@ function Harness(props: {
   const [capabilitySuggestions, setCapabilitySuggestions] = useState<any[]>([]);
   const [specialistSuggestions, setSpecialistSuggestions] = useState<any[]>([]);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<string | null>(null);
+  const [errorSource, setErrorSource] = useState<string | null>(null);
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
   const executeOutboundItemRef = useRef(async (_item: unknown) => undefined);
   const tryBeginOutboundExecutionRef = useRef(() => true);
@@ -127,6 +129,10 @@ function Harness(props: {
       })),
     [props.ensureFreshRoutePreflight],
   );
+  const setError = useCallback((value: string | null, source = "other") => {
+    setErrorState(value);
+    setErrorSource(value ? source : null);
+  }, []);
 
   const messages = useMemo(() => {
     return (
@@ -188,6 +194,7 @@ function Harness(props: {
     pendingApproval: hook.pendingApproval,
     pendingUserInput: hook.pendingUserInput,
     error,
+    errorSource,
     thread,
     loadSessionCoreStateMock,
     setThread,
@@ -621,5 +628,57 @@ describe("useChatOutboundExecution", () => {
 
     expect(sendAgentChatMessageMock).toHaveBeenCalledOnce();
     expect(latest?.pendingApproval).toBeNull();
+  });
+
+  it("restores the draft content when a send fails", async () => {
+    sendAgentChatMessageMock.mockRejectedValue(
+      new Error(
+        'API error 400: {"error":"image generation failed (400 Bad Request): {\\"error\\": {\\"message\\": \\"This prompt was rejected by policy because it references a copyrighted character.\\"}}"}',
+      ),
+    );
+
+    create(<Harness />);
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "I want you to create an image of a horse who looks like spongebob squarepants",
+        attachments: [],
+        createdAt: "2026-04-08T00:00:00.000Z",
+      });
+    });
+
+    expect(latest?.draft).toBe("I want you to create an image of a horse who looks like spongebob squarepants");
+    expect(latest?.error).toContain("This prompt was rejected by policy");
+    expect(latest?.errorSource).toBe("send");
+  });
+
+  it("tags approval resolution failures with the approval error source", async () => {
+    let renderer: ReactTestRenderer;
+    approveChatToolMock.mockRejectedValue(new Error('API error 400: {"message":"Approval could not be recorded."}'));
+
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+
+    act(() => {
+      latest?.setPendingApproval({
+        approvalId: "approval-1",
+        toolName: "shell_command",
+        reason: "Needs approval",
+      });
+    });
+
+    await act(async () => {
+      await latest?.approvePending();
+    });
+
+    expect(latest?.error).toContain("Approval could not be recorded.");
+    expect(latest?.errorSource).toBe("approval");
+
+    await act(async () => {
+      renderer!.unmount();
+    });
   });
 });

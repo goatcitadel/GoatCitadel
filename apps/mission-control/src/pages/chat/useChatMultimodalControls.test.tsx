@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatMultimodalControls } from "./useChatMultimodalControls";
@@ -12,6 +12,7 @@ const fetchVoiceRuntimeStatusMock = vi.fn(async () => ({
   readiness: "ready",
   selectedModelId: "voice-mini",
 }));
+const generateLlmImageMock = vi.fn();
 
 vi.mock("../../api/client", async () => {
   const actual = await vi.importActual<object>("../../api/client");
@@ -20,7 +21,7 @@ vi.mock("../../api/client", async () => {
     fetchVoiceStatus: () => fetchVoiceStatusMock(),
     fetchVoiceRuntimeStatus: () => fetchVoiceRuntimeStatusMock(),
     downloadChatAttachment: vi.fn(),
-    generateLlmImage: vi.fn(),
+    generateLlmImage: (...args: unknown[]) => generateLlmImageMock(...args),
     startVoiceTalkSession: vi.fn(),
     stopVoiceTalkSession: vi.fn(),
     transcribeVoice: vi.fn(),
@@ -59,6 +60,8 @@ type HarnessState = {
   setLatestAssistantMessageId: React.Dispatch<React.SetStateAction<string | undefined>>;
   setLatestAssistantContent: React.Dispatch<React.SetStateAction<string | undefined>>;
   setLatestAssistantStatus: React.Dispatch<React.SetStateAction<any>>;
+  handleGenerateImage: () => Promise<void>;
+  setErrorMock: ReturnType<typeof vi.fn>;
 };
 
 let latest: HarnessState | null = null;
@@ -66,12 +69,13 @@ let latest: HarnessState | null = null;
 function Harness() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>("sess-1");
   const [activeThreadSessionId, setActiveThreadSessionId] = useState<string | null>("sess-1");
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState("Create an image of a horse");
   const [latestAssistantMessageId, setLatestAssistantMessageId] = useState<string | undefined>("assistant-history");
   const [latestAssistantContent, setLatestAssistantContent] = useState<string | undefined>("Historical reply");
   const [latestAssistantStatus, setLatestAssistantStatus] = useState<any>("completed");
+  const setErrorMock = useMemo(() => vi.fn(), []);
 
-  useChatMultimodalControls({
+  const controls = useChatMultimodalControls({
     providerOptions: [
       {
         providerId: "openai",
@@ -92,7 +96,7 @@ function Harness() {
     latestAssistantContent,
     latestAssistantStatus,
     setDraft,
-    setError: vi.fn(),
+    setError: setErrorMock,
     pushLocalNotice: vi.fn(),
     uploadAttachments: vi.fn(async () => undefined),
   });
@@ -103,6 +107,8 @@ function Harness() {
     setLatestAssistantMessageId,
     setLatestAssistantContent,
     setLatestAssistantStatus,
+    handleGenerateImage: controls.handleGenerateImage,
+    setErrorMock,
   };
 
   return null;
@@ -113,6 +119,7 @@ describe("useChatMultimodalControls", () => {
     latest = null;
     fetchVoiceStatusMock.mockClear();
     fetchVoiceRuntimeStatusMock.mockClear();
+    generateLlmImageMock.mockReset();
 
     const localStorage = createMemoryStorage();
     localStorage.setItem("goatcitadel.chat.speak-replies.enabled", "true");
@@ -194,5 +201,27 @@ describe("useChatMultimodalControls", () => {
     });
 
     expect(window.speechSynthesis.speak).not.toHaveBeenCalled();
+  });
+
+  it("tags image generation failures with the image_generate source", async () => {
+    generateLlmImageMock.mockRejectedValue(
+      new Error('API error 400: {"error":"image generation failed (400 Bad Request): {\\"message\\":\\"blocked\\"}"}'),
+    );
+
+    create(<Harness />);
+
+    await act(async () => {
+      await settlePromises();
+    });
+
+    await act(async () => {
+      await latest?.handleGenerateImage();
+      await settlePromises();
+    });
+
+    expect(latest?.setErrorMock).toHaveBeenCalledWith(
+      'API error 400: {"error":"image generation failed (400 Bad Request): {\\"message\\":\\"blocked\\"}"}',
+      "image_generate",
+    );
   });
 });

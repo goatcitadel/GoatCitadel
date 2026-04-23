@@ -6,7 +6,10 @@ import type {
   ChatThreadResponse,
   RoutingPreflightResult,
 } from "@goatcitadel/contracts";
+import type { ChatErrorSource } from "@goatcitadel/threaded-surface-core";
+import { useEffect, useState } from "react";
 import type { ClipboardEvent, DragEvent, KeyboardEvent, RefObject } from "react";
+import { buildGatewayUrl, readGatewayAuthHeaders } from "../../api/client-core";
 import { ChatModelPicker, type ChatModelProviderOption } from "../../components/ChatModelPicker";
 import { ChatComposerPlusMenu } from "../../components/ChatComposerPlusMenu";
 import { ChatQueueBar, type ChatQueueItemView } from "../../components/chat/ChatQueueBar";
@@ -58,12 +61,112 @@ function isDocumentAttachment(attachment: ChatAttachmentRecord): boolean {
   );
 }
 
+function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
+  const mediaType = typeof attachment.mediaType === "string" ? attachment.mediaType.trim().toLowerCase() : "";
+  const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType.trim().toLowerCase() : "";
+  const fileName = attachment.fileName.trim().toLowerCase();
+  return (
+    mediaType === "image" ||
+    mediaType.includes("image") ||
+    mimeType.startsWith("image/") ||
+    mimeType.includes("image") ||
+    /\.(png|apng|jpe?g|gif|webp|avif|bmp|svg)$/i.test(fileName)
+  );
+}
+
 function canReadAttachmentInFull(attachment: ChatAttachmentRecord): boolean {
   return (
     attachment.extractStatus === "ready" ||
     Boolean(attachment.extractPreview?.trim()) ||
     Boolean(attachment.ocrText?.trim()) ||
     Boolean(attachment.transcriptText?.trim())
+  );
+}
+
+function PendingImageAttachmentPreview({ attachment }: { attachment: ChatAttachmentRecord }) {
+  const contentPath = `/api/v1/chat/attachments/${encodeURIComponent(attachment.attachmentId)}/content?disposition=inline`;
+  const directPreviewUrl = buildGatewayUrl(contentPath);
+  const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
+  const [loadWithAuthHeaders, setLoadWithAuthHeaders] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setBlobPreviewUrl(null);
+    setLoadWithAuthHeaders(false);
+    setError(null);
+  }, [attachment.attachmentId]);
+
+  useEffect(() => {
+    if (!loadWithAuthHeaders || blobPreviewUrl) {
+      return;
+    }
+    let active = true;
+    let objectUrl: string | null = null;
+
+    async function loadPreview(): Promise<void> {
+      try {
+        setError(null);
+        const response = await fetch(directPreviewUrl, {
+          headers: readGatewayAuthHeaders(contentPath),
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`API error ${response.status}: ${text}`);
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = null;
+          return;
+        }
+        setBlobPreviewUrl(objectUrl);
+      } catch (nextError) {
+        if (active) {
+          setError((nextError as Error).message);
+          setBlobPreviewUrl(null);
+        }
+      }
+    }
+
+    void loadPreview();
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [blobPreviewUrl, contentPath, directPreviewUrl, loadWithAuthHeaders]);
+
+  const previewUrl = blobPreviewUrl ?? directPreviewUrl;
+  const fallbackLoading = loadWithAuthHeaders && !blobPreviewUrl && !error;
+  const showImage = !error && !fallbackLoading;
+
+  if (showImage) {
+    return (
+      <div className="chat-v11-pending-image-preview-shell">
+        <img
+          src={previewUrl}
+          alt={attachment.fileName}
+          className="chat-v11-pending-image-preview"
+          onError={() => {
+            if (blobPreviewUrl) {
+              setError("Preview unavailable.");
+              return;
+            }
+            setLoadWithAuthHeaders(true);
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-v11-pending-image-preview-shell loading">
+      <p className="chat-v11-pending-image-preview-copy muted">
+        {fallbackLoading ? "Loading image preview..." : `Preview unavailable: ${error}`}
+      </p>
+    </div>
   );
 }
 
@@ -75,6 +178,7 @@ export function ChatComposerShell(props: {
   planningMode: "off" | "advisory";
   effectiveToolAutonomy?: string;
   error: string | null;
+  errorSource?: ChatErrorSource | null;
   draft: string;
   commandSuggestions: Array<{ key: string; command: string; description: string; applyValue: string }>;
   commandIndex: number;
@@ -172,6 +276,7 @@ export function ChatComposerShell(props: {
     planningMode,
     effectiveToolAutonomy,
     error,
+    errorSource = null,
     draft,
     commandSuggestions,
     commandIndex,
@@ -264,7 +369,7 @@ export function ChatComposerShell(props: {
       : mode === "cowork"
         ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
         : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
-  const mappedError = describeChatUiError(error);
+  const mappedError = describeChatUiError(error, errorSource);
   const currentRouteLabel = routePreflight
     ? [routePreflight.effectiveProviderId, routePreflight.effectiveModel].filter(Boolean).join(" / ")
     : null;
@@ -487,6 +592,7 @@ export function ChatComposerShell(props: {
                   Remove
                 </button>
               </div>
+              {isImageAttachment(item) ? <PendingImageAttachmentPreview attachment={item} /> : null}
               {isDocumentAttachment(item) ? (
                 <div className="chat-v11-attachment-mode-row" aria-label={`Attachment mode for ${item.fileName}`}>
                   <button

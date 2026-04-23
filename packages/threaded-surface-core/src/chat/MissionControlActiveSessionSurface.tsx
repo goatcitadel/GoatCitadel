@@ -17,6 +17,7 @@ import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/compo
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { PendingUserInputState } from "./useChatOutboundExecution";
 import type { WorkTrustDescriptor } from "./work-trust";
+import type { ChatErrorSource } from "./chat-error-copy";
 
 export interface MissionControlActiveSessionSurfaceProps {
   mode: ChatMode;
@@ -41,6 +42,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   streamStatus: ChatStreamStatus;
   queuedCount: number;
   streamError: string | null;
+  streamErrorSource?: ChatErrorSource | null;
   pendingApproval: ChatPendingApprovalState | null;
   pendingUserInput: PendingUserInputState | null;
   workspaceId: string;

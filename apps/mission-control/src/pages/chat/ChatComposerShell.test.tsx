@@ -13,6 +13,7 @@ function buildComposerMarkup(overrides: Partial<Parameters<typeof ChatComposerSh
       planningMode="off"
       effectiveToolAutonomy="safe_auto"
       error={null}
+      errorSource={null}
       draft=""
       commandSuggestions={[]}
       commandIndex={0}
@@ -129,5 +130,72 @@ describe("ChatComposerShell", () => {
 
     expect(markup).toContain("Preset");
     expect(markup).toContain("Reviewer");
+  });
+
+  it("renders a pending image preview shell for image attachments", () => {
+    const markup = buildComposerMarkup({
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-image-1",
+          sessionId: "session-1",
+          fileName: "generated-horse.png",
+          mimeType: "image/png",
+          mediaType: "image",
+          sizeBytes: 1024,
+          sha256: "hash",
+          storageRelPath: "chat/default/generated-horse.png",
+          extractStatus: "ready",
+          createdAt: "2026-04-22T00:00:00.000Z",
+        },
+      ] as any,
+    });
+
+    expect(markup).toContain("generated-horse.png");
+    expect(markup).toContain("chat-v11-pending-image-preview-shell");
+    expect(markup).toContain("/api/v1/chat/attachments/attachment-image-1/content?disposition=inline");
+  });
+
+  it("still treats loosely formatted image metadata as previewable", () => {
+    const markup = buildComposerMarkup({
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-image-2",
+          sessionId: "session-1",
+          fileName: "generated-creature.PNG",
+          mimeType: " image/png ",
+          mediaType: "binary",
+          sizeBytes: 1024,
+          sha256: "hash",
+          storageRelPath: "chat/default/generated-creature.PNG",
+          extractStatus: "ready",
+          createdAt: "2026-04-22T00:00:00.000Z",
+        },
+      ] as any,
+    });
+
+    expect(markup).toContain("chat-v11-pending-image-preview-shell");
+    expect(markup).toContain("/api/v1/chat/attachments/attachment-image-2/content?disposition=inline");
+  });
+
+  it("shows retry guidance for send failures", () => {
+    const markup = buildComposerMarkup({
+      error:
+        'API error 500: {"error":"image generation failed (500 Internal Server Error): {\\"error\\": {\\"message\\": \\"Upstream timeout while contacting the provider.\\"}}"}',
+      errorSource: "send",
+    });
+
+    expect(markup).toContain("Upstream timeout while contacting the provider.");
+    expect(markup).toContain("Your prompt was kept in the composer so you can edit and resend it.");
+  });
+
+  it("does not show retry guidance for approval failures", () => {
+    const markup = buildComposerMarkup({
+      error:
+        'API error 400: {"error":"approval failed (400 Bad Request): {\\"error\\": {\\"message\\": \\"Approval could not be recorded.\\"}}"}',
+      errorSource: "approval",
+    });
+
+    expect(markup).toContain("Approval could not be recorded.");
+    expect(markup).not.toContain("Your prompt was kept in the composer so you can edit and resend it.");
   });
 });

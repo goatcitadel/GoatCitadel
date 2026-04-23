@@ -909,6 +909,43 @@
   line-height: 1.45;
 }
 
+.chat-v11-pending-image-preview-shell {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--surface-inset) 84%, transparent),
+    color-mix(in srgb, var(--surface-elevated) 72%, transparent)
+  );
+}
+
+.chat-v11-pending-image-preview-shell.loading {
+  padding: 18px;
+}
+
+.chat-v11-pending-image-preview {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+}
+
+.chat-v11-pending-image-preview-copy {
+  margin: 0;
+  text-align: center;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.chat-v11-pending-image-preview-copy.muted {
+  color: var(--text-muted);
+}
+
 .chat-v11-attachment-mode-row {
   display: flex;
   flex-wrap: wrap;

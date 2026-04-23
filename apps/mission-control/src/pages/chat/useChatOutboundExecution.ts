@@ -34,7 +34,6 @@ import {
 import type { ChatStreamStatus } from "../../components/chat/ChatStreamStatusBar";
 import { recordClientDiagnostic } from "../../state/dev-diagnostics-store";
 import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOutboundPhase } from "./chat-causality";
-import { formatChatUiError } from "./chat-error-copy";
 import { isAbortError } from "./chat-page-derivations";
 import {
   shouldApplyFetchedMessagesAfterStream,
@@ -47,6 +46,7 @@ import {
   mergePendingUserInput,
   type PendingUserInputRecord,
 } from "./chat-pending-user-input";
+import type { ChatErrorSource } from "./chat-error-copy";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
 export type PendingApprovalState = PendingApprovalRecord;
@@ -80,7 +80,7 @@ export function useChatOutboundExecution(input: {
   thread: ChatThreadResponse | null;
   messages: ChatMessageRecord[];
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
-  setError: (value: string | null) => void;
+  setError: (value: string | null, source?: ChatErrorSource) => void;
   setSending: (value: boolean) => void;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setPendingAttachments: React.Dispatch<React.SetStateAction<ChatAttachmentRecord[]>>;
@@ -145,6 +145,16 @@ export function useChatOutboundExecution(input: {
     ensureFreshRoutePreflight,
     isRoutePreflightAcknowledged,
   } = input;
+
+  const getOutboundErrorSource = useCallback((action: OutboundQueueItem["action"]): ChatErrorSource => {
+    if (action === "edit") {
+      return "edit";
+    }
+    if (action === "send") {
+      return "send";
+    }
+    return "other";
+  }, []);
 
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalState | null>(null);
   const [approvalPending, setApprovalPending] = useState(false);
@@ -475,7 +485,7 @@ export function useChatOutboundExecution(input: {
           void loadSessionCoreState(sessionId, {
             background: true,
             includeThread: true,
-          }).catch((err: Error) => setError(formatChatUiError(err.message)));
+          }).catch((err: Error) => setError(err.message, "refresh"));
         },
         options?.immediate ? 0 : 400,
       );
@@ -707,7 +717,7 @@ export function useChatOutboundExecution(input: {
               setPendingUserInput(chunk.prompt);
             }
             if (chunk.type === "error") {
-              setError(formatChatUiError(chunk.error || "Streaming request failed."));
+              setError(chunk.error || "Streaming request failed.", getOutboundErrorSource(item.action));
               recordClientDiagnostic({
                 level: "error",
                 category: "chat",
@@ -917,7 +927,7 @@ export function useChatOutboundExecution(input: {
             setEditingTurnId(item.targetTurnId);
           }
         }
-        setError(formatChatUiError((err as Error).message));
+        setError((err as Error).message, getOutboundErrorSource(item.action));
         recordChatOutboundPhase({
           phase: "failed",
           action: item.action,
@@ -978,7 +988,7 @@ export function useChatOutboundExecution(input: {
         commitThreadUpdate(nextThread);
         return nextThread;
       } catch (err) {
-        setError(formatChatUiError((err as Error).message));
+        setError((err as Error).message, "branch_select");
         return null;
       }
     },
@@ -1046,7 +1056,7 @@ export function useChatOutboundExecution(input: {
           },
         });
       } catch (err) {
-        setError(formatChatUiError((err as Error).message));
+        setError((err as Error).message, "approval");
       } finally {
         setApprovalPending(false);
       }
@@ -1094,7 +1104,7 @@ export function useChatOutboundExecution(input: {
         source: "operator",
       });
     } catch (err) {
-      setError(formatChatUiError((err as Error).message));
+      setError((err as Error).message, "approval");
     } finally {
       setApprovalPending(false);
     }
@@ -1125,7 +1135,7 @@ export function useChatOutboundExecution(input: {
           includeThread: true,
         });
       } catch (err) {
-        setError(formatChatUiError((err as Error).message));
+        setError((err as Error).message, "user_input");
       } finally {
         setUserInputPending(false);
       }
