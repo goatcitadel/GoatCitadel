@@ -33,7 +33,7 @@ function createHost(
       composeContext: vi.fn(),
     } as never,
     hooksService: {
-      runInlineHooks: vi.fn(),
+      runInlineHooks: vi.fn(async () => ({ runs: [] })),
       enqueueAfterHooks: vi.fn(),
     } as never,
     llmService: {
@@ -123,5 +123,44 @@ describe("createChatCompletionStream", () => {
       },
     ]);
     expect(result.error?.message).toContain("fetch failed");
+  });
+
+  it("emits lifecycle hook events around streaming prompt build, request, and completion", async () => {
+    const host = createHost(async function* () {
+      yield {
+        choices: [{ delta: { content: "hello" } }],
+      };
+    });
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    expect(host.hooksService.runInlineHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "before_prompt_build",
+        payload: expect.objectContaining({
+          messageCount: 1,
+        }),
+      }),
+    );
+    expect(host.hooksService.runInlineHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "llm_input",
+        payload: expect.objectContaining({
+          messageCount: 1,
+          toolCount: 0,
+          stream: true,
+        }),
+      }),
+    );
+    expect(host.hooksService.enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "llm_output",
+        payload: expect.objectContaining({
+          fallbackUsed: false,
+          stream: true,
+        }),
+      }),
+    );
   });
 });

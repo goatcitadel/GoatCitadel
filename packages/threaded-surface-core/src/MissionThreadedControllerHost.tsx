@@ -31,6 +31,7 @@ import {
   fetchChatGeneratedArtifact,
   fetchMcpServers,
   fetchMcpTemplates,
+  fetchRuntimeLifecycleExport,
   fetchSkills,
   parseChatCommand,
   removeThreadKnowledgeAttachment,
@@ -694,9 +695,20 @@ export function MissionThreadedControllerHost({
     mcpServers,
     mcpTemplates,
   });
+  const executionRoutePrefs = useMemo(
+    () =>
+      prefs && (selectedProviderId || selectedModel)
+        ? {
+            ...prefs,
+            providerId: prefs.providerId ?? selectedProviderId,
+            model: prefs.model ?? selectedModel,
+          }
+        : prefs,
+    [prefs, selectedModel, selectedProviderId],
+  );
   const routePreflight = useChatRoutePreflight({
     sessionId: selectedSessionId,
-    prefs,
+    prefs: executionRoutePrefs,
     displayAction: editingTurnId ? "edit" : "send",
     displayTurnId: editingTurnId,
     enabled: Boolean(selectedSessionId),
@@ -777,6 +789,8 @@ export function MissionThreadedControllerHost({
     draft,
     messages,
     prefs,
+    selectedProviderId,
+    selectedModel,
     sending,
     streamEnabled,
     codeModeNeedsProjectBinding: Boolean(selectedSession && prefs?.mode === "code" && !selectedSession.projectId),
@@ -836,6 +850,8 @@ export function MissionThreadedControllerHost({
     queuedOutbound,
     activeStreamRef,
     prefs,
+    selectedProviderId,
+    selectedModel,
     thread,
     messages,
     setThread,
@@ -1465,6 +1481,35 @@ export function MissionThreadedControllerHost({
     pushLocalNotice("Session snapshot exported locally.", "success");
   }, [binding, messageMode, prefs, pushLocalNotice, selectedSession, thread]);
 
+  const handleExportRunBundle = useCallback(async () => {
+    if (typeof window === "undefined" || !selectedSession) {
+      return;
+    }
+    try {
+      const bundle = await fetchRuntimeLifecycleExport({
+        sessionId: selectedSession.sessionId,
+        turnId: selectedTurn?.turnId,
+        runId: selectedTurn?.trace.durable?.runId,
+        approvalId: selectedTurn?.trace.toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
+        includeTranscript: true,
+        includeTimeline: true,
+        timelineLimit: 200,
+      });
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${(selectedSession.title?.trim() || selectedSession.sessionId).replace(/[^a-z0-9_-]+/gi, "-")}-${selectedTurn?.turnId ?? "runtime"}-bundle.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      pushLocalNotice("Runtime lifecycle bundle exported locally.", "success");
+    } catch (error) {
+      setUiError(error instanceof Error ? error.message : "Unable to export runtime lifecycle bundle.");
+    }
+  }, [pushLocalNotice, selectedSession, selectedTurn, setUiError]);
+
   const handleRunCodeHelper = useCallback(
     async (language: string, source: string) => {
       if (!selectedSessionId) {
@@ -1979,6 +2024,7 @@ export function MissionThreadedControllerHost({
           setSelectedTurnId(turnId);
           handleDockOpenChange(true);
         },
+        onExportRunBundle: () => void handleExportRunBundle(),
         onOpenGeneratedArtifact: (turnId) => void handleOpenGeneratedArtifactFromTurn(turnId),
         onCreateGeneratedArtifact: (turnId) => void handleCreateGeneratedArtifactFromTurn(turnId),
         onCreateGeneratedArtifactVersion: (turnId) =>
@@ -2281,6 +2327,7 @@ export function MissionThreadedControllerHost({
           onDeleteSession: () => handleDeleteSession(formatSessionLabel(selectedSession)),
           onAssignProject: handleAssignProject,
           onExportSnapshot: handleExportSessionSnapshot,
+          onExportRunBundle: handleExportRunBundle,
           onIntegrationConnectionIdChange: setIntegrationConnectionId,
           onIntegrationTargetChange: setIntegrationTarget,
           onSaveExternalBinding: handleSaveExternalBinding,

@@ -25,6 +25,8 @@ export function useChatContextActions(input: {
   draft: string;
   messages: ChatMessageRecord[];
   prefs: ChatSessionPrefsRecord | null;
+  selectedProviderId?: string;
+  selectedModel?: string;
   sending: boolean;
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;

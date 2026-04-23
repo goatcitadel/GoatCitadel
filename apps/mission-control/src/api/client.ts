@@ -258,7 +258,13 @@ export async function runUiAction<T>(operation: () => Promise<T>): Promise<UiAct
 }
 
 export * from "./types.js";
-export { fetchRuntimeLifecycle, fetchSessionSummary, fetchSessions, fetchSessionTimeline } from "./sessions.js";
+export {
+  fetchRuntimeLifecycle,
+  fetchRuntimeLifecycleExport,
+  fetchSessionSummary,
+  fetchSessions,
+  fetchSessionTimeline,
+} from "./sessions.js";
 
 export type {
   ChatDelegationStreamChunk,

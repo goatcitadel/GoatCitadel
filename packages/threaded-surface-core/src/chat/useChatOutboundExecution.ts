@@ -77,6 +77,8 @@ export function useChatOutboundExecution(input: {
   queuedOutbound: OutboundQueueItem[];
   activeStreamRef: MutableRefObject<ActiveChatStreamState | null>;
   prefs: ChatSessionPrefsRecord | null;
+  selectedProviderId?: string;
+  selectedModel?: string;
   thread: ChatThreadResponse | null;
   messages: ChatMessageRecord[];
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
@@ -123,6 +125,8 @@ export function useChatOutboundExecution(input: {
     queuedOutbound,
     activeStreamRef,
     prefs,
+    selectedProviderId,
+    selectedModel,
     thread,
     messages,
     setThread,
@@ -517,6 +521,16 @@ export function useChatOutboundExecution(input: {
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       const currentPrefs = prefsRef.current;
+      const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
+      const executionModel = currentPrefs?.model ?? selectedModel;
+      const optimisticPrefs =
+        currentPrefs && (executionProviderId || executionModel)
+          ? {
+              ...currentPrefs,
+              providerId: executionProviderId,
+              model: executionModel,
+            }
+          : currentPrefs;
       const localAttachments = attachmentsSnapshot.map((entry) => ({
         attachmentId: entry.attachmentId,
         fileName: entry.fileName,
@@ -742,7 +756,7 @@ export function useChatOutboundExecution(input: {
               },
             });
             commitThreadUpdate((current) =>
-              updateThreadFromStreamChunk(current, chunk, streamSeed, session!.sessionId, prefsRef.current),
+              updateThreadFromStreamChunk(current, chunk, streamSeed, session!.sessionId, optimisticPrefs),
             );
           };
           let resumeAttempts = 0;
@@ -777,8 +791,8 @@ export function useChatOutboundExecution(input: {
                   session.sessionId,
                   item.targetTurnId,
                   {
-                    providerId: currentPrefs?.providerId,
-                    model: currentPrefs?.model,
+                    providerId: executionProviderId,
+                    model: executionModel,
                     mode: currentPrefs?.mode,
                     webMode: currentPrefs?.webMode,
                     memoryMode: currentPrefs?.memoryMode,
@@ -796,8 +810,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: currentPrefs?.providerId,
-                    model: currentPrefs?.model,
+                    providerId: executionProviderId,
+                    model: executionModel,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -813,8 +827,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: currentPrefs?.providerId,
-                    model: currentPrefs?.model,
+                    providerId: executionProviderId,
+                    model: executionModel,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -852,8 +866,8 @@ export function useChatOutboundExecution(input: {
           const sent =
             item.action === "retry" && item.targetTurnId
               ? await retryChatTurn(session.sessionId, item.targetTurnId, {
-                  providerId: currentPrefs?.providerId,
-                  model: currentPrefs?.model,
+                  providerId: executionProviderId,
+                  model: executionModel,
                   mode: currentPrefs?.mode,
                   webMode: currentPrefs?.webMode,
                   memoryMode: currentPrefs?.memoryMode,
@@ -865,8 +879,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: currentPrefs?.providerId,
-                    model: currentPrefs?.model,
+                    providerId: executionProviderId,
+                    model: executionModel,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -876,8 +890,8 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: currentPrefs?.providerId,
-                    model: currentPrefs?.model,
+                    providerId: executionProviderId,
+                    model: executionModel,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -958,6 +972,8 @@ export function useChatOutboundExecution(input: {
       loadSessionCoreState,
       loadSidebar,
       scheduleStreamMessageReconciliation,
+      selectedModel,
+      selectedProviderId,
       setCapabilitySuggestions,
       setSpecialistSuggestions,
       setDraft,

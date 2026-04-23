@@ -55,6 +55,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onExportRunBundle?: () => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;

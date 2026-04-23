@@ -479,7 +479,7 @@ function registerFailureAndGetDelay(reason: string): number | null {
 }
 
 function scheduleRestartAfter(delayMs: number, reason: string): void {
-  if (shuttingDown || restarting || restartTimer) {
+  if (shuttingDown || restartTimer) {
     return;
   }
   const delay = Math.max(100, delayMs);

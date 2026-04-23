@@ -94,6 +94,12 @@ import {
   validateChannelSetupDraft,
   type IntegrationConnection,
 } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  LlmTransportFields,
+  createEmptyLlmTransportDraft,
+  draftFromRequestConfig,
+  requestConfigFromDraft,
+} from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import type { AppRoute, SettingsSection } from "@next/app/route-model";
 import "./native-routes.css";
@@ -273,6 +279,76 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
   );
 }
 
+type ProviderEditorDraft = {
+  providerId: string;
+  label: string;
+  baseUrl: string;
+  apiStyle: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+  defaultModel: string;
+  apiKeyEnv: string;
+};
+
+function createEmptyProviderEditorDraft(): ProviderEditorDraft {
+  return {
+    providerId: "",
+    label: "",
+    baseUrl: "",
+    apiStyle: "openai-responses",
+    defaultModel: "",
+    apiKeyEnv: "",
+  };
+}
+
+function buildProviderEditorDraft(
+  provider?: {
+    providerId: string;
+    label: string;
+    baseUrl: string;
+    apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+    defaultModel: string;
+    apiKeySource?: string;
+    apiKeyRef?: string;
+  } | null,
+): ProviderEditorDraft {
+  return {
+    providerId: provider?.providerId ?? "",
+    label: provider?.label ?? "",
+    baseUrl: provider?.baseUrl ?? "",
+    apiStyle: provider?.apiStyle ?? "openai-responses",
+    defaultModel: provider?.defaultModel ?? "",
+    apiKeyEnv: provider?.apiKeySource === "env" ? (provider.apiKeyRef ?? "") : "",
+  };
+}
+
+function isLikelyLocalProviderBaseUrl(baseUrl: string | undefined): boolean {
+  const normalized = (baseUrl ?? "").trim().toLowerCase();
+  return /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(normalized);
+}
+
+function formatProviderProbeStateLabel(value?: "not_checked" | "ready" | "empty" | "error"): string {
+  switch (value) {
+    case "ready":
+      return "Ready";
+    case "empty":
+      return "No models";
+    case "error":
+      return "Unreachable";
+    default:
+      return "Not checked";
+  }
+}
+
+function formatCheckedAtLabel(value?: string): string {
+  if (!value) {
+    return "Not checked yet";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "Last check unavailable";
+  }
+  return `Checked ${parsed.toLocaleString()}`;
+}
+
 function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const { config, providers, loading, error, reload, loadModelsForProvider } = useProviderModelCatalog("system");
   const [selectedProviderId, setSelectedProviderId] = useState("");
@@ -280,13 +356,46 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [routingModel, setRoutingModel] = useState("");
   const [secretValue, setSecretValue] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
+  const [providerDraft, setProviderDraft] = useState<ProviderEditorDraft>(createEmptyProviderEditorDraft);
+  const [providerTransportDraft, setProviderTransportDraft] = useState(createEmptyLlmTransportDraft);
+  const [providerSaveBusy, setProviderSaveBusy] = useState(false);
+  const [providerProbeBusyId, setProviderProbeBusyId] = useState<string | null>(null);
   const [secretState, setSecretState] = useState<LoadState<Awaited<ReturnType<typeof fetchProviderSecretStatus>>>>({
     loading: false,
     error: null,
     data: null,
   });
+  const providerConfigMap = useMemo(
+    () => new Map((config?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
+    [config?.providerConfigs],
+  );
   const selectedProvider = providers.find((item) => item.providerId === selectedProviderId) ?? providers[0] ?? null;
+  const selectedProviderConfig = selectedProvider ? providerConfigMap.get(selectedProvider.providerId) : undefined;
   const availableModels = selectedProvider?.models ?? [];
+  const providerRequestValidation = useMemo(() => {
+    try {
+      return {
+        request: requestConfigFromDraft(providerTransportDraft),
+        error: null,
+      };
+    } catch (draftError) {
+      return {
+        request: undefined,
+        error: getErrorMessage(draftError),
+      };
+    }
+  }, [providerTransportDraft]);
+  const selectedProviderIsLocal = isLikelyLocalProviderBaseUrl(selectedProvider?.baseUrl);
+  const selectedProviderRuntimePosture = selectedProvider
+    ? selectedProviderIsLocal
+      ? "Local runtime"
+      : "Remote provider"
+    : "Provider pending";
+  const editorHint =
+    editorMode === "new"
+      ? "Create a new provider definition without expanding the gateway."
+      : "Edit the selected provider through runtime settings. Secrets stay on the secure secret endpoints.";
 
   useEffect(() => {
     if (!providers.length) {
@@ -332,6 +441,21 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       void loadModelsForProvider(selectedProviderId);
     }
   }, [loadModelsForProvider, selectedProviderId]);
+
+  useEffect(() => {
+    if (!selectedProvider) {
+      if (editorMode !== "new") {
+        setProviderDraft(createEmptyProviderEditorDraft());
+        setProviderTransportDraft(createEmptyLlmTransportDraft());
+      }
+      return;
+    }
+    if (editorMode === "new") {
+      return;
+    }
+    setProviderDraft(buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider));
+    setProviderTransportDraft(draftFromRequestConfig(selectedProviderConfig?.request));
+  }, [editorMode, selectedProvider, selectedProviderConfig]);
 
   const handleSaveRouting = async () => {
     if (!routingProviderId.trim() || !routingModel.trim()) {
@@ -385,27 +509,110 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
+  const handleSaveProvider = async () => {
+    if (!providerDraft.providerId.trim() || !providerDraft.baseUrl.trim()) {
+      setNotice({ tone: "warning", message: "Provide both a provider id and base URL before saving." });
+      return;
+    }
+    if (providerRequestValidation.error) {
+      setNotice({ tone: "error", message: providerRequestValidation.error });
+      return;
+    }
+    setProviderSaveBusy(true);
+    try {
+      await patchSettings({
+        llm: {
+          upsertProvider: {
+            providerId: providerDraft.providerId.trim(),
+            label: providerDraft.label.trim() || undefined,
+            baseUrl: providerDraft.baseUrl.trim(),
+            apiStyle: providerDraft.apiStyle,
+            defaultModel: providerDraft.defaultModel.trim() || undefined,
+            apiKeyEnv: providerDraft.apiKeyEnv.trim() || undefined,
+            request: providerRequestValidation.request,
+          },
+        },
+      });
+      await reload();
+      setEditorMode("selected");
+      setSelectedProviderId(providerDraft.providerId.trim());
+      setNotice({ tone: "success", message: `Saved provider ${providerDraft.providerId.trim()}.` });
+      void loadModelsForProvider(providerDraft.providerId.trim(), { force: true });
+    } catch (saveError) {
+      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    } finally {
+      setProviderSaveBusy(false);
+    }
+  };
+
+  const handleStartNewProviderDraft = () => {
+    setEditorMode("new");
+    setProviderDraft(createEmptyProviderEditorDraft());
+    setProviderTransportDraft(createEmptyLlmTransportDraft());
+    setNotice({
+      tone: "info",
+      message: "Started a new provider draft. Save it through Settings when the fields are ready.",
+    });
+  };
+
+  const handleRefreshModels = async (providerId: string) => {
+    const normalized = providerId.trim();
+    if (!normalized) {
+      setNotice({ tone: "warning", message: "Choose or save a provider before probing models." });
+      return;
+    }
+    setProviderProbeBusyId(normalized);
+    try {
+      const items = await loadModelsForProvider(normalized, { force: true });
+      setNotice({
+        tone: items.length > 0 ? "success" : "warning",
+        message:
+          items.length > 0
+            ? `Refreshed ${items.length} models for ${normalized}.`
+            : `Probe completed for ${normalized}, but no models were returned.`,
+      });
+      await reload();
+    } catch (probeError) {
+      setNotice({ tone: "error", message: getErrorMessage(probeError) });
+    } finally {
+      setProviderProbeBusyId(null);
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid>
         <SettingsPanel
           title="Providers"
-          subtitle="Available providers and their current model catalog posture."
+          subtitle="Available providers, probe posture, and current catalog coverage."
           stats={[
             { label: "Configured", value: String(providers.length) },
             { label: "Active workspace", value: activeWorkspaceId },
           ]}
         >
+          <SettingsButtonRow>
+            <button type="button" className="mc-next-button-secondary" onClick={handleStartNewProviderDraft}>
+              <Plus size={16} />
+              New provider draft
+            </button>
+          </SettingsButtonRow>
           <SettingsSelectableList
             items={providers.map((item) => ({
               id: item.providerId,
               title: item.label,
               meta: item.providerId,
-              body: `${item.models.length} models · ${item.hasApiKey ? "secret ready" : "secret missing"}`,
+              body: [
+                `${item.models.length} models`,
+                item.hasApiKey ? "secret ready" : "secret missing",
+                formatProviderProbeStateLabel(item.modelProbeState),
+              ].join(" · "),
             }))}
             selectedId={selectedProviderId}
-            onSelect={setSelectedProviderId}
+            onSelect={(providerId) => {
+              setEditorMode("selected");
+              setSelectedProviderId(providerId);
+            }}
             emptyLabel="No providers returned from runtime settings."
           />
         </SettingsPanel>
@@ -456,7 +663,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           </SettingsPanel>
           <SettingsPanel
             title={selectedProvider?.label ?? "Provider detail"}
-            subtitle="Credential posture and provider metadata."
+            subtitle="Credential posture, probe state, and read-only runtime trust signals."
           >
             {selectedProvider ? (
               <>
@@ -468,7 +675,17 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       value: secretState.data?.hasSecret || selectedProvider.hasApiKey ? "Configured" : "Missing",
                       meta: secretState.data?.source ?? selectedProvider.apiKeySource ?? "unknown",
                     },
+                    {
+                      label: "Probe",
+                      value: formatProviderProbeStateLabel(selectedProvider.modelProbeState),
+                      meta: formatCheckedAtLabel(selectedProvider.modelProbeCheckedAt),
+                    },
                     { label: "Models", value: String(availableModels.length), meta: "Known to the runtime" },
+                    {
+                      label: "Runtime posture",
+                      value: selectedProviderRuntimePosture,
+                      meta: selectedProviderIsLocal ? "Local endpoint detected" : "Network endpoint detected",
+                    },
                   ]}
                 />
                 <SettingsFieldGrid>
@@ -498,6 +715,15 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     <KeyRound size={16} />
                     Save secret
                   </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                    disabled={providerProbeBusyId === selectedProvider.providerId}
+                  >
+                    <RefreshCw size={16} />
+                    {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
+                  </button>
                   <button type="button" className="mc-next-button-secondary" onClick={() => void handleDeleteSecret()}>
                     <Trash2 size={16} />
                     Delete secret
@@ -507,6 +733,143 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Choose a provider to inspect routing and secret posture." />
             )}
+          </SettingsPanel>
+          <SettingsPanel title="Provider editor" subtitle={editorHint}>
+            <SettingsFieldGrid>
+              <SettingsField label="Provider id">
+                <input
+                  className="mc-next-settings-input"
+                  value={providerDraft.providerId}
+                  placeholder="openai-compatible"
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      providerId: event.target.value,
+                    }))
+                  }
+                />
+              </SettingsField>
+              <SettingsField label="Label">
+                <input
+                  className="mc-next-settings-input"
+                  value={providerDraft.label}
+                  placeholder="OpenAI-compatible"
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      label: event.target.value,
+                    }))
+                  }
+                />
+              </SettingsField>
+              <SettingsField label="Base URL">
+                <input
+                  className="mc-next-settings-input"
+                  value={providerDraft.baseUrl}
+                  placeholder="https://llm.example.test/v1"
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      baseUrl: event.target.value,
+                    }))
+                  }
+                />
+              </SettingsField>
+              <SettingsField label="API style">
+                <select
+                  className="mc-next-settings-input"
+                  value={providerDraft.apiStyle}
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      apiStyle: event.target.value as ProviderEditorDraft["apiStyle"],
+                    }))
+                  }
+                >
+                  <option value="openai-responses">OpenAI Responses</option>
+                  <option value="openai-chat-completions">OpenAI Chat Completions</option>
+                  <option value="anthropic-messages">Anthropic Messages</option>
+                </select>
+              </SettingsField>
+              <SettingsField label="Default model">
+                <input
+                  className="mc-next-settings-input"
+                  value={providerDraft.defaultModel}
+                  placeholder="gpt-5.4-mini"
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      defaultModel: event.target.value,
+                    }))
+                  }
+                />
+              </SettingsField>
+              <SettingsField label="API key env">
+                <input
+                  className="mc-next-settings-input"
+                  value={providerDraft.apiKeyEnv}
+                  placeholder="OPENAI_API_KEY"
+                  onChange={(event) =>
+                    setProviderDraft((current) => ({
+                      ...current,
+                      apiKeyEnv: event.target.value,
+                    }))
+                  }
+                />
+              </SettingsField>
+            </SettingsFieldGrid>
+            {providerRequestValidation.error ? (
+              <SettingsNotice notice={{ tone: "error", message: providerRequestValidation.error }} />
+            ) : null}
+            <LlmTransportFields
+              draft={providerTransportDraft}
+              idPrefix={`provider-editor-${providerDraft.providerId || "draft"}`}
+              onChange={setProviderTransportDraft}
+              error={providerRequestValidation.error}
+            />
+            <SettingsButtonRow>
+              <button
+                type="button"
+                className="mc-next-button"
+                disabled={providerSaveBusy}
+                onClick={() => void handleSaveProvider()}
+              >
+                <Save size={16} />
+                {providerSaveBusy ? "Saving..." : "Save provider"}
+              </button>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                onClick={() =>
+                  selectedProvider
+                    ? handleRefreshModels(selectedProvider.providerId)
+                    : handleRefreshModels(providerDraft.providerId)
+                }
+                disabled={
+                  providerProbeBusyId === selectedProvider?.providerId ||
+                  providerProbeBusyId === providerDraft.providerId
+                }
+              >
+                <RefreshCw size={16} />
+                {providerProbeBusyId === selectedProvider?.providerId ||
+                providerProbeBusyId === providerDraft.providerId
+                  ? "Probing..."
+                  : "Probe from editor"}
+              </button>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                onClick={() => {
+                  setEditorMode("selected");
+                  setProviderDraft(buildProviderEditorDraft(selectedProviderConfig ?? selectedProvider));
+                  setProviderTransportDraft(draftFromRequestConfig(selectedProviderConfig?.request));
+                }}
+                disabled={!selectedProvider}
+              >
+                <RotateCcw size={16} />
+                Reload selected
+              </button>
+            </SettingsButtonRow>
           </SettingsPanel>
         </SettingsStack>
       </SettingsGrid>

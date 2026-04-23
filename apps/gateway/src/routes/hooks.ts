@@ -28,9 +28,13 @@ const createHookSchema = z.object({
     "llm.model.select.before",
     "llm.request.before",
     "llm.response.after",
+    "before_prompt_build",
+    "llm_input",
+    "llm_output",
     "tool.call.before",
     "tool.call.after",
     "tool.call.error",
+    "after_tool_call",
     "approval.create.before",
     "approval.resolve.after",
     "orchestration.run.before",
@@ -38,6 +42,8 @@ const createHookSchema = z.object({
     "orchestration.phase.after",
     "orchestration.retry.scheduled",
     "orchestration.run.woken",
+    "before_message_write",
+    "agent_end",
   ]),
   mode: z.enum(["observe", "mutate", "intercept"]),
   enabled: z.boolean().optional(),
@@ -124,13 +130,7 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        redactHookRecord(
-          fastify.gateway.updateWorkspaceHook(
-            params.data.workspaceId,
-            params.data.hookId,
-            body.data,
-          ),
-        ),
+        redactHookRecord(fastify.gateway.updateWorkspaceHook(params.data.workspaceId, params.data.hookId, body.data)),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

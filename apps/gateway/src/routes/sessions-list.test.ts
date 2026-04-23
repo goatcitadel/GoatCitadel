@@ -112,12 +112,17 @@ describe("sessions routes", () => {
 
     app = Fastify();
     app.decorate("gateway", {
-      getRuntimeLifecycle,
       listSessions: vi.fn(() => []),
       getSession: vi.fn(),
       getTranscript: vi.fn(),
       getSessionSummary: vi.fn(),
       listSessionTimeline: vi.fn(),
+    } as never);
+    app.decorate("services", {
+      runtimeLifecycle: {
+        getLifecycle: getRuntimeLifecycle,
+        exportLifecycle: vi.fn(),
+      },
     } as never);
     await app.register(sessionsListRoute);
 
@@ -174,12 +179,17 @@ describe("sessions routes", () => {
   it("rejects runtime lifecycle requests without an identifier", async () => {
     app = Fastify();
     app.decorate("gateway", {
-      getRuntimeLifecycle: vi.fn(),
       listSessions: vi.fn(() => []),
       getSession: vi.fn(),
       getTranscript: vi.fn(),
       getSessionSummary: vi.fn(),
       listSessionTimeline: vi.fn(),
+    } as never);
+    app.decorate("services", {
+      runtimeLifecycle: {
+        getLifecycle: vi.fn(),
+        exportLifecycle: vi.fn(),
+      },
     } as never);
     await app.register(sessionsListRoute);
 
@@ -189,5 +199,119 @@ describe("sessions routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("exports a runtime lifecycle bundle with transcript and timeline toggles", async () => {
+    const exportLifecycle = vi.fn(async () => ({
+      export: {
+        version: "runtime.lifecycle.export.v1",
+        exportedAt: "2026-04-22T00:00:00.000Z",
+        includeTranscript: true,
+        includeTimeline: true,
+        timelineLimit: 80,
+      },
+      query: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+      },
+      canonical: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+      },
+      linked: {
+        sessionIds: ["session-1"],
+        turnIds: ["turn-1"],
+        runIds: ["run-1"],
+        proactiveRunIds: [],
+        approvalIds: [],
+        taskIds: [],
+        workspaceIds: ["workspace-1"],
+      },
+      turns: [],
+      toolRuns: [],
+      transcript: [
+        {
+          eventId: "evt-1",
+          actionId: "action-1",
+          idempotencyKey: "idem-1",
+          sessionId: "session-1",
+          sessionKey: "key-1",
+          timestamp: "2026-04-22T00:00:00.000Z",
+          type: "message.user",
+          actorType: "user",
+          actorId: "operator",
+          payload: {},
+        },
+      ],
+      timeline: [
+        {
+          eventId: "evt-1",
+          timestamp: "2026-04-22T00:00:00.000Z",
+          type: "message.user",
+          actorType: "user",
+          actorId: "operator",
+          preview: "hello",
+          payload: {},
+        },
+      ],
+      stats: {
+        linkedSessionCount: 1,
+        linkedTurnCount: 1,
+        linkedRunCount: 1,
+        linkedApprovalCount: 0,
+        linkedTaskCount: 0,
+        turnCount: 0,
+        toolRunCount: 0,
+        executionPlanCount: 0,
+        delegationRunCount: 0,
+        delegationStepCount: 0,
+        proactiveRunCount: 0,
+        approvalEffectCount: 0,
+        transcriptEventCount: 1,
+        timelineEventCount: 1,
+      },
+    }));
+
+    app = Fastify();
+    app.decorate("gateway", {
+      listSessions: vi.fn(() => []),
+      getSession: vi.fn(),
+      getTranscript: vi.fn(),
+      getSessionSummary: vi.fn(),
+      listSessionTimeline: vi.fn(),
+    } as never);
+    app.decorate("services", {
+      runtimeLifecycle: {
+        getLifecycle: vi.fn(),
+        exportLifecycle,
+      },
+    } as never);
+    await app.register(sessionsListRoute);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/runtime/lifecycle/export?sessionId=session-1&turnId=turn-1&includeTranscript=true&includeTimeline=true&timelineLimit=80",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(exportLifecycle).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      turnId: "turn-1",
+      includeTranscript: true,
+      includeTimeline: true,
+      timelineLimit: 80,
+    });
+    expect(response.json()).toMatchObject({
+      export: {
+        version: "runtime.lifecycle.export.v1",
+        includeTranscript: true,
+        includeTimeline: true,
+        timelineLimit: 80,
+      },
+      stats: {
+        transcriptEventCount: 1,
+        timelineEventCount: 1,
+      },
+    });
   });
 });

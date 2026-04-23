@@ -137,9 +137,7 @@ export function ThreadedSurfacePage({
         <div className="mc-next-threaded-rail-actions">
           <button type="button" className="mc-next-threaded-primary" onClick={input.sessionRail.onCreateSession}>
             <SurfaceIcon size={16} />
-            <span>
-              {surface === "chat" ? "New chat" : surface === "cowork" ? "New cowork run" : "New code run"}
-            </span>
+            <span>{surface === "chat" ? "New chat" : surface === "cowork" ? "New cowork run" : "New code run"}</span>
           </button>
           <button
             type="button"
@@ -248,26 +246,26 @@ export function ThreadedSurfacePage({
           </button>
         ) : null}
 
-          <SessionGroup
-            title="Mission"
-            items={missionSessions}
-            count={input.sessionRail.missionSessions.length}
-            selectedSessionId={input.sessionRail.selectedSessionId}
-            onSelectSession={input.sessionRail.onSelectSession}
-            renderSessionLabel={input.sessionRail.renderSessionLabel}
-            nestedChildrenByParentId={
-              surface === "cowork" && input.sessionRail.selectedSessionId && delegatedChildSessions.length > 0
-                ? { [input.sessionRail.selectedSessionId]: delegatedChildSessions }
-                : undefined
-            }
-          />
-          <SessionGroup
-            title="External"
-            items={input.sessionRail.externalSessions}
-            count={input.sessionRail.externalSessions.length}
-            selectedSessionId={input.sessionRail.selectedSessionId}
-            onSelectSession={input.sessionRail.onSelectSession}
-            renderSessionLabel={input.sessionRail.renderSessionLabel}
+        <SessionGroup
+          title="Mission"
+          items={missionSessions}
+          count={input.sessionRail.missionSessions.length}
+          selectedSessionId={input.sessionRail.selectedSessionId}
+          onSelectSession={input.sessionRail.onSelectSession}
+          renderSessionLabel={input.sessionRail.renderSessionLabel}
+          nestedChildrenByParentId={
+            surface === "cowork" && input.sessionRail.selectedSessionId && delegatedChildSessions.length > 0
+              ? { [input.sessionRail.selectedSessionId]: delegatedChildSessions }
+              : undefined
+          }
+        />
+        <SessionGroup
+          title="External"
+          items={input.sessionRail.externalSessions}
+          count={input.sessionRail.externalSessions.length}
+          selectedSessionId={input.sessionRail.selectedSessionId}
+          onSelectSession={input.sessionRail.onSelectSession}
+          renderSessionLabel={input.sessionRail.renderSessionLabel}
           emptyCopy="External bindings show up here when a thread is linked out."
         />
       </aside>
@@ -418,6 +416,11 @@ function ThreadConversationSurface({
                 {action.label}
               </button>
             ))}
+            {props.onExportRunBundle ? (
+              <button type="button" className="mc-next-threaded-secondary" onClick={props.onExportRunBundle}>
+                Export run bundle
+              </button>
+            ) : null}
             <button type="button" className="mc-next-threaded-secondary" onClick={onToggleDock}>
               {props.dockOpen ? "Hide context" : "Show context"}
             </button>
@@ -440,7 +443,8 @@ function ThreadConversationSurface({
             <SheetHeader>
               <SheetTitle>{props.activeGeneratedArtifact.title}</SheetTitle>
               <SheetDescription>
-                Generated {props.activeGeneratedArtifact.kind} artifact from {props.activeGeneratedArtifact.sourceSurface}.
+                Generated {props.activeGeneratedArtifact.kind} artifact from{" "}
+                {props.activeGeneratedArtifact.sourceSurface}.
               </SheetDescription>
             </SheetHeader>
             <GeneratedArtifactViewer artifact={props.activeGeneratedArtifact} compact />
@@ -660,15 +664,7 @@ function SessionRow({
   );
 }
 
-function FilterChip({
-  active,
-  onClick,
-  children,
-}: {
-  active?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
+function FilterChip({ active, onClick, children }: { active?: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button type="button" className={`mc-next-threaded-filter${active ? " active" : ""}`} onClick={onClick}>
       {children}

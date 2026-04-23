@@ -326,7 +326,13 @@ export class HooksService {
   ): Promise<HookRunRecord> {
     const run = this.ctx.storage.hookRuns.get(hookRunId);
     const hook = this.ctx.storage.workspaceHooks.get(run.workspaceId, run.hookId);
-    const delivered = await this.executeRecordedHookRun(hook, run.runId, run.requestPayload ?? {}, attemptCount, options);
+    const delivered = await this.executeRecordedHookRun(
+      hook,
+      run.runId,
+      run.requestPayload ?? {},
+      attemptCount,
+      options,
+    );
     if (delivered.status === "failed" || delivered.status === "timed_out") {
       throw new Error(delivered.errorText ?? "Hook delivery failed");
     }
@@ -559,12 +565,18 @@ export class HooksService {
     }
     if (
       trigger === "llm.response.after" ||
+      trigger === "before_prompt_build" ||
+      trigger === "llm_input" ||
+      trigger === "llm_output" ||
       trigger === "tool.call.after" ||
       trigger === "tool.call.error" ||
+      trigger === "after_tool_call" ||
       trigger === "approval.resolve.after" ||
       trigger === "orchestration.phase.after" ||
       trigger === "orchestration.retry.scheduled" ||
-      trigger === "orchestration.run.woken"
+      trigger === "orchestration.run.woken" ||
+      trigger === "before_message_write" ||
+      trigger === "agent_end"
     ) {
       throw new ValidationError({
         message: `Trigger ${trigger} only supports observe hooks in v1.`,

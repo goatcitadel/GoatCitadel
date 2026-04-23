@@ -41,4 +41,53 @@ describe("dashboard settings routes", () => {
       },
     });
   });
+
+  it("passes provider request transport overrides through the settings patch schema", async () => {
+    const updateSettings = vi.fn((input: Record<string, unknown>) => input);
+
+    app = Fastify();
+    app.decorate("gateway", {
+      updateSettings,
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: {
+        llm: {
+          upsertProvider: {
+            providerId: "openai-compatible",
+            baseUrl: "https://llm.example.test/v1",
+            request: {
+              headers: {
+                "X-Trace": "1",
+              },
+              proxy: {
+                url: "http://proxy.internal:8080",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateSettings).toHaveBeenCalledWith({
+      llm: {
+        upsertProvider: {
+          providerId: "openai-compatible",
+          baseUrl: "https://llm.example.test/v1",
+          request: {
+            headers: {
+              "X-Trace": "1",
+            },
+            proxy: {
+              url: "http://proxy.internal:8080",
+            },
+          },
+        },
+      },
+    });
+  });
 });

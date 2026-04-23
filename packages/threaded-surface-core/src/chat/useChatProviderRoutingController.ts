@@ -44,11 +44,28 @@ function formatSelectionSourceLabel(source: RoutingSelectionSource): string {
   }
 }
 
+function formatRuntimeCheckedAt(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+  return parsed.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function describeRuntimeStatus(provider: ChatModelProviderOption | undefined): {
   status: RuntimeHealthState;
   summary: string;
   tone: WorkTrustTone;
 } {
+  const checkedAtLabel = formatRuntimeCheckedAt(provider?.modelProbeCheckedAt);
+  const postureLabel = provider?.isLocalRuntime ? "Local runtime" : "Remote provider";
+  const appendCheckedAt = (summary: string) => (checkedAtLabel ? `${summary} (${checkedAtLabel})` : summary);
   if (!provider) {
     return {
       status: "not_checked",
@@ -67,19 +84,19 @@ function describeRuntimeStatus(provider: ChatModelProviderOption | undefined): {
     case "ready":
       return {
         status: "reachable",
-        summary: provider.isLocalRuntime ? "Runtime reachable" : "Provider reachable",
+        summary: appendCheckedAt(`${postureLabel} ready`),
         tone: "success",
       };
     case "empty":
       return {
         status: "degraded",
-        summary: provider.isLocalRuntime ? "Runtime degraded" : "Models unavailable",
+        summary: appendCheckedAt(provider.isLocalRuntime ? "Local runtime degraded" : "Remote provider missing models"),
         tone: "warning",
       };
     case "error":
       return {
         status: "unreachable",
-        summary: provider.isLocalRuntime ? "Runtime unreachable" : "Provider unreachable",
+        summary: appendCheckedAt(`${postureLabel} unreachable`),
         tone: "critical",
       };
     default:

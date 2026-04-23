@@ -449,7 +449,9 @@ function ChatDelegationRunSummary({
               {mode !== "cowork" && step.durableRunId ? <p>Durable {step.durableRunId}</p> : null}
               {mode !== "cowork" && step.childSessionId ? <p>Child session {step.childSessionId}</p> : null}
               {mode !== "cowork" && step.childTurnId ? <p>Child turn {step.childTurnId}</p> : null}
-              {step.output ? <p>{step.output}</p> : null}
+              {step.output ? (
+                <AssistantMessageRenderer role="assistant" content={step.output} className="chat-cowork-step-output" />
+              ) : null}
               {step.error ? <p>{step.error}</p> : null}
             </li>
           ))}

@@ -51,6 +51,8 @@ import {
 } from "./gateway-service.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { HooksService } from "./hooks-service.js";
+import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
 type ChatTurnStreamStorage = Pick<
   Storage,
@@ -65,6 +67,7 @@ type ChatTurnStreamStorage = Pick<
 export interface ChatTurnStreamHost {
   readonly storage: ChatTurnStreamStorage;
   readonly turnRuntime: Pick<TurnRuntime, "runStream">;
+  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
   resolvePreparedTurnOrchestration(
     prepared: PreparedAgentChatTurn,
   ): Promise<PreparedChatExecutionPlanResolution | undefined>;
@@ -159,6 +162,80 @@ export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: st
     }
   }
   return orderedToolRuns;
+}
+
+async function observeBeforeAssistantMessageWrite(
+  host: ChatTurnStreamHost,
+  input: {
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
+    messageId: string;
+    content: string;
+    stream: boolean;
+    runId?: string;
+    taskId?: string;
+    providerId?: string;
+    model?: string;
+  },
+): Promise<void> {
+  await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
+    workspaceId: input.workspaceId,
+    trigger: "before_message_write",
+    entityType: "chat_turn",
+    entityId: input.turnId,
+    payload: {
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      runId: input.runId,
+      taskId: input.taskId,
+      providerId: input.providerId,
+      model: input.model,
+      messageId: input.messageId,
+      contentLength: input.content.length,
+      stream: input.stream,
+    },
+  });
+}
+
+function enqueueAgentEndHook(
+  host: ChatTurnStreamHost,
+  input: {
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
+    status: string;
+    toolRunCount: number;
+    stream: boolean;
+    repaired: boolean;
+    runId?: string;
+    taskId?: string;
+    providerId?: string;
+    model?: string;
+    approvalId?: string;
+  },
+): void {
+  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
+    workspaceId: input.workspaceId,
+    trigger: "agent_end",
+    entityType: "chat_turn",
+    entityId: input.turnId,
+    payload: {
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      runId: input.runId,
+      taskId: input.taskId,
+      approvalId: input.approvalId,
+      providerId: input.providerId,
+      model: input.model,
+      status: input.status,
+      toolRunCount: input.toolRunCount,
+      stream: input.stream,
+      repaired: input.repaired,
+    },
+  });
 }
 
 export async function executePreparedModeOrchestration(
@@ -692,6 +769,26 @@ export async function* streamPreparedAgentChatTurn(
         finalText = buildEmptyAssistantTurnFallbackText();
       }
 
+      await observeBeforeAssistantMessageWrite(host, {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+        messageId: assistantMessageId,
+        content: finalText,
+        stream: false,
+        runId: orchestrationResult.summary.runId,
+        taskId: `chat-orchestration:${turnId}`,
+        providerId:
+          orchestrationResult.finalStep?.providerId ??
+          orchestrationResult.summary.steps.at(-1)?.providerId ??
+          input.providerId ??
+          prepared.prefs.providerId,
+        model:
+          orchestrationResult.finalStep?.model ??
+          orchestrationResult.summary.steps.at(-1)?.model ??
+          input.model ??
+          prepared.prefs.model,
+      });
       await host.ingestEvent(randomUUID(), {
         eventId: assistantMessageId,
         route: prepared.route,
@@ -842,6 +939,19 @@ export async function* streamPreparedAgentChatTurn(
         relationScope: "self",
       });
       host.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, prepared.parentTurnId);
+      enqueueAgentEndHook(host, {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+        status: hydratedTrace.status,
+        toolRunCount: orchestrationToolRuns.length,
+        stream: false,
+        repaired: Boolean(hydratedTrace.completion?.repaired),
+        runId: orchestrationResult.summary.runId,
+        taskId: `chat-orchestration:${turnId}`,
+        providerId: hydratedTrace.routing?.effectiveProviderId ?? hydratedTrace.routing?.primaryProviderId,
+        model: hydratedTrace.routing?.effectiveModel ?? hydratedTrace.model,
+      });
       if ((hydratedTrace.completion?.status ?? "complete") === "complete" && hydratedTrace.status === "completed") {
         yield {
           type: "done",
@@ -1051,6 +1161,19 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace: approvalTrace,
       };
+      enqueueAgentEndHook(host, {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+        status: approvalTrace.status,
+        toolRunCount: approvalTrace.toolRuns.length,
+        stream: true,
+        repaired: Boolean(approvalTrace.completion?.repaired),
+        runId: approvalTrace.durable?.runId,
+        approvalId: approvalTrace.toolRuns.find((toolRun) => toolRun.approvalId)?.approvalId,
+        providerId: approvalTrace.routing?.effectiveProviderId ?? approvalTrace.routing?.primaryProviderId,
+        model: approvalTrace.routing?.effectiveModel ?? approvalTrace.model,
+      });
       return;
     }
 
@@ -1098,10 +1221,35 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace: userInputTrace,
       };
+      enqueueAgentEndHook(host, {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+        status: userInputTrace.status,
+        toolRunCount: userInputTrace.toolRuns.length,
+        stream: true,
+        repaired: Boolean(userInputTrace.completion?.repaired),
+        runId: userInputTrace.durable?.runId,
+        providerId: userInputTrace.routing?.effectiveProviderId ?? userInputTrace.routing?.primaryProviderId,
+        model: userInputTrace.routing?.effectiveModel ?? userInputTrace.model,
+      });
       return;
     }
 
     if (finalText.trim()) {
+      const currentTraceBeforeWrite = host.storage.chatTurnTraces.get(turnId);
+      await observeBeforeAssistantMessageWrite(host, {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+        messageId: assistantMessageId,
+        content: finalText,
+        stream: true,
+        runId: currentTraceBeforeWrite.durable?.runId,
+        providerId:
+          currentTraceBeforeWrite.routing?.effectiveProviderId ?? currentTraceBeforeWrite.routing?.primaryProviderId,
+        model: currentTraceBeforeWrite.routing?.effectiveModel ?? currentTraceBeforeWrite.model,
+      });
       await host.ingestEvent(randomUUID(), {
         eventId: assistantMessageId,
         route: prepared.route,
@@ -1232,6 +1380,19 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     const completedTrace = host.storage.chatTurnTraces.get(turnId);
+    enqueueAgentEndHook(host, {
+      workspaceId: prepared.workspaceId,
+      sessionId,
+      turnId,
+      status: completedTrace.status,
+      toolRunCount: host.storage.chatToolRuns.listByTurn(turnId).length,
+      stream: true,
+      repaired: Boolean(completedTrace.completion?.repaired),
+      runId: completedTrace.durable?.runId,
+      approvalId: host.storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.approvalId)?.approvalId,
+      providerId: completedTrace.routing?.effectiveProviderId ?? completedTrace.routing?.primaryProviderId,
+      model: completedTrace.routing?.effectiveModel ?? completedTrace.model,
+    });
     if (completedTrace.completion?.status === "complete") {
       yield {
         type: "done",
@@ -1249,6 +1410,21 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         trace,
       };
+      enqueueAgentEndHook(host, {
+        workspaceId: prepared.workspaceId,
+        sessionId,
+        turnId,
+        status: trace.status,
+        toolRunCount: trace.toolRuns?.length ?? host.storage.chatToolRuns.listByTurn(turnId).length,
+        stream: true,
+        repaired: Boolean(trace.completion?.repaired),
+        runId: trace.durable?.runId,
+        approvalId:
+          trace.toolRuns?.find((toolRun) => toolRun.approvalId)?.approvalId ??
+          host.storage.chatToolRuns.listByTurn(turnId).find((toolRun) => toolRun.approvalId)?.approvalId,
+        providerId: trace.routing?.effectiveProviderId ?? trace.routing?.primaryProviderId,
+        model: trace.routing?.effectiveModel ?? trace.model,
+      });
       return;
     }
     throw error;

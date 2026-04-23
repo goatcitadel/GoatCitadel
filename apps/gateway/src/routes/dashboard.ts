@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { LlmProviderRequestConfigSchema } from "@goatcitadel/contracts";
 
 const memoryQuerySchema = z.object({
   dir: z.string().default("memory"),
@@ -70,6 +71,7 @@ const updateSettingsSchema = z.object({
           defaultModel: z.string().min(1).optional(),
           apiKey: z.string().min(1).optional(),
           apiKeyEnv: z.string().min(1).optional(),
+          request: LlmProviderRequestConfigSchema.optional(),
           headers: z.record(z.string()).optional(),
         })
         .optional(),

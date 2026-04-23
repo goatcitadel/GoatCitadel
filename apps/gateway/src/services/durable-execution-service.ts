@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Durable workflow executors remain grouped here until the service split lands. */
 /**
  * Durable execution helpers and workflow registry.
  *
@@ -39,10 +40,7 @@ import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
-import type {
-  DurableChatTurnExecutionPayload,
-  DurableChatTurnUserInputResumeRecord,
-} from "./gateway-service.js";
+import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./gateway-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -70,7 +68,10 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     | "recoverDurableDeadLetter"
     | "requestRunProcessing"
   >;
-  readonly hooksService: Pick<HooksService, "executeHookDelivery" | "markHookRunDeadLettered" | "enqueueAfterHooks">;
+  readonly hooksService: Pick<
+    HooksService,
+    "runInlineHooks" | "enqueueAfterHooks" | "executeHookDelivery" | "markHookRunDeadLettered"
+  >;
   readonly memoryLifecycleService: Pick<
     MemoryLifecycleService,
     "parseMaintenanceWorkflowPayload" | "syncMaintenanceFromDurableRun" | "executeMaintenanceDurableRun"
@@ -718,7 +719,8 @@ export async function executeDurableChatTurnRun(
     throw new NotFoundError({ entity: "Chat message", id: payload.userMessageId });
   }
   const resumedContent = buildDurableChatTurnResumeContent(userMessage.content, payload.userInputResponses);
-  const resumedUserMessage = resumedContent === userMessage.content ? userMessage : { ...userMessage, content: resumedContent };
+  const resumedUserMessage =
+    resumedContent === userMessage.content ? userMessage : { ...userMessage, content: resumedContent };
   const request = {
     ...payload.request,
     content: resumedContent,
@@ -898,10 +900,7 @@ function markDurableChatTurnUnrecoverable(
   );
 }
 
-function formatDurableChatTurnResumeEntry(
-  response: DurableChatTurnUserInputResumeRecord,
-  index: number,
-): string {
+function formatDurableChatTurnResumeEntry(response: DurableChatTurnUserInputResumeRecord, index: number): string {
   const lines = [
     `${index}. ${response.title?.trim() || response.question.trim()}`,
     `Question: ${response.question.trim()}`,

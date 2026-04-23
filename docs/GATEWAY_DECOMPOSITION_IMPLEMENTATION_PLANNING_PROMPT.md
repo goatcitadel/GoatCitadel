@@ -316,6 +316,16 @@ Produce a founder-facing summary:
 - If a proposed extraction depends on a doc-claimed authority model that code does not enforce yet, call that out as a prerequisite.
 - Judge extraction readiness by dependency narrowing, state ownership, and testability, not by file count.
 
+## Current Guardrails
+
+Preserve these implementation guardrails while continuing gateway decomposition:
+
+- provider mutation belongs in Settings via `patchSettings.llm.upsertProvider`; do not add new chat-command or gateway-only provider registration paths
+- runtime lifecycle export is a read-only bundle built from current lifecycle truth; do not invent a second trajectory or replay authority to support export
+- new runtime-facing route capabilities should prefer dedicated route services with narrow collaborators over widening `GatewayService`
+- route rewiring only counts as progress when ownership actually moves behind a narrower contract or service-context-backed host
+- trust and operator affordances should surface through existing Mission Control surfaces before any new control-plane pages are introduced
+
 ## Deliverable Goal
 
 Produce an implementation-planning prompt that is good enough to drive:

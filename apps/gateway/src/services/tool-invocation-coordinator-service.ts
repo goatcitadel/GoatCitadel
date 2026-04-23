@@ -13,6 +13,7 @@ import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import type { HooksService } from "./hooks-service.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
+import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
 type ToolCallHookPatch = Record<string, unknown> & {
   toolName?: string;
@@ -309,6 +310,22 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         sessionId: hookableRequest.sessionId,
         taskId: hookableRequest.taskId,
         result,
+      },
+    });
+    runtimeLifecycleHookDispatcher.enqueueObserveHook(this.host.hooksService, {
+      workspaceId: toolHookWorkspaceId,
+      trigger: "after_tool_call",
+      entityType: "tool_call",
+      entityId: toolHookEntityId,
+      payload: {
+        workspaceId: toolHookWorkspaceId,
+        sessionId: hookableRequest.sessionId,
+        taskId: hookableRequest.taskId,
+        approvalId: result.approvalId,
+        toolName: hookableRequest.toolName,
+        outcome: result.outcome,
+        auditEventId: result.auditEventId,
+        policyReason: result.policyReason,
       },
     });
 

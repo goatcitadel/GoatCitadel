@@ -12,16 +12,22 @@ export type HookTrigger =
   | "llm.model.select.before"
   | "llm.request.before"
   | "llm.response.after"
+  | "before_prompt_build"
+  | "llm_input"
+  | "llm_output"
   | "tool.call.before"
   | "tool.call.after"
   | "tool.call.error"
+  | "after_tool_call"
   | "approval.create.before"
   | "approval.resolve.after"
   | "orchestration.run.before"
   | "orchestration.phase.before"
   | "orchestration.phase.after"
   | "orchestration.retry.scheduled"
-  | "orchestration.run.woken";
+  | "orchestration.run.woken"
+  | "before_message_write"
+  | "agent_end";
 
 export type HookDeliveryStatus =
   | "queued"
@@ -81,13 +87,86 @@ export interface OrchestrationPhaseHookPatch {
   requiresApproval?: boolean;
 }
 
+export type RuntimeLifecycleHookTrigger =
+  | "before_prompt_build"
+  | "llm_input"
+  | "llm_output"
+  | "after_tool_call"
+  | "before_message_write"
+  | "agent_end";
+
+export interface RuntimeLifecycleHookBasePayload {
+  workspaceId?: string;
+  sessionId?: string;
+  turnId?: string;
+  runId?: string;
+  taskId?: string;
+  approvalId?: string;
+  providerId?: string;
+  model?: string;
+}
+
+export interface BeforePromptBuildHookPayload extends RuntimeLifecycleHookBasePayload {
+  messageCount: number;
+  memoryEnabled: boolean;
+  hasMemoryContext: boolean;
+}
+
+export interface LlmInputHookPayload extends RuntimeLifecycleHookBasePayload {
+  messageCount: number;
+  toolCount: number;
+  metadataKeys: string[];
+  stream: boolean;
+}
+
+export interface LlmOutputHookPayload extends RuntimeLifecycleHookBasePayload {
+  effectiveProviderId?: string;
+  effectiveModel?: string;
+  fallbackUsed: boolean;
+  stream: boolean;
+  messageCount: number;
+}
+
+export interface AfterToolCallHookPayload extends RuntimeLifecycleHookBasePayload {
+  toolName: string;
+  outcome: string;
+  auditEventId?: string;
+  policyReason?: string;
+}
+
+export interface BeforeMessageWriteHookPayload extends RuntimeLifecycleHookBasePayload {
+  messageId: string;
+  contentLength: number;
+  stream: boolean;
+}
+
+export interface AgentEndHookPayload extends RuntimeLifecycleHookBasePayload {
+  status: string;
+  toolRunCount: number;
+  stream: boolean;
+  repaired: boolean;
+}
+
+export interface RuntimeLifecycleHookPayloadByTrigger {
+  before_prompt_build: BeforePromptBuildHookPayload;
+  llm_input: LlmInputHookPayload;
+  llm_output: LlmOutputHookPayload;
+  after_tool_call: AfterToolCallHookPayload;
+  before_message_write: BeforeMessageWriteHookPayload;
+  agent_end: AgentEndHookPayload;
+}
+
 export interface HookPatchByTrigger {
   "llm.model.select.before": LlmModelSelectHookPatch;
   "llm.request.before": LlmRequestHookPatch;
   "llm.response.after": never;
+  before_prompt_build: never;
+  llm_input: never;
+  llm_output: never;
   "tool.call.before": ToolCallHookPatch;
   "tool.call.after": never;
   "tool.call.error": never;
+  after_tool_call: never;
   "approval.create.before": ApprovalCreateHookPatch;
   "approval.resolve.after": never;
   "orchestration.run.before": OrchestrationRunHookPatch;
@@ -95,6 +174,8 @@ export interface HookPatchByTrigger {
   "orchestration.phase.after": never;
   "orchestration.retry.scheduled": never;
   "orchestration.run.woken": never;
+  before_message_write: never;
+  agent_end: never;
 }
 
 export type HookPatch =
@@ -216,6 +297,12 @@ export interface HookWebhookResponse {
 }
 
 export function deriveHookPhase(trigger: HookTrigger): HookPhase {
+  if (trigger === "before_prompt_build" || trigger === "before_message_write") {
+    return "before";
+  }
+  if (trigger === "llm_input" || trigger === "llm_output" || trigger === "after_tool_call" || trigger === "agent_end") {
+    return "after";
+  }
   if (trigger.endsWith(".before")) {
     return "before";
   }

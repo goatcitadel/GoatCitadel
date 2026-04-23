@@ -215,6 +215,8 @@ export function useChatDelegationPolicyActions(input: {
   draft: string;
   messages: ChatMessageRecord[];
   prefs: ChatSessionPrefsRecord | null;
+  selectedProviderId?: string;
+  selectedModel?: string;
   sending: boolean;
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;
@@ -233,6 +235,8 @@ export function useChatDelegationPolicyActions(input: {
     draft,
     messages,
     prefs,
+    selectedProviderId,
+    selectedModel,
     sending,
     streamEnabled,
     codeModeNeedsProjectBinding,
@@ -311,8 +315,8 @@ export function useChatDelegationPolicyActions(input: {
       const summary = await runChatResearch(session.sessionId, {
         query,
         mode: prefs?.webMode === "deep" ? "deep" : "quick",
-        providerId: prefs?.providerId,
-        model: prefs?.model,
+        providerId: prefs?.providerId ?? selectedProviderId,
+        model: prefs?.model ?? selectedModel,
       });
       pushLocalNotice(`Research summary:\n${summary.summary}\n\nSources: ${summary.sources.length}`, "success");
       setError(null);
@@ -328,6 +332,8 @@ export function useChatDelegationPolicyActions(input: {
     prefs?.model,
     prefs?.providerId,
     prefs?.webMode,
+    selectedModel,
+    selectedProviderId,
     pushLocalNotice,
     sending,
     setError,
@@ -545,12 +551,12 @@ export function useChatDelegationPolicyActions(input: {
         objective,
         roles: graph.roles,
         mode,
-        providerId: prefs?.providerId,
-        model: prefs?.model,
+        providerId: prefs?.providerId ?? selectedProviderId,
+        model: prefs?.model ?? selectedModel,
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
       } satisfies ChatDelegateRequest;
     },
-    [prefs?.model, prefs?.providerId, selectedTurn],
+    [prefs?.model, prefs?.providerId, selectedModel, selectedProviderId, selectedTurn],
   );
 
   const handleAcceptDelegation = useCallback(async () => {

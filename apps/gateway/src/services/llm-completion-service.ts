@@ -30,6 +30,7 @@ import {
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
 } from "./gateway-service.js";
+import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
 type LlmRequestHookPatch = {
   providerId?: string;
@@ -142,6 +143,23 @@ export async function createChatCompletion(
   const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
   let hookableRequest = withContext;
 
+  await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
+    workspaceId: chatHookWorkspaceId,
+    trigger: "before_prompt_build",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      workspaceId: chatHookWorkspaceId,
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: request.providerId,
+      model: request.model,
+      messageCount: request.messages.length,
+      memoryEnabled: useQmd,
+      hasMemoryContext: Boolean(memoryContext),
+    },
+  });
+
   const modelSelectHook = await host.hooksService.runInlineHooks<{
     providerId?: string;
     model?: string;
@@ -204,6 +222,23 @@ export async function createChatCompletion(
   host.persistContextManifestForCompletionRequest({
     request: hookableRequest,
     memoryContext,
+  });
+  await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
+    workspaceId: chatHookWorkspaceId,
+    trigger: "llm_input",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      workspaceId: chatHookWorkspaceId,
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: hookableRequest.providerId,
+      model: hookableRequest.model,
+      messageCount: hookableRequest.messages.length,
+      toolCount: hookableRequest.tools?.length ?? 0,
+      metadataKeys: Object.keys(hookableRequest.metadata ?? {}),
+      stream: false,
+    },
   });
 
   const runtime = host.llmService.getRuntimeConfig({
@@ -408,6 +443,24 @@ export async function createChatCompletion(
     };
   }
   response.routing = routing;
+  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
+    workspaceId: chatHookWorkspaceId,
+    trigger: "llm_output",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      workspaceId: chatHookWorkspaceId,
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: hookableRequest.providerId,
+      model: hookableRequest.model,
+      effectiveProviderId: routing.effectiveProviderId ?? primaryProviderId,
+      effectiveModel: routing.effectiveModel ?? primaryModel,
+      fallbackUsed: routing.fallbackUsed ?? false,
+      stream: false,
+      messageCount: hookableRequest.messages.length,
+    },
+  });
   host.hooksService.enqueueAfterHooks({
     workspaceId: chatHookWorkspaceId,
     trigger: "llm.response.after",
@@ -432,6 +485,8 @@ export async function* createChatCompletionStream(
   host: LlmCompletionHost,
   request: ChatCompletionRequest,
 ): AsyncGenerator<Record<string, unknown>> {
+  const chatHookWorkspaceId = host.resolveChatCompletionHookWorkspaceId(request);
+  const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
   let memoryContext: MemoryContextPack | undefined;
   const memoryInput = request.memory;
   const useQmd =
@@ -469,9 +524,42 @@ export async function* createChatCompletionStream(
         ],
       }
     : request;
+  await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
+    workspaceId: chatHookWorkspaceId,
+    trigger: "before_prompt_build",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      workspaceId: chatHookWorkspaceId,
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: request.providerId,
+      model: request.model,
+      messageCount: request.messages.length,
+      memoryEnabled: useQmd,
+      hasMemoryContext: Boolean(memoryContext),
+    },
+  });
   host.persistContextManifestForCompletionRequest({
     request: withContext,
     memoryContext,
+  });
+  await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
+    workspaceId: chatHookWorkspaceId,
+    trigger: "llm_input",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      workspaceId: chatHookWorkspaceId,
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: withContext.providerId,
+      model: withContext.model,
+      messageCount: withContext.messages.length,
+      toolCount: withContext.tools?.length ?? 0,
+      metadataKeys: Object.keys(withContext.metadata ?? {}),
+      stream: true,
+    },
   });
 
   const runtime = host.llmService.getRuntimeConfig({
@@ -636,6 +724,24 @@ export async function* createChatCompletionStream(
     fallbackProviderId: routing.fallbackProviderId,
     fallbackModel: routing.fallbackModel,
     fallbackReason: routing.fallbackReason,
+  });
+  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
+    workspaceId: chatHookWorkspaceId,
+    trigger: "llm_output",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      workspaceId: chatHookWorkspaceId,
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: withContext.providerId,
+      model: withContext.model,
+      effectiveProviderId: routing.effectiveProviderId ?? primaryProviderId,
+      effectiveModel: routing.effectiveModel ?? primaryModel,
+      fallbackUsed: routing.fallbackUsed ?? false,
+      stream: true,
+      messageCount: withContext.messages.length,
+    },
   });
 
   const finalChunk: Record<string, unknown> = {

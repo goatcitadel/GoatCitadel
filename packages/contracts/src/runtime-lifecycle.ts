@@ -8,7 +8,7 @@ import type {
   ChatTurnTraceRecord,
 } from "./chat.js";
 import type { DurableRunRecord } from "./durable.js";
-import type { SessionMeta, SessionSummary } from "./session.js";
+import type { SessionMeta, SessionSummary, SessionTimelineItem, TranscriptEvent } from "./session.js";
 import type { TaskRecord } from "./tasks.js";
 import type { ProactiveRunRecord } from "./proactive.js";
 
@@ -18,6 +18,12 @@ export interface RuntimeLifecycleQuery {
   runId?: string;
   approvalId?: string;
   taskId?: string;
+}
+
+export interface RuntimeLifecycleExportQuery extends RuntimeLifecycleQuery {
+  includeTranscript?: boolean;
+  includeTimeline?: boolean;
+  timelineLimit?: number;
 }
 
 export interface RuntimeLifecycleTurnSummary extends Pick<
@@ -166,4 +172,34 @@ export interface RuntimeLifecycleResponse {
   executionPlans?: RuntimeLifecycleExecutionPlanSummary[];
   delegationRuns?: RuntimeLifecycleDelegationRunSummary[];
   delegationSteps?: RuntimeLifecycleDelegationStepSummary[];
+}
+
+export interface RuntimeLifecycleExportBundleStats {
+  linkedSessionCount: number;
+  linkedTurnCount: number;
+  linkedRunCount: number;
+  linkedApprovalCount: number;
+  linkedTaskCount: number;
+  turnCount: number;
+  toolRunCount: number;
+  executionPlanCount: number;
+  delegationRunCount: number;
+  delegationStepCount: number;
+  proactiveRunCount: number;
+  approvalEffectCount: number;
+  transcriptEventCount: number;
+  timelineEventCount: number;
+}
+
+export interface RuntimeLifecycleExportBundle extends RuntimeLifecycleResponse {
+  export: {
+    version: "runtime.lifecycle.export.v1";
+    exportedAt: string;
+    includeTranscript: boolean;
+    includeTimeline: boolean;
+    timelineLimit: number;
+  };
+  transcript?: TranscriptEvent[];
+  timeline?: SessionTimelineItem[];
+  stats: RuntimeLifecycleExportBundleStats;
 }

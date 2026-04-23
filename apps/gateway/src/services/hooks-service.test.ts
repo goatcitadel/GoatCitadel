@@ -421,6 +421,33 @@ describe("HooksService", () => {
     expect(queued[0]?.durableRunId).toBeUndefined();
     expect(requestedRunIds).toEqual([]);
   });
+
+  it("keeps runtime lifecycle triggers observe-only and phases them correctly", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: {
+        hooks: {
+          allowMutatingHooks: true,
+        },
+      },
+    });
+
+    expect(deriveHookPhase("before_prompt_build")).toBe("before");
+    expect(deriveHookPhase("agent_end")).toBe("after");
+    expect(() =>
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "agent-end-mutate",
+        trigger: "agent_end",
+        mode: "mutate",
+        action: {
+          type: "webhook",
+          webhook: {
+            url: "https://hooks.example.test/agent-end",
+          },
+        },
+      }),
+    ).toThrow(/observe hooks/i);
+  });
 });
 
 function createHarness(input?: {

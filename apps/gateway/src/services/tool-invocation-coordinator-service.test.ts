@@ -228,6 +228,32 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
+  it("emits runtime after_tool_call hooks with the final tool outcome", async () => {
+    const enqueueAfterHooks = vi.fn();
+    const host = createHost({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({ runs: [] })),
+        enqueueAfterHooks,
+      },
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const result = await coordinator.invokeTool(createToolRequest());
+
+    expect(result.outcome).toBe("executed");
+    expect(enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "after_tool_call",
+        payload: expect.objectContaining({
+          toolName: "shell.exec",
+          outcome: "executed",
+          auditEventId: "audit-1",
+          policyReason: "allowed",
+        }),
+      }),
+    );
+  });
+
   it("blocks MCP first-use execution before runtime invocation", async () => {
     const invokeMcpRuntimeTool = vi.fn();
     const host = createHost({

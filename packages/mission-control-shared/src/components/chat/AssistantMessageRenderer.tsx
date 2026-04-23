@@ -70,6 +70,7 @@ export function AssistantMessageRenderer({
   running?: boolean;
   className?: string;
 }) {
+  const displayContent = role === "assistant" ? decodeJsonUnicodeEscapes(content) : content;
   const shouldUseFallback =
     typeof window === "undefined" ||
     typeof document === "undefined" ||
@@ -80,21 +81,23 @@ export function AssistantMessageRenderer({
   if (shouldUseFallback) {
     return (
       <div className={cn("mc-assistant-renderer mc-assistant-renderer-fallback", className)}>
-        <AssistantMessageContainer role={role} content={content}>
+        <AssistantMessageContainer role={role} content={displayContent}>
           <div
             className={cn(
               "mc-assistant-markdown",
               role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
             )}
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
           </div>
         </AssistantMessageContainer>
       </div>
     );
   }
 
-  return <AssistantMessageRuntimeRenderer role={role} content={content} running={running} className={className} />;
+  return (
+    <AssistantMessageRuntimeRenderer role={role} content={displayContent} running={running} className={className} />
+  );
 }
 
 function AssistantMessageRuntimeRenderer({
@@ -229,4 +232,13 @@ async function copyTextToClipboard(content: string): Promise<void> {
   textArea.select();
   document.execCommand("copy");
   document.body.removeChild(textArea);
+}
+
+function decodeJsonUnicodeEscapes(content: string): string {
+  if (!/\\u[0-9a-fA-F]{4}/.test(content)) {
+    return content;
+  }
+  return content.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
 }

@@ -2231,8 +2231,10 @@ function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: st
   if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
   else payload.max_tokens = 1024;
   if (request.stop !== undefined) payload.stop_sequences = Array.isArray(request.stop) ? request.stop : [request.stop];
-  if (request.tools !== undefined) payload.tools = request.tools;
-  if (request.tool_choice !== undefined) payload.tool_choice = request.tool_choice;
+  const anthropicTools = mapAnthropicTools(request.tools);
+  if (anthropicTools !== undefined) payload.tools = anthropicTools;
+  const anthropicToolChoice = mapAnthropicToolChoice(request.tool_choice);
+  if (anthropicToolChoice !== undefined) payload.tool_choice = anthropicToolChoice;
   if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
   if (request.metadata !== undefined) payload.metadata = request.metadata;
   if (request.reasoning?.effort && request.reasoning.effort !== "none") {
@@ -2242,6 +2244,56 @@ function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: st
     };
   }
   return payload;
+}
+
+function mapAnthropicTools(tools: ChatCompletionRequest["tools"]): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(tools)) {
+    return undefined;
+  }
+  return tools
+    .map((tool) => {
+      if (!isRecord(tool)) {
+        return undefined;
+      }
+      if (typeof tool.name === "string" && isRecord(tool.input_schema)) {
+        return tool;
+      }
+      if (tool.type !== "function" || !isRecord(tool.function)) {
+        return tool;
+      }
+      const fn = tool.function;
+      const name = typeof fn.name === "string" ? fn.name : "";
+      if (!name) {
+        return undefined;
+      }
+      return {
+        name,
+        description: typeof fn.description === "string" ? fn.description : undefined,
+        input_schema: isRecord(fn.parameters) ? fn.parameters : { type: "object", properties: {} },
+      };
+    })
+    .filter((tool): tool is Record<string, unknown> => Boolean(tool));
+}
+
+function mapAnthropicToolChoice(toolChoice: ChatCompletionRequest["tool_choice"]): Record<string, unknown> | undefined {
+  if (toolChoice === undefined) {
+    return undefined;
+  }
+  if (typeof toolChoice === "string") {
+    if (toolChoice === "none") {
+      return undefined;
+    }
+    if (toolChoice === "required") {
+      return { type: "any" };
+    }
+    return { type: toolChoice };
+  }
+  if (isRecord(toolChoice) && toolChoice.type === "function") {
+    const fn = isRecord(toolChoice.function) ? toolChoice.function : undefined;
+    const name = typeof fn?.name === "string" ? fn.name : typeof toolChoice.name === "string" ? toolChoice.name : "";
+    return name ? { type: "tool", name } : { type: "auto" };
+  }
+  return toolChoice;
 }
 
 function buildAnthropicMessagesInput(messages: ChatCompletionRequest["messages"]): {

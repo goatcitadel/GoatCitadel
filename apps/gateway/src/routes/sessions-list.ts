@@ -10,13 +10,15 @@ const timelineQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
 
-const runtimeLifecycleQuerySchema = z.object({
+const runtimeLifecycleIdentifierSchema = z.object({
   sessionId: z.string().trim().min(1).optional(),
   turnId: z.string().trim().min(1).optional(),
   runId: z.string().trim().min(1).optional(),
   approvalId: z.string().trim().min(1).optional(),
   taskId: z.string().trim().min(1).optional(),
-}).refine(
+});
+
+const runtimeLifecycleQuerySchema = runtimeLifecycleIdentifierSchema.refine(
   (value) => Boolean(value.sessionId || value.turnId || value.runId || value.approvalId || value.taskId),
   {
     message: "Provide at least one lifecycle identifier.",
@@ -24,13 +26,32 @@ const runtimeLifecycleQuerySchema = z.object({
   },
 );
 
+const runtimeLifecycleExportQuerySchema = runtimeLifecycleIdentifierSchema
+  .extend({
+    includeTranscript: z.coerce.boolean().optional(),
+    includeTimeline: z.coerce.boolean().optional(),
+    timelineLimit: z.coerce.number().int().positive().max(1000).optional(),
+  })
+  .refine((value) => Boolean(value.sessionId || value.turnId || value.runId || value.approvalId || value.taskId), {
+    message: "Provide at least one lifecycle identifier.",
+    path: ["sessionId"],
+  });
+
 export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/runtime/lifecycle", async (request, reply) => {
     const parsed = runtimeLifecycleQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.getRuntimeLifecycle(parsed.data));
+    return reply.send(await fastify.services.runtimeLifecycle.getLifecycle(parsed.data));
+  });
+
+  fastify.get("/api/v1/runtime/lifecycle/export", async (request, reply) => {
+    const parsed = runtimeLifecycleExportQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await fastify.services.runtimeLifecycle.exportLifecycle(parsed.data));
   });
 
   fastify.get("/api/v1/sessions", async (request, reply) => {
@@ -41,9 +62,7 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
 
     const items = fastify.gateway.listSessions(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
-    const nextCursor = items.length === parsed.data.limit && last
-      ? `${last.updatedAt}|${last.sessionId}`
-      : undefined;
+    const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
 
     return reply.send({ items, nextCursor });
   });

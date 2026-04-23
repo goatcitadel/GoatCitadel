@@ -80,6 +80,28 @@ describe("streamPreparedAgentChatTurn", () => {
         postRepairContent: "Recovered empty assistant output.",
       },
     });
+    expect(host.hooksService.runInlineHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "before_message_write",
+        payload: expect.objectContaining({
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          contentLength: "Recovered empty assistant output.".length,
+          stream: true,
+        }),
+      }),
+    );
+    expect(host.hooksService.enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "agent_end",
+        payload: expect.objectContaining({
+          turnId: "turn-1",
+          status: "completed",
+          stream: true,
+          repaired: true,
+        }),
+      }),
+    );
     expect(chunks.at(-1)).toEqual(
       expect.objectContaining({
         type: "done",
@@ -94,6 +116,10 @@ function createHost(): ChatTurnStreamHost & {
       get: (turnId: string) => ChatTurnTraceRecord;
       patch: ReturnType<typeof vi.fn>;
     };
+  };
+  hooksService: {
+    runInlineHooks: ReturnType<typeof vi.fn>;
+    enqueueAfterHooks: ReturnType<typeof vi.fn>;
   };
 } {
   let trace: ChatTurnTraceRecord = {
@@ -148,6 +174,10 @@ function createHost(): ChatTurnStreamHost & {
     turnRuntime: {
       runStream: vi.fn(async function* () {}),
     },
+    hooksService: {
+      runInlineHooks: vi.fn(async () => ({ runs: [] })),
+      enqueueAfterHooks: vi.fn(),
+    } as never,
     resolvePreparedTurnOrchestration: vi.fn(async () => undefined),
     createChatCompletion: vi.fn(),
     recordDevDiagnostic: vi.fn(),
@@ -174,6 +204,10 @@ function createHost(): ChatTurnStreamHost & {
         get: (turnId: string) => ChatTurnTraceRecord;
         patch: ReturnType<typeof vi.fn>;
       };
+    };
+    hooksService: {
+      runInlineHooks: ReturnType<typeof vi.fn>;
+      enqueueAfterHooks: ReturnType<typeof vi.fn>;
     };
   };
 }

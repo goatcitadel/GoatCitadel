@@ -346,7 +346,13 @@ function ThreadDelegationSummary({
                 <strong>{toTitleCase(step.role)}</strong>
                 <span>{step.status}</span>
               </div>
-              {step.output ? <p>{step.output}</p> : null}
+              {step.output ? (
+                <AssistantMessageRenderer
+                  role="assistant"
+                  content={step.output}
+                  className="mc-next-thread-step-output"
+                />
+              ) : null}
               {step.error ? <p>{step.error}</p> : null}
             </li>
           ))}

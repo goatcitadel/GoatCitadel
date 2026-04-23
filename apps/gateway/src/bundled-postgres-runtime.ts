@@ -38,9 +38,7 @@ export async function ensureBundledPostgresRuntime(
 
   const nativeRuntime = await tryStartNativeBundledPostgres(config);
   if (nativeRuntime) {
-    // `pg_ctl -w start` already blocks until Postgres is accepting
-    // connections, so a second readiness wait here only adds avoidable delay
-    // and can race with dev restarts on Windows.
+    await waitForBundledPostgres(config);
     await ensureDatabaseExists(config);
     return nativeRuntime;
   }
@@ -89,14 +87,13 @@ async function tryStartNativeBundledPostgres(
         dataDir,
         "-l",
         logFile,
-        "-w",
         "start",
         "-o",
         `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
       ],
       {
         encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: "ignore",
       },
     );
   } catch (error) {

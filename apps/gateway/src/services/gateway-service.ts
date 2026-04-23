@@ -2020,6 +2020,7 @@ export class GatewayService {
       collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
       publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
+      hooksService: this.hooksService,
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),

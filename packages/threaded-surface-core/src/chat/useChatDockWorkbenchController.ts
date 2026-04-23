@@ -1,7 +1,7 @@
-import type { ChatMessageRecord, ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
+import type { ChatMessageRecord, ChatMode, ChatThreadResponse, OrchestrationRun } from "@goatcitadel/contracts";
+import type { OrchestrationCheckpointRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
-import { fetchOrchestrationRun, fetchOrchestrationRunCheckpoints } from "@goatcitadel/mission-control-shared/api/platform";
 import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/cowork-view-model";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
 import { deriveCoworkItems } from "./chat-page-derivations";
@@ -26,12 +26,8 @@ export function useChatDockWorkbenchController(input: {
   const [dockOpen, setDockOpen] = useState<boolean>(() =>
     defaultDockOpenForMode(input.messageMode, getViewportWidth()),
   );
-  const [orchestrationRun, setOrchestrationRun] = useState<Awaited<ReturnType<typeof fetchOrchestrationRun>> | null>(
-    null,
-  );
-  const [orchestrationCheckpoints, setOrchestrationCheckpoints] = useState<
-    Awaited<ReturnType<typeof fetchOrchestrationRunCheckpoints>>["items"]
-  >([]);
+  const [orchestrationRun, setOrchestrationRun] = useState<OrchestrationRun | null>(null);
+  const [orchestrationCheckpoints, setOrchestrationCheckpoints] = useState<OrchestrationCheckpointRecord[]>([]);
   const [orchestrationLoading, setOrchestrationLoading] = useState(false);
   const [orchestrationError, setOrchestrationError] = useState<string | null>(null);
 
@@ -75,53 +71,12 @@ export function useChatDockWorkbenchController(input: {
     () => activeWorkflowTurn?.trace.orchestration ?? input.thread?.turns.at(-1)?.trace.orchestration,
     [activeWorkflowTurn, input.thread],
   );
-  const canonicalOrchestrationRunId = latestOrchestration?.runId?.trim() || undefined;
-
   const refreshOrchestrationRun = useCallback(async () => {
-    if (input.messageMode !== "cowork" || !canonicalOrchestrationRunId) {
-      setOrchestrationRun(null);
-      setOrchestrationCheckpoints([]);
-      setOrchestrationLoading(false);
-      setOrchestrationError(null);
-      return;
-    }
-
-    setOrchestrationLoading(true);
+    setOrchestrationRun(null);
+    setOrchestrationCheckpoints([]);
+    setOrchestrationLoading(false);
     setOrchestrationError(null);
-    try {
-      const [runResult, checkpointResult] = await Promise.allSettled([
-        fetchOrchestrationRun(canonicalOrchestrationRunId),
-        fetchOrchestrationRunCheckpoints(canonicalOrchestrationRunId),
-      ]);
-
-      if (runResult.status === "fulfilled") {
-        setOrchestrationRun(runResult.value);
-      }
-      if (checkpointResult.status === "fulfilled") {
-        setOrchestrationCheckpoints(checkpointResult.value.items);
-      }
-
-      if (runResult.status === "rejected" || checkpointResult.status === "rejected") {
-        const failedParts = [
-          ...(runResult.status === "rejected" ? ["run"] : []),
-          ...(checkpointResult.status === "rejected" ? ["checkpoints"] : []),
-        ];
-        const prefix =
-          failedParts.length === 2
-            ? "Orchestration refresh failed while loading "
-            : "Orchestration refresh partially failed while loading ";
-        const suffix =
-          failedParts.length === 2
-            ? "run data and checkpoints."
-            : failedParts[0] === "run"
-              ? "run data."
-              : "checkpoints.";
-        setOrchestrationError(`${prefix}${suffix}`);
-      }
-    } finally {
-      setOrchestrationLoading(false);
-    }
-  }, [canonicalOrchestrationRunId, input.messageMode]);
+  }, []);
 
   useEffect(() => {
     void refreshOrchestrationRun();
@@ -133,7 +88,7 @@ export function useChatDockWorkbenchController(input: {
       await refreshOrchestrationRun();
     },
     {
-      enabled: input.messageMode === "cowork" && Boolean(canonicalOrchestrationRunId),
+      enabled: false,
       coalesceMs: 800,
       staleMs: 20_000,
       pollIntervalMs: 15_000,

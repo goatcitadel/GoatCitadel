@@ -1238,6 +1238,80 @@ describe("LlmService", () => {
     });
   });
 
+  it("maps OpenAI-style tool_choice values for Anthropic Messages payloads", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "anthropic",
+      providers: [
+        {
+          providerId: "anthropic",
+          label: "Anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+          apiKeyEnv: "ANTHROPIC_API_KEY",
+        },
+      ],
+    };
+
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        ANTHROPIC_API_KEY: "anthropic-secret",
+      },
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "msg_native_anthropic_tool_choice",
+          model: "claude-sonnet-4-6",
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_weather",
+              description: "Look up weather.",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        tool_choice: "auto",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody?.tool_choice).toEqual({ type: "auto" });
+    expect(payloadBody?.tools).toEqual([
+      {
+        name: "lookup_weather",
+        description: "Look up weather.",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
   it("round-trips tool calls and tool results through OpenAI Responses and dedupes duplicate call ids", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",

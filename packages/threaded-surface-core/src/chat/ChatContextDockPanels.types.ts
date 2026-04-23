@@ -117,6 +117,7 @@ export interface ChatContextDockPanelsProps {
   onDeleteSession: () => void;
   onAssignProject: (value: string) => Promise<void>;
   onExportSnapshot: () => void;
+  onExportRunBundle?: () => void;
   onIntegrationConnectionIdChange: (value: string) => void;
   onIntegrationTargetChange: (value: string) => void;
   onSaveExternalBinding: () => Promise<void>;

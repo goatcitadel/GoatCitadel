@@ -53,7 +53,11 @@ export function ThreadedContextDrawer({
               <StatusChip tone="muted">{formatSelectionSource(props.routePreflight?.selectionSource)}</StatusChip>
             </div>
             <div className="mc-next-context-actions">
-              <button type="button" className="mc-next-panel-button" onClick={() => props.onStreamEnabledChange(!props.streamEnabled)}>
+              <button
+                type="button"
+                className="mc-next-panel-button"
+                onClick={() => props.onStreamEnabledChange(!props.streamEnabled)}
+              >
                 {props.streamEnabled ? "Disable streaming" : "Enable streaming"}
               </button>
               {props.selectedProviderId ? (
@@ -99,17 +103,47 @@ export function ThreadedContextDrawer({
                 <p className="mc-next-panel-kicker">Turn trace</p>
                 <h4>{props.selectedTurn.turnId}</h4>
                 <div className="mc-next-context-chip-row">
-                  <StatusChip tone={props.selectedTurn.trace.status === "failed" ? "critical" : props.selectedTurn.trace.status === "completed" ? "success" : "warning"}>
+                  <StatusChip
+                    tone={
+                      props.selectedTurn.trace.status === "failed"
+                        ? "critical"
+                        : props.selectedTurn.trace.status === "completed"
+                          ? "success"
+                          : "warning"
+                    }
+                  >
                     {props.selectedTurn.trace.status}
                   </StatusChip>
-                  {props.selectedTurn.trace.routing.fallbackUsed ? <StatusChip tone="warning">Fallback used</StatusChip> : null}
+                  {props.selectedTurn.trace.routing.fallbackUsed ? (
+                    <StatusChip tone="warning">Fallback used</StatusChip>
+                  ) : null}
                 </div>
                 <p>{props.selectedTurn.trace.failure?.message ?? "No failure recorded for this turn."}</p>
+                {props.onExportRunBundle ? (
+                  <div className="mc-next-context-actions">
+                    <button type="button" className="mc-next-panel-button" onClick={props.onExportRunBundle}>
+                      Export run bundle
+                    </button>
+                  </div>
+                ) : null}
               </section>
               <section className="mc-next-context-card">
                 <p className="mc-next-panel-kicker">Routing</p>
-                <p>Primary: {[props.selectedTurn.trace.routing.primaryProviderId, props.selectedTurn.trace.routing.primaryModel].filter(Boolean).join(" / ") || "n/a"}</p>
-                <p>Effective: {[props.selectedTurn.trace.routing.effectiveProviderId, props.selectedTurn.trace.routing.effectiveModel].filter(Boolean).join(" / ") || "n/a"}</p>
+                <p>
+                  Primary:{" "}
+                  {[props.selectedTurn.trace.routing.primaryProviderId, props.selectedTurn.trace.routing.primaryModel]
+                    .filter(Boolean)
+                    .join(" / ") || "n/a"}
+                </p>
+                <p>
+                  Effective:{" "}
+                  {[
+                    props.selectedTurn.trace.routing.effectiveProviderId,
+                    props.selectedTurn.trace.routing.effectiveModel,
+                  ]
+                    .filter(Boolean)
+                    .join(" / ") || "n/a"}
+                </p>
                 <p>{props.selectedTurn.trace.routing.fallbackReason ?? "No fallback reason recorded."}</p>
               </section>
             </>
@@ -140,7 +174,11 @@ export function ThreadedContextDrawer({
                   <li key={`${suggestion.kind}-${suggestion.title}`}>
                     <strong>{suggestion.title}</strong>
                     <p>{suggestion.summary}</p>
-                    <button type="button" className="mc-next-panel-button" onClick={() => props.onCapabilitySuggestionAction(suggestion)}>
+                    <button
+                      type="button"
+                      className="mc-next-panel-button"
+                      onClick={() => props.onCapabilitySuggestionAction(suggestion)}
+                    >
                       Review suggestion
                     </button>
                   </li>
@@ -158,10 +196,18 @@ export function ThreadedContextDrawer({
                     <strong>{suggestion.title}</strong>
                     <p>{suggestion.summary}</p>
                     <div className="mc-next-context-actions">
-                      <button type="button" className="mc-next-panel-button" onClick={() => void props.onCreateSpecialistDraft(suggestion)}>
+                      <button
+                        type="button"
+                        className="mc-next-panel-button"
+                        onClick={() => void props.onCreateSpecialistDraft(suggestion)}
+                      >
                         Draft
                       </button>
-                      <button type="button" className="mc-next-panel-button" onClick={() => void props.onActivateCatalogSpecialist(suggestion)}>
+                      <button
+                        type="button"
+                        className="mc-next-panel-button"
+                        onClick={() => void props.onActivateCatalogSpecialist(suggestion)}
+                      >
                         Activate
                       </button>
                     </div>
@@ -180,17 +226,29 @@ export function ThreadedContextDrawer({
                     <strong>{item.content}</strong>
                     <p>{item.status}</p>
                     <div className="mc-next-context-actions">
-                      <button type="button" className="mc-next-panel-button" onClick={() => void props.onUpdateMemoryStatus(item.itemId, "active")}>
+                      <button
+                        type="button"
+                        className="mc-next-panel-button"
+                        onClick={() => void props.onUpdateMemoryStatus(item.itemId, "active")}
+                      >
                         Keep active
                       </button>
-                      <button type="button" className="mc-next-panel-button" onClick={() => void props.onUpdateMemoryStatus(item.itemId, "superseded")}>
+                      <button
+                        type="button"
+                        className="mc-next-panel-button"
+                        onClick={() => void props.onUpdateMemoryStatus(item.itemId, "superseded")}
+                      >
                         Mark stale
                       </button>
                     </div>
                   </li>
                 ))}
               </ul>
-              <button type="button" className="mc-next-panel-button" onClick={() => void props.onRebuildLearnedMemory()}>
+              <button
+                type="button"
+                className="mc-next-panel-button"
+                onClick={() => void props.onRebuildLearnedMemory()}
+              >
                 Rebuild learned memory
               </button>
             </section>
@@ -204,19 +262,34 @@ export function ThreadedContextDrawer({
             <p className="mc-next-panel-kicker">Session</p>
             <label className="mc-next-context-field">
               <span>Rename</span>
-              <input value={props.renameTitle} onChange={(event) => props.onRenameTitleChange(event.target.value)} placeholder={props.selectedSession.title ?? "Session title"} />
+              <input
+                value={props.renameTitle}
+                onChange={(event) => props.onRenameTitleChange(event.target.value)}
+                placeholder={props.selectedSession.title ?? "Session title"}
+              />
             </label>
             <label className="mc-next-context-field">
               <span>Folder</span>
-              <input value={props.folderName} onChange={(event) => props.onFolderNameChange(event.target.value)} placeholder="Folder" />
+              <input
+                value={props.folderName}
+                onChange={(event) => props.onFolderNameChange(event.target.value)}
+                placeholder="Folder"
+              />
             </label>
             <label className="mc-next-context-field">
               <span>Tags</span>
-              <input value={props.tagsValue} onChange={(event) => props.onTagsValueChange(event.target.value)} placeholder="tag-one, tag-two" />
+              <input
+                value={props.tagsValue}
+                onChange={(event) => props.onTagsValueChange(event.target.value)}
+                placeholder="tag-one, tag-two"
+              />
             </label>
             <label className="mc-next-context-field">
               <span>Project</span>
-              <select value={props.selectedSessionProjectValue} onChange={(event) => void props.onAssignProject(event.target.value)}>
+              <select
+                value={props.selectedSessionProjectValue}
+                onChange={(event) => void props.onAssignProject(event.target.value)}
+              >
                 {projectOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
@@ -225,7 +298,11 @@ export function ThreadedContextDrawer({
               </select>
             </label>
             <div className="mc-next-context-actions">
-              <button type="button" className="mc-next-panel-button primary" onClick={() => void props.onRenameSession()}>
+              <button
+                type="button"
+                className="mc-next-panel-button primary"
+                onClick={() => void props.onRenameSession()}
+              >
                 Save title
               </button>
               <button type="button" className="mc-next-panel-button" onClick={() => void props.onSaveOrganization()}>
@@ -234,7 +311,11 @@ export function ThreadedContextDrawer({
               <button type="button" className="mc-next-panel-button" onClick={() => void props.onTogglePinSession()}>
                 {props.selectedSession.pinned ? "Unpin" : "Pin"}
               </button>
-              <button type="button" className="mc-next-panel-button" onClick={() => void props.onToggleArchiveSession()}>
+              <button
+                type="button"
+                className="mc-next-panel-button"
+                onClick={() => void props.onToggleArchiveSession()}
+              >
                 {props.selectedSession.lifecycleStatus === "archived" ? "Restore" : "Archive"}
               </button>
             </div>
@@ -252,11 +333,19 @@ export function ThreadedContextDrawer({
             <p className="mc-next-panel-kicker">External binding</p>
             <label className="mc-next-context-field">
               <span>Connection</span>
-              <input value={props.integrationConnectionId} onChange={(event) => props.onIntegrationConnectionIdChange(event.target.value)} placeholder="Connection id" />
+              <input
+                value={props.integrationConnectionId}
+                onChange={(event) => props.onIntegrationConnectionIdChange(event.target.value)}
+                placeholder="Connection id"
+              />
             </label>
             <label className="mc-next-context-field">
               <span>Target</span>
-              <input value={props.integrationTarget} onChange={(event) => props.onIntegrationTargetChange(event.target.value)} placeholder="Target thread / channel" />
+              <input
+                value={props.integrationTarget}
+                onChange={(event) => props.onIntegrationTargetChange(event.target.value)}
+                placeholder="Target thread / channel"
+              />
             </label>
             <button type="button" className="mc-next-panel-button" onClick={() => void props.onSaveExternalBinding()}>
               Save binding
