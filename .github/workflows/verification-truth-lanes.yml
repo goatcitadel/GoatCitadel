@@ -27,6 +27,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   truth-lanes:
     runs-on: ubuntu-latest

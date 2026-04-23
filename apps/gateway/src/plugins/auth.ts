@@ -373,14 +373,7 @@ function readQueryToken(query: unknown, queryParam: string): string | undefined 
 }
 
 function readBearerToken(header: string | string[] | undefined): string | undefined {
-  if (!header || Array.isArray(header)) {
-    return undefined;
-  }
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    return undefined;
-  }
-  const token = match[1]?.trim();
+  const token = readAuthorizationSchemeValue(header, "bearer");
   if (!token || token.length === 0 || token.length > MAX_AUTH_TOKEN_LENGTH) {
     return undefined;
   }
@@ -390,15 +383,12 @@ function readBearerToken(header: string | string[] | undefined): string | undefi
 function readBasicCredentials(
   header: string | string[] | undefined,
 ): { username: string; password: string } | undefined {
-  if (!header || Array.isArray(header)) {
-    return undefined;
-  }
-  const match = header.match(/^Basic\s+(.+)$/i);
-  if (!match) {
+  const encoded = readAuthorizationSchemeValue(header, "basic");
+  if (!encoded) {
     return undefined;
   }
   try {
-    const decoded = Buffer.from(match[1] ?? "", "base64").toString("utf8");
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
     if (decoded.length > MAX_BASIC_CREDENTIAL_LENGTH) {
       return undefined;
     }
@@ -413,6 +403,28 @@ function readBasicCredentials(
   } catch {
     return undefined;
   }
+}
+
+function readAuthorizationSchemeValue(
+  header: string | string[] | undefined,
+  scheme: "basic" | "bearer",
+): string | undefined {
+  if (!header || Array.isArray(header) || header.length <= scheme.length) {
+    return undefined;
+  }
+  const providedScheme = header.slice(0, scheme.length);
+  if (providedScheme.toLowerCase() !== scheme) {
+    return undefined;
+  }
+  if (!isAsciiWhitespaceCode(header.charCodeAt(scheme.length))) {
+    return undefined;
+  }
+  const value = header.slice(scheme.length + 1).trim();
+  return value.length > 0 ? value : undefined;
+}
+
+function isAsciiWhitespaceCode(code: number): boolean {
+  return code === 9 || code === 10 || code === 11 || code === 12 || code === 13 || code === 32;
 }
 
 function isLoopbackAddress(ip: string): boolean {

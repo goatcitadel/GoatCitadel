@@ -77,7 +77,11 @@ export interface GatewayStartupTiming {
 
 export function normalizeGatewayBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();
-  return trimmed.replace(/\/+$/u, "");
+  let end = trimmed.length;
+  while (end > 0 && trimmed.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return trimmed.slice(0, end);
 }
 
 export function buildGatewayUrl(path: string, baseUrl = API_BASE): string {

@@ -19,6 +19,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   catalog-parity:
     runs-on: ubuntu-latest

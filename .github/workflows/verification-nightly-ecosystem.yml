@@ -5,6 +5,9 @@ on:
     - cron: "47 9 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   nightly-ecosystem:
     runs-on: ubuntu-latest

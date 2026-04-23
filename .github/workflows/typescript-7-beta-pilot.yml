@@ -15,6 +15,9 @@ on:
       - "packages/**/package.json"
       - "packages/**/tsconfig*.json"
 
+permissions:
+  contents: read
+
 jobs:
   benchmark:
     name: Experimental TS7 Benchmark

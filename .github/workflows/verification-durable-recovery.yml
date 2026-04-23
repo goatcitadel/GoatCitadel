@@ -20,6 +20,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   durable-recovery:
     runs-on: ubuntu-latest

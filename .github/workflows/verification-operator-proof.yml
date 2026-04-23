@@ -21,6 +21,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   operator-proof:
     runs-on: ubuntu-latest

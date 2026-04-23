@@ -19,6 +19,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   backup-roundtrip:
     runs-on: ubuntu-latest

@@ -133,6 +133,43 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
       auth,
     },
   } as never);
+  app.decorate("services", {
+    authAdmin: {
+      getAuthCredentialPlan: () => ({
+        mode: auth.mode,
+        warnings: [],
+        token: {
+          configured: Boolean(auth.token.value?.trim()),
+          source: auth.mode === "token" ? "env" : "none",
+        },
+        basicUsername: {
+          configured: Boolean(auth.basic.username?.trim()),
+          source: auth.mode === "basic" ? "env" : "none",
+        },
+        basicPassword: {
+          configured: Boolean(auth.basic.password?.trim()),
+          source: auth.mode === "basic" ? "env" : "none",
+        },
+      }),
+      resolveGatewayInstallToken: async () => ({
+        token: "install-token-1",
+        source: "env",
+        persistedToEnv: false,
+        warnings: [],
+      }),
+      createDeviceAccessRequest: app.gateway.createDeviceAccessRequest,
+      getDeviceAccessRequestStatus: app.gateway.getDeviceAccessRequestStatus,
+      exchangeCompanionSessionFromDeviceGrant: app.gateway.exchangeCompanionSessionFromDeviceGrant,
+      rotateCompanionSession: app.gateway.rotateCompanionSession,
+      getCompanionSessionInfo: app.gateway.getCompanionSessionInfo,
+      listCompanionSessions: () => [],
+      getCompanionSessionRecord: () => undefined,
+      revokeCompanionSession: async () => ({ revoked: true }),
+      listCompanionAuditEvents: async () => [],
+      listDeviceAccessGrants: () => [],
+      revokeDeviceAccessGrant: async (grantId: string) => ({ grantId }),
+    },
+  } as never);
 
   await app.register(authPlugin);
   await app.register(authRoutes);
@@ -199,6 +236,26 @@ describe("auth plugin", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       ok: true,
+      actorSource: "token",
+    });
+  });
+
+  it("accepts case-insensitive bearer auth with extra whitespace", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: {
+        Authorization: "bEaReR   alpha-token   ",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
       actorSource: "token",
     });
   });
@@ -326,6 +383,24 @@ describe("auth plugin", () => {
       },
     });
     expect(invalid.statusCode).toBe(401);
+  });
+
+  it("accepts case-insensitive basic auth with extra whitespace", async () => {
+    app = await buildApp({
+      mode: "basic",
+      basic: { username: "goat", password: "citadel" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/protected",
+      headers: {
+        Authorization: `bAsIc   ${Buffer.from("goat:citadel", "utf8").toString("base64")}   `,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ actorSource: "basic" });
   });
 
   it("allows loopback bypass when enabled", async () => {

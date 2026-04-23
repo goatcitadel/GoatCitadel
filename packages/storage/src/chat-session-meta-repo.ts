@@ -293,7 +293,25 @@ function sanitizeWorkspaceId(value: string): string {
 
 function sanitizeFolderId(value: string): string {
   const trimmed = value.trim().toLowerCase();
-  const normalized = trimmed.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  let normalized = "";
+  let pendingDash = false;
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    const isAsciiLetter = code >= 97 && code <= 122;
+    const isDigit = code >= 48 && code <= 57;
+    if (isAsciiLetter || isDigit) {
+      normalized += char;
+      pendingDash = false;
+      continue;
+    }
+    if (normalized.length > 0 && !pendingDash) {
+      normalized += "-";
+      pendingDash = true;
+    }
+  }
+  if (normalized.endsWith("-")) {
+    normalized = normalized.slice(0, -1);
+  }
   if (!normalized) {
     throw new ValidationError({ message: "folderName must include at least one letter or number" });
   }

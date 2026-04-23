@@ -21,6 +21,9 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   api-compat:
     runs-on: ubuntu-latest
