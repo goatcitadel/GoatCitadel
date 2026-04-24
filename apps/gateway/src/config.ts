@@ -1003,6 +1003,14 @@ function defaultLlmConfig(): string {
         apiKeyEnv: "OPENAI_API_KEY",
       },
       {
+        providerId: "openai-codex",
+        label: "OpenAI Codex (ChatGPT OAuth)",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        apiStyle: "openai-codex-responses",
+        defaultModel: "gpt-5.5",
+        authMode: "codex-oauth",
+      },
+      {
         providerId: "anthropic",
         label: "Anthropic",
         baseUrl: "https://api.anthropic.com/v1",
@@ -1047,7 +1055,7 @@ function defaultLlmConfig(): string {
         label: "DeepSeek",
         baseUrl: "https://api.deepseek.com/v1",
         apiStyle: "openai-chat-completions",
-        defaultModel: "deepseek-chat",
+        defaultModel: "deepseek-v4-flash",
         apiKeyEnv: "DEEPSEEK_API_KEY",
       },
       {

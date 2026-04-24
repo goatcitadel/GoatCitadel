@@ -1,4 +1,17 @@
-export type LlmApiStyle = "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+export type LlmApiStyle =
+  | "openai-chat-completions"
+  | "openai-responses"
+  | "openai-codex-responses"
+  | "anthropic-messages";
+
+export type LlmProviderAuthMode = "api-key" | "codex-oauth";
+
+export interface LlmProviderOAuthStatus {
+  connected: boolean;
+  accountLabel?: string;
+  expiresAt?: string;
+  requiresReauth?: boolean;
+}
 
 export interface LlmProviderCapabilities {
   vision: boolean;
@@ -70,6 +83,7 @@ export interface LlmProviderConfig {
   baseUrl: string;
   apiStyle: LlmApiStyle;
   defaultModel: string;
+  authMode?: LlmProviderAuthMode;
   apiKey?: string;
   apiKeyEnv?: string;
   request?: LlmProviderRequestConfig;
@@ -91,6 +105,8 @@ export interface LlmProviderSummary {
   apiStyle: LlmApiStyle;
   resolvedApiStyle?: LlmApiStyle;
   defaultModel: string;
+  authMode?: LlmProviderAuthMode;
+  oauthStatus?: LlmProviderOAuthStatus;
   hasApiKey: boolean;
   apiKeySource: "inline" | "env" | "keychain" | "none";
   hasKeychainSecret?: boolean;
@@ -201,6 +217,7 @@ export interface ChatCompletionRequest {
   stream?: boolean;
   tools?: Array<Record<string, unknown>>;
   tool_choice?: string | Record<string, unknown>;
+  parallel_tool_calls?: boolean;
   stop?: string | string[];
   response_format?: Record<string, unknown>;
   service_tier?: string;

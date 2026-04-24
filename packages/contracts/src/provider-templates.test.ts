@@ -24,6 +24,24 @@ describe("provider templates", () => {
     expect(findProviderTemplate("vercel")?.defaultModel).toBe("openai/gpt-5.4");
   });
 
+  it("ships OpenAI Codex OAuth as a separate provider template", () => {
+    expect(findProviderTemplate("openai-codex")).toMatchObject({
+      label: "OpenAI Codex (ChatGPT OAuth)",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      defaultModel: "gpt-5.5",
+      apiStyle: "openai-codex-responses",
+      knownModels: [
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.2-codex",
+      ],
+    });
+  });
+
   it("marks Anthropic as a native messages provider", () => {
     expect(findProviderTemplate("anthropic")?.apiStyle).toBe("anthropic-messages");
     expect(findProviderTemplate("anthropic")?.knownModels).toEqual([
@@ -66,6 +84,14 @@ describe("provider templates", () => {
     ]);
   });
 
+  it("includes DeepSeek V4 fallback models for offline model pickers", () => {
+    expect(findProviderTemplate("deepseek")).toMatchObject({
+      defaultModel: "deepseek-v4-flash",
+      knownModels: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+    });
+    expect(inferProviderForModelId("deepseek-v4-pro")).toBe("deepseek");
+  });
+
   it("includes GLM fallback models for direct Z.AI and OpenRouter pickers", () => {
     expect(findProviderTemplate("glm")?.knownModels).toEqual([
       "glm-5",
@@ -83,6 +109,7 @@ describe("provider templates", () => {
     expect(inferProviderForModelId("models/gemini-2.5-flash")).toBe("google");
     expect(inferProviderForModelId("gemini-3-pro-image-preview")).toBe("google");
     expect(inferProviderForModelId("openai/gpt-5.4-mini")).toBe("openai");
+    expect(inferProviderForModelId("openai-codex/gpt-5.5")).toBe("openai-codex");
     expect(inferProviderForModelId("anthropic/claude-sonnet-4")).toBe("anthropic");
     expect(inferProviderForModelId("zai/glm-5v-turbo")).toBe("glm");
     expect(inferProviderForModelId("custom-private-model")).toBeUndefined();

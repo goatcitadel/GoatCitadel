@@ -1,5 +1,10 @@
 import { useSyncExternalStore } from "react";
-import type { DevDiagnosticsCategory, DevDiagnosticsEvent, DevDiagnosticsLevel } from "@goatcitadel/contracts";
+import type {
+  DevDiagnosticsCategory,
+  DevDiagnosticsEvent,
+  DevDiagnosticsLevel,
+  RuntimeDiagnosticStatus,
+} from "@goatcitadel/contracts";
 import type { EventStreamConnectionState } from "../api/client";
 
 interface DevDiagnosticsState {
@@ -53,6 +58,11 @@ export interface DevDiagnosticsFilter {
   category?: string;
   correlationId?: string;
   level?: DevDiagnosticsLevel;
+  runtimeKind?: string;
+  runtimeStatus?: RuntimeDiagnosticStatus;
+  runId?: string;
+  toolName?: string;
+  meetingSessionId?: string;
   limit?: number;
 }
 
@@ -211,9 +221,19 @@ export function recordClientDiagnostic(input: {
   sessionId?: string;
   chatId?: string;
   turnId?: string;
+  runId?: string;
+  taskId?: string;
+  stepId?: string;
+  toolRunId?: string;
+  meetingSessionId?: string;
   route?: string;
   providerId?: string;
   modelId?: string;
+  toolName?: string;
+  durationMs?: number;
+  runtimeKind?: string;
+  runtimeStatus?: RuntimeDiagnosticStatus;
+  runtimeError?: DevDiagnosticsEvent["runtimeError"];
 }): DevDiagnosticsEvent | undefined {
   if (!state.enabled) {
     return undefined;
@@ -240,9 +260,19 @@ export function recordClientDiagnostic(input: {
     sessionId: sanitizeOptionalDiagnosticText(input.sessionId) ?? state.activeChatSessionId,
     chatId: sanitizeOptionalDiagnosticText(input.chatId),
     turnId: sanitizeOptionalDiagnosticText(input.turnId),
+    runId: sanitizeOptionalDiagnosticText(input.runId),
+    taskId: sanitizeOptionalDiagnosticText(input.taskId),
+    stepId: sanitizeOptionalDiagnosticText(input.stepId),
+    toolRunId: sanitizeOptionalDiagnosticText(input.toolRunId),
+    meetingSessionId: sanitizeOptionalDiagnosticText(input.meetingSessionId),
     route: sanitizeDiagnosticRoute(input.route ?? state.currentRoute),
     providerId: sanitizeOptionalDiagnosticText(input.providerId),
     modelId: sanitizeOptionalDiagnosticText(input.modelId),
+    toolName: sanitizeOptionalDiagnosticText(input.toolName),
+    durationMs: sanitizeDuration(input.durationMs),
+    runtimeKind: sanitizeOptionalDiagnosticText(input.runtimeKind),
+    runtimeStatus: input.runtimeStatus,
+    runtimeError: sanitizeRuntimeError(input.runtimeError),
     source: "client",
   };
   state = {
@@ -309,6 +339,21 @@ export function listClientDiagnostics(filter: DevDiagnosticsFilter = {}): DevDia
       if (filter.correlationId && item.correlationId !== filter.correlationId) {
         return false;
       }
+      if (filter.runtimeKind && item.runtimeKind !== filter.runtimeKind) {
+        return false;
+      }
+      if (filter.runtimeStatus && item.runtimeStatus !== filter.runtimeStatus) {
+        return false;
+      }
+      if (filter.runId && item.runId !== filter.runId) {
+        return false;
+      }
+      if (filter.toolName && item.toolName !== filter.toolName) {
+        return false;
+      }
+      if (filter.meetingSessionId && item.meetingSessionId !== filter.meetingSessionId) {
+        return false;
+      }
       return true;
     })
     .slice(-limit)
@@ -328,6 +373,9 @@ export function clearClientDiagnostics(): void {
 
 export function buildDevDiagnosticsBundle(gatewayItems: DevDiagnosticsEvent[] = []): Record<string, unknown> {
   const clientItems = listClientDiagnostics({ limit: MAX_COPY_ITEMS });
+  const runtimeDiagnostics = [...gatewayItems, ...clientItems]
+    .filter((item) => item.runtimeKind || item.runtimeStatus || item.runId || item.toolName || item.meetingSessionId)
+    .slice(0, MAX_COPY_ITEMS);
   return {
     generatedAt: new Date().toISOString(),
     route: state.currentRoute,
@@ -341,6 +389,7 @@ export function buildDevDiagnosticsBundle(gatewayItems: DevDiagnosticsEvent[] = 
     startupSummary: state.startupSummary,
     browserDiagnostics: clientItems,
     gatewayDiagnostics: gatewayItems.slice(0, MAX_COPY_ITEMS),
+    runtimeDiagnostics,
   };
 }
 
@@ -388,6 +437,30 @@ function sanitizeOptionalDiagnosticText(value: unknown): string | undefined {
     return undefined;
   }
   return trimmed;
+}
+
+function sanitizeDuration(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.round(value);
+}
+
+function sanitizeRuntimeError(value: unknown): DevDiagnosticsEvent["runtimeError"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const error = value as NonNullable<DevDiagnosticsEvent["runtimeError"]>;
+  const message = sanitizeOptionalDiagnosticText(error.message);
+  if (!message) {
+    return undefined;
+  }
+  return {
+    name: sanitizeOptionalDiagnosticText(error.name),
+    message,
+    code: sanitizeOptionalDiagnosticText(error.code),
+    retryable: typeof error.retryable === "boolean" ? error.retryable : undefined,
+  };
 }
 
 function notify(): void {

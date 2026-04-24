@@ -394,9 +394,20 @@ export interface RuntimeSettingsResponse {
       providerId: string;
       label: string;
       baseUrl: string;
-      apiStyle: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
-      resolvedApiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+      apiStyle: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+      resolvedApiStyle?:
+        | "openai-chat-completions"
+        | "openai-responses"
+        | "openai-codex-responses"
+        | "anthropic-messages";
       defaultModel: string;
+      authMode?: "api-key" | "codex-oauth";
+      oauthStatus?: {
+        connected: boolean;
+        accountLabel?: string;
+        expiresAt?: string;
+        requiresReauth?: boolean;
+      };
       hasApiKey: boolean;
       apiKeySource: "inline" | "env" | "keychain" | "none";
       hasKeychainSecret?: boolean;

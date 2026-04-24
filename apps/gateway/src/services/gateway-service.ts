@@ -1155,6 +1155,7 @@ export class GatewayService {
       invokeMcpRuntimeTool: (server, input) => invokeMcpRuntimeTool(server, input),
       resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
       applyMcpRedaction: (output, mode) => applyMcpRedaction(output, mode),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.runtimeLifecycleReadService = new RuntimeLifecycleReadService({
       getApproval: (approvalId) => this.storage.approvals.get(approvalId),

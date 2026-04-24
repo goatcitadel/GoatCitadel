@@ -35,6 +35,17 @@ describe("chat turn dispatch durable ownership", () => {
     );
 
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1");
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.dispatch.stream_registered",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        context: expect.objectContaining({
+          durableRequested: true,
+          durableRunId: "run-1",
+        }),
+      }),
+    );
     expect(host.backgroundTasks.size).toBe(0);
     expect(host.persistChatStreamChunk).not.toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
@@ -62,6 +73,19 @@ describe("chat turn dispatch durable ownership", () => {
     );
 
     expect(host.backgroundTasks.size).toBe(0);
+    expect(host.registerActiveChatTurnStream.mock.invocationCallOrder[0]).toBeLessThan(
+      (host.storage.chatTurnTraces.patch as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
+        Number.MAX_SAFE_INTEGER,
+    );
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.dispatch.durable_unavailable",
+        level: "warn",
+        context: expect.objectContaining({
+          providerCallStarted: false,
+        }),
+      }),
+    );
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
       "turn-1",
       expect.objectContaining({
@@ -187,6 +211,7 @@ function createHost(
   persistChatStreamChunk: ReturnType<typeof vi.fn>;
   completeActiveChatTurnStream: ReturnType<typeof vi.fn>;
   beginDurableChatRun: ReturnType<typeof vi.fn>;
+  recordDevDiagnostic: ReturnType<typeof vi.fn>;
 } {
   const traceState =
     overrides.traceState ??
@@ -230,6 +255,7 @@ function createHost(
     streamPersistedChatTurnEvents: vi.fn(async function* () {}),
     persistChatStreamChunk,
     createHydratedChatTurnTrace: vi.fn((_turnId: string, trace: ChatTurnTraceRecord) => trace),
+    recordDevDiagnostic: vi.fn(),
     finalizeDurableChatRun: vi.fn(),
     completeActiveChatTurnStream,
     closeActiveChatTurnStream,
@@ -246,6 +272,7 @@ function createHost(
     persistChatStreamChunk: ReturnType<typeof vi.fn>;
     completeActiveChatTurnStream: ReturnType<typeof vi.fn>;
     beginDurableChatRun: ReturnType<typeof vi.fn>;
+    recordDevDiagnostic: ReturnType<typeof vi.fn>;
   };
 }
 

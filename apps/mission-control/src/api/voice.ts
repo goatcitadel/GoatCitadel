@@ -1,4 +1,7 @@
 import type {
+  GoogleMeetPrerequisiteStatusRequest,
+  GoogleMeetPrerequisiteStatusResponse,
+  GoogleMeetSessionRecord,
   VoiceRuntimeInstallRequest,
   VoiceRuntimeStatus,
   VoiceStatus,
@@ -32,6 +35,20 @@ export async function fetchVoiceTalkSessions(limit = 10): Promise<VoiceTalkSessi
     `/api/v1/voice/talk/sessions?${query.toString()}`,
   );
   return response.items;
+}
+
+export async function fetchGoogleMeetPrerequisiteStatus(
+  input: GoogleMeetPrerequisiteStatusRequest = {},
+): Promise<GoogleMeetPrerequisiteStatusResponse> {
+  return request<GoogleMeetPrerequisiteStatusResponse>("/api/v1/voice/google-meet/prerequisites", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchGoogleMeetSessions(limit = 10): Promise<GoogleMeetSessionRecord[]> {
+  const response = await request<{ items: GoogleMeetSessionRecord[] }>("/api/v1/voice/google-meet/sessions");
+  return response.items.slice(0, Math.max(1, Math.min(100, Math.trunc(limit) || 10)));
 }
 
 export async function installVoiceRuntime(input: VoiceRuntimeInstallRequest = {}): Promise<VoiceRuntimeStatus> {

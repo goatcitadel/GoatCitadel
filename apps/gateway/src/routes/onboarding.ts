@@ -3,7 +3,12 @@ import { z } from "zod";
 
 const onboardingTimingEnabled = process.env.GOATCITADEL_DEBUG_ONBOARDING_TIMING === "1";
 
-const llmApiStyleSchema = z.enum(["openai-chat-completions", "openai-responses", "anthropic-messages"]);
+const llmApiStyleSchema = z.enum([
+  "openai-chat-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+]);
 
 const llmProviderRequestAuthSchema = z.discriminatedUnion("type", [
   z.object({
@@ -104,6 +109,7 @@ const bootstrapSchema = z.object({
           label: z.string().min(1).optional(),
           baseUrl: z.string().url().optional(),
           apiStyle: llmApiStyleSchema.optional(),
+          authMode: z.enum(["api-key", "codex-oauth"]).optional(),
           defaultModel: z.string().min(1).optional(),
           apiKey: z.string().min(1).optional(),
           apiKeyEnv: z.string().min(1).optional(),

@@ -4,6 +4,105 @@ export type VoiceProvider = "whisper.cpp" | "faster-whisper" | "cloud-fallback" 
 export type VoiceModelLanguageScope = "english" | "multilingual";
 export type VoiceRuntimeInstallSource = "managed" | "env_override" | "manual";
 export type VoiceRuntimeReadiness = "ready" | "missing" | "broken";
+export type RealtimeVoiceProvider = "openai-realtime" | "local-transcription";
+export type GoogleMeetSessionState =
+  | "blocked"
+  | "ready"
+  | "connecting"
+  | "running"
+  | "consulting"
+  | "stopping"
+  | "stopped"
+  | "failed";
+export type GoogleMeetPrerequisiteId =
+  | "oauth_profile"
+  | "provider_key"
+  | "browser_transport"
+  | "audio_transport"
+  | "user_start";
+
+export interface GoogleMeetPrerequisite {
+  id: GoogleMeetPrerequisiteId;
+  ready: boolean;
+  message: string;
+}
+
+export interface GoogleMeetTranscriptChunk {
+  chunkId: string;
+  sessionId: string;
+  timestamp: string;
+  speaker?: string;
+  text: string;
+  final: boolean;
+  provider: RealtimeVoiceProvider;
+}
+
+export interface GoogleMeetConsultHandoff {
+  handoffId: string;
+  sessionId: string;
+  createdAt: string;
+  target: "chat" | "cowork" | "code";
+  prompt: string;
+  transcriptChunkIds: string[];
+}
+
+export interface GoogleMeetCleanupResult {
+  sessionId: string;
+  cleanedAt: string;
+  stoppedTransport: boolean;
+  releasedAudio: boolean;
+  error?: string;
+}
+
+export interface GoogleMeetSessionRecord {
+  sessionId: string;
+  meetingUrl: string;
+  displayName?: string;
+  accountRef?: string;
+  state: GoogleMeetSessionState;
+  provider: RealtimeVoiceProvider;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  stoppedAt?: string;
+  failureReason?: string;
+  prerequisites: GoogleMeetPrerequisite[];
+  transcript: GoogleMeetTranscriptChunk[];
+  consultHandoff?: GoogleMeetConsultHandoff;
+  cleanup?: GoogleMeetCleanupResult;
+}
+
+export interface GoogleMeetSessionStartRequest {
+  meetingUrl: string;
+  displayName?: string;
+  accountRef?: string;
+  provider?: RealtimeVoiceProvider;
+  userStartConfirmed?: boolean;
+}
+
+export interface GoogleMeetAuthProfilePrerequisite {
+  accountRef?: string;
+  available: boolean;
+  source: "oauth_thread" | "manual_reference" | "missing";
+}
+
+export interface GoogleMeetPrerequisiteStatusRequest {
+  meetingUrl?: string;
+  displayName?: string;
+  accountRef?: string;
+  provider?: RealtimeVoiceProvider;
+  userStartConfirmed?: boolean;
+}
+
+export interface GoogleMeetPrerequisiteStatusResponse {
+  ready: boolean;
+  state: "ready" | "blocked";
+  provider: RealtimeVoiceProvider;
+  checkedAt: string;
+  failureReason?: string;
+  authProfile: GoogleMeetAuthProfilePrerequisite;
+  prerequisites: GoogleMeetPrerequisite[];
+}
 
 export interface VoiceTranscribeRequest {
   fileName?: string;
@@ -125,8 +224,9 @@ export function buildVoiceRecoveryActions(
 ): VoiceRecoveryAction[] {
   const actions: VoiceRecoveryAction[] = [];
   const runtimeMissing = !voiceRuntime || voiceRuntime.readiness === "missing";
-  const runtimeBroken = voiceRuntime?.readiness === "broken"
-    || Boolean(voiceRuntime && (!voiceRuntime.binaryReady || !voiceRuntime.ffmpegReady));
+  const runtimeBroken =
+    voiceRuntime?.readiness === "broken" ||
+    Boolean(voiceRuntime && (!voiceRuntime.binaryReady || !voiceRuntime.ffmpegReady));
 
   if (runtimeMissing || runtimeBroken) {
     actions.push({
@@ -153,7 +253,8 @@ export function buildVoiceRecoveryActions(
       actions.push({
         id: "install-starter-model",
         title: "Install and activate a starter model",
-        description: "The runtime is ready but no local model is installed yet. Install the starter base.en model so voice flows have an active transcription target.",
+        description:
+          "The runtime is ready but no local model is installed yet. Install the starter base.en model so voice flows have an active transcription target.",
         tone: "warning",
       });
     }
@@ -172,7 +273,8 @@ export function buildVoiceRecoveryActions(
     actions.push({
       id: "stop-wake-listener",
       title: "Disable the wake listener",
-      description: "Wake is still enabled. Disable it so you can re-run a clean enable/disable cycle and verify operator control.",
+      description:
+        "Wake is still enabled. Disable it so you can re-run a clean enable/disable cycle and verify operator control.",
       tone: "warning",
     });
   }
@@ -181,7 +283,8 @@ export function buildVoiceRecoveryActions(
     actions.push({
       id: "refresh-runtime-state",
       title: "Refresh runtime state after the last error",
-      description: "Voice recorded a recent error, but no immediate cleanup action is active. Refresh the live status before retrying the proof lane so the operator sees current state instead of stale failure text.",
+      description:
+        "Voice recorded a recent error, but no immediate cleanup action is active. Refresh the live status before retrying the proof lane so the operator sees current state instead of stale failure text.",
       tone: "warning",
     });
   }
@@ -228,7 +331,9 @@ export function buildVoiceOperatorGuidance(
   if (runtime.readiness !== "ready") {
     blockingIssues.push(`Managed voice runtime readiness is ${runtime.readiness}.`);
     if (runtime.selectedModelId) {
-      recommendedActions.push(`Run \`goatcitadel voice install --model ${runtime.selectedModelId}\` or re-select the active model from Settings.`);
+      recommendedActions.push(
+        `Run \`goatcitadel voice install --model ${runtime.selectedModelId}\` or re-select the active model from Settings.`,
+      );
     } else {
       recommendedActions.push("Run `goatcitadel voice install` to provision the managed whisper.cpp runtime.");
     }
@@ -236,7 +341,9 @@ export function buildVoiceOperatorGuidance(
 
   if (!runtime.selectedModelId) {
     blockingIssues.push("No managed voice model is currently selected.");
-    recommendedActions.push("Install or activate a local whisper model before testing Talk Mode or local transcription.");
+    recommendedActions.push(
+      "Install or activate a local whisper model before testing Talk Mode or local transcription.",
+    );
   }
 
   if (lastError?.trim()) {
@@ -252,7 +359,9 @@ export function buildVoiceOperatorGuidance(
     recommendedActions.push("Stop the current talk session before changing models or repairing the runtime.");
   }
 
-  recommendedActions.push("Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.");
+  recommendedActions.push(
+    "Generate the voice proof-lane draft from System, then run the transcription, Talk Mode, and Wake Mode operator cycle.",
+  );
 
   let postureSummary = `Voice runtime is ${runtime.readiness}, talk is ${status.talk.state}, and wake is ${status.wake.enabled ? status.wake.state : "disabled"}.`;
   if (runtime.readiness === "ready" && runtime.selectedModelId) {

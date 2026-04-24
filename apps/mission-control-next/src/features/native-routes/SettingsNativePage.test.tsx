@@ -19,6 +19,90 @@ const mocks = vi.hoisted(() => ({
     hasSecret: true,
     source: "keychain",
   })),
+  fetchOpenAICodexOAuthStatus: vi.fn(async () => ({
+    providerId: "openai-codex",
+    available: true,
+    connected: false,
+    requiresReauth: false,
+  })),
+  fetchIntegrationCatalog: vi.fn(async () => ({
+    items: [
+      {
+        catalogId: "github",
+        key: "github",
+        label: "GitHub",
+        kind: "service",
+        capabilities: ["issues"],
+        authMethods: ["token"],
+      },
+    ],
+  })),
+  fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
+  fetchIntegrationPlugins: vi.fn(async () => ({
+    items: [
+      {
+        pluginId: "dash-plugin",
+        label: "Dashboard Plugin",
+        version: "1.0.0",
+        enabled: true,
+        installedAt: "2026-04-24T12:00:00.000Z",
+        updatedAt: "2026-04-24T12:00:00.000Z",
+        capabilities: ["dashboard"],
+        sourceMetadata: {
+          type: "npm",
+          display: "@goat/plugin-dashboard",
+          packageName: "@goat/plugin-dashboard",
+          packageVersion: "1.0.0",
+          integrityStatus: "verified",
+        },
+        integrityStatus: "verified",
+        trustWarnings: [],
+        theme: {
+          dashboardVariant: "compact",
+          accentColor: "#14b8a6",
+        },
+      },
+    ],
+  })),
+  fetchGoogleMeetPrerequisiteStatus: vi.fn(async () => ({
+    ready: false,
+    state: "blocked",
+    provider: "openai-realtime",
+    checkedAt: "2026-04-24T12:00:00.000Z",
+    failureReason: "Google Meet OAuth profile is required before joining.",
+    authProfile: {
+      available: false,
+      source: "missing",
+    },
+    prerequisites: [
+      {
+        id: "oauth_profile",
+        ready: false,
+        message: "Google Meet OAuth profile is required before joining.",
+      },
+    ],
+  })),
+  fetchGoogleMeetSessions: vi.fn(async () => []),
+  startOpenAICodexOAuthDeviceFlow: vi.fn(async () => ({
+    providerId: "openai-codex",
+    flowId: "flow-1",
+    verificationUrl: "https://auth.openai.com/codex/device",
+    userCode: "ABCD-EFGH",
+    expiresAt: "2026-04-24T12:00:00.000Z",
+    pollAfterMs: 5000,
+  })),
+  pollOpenAICodexOAuthDeviceFlow: vi.fn(async () => ({
+    providerId: "openai-codex",
+    flowId: "flow-1",
+    status: "connected",
+    accountLabel: "user@example.com",
+  })),
+  deleteOpenAICodexOAuthCredential: vi.fn(async () => ({
+    providerId: "openai-codex",
+    available: true,
+    connected: false,
+    requiresReauth: false,
+  })),
   loadModelsForProvider: vi.fn(async () => ["gpt-5.4-mini"]),
   reload: vi.fn(async () => undefined),
   providerCatalogState: {
@@ -52,7 +136,7 @@ const mocks = vi.hoisted(() => ({
     ],
     loading: false,
     error: null as string | null,
-  },
+  } as any,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
@@ -65,6 +149,15 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     saveProviderSecret: mocks.saveProviderSecret,
     deleteProviderSecret: mocks.deleteProviderSecret,
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
+    fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
+    fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
+    fetchIntegrationConnections: mocks.fetchIntegrationConnections,
+    fetchIntegrationPlugins: mocks.fetchIntegrationPlugins,
+    fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
+    fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
+    startOpenAICodexOAuthDeviceFlow: mocks.startOpenAICodexOAuthDeviceFlow,
+    pollOpenAICodexOAuthDeviceFlow: mocks.pollOpenAICodexOAuthDeviceFlow,
+    deleteOpenAICodexOAuthCredential: mocks.deleteOpenAICodexOAuthCredential,
   };
 });
 
@@ -76,10 +169,10 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () 
   }),
 }));
 
-function renderPage(): ReactTestRenderer {
+function renderPage(section = "providers"): ReactTestRenderer {
   return create(
     <SettingsNativePage
-      route={{ area: "settings", section: "providers", theme: "ops" } as any}
+      route={{ area: "settings", section, theme: "ops" } as any}
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       navigate={vi.fn()}
@@ -248,5 +341,87 @@ describe("SettingsNativePage providers", () => {
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }
+  });
+
+  it("renders OAuth controls and hides API-key controls for OpenAI Codex", async () => {
+    mocks.providerCatalogState = {
+      config: {
+        activeProviderId: "openai-codex",
+        activeModel: "openai-codex/gpt-5.5",
+        providers: [],
+        providerConfigs: [
+          {
+            providerId: "openai-codex",
+            label: "OpenAI Codex (ChatGPT OAuth)",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            apiStyle: "openai-codex-responses",
+            authMode: "codex-oauth",
+            defaultModel: "gpt-5.5",
+          },
+        ],
+      },
+      providers: [
+        {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          defaultModel: "gpt-5.5",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+          oauthStatus: {
+            connected: false,
+            requiresReauth: false,
+          },
+          models: ["gpt-5.5", "gpt-5.5-pro"],
+          hasApiKey: false,
+          apiKeySource: "none",
+          modelProbeState: "ready" as const,
+          modelProbeCheckedAt: "2026-04-22T10:00:00.000Z",
+        },
+      ],
+      loading: false,
+      error: null,
+    };
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    const text = collectText(renderer!.root);
+
+    expect(mocks.fetchOpenAICodexOAuthStatus).toHaveBeenCalledTimes(1);
+    expect(text).toContain("OpenAI Codex (ChatGPT OAuth)");
+    expect(text).toContain("openai-codex-responses");
+    expect(text).toContain("ChatGPT/Codex plan");
+    expect(text).toContain("Connect OAuth");
+    expect(text).toContain("Check pairing");
+    expect(text).toContain("Disconnect OAuth");
+    expect(text).not.toContain("Save secret");
+    expect(text).not.toContain("Delete secret");
+    expect(renderer!.root.findAllByProps({ placeholder: "Paste a new API key to save" })).toHaveLength(0);
+    expect(renderer!.root.findAllByProps({ placeholder: "OPENAI_API_KEY" })).toHaveLength(0);
+  });
+});
+
+describe("SettingsNativePage integrations", () => {
+  it("renders plugin trust metadata and blocked Google Meet prerequisites", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+
+    const text = collectText(renderer!.root);
+
+    expect(mocks.fetchIntegrationPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchGoogleMeetPrerequisiteStatus).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Plugin trust");
+    expect(text).toContain("Dashboard Plugin");
+    expect(text).toContain("Integrity: verified");
+    expect(text).toContain("Theme: compact");
+    expect(text).toContain("Google Meet voice");
+    expect(text).toContain("OAuth profile");
+    expect(text).toContain("Blocked");
   });
 });

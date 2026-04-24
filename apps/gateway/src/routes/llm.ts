@@ -1,7 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
-const llmApiStyleSchema = z.enum(["openai-chat-completions", "openai-responses", "anthropic-messages"]);
+const llmApiStyleSchema = z.enum([
+  "openai-chat-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+]);
 
 const providerRequestAuthSchema = z.discriminatedUnion("type", [
   z.object({
@@ -88,6 +93,7 @@ const updateConfigSchema = z.object({
       label: z.string().min(1).optional(),
       baseUrl: z.string().url().optional(),
       apiStyle: llmApiStyleSchema.optional(),
+      authMode: z.enum(["api-key", "codex-oauth"]).optional(),
       defaultModel: z.string().min(1).optional(),
       apiKey: z.string().min(1).optional(),
       apiKeyEnv: z.string().min(1).optional(),
@@ -109,6 +115,10 @@ const modelPreviewSchema = z.object({
   apiKeyEnv: z.string().min(1).optional(),
   request: providerRequestSchema.optional(),
   headers: z.record(z.string()).optional(),
+});
+
+const codexOAuthPollSchema = z.object({
+  flowId: z.string().min(1),
 });
 
 const imageAssetSchema = z.object({
@@ -169,6 +179,7 @@ const chatCompletionSchema = z.object({
   stream: z.boolean().optional(),
   tools: z.array(z.record(z.unknown())).optional(),
   tool_choice: z.union([z.string(), z.record(z.unknown())]).optional(),
+  parallel_tool_calls: z.boolean().optional(),
   stop: z.union([z.string(), z.array(z.string())]).optional(),
   response_format: z.record(z.unknown()).optional(),
   service_tier: z.string().min(1).optional(),
@@ -179,6 +190,42 @@ const chatCompletionSchema = z.object({
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llm/providers", async (_request, reply) => {
     return reply.send({ items: fastify.services.llm.listLlmProviders() });
+  });
+
+  fastify.get("/api/v1/llm/providers/openai-codex/oauth/status", async (_request, reply) => {
+    try {
+      return reply.send(fastify.services.llm.getOpenAICodexOAuthStatus());
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llm/providers/openai-codex/oauth/device/start", async (_request, reply) => {
+    try {
+      return reply.send(await fastify.services.llm.startOpenAICodexOAuthDeviceFlow());
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llm/providers/openai-codex/oauth/device/poll", async (request, reply) => {
+    const parsed = codexOAuthPollSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.services.llm.pollOpenAICodexOAuthDeviceFlow(parsed.data.flowId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.delete("/api/v1/llm/providers/openai-codex/oauth", async (_request, reply) => {
+    try {
+      return reply.send(fastify.services.llm.deleteOpenAICodexOAuthCredential());
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {

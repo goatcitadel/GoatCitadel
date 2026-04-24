@@ -159,6 +159,52 @@ describe("llm routes", () => {
     );
   });
 
+  it("accepts OpenAI Codex provider config updates", async () => {
+    const updateLlmConfig = vi.fn(async (request) => request);
+
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig,
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/llm/config",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({
+        upsertProvider: {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+          defaultModel: "gpt-5.5",
+        },
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateLlmConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        upsertProvider: expect.objectContaining({
+          providerId: "openai-codex",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+        }),
+      }),
+    );
+  });
+
   it("accepts apiStyle in model preview payloads", async () => {
     const previewLlmModels = vi.fn(async (request) => request);
 
@@ -319,5 +365,84 @@ describe("llm routes", () => {
         ],
       }),
     );
+  });
+
+  it("exposes OpenAI Codex OAuth status, start, poll, and disconnect routes", async () => {
+    const getOpenAICodexOAuthStatus = vi.fn(() => ({
+      providerId: "openai-codex",
+      available: true,
+      connected: false,
+    }));
+    const startOpenAICodexOAuthDeviceFlow = vi.fn(async () => ({
+      providerId: "openai-codex",
+      flowId: "flow-1",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "ABCD-EFGH",
+      expiresAt: "2026-04-24T12:00:00.000Z",
+      pollAfterMs: 5000,
+    }));
+    const pollOpenAICodexOAuthDeviceFlow = vi.fn(async (flowId: string) => ({
+      providerId: "openai-codex",
+      flowId,
+      status: "connected",
+      accountLabel: "user@example.com",
+    }));
+    const deleteOpenAICodexOAuthCredential = vi.fn(() => ({
+      providerId: "openai-codex",
+      available: true,
+      connected: false,
+      requiresReauth: false,
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+        getOpenAICodexOAuthStatus,
+        startOpenAICodexOAuthDeviceFlow,
+        pollOpenAICodexOAuthDeviceFlow,
+        deleteOpenAICodexOAuthCredential,
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const status = await app.inject({
+      method: "GET",
+      url: "/api/v1/llm/providers/openai-codex/oauth/status",
+    });
+    const start = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/providers/openai-codex/oauth/device/start",
+    });
+    const poll = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/providers/openai-codex/oauth/device/poll",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({ flowId: "flow-1" }),
+    });
+    const disconnect = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/llm/providers/openai-codex/oauth",
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ providerId: "openai-codex", connected: false });
+    expect(start.statusCode).toBe(200);
+    expect(start.json()).toMatchObject({
+      providerId: "openai-codex",
+      verificationUrl: "https://auth.openai.com/codex/device",
+    });
+    expect(poll.statusCode).toBe(200);
+    expect(pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledWith("flow-1");
+    expect(poll.json()).toMatchObject({ status: "connected", accountLabel: "user@example.com" });
+    expect(disconnect.statusCode).toBe(200);
+    expect(deleteOpenAICodexOAuthCredential).toHaveBeenCalledTimes(1);
   });
 });

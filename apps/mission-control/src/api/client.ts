@@ -195,6 +195,9 @@ export type {
   LlamaCppHuggingFaceDownloadStatus,
   LlamaCppInstallDetection,
   LlmRuntimeConfigResponse,
+  OpenAICodexDevicePollResponse,
+  OpenAICodexDeviceStartResponse,
+  OpenAICodexOAuthStatus,
   ProviderSecretStatus,
 } from "./platform.js";
 export type { FileTemplate } from "./operators-agents-files.js";
@@ -604,6 +607,7 @@ export {
 } from "./mcp.js";
 export {
   createLlmChatCompletion,
+  deleteOpenAICodexOAuthCredential,
   createAssemblyRun,
   deleteProviderSecret,
   evaluateUiChangeRisk,
@@ -618,6 +622,7 @@ export {
   fetchInstalledAddons,
   fetchLlmConfig,
   fetchLlmModels,
+  fetchOpenAICodexOAuthStatus,
   fetchMeshLeases,
   fetchMeshNodes,
   fetchMeshReplicationOffsets,
@@ -638,10 +643,12 @@ export {
   installAddon,
   launchAddon,
   previewLlmModels,
+  pollOpenAICodexOAuthDeviceFlow,
   refreshLlamaCppRuntime,
   refreshNpuRuntime,
   restartDaemon,
   saveProviderSecret,
+  startOpenAICodexOAuthDeviceFlow,
   startLlamaCppHuggingFaceDownload,
   startLlamaCppRuntime,
   startDaemon,
@@ -657,6 +664,8 @@ export {
   fetchVoiceRuntimeStatus,
   fetchVoiceStatus,
   fetchVoiceTalkSessions,
+  fetchGoogleMeetPrerequisiteStatus,
+  fetchGoogleMeetSessions,
   installVoiceRuntime,
   removeVoiceRuntimeModel,
   selectVoiceRuntimeModel,

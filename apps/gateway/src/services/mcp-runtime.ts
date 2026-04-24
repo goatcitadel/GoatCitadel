@@ -41,6 +41,8 @@ export interface McpRuntimeInvocationResult {
   ok: boolean;
   output?: Record<string, unknown>;
   error?: string;
+  degraded?: boolean;
+  retryCount?: number;
 }
 
 export function inferMcpToolsForServer(server: McpServerRecord, existingTools: McpToolRecord[]): McpToolRecord[] {
@@ -108,58 +110,86 @@ export async function invokeMcpRuntimeTool(
     };
   }
   try {
-    return await withStdioMcpClient(
-      server,
-      timeoutMs,
-      async (client) => {
-        const response = await client.request(
-          "tools/call",
-          {
-            name: input.toolName,
-            arguments: input.arguments ?? {},
-          },
-          input.signal,
-        );
-        if (response.error) {
-          const detail = stringifyUnknown(response.error.data);
-          return {
-            ok: false,
-            error: [
-              `MCP tool ${input.toolName} failed`,
-              response.error.message,
-              detail ? `details: ${detail}` : undefined,
-            ]
-              .filter(Boolean)
-              .join(": "),
-          };
-        }
-        const result = response.result ?? {};
-        const content = Array.isArray(result.content) ? result.content : [];
-        const contentText = extractMcpContentText(content);
-        const output: Record<string, unknown> = {
-          ...result,
-          contentText: contentText || undefined,
-        };
-        if (result.isError === true) {
-          return {
-            ok: false,
-            output,
-            error: contentText || `MCP tool ${input.toolName} reported an error.`,
-          };
-        }
-        return {
-          ok: true,
-          output,
-        };
-      },
-      input.signal,
-    );
+    const first = await performMcpRuntimeToolCall(server, input, timeoutMs);
+    if (!isExpiredMcpSessionError(first.error) || input.signal?.aborted) {
+      return first;
+    }
+    const second = await performMcpRuntimeToolCall(server, input, timeoutMs);
+    return {
+      ...second,
+      degraded: true,
+      retryCount: 1,
+      output: second.output
+        ? {
+            ...second.output,
+            degradedReason: "expired_session_reconnect",
+          }
+        : second.output,
+      error: second.ok ? undefined : second.error,
+    };
   } catch (error) {
     return {
       ok: false,
       error: (error as Error).message,
     };
   }
+}
+
+async function performMcpRuntimeToolCall(
+  server: McpServerRecord,
+  input: Pick<McpInvokeRequest, "toolName" | "arguments" | "signal">,
+  timeoutMs: number,
+): Promise<McpRuntimeInvocationResult> {
+  return withStdioMcpClient(
+    server,
+    timeoutMs,
+    async (client) => {
+      const response = await client.request(
+        "tools/call",
+        {
+          name: input.toolName,
+          arguments: input.arguments ?? {},
+        },
+        input.signal,
+      );
+      if (response.error) {
+        const detail = stringifyUnknown(response.error.data);
+        return {
+          ok: false,
+          error: [
+            `MCP tool ${input.toolName} failed`,
+            response.error.message,
+            detail ? `details: ${detail}` : undefined,
+          ]
+            .filter(Boolean)
+            .join(": "),
+        };
+      }
+      const result = response.result ?? {};
+      const content = Array.isArray(result.content) ? result.content : [];
+      const contentText = extractMcpContentText(content);
+      const output: Record<string, unknown> = {
+        ...result,
+        contentText: contentText || undefined,
+      };
+      if (result.isError === true) {
+        return {
+          ok: false,
+          output,
+          error: contentText || `MCP tool ${input.toolName} reported an error.`,
+        };
+      }
+      return {
+        ok: true,
+        output,
+      };
+    },
+    input.signal,
+  );
+}
+
+function isExpiredMcpSessionError(error?: string): boolean {
+  return Boolean(error && /\b(expired|stale|invalid)\s+(session|connection|transport)\b/i.test(error));
 }
 
 export function collectMcpBrowserFallbackTargets(

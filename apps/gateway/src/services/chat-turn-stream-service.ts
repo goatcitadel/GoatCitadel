@@ -79,8 +79,20 @@ export interface ChatTurnStreamHost {
     message: string;
     sessionId?: string;
     turnId?: string;
+    runId?: string;
+    taskId?: string;
+    stepId?: string;
     providerId?: string;
     modelId?: string;
+    durationMs?: number;
+    runtimeKind?: string;
+    runtimeStatus?: "started" | "running" | "completed" | "failed" | "cancelled" | "blocked" | "degraded";
+    runtimeError?: {
+      name?: string;
+      message: string;
+      code?: string;
+      retryable?: boolean;
+    };
     context?: Record<string, unknown>;
   }): void;
   buildChatOrchestrationSummary(input: {
@@ -277,8 +289,12 @@ export async function executePreparedModeOrchestration(
     message: "Starting chat orchestration run",
     sessionId: prepared.session.sessionId,
     turnId: prepared.turnId,
+    runId,
+    taskId: `chat-orchestration:${prepared.turnId}`,
     providerId: orchestration.orchestrationPlan.steps.at(0)?.providerId,
     modelId: orchestration.orchestrationPlan.steps.at(0)?.model,
+    runtimeKind: "run.lifecycle",
+    runtimeStatus: "started",
     context: {
       workflowTemplate: orchestration.orchestrationPlan.workflowTemplate,
       visibility: orchestration.orchestrationPlan.routeDecision.visibility,
@@ -403,6 +419,12 @@ export async function executePreparedModeOrchestration(
         }),
       onStepResult: async (step, allSteps) => {
         currentSteps = [...allSteps];
+        const childToolRuns = step.childTurnId
+          ? (host.storage.chatToolRuns.listByTurnIds([step.childTurnId]).get(step.childTurnId) ?? [])
+          : [];
+        const activeToolWork = childToolRuns.some(
+          (toolRun) => toolRun.status === "started" || toolRun.status === "approval_required",
+        );
         host.recordDevDiagnostic({
           level: step.status === "failed" ? "warn" : "info",
           category: "orchestration",
@@ -410,13 +432,30 @@ export async function executePreparedModeOrchestration(
           message: `Completed orchestration step ${step.role}`,
           sessionId: prepared.session.sessionId,
           turnId: prepared.turnId,
+          runId,
+          taskId: `chat-orchestration:${prepared.turnId}`,
+          stepId: step.stepId,
           providerId: step.providerId,
           modelId: step.model,
+          durationMs: step.durationMs,
+          runtimeKind: "delegation.lifecycle",
+          runtimeStatus:
+            step.status === "failed" && activeToolWork ? "degraded" : step.status === "failed" ? "failed" : "completed",
+          runtimeError: step.error
+            ? {
+                message: step.error,
+                retryable: /\btimeout|timed out|deadline|aborted\b/i.test(step.error),
+              }
+            : undefined,
           context: {
             stepId: step.stepId,
             role: step.role,
             status: step.status,
             index: step.index,
+            activeToolWork,
+            activeToolRunCount: childToolRuns.filter(
+              (toolRun) => toolRun.status === "started" || toolRun.status === "approval_required",
+            ).length,
           },
         });
         host.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
@@ -495,8 +534,12 @@ export async function executePreparedModeOrchestration(
     message: "Completed chat orchestration run",
     sessionId: prepared.session.sessionId,
     turnId: prepared.turnId,
+    runId,
+    taskId: `chat-orchestration:${prepared.turnId}`,
     providerId: result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId,
     modelId: result.finalStep?.model ?? result.stepResults.at(-1)?.model,
+    runtimeKind: "run.lifecycle",
+    runtimeStatus: summary.status === "failed" ? "failed" : "completed",
     context: {
       status: summary.status,
       workflowTemplate: summary.workflowTemplate,
@@ -583,10 +626,35 @@ export async function executeDelegatedPlanStep(
     .filter(Boolean)
     .join("\n\n");
 
+  host.recordDevDiagnostic({
+    level: "info",
+    category: "orchestration",
+    event: "orchestration.step.start",
+    message: `Starting delegated orchestration step ${delegatedRole}`,
+    sessionId: prepared.session.sessionId,
+    turnId: prepared.turnId,
+    runId: input.runId,
+    taskId: `chat-orchestration:${prepared.turnId}`,
+    stepId: input.step.stepId,
+    providerId: input.step.providerId ?? prepared.prefs.providerId,
+    modelId: input.step.model ?? prepared.prefs.model,
+    runtimeKind: "delegation.lifecycle",
+    runtimeStatus: "started",
+    context: {
+      role: input.step.role,
+      delegatedRole,
+      childSessionId: childSession.sessionId,
+      suggestedTools: input.step.suggestedTools ?? [],
+    },
+  });
+
+  let delegatedDispatchStarted = false;
+  let delegatedResponseReceived = false;
   try {
     if (input.signal?.aborted) {
       throw new ChatTurnCancelledError(prepared.turnId);
     }
+    delegatedDispatchStarted = true;
     const response = await host.agentSendChatMessage(
       childSession.sessionId,
       buildDelegatedChatSendRequest({
@@ -600,6 +668,7 @@ export async function executeDelegatedPlanStep(
         retrievalMode: prepared.autonomy.retrievalMode,
       }),
     );
+    delegatedResponseReceived = true;
     if (input.signal?.aborted) {
       throw new ChatTurnCancelledError(prepared.turnId);
     }
@@ -642,6 +711,38 @@ export async function executeDelegatedPlanStep(
   } catch (error) {
     const finishedAt = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
+    const timeoutWithoutProviderResult = /\btimeout|timed out|deadline\b/i.test(message);
+    host.recordDevDiagnostic({
+      level: "warn",
+      category: "orchestration",
+      event: timeoutWithoutProviderResult
+        ? "orchestration.step.timeout_without_provider_result"
+        : "orchestration.step.failed_before_result",
+      message: timeoutWithoutProviderResult
+        ? "Delegated orchestration step timed out before any provider result was returned"
+        : `Delegated orchestration step ${delegatedRole} failed before returning a result`,
+      sessionId: prepared.session.sessionId,
+      turnId: prepared.turnId,
+      runId: input.runId,
+      taskId: `chat-orchestration:${prepared.turnId}`,
+      stepId: input.step.stepId,
+      providerId: input.step.providerId ?? prepared.prefs.providerId,
+      modelId: input.step.model ?? prepared.prefs.model,
+      durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+      runtimeKind: "delegation.lifecycle",
+      runtimeStatus: "failed",
+      runtimeError: {
+        name: error instanceof Error ? error.name : undefined,
+        message,
+        retryable: timeoutWithoutProviderResult,
+      },
+      context: {
+        childSessionId: childSession.sessionId,
+        delegatedDispatchStarted,
+        delegatedResponseReceived,
+        timeoutClassification: timeoutWithoutProviderResult ? "timeout_without_provider_result" : undefined,
+      },
+    });
     return {
       stepId: input.step.stepId,
       role: input.step.role,

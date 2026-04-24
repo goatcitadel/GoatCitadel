@@ -1,9 +1,38 @@
+export type IntegrationPluginInstallSourceType = "local" | "npm" | "git" | "url" | "manual" | "unknown";
+export type IntegrationPluginIntegrityStatus = "verified" | "missing" | "mismatch" | "unknown" | "not_applicable";
+export type IntegrationPluginTrustWarningSeverity = "info" | "warning" | "critical";
+
+export interface IntegrationPluginSourceMetadata {
+  type: IntegrationPluginInstallSourceType;
+  display: string;
+  packageName?: string;
+  packageVersion?: string;
+  integrityStatus: IntegrationPluginIntegrityStatus;
+  expectedIntegrity?: string;
+}
+
+export interface IntegrationPluginTrustWarning {
+  code: string;
+  severity: IntegrationPluginTrustWarningSeverity;
+  message: string;
+}
+
+export interface IntegrationPluginThemeMetadata {
+  accentColor?: string;
+  icon?: string;
+  dashboardVariant?: "default" | "compact" | "high_contrast";
+}
+
 export interface IntegrationPluginRecord {
   pluginId: string;
   label: string;
   version: string;
   description?: string;
   source?: string;
+  sourceMetadata?: IntegrationPluginSourceMetadata;
+  integrityStatus?: IntegrationPluginIntegrityStatus;
+  trustWarnings?: IntegrationPluginTrustWarning[];
+  theme?: IntegrationPluginThemeMetadata;
   enabled: boolean;
   installedAt: string;
   updatedAt: string;
@@ -13,6 +42,8 @@ export interface IntegrationPluginRecord {
 export interface IntegrationPluginInstallInput {
   source: string;
   pluginId?: string;
+  sourceType?: IntegrationPluginInstallSourceType;
+  expectedIntegrity?: string;
 }
 
 export interface IntegrationPluginAuthorManifest {
@@ -21,6 +52,11 @@ export interface IntegrationPluginAuthorManifest {
   version: string;
   description?: string;
   capabilities: string[];
+  packageName?: string;
+  integrity?: {
+    expected?: string;
+  };
+  theme?: IntegrationPluginThemeMetadata;
 }
 
 export type ChannelActionName =
@@ -33,12 +69,7 @@ export type ChannelActionName =
 
 export type ChannelAttachmentSource = "url" | "inline";
 
-export type ChannelInboundMode =
-  | "none"
-  | "webhook"
-  | "gateway"
-  | "poll"
-  | "local_bridge";
+export type ChannelInboundMode = "none" | "webhook" | "gateway" | "poll" | "local_bridge";
 
 export type ChannelChunkingMode = "unsupported" | "fallback" | "native";
 export type ChannelOutboundTransport = "webhook" | "api";

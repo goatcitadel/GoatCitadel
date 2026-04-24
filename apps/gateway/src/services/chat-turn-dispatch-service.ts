@@ -216,6 +216,29 @@ export async function executePreparedAgentChatTurnBackground(
       }
     }
   } catch (error) {
+    host.recordDevDiagnostic({
+      level: "warn",
+      category: "chat",
+      event: "chat.dispatch.background_failed",
+      message: "Chat turn background execution failed",
+      sessionId,
+      turnId: prepared.turnId,
+      runId: durableRunId,
+      taskId: prepared.content ? `chat-turn:${prepared.turnId}` : undefined,
+      providerId: input.providerId ?? prepared.prefs.providerId,
+      modelId: input.model ?? prepared.prefs.model,
+      runtimeKind: "chat.dispatch",
+      runtimeStatus: "failed",
+      runtimeError: {
+        name: error instanceof Error ? error.name : undefined,
+        message: error instanceof Error ? error.message : "Chat stream execution failed.",
+        retryable: true,
+      },
+      context: {
+        error: error instanceof Error ? error.message : "Chat stream execution failed.",
+        durableRunId,
+      },
+    });
     let currentTrace: ChatTurnTraceRecord | undefined;
     try {
       currentTrace = host.storage.chatTurnTraces.get(prepared.turnId);
@@ -288,6 +311,25 @@ export function launchPreparedAgentChatTurnStream(
   const durableRequested = shouldUseDurableExecution(host, prepared, input);
   const durableRun = host.beginDurableChatRun(prepared, input, threadEventType);
   host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId);
+  host.recordDevDiagnostic({
+    level: "info",
+    category: "chat",
+    event: "chat.dispatch.stream_registered",
+    message: "Registered active chat turn stream before dispatch",
+    sessionId,
+    turnId: prepared.turnId,
+    runId: durableRun?.runId,
+    taskId: `chat-turn:${prepared.turnId}`,
+    providerId: input.providerId ?? prepared.prefs.providerId,
+    modelId: input.model ?? prepared.prefs.model,
+    runtimeKind: "chat.dispatch",
+    runtimeStatus: "started",
+    context: {
+      durableRequested,
+      durableRunId: durableRun?.runId,
+      threadEventType,
+    },
+  });
   if (durableRun) {
     return;
   }
@@ -313,6 +355,27 @@ function persistDurableUnavailableFailure(
   sessionId: string,
   prepared: PreparedAgentChatTurn,
 ): void {
+  host.recordDevDiagnostic({
+    level: "warn",
+    category: "chat",
+    event: "chat.dispatch.durable_unavailable",
+    message: "Durable chat dispatch failed before provider execution",
+    sessionId,
+    turnId: prepared.turnId,
+    taskId: `chat-turn:${prepared.turnId}`,
+    providerId: prepared.prefs.providerId,
+    modelId: prepared.prefs.model,
+    runtimeKind: "chat.dispatch",
+    runtimeStatus: "failed",
+    runtimeError: {
+      message: "Durable execution could not start for this shipped operator surface.",
+      retryable: false,
+    },
+    context: {
+      failureClass: "durable_unavailable",
+      providerCallStarted: false,
+    },
+  });
   const failedTrace = host.storage.chatTurnTraces.patch(prepared.turnId, {
     status: "failed",
     finishedAt: new Date().toISOString(),

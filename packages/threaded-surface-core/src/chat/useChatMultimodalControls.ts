@@ -26,13 +26,14 @@ const GOOGLE_IMAGE_MODEL_PREFERENCES = [
   "gemini-3-pro-image-preview",
   "gemini-2.5-flash-image",
 ] as const;
-const IMAGE_MODEL_PREFERENCES: Record<"openai" | "google", readonly string[]> = {
+const IMAGE_MODEL_PREFERENCES: Record<"openai" | "openai-codex" | "google", readonly string[]> = {
   openai: OPENAI_IMAGE_MODEL_PREFERENCES,
+  "openai-codex": OPENAI_IMAGE_MODEL_PREFERENCES,
   google: GOOGLE_IMAGE_MODEL_PREFERENCES,
 };
 
 interface ChatImageRoute {
-  providerId: "openai" | "google";
+  providerId: "openai" | "openai-codex" | "google";
   model: string;
   label: string;
   supportsEdit: boolean;
@@ -77,7 +78,7 @@ function normalizeOptionalString(value?: string | null): string | undefined {
 }
 
 function getImageModelPreferences(providerId: string): readonly string[] {
-  return providerId === "openai"
+  return providerId === "openai" || providerId === "openai-codex"
     ? OPENAI_IMAGE_MODEL_PREFERENCES
     : providerId === "google"
       ? GOOGLE_IMAGE_MODEL_PREFERENCES
@@ -138,11 +139,11 @@ function buildImageRoute(
   if (!model) {
     return null;
   }
-  if (provider.providerId === "openai") {
+  if (provider.providerId === "openai" || provider.providerId === "openai-codex") {
     return {
-      providerId: "openai",
+      providerId: provider.providerId,
       model,
-      label: `OpenAI / ${model}`,
+      label: provider.providerId === "openai-codex" ? `OpenAI Codex / ${model}` : `OpenAI / ${model}`,
       supportsEdit: true,
     };
   }

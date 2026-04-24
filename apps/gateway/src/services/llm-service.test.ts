@@ -782,7 +782,7 @@ describe("LlmService", () => {
     });
 
     expect(updated.providers.find((provider) => provider.providerId === "deepseek")?.defaultModel).toBe(
-      "deepseek-chat",
+      "deepseek-v4-flash",
     );
   });
 
@@ -814,6 +814,33 @@ describe("LlmService", () => {
     expect(updated.providers.find((provider) => provider.providerId === "anthropic")?.apiStyle).toBe(
       "anthropic-messages",
     );
+  });
+
+  it("rejects raw API-key storage for the OpenAI Codex OAuth provider", () => {
+    const secretStore = createTrackedSecretStore({});
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+
+    service.updateRuntimeConfig({
+      upsertProvider: {
+        providerId: "openai-codex",
+        label: "OpenAI Codex (ChatGPT OAuth)",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        apiStyle: "openai-codex-responses",
+        authMode: "codex-oauth",
+        defaultModel: "gpt-5.5",
+        apiKey: "sk-ignored",
+        apiKeyEnv: "OPENAI_API_KEY",
+      },
+    });
+
+    const exportedProvider = service
+      .exportConfigFile()
+      .providers.find((provider) => provider.providerId === "openai-codex");
+    expect(exportedProvider?.apiKey).toBeUndefined();
+    expect(exportedProvider?.apiKeyEnv).toBeUndefined();
+    expect(service.getProviderSecretStatus("openai-codex").hasApiKey).toBe(false);
+    expect(() => service.setProviderApiKey("openai-codex", "sk-test")).toThrow(/ChatGPT OAuth/);
+    expect(() => service.deleteProviderApiKey("openai-codex")).toThrow(/ChatGPT OAuth/);
   });
 
   it("reports resolved execution api styles in runtime config", () => {
@@ -2272,6 +2299,207 @@ describe("LlmService", () => {
     }
   });
 
+  it("normalizes OpenAI Codex as an OAuth Responses provider without appending /v1", () => {
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore: createNoopSecretStore() });
+
+    const codexProvider = service
+      .getRuntimeConfig()
+      .providers.find((provider) => provider.providerId === "openai-codex");
+    const summary = service.listProviders().find((provider) => provider.providerId === "openai-codex");
+
+    expect(codexProvider).toMatchObject({
+      providerId: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      apiStyle: "openai-codex-responses",
+      authMode: "codex-oauth",
+    });
+    expect(service.resolveExecutionApiStyle("openai-codex", "openai-codex/gpt-5.5")).toBe("openai-codex-responses");
+    expect(summary).toMatchObject({
+      providerId: "openai-codex",
+      apiStyle: "openai-codex-responses",
+      resolvedApiStyle: "openai-codex-responses",
+      authMode: "codex-oauth",
+      hasApiKey: false,
+      apiKeySource: "none",
+      oauthStatus: {
+        connected: false,
+      },
+    });
+  });
+
+  it("returns local OpenAI Codex models without calling upstream /models", async () => {
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    try {
+      const models = await service.listModels("openai-codex");
+      expect(models.map((model) => model.id)).toEqual([
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5.4",
+        "gpt-5.4-pro",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.2-codex",
+      ]);
+      expect(models.map((model) => model.id)).not.toContain("gpt-5.3-codex-spark");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("posts OpenAI Codex chat through Responses with OAuth bearer auth and Codex defaults", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let authorizationHeader = "";
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requestedUrl = String(input);
+      const headers = new Headers(init?.headers);
+      authorizationHeader = headers.get("authorization") ?? "";
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "resp_codex_chat",
+          model: "gpt-5.5",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "ok" }],
+            },
+          ],
+          usage: {
+            input_tokens: 11,
+            output_tokens: 2,
+            total_tokens: 13,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+        messages: [
+          { role: "developer", content: "Be concise." },
+          { role: "user", content: "hello" },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_status",
+              description: "Look up runtime status.",
+              parameters: {
+                type: "object",
+                properties: {},
+                additionalProperties: false,
+              },
+            },
+          },
+        ],
+      });
+      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("ok");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const tools = Array.isArray(payloadBody?.tools) ? (payloadBody.tools as Array<Record<string, unknown>>) : [];
+
+    expect(requestedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(authorizationHeader).toBe("Bearer codex-access-token");
+    expect(payloadBody).toMatchObject({
+      model: "gpt-5.5",
+      instructions: "Be concise.",
+      store: false,
+      parallel_tool_calls: true,
+      text: { verbosity: "low" },
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "hello" }],
+        },
+      ],
+    });
+    expect(tools[0]).toMatchObject({
+      type: "function",
+      name: "lookup_status",
+      description: "Look up runtime status.",
+    });
+  });
+
+  it("preserves explicit OpenAI Codex Responses verbosity and parallel tool call settings", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        JSON.stringify({
+          id: "resp_codex_chat",
+          model: "gpt-5.5",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "ok" }],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+        messages: [{ role: "user", content: "hello" }],
+        verbosity: "high",
+        parallel_tool_calls: false,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody).toMatchObject({
+      store: false,
+      parallel_tool_calls: false,
+      text: { verbosity: "high" },
+    });
+  });
+
   it("normalizes legacy headers into canonical request headers on export", () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -2492,6 +2720,90 @@ describe("LlmService", () => {
     });
   });
 
+  it("posts OpenAI Codex image requests through Responses with OAuth bearer auth", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let authorizationHeader = "";
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (input, init) => {
+      requestedUrl = String(input);
+      const headers = new Headers(init?.headers);
+      authorizationHeader = headers.get("authorization") ?? "";
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        [
+          'data: {"type":"response.output_item.done","item":{"type":"image_generation_call","result":"aW1hZ2UtYnl0ZXM=","revised_prompt":"Rendered prompt"}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const response = await service.generateImage({
+        providerId: "openai-codex",
+        prompt: "Generate a neon operations console",
+        size: "1024x1024",
+        responseFormat: "b64_json",
+        referenceImages: [
+          {
+            bytesBase64: "cmVmZXJlbmNl",
+            mimeType: "image/png",
+            fileName: "reference.png",
+          },
+        ],
+      });
+      expect(response.operation).toBe("edit");
+      expect(response.model).toBe("gpt-image-2");
+      expect(response.data).toEqual([
+        {
+          b64Json: "aW1hZ2UtYnl0ZXM=",
+          revisedPrompt: "Rendered prompt",
+        },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const tools = payloadBody?.tools as Array<Record<string, unknown>>;
+    const input = payloadBody?.input as Array<Record<string, unknown>>;
+
+    expect(requestedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(authorizationHeader).toBe("Bearer codex-access-token");
+    expect(payloadBody).toMatchObject({
+      model: "gpt-5.4",
+      instructions: "You are an image generation assistant.",
+      stream: true,
+      store: false,
+      tool_choice: { type: "image_generation" },
+    });
+    expect(tools[0]).toMatchObject({
+      type: "image_generation",
+      model: "gpt-image-2",
+      size: "1024x1024",
+    });
+    expect(input[0]?.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "input_text", text: "Generate a neon operations console" }),
+        expect.objectContaining({ type: "input_image", image_url: "data:image/png;base64,cmVmZXJlbmNl" }),
+      ]),
+    );
+  });
+
   it("routes provider requests through a proxy dispatcher when configured", async () => {
     const tlsDir = mkdtempSync(join(tmpdir(), "llm-service-proxy-"));
     const caPath = join(tlsDir, "ca.pem");
@@ -2628,12 +2940,32 @@ describe("LlmService", () => {
   });
 });
 
+function createCodexConfig(): LlmConfigFile {
+  return {
+    activeProviderId: "openai-codex",
+    activeModel: "openai-codex/gpt-5.5",
+    providers: [
+      {
+        providerId: "openai-codex",
+        label: "OpenAI Codex (ChatGPT OAuth)",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        apiStyle: "openai-codex-responses",
+        defaultModel: "gpt-5.5",
+        authMode: "codex-oauth",
+      },
+    ],
+  };
+}
+
 function createNoopSecretStore(): SecretStoreService {
   return {
     isAvailable: () => false,
     setProviderApiKey: () => undefined,
     getProviderApiKey: () => undefined,
     deleteProviderApiKey: () => undefined,
+    setSecret: () => undefined,
+    getSecret: () => undefined,
+    deleteSecret: () => undefined,
     status: (providerId: string) => ({ providerId, hasSecret: false, source: "none" }),
   } as unknown as SecretStoreService;
 }
@@ -2655,6 +2987,16 @@ function createTrackedSecretStore(initial: Record<string, string>): SecretStoreS
     },
     deleteProviderApiKey: (providerId: string) => {
       secrets.delete(providerId);
+    },
+    setSecret: (account: string, secret: string) => {
+      secrets.set(account, secret);
+    },
+    getSecret: (account: string) => {
+      gets += 1;
+      return secrets.get(account);
+    },
+    deleteSecret: (account: string) => {
+      secrets.delete(account);
     },
     status: (providerId: string) => ({
       providerId,

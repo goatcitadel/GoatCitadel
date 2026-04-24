@@ -26,6 +26,38 @@ const talkListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
+const meetStartSchema = z.object({
+  meetingUrl: z.string().url(),
+  displayName: z.string().optional(),
+  accountRef: z.string().optional(),
+  provider: z.enum(["openai-realtime", "local-transcription"]).optional(),
+  userStartConfirmed: z.boolean().optional(),
+});
+
+const meetPrerequisitesSchema = z.object({
+  meetingUrl: z.string().url().optional(),
+  displayName: z.string().optional(),
+  accountRef: z.string().optional(),
+  provider: z.enum(["openai-realtime", "local-transcription"]).optional(),
+  userStartConfirmed: z.boolean().optional(),
+});
+
+const meetParamsSchema = z.object({
+  sessionId: z.string().min(1),
+});
+
+const meetTranscriptSchema = z.object({
+  text: z.string().min(1),
+  speaker: z.string().optional(),
+  final: z.boolean().default(false),
+  provider: z.enum(["openai-realtime", "local-transcription"]),
+});
+
+const meetConsultSchema = z.object({
+  target: z.enum(["chat", "cowork", "code"]).optional(),
+  prompt: z.string().optional(),
+});
+
 const modelParamsSchema = z.object({
   modelId: z.string().min(1),
 });
@@ -87,6 +119,72 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/voice/wake/stop", async (_request, reply) => {
     return reply.send(fastify.services.voice.stopVoiceWake());
+  });
+
+  fastify.get("/api/v1/voice/google-meet/sessions", async (_request, reply) => {
+    return reply.send({
+      items: fastify.services.voice.listGoogleMeetSessions(),
+    });
+  });
+
+  fastify.post("/api/v1/voice/google-meet/prerequisites", async (request, reply) => {
+    const parsed = meetPrerequisitesSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(fastify.services.voice.getGoogleMeetPrerequisiteStatus(parsed.data));
+  });
+
+  fastify.post("/api/v1/voice/google-meet/sessions", async (request, reply) => {
+    const parsed = meetStartSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.code(201).send(fastify.services.voice.startGoogleMeetSession(parsed.data));
+  });
+
+  fastify.post("/api/v1/voice/google-meet/sessions/:sessionId/transcript", async (request, reply) => {
+    const params = meetParamsSchema.safeParse(request.params);
+    const body = meetTranscriptSchema.safeParse(request.body);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.voice.appendGoogleMeetTranscriptChunk(params.data.sessionId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/voice/google-meet/sessions/:sessionId/consult", async (request, reply) => {
+    const params = meetParamsSchema.safeParse(request.params);
+    const body = meetConsultSchema.safeParse(request.body);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.voice.createGoogleMeetConsultHandoff(params.data.sessionId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/voice/google-meet/sessions/:sessionId/stop", async (request, reply) => {
+    const params = meetParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.voice.stopGoogleMeetSession(params.data.sessionId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
   });
 
   fastify.get("/api/v1/voice/status", async (_request, reply) => {

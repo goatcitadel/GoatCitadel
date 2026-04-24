@@ -19,6 +19,14 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     knownModels: ["gpt-5.4", "gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"],
   },
   {
+    providerId: "openai-codex",
+    label: "OpenAI Codex (ChatGPT OAuth)",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    defaultModel: "gpt-5.5",
+    apiStyle: "openai-codex-responses",
+    knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"],
+  },
+  {
     providerId: "anthropic",
     label: "Anthropic",
     baseUrl: "https://api.anthropic.com/v1",
@@ -135,9 +143,9 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     providerId: "deepseek",
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
-    defaultModel: "deepseek-chat",
+    defaultModel: "deepseek-v4-flash",
     apiStyle: "openai-chat-completions",
-    knownModels: ["deepseek-chat", "deepseek-reasoner"],
+    knownModels: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
   },
   {
     providerId: "glm",
@@ -188,6 +196,7 @@ const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
   anthropic: "anthropic",
   google: "google",
   openai: "openai",
+  "openai-codex": "openai-codex",
   zai: "glm",
 };
 

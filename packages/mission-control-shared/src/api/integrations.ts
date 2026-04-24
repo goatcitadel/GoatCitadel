@@ -330,6 +330,8 @@ export async function fetchIntegrationPlugins(): Promise<{ items: IntegrationPlu
 export async function installIntegrationPlugin(input: {
   source: string;
   pluginId?: string;
+  sourceType?: "local" | "npm" | "git" | "url" | "manual" | "unknown";
+  expectedIntegrity?: string;
 }): Promise<IntegrationPluginRecord> {
   return request<IntegrationPluginRecord>("/api/v1/integrations/plugins/install", {
     method: "POST",

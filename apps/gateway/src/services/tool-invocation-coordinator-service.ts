@@ -122,6 +122,26 @@ export interface ToolInvocationCoordinatorHost {
     output: Record<string, unknown>,
     mode: McpServerRecord["policy"]["redactionMode"],
   ): Record<string, unknown>;
+  recordDevDiagnostic?(input: {
+    level: "debug" | "info" | "warn" | "error";
+    category: string;
+    event: string;
+    message: string;
+    sessionId?: string;
+    taskId?: string;
+    toolRunId?: string;
+    toolName?: string;
+    durationMs?: number;
+    runtimeKind?: string;
+    runtimeStatus?: "started" | "running" | "completed" | "failed" | "cancelled" | "blocked" | "degraded";
+    runtimeError?: {
+      name?: string;
+      message: string;
+      code?: string;
+      retryable?: boolean;
+    };
+    context?: Record<string, unknown>;
+  }): void;
 }
 
 export interface ToolInvocationCoordinator {
@@ -246,9 +266,44 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       : normalizedRequest;
 
     let result: ToolInvokeResult;
+    const toolStartedAt = Date.now();
+    this.host.recordDevDiagnostic?.({
+      level: "debug",
+      category: "tools",
+      event: "tool.invocation.start",
+      message: "Starting tool invocation",
+      sessionId: hookableRequest.sessionId,
+      taskId: hookableRequest.taskId,
+      toolRunId: toolHookEntityId,
+      toolName: hookableRequest.toolName,
+      runtimeKind: "tool.invocation",
+      runtimeStatus: "started",
+      context: {
+        agentId: hookableRequest.agentId,
+      },
+    });
     try {
       result = await this.host.policyEngine.invoke(hookableRequest);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.host.recordDevDiagnostic?.({
+        level: "error",
+        category: "tools",
+        event: "tool.invocation.failed",
+        message: "Tool invocation failed",
+        sessionId: hookableRequest.sessionId,
+        taskId: hookableRequest.taskId,
+        toolRunId: toolHookEntityId,
+        toolName: hookableRequest.toolName,
+        durationMs: Date.now() - toolStartedAt,
+        runtimeKind: "tool.invocation",
+        runtimeStatus: "failed",
+        runtimeError: {
+          name: error instanceof Error ? error.name : undefined,
+          message: errorMessage,
+          retryable: false,
+        },
+      });
       this.host.hooksService.enqueueAfterHooks({
         workspaceId: toolHookWorkspaceId,
         trigger: "tool.call.error",
@@ -259,7 +314,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           args: hookableRequest.args,
           sessionId: hookableRequest.sessionId,
           taskId: hookableRequest.taskId,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage,
         },
       });
       throw error;
@@ -294,6 +349,25 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         },
       },
     );
+
+    this.host.recordDevDiagnostic?.({
+      level: result.outcome === "blocked" ? "warn" : "info",
+      category: "tools",
+      event: "tool.invocation.complete",
+      message: "Tool invocation completed",
+      sessionId: hookableRequest.sessionId,
+      taskId: hookableRequest.taskId,
+      toolRunId: toolHookEntityId,
+      toolName: hookableRequest.toolName,
+      durationMs: Date.now() - toolStartedAt,
+      runtimeKind: "tool.invocation",
+      runtimeStatus: result.outcome === "blocked" || result.outcome === "approval_required" ? "blocked" : "completed",
+      context: {
+        outcome: result.outcome,
+        approvalId: result.approvalId,
+        policyReason: result.policyReason,
+      },
+    });
 
     if (result.outcome === "approval_required" && result.approvalId) {
       this.host.scheduleApprovalExplanationById(result.approvalId);
@@ -333,6 +407,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
   }
 
   public async invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse> {
+    const runtimeStartedAt = Date.now();
     const server = this.host.requireMcpServer(input.serverId);
     if (!server.enabled || server.status !== "connected") {
       return {
@@ -400,6 +475,26 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           arguments: input.arguments,
           signal: input.signal,
         });
+    const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;
+    if (runtimeRetryCount || runtime.output?.degradedReason) {
+      this.host.recordDevDiagnostic?.({
+        level: "warn",
+        category: "mcp",
+        event: "mcp.transport.degraded",
+        message: "MCP tool invocation recovered after a degraded transport state",
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        toolName: input.toolName,
+        durationMs: Date.now() - runtimeStartedAt,
+        runtimeKind: "mcp.transport",
+        runtimeStatus: "degraded",
+        context: {
+          serverId: input.serverId,
+          retryCount: runtimeRetryCount ?? 0,
+          degradedReason: runtime.output?.degradedReason,
+        },
+      });
+    }
 
     const output = runtime.output
       ? {

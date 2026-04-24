@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type {
   ApprovalEffectRecord,
   ApprovalRequest,
+  DevDiagnosticsEvent,
+  GoogleMeetPrerequisiteStatusResponse,
   LlmModelRecord,
   LlmRuntimeConfig,
   ApprovalReplayEvent,
@@ -82,6 +84,18 @@ export class TuiApiClient {
     dailyCostUsd: number;
   }> {
     return this.request("/api/v1/dashboard/state", { method: "GET" });
+  }
+
+  public async devDiagnostics(limit = 8): Promise<{ items: DevDiagnosticsEvent[] }> {
+    const query = new URLSearchParams({ limit: String(Math.max(1, Math.min(50, Math.trunc(limit) || 8))) });
+    return this.request(`/api/v1/dev/diagnostics?${query.toString()}`, { method: "GET" });
+  }
+
+  public async googleMeetPrerequisites(): Promise<GoogleMeetPrerequisiteStatusResponse> {
+    return this.request("/api/v1/voice/google-meet/prerequisites", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
   }
 
   public async systemVitals(): Promise<{

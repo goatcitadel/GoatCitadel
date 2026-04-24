@@ -635,13 +635,17 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     llm: {
       createChatCompletion: (request) => gateway.createChatCompletion(request),
       generateImage: (input) => gateway.llmService.generateImage(input),
+      getOpenAICodexOAuthStatus: () => gateway.llmService.getOpenAICodexOAuthStatus(),
       getLlmConfigWithDetails: () => ({
         ...gateway.getLlmConfig(),
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
       listLlmModels: (providerId) => gateway.llmService.listModels(providerId),
       listLlmProviders: () => gateway.llmService.listProviders(),
+      pollOpenAICodexOAuthDeviceFlow: (flowId) => gateway.llmService.pollOpenAICodexOAuthDeviceFlow(flowId),
       previewLlmModels: (input) => gateway.llmService.previewModels(input),
+      startOpenAICodexOAuthDeviceFlow: () => gateway.llmService.startOpenAICodexOAuthDeviceFlow(),
+      deleteOpenAICodexOAuthCredential: () => gateway.llmService.deleteOpenAICodexOAuthCredential(),
       updateLlmConfig: (input) => {
         const updated = gateway.llmService.updateRuntimeConfig(input);
         gateway.persistLlmConfig();

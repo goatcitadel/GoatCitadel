@@ -20,6 +20,19 @@ export const IntegrationPluginAuthorManifestSchema = z.object({
   version: z.string().min(1),
   description: z.string().min(1).optional(),
   capabilities: z.array(z.string().min(1)).min(1),
+  packageName: z.string().min(1).optional(),
+  integrity: z
+    .object({
+      expected: z.string().min(1).optional(),
+    })
+    .optional(),
+  theme: z
+    .object({
+      accentColor: z.string().min(1).optional(),
+      icon: z.string().min(1).optional(),
+      dashboardVariant: z.enum(["default", "compact", "high_contrast"]).optional(),
+    })
+    .optional(),
 });
 
 export function validateIntegrationPluginAuthorManifest(input: unknown): IntegrationPluginAuthorManifest {

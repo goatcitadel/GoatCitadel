@@ -25,6 +25,9 @@ import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type {
   ChannelSetupDefinition,
   ConnectorDiagnosticReport,
+  GoogleMeetPrerequisiteStatusResponse,
+  GoogleMeetSessionRecord,
+  IntegrationPluginRecord,
   McpServerRecord,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
@@ -36,6 +39,7 @@ import {
   createMcpServer,
   createToolGrant,
   createWorkspace,
+  deleteOpenAICodexOAuthCredential,
   deleteIntegrationConnection,
   deleteMcpServer,
   deleteProviderSecret,
@@ -50,11 +54,15 @@ import {
   fetchIntegrationCatalog,
   fetchIntegrationConnectionDiagnostics,
   fetchIntegrationConnections,
+  fetchIntegrationPlugins,
+  fetchGoogleMeetPrerequisiteStatus,
+  fetchGoogleMeetSessions,
   fetchLlamaCppModels,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchMcpTools,
   fetchNpuModels,
+  fetchOpenAICodexOAuthStatus,
   fetchProviderSecretStatus,
   fetchSettings,
   fetchToolCatalog,
@@ -67,6 +75,7 @@ import {
   invokeIntegrationConnectionAction,
   launchAddon,
   patchSettings,
+  pollOpenAICodexOAuthDeviceFlow,
   refreshLlamaCppRuntime,
   refreshNpuRuntime,
   restartDaemon,
@@ -78,6 +87,7 @@ import {
   saveProviderSecret,
   selectVoiceRuntimeModel,
   startDaemon,
+  startOpenAICodexOAuthDeviceFlow,
   startLlamaCppRuntime,
   startNpuRuntime,
   stopAddon,
@@ -93,6 +103,8 @@ import {
   updateWorkspace,
   validateChannelSetupDraft,
   type IntegrationConnection,
+  type OpenAICodexDeviceStartResponse,
+  type OpenAICodexOAuthStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
   LlmTransportFields,
@@ -283,7 +295,7 @@ type ProviderEditorDraft = {
   providerId: string;
   label: string;
   baseUrl: string;
-  apiStyle: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+  apiStyle: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
   defaultModel: string;
   apiKeyEnv: string;
 };
@@ -304,7 +316,7 @@ function buildProviderEditorDraft(
     providerId: string;
     label: string;
     baseUrl: string;
-    apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+    apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
     defaultModel: string;
     apiKeySource?: string;
     apiKeyRef?: string;
@@ -361,6 +373,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [providerTransportDraft, setProviderTransportDraft] = useState(createEmptyLlmTransportDraft);
   const [providerSaveBusy, setProviderSaveBusy] = useState(false);
   const [providerProbeBusyId, setProviderProbeBusyId] = useState<string | null>(null);
+  const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
+  const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(null);
+  const [codexOAuthBusy, setCodexOAuthBusy] = useState(false);
   const [secretState, setSecretState] = useState<LoadState<Awaited<ReturnType<typeof fetchProviderSecretStatus>>>>({
     loading: false,
     error: null,
@@ -387,6 +402,8 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   }, [providerTransportDraft]);
   const selectedProviderIsLocal = isLikelyLocalProviderBaseUrl(selectedProvider?.baseUrl);
+  const selectedProviderIsCodexOAuth = selectedProvider?.providerId === "openai-codex";
+  const draftIsCodexOAuth = providerDraft.providerId.trim().toLowerCase() === "openai-codex";
   const selectedProviderRuntimePosture = selectedProvider
     ? selectedProviderIsLocal
       ? "Local runtime"
@@ -416,8 +433,30 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   useEffect(() => {
     if (!selectedProviderId) {
       setSecretState({ loading: false, error: null, data: null });
+      setCodexOAuthStatus(null);
+      setCodexOAuthFlow(null);
       return;
     }
+    if (selectedProviderId === "openai-codex") {
+      let cancelled = false;
+      setSecretState({ loading: false, error: null, data: null });
+      void fetchOpenAICodexOAuthStatus()
+        .then((data) => {
+          if (!cancelled) {
+            setCodexOAuthStatus(data);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setCodexOAuthStatus(null);
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    setCodexOAuthStatus(null);
+    setCodexOAuthFlow(null);
     let cancelled = false;
     setSecretState({ loading: true, error: null, data: null });
     void fetchProviderSecretStatus(selectedProviderId)
@@ -509,6 +548,65 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
+  const handleStartCodexOAuth = async () => {
+    setCodexOAuthBusy(true);
+    try {
+      const flow = await startOpenAICodexOAuthDeviceFlow();
+      setCodexOAuthFlow(flow);
+      setNotice({ tone: "success", message: "OpenAI Codex device pairing started." });
+    } catch (oauthError) {
+      setNotice({ tone: "error", message: getErrorMessage(oauthError) });
+    } finally {
+      setCodexOAuthBusy(false);
+    }
+  };
+
+  const handlePollCodexOAuth = async () => {
+    if (!codexOAuthFlow) {
+      setNotice({ tone: "warning", message: "Start OpenAI Codex device pairing first." });
+      return;
+    }
+    setCodexOAuthBusy(true);
+    try {
+      const result = await pollOpenAICodexOAuthDeviceFlow(codexOAuthFlow.flowId);
+      if (result.status === "connected") {
+        setCodexOAuthFlow(null);
+        setCodexOAuthStatus(await fetchOpenAICodexOAuthStatus());
+        setNotice({ tone: "success", message: "OpenAI Codex OAuth connected." });
+        await reload();
+        return;
+      }
+      if (result.status === "expired") {
+        setCodexOAuthFlow(null);
+        setNotice({ tone: "warning", message: "OpenAI Codex device pairing expired." });
+        return;
+      }
+      if (result.status === "failed") {
+        setNotice({ tone: "error", message: result.error ?? "OpenAI Codex OAuth pairing failed." });
+        return;
+      }
+      setNotice({ tone: "info", message: "OpenAI Codex is still waiting for device approval." });
+    } catch (oauthError) {
+      setNotice({ tone: "error", message: getErrorMessage(oauthError) });
+    } finally {
+      setCodexOAuthBusy(false);
+    }
+  };
+
+  const handleDisconnectCodexOAuth = async () => {
+    setCodexOAuthBusy(true);
+    try {
+      setCodexOAuthStatus(await deleteOpenAICodexOAuthCredential());
+      setCodexOAuthFlow(null);
+      setNotice({ tone: "success", message: "OpenAI Codex OAuth disconnected." });
+      await reload();
+    } catch (oauthError) {
+      setNotice({ tone: "error", message: getErrorMessage(oauthError) });
+    } finally {
+      setCodexOAuthBusy(false);
+    }
+  };
+
   const handleSaveProvider = async () => {
     if (!providerDraft.providerId.trim() || !providerDraft.baseUrl.trim()) {
       setNotice({ tone: "warning", message: "Provide both a provider id and base URL before saving." });
@@ -527,8 +625,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
             label: providerDraft.label.trim() || undefined,
             baseUrl: providerDraft.baseUrl.trim(),
             apiStyle: providerDraft.apiStyle,
+            authMode: draftIsCodexOAuth ? "codex-oauth" : undefined,
             defaultModel: providerDraft.defaultModel.trim() || undefined,
-            apiKeyEnv: providerDraft.apiKeyEnv.trim() || undefined,
+            apiKeyEnv: draftIsCodexOAuth ? undefined : providerDraft.apiKeyEnv.trim() || undefined,
             request: providerRequestValidation.request,
           },
         },
@@ -671,9 +770,19 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   items={[
                     { label: "Default model", value: selectedProvider.defaultModel, meta: selectedProvider.apiStyle },
                     {
-                      label: "API key",
-                      value: secretState.data?.hasSecret || selectedProvider.hasApiKey ? "Configured" : "Missing",
-                      meta: secretState.data?.source ?? selectedProvider.apiKeySource ?? "unknown",
+                      label: selectedProviderIsCodexOAuth ? "OAuth" : "API key",
+                      value: selectedProviderIsCodexOAuth
+                        ? codexOAuthStatus?.connected
+                          ? "Connected"
+                          : codexOAuthStatus?.requiresReauth
+                            ? "Reauth"
+                            : "Missing"
+                        : secretState.data?.hasSecret || selectedProvider.hasApiKey
+                          ? "Configured"
+                          : "Missing",
+                      meta: selectedProviderIsCodexOAuth
+                        ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
+                        : (secretState.data?.source ?? selectedProvider.apiKeySource ?? "unknown"),
                     },
                     {
                       label: "Probe",
@@ -700,35 +809,93 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     />
                   </SettingsField>
                 </SettingsFieldGrid>
-                <SettingsField label="Provider secret">
-                  <input
-                    className="mc-next-settings-input"
-                    type="password"
-                    value={secretValue}
-                    placeholder="Paste a new API key to save"
-                    onChange={(event) => setSecretValue(event.target.value)}
-                  />
-                </SettingsField>
-                {secretState.error ? <SettingsNotice notice={{ tone: "error", message: secretState.error }} /> : null}
-                <SettingsButtonRow>
-                  <button type="button" className="mc-next-button" onClick={() => void handleSaveSecret()}>
-                    <KeyRound size={16} />
-                    Save secret
-                  </button>
-                  <button
-                    type="button"
-                    className="mc-next-button-secondary"
-                    onClick={() => void handleRefreshModels(selectedProvider.providerId)}
-                    disabled={providerProbeBusyId === selectedProvider.providerId}
-                  >
-                    <RefreshCw size={16} />
-                    {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
-                  </button>
-                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleDeleteSecret()}>
-                    <Trash2 size={16} />
-                    Delete secret
-                  </button>
-                </SettingsButtonRow>
+                {selectedProviderIsCodexOAuth ? (
+                  <>
+                    <SettingsNotice
+                      notice={{
+                        tone: codexOAuthStatus?.connected ? "success" : "info",
+                        message: codexOAuthStatus?.connected
+                          ? `OpenAI Codex OAuth connected${codexOAuthStatus.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`
+                          : "OpenAI Codex uses ChatGPT OAuth stored in the OS keychain.",
+                      }}
+                    />
+                    {codexOAuthFlow ? (
+                      <SettingsNotice
+                        notice={{
+                          tone: "info",
+                          message: `Open ${codexOAuthFlow.verificationUrl} and enter code ${codexOAuthFlow.userCode}.`,
+                        }}
+                      />
+                    ) : null}
+                    <SettingsButtonRow>
+                      <button
+                        type="button"
+                        className="mc-next-button"
+                        onClick={() => void handleStartCodexOAuth()}
+                        disabled={codexOAuthBusy}
+                      >
+                        <KeyRound size={16} />
+                        {codexOAuthStatus?.connected ? "Reconnect OAuth" : "Connect OAuth"}
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-next-button-secondary"
+                        onClick={() => void handlePollCodexOAuth()}
+                        disabled={codexOAuthBusy || !codexOAuthFlow}
+                      >
+                        <RefreshCw size={16} />
+                        Check pairing
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-next-button-secondary"
+                        onClick={() => void handleDisconnectCodexOAuth()}
+                        disabled={codexOAuthBusy || !codexOAuthStatus?.connected}
+                      >
+                        <Trash2 size={16} />
+                        Disconnect OAuth
+                      </button>
+                    </SettingsButtonRow>
+                  </>
+                ) : (
+                  <>
+                    <SettingsField label="Provider secret">
+                      <input
+                        className="mc-next-settings-input"
+                        type="password"
+                        value={secretValue}
+                        placeholder="Paste a new API key to save"
+                        onChange={(event) => setSecretValue(event.target.value)}
+                      />
+                    </SettingsField>
+                    {secretState.error ? (
+                      <SettingsNotice notice={{ tone: "error", message: secretState.error }} />
+                    ) : null}
+                    <SettingsButtonRow>
+                      <button type="button" className="mc-next-button" onClick={() => void handleSaveSecret()}>
+                        <KeyRound size={16} />
+                        Save secret
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-next-button-secondary"
+                        onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                        disabled={providerProbeBusyId === selectedProvider.providerId}
+                      >
+                        <RefreshCw size={16} />
+                        {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-next-button-secondary"
+                        onClick={() => void handleDeleteSecret()}
+                      >
+                        <Trash2 size={16} />
+                        Delete secret
+                      </button>
+                    </SettingsButtonRow>
+                  </>
+                )}
               </>
             ) : (
               <SettingsEmptyState label="Choose a provider to inspect routing and secret posture." />
@@ -787,6 +954,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   }
                 >
                   <option value="openai-responses">OpenAI Responses</option>
+                  <option value="openai-codex-responses">OpenAI Codex Responses</option>
                   <option value="openai-chat-completions">OpenAI Chat Completions</option>
                   <option value="anthropic-messages">Anthropic Messages</option>
                 </select>
@@ -804,19 +972,21 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   }
                 />
               </SettingsField>
-              <SettingsField label="API key env">
-                <input
-                  className="mc-next-settings-input"
-                  value={providerDraft.apiKeyEnv}
-                  placeholder="OPENAI_API_KEY"
-                  onChange={(event) =>
-                    setProviderDraft((current) => ({
-                      ...current,
-                      apiKeyEnv: event.target.value,
-                    }))
-                  }
-                />
-              </SettingsField>
+              {draftIsCodexOAuth ? null : (
+                <SettingsField label="API key env">
+                  <input
+                    className="mc-next-settings-input"
+                    value={providerDraft.apiKeyEnv}
+                    placeholder="OPENAI_API_KEY"
+                    onChange={(event) =>
+                      setProviderDraft((current) => ({
+                        ...current,
+                        apiKeyEnv: event.target.value,
+                      }))
+                    }
+                  />
+                </SettingsField>
+              )}
             </SettingsFieldGrid>
             {providerRequestValidation.error ? (
               <SettingsNotice notice={{ tone: "error", message: providerRequestValidation.error }} />
@@ -1846,13 +2016,19 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
 
 function IntegrationsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, connections] = await Promise.all([
+    const [catalog, connections, plugins, meetStatus, meetSessions] = await Promise.all([
       fetchIntegrationCatalog().catch(() => ({ items: [] })),
       fetchIntegrationConnections().catch(() => ({ items: [] })),
+      fetchIntegrationPlugins().catch(() => ({ items: [] })),
+      fetchGoogleMeetPrerequisiteStatus().catch(() => null),
+      fetchGoogleMeetSessions(6).catch(() => []),
     ]);
     return {
       catalog: catalog.items.filter((item) => item.kind !== "channel"),
       connections: connections.items.filter((item) => item.kind !== "channel"),
+      plugins: plugins.items,
+      meetStatus,
+      meetSessions,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -2004,6 +2180,7 @@ function IntegrationsSection(_props: SettingsSectionProps) {
               stats={[
                 { label: "Connections", value: String(data.connections.length) },
                 { label: "Catalog", value: String(data.catalog.length) },
+                { label: "Plugins", value: String(data.plugins.length) },
               ]}
             >
               <SettingsSelectableList
@@ -2021,6 +2198,8 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                 emptyLabel="No integration connections yet."
               />
             </SettingsPanel>
+            <PluginTrustPanel plugins={data.plugins} />
+            <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
             <SettingsPanel title="Create connection" subtitle="Create a new integration connection from the catalog.">
               <SettingsFieldGrid>
                 <SettingsField label="Catalog">
@@ -2163,6 +2342,121 @@ function IntegrationsSection(_props: SettingsSectionProps) {
       ) : null}
     </SettingsSectionShell>
   );
+}
+
+function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
+  const warningCount = plugins.reduce((count, plugin) => count + (plugin.trustWarnings?.length ?? 0), 0);
+  return (
+    <SettingsPanel
+      title="Plugin trust"
+      subtitle="Installed plugin source, integrity, readiness, and dashboard theme truth."
+      stats={[
+        { label: "Installed", value: String(plugins.length) },
+        { label: "Warnings", value: String(warningCount) },
+      ]}
+    >
+      <SettingsActionList
+        items={plugins.map((plugin) => {
+          const source = plugin.sourceMetadata;
+          const warnings = plugin.trustWarnings ?? [];
+          return {
+            id: plugin.pluginId,
+            label: plugin.label,
+            description: [
+              `${source?.display ?? plugin.source ?? "Unknown source"} · ${source?.type ?? "unknown"}`,
+              `Integrity: ${plugin.integrityStatus ?? source?.integrityStatus ?? "unknown"}`,
+              `State: ${plugin.enabled ? "enabled" : "disabled"}`,
+              plugin.theme
+                ? `Theme: ${plugin.theme.dashboardVariant ?? "default"}${plugin.theme.accentColor ? `, ${plugin.theme.accentColor}` : ""}`
+                : "Theme: default",
+            ].join(" | "),
+            meta: warnings.length
+              ? warnings.map((warning) => `${warning.severity}: ${warning.message}`).join(" | ")
+              : "Setup readiness: no trust warnings",
+            actionLabel: plugin.enabled ? "Enabled" : "Disabled",
+          };
+        })}
+        emptyLabel="No integration plugins installed."
+      />
+    </SettingsPanel>
+  );
+}
+
+function GoogleMeetStatusPanel({
+  status,
+  sessions,
+}: {
+  status: GoogleMeetPrerequisiteStatusResponse | null;
+  sessions: GoogleMeetSessionRecord[];
+}) {
+  return (
+    <SettingsPanel
+      title="Google Meet voice"
+      subtitle="Realtime meeting voice remains blocked until OAuth, provider, browser, audio, and user-start prerequisites pass."
+      stats={[
+        { label: "State", value: status?.state ?? "unknown" },
+        { label: "Sessions", value: String(sessions.length) },
+      ]}
+    >
+      {status ? (
+        <>
+          <SettingsMetricGrid
+            items={[
+              {
+                label: "Provider",
+                value: status.provider,
+                meta: status.failureReason ?? `Checked ${formatDateTime(status.checkedAt)}`,
+              },
+              {
+                label: "Auth profile",
+                value: status.authProfile.available ? "available" : "missing",
+                meta: status.authProfile.accountRef ?? "OAuth handoff has not provided an account reference",
+              },
+            ]}
+          />
+          <SettingsActionList
+            items={status.prerequisites.map((item) => ({
+              id: item.id,
+              label: labelForMeetPrerequisite(item.id),
+              description: item.message,
+              meta: item.ready ? "ready" : "blocked",
+              actionLabel: item.ready ? "Ready" : "Blocked",
+            }))}
+          />
+          <SettingsActionList
+            items={sessions.map((session) => ({
+              id: session.sessionId,
+              label: session.displayName ?? session.meetingUrl,
+              description:
+                session.failureReason ?? `${session.provider} · ${session.transcript.length} transcript chunks`,
+              meta: `${session.state} · updated ${formatDateTime(session.updatedAt)}`,
+              actionLabel: session.state,
+            }))}
+            emptyLabel="No Google Meet sessions recorded."
+          />
+        </>
+      ) : (
+        <SettingsEmptyState label="Google Meet prerequisite status is unavailable from the gateway." />
+      )}
+    </SettingsPanel>
+  );
+}
+
+function labelForMeetPrerequisite(id: string): string {
+  switch (id) {
+    case "oauth_profile":
+      return "OAuth profile";
+    case "provider_key":
+      return "Provider key";
+    case "browser_transport":
+      return "Browser transport";
+    case "audio_transport":
+      return "Audio transport";
+    case "user_start":
+      return "User start";
+    default:
+      return id;
+  }
 }
 
 function ChannelsSection(_props: SettingsSectionProps) {

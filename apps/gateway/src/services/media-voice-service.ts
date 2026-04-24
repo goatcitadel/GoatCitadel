@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Media, voice, and Meet session orchestration stay grouped until their shared state model is split. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,13 @@ import type {
   ChatAttachmentMediaType,
   ChatAttachmentPreviewResponse,
   ChatAttachmentRecord,
+  GoogleMeetCleanupResult,
+  GoogleMeetConsultHandoff,
+  GoogleMeetPrerequisiteStatusRequest,
+  GoogleMeetPrerequisiteStatusResponse,
+  GoogleMeetSessionRecord,
+  GoogleMeetSessionStartRequest,
+  GoogleMeetTranscriptChunk,
   MediaCreateJobRequest,
   MediaJobRecord,
   VoiceRuntimeInstallRequest,
@@ -30,6 +38,7 @@ import type { GatewaySqlRepository, SystemSettingsRepository } from "@goatcitade
 
 const VOICE_STATUS_SETTING_KEY = "voice_status_v1";
 const VOICE_WAKE_STATUS_SETTING_KEY = "voice_wake_status_v1";
+const GOOGLE_MEET_SESSIONS_SETTING_KEY = "google_meet_voice_sessions_v1";
 const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp";
 
 // ---------------------------------------------------------------------------
@@ -56,6 +65,16 @@ interface DevDiagnosticInput {
   event: string;
   message: string;
   context?: Record<string, unknown>;
+  meetingSessionId?: string;
+  durationMs?: number;
+  runtimeKind?: string;
+  runtimeStatus?: "started" | "running" | "completed" | "failed" | "cancelled" | "blocked" | "degraded";
+  runtimeError?: {
+    name?: string;
+    message: string;
+    code?: string;
+    retryable?: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -646,7 +665,236 @@ export class MediaVoiceService {
     return status;
   }
 
+  // ── Google Meet realtime voice ──────────────────────────────────────────
+
+  public listGoogleMeetSessions(limit = 20): GoogleMeetSessionRecord[] {
+    return this.readGoogleMeetSessions()
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, Math.max(1, Math.min(100, Math.trunc(limit) || 20)));
+  }
+
+  public getGoogleMeetPrerequisiteStatus(
+    input: GoogleMeetPrerequisiteStatusRequest = {},
+  ): GoogleMeetPrerequisiteStatusResponse {
+    const provider = input.provider ?? "openai-realtime";
+    const prerequisites = this.resolveGoogleMeetPrerequisites({
+      meetingUrl: input.meetingUrl ?? "https://meet.google.com/placeholder",
+      displayName: input.displayName,
+      accountRef: input.accountRef,
+      provider,
+      userStartConfirmed: input.userStartConfirmed,
+    });
+    const blocked = prerequisites.find((item) => !item.ready);
+    return {
+      ready: !blocked,
+      state: blocked ? "blocked" : "ready",
+      provider,
+      checkedAt: new Date().toISOString(),
+      failureReason: blocked?.message,
+      authProfile: {
+        accountRef: input.accountRef?.trim() || undefined,
+        available: Boolean(input.accountRef?.trim()),
+        source: input.accountRef?.trim() ? "oauth_thread" : "missing",
+      },
+      prerequisites,
+    };
+  }
+
+  public startGoogleMeetSession(input: GoogleMeetSessionStartRequest): GoogleMeetSessionRecord {
+    const now = new Date().toISOString();
+    const prerequisites = this.resolveGoogleMeetPrerequisites(input);
+    const blocked = prerequisites.find((item) => !item.ready);
+    const record: GoogleMeetSessionRecord = {
+      sessionId: randomUUID(),
+      meetingUrl: input.meetingUrl.trim(),
+      displayName: input.displayName?.trim() || undefined,
+      accountRef: input.accountRef?.trim() || undefined,
+      state: blocked ? "blocked" : "running",
+      provider: input.provider ?? "openai-realtime",
+      createdAt: now,
+      updatedAt: now,
+      startedAt: blocked ? undefined : now,
+      failureReason: blocked?.message,
+      prerequisites,
+      transcript: [],
+    };
+    this.writeGoogleMeetSession(record);
+    this.recordGoogleMeetDiagnostic(record, blocked ? "blocked" : "started", blocked?.message);
+    this.deps.publishRealtime("system", "voice", {
+      type: "google_meet_session_started",
+      sessionId: record.sessionId,
+      state: record.state,
+      failureReason: record.failureReason,
+    });
+    return record;
+  }
+
+  public appendGoogleMeetTranscriptChunk(
+    sessionId: string,
+    input: Pick<GoogleMeetTranscriptChunk, "text" | "speaker" | "final" | "provider">,
+  ): GoogleMeetSessionRecord {
+    const record = this.requireGoogleMeetSession(sessionId);
+    if (record.state !== "running" && record.state !== "consulting") {
+      throw new Error(`Google Meet session ${sessionId} is ${record.state} and cannot accept transcript chunks.`);
+    }
+    const chunk: GoogleMeetTranscriptChunk = {
+      chunkId: randomUUID(),
+      sessionId,
+      timestamp: new Date().toISOString(),
+      speaker: input.speaker,
+      text: input.text,
+      final: input.final,
+      provider: input.provider,
+    };
+    const updated = this.writeGoogleMeetSession({
+      ...record,
+      updatedAt: chunk.timestamp,
+      transcript: [...record.transcript, chunk],
+    });
+    this.deps.publishRealtime("system", "voice", {
+      type: "google_meet_transcript_chunk",
+      sessionId,
+      chunk,
+    });
+    this.recordGoogleMeetDiagnostic(updated, "running", "Google Meet transcript chunk appended");
+    return updated;
+  }
+
+  public createGoogleMeetConsultHandoff(
+    sessionId: string,
+    input: { target?: GoogleMeetConsultHandoff["target"]; prompt?: string },
+  ): GoogleMeetSessionRecord {
+    const record = this.requireGoogleMeetSession(sessionId);
+    const now = new Date().toISOString();
+    const handoff: GoogleMeetConsultHandoff = {
+      handoffId: randomUUID(),
+      sessionId,
+      createdAt: now,
+      target: input.target ?? "cowork",
+      prompt: input.prompt?.trim() || "Review this meeting transcript and suggest the next operator action.",
+      transcriptChunkIds: record.transcript.map((chunk) => chunk.chunkId),
+    };
+    const updated = this.writeGoogleMeetSession({
+      ...record,
+      state: "consulting",
+      updatedAt: now,
+      consultHandoff: handoff,
+    });
+    this.deps.publishRealtime("system", "voice", {
+      type: "google_meet_consult_handoff",
+      sessionId,
+      handoff,
+    });
+    this.recordGoogleMeetDiagnostic(updated, "running", "Google Meet consult handoff created");
+    return updated;
+  }
+
+  public stopGoogleMeetSession(sessionId: string): GoogleMeetSessionRecord {
+    const record = this.requireGoogleMeetSession(sessionId);
+    const now = new Date().toISOString();
+    const cleanup: GoogleMeetCleanupResult = {
+      sessionId,
+      cleanedAt: now,
+      stoppedTransport: record.state === "running" || record.state === "consulting",
+      releasedAudio: record.state === "running" || record.state === "consulting",
+    };
+    const updated = this.writeGoogleMeetSession({
+      ...record,
+      state: "stopped",
+      updatedAt: now,
+      stoppedAt: now,
+      cleanup,
+    });
+    this.deps.publishRealtime("system", "voice", {
+      type: "google_meet_session_stopped",
+      sessionId,
+      cleanup,
+    });
+    this.recordGoogleMeetDiagnostic(updated, "completed", "Google Meet voice session stopped");
+    return updated;
+  }
+
   // ── Private helpers ─────────────────────────────────────────────────────
+
+  private resolveGoogleMeetPrerequisites(
+    input: GoogleMeetSessionStartRequest,
+  ): GoogleMeetSessionRecord["prerequisites"] {
+    const provider = input.provider ?? "openai-realtime";
+    return [
+      {
+        id: "oauth_profile",
+        ready: Boolean(input.accountRef?.trim()),
+        message: input.accountRef?.trim()
+          ? "OAuth profile reference is selected."
+          : "Google Meet OAuth profile is required before joining.",
+      },
+      {
+        id: "provider_key",
+        ready: provider === "local-transcription" || Boolean(process.env.OPENAI_API_KEY?.trim()),
+        message:
+          provider === "local-transcription" || process.env.OPENAI_API_KEY?.trim()
+            ? "Realtime provider prerequisite is available."
+            : "OpenAI Realtime requires OPENAI_API_KEY before meeting voice can start.",
+      },
+      {
+        id: "browser_transport",
+        ready: process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT === "ready",
+        message: "Browser transport must report ready before Google Meet join is enabled.",
+      },
+      {
+        id: "audio_transport",
+        ready: process.env.GOATCITADEL_MEET_AUDIO_TRANSPORT === "ready",
+        message: "Audio capture transport must report ready before Google Meet join is enabled.",
+      },
+      {
+        id: "user_start",
+        ready: input.userStartConfirmed === true,
+        message: "The operator must explicitly start the meeting session.",
+      },
+    ];
+  }
+
+  private readGoogleMeetSessions(): GoogleMeetSessionRecord[] {
+    return (
+      this.deps.storage.systemSettings.get<GoogleMeetSessionRecord[]>(GOOGLE_MEET_SESSIONS_SETTING_KEY)?.value ?? []
+    );
+  }
+
+  private writeGoogleMeetSession(record: GoogleMeetSessionRecord): GoogleMeetSessionRecord {
+    const sessions = this.readGoogleMeetSessions();
+    const next = [record, ...sessions.filter((item) => item.sessionId !== record.sessionId)].slice(0, 100);
+    this.deps.storage.systemSettings.set(GOOGLE_MEET_SESSIONS_SETTING_KEY, next);
+    return record;
+  }
+
+  private requireGoogleMeetSession(sessionId: string): GoogleMeetSessionRecord {
+    const record = this.readGoogleMeetSessions().find((item) => item.sessionId === sessionId);
+    if (!record) {
+      throw new Error(`Unknown Google Meet session: ${sessionId}`);
+    }
+    return record;
+  }
+
+  private recordGoogleMeetDiagnostic(
+    record: GoogleMeetSessionRecord,
+    status: "started" | "running" | "completed" | "blocked",
+    message?: string,
+  ): void {
+    this.deps.recordDevDiagnostic({
+      level: status === "blocked" ? "warn" : "info",
+      category: "meet",
+      event: "meet.session",
+      message: message ?? "Google Meet voice session updated",
+      meetingSessionId: record.sessionId,
+      runtimeKind: "meet.session",
+      runtimeStatus: status,
+      context: {
+        state: record.state,
+        provider: record.provider,
+        failureReason: record.failureReason,
+      },
+    });
+  }
 
   private processMediaJob(jobId: string): void {
     if (typeof jobId !== "string" || !jobId.trim()) {

@@ -89,6 +89,8 @@ const updateChannelDraftSchema = z.object({
 const pluginInstallSchema = z.object({
   source: z.string().min(1),
   pluginId: z.string().optional(),
+  sourceType: z.enum(["local", "npm", "git", "url", "manual", "unknown"]).optional(),
+  expectedIntegrity: z.string().min(1).optional(),
 });
 
 const pluginParamsSchema = z.object({

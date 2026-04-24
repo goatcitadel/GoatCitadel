@@ -130,6 +130,16 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         placeholder: "123456789 or @channel_name",
         required: true,
       }),
+      text("allowedGroupIds", "Allowed Groups", {
+        placeholder: "-1001234567890,@ops_group",
+        advanced: true,
+        description: "Comma-separated Telegram group or supergroup ids allowed for inbound routing.",
+      }),
+      text("allowedForumTopicIds", "Allowed Forum Topics", {
+        placeholder: "123,456",
+        advanced: true,
+        description: "Optional comma-separated forum topic ids for group-topic routing.",
+      }),
       select("parseMode", "Parse Mode", ["Markdown", "MarkdownV2", "HTML"], "Markdown"),
       text("webhookSecretEnv", "Webhook Secret ENV Var", {
         placeholder: "TELEGRAM_WEBHOOK_SECRET",
@@ -137,6 +147,68 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         advanced: true,
       }),
       bool("enabled", "Enabled", true),
+    ],
+  },
+  "channel.matrix": {
+    catalogId: "channel.matrix",
+    title: "Matrix Connection",
+    description:
+      "Catalog-only Matrix setup entry. Live send/read probes are not enabled until a Matrix adapter is wired.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Matrix" }),
+      url("homeserverUrl", "Homeserver URL", {
+        placeholder: "https://matrix.example.com",
+        required: true,
+      }),
+      text("accessTokenEnv", "Access Token ENV Var", {
+        placeholder: "MATRIX_ACCESS_TOKEN",
+        secretRef: true,
+      }),
+      text("defaultRoomId", "Default Room ID", {
+        placeholder: "!roomid:example.com",
+        required: true,
+      }),
+      bool("enabled", "Enabled", false),
+    ],
+  },
+  "channel.qqbot": {
+    catalogId: "channel.qqbot",
+    title: "QQBot Connection",
+    description: "Catalog-only QQBot setup entry. Live send/read probes are not enabled until an adapter is wired.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "QQBot" }),
+      text("appId", "App ID", { required: true }),
+      text("tokenEnv", "Token ENV Var", {
+        placeholder: "QQBOT_TOKEN",
+        secretRef: true,
+      }),
+      text("defaultTarget", "Default Target", {
+        placeholder: "guild/channel/user id",
+        required: true,
+      }),
+      bool("enabled", "Enabled", false),
+    ],
+  },
+  "channel.wecom": {
+    catalogId: "channel.wecom",
+    title: "WeCom Connection",
+    description: "Catalog-only WeCom setup entry. Live send/read probes are not enabled until an adapter is wired.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "WeCom" }),
+      text("corpId", "Corp ID", { required: true }),
+      text("agentId", "Agent ID", { required: true }),
+      text("secretEnv", "Secret ENV Var", {
+        placeholder: "WECOM_SECRET",
+        secretRef: true,
+      }),
+      text("defaultTarget", "Default Target", {
+        placeholder: "user id, party id, or chat id",
+        required: true,
+      }),
+      bool("enabled", "Enabled", false),
     ],
   },
   "channel.google-chat": {
@@ -676,6 +748,33 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "beta",
     ["bot-token"],
     ["chat", "threads", "attachments", "reactions", "unsend", "typing"],
+  ),
+  entry(
+    "channel",
+    "matrix",
+    "Matrix",
+    "Matrix catalog/setup entry. Runtime adapter probes are not wired yet.",
+    "planned",
+    ["token"],
+    ["catalog", "setup"],
+  ),
+  entry(
+    "channel",
+    "qqbot",
+    "QQBot",
+    "QQBot catalog/setup entry. Runtime adapter probes are not wired yet.",
+    "planned",
+    ["token"],
+    ["catalog", "setup"],
+  ),
+  entry(
+    "channel",
+    "wecom",
+    "WeCom",
+    "WeCom catalog/setup entry. Runtime adapter probes are not wired yet.",
+    "planned",
+    ["token"],
+    ["catalog", "setup"],
   ),
   entry(
     "channel",

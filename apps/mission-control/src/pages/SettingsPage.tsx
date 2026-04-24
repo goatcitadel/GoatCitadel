@@ -4,6 +4,7 @@ import { providerTemplates, type DeviceAccessGrantRecord } from "@goatcitadel/co
 import {
   clearGatewayAuthState,
   createLlmChatCompletion,
+  deleteOpenAICodexOAuthCredential,
   deleteProviderSecret,
   evaluateUiChangeRisk,
   fetchDeviceAccessGrants,
@@ -12,12 +13,17 @@ import {
   readStoredGatewayAuthState,
   revokeDeviceAccessGrant,
   fetchProviderSecretStatus,
+  fetchOpenAICodexOAuthStatus,
   fetchSettings,
   patchSettings,
+  pollOpenAICodexOAuthDeviceFlow,
   saveProviderSecret,
   setGatewayAuthStorageMode,
   type GatewayAuthStorageMode,
+  type OpenAICodexDeviceStartResponse,
+  type OpenAICodexOAuthStatus,
   type ProviderSecretStatus,
+  startOpenAICodexOAuthDeviceFlow,
 } from "../api/client";
 import { SettingsAccessSection } from "./settings/SettingsAccessSection";
 import { SettingsOverviewSection } from "./settings/SettingsOverviewSection";
@@ -112,6 +118,9 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
   const [providerApiKeyEnv, setProviderApiKeyEnv] = useState("");
   const [providerRequestDraft, setProviderRequestDraft] = useState(createEmptyLlmTransportDraft);
   const [providerSecretStatus, setProviderSecretStatus] = useState<ProviderSecretStatus | null>(null);
+  const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
+  const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(null);
+  const [codexOAuthBusy, setCodexOAuthBusy] = useState(false);
   const [hasUnsavedActiveLlmDraft, setHasUnsavedActiveLlmDraft] = useState(false);
   const [hasUnsavedProviderDraft, setHasUnsavedProviderDraft] = useState(false);
   const [authMode, setAuthMode] = useState<"none" | "token" | "basic">("none");
@@ -510,6 +519,17 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     };
   }, [providerId, knownProviderIds]);
 
+  useEffect(() => {
+    if (providerId.trim().toLowerCase() !== "openai-codex") {
+      setCodexOAuthStatus(null);
+      setCodexOAuthFlow(null);
+      return;
+    }
+    void fetchOpenAICodexOAuthStatus()
+      .then((status) => setCodexOAuthStatus(status))
+      .catch(() => setCodexOAuthStatus(null));
+  }, [providerId]);
+
   const onSaveRuntime = async () => {
     if (changeReview.overall === "critical" && !criticalConfirmed) {
       setError("Confirm critical changes before saving.");
@@ -584,8 +604,9 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
             label: providerLabel || undefined,
             baseUrl: providerBaseUrl || undefined,
             apiStyle: providerApiStyle,
+            authMode: providerId.trim().toLowerCase() === "openai-codex" ? "codex-oauth" : undefined,
             defaultModel: providerDefaultModel || undefined,
-            apiKeyEnv: providerApiKeyEnv || undefined,
+            apiKeyEnv: providerId.trim().toLowerCase() === "openai-codex" ? undefined : providerApiKeyEnv || undefined,
             request: providerRequestValidation.request,
           },
         },
@@ -593,7 +614,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       setSettings(normalizeRuntimeSettingsResponse(next));
       setHasUnsavedProviderDraft(false);
       await reloadProviderCatalog();
-      if (providerApiKey.trim()) {
+      if (providerId.trim().toLowerCase() !== "openai-codex" && providerApiKey.trim()) {
         const status = await saveProviderSecret(providerId, providerApiKey.trim());
         setProviderSecretStatus(status);
         setProviderApiKey("");
@@ -632,6 +653,64 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       await reloadProviderCatalog();
     } catch (err) {
       setError((err as Error).message);
+    }
+  };
+
+  const onStartCodexOAuthDeviceFlow = async () => {
+    setError(null);
+    setCodexOAuthBusy(true);
+    try {
+      const flow = await startOpenAICodexOAuthDeviceFlow();
+      setCodexOAuthFlow(flow);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCodexOAuthBusy(false);
+    }
+  };
+
+  const onPollCodexOAuthDeviceFlow = async () => {
+    if (!codexOAuthFlow) {
+      setError("Start OpenAI Codex device pairing first.");
+      return;
+    }
+    setError(null);
+    setCodexOAuthBusy(true);
+    try {
+      const result = await pollOpenAICodexOAuthDeviceFlow(codexOAuthFlow.flowId);
+      if (result.status === "connected") {
+        setCodexOAuthFlow(null);
+        const status = await fetchOpenAICodexOAuthStatus();
+        setCodexOAuthStatus(status);
+        await reloadProviderCatalog();
+        return;
+      }
+      if (result.status === "failed") {
+        setError(result.error ?? "OpenAI Codex OAuth pairing failed.");
+      }
+      if (result.status === "expired") {
+        setCodexOAuthFlow(null);
+        setError("OpenAI Codex OAuth pairing expired. Start a new device pairing flow.");
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCodexOAuthBusy(false);
+    }
+  };
+
+  const onDisconnectCodexOAuth = async () => {
+    setError(null);
+    setCodexOAuthBusy(true);
+    try {
+      const status = await deleteOpenAICodexOAuthCredential();
+      setCodexOAuthStatus(status);
+      setCodexOAuthFlow(null);
+      await reloadProviderCatalog();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCodexOAuthBusy(false);
     }
   };
 
@@ -1082,6 +1161,12 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
                 setProviderApiKey(nextApiKey);
               }}
               providerSecretStatus={providerSecretStatus}
+              codexOAuthStatus={codexOAuthStatus}
+              codexOAuthFlow={codexOAuthFlow}
+              codexOAuthBusy={codexOAuthBusy}
+              onStartCodexOAuthDeviceFlow={onStartCodexOAuthDeviceFlow}
+              onPollCodexOAuthDeviceFlow={onPollCodexOAuthDeviceFlow}
+              onDisconnectCodexOAuth={onDisconnectCodexOAuth}
               providerOptions={providerOptions}
               onSaveProviderKeyToSecureStore={onSaveProviderKeyToSecureStore}
               onDeleteProviderKeyFromSecureStore={onDeleteProviderKeyFromSecureStore}

@@ -6,6 +6,8 @@ import type {
   DevDiagnosticsEvent,
   DevDiagnosticsLevel,
   DevDiagnosticsListResponse,
+  RuntimeDiagnosticStatus,
+  RuntimeDiagnosticEventInput,
 } from "@goatcitadel/contracts";
 
 interface DevDiagnosticsContext {
@@ -14,6 +16,8 @@ interface DevDiagnosticsContext {
   sessionId?: string;
   chatId?: string;
   turnId?: string;
+  runId?: string;
+  taskId?: string;
   providerId?: string;
   modelId?: string;
 }
@@ -22,6 +26,11 @@ interface DevDiagnosticsFilter {
   level?: DevDiagnosticsLevel;
   category?: string;
   correlationId?: string;
+  runtimeKind?: string;
+  runtimeStatus?: RuntimeDiagnosticStatus;
+  runId?: string;
+  toolName?: string;
+  meetingSessionId?: string;
   limit?: number;
 }
 
@@ -35,9 +44,19 @@ interface DevDiagnosticsRecordInput {
   sessionId?: string;
   chatId?: string;
   turnId?: string;
+  runId?: string;
+  taskId?: string;
+  stepId?: string;
+  toolRunId?: string;
+  meetingSessionId?: string;
   route?: string;
   providerId?: string;
   modelId?: string;
+  toolName?: string;
+  durationMs?: number;
+  runtimeKind?: string;
+  runtimeStatus?: DevDiagnosticsEvent["runtimeStatus"];
+  runtimeError?: DevDiagnosticsEvent["runtimeError"];
 }
 
 const DEFAULT_BUFFER_SIZE = 300;
@@ -48,6 +67,10 @@ const MAX_CONTEXT_DEPTH = 5;
 const diagnosticsContextStorage = new AsyncLocalStorage<DevDiagnosticsContext>();
 
 type DevDiagnosticsListener = (event: DevDiagnosticsEvent) => void;
+
+export interface DevDiagnosticsExporter {
+  export(event: DevDiagnosticsEvent): void | Promise<void>;
+}
 
 export function runWithDevDiagnosticsContext<T>(context: DevDiagnosticsContext, callback: () => T): T {
   return diagnosticsContextStorage.run(context, callback);
@@ -97,6 +120,7 @@ export function resolveDevDiagnosticsBufferSize(raw: string | undefined, fallbac
 
 export class GatewayDevDiagnosticsService {
   private readonly listeners = new Set<DevDiagnosticsListener>();
+  private readonly exporters = new Set<DevDiagnosticsExporter>();
   private readonly items: DevDiagnosticsEvent[] = [];
 
   public constructor(
@@ -129,6 +153,21 @@ export class GatewayDevDiagnosticsService {
       if (filter.correlationId && item.correlationId !== filter.correlationId) {
         return false;
       }
+      if (filter.runtimeKind && item.runtimeKind !== filter.runtimeKind) {
+        return false;
+      }
+      if (filter.runtimeStatus && item.runtimeStatus !== filter.runtimeStatus) {
+        return false;
+      }
+      if (filter.runId && item.runId !== filter.runId) {
+        return false;
+      }
+      if (filter.toolName && item.toolName !== filter.toolName) {
+        return false;
+      }
+      if (filter.meetingSessionId && item.meetingSessionId !== filter.meetingSessionId) {
+        return false;
+      }
       return true;
     });
     return {
@@ -140,6 +179,13 @@ export class GatewayDevDiagnosticsService {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  public registerExporter(exporter: DevDiagnosticsExporter): () => void {
+    this.exporters.add(exporter);
+    return () => {
+      this.exporters.delete(exporter);
     };
   }
 
@@ -161,9 +207,21 @@ export class GatewayDevDiagnosticsService {
       sessionId: input.sessionId ?? inherited.sessionId,
       chatId: input.chatId ?? inherited.chatId,
       turnId: input.turnId ?? inherited.turnId,
+      runId: input.runId ?? inherited.runId,
+      taskId: input.taskId ?? inherited.taskId,
+      stepId: input.stepId,
+      toolRunId: input.toolRunId,
+      meetingSessionId: input.meetingSessionId,
       route: input.route ?? inherited.route,
       providerId: input.providerId ?? inherited.providerId,
       modelId: input.modelId ?? inherited.modelId,
+      toolName: input.toolName,
+      durationMs: input.durationMs,
+      runtimeKind: input.runtimeKind,
+      runtimeStatus: input.runtimeStatus,
+      runtimeError: input.runtimeError
+        ? (redactValue(input.runtimeError, 0) as DevDiagnosticsEvent["runtimeError"])
+        : undefined,
       source: "gateway",
     };
 
@@ -172,7 +230,44 @@ export class GatewayDevDiagnosticsService {
       this.items.splice(0, this.items.length - this.maxItems);
     }
     for (const listener of this.listeners) {
-      listener(event);
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger?.warn(
+          {
+            diagnostics: true,
+            event: event.event,
+            listenerError: error instanceof Error ? error.message : String(error),
+          },
+          "Dev diagnostics listener threw while handling an event",
+        );
+      }
+    }
+    for (const exporter of this.exporters) {
+      try {
+        const result = exporter.export(event);
+        if (result && typeof result.catch === "function") {
+          result.catch((error: unknown) => {
+            this.logger?.warn(
+              {
+                diagnostics: true,
+                event: event.event,
+                exporterError: error instanceof Error ? error.message : String(error),
+              },
+              "Dev diagnostics exporter rejected while handling an event",
+            );
+          });
+        }
+      } catch (error) {
+        this.logger?.warn(
+          {
+            diagnostics: true,
+            event: event.event,
+            exporterError: error instanceof Error ? error.message : String(error),
+          },
+          "Dev diagnostics exporter threw while handling an event",
+        );
+      }
     }
 
     if (this.logger && (this.verbose || event.level !== "debug")) {
@@ -183,9 +278,14 @@ export class GatewayDevDiagnosticsService {
         correlationId: event.correlationId,
         sessionId: event.sessionId,
         turnId: event.turnId,
+        runId: event.runId,
+        taskId: event.taskId,
         route: event.route,
         providerId: event.providerId,
         modelId: event.modelId,
+        toolName: event.toolName,
+        runtimeKind: event.runtimeKind,
+        runtimeStatus: event.runtimeStatus,
         context: event.context,
       };
       switch (event.level) {
@@ -206,6 +306,77 @@ export class GatewayDevDiagnosticsService {
 
     return event;
   }
+
+  public recordRuntime(input: RuntimeDiagnosticEventInput): DevDiagnosticsEvent | undefined {
+    const context: Record<string, unknown> = {
+      ...(input.metadata ?? {}),
+      status: input.status,
+      kind: input.kind,
+      durationMs: input.durationMs,
+      error: input.error,
+    };
+    return this.record({
+      level: input.level ?? levelForRuntimeStatus(input.status),
+      category: input.category ?? categoryForRuntimeKind(input.kind),
+      event: input.event ?? input.kind,
+      message: input.message,
+      context,
+      correlationId: input.correlationId,
+      sessionId: input.linkage?.sessionId,
+      chatId: input.linkage?.chatId,
+      turnId: input.linkage?.turnId,
+      runId: input.linkage?.runId,
+      taskId: input.linkage?.taskId,
+      stepId: input.linkage?.stepId,
+      toolRunId: input.linkage?.toolRunId,
+      meetingSessionId: input.linkage?.meetingSessionId,
+      providerId: input.providerId,
+      modelId: input.modelId,
+      toolName: input.toolName,
+      durationMs: input.durationMs,
+      runtimeKind: input.kind,
+      runtimeStatus: input.status,
+      runtimeError: input.error,
+    });
+  }
+}
+
+function levelForRuntimeStatus(status: RuntimeDiagnosticEventInput["status"]): DevDiagnosticsLevel {
+  if (status === "failed") {
+    return "error";
+  }
+  if (status === "blocked" || status === "degraded") {
+    return "warn";
+  }
+  return status === "running" ? "debug" : "info";
+}
+
+function categoryForRuntimeKind(kind: RuntimeDiagnosticEventInput["kind"]): DevDiagnosticsCategory | string {
+  if (kind.startsWith("model.")) {
+    return "model";
+  }
+  if (kind.startsWith("tool.")) {
+    return "tools";
+  }
+  if (kind.startsWith("meet.")) {
+    return "meet";
+  }
+  if (kind.startsWith("voice.")) {
+    return "voice";
+  }
+  if (kind.startsWith("mcp.")) {
+    return "mcp";
+  }
+  if (kind.startsWith("chat.")) {
+    return "chat";
+  }
+  if (kind.startsWith("delegation.")) {
+    return "orchestration";
+  }
+  if (kind.startsWith("dependency.")) {
+    return "dependency";
+  }
+  return "runtime";
 }
 
 function redactValue(value: unknown, depth: number): unknown {
@@ -225,8 +396,11 @@ function redactValue(value: unknown, depth: number): unknown {
     }
     return result;
   }
-  if (typeof value === "string" && /^bearer\s+/i.test(value)) {
+  if (typeof value === "string" && /^bearer\s+[a-z0-9._~+/-]+$/i.test(value)) {
     return REDACTED;
+  }
+  if (typeof value === "string" && /\bbearer\s+[a-z0-9._~+/-]+/i.test(value)) {
+    return value.replace(/\bbearer\s+[a-z0-9._~+/-]+/gi, REDACTED);
   }
   return value;
 }

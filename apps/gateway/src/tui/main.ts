@@ -1,3 +1,4 @@
+/* eslint-disable no-console, max-lines -- TUI CLI entrypoint intentionally writes operator output to stdout. */
 import process from "node:process";
 import type { ChatCapabilityUpgradeSuggestion } from "@goatcitadel/contracts";
 import { confirm, input, password, select } from "@inquirer/prompts";
@@ -8,7 +9,7 @@ import { loadLocalEnvFile } from "../env-file.js";
 import { TuiApiClient } from "./api-client.js";
 import { TuiLiveFeed } from "./live-feed.js";
 import { loadResolvedProfile, saveProfile, type TuiResolvedAuth } from "./profile.js";
-import { renderBox, renderBulletList, renderKeyValueSummary, renderSection } from "./render.js";
+import { renderBox, renderBulletList, renderKeyValueSummary, renderOperatorSection, renderSection } from "./render.js";
 import { tuiTheme } from "./theme.js";
 
 type HomeView =
@@ -209,8 +210,8 @@ async function resolveAuth(auth: TuiResolvedAuth): Promise<TuiResolvedAuth> {
     };
   }
   if (auth.mode === "basic" && (!auth.username || !auth.password)) {
-    const username = auth.username?.trim() || await input({ message: "Gateway basic username" });
-    const pass = auth.password || await password({ message: "Gateway basic password", mask: "*" });
+    const username = auth.username?.trim() || (await input({ message: "Gateway basic username" }));
+    const pass = auth.password || (await password({ message: "Gateway basic password", mask: "*" }));
     return {
       ...auth,
       username: username.trim(),
@@ -276,15 +277,19 @@ function printHeader(input: {
   liveNote?: string;
 }): void {
   console.clear();
-  console.log(renderSection("GoatCitadel Terminal Mission Control", "Operator console for local-first runtime control."));
-  console.log(renderKeyValueSummary([
-    { key: "Profile", value: input.profile },
-    { key: "Gateway", value: input.gateway },
-    { key: "Live", value: input.liveState },
-    { key: "Mode", value: input.readOnly ? "read-only" : "read+safe-write" },
-    { key: "Last event", value: input.lastEventAt ? new Date(input.lastEventAt).toLocaleString() : "none yet" },
-    ...(input.liveNote ? [{ key: "Feed note", value: summarizeText(input.liveNote, 100) }] : []),
-  ]));
+  console.log(
+    renderSection("GoatCitadel Terminal Mission Control", "Operator console for local-first runtime control."),
+  );
+  console.log(
+    renderKeyValueSummary([
+      { key: "Profile", value: input.profile },
+      { key: "Gateway", value: input.gateway },
+      { key: "Live", value: input.liveState },
+      { key: "Mode", value: input.readOnly ? "read-only" : "read+safe-write" },
+      { key: "Last event", value: input.lastEventAt ? new Date(input.lastEventAt).toLocaleString() : "none yet" },
+      ...(input.liveNote ? [{ key: "Feed note", value: summarizeText(input.liveNote, 100) }] : []),
+    ]),
+  );
   console.log("");
 }
 
@@ -318,34 +323,96 @@ async function chooseNextView(): Promise<HomeView> {
 
 async function viewDashboard(client: TuiApiClient): Promise<void> {
   const spinner = ora("Loading dashboard...").start();
-  const state = await client.dashboard();
+  const [state, diagnostics, meetStatus] = await Promise.all([
+    client.dashboard(),
+    client.devDiagnostics(6).catch(() => ({ items: [] })),
+    client.googleMeetPrerequisites().catch(() => null),
+  ]);
   spinner.stop();
   const sessions = state.sessions ?? [];
   const taskStatusCounts = state.taskStatusCounts ?? [];
   const recentEvents = state.recentEvents ?? [];
+  const runtimeDiagnostics = diagnostics.items.filter((item) => item.runtimeKind || item.runtimeStatus);
 
   console.log(renderSection("Dashboard", "Fast health snapshot before you dive into a view."));
-  console.log(renderBox("Current state", [
-    `Timestamp: ${state.timestamp}`,
-    `Sessions: ${sessions.length}`,
-    `Pending approvals: ${state.pendingApprovals}`,
-    `Active subagents: ${state.activeSubagents}`,
-    `Daily cost (USD): ${Number(state.dailyCostUsd ?? 0).toFixed(4)}`,
-  ], "info"));
-  console.log(renderBox(
-    "Task status",
-    taskStatusCounts.length > 0
-      ? taskStatusCounts.map((item) => `${toText(item.status) || "unknown"}: ${Number(item.count ?? 0)}`)
-      : ["No task counters reported."],
-    taskStatusCounts.length > 0 ? "info" : "warning",
-  ));
-  console.log(renderBox(
-    "Recent events",
-    recentEvents.length > 0
-      ? recentEvents.slice(0, 8).map((event) => `${formatTimestamp(toText(event.timestamp))} · ${toText(event.eventType)} · ${toText(event.source)}`)
-      : ["No recent realtime events reported."],
-    recentEvents.length > 0 ? "info" : "warning",
-  ));
+  console.log(
+    renderBox(
+      "Current state",
+      [
+        `Timestamp: ${state.timestamp}`,
+        `Sessions: ${sessions.length}`,
+        `Pending approvals: ${state.pendingApprovals}`,
+        `Active subagents: ${state.activeSubagents}`,
+        `Daily cost (USD): ${Number(state.dailyCostUsd ?? 0).toFixed(4)}`,
+      ],
+      "info",
+    ),
+  );
+  console.log(
+    renderBox(
+      "Task status",
+      taskStatusCounts.length > 0
+        ? taskStatusCounts.map((item) => `${toText(item.status) || "unknown"}: ${Number(item.count ?? 0)}`)
+        : ["No task counters reported."],
+      taskStatusCounts.length > 0 ? "info" : "warning",
+    ),
+  );
+  console.log(
+    renderBox(
+      "Recent events",
+      recentEvents.length > 0
+        ? recentEvents
+            .slice(0, 8)
+            .map(
+              (event) =>
+                `${formatTimestamp(toText(event.timestamp))} · ${toText(event.eventType)} · ${toText(event.source)}`,
+            )
+        : ["No recent realtime events reported."],
+      recentEvents.length > 0 ? "info" : "warning",
+    ),
+  );
+  console.log(
+    renderOperatorSection({
+      id: "activity",
+      title: "Activity",
+      lines: recentEvents
+        .slice(0, 5)
+        .map(
+          (event) =>
+            `${formatTimestamp(toText(event.timestamp))} · ${toText(event.eventType)} · ${toText(event.source)}`,
+        ),
+      contentBearing: recentEvents.length > 0,
+    }),
+  );
+  console.log(
+    renderOperatorSection({
+      id: "diagnostics",
+      title: "Diagnostics",
+      lines: runtimeDiagnostics
+        .slice(0, 5)
+        .map(
+          (event) =>
+            `${event.runtimeStatus ?? event.level} · ${event.runtimeKind ?? event.category} · ${event.message}`,
+        ),
+      contentBearing: runtimeDiagnostics.length > 0,
+    }),
+  );
+  console.log(
+    renderOperatorSection({
+      id: "voice_meeting",
+      title: "Voice / meeting",
+      lines: meetStatus
+        ? [
+            `Google Meet: ${meetStatus.state} · ${meetStatus.provider}`,
+            ...(meetStatus.failureReason ? [`Blocked reason: ${meetStatus.failureReason}`] : []),
+            ...meetStatus.prerequisites.map(
+              (item) => `${item.ready ? "ready" : "blocked"} · ${item.id}: ${item.message}`,
+            ),
+          ]
+        : [],
+      contentBearing: Boolean(meetStatus),
+    }),
+  );
   await pause();
 }
 
@@ -354,23 +421,33 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     client.listChatSessions({ limit: 60, view: "active" }),
     client.fetchLlmConfig().catch(() => null),
   ]);
-  console.log(renderSection("Chat Workspace", "Start from an existing session or create one. Project creation is optional."));
+  console.log(
+    renderSection("Chat Workspace", "Start from an existing session or create one. Project creation is optional."),
+  );
   if (runtimeLlm) {
-    console.log(renderBox("Runtime model", [
-      `Active provider: ${runtimeLlm.activeProviderId}`,
-      `Active model: ${runtimeLlm.activeModel}`,
-      "New chats fall back to this runtime selection when session prefs are blank.",
-    ], "info"));
+    console.log(
+      renderBox(
+        "Runtime model",
+        [
+          `Active provider: ${runtimeLlm.activeProviderId}`,
+          `Active model: ${runtimeLlm.activeModel}`,
+          "New chats fall back to this runtime selection when session prefs are blank.",
+        ],
+        "info",
+      ),
+    );
   }
   const sessionItems = sessions.items ?? [];
   if (sessionItems.length > 0) {
-    console.log(renderBox(
-      "Active sessions",
-      sessionItems.slice(0, MAX_TUI_SESSION_CHOICES).map((session, index) => (
-        `${index + 1}. ${formatSessionSummary(session)}`
-      )),
-      "info",
-    ));
+    console.log(
+      renderBox(
+        "Active sessions",
+        sessionItems
+          .slice(0, MAX_TUI_SESSION_CHOICES)
+          .map((session, index) => `${index + 1}. ${formatSessionSummary(session)}`),
+        "info",
+      ),
+    );
     if (sessionItems.length > MAX_TUI_SESSION_CHOICES) {
       console.log(tuiTheme.muted(`Showing ${MAX_TUI_SESSION_CHOICES} of ${sessionItems.length} active sessions.`));
     }
@@ -391,15 +468,18 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     return;
   }
 
-  let sessionId = "";
+  let sessionId: string;
   if (action === "create") {
     const title = await input({ message: "Session title (optional)" });
     const created = await client.createChatSession({ title: title.trim() || undefined });
     sessionId = toText(created.sessionId);
-    console.log(renderBox("Session created", [
-      `Session ID: ${sessionId}`,
-      "You can chat immediately. Creating a separate project is optional.",
-    ], "success"));
+    console.log(
+      renderBox(
+        "Session created",
+        [`Session ID: ${sessionId}`, "You can chat immediately. Creating a separate project is optional."],
+        "success",
+      ),
+    );
   } else {
     sessionId = await chooseSessionId(
       sessionItems,
@@ -455,13 +535,19 @@ async function viewChat(client: TuiApiClient): Promise<void> {
       memoryMode,
       thinkingLevel,
     });
-    console.log(renderBox("Session prefs updated", [
-      `Session: ${sessionId}`,
-      `Mode: ${toText(patched.mode ?? mode)}`,
-      `Web: ${toText(patched.webMode ?? webMode)}`,
-      `Memory: ${toText(patched.memoryMode ?? memoryMode)}`,
-      `Thinking: ${toText(patched.thinkingLevel ?? thinkingLevel)}`,
-    ], "success"));
+    console.log(
+      renderBox(
+        "Session prefs updated",
+        [
+          `Session: ${sessionId}`,
+          `Mode: ${toText(patched.mode ?? mode)}`,
+          `Web: ${toText(patched.webMode ?? webMode)}`,
+          `Memory: ${toText(patched.memoryMode ?? memoryMode)}`,
+          `Thinking: ${toText(patched.thinkingLevel ?? thinkingLevel)}`,
+        ],
+        "success",
+      ),
+    );
     await pause();
     return;
   }
@@ -469,13 +555,18 @@ async function viewChat(client: TuiApiClient): Promise<void> {
   const messages = await client.listChatMessages(sessionId, 30);
   const messageItems = messages.items ?? [];
   if (messageItems.length > 0) {
-    console.log(renderBox(
-      `Recent messages for ${sessionId}`,
-      messageItems.slice(-8).map((msg) => (
-        `${toText(msg.role) || "unknown"} · ${formatTimestamp(toText(msg.createdAt))} · ${summarizeText(toText(msg.content), 140)}`
-      )),
-      "info",
-    ));
+    console.log(
+      renderBox(
+        `Recent messages for ${sessionId}`,
+        messageItems
+          .slice(-8)
+          .map(
+            (msg) =>
+              `${toText(msg.role) || "unknown"} · ${formatTimestamp(toText(msg.createdAt))} · ${summarizeText(toText(msg.content), 140)}`,
+          ),
+        "info",
+      ),
+    );
   }
 
   const content = (await input({ message: "Message (blank to return)" })).trim();
@@ -492,8 +583,16 @@ async function viewChat(client: TuiApiClient): Promise<void> {
   const sendStyle = await select({
     message: "Send style",
     choices: [
-      { name: "Quick send (chat/auto/standard)", value: "quick", description: "Send immediately with sensible defaults." },
-      { name: "Configure options", value: "configure", description: "Choose mode, web, memory, thinking, and agent path before sending." },
+      {
+        name: "Quick send (chat/auto/standard)",
+        value: "quick",
+        description: "Send immediately with sensible defaults.",
+      },
+      {
+        name: "Configure options",
+        value: "configure",
+        description: "Choose mode, web, memory, thinking, and agent path before sending.",
+      },
     ],
   });
   if (sendStyle === "configure") {
@@ -536,12 +635,18 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     });
   }
 
-  console.log(renderBox("Request", [
-    `Session: ${sessionId}`,
-    `Mode: ${mode} / web ${webMode} / memory ${memoryMode} / thinking ${thinkingLevel}`,
-    `Agent path: ${agentMode ? "enabled" : "off"}`,
-    `Prompt: ${content}`,
-  ], "info"));
+  console.log(
+    renderBox(
+      "Request",
+      [
+        `Session: ${sessionId}`,
+        `Mode: ${mode} / web ${webMode} / memory ${memoryMode} / thinking ${thinkingLevel}`,
+        `Agent path: ${agentMode ? "enabled" : "off"}`,
+        `Prompt: ${content}`,
+      ],
+      "info",
+    ),
+  );
   console.log(tuiTheme.heading("\nAssistant response"));
   let done = false;
   let renderedAny = false;
@@ -573,18 +678,16 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     }
     if (type === "tool_start") {
       const toolRun = asRecord(event.toolRun);
-      console.log(renderBox("Tool start", [
-        `Tool: ${toText(toolRun.toolName)}`,
-        `Status: ${toText(toolRun.status)}`,
-      ], "info"));
+      console.log(
+        renderBox("Tool start", [`Tool: ${toText(toolRun.toolName)}`, `Status: ${toText(toolRun.status)}`], "info"),
+      );
       continue;
     }
     if (type === "tool_result") {
       const toolRun = asRecord(event.toolRun);
-      console.log(renderBox("Tool result", [
-        `Tool: ${toText(toolRun.toolName)}`,
-        `Status: ${toText(toolRun.status)}`,
-      ], "success"));
+      console.log(
+        renderBox("Tool result", [`Tool: ${toText(toolRun.toolName)}`, `Status: ${toText(toolRun.status)}`], "success"),
+      );
       continue;
     }
     if (type === "trace_update") {
@@ -592,9 +695,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
       const routing = asRecord(trace.routing);
       const note = toText(routing.fallbackReason);
       const rawSuggestions = trace.capabilityUpgradeSuggestions;
-      const suggestions = Array.isArray(rawSuggestions)
-        ? (rawSuggestions as ChatCapabilityUpgradeSuggestion[])
-        : [];
+      const suggestions = Array.isArray(rawSuggestions) ? (rawSuggestions as ChatCapabilityUpgradeSuggestion[]) : [];
       if (suggestions.length > 0) {
         capabilitySuggestions = suggestions;
       }
@@ -605,9 +706,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     }
     if (type === "capability_upgrade_suggestion") {
       const rawSuggestions = event.capabilityUpgradeSuggestions;
-      const suggestions = Array.isArray(rawSuggestions)
-        ? (rawSuggestions as ChatCapabilityUpgradeSuggestion[])
-        : [];
+      const suggestions = Array.isArray(rawSuggestions) ? (rawSuggestions as ChatCapabilityUpgradeSuggestion[]) : [];
       if (suggestions.length > 0) {
         capabilitySuggestions = suggestions;
       }
@@ -615,11 +714,17 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     }
     if (type === "approval_required") {
       const approval = asRecord(event.approval);
-      console.log(renderBox("Approval required", [
-        `Approval ID: ${toText(approval.approvalId)}`,
-        `Tool: ${toText(approval.toolName) || "unknown"}`,
-        `Reason: ${toText(approval.reason) || "Review before continuing."}`,
-      ], "warning"));
+      console.log(
+        renderBox(
+          "Approval required",
+          [
+            `Approval ID: ${toText(approval.approvalId)}`,
+            `Tool: ${toText(approval.toolName) || "unknown"}`,
+            `Reason: ${toText(approval.reason) || "Review before continuing."}`,
+          ],
+          "warning",
+        ),
+      );
       continue;
     }
     if (type === "error") {
@@ -726,11 +831,18 @@ async function viewPromptLab(client: TuiApiClient): Promise<void> {
   }
 
   if (action === "benchmark") {
-    const testsCsv = (await input({
-      message: "Test codes CSV (optional)",
-    })).trim();
+    const testsCsv = (
+      await input({
+        message: "Test codes CSV (optional)",
+      })
+    ).trim();
     const launched = await client.runPromptPackBenchmark(packId, {
-      testCodes: testsCsv ? testsCsv.split(",").map((item) => item.trim()).filter(Boolean) : undefined,
+      testCodes: testsCsv
+        ? testsCsv
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : undefined,
     });
     console.log(JSON.stringify(launched, null, 2));
     await pause();
@@ -866,7 +978,12 @@ async function viewMemoryLifecycle(client: TuiApiClient): Promise<void> {
       return;
     }
     const result = await client.forgetMemory({
-      itemIds: ids ? ids.split(",").map((item) => item.trim()).filter(Boolean) : undefined,
+      itemIds: ids
+        ? ids
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : undefined,
       namespace: forgetNamespace || undefined,
       query: forgetQuery || undefined,
     });
@@ -1016,22 +1133,20 @@ async function viewCron(client: TuiApiClient): Promise<void> {
   if (!confirmed) {
     return;
   }
-  const result = action === "run"
-    ? await client.runCronJob(jobId)
-    : action === "start"
-      ? await client.startCronJob(jobId)
-      : action === "pause"
-        ? await client.pauseCronJob(jobId)
-        : await client.deleteCronJob(jobId);
+  const result =
+    action === "run"
+      ? await client.runCronJob(jobId)
+      : action === "start"
+        ? await client.startCronJob(jobId)
+        : action === "pause"
+          ? await client.pauseCronJob(jobId)
+          : await client.deleteCronJob(jobId);
   console.log(JSON.stringify(result, null, 2));
   await pause();
 }
 
 async function viewImprovement(client: TuiApiClient): Promise<void> {
-  const [reports, runs] = await Promise.all([
-    client.listImprovementReports(20),
-    client.listImprovementReplayRuns(30),
-  ]);
+  const [reports, runs] = await Promise.all([client.listImprovementReports(20), client.listImprovementReplayRuns(30)]);
 
   console.log(chalk.bold("Improvement Reports"));
   console.table(
@@ -1071,9 +1186,7 @@ async function viewImprovement(client: TuiApiClient): Promise<void> {
   if (action === "manual-run") {
     const sampleSizeRaw = (await input({ message: "Sample size (optional)" })).trim();
     const sampleSize = sampleSizeRaw ? Number(sampleSizeRaw) : undefined;
-    const launched = await client.runImprovementReplay(
-      sampleSize && !Number.isNaN(sampleSize) ? { sampleSize } : {},
-    );
+    const launched = await client.runImprovementReplay(sampleSize && !Number.isNaN(sampleSize) ? { sampleSize } : {});
     console.log(JSON.stringify(launched, null, 2));
     await pause();
     return;
@@ -1116,10 +1229,13 @@ async function viewImprovement(client: TuiApiClient): Promise<void> {
   if (!runId) {
     return;
   }
-  const overrideJson = (await input({
-    message: "Overrides JSON array (blank for [])",
-    default: "[]",
-  })).trim() || "[]";
+  const overrideJson =
+    (
+      await input({
+        message: "Overrides JSON array (blank for [])",
+        default: "[]",
+      })
+    ).trim() || "[]";
   let overrides: Array<Record<string, unknown>>;
   try {
     overrides = JSON.parse(overrideJson) as Array<Record<string, unknown>>;
@@ -1131,9 +1247,10 @@ async function viewImprovement(client: TuiApiClient): Promise<void> {
     await pause();
     return;
   }
-  const result = action === "draft"
-    ? await client.createReplayDraft(runId, overrides)
-    : await client.executeReplayOverride(runId, overrides);
+  const result =
+    action === "draft"
+      ? await client.createReplayDraft(runId, overrides)
+      : await client.executeReplayOverride(runId, overrides);
   console.log(JSON.stringify(result, null, 2));
   await pause();
 }
@@ -1258,7 +1375,7 @@ async function viewCosts(client: TuiApiClient): Promise<void> {
   );
   console.log(
     `QMD: ${qmd.totalRuns ?? 0} runs, ${Number(qmd.savingsPercent ?? 0).toFixed(1)}% estimated savings ` +
-    `(${qmd.originalTokenEstimate ?? 0} -> ${qmd.distilledTokenEstimate ?? 0})`,
+      `(${qmd.originalTokenEstimate ?? 0} -> ${qmd.distilledTokenEstimate ?? 0})`,
   );
 
   const cheaper = await confirm({
@@ -1276,10 +1393,7 @@ async function viewCosts(client: TuiApiClient): Promise<void> {
 }
 
 async function viewTools(client: TuiApiClient): Promise<void> {
-  const [catalog, grants] = await Promise.all([
-    client.toolsCatalog(),
-    client.toolsListGrants({ limit: 500 }),
-  ]);
+  const [catalog, grants] = await Promise.all([client.toolsCatalog(), client.toolsListGrants({ limit: 500 })]);
 
   console.log(chalk.bold("Tool Catalog"));
   console.table(
@@ -1374,7 +1488,7 @@ async function viewTools(client: TuiApiClient): Promise<void> {
       toolPattern,
       decision,
       scope,
-      scopeRef: scope === "global" ? undefined : (scopeRef.trim() || undefined),
+      scopeRef: scope === "global" ? undefined : scopeRef.trim() || undefined,
       grantType,
       expiresAt: expiresAt.trim() || undefined,
       createdBy: createdBy.trim() || "tui-operator",
@@ -1397,7 +1511,7 @@ async function viewTools(client: TuiApiClient): Promise<void> {
   }
 
   const toolName = await input({ message: "Tool name", default: "fs.list" });
-  const argsRaw = await input({ message: "Args JSON", default: "{\"path\":\"./workspace\"}" });
+  const argsRaw = await input({ message: "Args JSON", default: '{"path":"./workspace"}' });
   const agentId = await input({ message: "Agent ID", default: "operator" });
   const sessionId = await input({ message: "Session ID", default: "demo-session" });
   const taskId = await input({ message: "Task ID (optional)" });
@@ -1761,19 +1875,18 @@ async function viewSystem(client: TuiApiClient): Promise<void> {
   console.log(chalk.bold("Runtime Settings"));
   console.log(JSON.stringify(settings, null, 2));
   console.log(chalk.bold("Recent Realtime Events"));
-  console.table(events.items.map((item) => ({
-    timestamp: item.timestamp,
-    eventType: item.eventType,
-    source: item.source,
-  })));
+  console.table(
+    events.items.map((item) => ({
+      timestamp: item.timestamp,
+      eventType: item.eventType,
+      source: item.source,
+    })),
+  );
   await pause();
 }
 
 async function viewNpu(client: TuiApiClient): Promise<void> {
-  const [status, models] = await Promise.all([
-    client.npuStatus(),
-    client.npuModels().catch(() => ({ items: [] })),
-  ]);
+  const [status, models] = await Promise.all([client.npuStatus(), client.npuModels().catch(() => ({ items: [] }))]);
 
   console.log(chalk.bold("NPU Runtime"));
   console.log(JSON.stringify(status, null, 2));
@@ -1876,51 +1989,70 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
   const state = await client.onboardingState();
   const activeProviderId = state.settings?.llm?.activeProviderId?.trim();
   const providerProbe = activeProviderId
-    ? await client.listLlmModels(activeProviderId)
-      .then((result) => ({
-        ok: true as const,
-        items: result.items ?? [],
-      }))
-      .catch((error) => ({
-        ok: false as const,
-        message: (error as Error).message,
-      }))
+    ? await client
+        .listLlmModels(activeProviderId)
+        .then((result) => ({
+          ok: true as const,
+          items: result.items ?? [],
+        }))
+        .catch((error) => ({
+          ok: false as const,
+          message: (error as Error).message,
+        }))
     : null;
   console.log(renderSection("Onboarding", "Configuration readiness for first-run setup and operator handoff."));
-  console.log(renderBox("Current state", [
-    `Completed: ${state.completed ? "yes" : "no"}`,
-    `Completed at: ${state.completedAt ? formatTimestamp(state.completedAt) : "not yet"}`,
-    `Completed by: ${state.completedBy || "n/a"}`,
-    `Provider: ${state.settings?.llm?.activeProviderId || "unset"} / ${state.settings?.llm?.activeModel || "unset"}`,
-    `Runtime defaults: ${state.settings?.defaultToolProfile || "unset"} / ${state.settings?.budgetMode || "unset"}`,
-  ], state.completed ? "success" : "warning"));
-  console.log(renderBox(
-    "Checklist",
-    (state.checklist ?? []).length > 0
-      ? state.checklist.map((item) => `${item.label}: ${item.status}${item.detail ? ` (${item.detail})` : ""}`)
-      : ["No onboarding checklist items were returned."],
-    "info",
-  ));
+  console.log(
+    renderBox(
+      "Current state",
+      [
+        `Completed: ${state.completed ? "yes" : "no"}`,
+        `Completed at: ${state.completedAt ? formatTimestamp(state.completedAt) : "not yet"}`,
+        `Completed by: ${state.completedBy || "n/a"}`,
+        `Provider: ${state.settings?.llm?.activeProviderId || "unset"} / ${state.settings?.llm?.activeModel || "unset"}`,
+        `Runtime defaults: ${state.settings?.defaultToolProfile || "unset"} / ${state.settings?.budgetMode || "unset"}`,
+      ],
+      state.completed ? "success" : "warning",
+    ),
+  );
+  console.log(
+    renderBox(
+      "Checklist",
+      (state.checklist ?? []).length > 0
+        ? state.checklist.map((item) => `${item.label}: ${item.status}${item.detail ? ` (${item.detail})` : ""}`)
+        : ["No onboarding checklist items were returned."],
+      "info",
+    ),
+  );
   if (providerProbe) {
-    console.log(renderBox(
-      "Provider probe",
-      providerProbe.ok
-        ? [
-          `Provider ${activeProviderId} responded to live model discovery.`,
-          `Models returned: ${providerProbe.items.length}`,
-          providerProbe.items[0]?.id ? `First model: ${providerProbe.items[0].id}` : "The provider responded but returned no models.",
-        ]
-        : [
-          `Provider ${activeProviderId} did not complete a live model lookup.`,
-          summarizeText(providerProbe.message, 180),
-        ],
-      providerProbe.ok ? "success" : "warning",
-    ));
+    console.log(
+      renderBox(
+        "Provider probe",
+        providerProbe.ok
+          ? [
+              `Provider ${activeProviderId} responded to live model discovery.`,
+              `Models returned: ${providerProbe.items.length}`,
+              providerProbe.items[0]?.id
+                ? `First model: ${providerProbe.items[0].id}`
+                : "The provider responded but returned no models.",
+            ]
+          : [
+              `Provider ${activeProviderId} did not complete a live model lookup.`,
+              summarizeText(providerProbe.message, 180),
+            ],
+        providerProbe.ok ? "success" : "warning",
+      ),
+    );
   }
-  console.log(renderBox("Readiness note", [
-    "This checklist is configuration-based. It can read as complete even when a provider endpoint is currently unreachable.",
-    "Run the guided onboarding wizard or `goat doctor --deep` before public testing if you need a live provider check.",
-  ], "warning"));
+  console.log(
+    renderBox(
+      "Readiness note",
+      [
+        "This checklist is configuration-based. It can read as complete even when a provider endpoint is currently unreachable.",
+        "Run the guided onboarding wizard or `goat doctor --deep` before public testing if you need a live provider check.",
+      ],
+      "warning",
+    ),
+  );
 
   const action = await select({
     message: "Onboarding action",
@@ -1936,10 +2068,13 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
       return;
     }
     const result = await client.onboardingComplete("tui-operator");
-    console.log(renderBox("Onboarding updated", [
-      `Completed: ${result.state?.completed ? "yes" : "no"}`,
-      "The onboarding marker was updated for this gateway.",
-    ], "success"));
+    console.log(
+      renderBox(
+        "Onboarding updated",
+        [`Completed: ${result.state?.completed ? "yes" : "no"}`, "The onboarding marker was updated for this gateway."],
+        "success",
+      ),
+    );
     await pause();
     return;
   }
@@ -1973,28 +2108,28 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
       markComplete: false,
       completedBy: "tui-operator",
     });
-    console.log(renderBox("Bootstrap applied", [
-      `Applied at: ${formatTimestamp(result.appliedAt)}`,
-      `Profile: ${defaultToolProfile}`,
-      `Budget: ${budgetMode}`,
-    ], "success"));
+    console.log(
+      renderBox(
+        "Bootstrap applied",
+        [`Applied at: ${formatTimestamp(result.appliedAt)}`, `Profile: ${defaultToolProfile}`, `Budget: ${budgetMode}`],
+        "success",
+      ),
+    );
     await pause();
   }
 }
 
-async function viewSettings(
-  client: TuiApiClient,
-  profilePath: string,
-  profileName: string,
-): Promise<void> {
+async function viewSettings(client: TuiApiClient, profilePath: string, profileName: string): Promise<void> {
   const settings = await client.runtimeSettings();
   console.log(renderSection("Gateway Settings", "Current runtime configuration from the gateway."));
-  console.log(renderKeyValueSummary(
-    Object.entries(settings).map(([key, value]) => ({
-      key,
-      value: typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? ""),
-    })),
-  ));
+  console.log(
+    renderKeyValueSummary(
+      Object.entries(settings).map(([key, value]) => ({
+        key,
+        value: typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? ""),
+      })),
+    ),
+  );
 
   const action = await select({
     message: "Settings action",
@@ -2084,14 +2219,22 @@ async function handleCapabilitySuggestions(
   client: TuiApiClient,
   suggestions: ChatCapabilityUpgradeSuggestion[],
 ): Promise<void> {
-  console.log(renderBox("Capability upgrade available", [
-    "GoatCitadel found a likely capability upgrade for this request.",
-    "Nothing is installed or enabled automatically. Every change still needs your approval.",
-  ], "warning"));
-  console.log(renderBulletList(
-    suggestions.map((item) => `${item.title}${item.riskLevel ? ` (${item.riskLevel} risk)` : ""} - ${item.summary}`),
-    "accent",
-  ));
+  console.log(
+    renderBox(
+      "Capability upgrade available",
+      [
+        "GoatCitadel found a likely capability upgrade for this request.",
+        "Nothing is installed or enabled automatically. Every change still needs your approval.",
+      ],
+      "warning",
+    ),
+  );
+  console.log(
+    renderBulletList(
+      suggestions.map((item) => `${item.title}${item.riskLevel ? ` (${item.riskLevel} risk)` : ""} - ${item.summary}`),
+      "accent",
+    ),
+  );
 
   const selectedValue = await select<string>({
     message: "Capability follow-up",
@@ -2112,14 +2255,23 @@ async function handleCapabilitySuggestions(
     return;
   }
 
-  console.log(renderBox("Suggestion details", [
-    suggestion.summary,
-    suggestion.reason,
-    `Recommended action: ${suggestion.recommendedAction}`,
-    `Source: ${suggestion.sourceProvider ?? "installed/local"}`,
-  ], suggestion.riskLevel === "high" ? "danger" : suggestion.riskLevel === "medium" ? "warning" : "info"));
+  console.log(
+    renderBox(
+      "Suggestion details",
+      [
+        suggestion.summary,
+        suggestion.reason,
+        `Recommended action: ${suggestion.recommendedAction}`,
+        `Source: ${suggestion.sourceProvider ?? "installed/local"}`,
+      ],
+      suggestion.riskLevel === "high" ? "danger" : suggestion.riskLevel === "medium" ? "warning" : "info",
+    ),
+  );
 
-  const followUpChoices = [{ name: "Back", value: "back" }, { name: "Show details only", value: "details" }] as Array<{ name: string; value: string }>;
+  const followUpChoices = [
+    { name: "Back", value: "back" },
+    { name: "Show details only", value: "details" },
+  ] as Array<{ name: string; value: string }>;
   if (suggestion.recommendedAction === "enable_skill") {
     followUpChoices.push({ name: "Enable skill now", value: "enable" });
   }
@@ -2150,10 +2302,7 @@ async function handleCapabilitySuggestions(
       state: "enabled",
       note: "Enabled from TUI capability suggestion.",
     });
-    console.log(renderBox("Skill enabled", [
-      `Skill ID: ${updated.skillId}`,
-      "Retry your request now.",
-    ], "success"));
+    console.log(renderBox("Skill enabled", [`Skill ID: ${updated.skillId}`, "Retry your request now."], "success"));
     return;
   }
 
@@ -2164,24 +2313,33 @@ async function handleCapabilitySuggestions(
     }
     const installed = await client.installSkillImport({
       sourceRef: suggestion.sourceRef,
-      sourceProvider: suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
-        ? suggestion.sourceProvider
-        : undefined,
+      sourceProvider:
+        suggestion.sourceProvider && suggestion.sourceProvider !== "mcp_template"
+          ? suggestion.sourceProvider
+          : undefined,
       confirmHighRisk: suggestion.riskLevel === "high",
     });
-    console.log(renderBox("Skill installed", [
-      installed.installedSkillId
-        ? `Installed ${installed.installedSkillId}.`
-        : "Installed the suggested skill source.",
-      "Imported skills stay disabled by default until you review and enable them.",
-    ], "success"));
+    console.log(
+      renderBox(
+        "Skill installed",
+        [
+          installed.installedSkillId
+            ? `Installed ${installed.installedSkillId}.`
+            : "Installed the suggested skill source.",
+          "Imported skills stay disabled by default until you review and enable them.",
+        ],
+        "success",
+      ),
+    );
     return;
   }
 
   if (next === "mcp") {
     const templateId = suggestion.candidateId ?? suggestion.sourceRef;
     if (!templateId) {
-      console.log(renderBox("Cannot add MCP template", ["The template identifier is missing from this suggestion."], "danger"));
+      console.log(
+        renderBox("Cannot add MCP template", ["The template identifier is missing from this suggestion."], "danger"),
+      );
       return;
     }
     const templates = await client.fetchMcpTemplates();
@@ -2191,10 +2349,13 @@ async function handleCapabilitySuggestions(
       return;
     }
     if (template.installed) {
-      console.log(renderBox("MCP template already added", [
-        `${template.label} is already installed.`,
-        "Open the MCP view to connect or tune its policy.",
-      ], "info"));
+      console.log(
+        renderBox(
+          "MCP template already added",
+          [`${template.label} is already installed.`, "Open the MCP view to connect or tune its policy."],
+          "info",
+        ),
+      );
       return;
     }
     await client.createMcpServer({
@@ -2210,18 +2371,27 @@ async function handleCapabilitySuggestions(
       costTier: template.costTier,
       policy: template.policy,
     });
-    console.log(renderBox("MCP template added", [
-      `${template.label} was added to GoatCitadel.`,
-      "Review trust, auth, and policy before first live use.",
-    ], "success"));
+    console.log(
+      renderBox(
+        "MCP template added",
+        [`${template.label} was added to GoatCitadel.`, "Review trust, auth, and policy before first live use."],
+        "success",
+      ),
+    );
     return;
   }
 
   if (next === "tools") {
-    console.log(renderBox("Tool Access hint", [
-      "This capability is blocked by the current tool/profile policy.",
-      "Open the Tool Access view next and adjust the profile or grants before retrying.",
-    ], "warning"));
+    console.log(
+      renderBox(
+        "Tool Access hint",
+        [
+          "This capability is blocked by the current tool/profile policy.",
+          "Open the Tool Access view next and adjust the profile or grants before retrying.",
+        ],
+        "warning",
+      ),
+    );
   }
 }
 
@@ -2253,10 +2423,7 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function chooseSessionId(
-  sessionItems: Array<Record<string, unknown>>,
-  message: string,
-): Promise<string> {
+async function chooseSessionId(sessionItems: Array<Record<string, unknown>>, message: string): Promise<string> {
   const available = sessionItems
     .map((session) => ({
       sessionId: toText(session.sessionId),

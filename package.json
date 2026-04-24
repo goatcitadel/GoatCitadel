@@ -39,6 +39,7 @@
     "prompt:gates:targeted": "pnpm tsx scripts/run-prompt-pack-gates.ts --target-only",
     "screenshots:capture": "pnpm --filter @goatcitadel/policy-engine exec node scripts/capture-mission-control-screenshots.mjs",
     "inventory:inline-sql": "node scripts/inventory-inline-sql.mjs",
+    "dependency:risk": "node scripts/dependency-risk-report.mjs",
     "coverage:collect": "node scripts/coverage-collect.mjs",
     "coverage:gate": "node scripts/coverage-gate.mjs",
     "coverage:gate:production": "node scripts/coverage-gate.mjs --profile=production",

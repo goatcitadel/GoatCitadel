@@ -1,15 +1,18 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { discoverMcpTools, invokeMcpRuntimeTool } from "./mcp-runtime.js";
 
-function createTestServer(script: string): McpServerRecord {
+function createTestServer(script: string, extraArgs: string[] = []): McpServerRecord {
   const now = new Date().toISOString();
   return {
     serverId: "srv-test",
     label: "Test Playwright MCP",
     transport: "stdio",
     command: process.execPath,
-    args: ["-e", script],
+    args: ["-e", script, ...extraArgs],
     authType: "none",
     enabled: true,
     status: "connected",
@@ -96,6 +99,46 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_EXPIRED_SESSION_ONCE_SCRIPT = String.raw`
+const fs = require("node:fs");
+const statePath = process.argv[1];
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, payload) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, ...payload }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "test-mcp", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    if (!fs.existsSync(statePath)) {
+      fs.writeFileSync(statePath, "expired");
+      reply(message.id, {
+        error: {
+          code: -32001,
+          message: "expired session",
+        },
+      });
+      return;
+    }
+    reply(message.id, {
+      result: {
+        structuredContent: { ok: true },
+      },
+    });
+  }
+});
+`;
+
 describe("mcp runtime", () => {
   it("discovers tools from a stdio MCP server", async () => {
     const server = createTestServer(MCP_TEST_SCRIPT);
@@ -140,5 +183,29 @@ describe("mcp runtime", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("aborted");
+  });
+
+  it("reconnects once when a stdio MCP tool reports an expired session", async () => {
+    const statePath = path.join(os.tmpdir(), `goatcitadel-mcp-expired-${Date.now()}.txt`);
+    try {
+      const server = createTestServer(MCP_EXPIRED_SESSION_ONCE_SCRIPT, [statePath]);
+
+      const result = await invokeMcpRuntimeTool(server, {
+        toolName: "browser.navigate",
+        arguments: {
+          url: "https://example.com/releases",
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.degraded).toBe(true);
+      expect(result.retryCount).toBe(1);
+      expect(result.output).toMatchObject({
+        structuredContent: { ok: true },
+        degradedReason: "expired_session_reconnect",
+      });
+    } finally {
+      fs.rmSync(statePath, { force: true });
+    }
   });
 });

@@ -7,6 +7,7 @@ import type { Dispatcher } from "undici";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ImageAssetInput,
   ImageGenerationRequest,
   ImageGenerationResponse,
   LlmProviderRequestAuthConfig,
@@ -25,6 +26,12 @@ import type {
 import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
 import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
 import {
+  OpenAICodexOAuthService,
+  type OpenAICodexDevicePollResponse,
+  type OpenAICodexDeviceStartResponse,
+  type OpenAICodexOAuthStatus,
+} from "./openai-codex-oauth-service.js";
+import {
   isSecretStoreUnavailableLikeError,
   SecretStoreService,
   SecretStoreUnavailableError,
@@ -39,6 +46,7 @@ export interface LlmRuntimeUpdateInput {
     baseUrl?: string;
     apiStyle?: LlmApiStyle;
     defaultModel?: string;
+    authMode?: LlmProviderConfig["authMode"];
     apiKey?: string;
     apiKeyEnv?: string;
     request?: LlmProviderRequestConfig;
@@ -66,6 +74,7 @@ export interface LlmServiceOptions {
   networkAllowlist?: string[];
   enforceNetworkAllowlist?: boolean;
   secretStore?: SecretStoreService;
+  openAICodexOAuthFetch?: typeof fetch;
 }
 
 export interface LlmProviderSecretStatusOptions {
@@ -113,6 +122,7 @@ type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 export class LlmService {
   private readonly providers = new Map<string, LlmProviderConfig>();
   private readonly secretStore: SecretStoreService;
+  private readonly openAICodexOAuth: OpenAICodexOAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private networkAllowlist: string[];
@@ -126,6 +136,7 @@ export class LlmService {
     options: LlmServiceOptions = {},
   ) {
     this.secretStore = options.secretStore ?? new SecretStoreService();
+    this.openAICodexOAuth = new OpenAICodexOAuthService(this.secretStore, options.openAICodexOAuthFetch ?? fetch);
     this.networkAllowlist = [...(options.networkAllowlist ?? [])];
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.activeProviderId = "";
@@ -169,10 +180,19 @@ export class LlmService {
     return Array.from(this.providers.values()).map((provider) => {
       const includeKeychain =
         options.includeKeychainForProviderId === provider.providerId ? true : includeKeychainDefault;
-      const status = this.getProviderSecretStatus(provider.providerId, {
-        includeKeychain,
-        useCache: options.useCache,
-      });
+      const oauthStatus = isOpenAICodexProvider(provider) ? this.openAICodexOAuth.getStatus() : undefined;
+      const status = oauthStatus
+        ? {
+            providerId: provider.providerId,
+            hasApiKey: oauthStatus.connected,
+            apiKeySource: oauthStatus.connected ? ("keychain" as const) : ("none" as const),
+            hasKeychainSecret: oauthStatus.connected,
+            apiKeyRef: oauthStatus.connected ? "keychain:goatcitadel:provider:openai-codex:oauth" : undefined,
+          }
+        : this.getProviderSecretStatus(provider.providerId, {
+            includeKeychain,
+            useCache: options.useCache,
+          });
       return {
         providerId: provider.providerId,
         label: provider.label,
@@ -180,6 +200,8 @@ export class LlmService {
         apiStyle: provider.apiStyle,
         resolvedApiStyle: resolveProviderExecutionApiStyle(provider, provider.defaultModel),
         defaultModel: provider.defaultModel,
+        authMode: resolveProviderAuthMode(provider),
+        oauthStatus,
         hasApiKey: status.hasApiKey,
         apiKeySource: status.apiKeySource,
         hasKeychainSecret: status.hasKeychainSecret,
@@ -206,7 +228,8 @@ export class LlmService {
   public updateRuntimeConfig(input: LlmRuntimeUpdateInput): LlmRuntimeConfig {
     if (input.upsertProvider) {
       const existing = this.providers.get(input.upsertProvider.providerId);
-      const submittedApiKey = input.upsertProvider.apiKey?.trim();
+      const isCodexOAuthProvider = input.upsertProvider.providerId.trim().toLowerCase() === "openai-codex";
+      const submittedApiKey = isCodexOAuthProvider ? undefined : input.upsertProvider.apiKey?.trim();
       if (submittedApiKey) {
         this.setProviderApiKey(input.upsertProvider.providerId, submittedApiKey);
       }
@@ -223,8 +246,16 @@ export class LlmService {
           input.upsertProvider.defaultModel ??
           existing?.defaultModel ??
           defaultModelForProvider(input.upsertProvider.providerId),
-        apiKey: submittedApiKey ? undefined : (input.upsertProvider.apiKey ?? existing?.apiKey),
-        apiKeyEnv: input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv,
+        authMode:
+          input.upsertProvider.authMode ??
+          existing?.authMode ??
+          defaultAuthModeForProvider(input.upsertProvider.providerId),
+        apiKey: isCodexOAuthProvider
+          ? undefined
+          : submittedApiKey
+            ? undefined
+            : (input.upsertProvider.apiKey ?? existing?.apiKey),
+        apiKeyEnv: isCodexOAuthProvider ? undefined : (input.upsertProvider.apiKeyEnv ?? existing?.apiKeyEnv),
         request: input.upsertProvider.request ?? existing?.request,
         headers: input.upsertProvider.headers ?? existing?.headers,
       });
@@ -322,8 +353,12 @@ export class LlmService {
   }
 
   public setProviderApiKey(providerId: string, apiKey: string): void {
-    if (!this.providers.has(providerId)) {
+    const provider = this.providers.get(providerId);
+    if (!provider) {
       throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+    if (isOpenAICodexProvider(provider)) {
+      throw new Error("OpenAI Codex uses ChatGPT OAuth. Connect it through the OpenAI Codex OAuth flow.");
     }
     try {
       this.secretStore.setProviderApiKey(providerId, apiKey);
@@ -345,8 +380,12 @@ export class LlmService {
   }
 
   public deleteProviderApiKey(providerId: string): void {
-    if (!this.providers.has(providerId)) {
+    const provider = this.providers.get(providerId);
+    if (!provider) {
       throw new Error(`Unknown LLM provider: ${providerId}`);
+    }
+    if (isOpenAICodexProvider(provider)) {
+      throw new Error("OpenAI Codex uses ChatGPT OAuth. Disconnect it through the OpenAI Codex OAuth flow.");
     }
     try {
       this.secretStore.deleteProviderApiKey(providerId);
@@ -356,12 +395,27 @@ export class LlmService {
       }
       throw error;
     }
-    const provider = this.providers.get(providerId);
-    if (provider) {
-      this.setCachedSecretStatus(this.buildQuickSecretStatus(provider));
-    } else {
-      this.secretStatusCache.delete(providerId);
-    }
+    this.setCachedSecretStatus(this.buildQuickSecretStatus(provider));
+  }
+
+  public getOpenAICodexOAuthStatus(): OpenAICodexOAuthStatus {
+    this.assertKnownOpenAICodexProvider();
+    return this.openAICodexOAuth.getStatus();
+  }
+
+  public async startOpenAICodexOAuthDeviceFlow(): Promise<OpenAICodexDeviceStartResponse> {
+    this.assertKnownOpenAICodexProvider();
+    return this.openAICodexOAuth.startDeviceFlow();
+  }
+
+  public async pollOpenAICodexOAuthDeviceFlow(flowId: string): Promise<OpenAICodexDevicePollResponse> {
+    this.assertKnownOpenAICodexProvider();
+    return this.openAICodexOAuth.pollDeviceFlow(flowId);
+  }
+
+  public deleteOpenAICodexOAuthCredential(): OpenAICodexOAuthStatus {
+    this.assertKnownOpenAICodexProvider();
+    return this.openAICodexOAuth.deleteCredential();
   }
 
   public clearInlineProviderApiKey(providerId: string): void {
@@ -392,7 +446,7 @@ export class LlmService {
   }
 
   public async listModels(providerId?: string): Promise<LlmModelRecord[]> {
-    const resolved = this.resolveProvider(providerId);
+    const resolved = await this.resolveProvider(providerId);
     const result = await this.fetchModelsForResolvedProvider(resolved);
     return result.items;
   }
@@ -451,15 +505,19 @@ export class LlmService {
       throw new Error("images requires a non-empty prompt");
     }
 
-    const resolved = this.resolveProvider(request.providerId);
+    const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     if (!supportsImageGenerationProvider(resolved.provider.providerId)) {
-      throw new Error("Image generation currently requires an OpenAI- or Google-compatible provider.");
+      throw new Error("Image generation currently requires an OpenAI, OpenAI Codex, or Google-compatible provider.");
     }
 
     const model = request.model?.trim() || defaultImageModelForProvider(resolved.provider.providerId);
     const operation =
       Array.isArray(request.referenceImages) && request.referenceImages.length > 0 ? "edit" : "generate";
+
+    if (isOpenAICodexProvider(resolved.provider)) {
+      return this.generateOpenAICodexImage(request, resolved, model, operation);
+    }
 
     if (operation === "edit") {
       const target = this.buildRequestTarget(
@@ -534,17 +592,74 @@ export class LlmService {
     });
   }
 
+  private async generateOpenAICodexImage(
+    request: ImageGenerationRequest,
+    resolved: ResolvedProvider,
+    model: string,
+    operation: "generate" | "edit",
+  ): Promise<ImageGenerationResponse> {
+    const referenceImages = request.referenceImages ?? [];
+    if (referenceImages.length > 5) {
+      throw new Error("OpenAI Codex image generation supports at most 5 reference images.");
+    }
+    if (request.maskImage) {
+      throw new Error("OpenAI Codex image generation does not support mask images in v1.");
+    }
+    const count = request.n ?? 1;
+    if (!Number.isInteger(count) || count < 1 || count > 4) {
+      throw new Error("OpenAI Codex image generation supports 1 to 4 results.");
+    }
+
+    const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
+    target.headers.Accept = "text/event-stream";
+    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 180000);
+    const data: ImageGenerationResponse["data"] = [];
+    const content: Array<Record<string, unknown>> = [
+      { type: "input_text", text: request.prompt.trim() },
+      ...referenceImages.map((image) => ({
+        type: "input_image",
+        image_url: toImageDataUrl(image),
+        detail: "auto",
+      })),
+    ];
+
+    for (let index = 0; index < count; index += 1) {
+      const response = await postJsonRequest(target, buildOpenAICodexImagePayload(request, model, content), timeoutMs);
+      if (isRedirect(response.status)) {
+        throw new Error(`OpenAI Codex image generation blocked redirect (${response.status})`);
+      }
+      if (!response.ok) {
+        throw new Error(await buildHttpError("OpenAI Codex image generation", response));
+      }
+      data.push(...(await adaptOpenAICodexImageResponse(response, model)));
+    }
+
+    return {
+      providerId: resolved.provider.providerId,
+      model,
+      operation,
+      data: data.slice(0, 4),
+    };
+  }
+
+  private assertKnownOpenAICodexProvider(): void {
+    if (!this.providers.has("openai-codex")) {
+      throw new Error("Unknown LLM provider: openai-codex");
+    }
+  }
+
   public async chatCompletions(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
     if (!request.messages || request.messages.length === 0) {
       throw new Error("chat/completions requires at least one message");
     }
 
-    const resolved = this.resolveProvider(request.providerId);
+    const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const model = this.resolveRequestModel(resolved.provider, request.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
 
     switch (apiStyle) {
+      case "openai-codex-responses":
       case "openai-responses":
         return this.executeOpenAiResponses(request, resolved, model);
       case "anthropic-messages":
@@ -559,12 +674,13 @@ export class LlmService {
       throw new Error("chat/completions requires at least one message");
     }
 
-    const resolved = this.resolveProvider(request.providerId);
+    const resolved = await this.resolveProvider(request.providerId, { requireAuth: true });
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const model = this.resolveRequestModel(resolved.provider, request.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
 
     switch (apiStyle) {
+      case "openai-codex-responses":
       case "openai-responses":
         yield* this.executeOpenAiResponsesStream(request, resolved, model);
         return;
@@ -724,7 +840,7 @@ export class LlmService {
     resolved: ResolvedProvider,
     model: string,
   ): Promise<ChatCompletionResponse> {
-    const payload = buildOpenAiResponsesPayload(request, model);
+    const payload = buildOpenAiResponsesPayload(request, model, resolved.provider);
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
     const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
@@ -748,7 +864,7 @@ export class LlmService {
     resolved: ResolvedProvider,
     model: string,
   ): AsyncGenerator<Record<string, unknown>> {
-    const payload = buildOpenAiResponsesPayload(request, model);
+    const payload = buildOpenAiResponsesPayload(request, model, resolved.provider);
     payload.stream = true;
 
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
@@ -1017,7 +1133,10 @@ export class LlmService {
     }
   }
 
-  private resolveProvider(providerId?: string): ResolvedProvider {
+  private async resolveProvider(
+    providerId?: string,
+    options: { requireAuth?: boolean } = {},
+  ): Promise<ResolvedProvider> {
     const selectedId = normalizeConfiguredProviderId(providerId) ?? this.activeProviderId;
     if (!selectedId) {
       throw new Error("No active LLM provider is configured. Select a provider first.");
@@ -1027,7 +1146,11 @@ export class LlmService {
       throw new Error(`Unknown LLM provider: ${selectedId}`);
     }
 
-    const apiKey = this.resolveApiKey(provider);
+    const apiKey = isOpenAICodexProvider(provider)
+      ? options.requireAuth
+        ? await this.openAICodexOAuth.resolveAccessToken()
+        : undefined
+      : this.resolveApiKey(provider);
     return { provider, apiKey };
   }
 
@@ -1224,6 +1347,9 @@ export class LlmService {
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
+    if (isOpenAICodexProvider(resolved.provider)) {
+      return { items: fallback, source: "fallback" };
+    }
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
 
     try {
@@ -1271,6 +1397,7 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
     ...provider,
     baseUrl: withV1,
     apiStyle: normalizeProviderApiStyle(provider.providerId, provider.apiStyle),
+    authMode: provider.authMode ?? defaultAuthModeForProvider(provider.providerId),
     request: normalizeProviderRequestConfig(provider.request, provider.headers),
     headers: undefined,
   };
@@ -1300,8 +1427,16 @@ function normalizeProviderRequestConfig(
 }
 
 function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
-  if (apiStyle === "openai-chat-completions" || apiStyle === "openai-responses" || apiStyle === "anthropic-messages") {
+  if (
+    apiStyle === "openai-chat-completions" ||
+    apiStyle === "openai-responses" ||
+    apiStyle === "openai-codex-responses" ||
+    apiStyle === "anthropic-messages"
+  ) {
     return apiStyle;
+  }
+  if (providerId === "openai-codex") {
+    return "openai-codex-responses";
   }
   if (providerId === "openai") {
     return "openai-responses";
@@ -1313,6 +1448,10 @@ function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | u
 }
 
 function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: string): LlmApiStyle {
+  if (isOpenAICodexProvider(provider)) {
+    return "openai-codex-responses";
+  }
+
   if (provider.providerId === "openai") {
     if (provider.apiStyle === "openai-chat-completions") {
       return "openai-chat-completions";
@@ -1324,7 +1463,9 @@ function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: st
     return provider.apiStyle === "openai-chat-completions" ? "openai-chat-completions" : "anthropic-messages";
   }
 
-  return provider.apiStyle === "openai-responses" ? "openai-chat-completions" : provider.apiStyle;
+  return provider.apiStyle === "openai-responses" || provider.apiStyle === "openai-codex-responses"
+    ? "openai-chat-completions"
+    : provider.apiStyle;
 }
 
 function isOpenAiResponsesPreferredModel(model: string): boolean {
@@ -1371,6 +1512,9 @@ function inferForeignProviderForModel(providerId: string, model: string): string
 
 function normalizeRequestedModel(providerId: string, model: string): string {
   const trimmed = model.trim();
+  if (providerId === "openai-codex") {
+    return trimmed.replace(/^openai-codex\//i, "");
+  }
   if (providerId !== "google") {
     return trimmed;
   }
@@ -1522,7 +1666,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function shouldAppendV1(providerId: string, baseUrl: string): boolean {
-  if (providerId === "perplexity") {
+  if (providerId === "perplexity" || providerId === "openai-codex") {
     return false;
   }
   const parsed = new URL(baseUrl);
@@ -1950,7 +2094,11 @@ async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record
   }
 }
 
-function buildOpenAiResponsesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
+function buildOpenAiResponsesPayload(
+  request: ChatCompletionRequest,
+  model: string,
+  provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
+): Record<string, unknown> {
   const { instructions, input } = buildOpenAiResponsesInput(request.messages);
   const payload: Record<string, unknown> = {
     model,
@@ -1977,12 +2125,52 @@ function buildOpenAiResponsesPayload(request: ChatCompletionRequest, model: stri
   }
   if (request.tools !== undefined) payload.tools = mapOpenAiResponsesTools(request.tools);
   if (request.tool_choice !== undefined) payload.tool_choice = mapOpenAiResponsesToolChoice(request.tool_choice);
+  if (request.parallel_tool_calls !== undefined) payload.parallel_tool_calls = request.parallel_tool_calls;
   if (request.stop !== undefined) payload.stop = request.stop;
   if (request.metadata !== undefined) payload.metadata = request.metadata;
   if (request.service_tier) payload.service_tier = request.service_tier;
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
 
+  applyOpenAiResponsesProviderDefaults(payload, provider, model);
+
   return payload;
+}
+
+function applyOpenAiResponsesProviderDefaults(
+  payload: Record<string, unknown>,
+  provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">,
+  model: string,
+): void {
+  if (!isOpenAICodexResponsesProvider(provider)) {
+    return;
+  }
+
+  payload.store = false;
+  if (!isOpenAIGpt5Model(model)) {
+    return;
+  }
+
+  if (!hasOwn(payload, "parallel_tool_calls")) {
+    payload.parallel_tool_calls = true;
+  }
+
+  const text = isRecord(payload.text) ? { ...payload.text } : {};
+  if (!hasOwn(text, "verbosity")) {
+    text.verbosity = "low";
+    payload.text = text;
+  }
+}
+
+function isOpenAICodexResponsesProvider(provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">): boolean {
+  return provider.providerId.trim().toLowerCase() === "openai-codex" || provider.apiStyle === "openai-codex-responses";
+}
+
+function isOpenAIGpt5Model(model: string): boolean {
+  return /^gpt-5(?:[.-]|$)/i.test(model.trim());
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function isJsonObjectResponseFormat(format: ChatCompletionRequest["response_format"]): boolean {
@@ -2562,9 +2750,167 @@ function decodeImageAssetToBlob(input: { bytesBase64: string; mimeType?: string 
   });
 }
 
+const OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.4";
+const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
+const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
+const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
+const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
+
+function buildOpenAICodexImagePayload(
+  request: ImageGenerationRequest,
+  model: string,
+  content: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  const imageTool: Record<string, unknown> = {
+    type: "image_generation",
+    model,
+    size: request.size ?? "1024x1024",
+  };
+  if (request.quality) imageTool.quality = request.quality;
+  if (request.outputFormat) imageTool.output_format = request.outputFormat;
+  if (request.background) imageTool.background = request.background;
+
+  return {
+    model: OPENAI_CODEX_IMAGE_RESPONSES_MODEL,
+    input: [
+      {
+        role: "user",
+        content,
+      },
+    ],
+    instructions: OPENAI_CODEX_IMAGE_INSTRUCTIONS,
+    tools: [imageTool],
+    tool_choice: { type: "image_generation" },
+    stream: true,
+    store: false,
+  };
+}
+
+function toImageDataUrl(image: ImageAssetInput): string {
+  const mimeType = image.mimeType?.trim() || "image/png";
+  return `data:${mimeType};base64,${image.bytesBase64}`;
+}
+
+async function adaptOpenAICodexImageResponse(
+  response: Response,
+  model: string,
+): Promise<ImageGenerationResponse["data"]> {
+  const body = await readLimitedResponseBodyText(response, MAX_CODEX_IMAGE_SSE_BYTES);
+  const events = parseOpenAICodexImageEvents(body);
+  const failure = events.find((event) => event.type === "response.failed" || event.type === "error");
+  if (failure) {
+    const error = isRecord(failure.error) ? failure.error : undefined;
+    const message =
+      (typeof error?.message === "string" ? error.message : undefined) ??
+      (typeof failure.message === "string" ? failure.message : undefined) ??
+      "OpenAI Codex image generation failed";
+    throw new Error(message);
+  }
+
+  const outputItemImages = events
+    .filter((event) => {
+      const item = isRecord(event.item) ? event.item : undefined;
+      return event.type === "response.output_item.done" && item?.type === "image_generation_call";
+    })
+    .map((event) => (isRecord(event.item) ? toOpenAICodexImageResult(event.item) : undefined))
+    .filter((item): item is ImageGenerationResponse["data"][number] => Boolean(item));
+
+  const completedImages = events
+    .filter((event) => event.type === "response.completed" && isRecord(event.response))
+    .flatMap((event) => {
+      const responsePayload = event.response as Record<string, unknown>;
+      const output = Array.isArray(responsePayload.output) ? responsePayload.output : [];
+      return output
+        .filter((item): item is Record<string, unknown> => isRecord(item) && item.type === "image_generation_call")
+        .map(toOpenAICodexImageResult)
+        .filter((item): item is ImageGenerationResponse["data"][number] => Boolean(item));
+    });
+
+  const results = outputItemImages.length > 0 ? outputItemImages : completedImages;
+  if (results.length === 0) {
+    throw new Error(`OpenAI Codex image generation returned no images for ${model}.`);
+  }
+  return results.slice(0, 4);
+}
+
+async function readLimitedResponseBodyText(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      throw new Error("OpenAI Codex image generation response exceeded size limit.");
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (value) {
+        byteLength += value.byteLength;
+        if (byteLength > maxBytes) {
+          throw new Error("OpenAI Codex image generation response exceeded size limit.");
+        }
+        chunks.push(decoder.decode(value, { stream: !done }));
+      }
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        return chunks.join("");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseOpenAICodexImageEvents(body: string): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  for (const line of body.split(/\r?\n/)) {
+    if (!line.startsWith("data: ")) {
+      continue;
+    }
+    const data = line.slice(6).trim();
+    if (!data || data === "[DONE]") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(data);
+      if (isRecord(parsed)) {
+        events.push(parsed);
+      }
+    } catch {
+      continue;
+    }
+    if (events.length > MAX_CODEX_IMAGE_SSE_EVENTS) {
+      throw new Error("OpenAI Codex image generation response exceeded event limit.");
+    }
+  }
+  return events;
+}
+
+function toOpenAICodexImageResult(item: Record<string, unknown>): ImageGenerationResponse["data"][number] | undefined {
+  const result = typeof item.result === "string" ? item.result : undefined;
+  if (!result) {
+    return undefined;
+  }
+  if (result.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
+    throw new Error("OpenAI Codex image generation result exceeded size limit.");
+  }
+  return {
+    b64Json: result,
+    revisedPrompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
+  };
+}
+
 function supportsImageGenerationProvider(providerId: string): boolean {
   const normalized = providerId.trim().toLowerCase();
-  return normalized === "openai" || normalized === "google";
+  return normalized === "openai" || normalized === "openai-codex" || normalized === "google";
 }
 
 function defaultImageModelForProvider(providerId: string): string {
@@ -2636,6 +2982,8 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
   jsonMode: boolean;
   webSearch?: boolean;
   reasoning?: boolean;
+  imageGenerate?: boolean;
+  imageEdit?: boolean;
 } {
   const model = provider.defaultModel.toLowerCase();
   const base = provider.baseUrl.toLowerCase();
@@ -2677,11 +3025,26 @@ function inferProviderCapabilities(provider: LlmProviderConfig): {
     jsonMode: hasJsonMode,
     webSearch: hasWebSearch,
     reasoning: hasReasoning,
+    imageGenerate: supportsImageGenerationProvider(provider.providerId),
+    imageEdit: supportsImageGenerationProvider(provider.providerId),
+    ...(provider.capabilities ?? {}),
   };
 }
 
 function defaultModelForProvider(providerId: string): string {
   return findProviderTemplate(providerId.trim().toLowerCase())?.defaultModel ?? "gpt-5.4-mini";
+}
+
+function defaultAuthModeForProvider(providerId: string): LlmProviderConfig["authMode"] {
+  return providerId.trim().toLowerCase() === "openai-codex" ? "codex-oauth" : undefined;
+}
+
+function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig["authMode"] {
+  return provider.authMode ?? defaultAuthModeForProvider(provider.providerId);
+}
+
+function isOpenAICodexProvider(provider: Pick<LlmProviderConfig, "providerId">): boolean {
+  return provider.providerId.trim().toLowerCase() === "openai-codex";
 }
 
 function applyProviderSpecificChatOptions(input: {

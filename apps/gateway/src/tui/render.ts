@@ -30,14 +30,19 @@ function wrapLine(text: string, width: number): string[] {
   return lines;
 }
 
-export function renderBox(title: string, lines: string[], tone: "info" | "success" | "warning" | "danger" = "info"): string {
-  const color = tone === "success"
-    ? tuiTheme.success
-    : tone === "warning"
-      ? tuiTheme.warning
-      : tone === "danger"
-        ? tuiTheme.danger
-        : tuiTheme.info;
+export function renderBox(
+  title: string,
+  lines: string[],
+  tone: "info" | "success" | "warning" | "danger" = "info",
+): string {
+  const color =
+    tone === "success"
+      ? tuiTheme.success
+      : tone === "warning"
+        ? tuiTheme.warning
+        : tone === "danger"
+          ? tuiTheme.danger
+          : tuiTheme.info;
   const titledLines = [`${title}`, ...lines];
   const width = Math.min(Math.max(textWidth(titledLines), 40), 108);
   const contentWidth = width - 4;
@@ -60,12 +65,44 @@ export function renderSection(title: string, subtitle?: string): string {
 }
 
 export function renderKeyValueSummary(items: Array<{ key: string; value: string }>): string {
-  return items
-    .map((item) => `${tuiTheme.key(item.key)} ${tuiTheme.value(item.value)}`)
-    .join("\n");
+  return items.map((item) => `${tuiTheme.key(item.key)} ${tuiTheme.value(item.value)}`).join("\n");
 }
 
 export function renderBulletList(items: string[], tone: "muted" | "accent" = "muted"): string {
   const color = tone === "accent" ? tuiTheme.accent : tuiTheme.muted;
   return items.map((item) => color(`- ${item}`)).join("\n");
+}
+
+export type TuiOperatorSectionId = "activity" | "thinking" | "tools" | "diagnostics" | "voice_meeting" | "details";
+
+export interface TuiOperatorSection {
+  id: TuiOperatorSectionId;
+  title: string;
+  lines: string[];
+  visible?: boolean;
+  contentBearing?: boolean;
+}
+
+export function renderOperatorSection(section: TuiOperatorSection): string {
+  const contentBearing = section.contentBearing ?? section.lines.some((line) => line.trim().length > 0);
+  const visible = section.visible ?? defaultOperatorSectionVisibility(section.id, contentBearing);
+  const marker = visible ? "expanded" : "collapsed";
+  const label = `${section.title} (${marker})`;
+  if (!visible) {
+    return tuiTheme.muted(`${label} - ${contentBearing ? "content available" : "no current activity"}`);
+  }
+  return [
+    renderSection(label, section.id === "voice_meeting" ? "Voice / meeting status" : undefined),
+    ...(contentBearing ? section.lines : [tuiTheme.muted("No current activity.")]),
+  ].join("\n");
+}
+
+export function defaultOperatorSectionVisibility(id: TuiOperatorSectionId, contentBearing: boolean): boolean {
+  if (id === "activity" || id === "diagnostics" || id === "details") {
+    return false;
+  }
+  if (id === "thinking" || id === "tools" || id === "voice_meeting") {
+    return contentBearing;
+  }
+  return contentBearing;
 }

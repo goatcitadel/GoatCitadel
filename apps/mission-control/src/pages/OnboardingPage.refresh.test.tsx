@@ -92,15 +92,25 @@ vi.mock("../components/SelectOrCustom", () => ({
     value: string;
     onChange: (value: string) => void;
     options: Array<{ value: string; label: string }>;
-  }) => (
-    <select id={props.id} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
-      {props.options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  ),
+  }) => {
+    const seen = new Set<string>();
+    const options = props.options.filter((option) => {
+      if (seen.has(option.value)) {
+        return false;
+      }
+      seen.add(option.value);
+      return true;
+    });
+    return (
+      <select id={props.id} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+  },
 }));
 
 import { OnboardingPage } from "./OnboardingPage";
@@ -109,7 +119,7 @@ function makeProvider(input: {
   providerId: string;
   label: string;
   baseUrl: string;
-  apiStyle: "openai-chat-completions" | "openai-responses";
+  apiStyle: "openai-chat-completions" | "openai-responses" | "openai-codex-responses";
   defaultModel: string;
 }) {
   return {

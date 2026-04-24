@@ -1,4 +1,5 @@
 import type { RuntimeSettingsResponse } from "../../api/client";
+import type { OpenAICodexDeviceStartResponse, OpenAICodexOAuthStatus } from "../../api/client";
 import type { ProviderSecretStatus } from "../../api/client";
 import { FieldHelp } from "../../components/FieldHelp";
 import { HelpHint } from "../../components/HelpHint";
@@ -70,6 +71,12 @@ export interface SettingsModelsSectionProps {
   providerApiKey: string;
   onProviderApiKeyChange: (nextApiKey: string) => void;
   providerSecretStatus: ProviderSecretStatus | null;
+  codexOAuthStatus: OpenAICodexOAuthStatus | null;
+  codexOAuthFlow: OpenAICodexDeviceStartResponse | null;
+  codexOAuthBusy: boolean;
+  onStartCodexOAuthDeviceFlow: () => void;
+  onPollCodexOAuthDeviceFlow: () => void;
+  onDisconnectCodexOAuth: () => void;
   providerOptions: SettingsModelsProviderOption[];
   onSaveProviderKeyToSecureStore: () => void;
   onDeleteProviderKeyFromSecureStore: () => void;
@@ -117,6 +124,12 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
     providerApiKey,
     onProviderApiKeyChange,
     providerSecretStatus,
+    codexOAuthStatus,
+    codexOAuthFlow,
+    codexOAuthBusy,
+    onStartCodexOAuthDeviceFlow,
+    onPollCodexOAuthDeviceFlow,
+    onDisconnectCodexOAuth,
     providerOptions,
     onSaveProviderKeyToSecureStore,
     onDeleteProviderKeyFromSecureStore,
@@ -127,6 +140,7 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
     providerRequestValidationError,
     onSaveProvider,
   } = props;
+  const isCodexOAuthProvider = providerId.trim().toLowerCase() === "openai-codex";
 
   return (
     <section id="settings-models" className="settings-v2-section">
@@ -335,63 +349,115 @@ export function SettingsModelsSection(props: SettingsModelsSectionProps) {
                 customLabel="Custom default model"
               />
             </div>
-            <div className="controls-row">
-              <label htmlFor="providerApiKey">API Key (optional)</label>
-              <input
-                id="providerApiKey"
-                type="password"
-                value={providerApiKey}
-                onChange={(event) => onProviderApiKeyChange(event.target.value)}
-              />
-            </div>
-            <p className="office-subtitle">
-              Key source:{" "}
-              {providerSecretStatus?.source ??
-                providerOptions.find((provider) => provider.providerId === providerId)?.apiKeySource ??
-                "none"}
-            </p>
-            <div className="controls-row">
-              <button
-                type="button"
-                onClick={onSaveProviderKeyToSecureStore}
-                disabled={!providerApiKey.trim()}
-                className="gc-button"
-              >
-                Save Key to Secure Store
-              </button>
-              <button type="button" onClick={onDeleteProviderKeyFromSecureStore} className="gc-button">
-                Remove Secure Key
-              </button>
-            </div>
-            <div className="controls-row">
-              <label htmlFor="providerApiKeyEnv">
-                API Key Env (optional){" "}
-                <HelpHint
-                  label="Provider API key env help"
-                  text="This is the environment variable name GoatCitadel should look for at runtime, for example GLM_API_KEY. It names the variable; it is not the secret value itself."
-                />
-              </label>
-              <SelectOrCustom
-                id="providerApiKeyEnv"
-                value={providerApiKeyEnv}
-                onChange={onProviderApiKeyEnvChange}
-                options={[
-                  { value: "OPENAI_API_KEY", label: "OPENAI_API_KEY" },
-                  { value: "ANTHROPIC_API_KEY", label: "ANTHROPIC_API_KEY" },
-                  { value: "GOOGLE_API_KEY", label: "GOOGLE_API_KEY" },
-                  { value: "GLM_API_KEY", label: "GLM_API_KEY" },
-                  { value: "MOONSHOT_API_KEY", label: "MOONSHOT_API_KEY" },
-                  { value: "OPENROUTER_API_KEY", label: "OPENROUTER_API_KEY" },
-                  { value: "OLLAMA_API_KEY", label: "OLLAMA_API_KEY (optional/proxy only)" },
-                  {
-                    value: "LMSTUDIO_API_KEY",
-                    label: "LMSTUDIO_API_KEY (optional/proxy only)",
-                  },
-                ]}
-                customPlaceholder="Custom env var name"
-                customLabel="Custom env var"
-              />
-            </div>
+            {isCodexOAuthProvider ? (
+              <div className="advanced-panel">
+                <p className="office-subtitle">
+                  OpenAI Codex uses ChatGPT OAuth stored in the OS keychain. Usage is governed by the connected
+                  ChatGPT/Codex plan, not normal OpenAI API billing.
+                </p>
+                <p className="office-subtitle">
+                  OAuth status:{" "}
+                  {codexOAuthStatus?.connected
+                    ? `connected${codexOAuthStatus.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}`
+                    : codexOAuthStatus?.requiresReauth
+                      ? "reauth required"
+                      : "not connected"}
+                  {codexOAuthStatus?.expiresAt ? ` · expires ${codexOAuthStatus.expiresAt}` : ""}
+                </p>
+                {codexOAuthFlow ? (
+                  <p className="office-subtitle">
+                    Visit <a href={codexOAuthFlow.verificationUrl}>{codexOAuthFlow.verificationUrl}</a> and enter code{" "}
+                    <code>{codexOAuthFlow.userCode}</code>.
+                  </p>
+                ) : null}
+                <div className="controls-row">
+                  <button
+                    type="button"
+                    onClick={onStartCodexOAuthDeviceFlow}
+                    disabled={codexOAuthBusy}
+                    className="gc-button"
+                  >
+                    {codexOAuthStatus?.connected ? "Reconnect ChatGPT OAuth" : "Connect ChatGPT OAuth"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onPollCodexOAuthDeviceFlow}
+                    disabled={codexOAuthBusy || !codexOAuthFlow}
+                    className="gc-button"
+                  >
+                    Check Device Pairing
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDisconnectCodexOAuth}
+                    disabled={codexOAuthBusy || !codexOAuthStatus?.connected}
+                    className="gc-button"
+                  >
+                    Disconnect OAuth
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="controls-row">
+                  <label htmlFor="providerApiKey">API Key (optional)</label>
+                  <input
+                    id="providerApiKey"
+                    type="password"
+                    value={providerApiKey}
+                    onChange={(event) => onProviderApiKeyChange(event.target.value)}
+                  />
+                </div>
+                <p className="office-subtitle">
+                  Key source:{" "}
+                  {providerSecretStatus?.source ??
+                    providerOptions.find((provider) => provider.providerId === providerId)?.apiKeySource ??
+                    "none"}
+                </p>
+                <div className="controls-row">
+                  <button
+                    type="button"
+                    onClick={onSaveProviderKeyToSecureStore}
+                    disabled={!providerApiKey.trim()}
+                    className="gc-button"
+                  >
+                    Save Key to Secure Store
+                  </button>
+                  <button type="button" onClick={onDeleteProviderKeyFromSecureStore} className="gc-button">
+                    Remove Secure Key
+                  </button>
+                </div>
+                <div className="controls-row">
+                  <label htmlFor="providerApiKeyEnv">
+                    API Key Env (optional){" "}
+                    <HelpHint
+                      label="Provider API key env help"
+                      text="This is the environment variable name GoatCitadel should look for at runtime, for example GLM_API_KEY. It names the variable; it is not the secret value itself."
+                    />
+                  </label>
+                  <SelectOrCustom
+                    id="providerApiKeyEnv"
+                    value={providerApiKeyEnv}
+                    onChange={onProviderApiKeyEnvChange}
+                    options={[
+                      { value: "OPENAI_API_KEY", label: "OPENAI_API_KEY" },
+                      { value: "ANTHROPIC_API_KEY", label: "ANTHROPIC_API_KEY" },
+                      { value: "GOOGLE_API_KEY", label: "GOOGLE_API_KEY" },
+                      { value: "GLM_API_KEY", label: "GLM_API_KEY" },
+                      { value: "MOONSHOT_API_KEY", label: "MOONSHOT_API_KEY" },
+                      { value: "OPENROUTER_API_KEY", label: "OPENROUTER_API_KEY" },
+                      { value: "OLLAMA_API_KEY", label: "OLLAMA_API_KEY (optional/proxy only)" },
+                      {
+                        value: "LMSTUDIO_API_KEY",
+                        label: "LMSTUDIO_API_KEY (optional/proxy only)",
+                      },
+                    ]}
+                    customPlaceholder="Custom env var name"
+                    customLabel="Custom env var"
+                  />
+                </div>
+              </>
+            )}
             <LlmTransportFields
               idPrefix="settings-provider-transport"
               draft={providerRequestDraft}

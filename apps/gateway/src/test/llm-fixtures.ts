@@ -8,6 +8,9 @@ export function createNoopSecretStore(): SecretStoreService {
     setProviderApiKey: () => undefined,
     getProviderApiKey: () => undefined,
     deleteProviderApiKey: () => undefined,
+    setSecret: () => undefined,
+    getSecret: () => undefined,
+    deleteSecret: () => undefined,
     status: (providerId: string) => ({ providerId, hasSecret: false, source: "none" }),
   } as unknown as SecretStoreService;
 }

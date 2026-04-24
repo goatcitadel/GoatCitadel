@@ -4,9 +4,13 @@ export const llmRouteMethods = [
   "createChatCompletion",
   "generateImage",
   "getLlmConfigWithDetails",
+  "getOpenAICodexOAuthStatus",
   "listLlmModels",
   "listLlmProviders",
+  "pollOpenAICodexOAuthDeviceFlow",
   "previewLlmModels",
+  "startOpenAICodexOAuthDeviceFlow",
+  "deleteOpenAICodexOAuthCredential",
   "updateLlmConfig",
 ] as const;
 

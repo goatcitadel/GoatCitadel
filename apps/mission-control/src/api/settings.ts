@@ -73,7 +73,8 @@ export async function patchSettings(input: {
       providerId: string;
       label?: string;
       baseUrl?: string;
-      apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+      apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+      authMode?: "api-key" | "codex-oauth";
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;

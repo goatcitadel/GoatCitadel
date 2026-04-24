@@ -524,6 +524,8 @@ export function installIntegrationPlugin(
       now,
       pluginId: nextId,
       source: input.source,
+      sourceType: input.sourceType,
+      expectedIntegrity: input.expectedIntegrity,
       existing,
     });
     deps.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === nextId ? updated : item)));
@@ -534,6 +536,8 @@ export function installIntegrationPlugin(
     now,
     pluginId: nextId,
     source: input.source,
+    sourceType: input.sourceType,
+    expectedIntegrity: input.expectedIntegrity,
   });
   deps.writeIntegrationPlugins([created, ...plugins]);
   deps.publishRealtime("system", "integrations", {

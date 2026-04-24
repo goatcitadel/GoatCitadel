@@ -45,6 +45,35 @@ export interface ProviderSecretStatus {
   source: "none" | "keychain" | "env" | "inline";
 }
 
+export interface OpenAICodexOAuthStatus {
+  providerId: "openai-codex";
+  available: boolean;
+  connected: boolean;
+  accountLabel?: string;
+  expiresAt?: string;
+  requiresReauth?: boolean;
+}
+
+export interface OpenAICodexDeviceStartResponse {
+  flowId: string;
+  providerId: "openai-codex";
+  verificationUrl: string;
+  userCode: string;
+  expiresAt: string;
+  pollAfterMs: number;
+}
+
+export interface OpenAICodexDevicePollResponse {
+  flowId: string;
+  providerId: "openai-codex";
+  status: "pending" | "connected" | "expired" | "failed";
+  retryAfterMs?: number;
+  accountLabel?: string;
+  expiresAt?: string;
+  requiresReauth?: boolean;
+  error?: string;
+}
+
 export interface LlamaCppInstallDetection {
   found: boolean;
   command?: string;
@@ -186,7 +215,7 @@ export async function previewLlmModels(
   input: {
     providerId: string;
     baseUrl: string;
-    apiStyle?: "openai-chat-completions" | "openai-responses" | "anthropic-messages";
+    apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
     apiKey?: string;
     apiKeyEnv?: string;
     request?: LlmProviderRequestConfig;
@@ -252,6 +281,31 @@ export async function saveProviderSecret(providerId: string, apiKey: string): Pr
 
 export async function deleteProviderSecret(providerId: string): Promise<ProviderSecretStatus> {
   return request<ProviderSecretStatus>(`/api/v1/secrets/providers/${encodeURIComponent(providerId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchOpenAICodexOAuthStatus(): Promise<OpenAICodexOAuthStatus> {
+  return request<OpenAICodexOAuthStatus>("/api/v1/llm/providers/openai-codex/oauth/status");
+}
+
+export async function startOpenAICodexOAuthDeviceFlow(): Promise<OpenAICodexDeviceStartResponse> {
+  return request<OpenAICodexDeviceStartResponse>("/api/v1/llm/providers/openai-codex/oauth/device/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function pollOpenAICodexOAuthDeviceFlow(flowId: string): Promise<OpenAICodexDevicePollResponse> {
+  return request<OpenAICodexDevicePollResponse>("/api/v1/llm/providers/openai-codex/oauth/device/poll", {
+    method: "POST",
+    body: JSON.stringify({ flowId }),
+  });
+}
+
+export async function deleteOpenAICodexOAuthCredential(): Promise<OpenAICodexOAuthStatus> {
+  return request<OpenAICodexOAuthStatus>("/api/v1/llm/providers/openai-codex/oauth", {
     method: "DELETE",
     body: JSON.stringify({}),
   });

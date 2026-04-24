@@ -162,6 +162,35 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
+  it("emits runtime diagnostics for tool invocation lifecycle", async () => {
+    const recordDevDiagnostic = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(createHost({ recordDevDiagnostic }));
+
+    const result = await coordinator.invokeTool(createToolRequest({ taskId: "task-1" }));
+
+    expect(result.outcome).toBe("executed");
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "tool.invocation.start",
+        runtimeKind: "tool.invocation",
+        runtimeStatus: "started",
+        toolName: "shell.exec",
+        sessionId: "session-1",
+        taskId: "task-1",
+      }),
+    );
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "tool.invocation.complete",
+        runtimeKind: "tool.invocation",
+        runtimeStatus: "completed",
+        toolName: "shell.exec",
+        sessionId: "session-1",
+        taskId: "task-1",
+      }),
+    );
+  });
+
   it("primes approval lifecycle and publishes retained-stream linkage for approval-required tools", async () => {
     const publishRealtime = vi.fn();
     const scheduleApprovalExplanationById = vi.fn();
@@ -565,6 +594,47 @@ describe("ToolInvocationCoordinatorService", () => {
         links: expect.objectContaining({
           sessionId: "session-1",
           taskId: "task-1",
+        }),
+      }),
+    );
+  });
+
+  it("emits degraded diagnostics when MCP runtime reconnects an expired session", async () => {
+    const recordDevDiagnostic = vi.fn();
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        recordDevDiagnostic,
+        invokeMcpRuntimeTool: vi.fn(async () => ({
+          ok: true,
+          retryCount: 1,
+          output: {
+            payload: "ok",
+            degradedReason: "expired_session_reconnect",
+          },
+        })),
+      }),
+    );
+
+    await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      sessionId: "session-1",
+      taskId: "task-1",
+      arguments: { value: "hello" },
+    });
+
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "mcp",
+        event: "mcp.transport.degraded",
+        runtimeKind: "mcp.transport",
+        runtimeStatus: "degraded",
+        toolName: "tool.echo",
+        sessionId: "session-1",
+        taskId: "task-1",
+        context: expect.objectContaining({
+          retryCount: 1,
+          degradedReason: "expired_session_reconnect",
         }),
       }),
     );

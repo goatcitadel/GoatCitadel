@@ -18,6 +18,9 @@ describe("integration-catalog", () => {
       "channel.nextcloud-talk",
       "channel.zalo",
       "channel.zalouser",
+      "channel.matrix",
+      "channel.qqbot",
+      "channel.wecom",
     ];
 
     for (const catalogId of catalogIds) {
@@ -136,10 +139,16 @@ describe("integration-catalog", () => {
     expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp, new Set())).toBe("runnable");
   });
 
-  it("ships no planned entries in the current catalog", () => {
-    for (const entry of INTEGRATION_CATALOG) {
-      expect(entry.maturity).not.toBe("planned");
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).not.toBe("planned");
+  it("keeps catalog-only channels blocked until adapter probes exist", () => {
+    for (const catalogId of ["channel.matrix", "channel.qqbot", "channel.wecom"]) {
+      const entry = requireCatalogEntry(catalogId);
+      expect(entry.maturity).toBe("planned");
+      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("disabled");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("blocked");
+      expect(entry.description).toMatch(/probes are not wired/i);
+      expect(getIntegrationFormSchema(catalogId)?.fields.find((field) => field.key === "enabled")).toMatchObject({
+        defaultValue: false,
+      });
     }
   });
 
@@ -190,6 +199,12 @@ describe("integration-catalog", () => {
 
     const telegram = requireCatalogEntry("channel.telegram");
     expect(telegram.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend", "typing"]));
+    expect(getIntegrationFormSchema("channel.telegram")?.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "allowedGroupIds", advanced: true }),
+        expect.objectContaining({ key: "allowedForumTopicIds", advanced: true }),
+      ]),
+    );
 
     const mattermost = requireCatalogEntry("channel.mattermost");
     expect(mattermost.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));

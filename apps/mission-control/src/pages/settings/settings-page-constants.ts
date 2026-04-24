@@ -92,6 +92,7 @@ export type NormalizedRuntimeSettingsResponse = RuntimeSettingsResponse & {
 
 export const PROVIDER_API_STYLE_OPTIONS: Array<{ value: ProviderApiStyle; label: string }> = [
   { value: "openai-responses", label: "OpenAI Responses" },
+  { value: "openai-codex-responses", label: "OpenAI Codex Responses" },
   { value: "anthropic-messages", label: "Anthropic Messages" },
   { value: "openai-chat-completions", label: "OpenAI Chat Completions" },
 ];

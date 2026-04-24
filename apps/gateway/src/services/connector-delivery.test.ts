@@ -164,6 +164,48 @@ describe("dispatchConnectorDelivery", () => {
     );
   });
 
+  it("canonicalizes WhatsApp group and LID identities before dispatch", async () => {
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-1",
+        policyReason: "allowed",
+        result: { deliveryId: "delivery-1", status: "sent" },
+      }),
+    );
+
+    for (const [target, expected] of [
+      ["WHATSAPP:120363123456789@G.US", "120363123456789@g.us"],
+      ["15551234567@lid", "+15551234567"],
+    ] as const) {
+      await dispatchConnectorDelivery(
+        createConnector("integration_connection", "integration:whatsapp-1", "whatsapp-1", ["outbound_messages"], {
+          key: "whatsapp",
+        }),
+        createPayload("channel.send", {
+          target,
+          message: "hello from durable delivery",
+        }),
+        {
+          commsSend,
+          commsReply: vi.fn(async () => ({})),
+          commsReact: vi.fn(),
+          commsUnsend: vi.fn(),
+          commsTyping: vi.fn(async () => createTypingResult()),
+          invokeMcpTool: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+      );
+
+      expect(commsSend).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          connectionId: "whatsapp-1",
+          target: expected,
+        }),
+      );
+    }
+  });
+
   it("rejects invalid WhatsApp JID-shaped targets", async () => {
     const commsSend = vi.fn(
       async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({

@@ -55,23 +55,39 @@ export class SecretStoreService {
     if (!apiKey.trim()) {
       throw new Error("apiKey must not be empty");
     }
-    this.assertAvailable();
-    const account = providerAccount(providerId);
-    if (process.platform === "win32") {
-      this.setWindowsCredential(account, apiKey);
-      return;
-    }
-    if (process.platform === "darwin") {
-      this.setMacCredential(account, apiKey);
-      return;
-    }
-    this.setLinuxCredential(account, apiKey);
+    this.setSecret(providerAccount(providerId), apiKey);
   }
 
   public getProviderApiKey(providerId: string): string | undefined {
     assertProviderId(providerId);
+    return this.getSecret(providerAccount(providerId));
+  }
+
+  public deleteProviderApiKey(providerId: string): void {
+    assertProviderId(providerId);
+    this.deleteSecret(providerAccount(providerId));
+  }
+
+  public setSecret(account: string, secret: string): void {
+    assertSecretAccount(account);
+    if (!secret.trim()) {
+      throw new Error("secret must not be empty");
+    }
     this.assertAvailable();
-    const account = providerAccount(providerId);
+    if (process.platform === "win32") {
+      this.setWindowsCredential(account, secret);
+      return;
+    }
+    if (process.platform === "darwin") {
+      this.setMacCredential(account, secret);
+      return;
+    }
+    this.setLinuxCredential(account, secret);
+  }
+
+  public getSecret(account: string): string | undefined {
+    assertSecretAccount(account);
+    this.assertAvailable();
     if (process.platform === "win32") {
       return this.getWindowsCredential(account);
     }
@@ -81,10 +97,9 @@ export class SecretStoreService {
     return this.getLinuxCredential(account);
   }
 
-  public deleteProviderApiKey(providerId: string): void {
-    assertProviderId(providerId);
+  public deleteSecret(account: string): void {
+    assertSecretAccount(account);
     this.assertAvailable();
-    const account = providerAccount(providerId);
     if (process.platform === "win32") {
       this.deleteWindowsCredential(account);
       return;
@@ -146,10 +161,15 @@ try {
   exit 3
 }
 `;
-    const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
-      GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
-      GOATCITADEL_SECRET_ACCOUNT: account,
-    }, { allowExitCodes: [3] });
+    const result = runCommand(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      {
+        GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
+        GOATCITADEL_SECRET_ACCOUNT: account,
+      },
+      { allowExitCodes: [3] },
+    );
     if (result.status === 3) {
       return undefined;
     }
@@ -174,27 +194,16 @@ Write-Output "ok"
   }
 
   private setMacCredential(account: string, secret: string): void {
-    runCommand("security", [
-      "add-generic-password",
-      "-a",
-      account,
-      "-s",
-      SECRET_SERVICE,
-      "-w",
-      secret,
-      "-U",
-    ]);
+    runCommand("security", ["add-generic-password", "-a", account, "-s", SECRET_SERVICE, "-w", secret, "-U"]);
   }
 
   private getMacCredential(account: string): string | undefined {
-    const result = runCommand("security", [
-      "find-generic-password",
-      "-a",
-      account,
-      "-s",
-      SECRET_SERVICE,
-      "-w",
-    ], undefined, { allowExitCodes: [44] });
+    const result = runCommand(
+      "security",
+      ["find-generic-password", "-a", account, "-s", SECRET_SERVICE, "-w"],
+      undefined,
+      { allowExitCodes: [44] },
+    );
     if (result.status === 44) {
       return undefined;
     }
@@ -203,35 +212,24 @@ Write-Output "ok"
   }
 
   private deleteMacCredential(account: string): void {
-    runCommand("security", [
-      "delete-generic-password",
-      "-a",
-      account,
-      "-s",
-      SECRET_SERVICE,
-    ], undefined, { allowExitCodes: [44] });
+    runCommand("security", ["delete-generic-password", "-a", account, "-s", SECRET_SERVICE], undefined, {
+      allowExitCodes: [44],
+    });
   }
 
   private setLinuxCredential(account: string, secret: string): void {
-    runCommand("secret-tool", [
-      "store",
-      "--label",
-      "GoatCitadel Provider Secret",
-      "service",
-      SECRET_SERVICE,
-      "account",
-      account,
-    ], undefined, { stdin: secret });
+    runCommand(
+      "secret-tool",
+      ["store", "--label", "GoatCitadel Provider Secret", "service", SECRET_SERVICE, "account", account],
+      undefined,
+      { stdin: secret },
+    );
   }
 
   private getLinuxCredential(account: string): string | undefined {
-    const result = runCommand("secret-tool", [
-      "lookup",
-      "service",
-      SECRET_SERVICE,
-      "account",
-      account,
-    ], undefined, { allowExitCodes: [1] });
+    const result = runCommand("secret-tool", ["lookup", "service", SECRET_SERVICE, "account", account], undefined, {
+      allowExitCodes: [1],
+    });
     if (result.status === 1) {
       return undefined;
     }
@@ -240,13 +238,9 @@ Write-Output "ok"
   }
 
   private deleteLinuxCredential(account: string): void {
-    runCommand("secret-tool", [
-      "clear",
-      "service",
-      SECRET_SERVICE,
-      "account",
-      account,
-    ], undefined, { allowExitCodes: [1] });
+    runCommand("secret-tool", ["clear", "service", SECRET_SERVICE, "account", account], undefined, {
+      allowExitCodes: [1],
+    });
   }
 }
 
@@ -257,6 +251,12 @@ function providerAccount(providerId: string): string {
 function assertProviderId(providerId: string): void {
   if (!providerId.trim()) {
     throw new Error("providerId is required");
+  }
+}
+
+function assertSecretAccount(account: string): void {
+  if (!account.trim()) {
+    throw new Error("secret account is required");
   }
 }
 

@@ -162,5 +162,19 @@ describe("createChatCompletionStream", () => {
         }),
       }),
     );
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.start",
+        runtimeKind: "model.call",
+        runtimeStatus: "started",
+      }),
+    );
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.complete",
+        runtimeKind: "model.call",
+        runtimeStatus: "completed",
+      }),
+    );
   });
 });

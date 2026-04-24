@@ -5,6 +5,24 @@ export interface IntegrationsPluginEntry {
   pluginId: string;
   label: string;
   source?: string;
+  sourceMetadata?: {
+    type: string;
+    display: string;
+    packageName?: string;
+    packageVersion?: string;
+    integrityStatus: string;
+  };
+  integrityStatus?: string;
+  trustWarnings?: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
+  theme?: {
+    accentColor?: string;
+    icon?: string;
+    dashboardVariant?: string;
+  };
   version: string;
   capabilities: string[];
   enabled: boolean;
@@ -39,7 +57,12 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
             onChange={(event) => onPluginSourceChange(event.target.value)}
             placeholder="Plugin source (file path, URL, or package id)"
           />
-          <button type="button" onClick={() => onInstallPlugin()} disabled={pluginBusyId === "install"} className="gc-button">
+          <button
+            type="button"
+            onClick={() => onInstallPlugin()}
+            disabled={pluginBusyId === "install"}
+            className="gc-button"
+          >
             {pluginBusyId === "install" ? "Installing..." : "Install Plugin"}
           </button>
         </div>
@@ -48,6 +71,7 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
         <thead>
           <tr>
             <th>Plugin</th>
+            <th>Source / Trust</th>
             <th>Version</th>
             <th>Capabilities</th>
             <th>Status</th>
@@ -58,15 +82,32 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
         <tbody>
           {plugins.length === 0 ? (
             <tr>
-              <td colSpan={6}>No plugins installed.</td>
+              <td colSpan={7}>No plugins installed.</td>
             </tr>
           ) : (
             plugins.map((plugin) => (
-              <tr key={plugin.pluginId}>
+              <tr
+                key={plugin.pluginId}
+                style={plugin.theme?.accentColor ? { borderLeft: `3px solid ${plugin.theme.accentColor}` } : undefined}
+              >
                 <td>
                   <strong>{plugin.label}</strong>
                   <div className="office-subtitle">{plugin.pluginId}</div>
-                  {plugin.source ? <div className="office-subtitle">{plugin.source}</div> : null}
+                  {plugin.theme?.dashboardVariant ? (
+                    <div className="office-subtitle">Theme: {plugin.theme.dashboardVariant}</div>
+                  ) : null}
+                </td>
+                <td>
+                  <div>{plugin.sourceMetadata?.display ?? plugin.source ?? "Unknown source"}</div>
+                  <div className="office-subtitle">
+                    {plugin.sourceMetadata?.type ?? "unknown"} /{" "}
+                    {plugin.integrityStatus ?? plugin.sourceMetadata?.integrityStatus ?? "unknown"}
+                  </div>
+                  {plugin.trustWarnings?.length ? (
+                    <div className="office-subtitle">
+                      {plugin.trustWarnings.map((warning) => warning.code).join(", ")}
+                    </div>
+                  ) : null}
                 </td>
                 <td>{plugin.version}</td>
                 <td>{plugin.capabilities.join(", ") || "-"}</td>
@@ -77,7 +118,8 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
                     type="button"
                     onClick={() => onTogglePlugin(plugin.pluginId, plugin.enabled)}
                     disabled={pluginBusyId === plugin.pluginId}
-                   className="gc-button">
+                    className="gc-button"
+                  >
                     {pluginBusyId === plugin.pluginId
                       ? plugin.enabled
                         ? "Disabling..."
@@ -95,4 +137,3 @@ export function IntegrationsPluginsPanel(props: IntegrationsPluginsPanelProps) {
     </Panel>
   );
 }
-
