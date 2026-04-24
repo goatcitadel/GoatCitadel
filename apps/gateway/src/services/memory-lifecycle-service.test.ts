@@ -144,11 +144,27 @@ describe("MemoryLifecycleService", () => {
             run: vi.fn(),
           };
         }
+        if (sql.includes("retainedPinnedCount") && sql.includes("FROM memory_items")) {
+          return {
+            get: vi.fn((params: Record<string, unknown>) => {
+              const expired = row.status === "active" && row.expires_at && String(row.expires_at) <= String(params.now);
+              return {
+                totalCount: expired ? 1 : 0,
+                retainedPinnedCount: expired && row.pinned === 1 ? 1 : 0,
+              };
+            }),
+            all: vi.fn(() => []),
+            run: vi.fn(),
+          };
+        }
         if (sql.includes("FROM memory_items") && sql.includes("expires_at <= @now")) {
           return {
             get: vi.fn(),
             all: vi.fn((params: Record<string, unknown>) =>
-              row.status === "active" && row.expires_at && String(row.expires_at) <= String(params.now)
+              row.status === "active" &&
+              (!sql.includes("AND pinned = 0") || row.pinned === 0) &&
+              row.expires_at &&
+              String(row.expires_at) <= String(params.now)
                 ? [{ ...row }]
                 : [],
             ),
@@ -249,6 +265,30 @@ describe("MemoryLifecycleService", () => {
       lifecycleState: "expired",
     });
 
+    const pinnedFlush = service.forgetExpiredActiveMemoryItems({
+      nowIso: "2026-04-10T01:00:00.000Z",
+      limit: 10,
+    });
+    expect(pinnedFlush).toMatchObject({
+      totalCount: 1,
+      retainedPinnedCount: 1,
+      forgottenItems: [],
+    });
+
+    row.pinned = 0;
+    const autoForgotten = service.forgetExpiredActiveMemoryItems({
+      nowIso: "2026-04-10T01:00:00.000Z",
+      limit: 10,
+      actorId: "memory-flush-test",
+    });
+    expect(autoForgotten.forgottenItems[0]).toMatchObject({
+      itemId: "item-1",
+      status: "forgotten",
+      lifecycleState: "forgotten",
+    });
+
+    row.status = "active";
+    row.forgotten_at = null;
     const forgotten = service.forgetMemoryItem("item-1", "operator-1");
     expect(forgotten).toMatchObject({
       itemId: "item-1",

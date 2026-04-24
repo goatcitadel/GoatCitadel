@@ -113,7 +113,7 @@ import {
   requestConfigFromDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
-import type { AppRoute, SettingsSection } from "@next/app/route-model";
+import type { AppRoute } from "@next/app/route-model";
 import "./native-routes.css";
 
 interface SettingsNativePageProps {
@@ -136,11 +136,11 @@ type Notice = {
 };
 
 type SettingsSectionProps = SettingsNativePageProps & {
-  section: SettingsSection;
+  section: string;
 };
 
 export function SettingsNativePage(props: SettingsNativePageProps) {
-  const section = (props.route.section as SettingsSection | undefined) ?? "general";
+  const section = props.route.section ? String(props.route.section) : "general";
 
   return (
     <SettingsPageFrame
@@ -156,6 +156,12 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
 
 function renderSettingsSection(props: SettingsSectionProps) {
   switch (props.section) {
+    case "general":
+      return <GeneralSection {...props} />;
+    case "onboarding":
+      return <OnboardingSection {...props} />;
+    case "budget":
+      return <BudgetSection {...props} />;
     case "providers":
       return <ProvidersSection {...props} />;
     case "access":
@@ -175,19 +181,19 @@ function renderSettingsSection(props: SettingsSectionProps) {
     case "addons":
       return <AddonsSection {...props} />;
     default:
-      return <GeneralSection {...props} />;
+      return <UnknownSettingsSection {...props} />;
   }
 }
 
 function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [settings, workspaces, integrations, mcpServers, tools, addons] = await Promise.all([
-      fetchSettings().catch(() => null),
-      fetchWorkspaces("all", 400).catch(() => ({ items: [] })),
-      fetchIntegrationConnections().catch(() => ({ items: [] })),
-      fetchMcpServers().catch(() => ({ items: [] })),
-      fetchToolCatalog().catch(() => ({ items: [] })),
-      fetchInstalledAddons().catch(() => ({ items: [] })),
+      fetchSettings(),
+      fetchWorkspaces("all", 400),
+      fetchIntegrationConnections(),
+      fetchMcpServers(),
+      fetchToolCatalog(),
+      fetchInstalledAddons(),
     ]);
     return {
       settings,
@@ -288,6 +294,137 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
+  );
+}
+
+function OnboardingSection({ route, navigate }: SettingsSectionProps) {
+  return (
+    <SettingsGrid>
+      <SettingsPanel
+        title="First-run setup"
+        subtitle="Complete the routes that make the first real send trustworthy."
+        stats={[
+          { label: "Primary", value: "Providers" },
+          { label: "Local", value: "Runtime" },
+          { label: "Access", value: "Gateway" },
+        ]}
+      >
+        <SettingsActionList
+          items={[
+            {
+              label: "Configure providers",
+              description: "Select the active provider/model and choose where provider secrets are stored.",
+              onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+            },
+            {
+              label: "Check local runtimes",
+              description: "Inspect daemon, llama.cpp, NPU, and voice runtime readiness before sending work.",
+              onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
+            },
+            {
+              label: "Review access",
+              description: "Confirm gateway auth posture, install tokens, and device access before exposing the app.",
+              onClick: () => navigate({ area: "settings", section: "access", theme: route.theme }),
+            },
+          ]}
+        />
+        <SettingsCodeBlock label="Terminal onboarding">pnpm onboarding:tui</SettingsCodeBlock>
+      </SettingsPanel>
+      <SettingsPanel
+        title="Route truth checklist"
+        subtitle="These checks prevent the setup screen from pretending the app is ready before it is."
+      >
+        <SettingsActionList
+          items={[
+            {
+              label: "Provider selected",
+              description: "Chat, Cowork, and Code should show a concrete provider and model before send.",
+              actionLabel: "Required",
+            },
+            {
+              label: "Secret persistence chosen",
+              description: "Use the OS keychain when available, or explicitly choose env/local file fallback.",
+              actionLabel: "Required",
+            },
+            {
+              label: "Runtime reachable",
+              description: "Local-first sends need a reachable local endpoint such as Ollama, LM Studio, or llama.cpp.",
+              actionLabel: "Required",
+            },
+          ]}
+        />
+      </SettingsPanel>
+    </SettingsGrid>
+  );
+}
+
+function BudgetSection({ route, navigate }: SettingsSectionProps) {
+  return (
+    <SettingsGrid>
+      <SettingsPanel
+        title="Budget controls"
+        subtitle="Cost and usage controls live in Ops for this build; this route is intentionally explicit."
+        stats={[
+          { label: "Status", value: "Ops" },
+          { label: "Routing", value: "Providers" },
+        ]}
+      >
+        <SettingsActionList
+          items={[
+            {
+              label: "Open cost telemetry",
+              description: "Review provider usage and budget-facing runtime evidence in Ops.",
+              onClick: () => navigate({ area: "ops", section: "costs", theme: route.theme }),
+            },
+            {
+              label: "Tune provider routing",
+              description: "Change active model routing where cost, latency, and fallback choices are made.",
+              onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+            },
+          ]}
+        />
+      </SettingsPanel>
+      <SettingsPanel
+        title="Release boundary"
+        subtitle="This page exists so deep links do not silently land on General settings."
+      >
+        <SettingsActionList
+          items={[
+            {
+              label: "No silent fallback",
+              description: "Budget deep links must resolve to budget guidance, not unrelated General settings.",
+              actionLabel: "Handled",
+            },
+          ]}
+        />
+      </SettingsPanel>
+    </SettingsGrid>
+  );
+}
+
+function UnknownSettingsSection({ section, route, navigate }: SettingsSectionProps) {
+  return (
+    <SettingsGrid>
+      <SettingsPanel
+        title="Unknown settings section"
+        subtitle={`No next-native settings section is registered for "${String(section)}".`}
+      >
+        <SettingsActionList
+          items={[
+            {
+              label: "Open General",
+              description: "Return to the settings overview.",
+              onClick: () => navigate({ area: "settings", section: "general", theme: route.theme }),
+            },
+            {
+              label: "Open Providers",
+              description: "Jump to the provider/model route used by Chat, Cowork, and Code.",
+              onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+            },
+          ]}
+        />
+      </SettingsPanel>
+    </SettingsGrid>
   );
 }
 
@@ -2017,11 +2154,11 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
 function IntegrationsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [catalog, connections, plugins, meetStatus, meetSessions] = await Promise.all([
-      fetchIntegrationCatalog().catch(() => ({ items: [] })),
-      fetchIntegrationConnections().catch(() => ({ items: [] })),
-      fetchIntegrationPlugins().catch(() => ({ items: [] })),
-      fetchGoogleMeetPrerequisiteStatus().catch(() => null),
-      fetchGoogleMeetSessions(6).catch(() => []),
+      fetchIntegrationCatalog(),
+      fetchIntegrationConnections(),
+      fetchIntegrationPlugins(),
+      fetchGoogleMeetPrerequisiteStatus(),
+      fetchGoogleMeetSessions(6),
     ]);
     return {
       catalog: catalog.items.filter((item) => item.kind !== "channel"),
@@ -3119,10 +3256,7 @@ function McpSection(_props: SettingsSectionProps) {
 
 function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [tools, grants] = await Promise.all([
-      fetchToolCatalog().catch(() => ({ items: [] })),
-      fetchToolGrants({ limit: 400 }).catch(() => ({ items: [] })),
-    ]);
+    const [tools, grants] = await Promise.all([fetchToolCatalog(), fetchToolGrants({ limit: 400 })]);
     return {
       tools: tools.items,
       grants: grants.items,
@@ -3355,10 +3489,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
 
 function AddonsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, installed] = await Promise.all([
-      fetchAddonsCatalog().catch(() => ({ items: [] })),
-      fetchInstalledAddons().catch(() => ({ items: [] })),
-    ]);
+    const [catalog, installed] = await Promise.all([fetchAddonsCatalog(), fetchInstalledAddons()]);
     return {
       catalog: catalog.items,
       installed: installed.items,
@@ -3956,8 +4087,14 @@ function formatDateTime(value?: string | null) {
   return new Date(parsed).toLocaleString();
 }
 
-function iconForSettingsSection(section: SettingsSection) {
+function iconForSettingsSection(section: string) {
   switch (section) {
+    case "general":
+      return SlidersHorizontal;
+    case "onboarding":
+      return Play;
+    case "budget":
+      return Gauge;
     case "providers":
       return SlidersHorizontal;
     case "access":
@@ -3981,8 +4118,14 @@ function iconForSettingsSection(section: SettingsSection) {
   }
 }
 
-function labelForSettingsSection(section: SettingsSection) {
+function labelForSettingsSection(section: string) {
   switch (section) {
+    case "general":
+      return "General";
+    case "onboarding":
+      return "Onboarding";
+    case "budget":
+      return "Budget";
     case "providers":
       return "Providers";
     case "access":
@@ -4002,12 +4145,18 @@ function labelForSettingsSection(section: SettingsSection) {
     case "addons":
       return "Add-ons";
     default:
-      return "General";
+      return "Unknown";
   }
 }
 
-function descriptionForSettingsSection(section: SettingsSection) {
+function descriptionForSettingsSection(section: string) {
   switch (section) {
+    case "general":
+      return "Focused next-native settings instead of placeholder summaries.";
+    case "onboarding":
+      return "First-run setup routes for provider, runtime, secret, and access readiness.";
+    case "budget":
+      return "Cost-control deep links route to explicit budget guidance instead of silent fallback.";
     case "providers":
       return "Choose active routing, inspect provider posture, and manage secrets.";
     case "access":
@@ -4027,6 +4176,6 @@ function descriptionForSettingsSection(section: SettingsSection) {
     case "addons":
       return "Install and control optional add-on runtimes and their health.";
     default:
-      return "Focused next-native settings instead of placeholder summaries.";
+      return "This settings deep link is not registered in the current shell.";
   }
 }

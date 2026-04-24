@@ -22,6 +22,55 @@ afterEach(() => {
 });
 
 describe("sqlite chat branching migration", () => {
+  it("creates chat_session_prefs before branching migration touches it", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-missing-chat-prefs-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+
+      CREATE TABLE chat_turn_traces (
+        turn_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+    `);
+
+    const insertMigration = legacy.prepare(`
+      INSERT INTO schema_migrations (version, name, applied_at)
+      VALUES (?, ?, '2026-03-07T00:00:00.000Z')
+    `);
+    for (let version = 1; version <= 24; version += 1) {
+      insertMigration.run(version, `legacy-${version}`);
+    }
+    legacy.close();
+
+    const db = createDatabase({ dbPath });
+    const prefTable = db
+      .prepare(
+        `
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'chat_session_prefs'
+    `,
+      )
+      .get() as { name: string } | undefined;
+    assert.equal(prefTable?.name, "chat_session_prefs");
+
+    const prefColumns = db.prepare("PRAGMA table_info(chat_session_prefs)").all() as Array<{ name: string }>;
+    assert.ok(prefColumns.some((row) => row.name === "planning_mode"));
+    assert.ok(prefColumns.some((row) => row.name === "orchestration_enabled"));
+
+    db.close();
+  });
+
   it("backfills planning mode, parent turn ids, and branch state without loading rows in JS", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-legacy-chat-branch-${randomUUID()}.db`);
     createdFiles.push(dbPath);
@@ -109,34 +158,49 @@ describe("sqlite chat branching migration", () => {
 
     const db = createDatabase({ dbPath });
 
-    const prefRow = db.prepare(`
+    const prefRow = db
+      .prepare(
+        `
       SELECT planning_mode AS planningMode
       FROM chat_session_prefs
       WHERE session_id = 'sess-1'
-    `).get() as { planningMode: string } | undefined;
+    `,
+      )
+      .get() as { planningMode: string } | undefined;
     assert.equal(prefRow?.planningMode, "off");
 
-    const traceRows = db.prepare(`
+    const traceRows = db
+      .prepare(
+        `
       SELECT turn_id AS turnId, parent_turn_id AS parentTurnId, branch_kind AS branchKind
       FROM chat_turn_traces
       WHERE session_id = 'sess-1'
       ORDER BY started_at ASC
-    `).all() as Array<{ turnId: string; parentTurnId: string | null; branchKind: string }>;
-    assert.deepEqual(traceRows.map((row) => ({
-      turnId: row.turnId,
-      parentTurnId: row.parentTurnId,
-      branchKind: row.branchKind,
-    })), [
-      { turnId: "turn-1", parentTurnId: null, branchKind: "append" },
-      { turnId: "turn-2", parentTurnId: "turn-1", branchKind: "append" },
-      { turnId: "turn-3", parentTurnId: "turn-2", branchKind: "append" },
-    ]);
+    `,
+      )
+      .all() as Array<{ turnId: string; parentTurnId: string | null; branchKind: string }>;
+    assert.deepEqual(
+      traceRows.map((row) => ({
+        turnId: row.turnId,
+        parentTurnId: row.parentTurnId,
+        branchKind: row.branchKind,
+      })),
+      [
+        { turnId: "turn-1", parentTurnId: null, branchKind: "append" },
+        { turnId: "turn-2", parentTurnId: "turn-1", branchKind: "append" },
+        { turnId: "turn-3", parentTurnId: "turn-2", branchKind: "append" },
+      ],
+    );
 
-    const branchState = db.prepare(`
+    const branchState = db
+      .prepare(
+        `
       SELECT active_leaf_turn_id AS activeLeafTurnId
       FROM chat_session_branch_state
       WHERE session_id = 'sess-1'
-    `).get() as { activeLeafTurnId: string } | undefined;
+    `,
+      )
+      .get() as { activeLeafTurnId: string } | undefined;
     assert.equal(branchState?.activeLeafTurnId, "turn-3");
 
     db.close();

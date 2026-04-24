@@ -3,7 +3,7 @@
 > Local-first AI operations console for chat, coding, orchestration, memory, tools, and approvals.
 
 [![Release](https://img.shields.io/badge/release-1.0.0-1ec8a5?style=for-the-badge)](./CHANGELOG.md)
-[![UI](https://img.shields.io/badge/ui-Mission%20Control-0f172a?style=for-the-badge)](./apps/mission-control)
+[![UI](https://img.shields.io/badge/ui-Mission%20Control%20Next-0f172a?style=for-the-badge)](./apps/mission-control-next)
 [![Runtime](https://img.shields.io/badge/runtime-Fastify%20Gateway-123c52?style=for-the-badge)](./apps/gateway)
 [![Local First](https://img.shields.io/badge/posture-local--first-2dd4bf?style=for-the-badge)](./docs/INSTALL_SETUP_TESTING.md)
 [![Monorepo](https://img.shields.io/badge/monorepo-pnpm-f69220?style=for-the-badge)](./package.json)
@@ -93,16 +93,20 @@ What it does not guarantee:
 
 Primary Postgres-backed compose path:
 
-```bash
+```powershell
+$env:GOATCITADEL_AUTH_TOKEN = "<long random token>"
+$env:GOATCITADEL_POSTGRES_PASSWORD = "<long random password>"
 docker compose up --build
 ```
 
 Default container endpoints:
 
-- Mission Control: `http://localhost:5173`
+- Mission Control: `http://localhost:4173`
 - Gateway health: `http://127.0.0.1:8787/health`
 
-Before exposing GoatCitadel beyond your own machine, replace the compose defaults for:
+The compose file binds published ports to `127.0.0.1` by default. To expose it on another interface, set `GOATCITADEL_DOCKER_BIND_IP` intentionally and keep auth/origin controls tight.
+
+Before exposing GoatCitadel beyond your own machine, set non-placeholder values for:
 
 - `GOATCITADEL_AUTH_TOKEN`
 - `GOATCITADEL_POSTGRES_PASSWORD`

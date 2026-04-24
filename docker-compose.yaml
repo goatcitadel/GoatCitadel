@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: goatcitadel
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${GOATCITADEL_POSTGRES_PASSWORD:-change-this-postgres-password}
+      POSTGRES_PASSWORD: ${GOATCITADEL_POSTGRES_PASSWORD:?Set GOATCITADEL_POSTGRES_PASSWORD to a long random value before running docker compose}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d goatcitadel"]
       interval: 10s
@@ -45,18 +45,18 @@ services:
       GOATCITADEL_POSTGRES_PORT: 5432
       GOATCITADEL_POSTGRES_DATABASE: goatcitadel
       GOATCITADEL_POSTGRES_USER: postgres
-      GOATCITADEL_POSTGRES_PASSWORD: ${GOATCITADEL_POSTGRES_PASSWORD:-change-this-postgres-password}
+      GOATCITADEL_POSTGRES_PASSWORD: ${GOATCITADEL_POSTGRES_PASSWORD:?Set GOATCITADEL_POSTGRES_PASSWORD to a long random value before running docker compose}
       GOATCITADEL_POSTGRES_SSL: disable
       GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false"
       GOATCITADEL_AUTH_MODE: token
-      GOATCITADEL_AUTH_TOKEN: ${GOATCITADEL_AUTH_TOKEN:-change-this-goatcitadel-token}
+      GOATCITADEL_AUTH_TOKEN: ${GOATCITADEL_AUTH_TOKEN:?Set GOATCITADEL_AUTH_TOKEN to a long random value before running docker compose}
       GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false"
       GOATCITADEL_ALLOWED_ORIGINS: ${GOATCITADEL_ALLOWED_ORIGINS:-http://localhost:4173,http://127.0.0.1:4173}
       GOATCITADEL_VITE_ALLOWED_HOSTS: ${GOATCITADEL_VITE_ALLOWED_HOSTS:-localhost,127.0.0.1}
       VITE_GATEWAY_ALLOWED_HOSTS: ${VITE_GATEWAY_ALLOWED_HOSTS:-localhost,127.0.0.1}
     ports:
-      - "4173:4173"
-      - "8787:8787"
+      - "${GOATCITADEL_DOCKER_BIND_IP:-127.0.0.1}:4173:4173"
+      - "${GOATCITADEL_DOCKER_BIND_IP:-127.0.0.1}:8787:8787"
     healthcheck:
       test:
         [

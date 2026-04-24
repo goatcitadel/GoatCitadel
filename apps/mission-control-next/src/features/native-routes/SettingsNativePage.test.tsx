@@ -253,6 +253,36 @@ beforeEach(() => {
 });
 
 describe("SettingsNativePage providers", () => {
+  it("renders onboarding, budget, and unknown sections without silently falling through to General", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("onboarding");
+    });
+    let text = collectText(renderer!.root);
+    expect(text).toContain("First-run setup");
+    expect(text).toContain("Terminal onboarding");
+    expect(text).not.toContain("Mission Control posture");
+
+    await act(async () => {
+      renderer = renderPage("budget");
+    });
+    text = collectText(renderer!.root);
+    expect(text).toContain("Budget controls");
+    expect(text).toContain("No silent fallback");
+    expect(text).not.toContain("Mission Control posture");
+
+    await act(async () => {
+      renderer = renderPage("not-real");
+    });
+    text = collectText(renderer!.root);
+    expect(text).toContain("Unknown");
+    expect(text).toContain("not registered in the current shell");
+    expect(text).toContain("Unknown settings section");
+    expect(text).toContain("Open General");
+    expect(text).not.toContain("Mission Control posture");
+  });
+
   it("saves provider upserts through patchSettings", async () => {
     let renderer: ReactTestRenderer | null = null;
 

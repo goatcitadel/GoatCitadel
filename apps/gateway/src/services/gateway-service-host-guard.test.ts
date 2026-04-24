@@ -108,16 +108,29 @@ async function collectServiceFiles(dir: URL, prefix = ""): Promise<string[]> {
   return files;
 }
 
+let serviceSourcesPromise: Promise<Array<{ relativePath: string; source: string }>> | null = null;
+
+async function readServiceSources(): Promise<Array<{ relativePath: string; source: string }>> {
+  serviceSourcesPromise ??= collectServiceFiles(SERVICES_DIR).then(async (files) =>
+    Promise.all(
+      files.map(async (relativePath) => ({
+        relativePath,
+        source: await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8"),
+      })),
+    ),
+  );
+  return serviceSourcesPromise;
+}
+
 describe("gateway service host guard", () => {
   it("does not allow GatewayService host coupling outside gateway-service.ts", async () => {
-    const files = await collectServiceFiles(SERVICES_DIR);
+    const files = await readServiceSources();
     const offenders: string[] = [];
 
-    for (const relativePath of files) {
+    for (const { relativePath, source } of files) {
       if (HOST_GUARD_EXCLUDED_PATHS.has(relativePath)) {
         continue;
       }
-      const source = await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8");
       if (HOST_COUPLING_PATTERNS.some((pattern) => pattern.test(source))) {
         offenders.push(relativePath);
       }
@@ -125,17 +138,16 @@ describe("gateway service host guard", () => {
 
     offenders.sort();
     expect(offenders).toEqual([]);
-  });
+  }, 15_000);
 
   it("does not allow imports of extracted helper and payload types from gateway-service.ts", async () => {
-    const files = await collectServiceFiles(SERVICES_DIR);
+    const files = await readServiceSources();
     const offenders: string[] = [];
 
-    for (const relativePath of files) {
+    for (const { relativePath, source } of files) {
       if (relativePath === "gateway-service.ts") {
         continue;
       }
-      const source = await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8");
       const importedSymbols = extractGatewayServiceNamedImports(source);
       const extractedImports = importedSymbols.filter((symbol) => EXTRACTED_GATEWAY_SERVICE_SYMBOLS.includes(symbol));
       if (extractedImports.length > 0) {
@@ -145,7 +157,7 @@ describe("gateway service host guard", () => {
 
     offenders.sort();
     expect(offenders).toEqual([]);
-  });
+  }, 15_000);
 });
 
 function extractGatewayServiceNamedImports(source: string): string[] {

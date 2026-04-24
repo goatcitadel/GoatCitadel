@@ -70,7 +70,7 @@ function renderLegacySurface(input: ChatPageRenderSurfaceInput): ReactNode {
   const sessionRail = <ChatSessionSidebar {...input.sessionRail} />;
   const primaryColumn = input.activeSessionSurfaceProps ? (
     <MissionControlActiveSessionSurface
-      {...(input.activeSessionSurfaceProps as LegacyMissionControlActiveSessionSurfaceProps)}
+      {...(input.activeSessionSurfaceProps as unknown as LegacyMissionControlActiveSessionSurfaceProps)}
     />
   ) : (
     <MissionControlEmptyState {...(input.emptyStateProps as MissionThreadedEmptyStateProps)} />

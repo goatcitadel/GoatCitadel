@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import readline from "node:readline/promises";
+import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
 const preferredBaseDir = path.join(os.homedir(), ".GoatCitadel");
@@ -654,6 +655,7 @@ function startSourceGateway(gatewayUrl) {
 function startSourceUi(gatewayUrl, uiUrl) {
   const runner = resolvePnpmRunner();
   const port = String(new URL(uiUrl).port || "5173");
+  const uiTarget = resolveUiTarget(appDir, runtimeProcessEnv);
   writePidFile(
     uiPidPath,
     spawnDetachedProcess({
@@ -663,7 +665,7 @@ function startSourceUi(gatewayUrl, uiUrl) {
         "--dir",
         appDir,
         "--filter",
-        "@goatcitadel/mission-control",
+        uiTarget.packageName,
         "exec",
         "vite",
         "--host",

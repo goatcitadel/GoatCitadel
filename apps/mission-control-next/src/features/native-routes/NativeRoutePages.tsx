@@ -104,10 +104,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
   useEffect(() => {
     let cancelled = false;
     setState((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([
-      fetchTasksByView("active", undefined, activeWorkspaceId).catch(() => ({ items: [] })),
-      fetchOperators().catch(() => ({ items: [] })),
-    ])
+    void Promise.all([fetchTasksByView("active", undefined, activeWorkspaceId), fetchOperators()])
       .then(([tasks, operators]) => {
         if (cancelled) {
           return;

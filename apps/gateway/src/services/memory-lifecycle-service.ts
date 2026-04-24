@@ -220,6 +220,65 @@ export class MemoryLifecycleService {
     };
   }
 
+  public forgetExpiredActiveMemoryItems(input: { limit?: number; nowIso?: string; actorId?: string } = {}): {
+    totalCount: number;
+    retainedPinnedCount: number;
+    forgottenItems: MemoryItemRecord[];
+  } {
+    const nowIso = input.nowIso ?? new Date().toISOString();
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+    const countRows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT
+        COUNT(*) AS totalCount,
+        SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END) AS retainedPinnedCount
+      FROM memory_items
+      WHERE status = 'active'
+        AND expires_at IS NOT NULL
+        AND expires_at <= @now
+    `,
+      )
+      .get({ now: nowIso }) as { totalCount?: number | null; retainedPinnedCount?: number | null } | undefined;
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+             created_at, updated_at, forgotten_at
+      FROM memory_items
+      WHERE status = 'active'
+        AND expires_at IS NOT NULL
+        AND expires_at <= @now
+        AND pinned = 0
+      ORDER BY expires_at ASC, updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all({ now: nowIso, limit }) as Array<{
+      item_id: string;
+      namespace: string;
+      title: string;
+      content: string;
+      metadata_json: string | null;
+      pinned: number;
+      ttl_override_seconds: number | null;
+      expires_at: string | null;
+      status: MemoryItemRecord["status"];
+      created_at: string;
+      updated_at: string;
+      forgotten_at: string | null;
+    }>;
+
+    const forgottenItems = rows.map((row) =>
+      this.forgetMemoryItemInternal(row.item_id, input.actorId ?? "memory-flush", { requireFeature: false }),
+    );
+    return {
+      totalCount: Number(countRows?.totalCount ?? 0),
+      retainedPinnedCount: Number(countRows?.retainedPinnedCount ?? 0),
+      forgottenItems,
+    };
+  }
+
   public patchMemoryItem(itemId: string, patch: MemoryLifecyclePatch, actorId = "operator"): MemoryItemRecord {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const current = requireMemoryItem(this.deps.admin, itemId);
@@ -302,7 +361,17 @@ export class MemoryLifecycleService {
   }
 
   public forgetMemoryItem(itemId: string, actorId = "operator"): MemoryItemRecord {
-    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    return this.forgetMemoryItemInternal(itemId, actorId, { requireFeature: true });
+  }
+
+  private forgetMemoryItemInternal(
+    itemId: string,
+    actorId = "operator",
+    options: { requireFeature: boolean },
+  ): MemoryItemRecord {
+    if (options.requireFeature) {
+      this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    }
     const current = requireMemoryItem(this.deps.admin, itemId);
     if (current.status === "forgotten") {
       return current;

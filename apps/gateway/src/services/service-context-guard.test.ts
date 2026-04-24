@@ -29,21 +29,34 @@ async function collectServiceFiles(dir: URL, prefix = ""): Promise<string[]> {
   return files;
 }
 
+let serviceSourcesPromise: Promise<Array<{ relativePath: string; source: string }>> | null = null;
+
+async function readServiceSources(): Promise<Array<{ relativePath: string; source: string }>> {
+  serviceSourcesPromise ??= collectServiceFiles(SERVICES_DIR).then(async (files) =>
+    Promise.all(
+      files.map(async (relativePath) => ({
+        relativePath,
+        source: await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8"),
+      })),
+    ),
+  );
+  return serviceSourcesPromise;
+}
+
 describe("service context guard", () => {
   it("does not allow bare ServiceContext service fields outside transitional infrastructure", async () => {
-    const files = await collectServiceFiles(SERVICES_DIR);
+    const files = await readServiceSources();
     const offenders: string[] = [];
 
-    for (const relativePath of files) {
+    for (const { relativePath, source } of files) {
       if (SERVICE_CONTEXT_GUARD_EXCLUDED_PATHS.has(relativePath)) {
         continue;
       }
-      const source = await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8");
       if (DIRECT_SERVICE_CONTEXT_PATTERN.test(source)) {
         offenders.push(relativePath);
       }
     }
     offenders.sort();
     expect(offenders).toEqual([]);
-  });
+  }, 15_000);
 });

@@ -85,6 +85,8 @@ export function useChatRoutePreflight(input: {
       return;
     }
     let cancelled = false;
+    setResult(null);
+    setError(null);
     setLoading(true);
     void fetchPreflight(displayRequest)
       .then((next) => {

@@ -51,6 +51,10 @@ async function main() {
 
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));
   copyFile(path.join(repoRoot, "package.json"), path.join(appRoot, "package.json"));
+  copyFile(
+    path.join(repoRoot, "scripts", "lib", "ui-target.mjs"),
+    path.join(appRoot, "scripts", "lib", "ui-target.mjs"),
+  );
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
   copyDirectory(uiTarget.distDir, missionControlDistDir);
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));

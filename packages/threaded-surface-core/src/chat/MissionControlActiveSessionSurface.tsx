@@ -92,6 +92,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   selectedSessionId: string | null;
   currentWebMode: "auto" | "off" | "quick" | "deep";
   routePreflight: RoutingPreflightResult | null;
+  routePreflightLoading: boolean;
+  routePreflightError: string | null;
   routeBoundaryAckRequired: boolean;
   routeBoundaryAcknowledged: boolean;
   sending: boolean;

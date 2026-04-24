@@ -194,6 +194,20 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       ) : null}
 
+      {props.routePreflightLoading && !props.routePreflight ? (
+        <div className="mc-next-composer-banner info">
+          <StatusChip tone="muted">Route</StatusChip>
+          <p>Checking the selected provider/model route before send.</p>
+        </div>
+      ) : null}
+
+      {props.routePreflight?.blockedReason || props.routePreflightError ? (
+        <div className="mc-next-composer-banner error" role="alert">
+          <StatusChip tone="critical">Route blocked</StatusChip>
+          <p>{props.routePreflight?.blockedReason ?? props.routePreflightError}</p>
+        </div>
+      ) : null}
+
       {props.routeBoundaryAckRequired && !props.routeBoundaryAcknowledged ? (
         <div className="mc-next-composer-banner warning">
           <StatusChip tone="warning">Confirm</StatusChip>

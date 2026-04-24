@@ -2000,9 +2000,9 @@ export class GatewayService {
     const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
     const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
     const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
-    const expiredMemoryItems = this.memoryLifecycleService.inspectExpiredActiveMemoryItems({
+    const expiredMemoryItems = this.memoryLifecycleService.forgetExpiredActiveMemoryItems({
       nowIso,
-      limit: 25,
+      limit: 500,
     });
 
     this.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
@@ -2020,8 +2020,10 @@ export class GatewayService {
       prunedOldContextPacks,
       prunedOldQmdRuns,
       expiredMemoryItemCount: expiredMemoryItems.totalCount,
-      expiredMemoryItemIds: expiredMemoryItems.items.map((item) => item.itemId),
-      expiredMemoryNamespacesSample: [...new Set(expiredMemoryItems.items.map((item) => item.namespace))],
+      forgottenExpiredMemoryItemCount: expiredMemoryItems.forgottenItems.length,
+      retainedPinnedExpiredMemoryItemCount: expiredMemoryItems.retainedPinnedCount,
+      expiredMemoryItemIds: expiredMemoryItems.forgottenItems.map((item) => item.itemId),
+      expiredMemoryNamespacesSample: [...new Set(expiredMemoryItems.forgottenItems.map((item) => item.namespace))],
     });
   }
 

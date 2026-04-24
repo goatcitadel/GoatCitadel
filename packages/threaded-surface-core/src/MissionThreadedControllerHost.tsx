@@ -1258,16 +1258,19 @@ export function MissionThreadedControllerHost({
       workspaceName,
     ],
   );
-  const coworkRouteBlocked = messageMode === "cowork" ? currentRoutePreflight?.blockedReason : undefined;
-  const coworkRouteBoundaryAckRequired =
-    messageMode === "cowork" && requiresBoundaryAcknowledgment(currentRoutePreflight);
+  const routeBlocked = currentRoutePreflight?.blockedReason ?? undefined;
+  const routeBoundaryAckRequired = requiresBoundaryAcknowledgment(currentRoutePreflight);
+  const routePreflightPending = Boolean(selectedSessionId) && routePreflight.loading && !currentRoutePreflight;
+  const routePreflightUnavailable = Boolean(selectedSessionId) && Boolean(routePreflight.error);
   const canSend =
     Boolean(resolveOutboundDraftContent(draft, pendingAttachments.length, editingTurnId ? "edit" : "send")) &&
     !sending &&
     !pendingApproval &&
     !pendingUserInput &&
-    !coworkRouteBlocked &&
-    (!coworkRouteBoundaryAckRequired || currentRouteBoundaryAcknowledged);
+    !routeBlocked &&
+    !routePreflightPending &&
+    !routePreflightUnavailable &&
+    (!routeBoundaryAckRequired || currentRouteBoundaryAcknowledged);
 
   const handleSelectSessionFromRail = useCallback(
     (sessionId: string, options?: { turnId?: string | null }) => {
@@ -2066,7 +2069,9 @@ export function MissionThreadedControllerHost({
         selectedSessionId,
         currentWebMode: prefs?.webMode ?? "auto",
         routePreflight: currentRoutePreflight,
-        routeBoundaryAckRequired: Boolean(coworkRouteBoundaryAckRequired),
+        routePreflightLoading: routePreflight.loading,
+        routePreflightError: routePreflight.error,
+        routeBoundaryAckRequired,
         routeBoundaryAcknowledged: currentRouteBoundaryAcknowledged,
         sending,
         canSend,

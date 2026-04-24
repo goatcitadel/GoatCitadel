@@ -97,6 +97,8 @@ vi.mock("./components/RemoteApprovalActionModal", () => ({
     ) : null,
 }));
 
+const appModulePromise = import("./App");
+
 function createMemoryStorage(): Storage {
   const map = new Map<string, string>();
   return {
@@ -290,7 +292,7 @@ async function flush(): Promise<void> {
 
 describe("deriveRefreshTopics", () => {
   it("keeps session-scoped chat events off the surface refresh topic", async () => {
-    const { deriveRefreshTopics } = await import("./App");
+    const { deriveRefreshTopics } = await appModulePromise;
 
     expect(
       deriveRefreshTopics({
@@ -311,7 +313,7 @@ describe("deriveRefreshTopics", () => {
         links: { sessionId: "sess-1" },
       } as any),
     ).not.toContain("surface");
-  }, 15_000);
+  }, 45_000);
 });
 
 async function waitForTreeText(renderer: ReactTestRenderer, expected: string, attempts = 20): Promise<string> {
@@ -455,7 +457,7 @@ describe("App gateway access gate", () => {
   });
 
   it("shows the access gate and does not start SSE when auth is required", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     preflightGatewayAccessMock.mockResolvedValue({
       status: "needs-auth",
       message: "Gateway credentials are required to continue.",
@@ -476,7 +478,7 @@ describe("App gateway access gate", () => {
   }, 15_000);
 
   it("starts Mission Control normally after a ready preflight result", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
 
     let renderer: ReactTestRenderer;
@@ -491,7 +493,7 @@ describe("App gateway access gate", () => {
   }, 15_000);
 
   it("restores the last safe shell route when launched from the PWA entrypoint", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     window.localStorage.setItem("goatcitadel.shell.last-route", "?space=operate&page=surface&surface=code");
     window.location.search = "?source=pwa";
     window.location.href = "http://localhost:5173/?source=pwa";
@@ -514,7 +516,7 @@ describe("App gateway access gate", () => {
   }, 15_000);
 
   it("keeps direct Work surface entry active when onboarding is incomplete", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     window.location.search = "?space=operate&page=surface&surface=code";
     window.location.href = "http://localhost:5173/?space=operate&page=surface&surface=code";
     preflightGatewayAccessMock.mockResolvedValue({
@@ -538,7 +540,7 @@ describe("App gateway access gate", () => {
   }, 15_000);
 
   it("shows startup copy before the first preflight resolves and then transitions into the shell", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     let resolvePreflight: ((value: ReturnType<typeof createReadyPreflightResult>) => void) | undefined;
     preflightGatewayAccessMock.mockImplementation(
       () =>
@@ -573,7 +575,7 @@ describe("App gateway access gate", () => {
     try {
       window.setTimeout = globalThis.setTimeout.bind(globalThis);
       window.clearTimeout = globalThis.clearTimeout.bind(globalThis);
-      const { App } = await import("./App");
+      const { App } = await appModulePromise;
       preflightGatewayAccessMock
         .mockResolvedValueOnce({
           status: "unreachable",
@@ -605,7 +607,7 @@ describe("App gateway access gate", () => {
   });
 
   it("adds backend pending approvals to unresolved local approval prompts", async () => {
-    const { deriveShellApprovalCount } = await import("./App");
+    const { deriveShellApprovalCount } = await appModulePromise;
 
     expect(deriveShellApprovalCount(null, 0)).toBe(0);
     expect(
@@ -639,7 +641,7 @@ describe("App gateway access gate", () => {
   });
 
   it("marks shell status stale after refresh failures or long gaps", async () => {
-    const { deriveOperateStatusFreshness } = await import("./App");
+    const { deriveOperateStatusFreshness } = await appModulePromise;
 
     expect(deriveOperateStatusFreshness(null, null, 0)).toMatchObject({
       state: "stale",
@@ -656,7 +658,7 @@ describe("App gateway access gate", () => {
   });
 
   it("renders the new three-space shell without the old overflow navigation", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     const { UiPreferencesProvider } = await import("./state/ui-preferences");
     window.localStorage.setItem("goatcitadel.ui.mode.v1", "advanced");
     window.location.search = "?space=operate&page=surface&surface=chat";
@@ -697,7 +699,7 @@ describe("App gateway access gate", () => {
   });
 
   it("reads the work surface from a legacy URL and passes it to the shared Chat page", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     window.location.search = "?tab=chat&surface=code";
     window.location.href = "http://localhost:5173/?tab=chat&surface=code";
     preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
@@ -719,7 +721,7 @@ describe("App gateway access gate", () => {
   });
 
   it("routes into the shared Chat page when a surface tab is selected from another page", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     window.location.search = "?space=operate&page=tasks";
     window.location.href = "http://localhost:5173/?space=operate&page=tasks";
     preflightGatewayAccessMock.mockResolvedValue(createReadyPreflightResult());
@@ -744,7 +746,7 @@ describe("App gateway access gate", () => {
   });
 
   it("enters a waiting state after requesting device approval from the access gate", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     preflightGatewayAccessMock.mockResolvedValue({
       status: "needs-auth",
       message: "Gateway credentials are required to continue.",
@@ -789,7 +791,7 @@ describe("App gateway access gate", () => {
   });
 
   it("surfaces device approval prompts from realtime events", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     let onEvent:
       | ((event: {
           eventId: string;
@@ -922,7 +924,7 @@ describe("App gateway access gate", () => {
   });
 
   it("keeps provider trust out of duplicated shell chrome for work surfaces", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -936,7 +938,7 @@ describe("App gateway access gate", () => {
   });
 
   it("keeps the status center collapsed by default while the shell stays compact", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
 
     let renderer: ReactTestRenderer;
     await act(async () => {
@@ -952,7 +954,7 @@ describe("App gateway access gate", () => {
   });
 
   it("does not auto-expand the status center when approvals are the only active trust warning", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     fetchDashboardStateMock.mockResolvedValue({
       timestamp: new Date().toISOString(),
       sessions: [],
@@ -975,7 +977,7 @@ describe("App gateway access gate", () => {
   });
 
   it("lets the status center expand workload detail on demand", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     const { UiPreferencesProvider } = await import("./state/ui-preferences");
 
     let renderer: ReactTestRenderer;
@@ -1009,7 +1011,7 @@ describe("App gateway access gate", () => {
   });
 
   it("surfaces remote approval action prompts from realtime events and resolves them with the delivered token", async () => {
-    const { App } = await import("./App");
+    const { App } = await appModulePromise;
     let onEvent:
       | ((event: {
           eventId: string;

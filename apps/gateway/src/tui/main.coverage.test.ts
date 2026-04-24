@@ -130,6 +130,10 @@ function buildResponse(methodName: string): unknown {
         recentEvents: [],
         dailyCostUsd: 0,
       };
+    case "devDiagnostics":
+      return { items: [] };
+    case "googleMeetPrerequisites":
+      return { state: "ready", provider: "coverage", prerequisites: [] };
     case "listChatSessions":
       return {
         items: [

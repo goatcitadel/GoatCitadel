@@ -24,6 +24,8 @@ function buildMarkup(overrides: Partial<any> = {}) {
     selectedSessionId: "session-1",
     currentWebMode: "auto",
     routePreflight: null,
+    routePreflightLoading: false,
+    routePreflightError: null,
     routeBoundaryAckRequired: false,
     routeBoundaryAcknowledged: false,
     sending: false,
@@ -110,5 +112,15 @@ describe("ThreadedComposer", () => {
 
     expect(markup).toContain("Upstream timeout while contacting the provider.");
     expect(markup).toContain("Your prompt was kept in the composer so you can edit and resend it.");
+  });
+
+  it("surfaces route preflight failures before send", () => {
+    const markup = buildMarkup({
+      canSend: false,
+      routePreflightError: "No active provider configured.",
+    });
+
+    expect(markup).toContain("Route blocked");
+    expect(markup).toContain("No active provider configured.");
   });
 });

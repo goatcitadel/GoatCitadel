@@ -1,6 +1,6 @@
 # GoatCitadel Install, Setup, and Testing
 
-Last updated: 2026-04-11
+Last updated: 2026-04-24
 Target release: `1.0.0`
 
 Related guides:
@@ -234,7 +234,9 @@ Important posture notes:
 
 Primary stack:
 
-```bash
+```powershell
+$env:GOATCITADEL_AUTH_TOKEN = "<long random token>"
+$env:GOATCITADEL_POSTGRES_PASSWORD = "<long random password>"
 docker compose up --build
 ```
 
@@ -243,7 +245,9 @@ Default endpoints:
 - Mission Control: `http://localhost:4173`
 - Gateway health: `http://127.0.0.1:8787/health`
 
-Change these before exposing the stack outside local-only use:
+The compose file publishes ports on `127.0.0.1` by default. Set `GOATCITADEL_DOCKER_BIND_IP` only when you intentionally want another host/interface to reach the stack.
+
+Set these to non-placeholder values before the stack starts:
 
 - `GOATCITADEL_AUTH_TOKEN`
 - `GOATCITADEL_POSTGRES_PASSWORD`
@@ -261,6 +265,8 @@ The compose file already enables:
 Mission Control is served from a built Vite preview image. If you want to use a non-local hostname, set these at build time and rebuild:
 
 ```bash
+export GOATCITADEL_AUTH_TOKEN="<long random token>"
+export GOATCITADEL_POSTGRES_PASSWORD="<long random password>"
 GOATCITADEL_VITE_ALLOWED_HOSTS=your-host.example \
 VITE_GATEWAY_ALLOWED_HOSTS=your-host.example \
 docker compose up --build

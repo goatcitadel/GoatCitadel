@@ -1276,6 +1276,7 @@ function createSessionsOperatorSummaryIndex(db: DatabaseSync): void {
 }
 
 function createChatBranchingAndPlanningSchema(db: DatabaseSync): void {
+  createChatSessionPrefsTableIfMissing(db);
   addColumnIfMissing(db, "chat_session_prefs", "planning_mode", "TEXT NOT NULL DEFAULT 'off'");
   addColumnIfMissing(db, "chat_turn_traces", "parent_turn_id", "TEXT");
   addColumnIfMissing(db, "chat_turn_traces", "branch_kind", "TEXT NOT NULL DEFAULT 'append'");
@@ -1350,6 +1351,7 @@ function createChatBranchingAndPlanningSchema(db: DatabaseSync): void {
 }
 
 function createChatModeOrchestrationFoundationSchema(db: DatabaseSync): void {
+  createChatSessionPrefsTableIfMissing(db);
   addColumnIfMissing(db, "chat_session_prefs", "orchestration_enabled", "INTEGER NOT NULL DEFAULT 1");
   addColumnIfMissing(db, "chat_session_prefs", "orchestration_intensity", "TEXT NOT NULL DEFAULT 'balanced'");
   addColumnIfMissing(db, "chat_session_prefs", "orchestration_visibility", "TEXT NOT NULL DEFAULT 'summarized'");

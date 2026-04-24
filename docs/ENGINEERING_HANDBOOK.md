@@ -30,6 +30,7 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
 - Surface-regression and visual-regression derive from the same canonical release-surface manifest so the visible `Work / Observe / Tune` evidence set cannot drift silently.
 - Postgres backups participate in shipped create/verify coverage, but restore remains an operator-driven `pg_restore` workflow rather than the SQLite file-copy restore path.
+- `GatewayService` has been substantially decomposed, but `apps/gateway/src/services/gateway-service.ts` remains the facade many routes call through. Treat facade extraction as active architecture work, not finished clean-architecture proof.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 
@@ -72,7 +73,8 @@ Primary implementation goals:
 <repo-root>
 ├─ apps
 │  ├─ gateway                  # Fastify backend, canonical control plane
-│  └─ mission-control          # React + Vite operator console
+│  ├─ mission-control-next     # Canonical React + Vite operator console
+│  └─ mission-control          # Compatibility-only React + Vite operator console
 ├─ packages
 │  ├─ contracts                # Shared TypeScript contracts
 │  ├─ extensions-sdk           # Author-facing add-on / integration-plugin SDK helpers
