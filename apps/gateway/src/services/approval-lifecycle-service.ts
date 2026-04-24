@@ -38,13 +38,14 @@ import type {
   ApprovalReplayResult,
   ApprovalResolveResult,
   RemoteApprovalActionTokenIssueResult,
-} from "./gateway-service.js";
+} from "./approval-types.js";
 import type { HooksService } from "./hooks-service.js";
 import type { ApprovalWaitRunService } from "./approval-wait-run-service.js";
 import {
   deriveApprovalResolutionEffectsResult,
   type ApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
+import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
@@ -102,7 +103,6 @@ export interface ApprovalLifecycleHost {
   resolveDeviceAccessApproval(current: ApprovalRequest, input: ApprovalResolveInput): Promise<ApprovalResolveResult>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   resolveApprovalHookWorkspaceId(payload: Record<string, unknown>): string;
-  parseApprovalCreateHookPatch(value: unknown): Record<string, unknown> | undefined;
   scheduleApprovalExplanation(approval: ApprovalRequest): void;
   findProactiveDurableRunIdsForApproval(approvalId: string): string[];
   wakeDurableRun(
@@ -399,7 +399,7 @@ export async function createApproval(
       preview: input.preview,
       expiresAt: input.expiresAt ?? null,
     },
-    parsePatch: (value) => host.parseApprovalCreateHookPatch(value),
+    parsePatch: (value) => parseApprovalCreateHookPatch(value as Record<string, unknown>),
     mergePatch: (current, next) => ({
       ...(current ?? {}),
       ...next,

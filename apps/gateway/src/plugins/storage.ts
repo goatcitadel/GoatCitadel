@@ -3,13 +3,18 @@ import path from "node:path";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
-import { GatewayService } from "../services/gateway-service.js";
+import {
+  createGatewayRuntime,
+  type GatewayAuthValidationPort,
+  type GatewayRuntimePort,
+} from "../services/gateway-runtime-factory.js";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { shouldStopBundledPostgresOnClose } from "./storage-runtime.js";
 
 declare module "fastify" {
   interface FastifyInstance {
-    gateway: GatewayService;
+    gatewayRuntime: GatewayRuntimePort;
+    gatewayAuth: GatewayAuthValidationPort;
     gatewayConfig: GatewayRuntimeConfig;
   }
 }
@@ -19,9 +24,10 @@ export const gatewayPlugin = fp(async (fastify) => {
   const config = await loadGatewayConfig(rootDir);
   const bundledPostgres = await ensureBundledPostgresRuntime(config);
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
-  const gateway = new GatewayService(config);
+  const gateway = createGatewayRuntime(config);
   gateway.attachDevDiagnosticsLogger(fastify.log);
-  fastify.decorate("gateway", gateway);
+  fastify.decorate("gatewayRuntime", gateway);
+  fastify.decorate("gatewayAuth", gateway);
   fastify.decorate("gatewayConfig", config);
   await gateway.initCritical();
 

@@ -61,7 +61,7 @@ export function buildPromptPackMarkdownImportFallback(input: {
     `- Auto-load today is gated by \`ensurePromptPackLoaded()\` in \`${serviceEvidence.path}\`: if storage already has a pack it returns the existing record, otherwise it reads \`GOATCITADEL_PROMPT_PACK_PATH\` from disk with \`fs.readFile(..., "utf8")\` and imports that markdown with \`sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE\`.`,
     `- The service import path runs through \`importPromptPack(...)\`, which parses markdown with \`parsePromptPackTests(...)\`, infers a pack name from \`sourceLabel\` when needed, then persists the pack and tests via \`this.ctx.storage.promptPacks.replacePackTests(...)\`.`,
     routeEvidence
-      ? `- Manual markdown imports are exposed through \`${routeEvidence.path}\` at \`POST /api/v1/prompt-packs/import\`, which forwards the request body to \`fastify.gateway.importPromptPack(...)\`.`
+      ? `- Manual markdown imports are exposed through \`${routeEvidence.path}\` at \`POST /api/v1/prompt-packs/import\`, which forwards the request body to \`fastify.services.promptPacks.importPromptPack(...)\`.`
       : undefined,
     repoEvidence && repoEvidence.content.includes("source_label") && repoEvidence.content.includes("policy_v2_source")
       ? `- \`${repoEvidence.path}\` stores both \`source_label\` and \`policy_v2_source\`: the first is the operator-facing pack label, while the second decides whether policy comes from \`pack_override\` or the inherited default.`
@@ -174,12 +174,12 @@ export function buildPromptPackOperatorSurfaceFallback(input: {
 
   return [
     "## Report Surface",
-    `- \`${routeEvidence.path}\` exposes \`GET /api/v1/prompt-packs/:packId/report\`, and the handler returns \`fastify.gateway.getPromptPackReport(packId)\`, so the operator-facing report API is the raw prompt-pack report record rather than a thin status stub.`,
+    `- \`${routeEvidence.path}\` exposes \`GET /api/v1/prompt-packs/:packId/report\`, and the handler returns \`fastify.services.promptPacks.getPromptPackReport(packId)\`, so the operator-facing report API is the raw prompt-pack report record rather than a thin status stub.`,
     `- \`${serviceEvidence.path}\` shows that \`getPromptPackReport(packId)\` bundles the pack definition, tests, runs, legacy scores, v2 auto-scores, human reviews, latest assessments, and a computed summary, so an operator can inspect both the latest verdict state and the underlying run/score history from the same report payload.`,
     `- The same service file renders that record into markdown with headline pack metrics, a snapshot table, per-test sections (\`Prompt\`, \`Latest Run\`, \`Auto Score (V2)\` or legacy score, \`Integrity\`, \`Assistant Output\`, \`Trace Summary\`, \`Citations\`), plus an \`Outstanding\` section, so the rendered report exposes both fleet-level coverage/pass-rate evidence and drill-down evidence for each test.`,
     "",
     "## Trend Surface",
-    `- \`${routeEvidence.path}\` also exposes \`GET /api/v1/prompt-packs/:packId/trends\`, which returns \`fastify.gateway.getPromptPackCapabilityTrends(packId)\`.`,
+    `- \`${routeEvidence.path}\` also exposes \`GET /api/v1/prompt-packs/:packId/trends\`, which returns \`fastify.services.promptPacks.getPromptPackCapabilityTrends(packId)\`.`,
     `- \`${serviceEvidence.path}\` shows that the trend payload is \`{ items: CapabilityTrendSeries[] }\`, with series for \`taskSuccess\`, \`honesty\`, \`executionQuality\`, \`robustness\`, \`usability\`, \`run_failure_rate\`, and \`review_rate\`. Each series carries \`points\`, an optional \`threshold\`, and a computed \`breached\` flag, so the operator can see both the history and whether the latest series crossed its alert boundary.`,
     "",
     "## Benchmark Status Surfaces",
@@ -321,11 +321,17 @@ function extractPromptLabEvidenceTextFromSerializedPayload(content: string): str
   } catch {
     const singleQuotedContentMatch = trimmed.match(/['"]content['"]\s*:\s*'([\s\S]*?)'(?:\s*[,}])/);
     if (singleQuotedContentMatch?.[1]) {
-      return singleQuotedContentMatch[1].replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\'/g, "'");
+      return singleQuotedContentMatch[1]
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\'/g, "'");
     }
     const doubleQuotedContentMatch = trimmed.match(/['"]content['"]\s*:\s*"([\s\S]*?)"(?:\s*[,}])/);
     if (doubleQuotedContentMatch?.[1]) {
-      return doubleQuotedContentMatch[1].replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\"/g, '"');
+      return doubleQuotedContentMatch[1]
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\"/g, '"');
     }
     return undefined;
   }

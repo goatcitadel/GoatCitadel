@@ -47,8 +47,8 @@ import {
   splitIntoChunks,
   toTitleCase,
   truncateSummaryLine,
-  type PreparedChatExecutionPlanResolution,
-} from "./gateway-service.js";
+} from "./chat-turn-helpers.js";
+import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { HooksService } from "./hooks-service.js";

@@ -23,10 +23,11 @@ describe("gateway events route", () => {
 
     app = Fastify();
     app.addHook("preHandler", async (request) => {
-      (request as typeof request & { idempotencyKey: string }).idempotencyKey =
-        String(request.headers["idempotency-key"] ?? "");
+      (request as typeof request & { idempotencyKey: string }).idempotencyKey = String(
+        request.headers["idempotency-key"] ?? "",
+      );
     });
-    app.decorate("gateway", { ingestEvent } as never);
+    app.decorate("services", { gatewayEvents: { ingestEvent } } as never);
     await app.register(gatewayEventsRoute);
 
     const payload = createGatewayEventPayload();
@@ -54,7 +55,7 @@ describe("gateway events route", () => {
     const ingestEvent = vi.fn();
 
     app = Fastify();
-    app.decorate("gateway", { ingestEvent } as never);
+    app.decorate("services", { gatewayEvents: { ingestEvent } } as never);
     await app.register(gatewayEventsRoute);
 
     const response = await app.inject({

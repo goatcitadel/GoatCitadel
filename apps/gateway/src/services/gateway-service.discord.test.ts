@@ -6,6 +6,7 @@ import type {
   IntegrationConnection,
 } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
+import { createIntegrationChannelServiceForGateway } from "./gateway-route-service-composition.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -38,6 +39,11 @@ function createGatewayHarness() {
   const settings = new Map<string, unknown>();
   const gateway = Object.create(GatewayService.prototype) as any;
   gateway.storage = {
+    gatewaySql: {
+      prepare: vi.fn(() => ({
+        run: vi.fn(),
+      })),
+    },
     sessions: {
       upsert: vi.fn(),
     },
@@ -66,6 +72,24 @@ function createGatewayHarness() {
   gateway.operatorSummaryCache = {
     invalidate: vi.fn(),
   };
+  gateway.config = {
+    toolPolicy: {
+      tools: {
+        profile: "minimal",
+      },
+      sandbox: {
+        networkAllowlist: [],
+      },
+    },
+  };
+  gateway.discordRuntimeService = {
+    getConnectionStatus: vi.fn(),
+    reconnectConnection: vi.fn(),
+    sendTyping: vi.fn(),
+  };
+  gateway.publishRealtime = vi.fn();
+  gateway.requireFeatureEnabled = vi.fn();
+  gateway.fetchWithDiagnosticsTimeout = vi.fn();
   gateway.ensureChatSessionRuntimeGrants = vi.fn();
   gateway.getChatSessionPrefs = vi.fn((sessionId: string) => ({
     sessionId,
@@ -114,8 +138,8 @@ describe("GatewayService Discord parity seams", () => {
       supported: true,
       status: "sent",
     };
-    gateway.getIntegrationConnection = vi.fn(() => connection);
-    gateway.emitDiscordTyping = vi.fn(async () => result);
+    gateway.storage.integrationConnections.get.mockReturnValue(connection);
+    gateway.discordRuntimeService.sendTyping.mockResolvedValue(result);
 
     const typing = await gateway.commsTyping({
       connectionId: connection.connectionId,
@@ -123,14 +147,12 @@ describe("GatewayService Discord parity seams", () => {
       durationMs: 3_000,
     });
 
-    expect(gateway.getIntegrationConnection).toHaveBeenCalledWith(connection.connectionId);
-    expect(gateway.emitDiscordTyping).toHaveBeenCalledWith(
-      connection,
-      expect.objectContaining({
-        connectionId: connection.connectionId,
-        target: "channel_1",
-        durationMs: 3_000,
-      }),
+    expect(gateway.storage.integrationConnections.get).toHaveBeenCalledWith(connection.connectionId);
+    expect(gateway.discordRuntimeService.sendTyping).toHaveBeenCalledWith(
+      connection.connectionId,
+      "channel_1",
+      3_000,
+      undefined,
     );
     expect(typing).toEqual(result);
   });
@@ -153,9 +175,10 @@ describe("GatewayService Discord parity seams", () => {
       lastReconnectAt: "2026-03-31T00:08:00.000Z",
     };
     gateway.storage.integrationConnections.get.mockReturnValue(connection);
-    gateway.getDiscordRuntimeStatus = vi.fn(() => runtime);
+    gateway.discordRuntimeService.getConnectionStatus.mockReturnValue(runtime);
+    const integrationChannel = createIntegrationChannelServiceForGateway(gateway);
 
-    const status = gateway.getIntegrationConnectionChannelRuntimeStatus(connection.connectionId);
+    const status = integrationChannel.getIntegrationConnectionChannelRuntimeStatus(connection.connectionId);
 
     expect(status.ready).toBe(true);
     expect(status.runtimePolicy).toMatchObject({
@@ -173,9 +196,9 @@ describe("GatewayService Discord parity seams", () => {
     });
     expect(status.lastReadyAt).toBe("2026-03-31T00:06:00.000Z");
     expect(status.lastInboundAt).toBe("2026-03-31T00:07:00.000Z");
-    expect(gateway.getIntegrationConnectionChannelCapabilities(connection.connectionId).supportedActions).not.toContain(
-      "channel.presence",
-    );
+    expect(
+      integrationChannel.getIntegrationConnectionChannelCapabilities(connection.connectionId).supportedActions,
+    ).not.toContain("channel.presence");
   });
 
   it("lists, approves, and revokes Discord pairings through the service layer", () => {
@@ -194,22 +217,23 @@ describe("GatewayService Discord parity seams", () => {
       updatedAt: "2026-03-31T00:02:00.000Z",
     });
     settings.set("discord_pairings_v1", [approvedExisting, pending]);
-    gateway.getIntegrationConnection = vi.fn(() => connection);
-    gateway.getDiscordRuntimeStatus = vi.fn(() => undefined);
+    gateway.storage.integrationConnections.get.mockReturnValue(connection);
+    gateway.discordRuntimeService.getConnectionStatus.mockReturnValue(undefined);
+    const integrationChannel = createIntegrationChannelServiceForGateway(gateway);
 
-    const listed = gateway.listDiscordPairings(connection.connectionId);
+    const listed = integrationChannel.listDiscordPairings(connection.connectionId);
     expect((listed.items as DiscordPairingRecord[]).map((item: DiscordPairingRecord) => item.pairingId)).toEqual([
       "pairing-new",
       "pairing-old",
     ]);
 
-    const approved = gateway.approveDiscordPairing(connection.connectionId, "pairing-new");
+    const approved = integrationChannel.approveDiscordPairing(connection.connectionId, "pairing-new");
     expect(approved.status).toBe("approved");
     const storedAfterApprove = settings.get("discord_pairings_v1") as DiscordPairingRecord[];
     expect(storedAfterApprove.find((item) => item.pairingId === "pairing-new")?.status).toBe("approved");
     expect(storedAfterApprove.find((item) => item.pairingId === "pairing-old")?.status).toBe("revoked");
 
-    const revoked = gateway.revokeDiscordPairing(connection.connectionId, "pairing-new");
+    const revoked = integrationChannel.revokeDiscordPairing(connection.connectionId, "pairing-new");
     expect(revoked.status).toBe("revoked");
     const storedAfterRevoke = settings.get("discord_pairings_v1") as DiscordPairingRecord[];
     expect(storedAfterRevoke.find((item) => item.pairingId === "pairing-new")?.status).toBe("revoked");

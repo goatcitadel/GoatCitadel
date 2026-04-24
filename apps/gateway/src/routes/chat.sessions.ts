@@ -110,7 +110,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.gateway.listChatGeneratedArtifacts(parsed.data),
+        items: fastify.services.chatSessions.listChatGeneratedArtifacts(parsed.data),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -124,7 +124,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        item: fastify.gateway.getChatGeneratedArtifact(params.data.artifactId),
+        item: fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId),
       });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -136,7 +136,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const items = fastify.gateway.listChatSessions(parsed.data);
+    const items = fastify.services.chatSessions.listChatSessions(parsed.data);
     const last = items.at(-1);
     const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
     return reply.send({ items, nextCursor });
@@ -148,7 +148,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.gateway.createChatSession(parsed.data);
+      const created = fastify.services.chatSessions.createChatSession(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -161,7 +161,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.archiveChatSessionsBulk(parsed.data));
+      return reply.send(await fastify.services.chatSessions.archiveChatSessionsBulk(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -179,7 +179,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(fastify.gateway.updateChatSession(params.data.sessionId, body.data));
+      return reply.send(fastify.services.chatSessions.updateChatSession(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -191,7 +191,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.deleteChatSession(params.data.sessionId));
+      return reply.send(await fastify.services.chatSessions.deleteChatSession(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -203,7 +203,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.pinChatSession(params.data.sessionId));
+      return reply.send(fastify.services.chatSessions.pinChatSession(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -215,7 +215,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.unpinChatSession(params.data.sessionId));
+      return reply.send(fastify.services.chatSessions.unpinChatSession(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -227,7 +227,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.archiveChatSession(params.data.sessionId));
+      return reply.send(fastify.services.chatSessions.archiveChatSession(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -239,7 +239,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.restoreChatSession(params.data.sessionId));
+      return reply.send(fastify.services.chatSessions.restoreChatSession(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -257,7 +257,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(fastify.gateway.assignChatSessionProject(params.data.sessionId, body.data.projectId));
+      return reply.send(
+        fastify.services.chatSessions.assignChatSessionProject(params.data.sessionId, body.data.projectId),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -276,7 +278,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.gateway.setChatSessionBinding({
+        fastify.services.chatSessions.setChatSessionBinding({
           sessionId: params.data.sessionId,
           ...body.data,
         }),
@@ -293,7 +295,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        item: fastify.gateway.getChatSessionBinding(params.data.sessionId) ?? null,
+        item: fastify.services.chatSessions.getChatSessionBinding(params.data.sessionId) ?? null,
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -307,7 +309,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        state: await fastify.gateway.getChatSessionWorkbench(params.data.sessionId),
+        state: await fastify.services.chatSessions.getChatSessionWorkbench(params.data.sessionId),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -327,7 +329,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        state: await fastify.gateway.createChatSessionWorkbenchWorktree(params.data.sessionId, body.data),
+        state: await fastify.services.chatSessions.createChatSessionWorkbenchWorktree(params.data.sessionId, body.data),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -340,7 +342,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.getChatSessionWorkbenchTree(params.data.sessionId));
+      return reply.send(await fastify.services.chatSessions.getChatSessionWorkbenchTree(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -358,7 +360,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.gateway.getChatSessionWorkbenchFile(params.data.sessionId, query.data.path));
+      return reply.send(
+        await fastify.services.chatSessions.getChatSessionWorkbenchFile(params.data.sessionId, query.data.path),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -376,7 +380,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.gateway.saveChatSessionWorkbenchFile(params.data.sessionId, body.data));
+      return reply.send(
+        await fastify.services.chatSessions.saveChatSessionWorkbenchFile(params.data.sessionId, body.data),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -394,7 +400,9 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.gateway.getChatSessionWorkbenchFileDiff(params.data.sessionId, query.data.path));
+      return reply.send(
+        await fastify.services.chatSessions.getChatSessionWorkbenchFileDiff(params.data.sessionId, query.data.path),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -406,7 +414,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.getChatSessionWorkbenchDiff(params.data.sessionId));
+      return reply.send(await fastify.services.chatSessions.getChatSessionWorkbenchDiff(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -418,7 +426,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.getChatSessionWorkbenchOutput(params.data.sessionId));
+      return reply.send(await fastify.services.chatSessions.getChatSessionWorkbenchOutput(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -437,7 +445,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.gateway.listChatGeneratedArtifacts({
+        items: fastify.services.chatSessions.listChatGeneratedArtifacts({
           ...query.data,
           sessionId: params.data.sessionId,
         }),
@@ -460,7 +468,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.code(201).send({
-        item: fastify.gateway.createChatGeneratedArtifactFromTurn({
+        item: fastify.services.chatSessions.createChatGeneratedArtifactFromTurn({
           sessionId: params.data.sessionId,
           turnId: params.data.turnId,
           supersedeLatest: body.data.supersedeLatest,
@@ -478,7 +486,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send({
-        items: fastify.gateway.listChatThreadKnowledgeAttachments(params.data.sessionId),
+        items: fastify.services.chatSessions.listChatThreadKnowledgeAttachments(params.data.sessionId),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -498,7 +506,7 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.code(201).send({
-        item: await fastify.gateway.attachChatThreadKnowledgeAttachment(params.data.sessionId, body.data),
+        item: await fastify.services.chatSessions.attachChatThreadKnowledgeAttachment(params.data.sessionId, body.data),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -517,7 +525,10 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(
-        fastify.gateway.removeChatThreadKnowledgeAttachment(params.data.sessionId, params.data.attachmentId),
+        fastify.services.chatSessions.removeChatThreadKnowledgeAttachment(
+          params.data.sessionId,
+          params.data.attachmentId,
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

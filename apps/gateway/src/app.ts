@@ -191,7 +191,7 @@ export async function buildApp() {
       route: request.routeOptions.url || request.url,
       sessionId,
     });
-    app.gateway?.recordDevDiagnostic({
+    app.gatewayRuntime?.recordDevDiagnostic({
       level: "debug",
       category: "api",
       event: "request.start",
@@ -222,7 +222,7 @@ export async function buildApp() {
   });
 
   app.addHook("onResponse", async (request, reply) => {
-    app.gateway?.recordDevDiagnostic({
+    app.gatewayRuntime?.recordDevDiagnostic({
       level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug",
       category: "api",
       event: "request.finish",
@@ -237,7 +237,7 @@ export async function buildApp() {
   });
 
   app.addHook("onError", async (request, reply, error) => {
-    app.gateway?.recordDevDiagnostic({
+    app.gatewayRuntime?.recordDevDiagnostic({
       level: "error",
       category: "api",
       event: "request.error",
@@ -297,7 +297,7 @@ export async function buildApp() {
   });
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin, {
-    mutationStore: app.gateway.storage.mutationIdempotency,
+    mutationStore: app.gatewayRuntime.storage.mutationIdempotency,
   });
 
   await app.register(healthRoute);

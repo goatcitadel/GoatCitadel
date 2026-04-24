@@ -16,8 +16,8 @@ describe("files routes", () => {
 
   it("rejects invalid upload payloads", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      uploadWorkspaceFile: vi.fn(),
+    app.decorate("services", {
+      files: { uploadWorkspaceFile: vi.fn() },
     } as never);
     await app.register(filesRoutes);
 
@@ -32,16 +32,18 @@ describe("files routes", () => {
 
   it("returns download metadata provided by gateway service", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      downloadWorkspaceFile: vi.fn(async () => ({
-        relativePath: "workspace/test.md",
-        fullPath: "./workspace/test.md",
-        size: 12,
-        modifiedAt: "2026-03-04T18:00:00.000Z",
-        contentType: "text/markdown",
-        isText: true,
-        content: "hello world!",
-      })),
+    app.decorate("services", {
+      files: {
+        downloadWorkspaceFile: vi.fn(async () => ({
+          relativePath: "workspace/test.md",
+          fullPath: "./workspace/test.md",
+          size: 12,
+          modifiedAt: "2026-03-04T18:00:00.000Z",
+          contentType: "text/markdown",
+          isText: true,
+          content: "hello world!",
+        })),
+      },
     } as never);
     await app.register(filesRoutes);
 
@@ -61,10 +63,12 @@ describe("files routes", () => {
 
   it("maps typed gateway download errors to their contract status", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      downloadWorkspaceFile: vi.fn(async () => {
-        throw new NotFoundError({ entity: "File", id: "workspace/missing.md" });
-      }),
+    app.decorate("services", {
+      files: {
+        downloadWorkspaceFile: vi.fn(async () => {
+          throw new NotFoundError({ entity: "File", id: "workspace/missing.md" });
+        }),
+      },
     } as never);
     await app.register(filesRoutes);
 

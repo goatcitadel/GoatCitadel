@@ -75,7 +75,7 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     return reply.send({
-      items: fastify.gateway.listWorkspaceHooks(params.data.workspaceId, query.data.limit).map(redactHookRecord),
+      items: fastify.services.hooks.listWorkspaceHooks(params.data.workspaceId, query.data.limit).map(redactHookRecord),
     });
   });
 
@@ -91,7 +91,7 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     return reply.send({
-      items: fastify.gateway.listWorkspaceHookRuns(params.data.workspaceId, query.data.limit),
+      items: fastify.services.hooks.listWorkspaceHookRuns(params.data.workspaceId, query.data.limit),
     });
   });
 
@@ -107,7 +107,7 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const created = fastify.gateway.createWorkspaceHook({
+      const created = fastify.services.hooks.createWorkspaceHook({
         ...body.data,
         workspaceId: params.data.workspaceId,
       });
@@ -130,7 +130,9 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        redactHookRecord(fastify.gateway.updateWorkspaceHook(params.data.workspaceId, params.data.hookId, body.data)),
+        redactHookRecord(
+          fastify.services.hooks.updateWorkspaceHook(params.data.workspaceId, params.data.hookId, body.data),
+        ),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -143,7 +145,7 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     return reply.send({
-      deleted: fastify.gateway.deleteWorkspaceHook(params.data.workspaceId, params.data.hookId),
+      deleted: fastify.services.hooks.deleteWorkspaceHook(params.data.workspaceId, params.data.hookId),
     });
   });
 };

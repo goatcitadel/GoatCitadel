@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 
-vi.mock("./gateway-service.js", () => ({
+vi.mock("./chat-turn-helpers.js", () => ({
   buildDelegationFailureGuidance: () => "fallback guidance",
   buildEmptyAssistantTurnFallbackText: () => "Recovered empty assistant output.",
   ChatTurnCancelledError: class ChatTurnCancelledError extends Error {},

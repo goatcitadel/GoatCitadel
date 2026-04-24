@@ -1084,10 +1084,10 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
 function getCoverageGateway(app: FastifyInstance): {
   parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;
 } & Record<string, unknown> {
-  const candidate: unknown = (app as FastifyInstance & { gateway?: unknown }).gateway;
+  const candidate: unknown = app.gatewayRuntime;
   assert.ok(
     candidate && typeof candidate === "object" && !Array.isArray(candidate),
-    "Expected Fastify gateway decorator",
+    "Expected Fastify gatewayRuntime decorator",
   );
   assert.equal(typeof (candidate as { parseChatCommand?: unknown }).parseChatCommand, "function");
   return candidate as {

@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- Durable workflow executors remain grouped here until the service split lands. */
 /**
  * Durable execution helpers and workflow registry.
  *
@@ -22,10 +21,6 @@ import {
   type ChatSendMessageRequest,
   type ChatTurnTraceRecord,
   type ConnectorDeliveryWorkflowPayload,
-  type DurableCheckpointRecord,
-  type DurableDeadLetterRecord,
-  type DurableDiagnosticsResponse,
-  type DurableRunCreateRequest,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
   type HookTrigger,
@@ -40,7 +35,7 @@ import { dispatchConnectorDelivery } from "./connector-delivery.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
-import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./gateway-service.js";
+import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -51,23 +46,7 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
   readonly gatewaySql: Storage["gatewaySql"];
-  readonly durableRunService: Pick<
-    DurableRunService,
-    | "createDurableRun"
-    | "getDurableRun"
-    | "listDurableRuns"
-    | "listDurableDeadLetters"
-    | "listDurableRunCheckpoints"
-    | "listDurableRunTimeline"
-    | "getDurableDiagnostics"
-    | "pauseDurableRun"
-    | "resumeDurableRun"
-    | "cancelDurableRun"
-    | "retryDurableRun"
-    | "wakeDurableRun"
-    | "recoverDurableDeadLetter"
-    | "requestRunProcessing"
-  >;
+  readonly durableRunService: Pick<DurableRunService, "retryDurableRun" | "requestRunProcessing">;
   readonly hooksService: Pick<
     HooksService,
     "runInlineHooks" | "enqueueAfterHooks" | "executeHookDelivery" | "markHookRunDeadLettered"
@@ -954,125 +933,4 @@ function isDurableWorkflowAbortError(error: unknown, context?: DurableWorkflowEx
   return (
     error === signal.reason || (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)))
   );
-}
-
-export function getDurableDiagnostics(host: DurableExecutionHost): DurableDiagnosticsResponse {
-  return host.durableRunService.getDurableDiagnostics();
-}
-
-export function listDurableRuns(host: DurableExecutionHost, limit = 50): DurableRunRecord[] {
-  return host.durableRunService.listDurableRuns(limit);
-}
-
-export function listDurableDeadLetters(host: DurableExecutionHost, limit = 50): DurableDeadLetterRecord[] {
-  return host.durableRunService.listDurableDeadLetters(limit);
-}
-
-export function listDurableRunCheckpoints(
-  host: DurableExecutionHost,
-  runId: string,
-  limit = 200,
-): DurableCheckpointRecord[] {
-  return host.durableRunService.listDurableRunCheckpoints(runId, limit);
-}
-
-export function createDurableRun(host: DurableExecutionHost, input: DurableRunCreateRequest): DurableRunRecord {
-  const run = host.durableRunService.createDurableRun(input);
-  if (run.status === "queued") {
-    host.durableRunService.requestRunProcessing(run.runId);
-  }
-  return run;
-}
-
-export function getDurableRun(host: DurableExecutionHost, runId: string): DurableRunRecord {
-  return host.durableRunService.getDurableRun(runId);
-}
-
-export function listDurableRunTimeline(
-  host: DurableExecutionHost,
-  runId: string,
-  limit = 300,
-): DurableRunTimelineEvent[] {
-  return host.durableRunService.listDurableRunTimeline(runId, limit);
-}
-
-export function pauseDurableRun(host: DurableExecutionHost, runId: string, actorId = "operator"): DurableRunRecord {
-  return host.durableRunService.pauseDurableRun(runId, actorId);
-}
-
-export function resumeDurableRun(host: DurableExecutionHost, runId: string, actorId = "operator"): DurableRunRecord {
-  const run = host.durableRunService.resumeDurableRun(runId, actorId);
-  host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-  host.durableRunService.requestRunProcessing(runId);
-  return run;
-}
-
-export function cancelDurableRun(host: DurableExecutionHost, runId: string, actorId = "operator"): DurableRunRecord {
-  const run = host.durableRunService.cancelDurableRun(runId, actorId);
-  host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-  return run;
-}
-
-export function retryDurableRun(
-  host: DurableExecutionHost,
-  runId: string,
-  reason = "manual_retry",
-  actorId = "operator",
-): DurableRunRecord {
-  const run = host.durableRunService.retryDurableRun(runId, reason, actorId);
-  host.memoryLifecycleService.syncMaintenanceFromDurableRun(run);
-  if (run.status === "queued") {
-    host.durableRunService.requestRunProcessing(runId);
-  }
-  host.hooksService.enqueueAfterHooks({
-    workspaceId: host.resolveDurableRunHookWorkspaceId(run),
-    trigger: "orchestration.retry.scheduled",
-    entityType: "durable_run",
-    entityId: runId,
-    payload: {
-      runId,
-      reason,
-      actorId,
-      status: run.status,
-      attemptCount: run.attemptCount,
-    },
-  });
-  return run;
-}
-
-export function wakeDurableRun(
-  host: DurableExecutionHost,
-  runId: string,
-  event: {
-    eventKey: string;
-    payload?: Record<string, unknown>;
-    correlationId?: string;
-  },
-): import("@goatcitadel/contracts").DurableWakeResult {
-  const result = host.durableRunService.wakeDurableRun(runId, event);
-  if (result.outcome === "woke" && result.run) {
-    host.durableRunService.requestRunProcessing(runId);
-    host.hooksService.enqueueAfterHooks({
-      workspaceId: host.resolveDurableRunHookWorkspaceId(result.run),
-      trigger: "orchestration.run.woken",
-      entityType: "durable_run",
-      entityId: runId,
-      payload: {
-        runId,
-        eventKey: event.eventKey,
-        correlationId: event.correlationId,
-        payload: event.payload ?? {},
-      },
-    });
-  }
-  return result;
-}
-
-export function recoverDurableDeadLetter(
-  host: DurableExecutionHost,
-  entryId: string,
-  actorId = "operator",
-  options?: { maxAttempts?: number },
-): DurableRunRecord {
-  return host.durableRunService.recoverDurableDeadLetter(entryId, actorId, options);
 }

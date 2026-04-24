@@ -14,7 +14,7 @@ describe("chat message routes", () => {
   });
 
   it("lists chat messages with cursor and limit", async () => {
-    const listChatMessages = vi.fn(async () => ([
+    const listChatMessages = vi.fn(async () => [
       {
         messageId: "m1",
         sessionId: "sess-1",
@@ -24,11 +24,9 @@ describe("chat message routes", () => {
         content: "hello",
         timestamp: "2026-03-05T01:00:00.000Z",
       },
-    ]));
+    ]);
     app = Fastify();
-    app.decorate("gateway", {
-      listChatMessages,
-    } as never);
+    app.decorate("services", { chatMessages: { listChatMessages } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({
@@ -50,9 +48,7 @@ describe("chat message routes", () => {
   it("returns migration guidance for the removed POST /messages write path", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
-      sendChatMessage,
-    } as never);
+    app.decorate("services", { chatMessages: { sendChatMessage } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({
@@ -72,9 +68,7 @@ describe("chat message routes", () => {
   it("returns validation error for missing content", async () => {
     const sendChatMessage = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
-      sendChatMessage,
-    } as never);
+    app.decorate("services", { chatMessages: { sendChatMessage } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({

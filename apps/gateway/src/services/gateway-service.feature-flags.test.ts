@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ConflictError } from "@goatcitadel/contracts";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -78,8 +79,9 @@ describe("GatewayService durable feature flags", () => {
       },
     });
 
-    (GatewayService.prototype as unknown as { enforceDurableExecutionBaseline(this: typeof gateway): void })
-      .enforceDurableExecutionBaseline.call(gateway);
+    (
+      GatewayService.prototype as unknown as { enforceDurableExecutionBaseline(this: typeof gateway): void }
+    ).enforceDurableExecutionBaseline.call(gateway);
 
     expect(gateway.config.assistant.durable.enabled).toBe(false);
     expect(gateway.config.assistant.durable.executionEnabled).toBe(false);
@@ -109,6 +111,14 @@ describe("GatewayService durable feature flags", () => {
         durableKernelV1Enabled: true,
         replayRegressionV1Enabled: true,
       }),
+    );
+  });
+
+  it("throws a typed conflict when a feature-gated runtime path is disabled", () => {
+    const { gateway } = createGatewayHarness();
+
+    expect(() => GatewayService.prototype.requireFeatureEnabled.call(gateway, "memoryLifecycleAdminV1Enabled")).toThrow(
+      ConflictError,
     );
   });
 });

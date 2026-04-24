@@ -24,7 +24,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { ServiceContext } from "./service-context.js";
-import type { RuntimeSettings } from "./gateway-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { ChatProactiveService, type ChatProactiveServiceCallbacks } from "./chat-proactive-service.js";
 import { DurableRunService } from "./durable-run-service.js";
 

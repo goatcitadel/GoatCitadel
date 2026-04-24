@@ -13,7 +13,7 @@ describe("capabilities routes", () => {
     app = null;
   });
 
-  it("returns the requested catalog scope from the gateway", async () => {
+  it("returns the requested catalog scope from the capability route service", async () => {
     const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") => [
       {
         capabilityId: `cap-${scope}`,
@@ -25,8 +25,10 @@ describe("capabilities routes", () => {
     ]);
 
     app = Fastify();
-    app.decorate("gateway", {
-      listCapabilityCatalog,
+    app.decorate("services", {
+      capabilities: {
+        listCapabilityCatalog,
+      },
     } as never);
     await app.register(capabilitiesRoutes);
 
@@ -43,7 +45,7 @@ describe("capabilities routes", () => {
     });
   });
 
-  it("creates a capability proposal through the gateway", async () => {
+  it("creates a capability proposal through the capability route service", async () => {
     const createCapabilityProposal = vi.fn((payload: Record<string, unknown>) => ({
       proposalId: "proposal-1",
       proposalKind: payload.proposalKind,
@@ -56,19 +58,21 @@ describe("capabilities routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      createCapabilityProposal,
-      listCapabilityCatalog: vi.fn(() => []),
-      getCapabilityCandidateDetail: vi.fn(),
-      getCapabilityProposalDetail: vi.fn(),
-      promoteCapabilityCandidate: vi.fn(),
-      revokeCapabilityCandidate: vi.fn(),
-      rollbackCapabilityCandidate: vi.fn(),
-      listCapabilityProposals: vi.fn(() => []),
-      listCodeModeRuns: vi.fn(() => []),
-      getCodeModeRun: vi.fn(),
-      createCodeModeRun: vi.fn(),
-      getCapabilityCatalogSnapshot: vi.fn(),
+    app.decorate("services", {
+      capabilities: {
+        createCapabilityProposal,
+        listCapabilityCatalog: vi.fn(() => []),
+        getCapabilityCandidateDetail: vi.fn(),
+        getCapabilityProposalDetail: vi.fn(),
+        promoteCapabilityCandidate: vi.fn(),
+        revokeCapabilityCandidate: vi.fn(),
+        rollbackCapabilityCandidate: vi.fn(),
+        listCapabilityProposals: vi.fn(() => []),
+        listCodeModeRuns: vi.fn(() => []),
+        getCodeModeRun: vi.fn(),
+        createCodeModeRun: vi.fn(),
+        getCapabilityCatalogSnapshot: vi.fn(),
+      },
     } as never);
     await app.register(capabilitiesRoutes);
 
@@ -101,7 +105,7 @@ describe("capabilities routes", () => {
     });
   });
 
-  it("creates a Code Mode run through the gateway", async () => {
+  it("creates a Code Mode run through the capability route service", async () => {
     const createCodeModeRun = vi.fn(async (payload: Record<string, unknown>) => ({
       runId: "code-run-1",
       status: "approval_pending",
@@ -136,19 +140,21 @@ describe("capabilities routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      createCodeModeRun,
-      listCapabilityCatalog: vi.fn(() => []),
-      getCapabilityCandidateDetail: vi.fn(),
-      getCapabilityProposalDetail: vi.fn(),
-      promoteCapabilityCandidate: vi.fn(),
-      revokeCapabilityCandidate: vi.fn(),
-      rollbackCapabilityCandidate: vi.fn(),
-      createCapabilityProposal: vi.fn(),
-      listCapabilityProposals: vi.fn(() => []),
-      listCodeModeRuns: vi.fn(() => []),
-      getCodeModeRun: vi.fn(),
-      getCapabilityCatalogSnapshot: vi.fn(),
+    app.decorate("services", {
+      capabilities: {
+        createCodeModeRun,
+        listCapabilityCatalog: vi.fn(() => []),
+        getCapabilityCandidateDetail: vi.fn(),
+        getCapabilityProposalDetail: vi.fn(),
+        promoteCapabilityCandidate: vi.fn(),
+        revokeCapabilityCandidate: vi.fn(),
+        rollbackCapabilityCandidate: vi.fn(),
+        createCapabilityProposal: vi.fn(),
+        listCapabilityProposals: vi.fn(() => []),
+        listCodeModeRuns: vi.fn(() => []),
+        getCodeModeRun: vi.fn(),
+        getCapabilityCatalogSnapshot: vi.fn(),
+      },
     } as never);
     await app.register(capabilitiesRoutes);
 
@@ -179,7 +185,7 @@ describe("capabilities routes", () => {
     });
   });
 
-  it("returns candidate detail through the gateway", async () => {
+  it("returns candidate detail through the capability route service", async () => {
     const getCapabilityCandidateDetail = vi.fn((candidateId: string) => ({
       candidateId,
       versions: [],
@@ -189,19 +195,21 @@ describe("capabilities routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      listCapabilityCatalog: vi.fn(() => []),
-      getCapabilityCatalogSnapshot: vi.fn(),
-      getCapabilityCandidateDetail,
-      getCapabilityProposalDetail: vi.fn(),
-      promoteCapabilityCandidate: vi.fn(),
-      revokeCapabilityCandidate: vi.fn(),
-      rollbackCapabilityCandidate: vi.fn(),
-      createCapabilityProposal: vi.fn(),
-      listCapabilityProposals: vi.fn(() => []),
-      listCodeModeRuns: vi.fn(() => []),
-      getCodeModeRun: vi.fn(),
-      createCodeModeRun: vi.fn(),
+    app.decorate("services", {
+      capabilities: {
+        listCapabilityCatalog: vi.fn(() => []),
+        getCapabilityCatalogSnapshot: vi.fn(),
+        getCapabilityCandidateDetail,
+        getCapabilityProposalDetail: vi.fn(),
+        promoteCapabilityCandidate: vi.fn(),
+        revokeCapabilityCandidate: vi.fn(),
+        rollbackCapabilityCandidate: vi.fn(),
+        createCapabilityProposal: vi.fn(),
+        listCapabilityProposals: vi.fn(() => []),
+        listCodeModeRuns: vi.fn(() => []),
+        getCodeModeRun: vi.fn(),
+        createCodeModeRun: vi.fn(),
+      },
     } as never);
     await app.register(capabilitiesRoutes);
 
@@ -218,7 +226,7 @@ describe("capabilities routes", () => {
     });
   });
 
-  it("promotes a candidate through the gateway", async () => {
+  it("promotes a candidate through the capability route service", async () => {
     const promoteCapabilityCandidate = vi.fn((candidateId: string, versionId?: string) => ({
       action: "promote",
       candidateId,
@@ -235,19 +243,21 @@ describe("capabilities routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      listCapabilityCatalog: vi.fn(() => []),
-      getCapabilityCatalogSnapshot: vi.fn(),
-      getCapabilityCandidateDetail: vi.fn(),
-      getCapabilityProposalDetail: vi.fn(),
-      promoteCapabilityCandidate,
-      revokeCapabilityCandidate: vi.fn(),
-      rollbackCapabilityCandidate: vi.fn(),
-      createCapabilityProposal: vi.fn(),
-      listCapabilityProposals: vi.fn(() => []),
-      listCodeModeRuns: vi.fn(() => []),
-      getCodeModeRun: vi.fn(),
-      createCodeModeRun: vi.fn(),
+    app.decorate("services", {
+      capabilities: {
+        listCapabilityCatalog: vi.fn(() => []),
+        getCapabilityCatalogSnapshot: vi.fn(),
+        getCapabilityCandidateDetail: vi.fn(),
+        getCapabilityProposalDetail: vi.fn(),
+        promoteCapabilityCandidate,
+        revokeCapabilityCandidate: vi.fn(),
+        rollbackCapabilityCandidate: vi.fn(),
+        createCapabilityProposal: vi.fn(),
+        listCapabilityProposals: vi.fn(() => []),
+        listCodeModeRuns: vi.fn(() => []),
+        getCodeModeRun: vi.fn(),
+        createCodeModeRun: vi.fn(),
+      },
     } as never);
     await app.register(capabilitiesRoutes);
 

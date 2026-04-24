@@ -1,0 +1,233 @@
+import { GoatError, type ChatCitationRecord, type ChatMode, type ChatTurnFailureRecord } from "@goatcitadel/contracts";
+import type { OrchestrationStepExecutionResult } from "../orchestration/types.js";
+import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
+
+export const DEFAULT_DELEGATION_ROLES = ["product", "architect", "coder", "qa", "ops"];
+
+export class ChatTurnCancelledError extends GoatError {
+  readonly code = "TURN_CANCELLED" as const;
+  readonly httpStatus = 499;
+  public constructor(
+    public readonly turnId: string,
+    message = "Chat turn cancelled.",
+  ) {
+    super(message, { turnId });
+  }
+}
+
+export function isChatTurnCancelledError(error: unknown): boolean {
+  if (error instanceof ChatTurnCancelledError) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  return name.includes("cancel") || message.includes("chat turn cancelled");
+}
+
+export function splitIntoChunks(input: string, maxChunkLength: number): string[] {
+  if (!input) {
+    return [];
+  }
+  const chunks: string[] = [];
+  let remaining = input;
+  const chunkSize = Math.max(1, maxChunkLength);
+  while (remaining.length > chunkSize) {
+    chunks.push(remaining.slice(0, chunkSize));
+    remaining = remaining.slice(chunkSize);
+  }
+  chunks.push(remaining);
+  return chunks;
+}
+
+export function buildEmptyAssistantTurnFallbackText(): string {
+  return [
+    "Summary",
+    "- I completed the turn, but the final assistant text was empty after tool/model synthesis.",
+    "",
+    "Constraints",
+    "- This usually means tool/model outputs were incomplete or could not be stitched into a final response.",
+    "",
+    "What I did instead",
+    "- Preserved trace/tool evidence for this turn.",
+    "",
+    "What I need from you next",
+    "- Retry once, or provide tighter constraints (explicit query/url/path) for deterministic tool execution.",
+  ].join("\n");
+}
+
+export function inferDegradedAssistantTurnFailure(content: string): ChatTurnFailureRecord | undefined {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized.startsWith("i ran out of time before i could finish") ||
+    normalized.startsWith("i couldn't finish that cleanly because") ||
+    normalized.includes("recover useful content from") ||
+    normalized.includes("strongest leads so far")
+  ) {
+    return {
+      failureClass: "unknown",
+      message: "Assistant response degraded into a fallback-style partial answer after tool execution.",
+      retryable: true,
+      recommendedAction: "retry_narrower",
+    };
+  }
+  return undefined;
+}
+
+export function isImageMimeType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("image/");
+}
+
+export function toTitleCase(value: string): string {
+  return value
+    .split(/[-_.]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function detectDelegationRoles(objective: string): string[] {
+  const normalized = objective.toLowerCase();
+  const roleHints: Array<{ role: string; patterns: RegExp[] }> = [
+    { role: "product", patterns: [/\bproduct\b/, /\bprd\b/, /\brequirements?\b/] },
+    { role: "architect", patterns: [/\barchitect\b/, /\bdesign\b/, /\barchitecture\b/] },
+    { role: "coder", patterns: [/\bcoder\b/, /\bdeveloper\b/, /\bimplementation\b/, /\bbuild\b/] },
+    { role: "qa", patterns: [/\bqa\b/, /\btest\b/, /\bvalidation\b/] },
+    { role: "ops", patterns: [/\bops\b/, /\bdeploy\b/, /\brollout\b/, /\brelease\b/] },
+    { role: "researcher", patterns: [/\bresearch\b/, /\banalyze\b/, /\bsources?\b/] },
+  ];
+  const roles = roleHints
+    .filter((hint) => hint.patterns.some((pattern) => pattern.test(normalized)))
+    .map((hint) => hint.role);
+  if (roles.length > 0) {
+    return roles;
+  }
+  if (/->|route this through|multi-agent|agents work together|handoff/.test(normalized)) {
+    return [...DEFAULT_DELEGATION_ROLES.slice(0, 3)];
+  }
+  return [];
+}
+
+export function renderExecutionPlanAsMarkdown(input: {
+  mode: ChatMode;
+  objective: string;
+  summary: string;
+  steps: PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"];
+}): string {
+  const modeLabel = input.mode === "cowork" ? "Cowork plan" : input.mode === "code" ? "Code plan" : "Chat plan";
+  const stepLines = input.steps.map((step) => {
+    const parts = [
+      `${step.index + 1}. ${step.objective}`,
+      step.successCriteria ? `Success: ${step.successCriteria}` : undefined,
+      step.expectedOutput ? `Output: ${step.expectedOutput}` : undefined,
+      step.suggestedTools?.length ? `Suggested tools: ${step.suggestedTools.join(", ")}` : undefined,
+      step.dependsOnStepIds?.length ? `Depends on: ${step.dependsOnStepIds.join(", ")}` : undefined,
+      step.delegatedRole ? `Delegated role: ${step.delegatedRole}` : undefined,
+    ].filter(Boolean);
+    return parts.join("\n   ");
+  });
+  return [
+    `## ${modeLabel}`,
+    "",
+    `Objective: ${input.objective}`,
+    "",
+    input.summary,
+    "",
+    "Planned steps:",
+    ...stepLines,
+  ].join("\n");
+}
+
+export function truncateSummaryLine(content: string, maxLength = 220): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+export function mergeExecutionPlanStepStatuses(
+  planSteps: PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"],
+  results: OrchestrationStepExecutionResult[],
+): PreparedChatExecutionPlanResolution["executionPlanDraft"]["steps"] {
+  return planSteps.map((planStep, index) => {
+    const result =
+      results.find((item) => item.stepId === planStep.stepId) ?? results.find((item) => item.index === index);
+    if (!result) {
+      return planStep;
+    }
+    return {
+      ...planStep,
+      status: result.status === "skipped" ? "cancelled" : result.status,
+      summary: result.summary,
+      error: result.error,
+      startedAt: result.startedAt,
+      finishedAt: result.finishedAt,
+      childRunId: result.childRunId,
+      durableRunId: result.durableRunId,
+      childSessionId: result.childSessionId,
+      childTurnId: result.childTurnId,
+    };
+  });
+}
+
+export function buildDelegationFailureGuidance(error: string, role: string): string {
+  const normalized = error.toLowerCase();
+  if (/\bauth|login|token|credential|permission\b/.test(normalized)) {
+    return `${toTitleCase(role)} hit an auth or permission barrier. Reconnect the required account or switch to another source.`;
+  }
+  if (/\btimeout|timed out|deadline|aborted\b/.test(normalized)) {
+    return `${toTitleCase(role)} ran out of time. Retry with a narrower brief or fewer sources.`;
+  }
+  if (/\bblocked|deny|denied|approval|policy|jail\b/.test(normalized)) {
+    return `${toTitleCase(role)} hit a restricted action. Use a safer fallback path or request approval explicitly.`;
+  }
+  if (/\bnot found|404|missing\b/.test(normalized)) {
+    return `${toTitleCase(role)} could not find the expected input. Retry with a more explicit file, path, or source reference.`;
+  }
+  return `Retry the ${role} delegate with a narrower brief or a different tool/source strategy.`;
+}
+
+export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] {
+  const deduped: ChatCitationRecord[] = [];
+  const seen = new Map<string, number>();
+  for (const citation of citations) {
+    const key = citation.knowledge
+      ? [
+          "knowledge",
+          citation.knowledge.attachmentId,
+          citation.knowledge.chunkId ?? citation.knowledge.sectionLabel ?? citation.knowledge.sourceRef,
+          citation.knowledge.retrievalMode,
+        ]
+          .join(":")
+          .toLowerCase()
+      : citation.url.trim().toLowerCase();
+    const existingIndex = seen.get(key);
+    if (existingIndex === undefined) {
+      seen.set(key, deduped.length);
+      deduped.push(citation);
+      continue;
+    }
+    const existing = deduped[existingIndex];
+    if (!existing) {
+      seen.set(key, deduped.length);
+      deduped.push(citation);
+      continue;
+    }
+    deduped[existingIndex] = {
+      ...existing,
+      citationId: existing.citationId,
+      url: existing.url,
+      title: existing.title ?? citation.title,
+      snippet: existing.snippet ?? citation.snippet,
+      sourceType: existing.sourceType ?? citation.sourceType,
+      knowledge: existing.knowledge ?? citation.knowledge,
+    };
+  }
+  return deduped;
+}

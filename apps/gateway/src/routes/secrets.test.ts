@@ -20,7 +20,7 @@ describe("secrets routes", () => {
       source: "secure_store",
     }));
     app = Fastify();
-    app.decorate("gateway", { getProviderSecretStatus } as never);
+    app.decorate("services", { secrets: { getProviderSecretStatus } } as never);
     await app.register(secretsRoutes);
 
     const response = await app.inject({
@@ -35,7 +35,7 @@ describe("secrets routes", () => {
   it("validates API key payloads before saving", async () => {
     const saveProviderSecret = vi.fn();
     app = Fastify();
-    app.decorate("gateway", { saveProviderSecret } as never);
+    app.decorate("services", { secrets: { saveProviderSecret } } as never);
     await app.register(secretsRoutes);
 
     const response = await app.inject({
@@ -54,7 +54,7 @@ describe("secrets routes", () => {
       hasSecret: false,
     }));
     app = Fastify();
-    app.decorate("gateway", { deleteProviderSecret } as never);
+    app.decorate("services", { secrets: { deleteProviderSecret } } as never);
     await app.register(secretsRoutes);
 
     const response = await app.inject({

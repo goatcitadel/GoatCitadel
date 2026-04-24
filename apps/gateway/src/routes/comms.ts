@@ -57,9 +57,11 @@ const channelReactSchema = z.object({
   taskId: z.string().min(1).optional(),
 });
 
-const channelReplySchema = channelSendBaseSchema.extend({
-  replyToMessageId: z.string().min(1),
-}).superRefine(validateChannelSendLike);
+const channelReplySchema = channelSendBaseSchema
+  .extend({
+    replyToMessageId: z.string().min(1),
+  })
+  .superRefine(validateChannelSendLike);
 
 const channelUnsendSchema = z.object({
   connectionId: z.string().uuid(),
@@ -138,7 +140,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsSend(parsed.data));
+    return reply.send(await fastify.services.comms.commsSend(parsed.data));
   });
 
   fastify.post("/api/v1/comms/reply", async (request, reply) => {
@@ -146,7 +148,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsReply(parsed.data));
+    return reply.send(await fastify.services.comms.commsReply(parsed.data));
   });
 
   fastify.post("/api/v1/comms/react", async (request, reply) => {
@@ -154,7 +156,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsReact(parsed.data));
+    return reply.send(await fastify.services.comms.commsReact(parsed.data));
   });
 
   fastify.post("/api/v1/comms/unsend", async (request, reply) => {
@@ -162,7 +164,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsUnsend(parsed.data));
+    return reply.send(await fastify.services.comms.commsUnsend(parsed.data));
   });
 
   fastify.post("/api/v1/comms/typing", async (request, reply) => {
@@ -170,7 +172,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsTyping(parsed.data));
+    return reply.send(await fastify.services.comms.commsTyping(parsed.data));
   });
 
   fastify.get("/api/v1/comms/capabilities/:connectionId", async (request, reply) => {
@@ -179,7 +181,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getIntegrationConnectionChannelCapabilities(params.data.connectionId));
+      return reply.send(fastify.services.comms.getIntegrationConnectionChannelCapabilities(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
@@ -193,7 +195,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId));
+      return reply.send(fastify.services.comms.getIntegrationConnectionChannelRuntimeStatus(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
@@ -207,7 +209,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
+      return reply.send(await fastify.services.comms.runIntegrationConnectionDiagnostics(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");
@@ -220,7 +222,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsGmailRead(parsed.data));
+    return reply.send(await fastify.services.comms.commsGmailRead(parsed.data));
   });
 
   fastify.post("/api/v1/comms/gmail/send", async (request, reply) => {
@@ -228,7 +230,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsGmailSend(parsed.data));
+    return reply.send(await fastify.services.comms.commsGmailSend(parsed.data));
   });
 
   fastify.post("/api/v1/comms/calendar/list", async (request, reply) => {
@@ -236,7 +238,7 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsCalendarList(parsed.data));
+    return reply.send(await fastify.services.comms.commsCalendarList(parsed.data));
   });
 
   fastify.post("/api/v1/comms/calendar/create", async (request, reply) => {
@@ -244,6 +246,6 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.commsCalendarCreate(parsed.data));
+    return reply.send(await fastify.services.comms.commsCalendarCreate(parsed.data));
   });
 };

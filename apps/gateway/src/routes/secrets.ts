@@ -17,7 +17,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(fastify.gateway.getProviderSecretStatus(parsed.data.providerId));
+      return reply.send(fastify.services.secrets.getProviderSecretStatus(parsed.data.providerId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -34,7 +34,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const status = fastify.gateway.saveProviderSecret(parsedParams.data.providerId, parsedBody.data.apiKey);
+      const status = fastify.services.secrets.saveProviderSecret(parsedParams.data.providerId, parsedBody.data.apiKey);
       return reply.send(status);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -48,7 +48,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(fastify.gateway.deleteProviderSecret(parsed.data.providerId));
+      return reply.send(fastify.services.secrets.deleteProviderSecret(parsed.data.providerId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

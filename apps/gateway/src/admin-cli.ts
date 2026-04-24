@@ -8,7 +8,7 @@ import { repoHasConfigMarker } from "./config-files.js";
 import { runOfflineBackupCommand } from "./admin-backup-cli.js";
 import { loadLocalEnvFile } from "./env-file.js";
 import { loadGatewayConfig } from "./config.js";
-import { GatewayService } from "./services/gateway-service.js";
+import { createGatewayAdminRuntime, type GatewayAdminPort } from "./services/gateway-runtime-factory.js";
 
 loadLocalEnvFile();
 
@@ -35,7 +35,7 @@ export async function main(): Promise<void> {
   if (config.assistant.database.driver === "postgres") {
     bundledPostgres = await ensureBundledPostgresRuntime(config);
   }
-  const gateway = new GatewayService(config);
+  const gateway = createGatewayAdminRuntime(config);
   await gateway.init();
 
   try {
@@ -58,7 +58,7 @@ export async function main(): Promise<void> {
   }
 }
 
-async function runBackupCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
+async function runBackupCommand(gateway: GatewayAdminPort, action: string | undefined, args: string[]): Promise<void> {
   if (action === "create") {
     const name = readFlag(args, "--name");
     const outputPath = readFlag(args, "--output");
@@ -81,7 +81,11 @@ async function runBackupCommand(gateway: GatewayService, action: string | undefi
   throw new Error("Unknown backup command");
 }
 
-async function runRetentionCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
+async function runRetentionCommand(
+  gateway: GatewayAdminPort,
+  action: string | undefined,
+  args: string[],
+): Promise<void> {
   if (action === "show") {
     console.log(JSON.stringify(gateway.getRetentionPolicy(), null, 2));
     return;
@@ -113,7 +117,7 @@ async function runRetentionCommand(gateway: GatewayService, action: string | und
   throw new Error("Unknown retention command");
 }
 
-async function runAuthCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
+async function runAuthCommand(gateway: GatewayAdminPort, action: string | undefined, args: string[]): Promise<void> {
   if (action === "plan") {
     console.log(JSON.stringify(gateway.getAuthCredentialPlan(), null, 2));
     return;
@@ -133,7 +137,11 @@ async function runAuthCommand(gateway: GatewayService, action: string | undefine
   throw new Error("Unknown auth command");
 }
 
-async function runDatabaseCommand(gateway: GatewayService, action: string | undefined, args: string[]): Promise<void> {
+async function runDatabaseCommand(
+  gateway: GatewayAdminPort,
+  action: string | undefined,
+  args: string[],
+): Promise<void> {
   if (action === "cutover") {
     const profileRaw = readFlag(args, "--profile");
     if (profileRaw !== "local" && profileRaw !== "hosted") {

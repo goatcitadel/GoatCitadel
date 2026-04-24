@@ -24,8 +24,10 @@ describe("prompt-pack run route", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      runPromptPackTest,
+    app.decorate("services", {
+      promptPacks: {
+        runPromptPackTest,
+      },
     } as never);
     await app.register(promptPackRoutes);
 

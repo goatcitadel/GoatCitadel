@@ -10,13 +10,13 @@ import type {
 import { ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
-export interface ChatGeneratedArtifactHost {
+export interface ChatGeneratedArtifactDependencies {
   readonly storage: Pick<Storage, "chatGeneratedArtifacts" | "chatTurnTraces" | "gatewaySql">;
   requireChatSession(sessionId: string): ChatSessionRecord;
 }
 
 export function listChatGeneratedArtifacts(
-  host: ChatGeneratedArtifactHost,
+  deps: ChatGeneratedArtifactDependencies,
   input: {
     sessionId?: string;
     workspaceId?: string;
@@ -26,10 +26,10 @@ export function listChatGeneratedArtifacts(
   } = {},
 ): ChatGeneratedArtifactRecord[] {
   if (input.sessionId?.trim()) {
-    host.requireChatSession(input.sessionId.trim());
-    return host.storage.chatGeneratedArtifacts.listBySession(input.sessionId.trim(), input.limit ?? 300);
+    deps.requireChatSession(input.sessionId.trim());
+    return deps.storage.chatGeneratedArtifacts.listBySession(input.sessionId.trim(), input.limit ?? 300);
   }
-  return host.storage.chatGeneratedArtifacts.listVisible({
+  return deps.storage.chatGeneratedArtifacts.listVisible({
     workspaceId: input.workspaceId?.trim() || undefined,
     sourceSurface: input.sourceSurface,
     kind: input.kind,
@@ -38,20 +38,20 @@ export function listChatGeneratedArtifacts(
 }
 
 export function getChatGeneratedArtifact(
-  host: ChatGeneratedArtifactHost,
+  deps: ChatGeneratedArtifactDependencies,
   artifactId: string,
 ): ChatGeneratedArtifactRecord {
   const normalizedArtifactId = artifactId.trim();
   if (!normalizedArtifactId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "artifactId" });
   }
-  const artifact = host.storage.chatGeneratedArtifacts.get(normalizedArtifactId);
-  host.requireChatSession(artifact.sessionId);
+  const artifact = deps.storage.chatGeneratedArtifacts.get(normalizedArtifactId);
+  deps.requireChatSession(artifact.sessionId);
   return artifact;
 }
 
 export function createChatGeneratedArtifactFromTurn(
-  host: ChatGeneratedArtifactHost,
+  deps: ChatGeneratedArtifactDependencies,
   input: {
     sessionId: string;
     turnId: string;
@@ -66,8 +66,8 @@ export function createChatGeneratedArtifactFromTurn(
   if (!turnId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "turnId" });
   }
-  const session = host.requireChatSession(sessionId);
-  const trace = host.storage.chatTurnTraces.get(turnId);
+  const session = deps.requireChatSession(sessionId);
+  const trace = deps.storage.chatTurnTraces.get(turnId);
   if (trace.sessionId !== sessionId) {
     throw new ValidationError({ message: `Turn ${turnId} does not belong to session ${sessionId}.` });
   }
@@ -75,12 +75,12 @@ export function createChatGeneratedArtifactFromTurn(
     throw new ValidationError({ message: "Artifacts can only be created from assistant turns." });
   }
   const sourceSurface = trace.mode;
-  const turnArtifacts = host.storage.chatGeneratedArtifacts.listByTurn(turnId, 50);
+  const turnArtifacts = deps.storage.chatGeneratedArtifacts.listByTurn(turnId, 50);
   const latestSameTurnArtifact = turnArtifacts[0];
   if (!input.supersedeLatest && latestSameTurnArtifact) {
     return latestSameTurnArtifact;
   }
-  const assistantText = resolveAssistantTextFromTrace(host, turnId);
+  const assistantText = resolveAssistantTextFromTrace(deps, turnId);
   const inferred = inferGeneratedArtifactFromAssistantText(assistantText);
   if (
     input.supersedeLatest &&
@@ -105,7 +105,7 @@ export function createChatGeneratedArtifactFromTurn(
     : buildStableGeneratedArtifactId(turnId, inferred.kind, inferred.contentHash, inferred.sourceBlockIndex);
   const expectedSupersedesArtifactId = input.supersedeLatest ? latestSameTurnArtifact?.artifactId : undefined;
   try {
-    return host.storage.chatGeneratedArtifacts.create({
+    return deps.storage.chatGeneratedArtifacts.create({
       artifactId,
       sessionId,
       workspaceId: session.workspaceId,
@@ -126,7 +126,7 @@ export function createChatGeneratedArtifactFromTurn(
     });
   } catch (error) {
     try {
-      const currentArtifact = host.storage.chatGeneratedArtifacts.get(artifactId);
+      const currentArtifact = deps.storage.chatGeneratedArtifacts.get(artifactId);
       if (
         currentArtifact.turnId === turnId &&
         currentArtifact.kind === inferred.kind &&
@@ -171,13 +171,13 @@ export function attachGeneratedArtifactsToThreadTurns(
   }));
 }
 
-function resolveAssistantTextFromTrace(host: ChatGeneratedArtifactHost, turnId: string): string {
-  const trace = host.storage.chatTurnTraces.get(turnId);
+function resolveAssistantTextFromTrace(deps: ChatGeneratedArtifactDependencies, turnId: string): string {
+  const trace = deps.storage.chatTurnTraces.get(turnId);
   const assistantMessageId = trace.assistantMessageId?.trim();
   if (!assistantMessageId) {
     throw new ValidationError({ message: "Assistant output is missing for this turn." });
   }
-  const result = host.storage.gatewaySql
+  const result = deps.storage.gatewaySql
     .prepare("SELECT content FROM chat_messages WHERE message_id = ? LIMIT 1")
     .get(assistantMessageId) as { content?: string } | undefined;
   const content = typeof result?.content === "string" ? result.content.trim() : "";

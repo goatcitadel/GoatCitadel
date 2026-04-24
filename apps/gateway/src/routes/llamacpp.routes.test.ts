@@ -94,13 +94,15 @@ describe("llama.cpp runtime routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      refreshLlamaCppRuntime,
-      adviseLlamaCppRuntime,
-      detectLlamaCppInstall,
-      startLlamaCppHuggingFaceDownload,
-      getLlamaCppHuggingFaceDownload,
-      cancelLlamaCppHuggingFaceDownload,
+    app.decorate("services", {
+      llamaCpp: {
+        refreshLlamaCppRuntime,
+        adviseLlamaCppRuntime,
+        detectLlamaCppInstall,
+        startLlamaCppHuggingFaceDownload,
+        getLlamaCppHuggingFaceDownload,
+        cancelLlamaCppHuggingFaceDownload,
+      },
     } as never);
     await app.register(llamaCppRoutes);
 
@@ -182,9 +184,11 @@ describe("llama.cpp runtime routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      listLlamaCppModels,
-      adviseLlamaCppRuntime: vi.fn(),
+    app.decorate("services", {
+      llamaCpp: {
+        listLlamaCppModels,
+        adviseLlamaCppRuntime: vi.fn(),
+      },
     } as never);
     await app.register(llamaCppRoutes);
 

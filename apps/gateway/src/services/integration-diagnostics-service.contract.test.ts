@@ -19,7 +19,7 @@ vi.mock("./channel-bot-live-probes.js", () => ({
 import {
   buildIntegrationConnectionChecks,
   runIntegrationConnectionLiveChecks,
-  type IntegrationDiagnosticsHost,
+  type IntegrationDiagnosticsPort,
 } from "./integration-diagnostics-service.js";
 
 function createDiscordConnection(config: Record<string, unknown>): IntegrationConnection {
@@ -56,7 +56,7 @@ function createIntegrationConnection(
   };
 }
 
-function createHost(): IntegrationDiagnosticsHost {
+function createPort(): IntegrationDiagnosticsPort {
   return {
     config: {
       toolPolicy: {
@@ -67,7 +67,7 @@ function createHost(): IntegrationDiagnosticsHost {
           networkAllowlist: [],
         },
       },
-    } as unknown as IntegrationDiagnosticsHost["config"],
+    } as unknown as IntegrationDiagnosticsPort["config"],
     fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("{}")),
     getDiscordRuntimeStatus: vi.fn(() => ({
       connectionId: "11111111-1111-1111-1111-111111111111",
@@ -96,7 +96,7 @@ describe("integration-diagnostics-service contract behavior", () => {
   });
 
   it("marks remote plain-http webhook URLs as unsafe while still recognizing configured auth", () => {
-    const host = createHost();
+    const host = createPort();
     const connection = createDiscordConnection({
       webhookUrl: "http://discord.example.test/webhook",
       defaultChannelId: "123456789012345678",
@@ -118,7 +118,7 @@ describe("integration-diagnostics-service contract behavior", () => {
   });
 
   it("composes discord live-check inputs from connection config and runtime state", async () => {
-    const host = createHost();
+    const host = createPort();
     const connection = createDiscordConnection({
       runtimeMode: "gateway",
       botToken: "discord-token",
@@ -153,27 +153,29 @@ describe("integration-diagnostics-service contract behavior", () => {
   });
 
   it("requires local bridge posture for local-app productivity entries", () => {
-    const host = createHost();
+    const host = createPort();
     const connection = createIntegrationConnection("apple-notes", "productivity", {
       bridgeUrl: "https://remote-agent.example.test",
     });
 
     const checks = buildIntegrationConnectionChecks(host, connection);
 
-    expect(checks).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        key: "url",
-        status: "warn",
-      }),
-      expect.objectContaining({
-        key: "host_requirement",
-        status: "warn",
-      }),
-    ]));
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "url",
+          status: "warn",
+        }),
+        expect.objectContaining({
+          key: "host_requirement",
+          status: "warn",
+        }),
+      ]),
+    );
   });
 
   it("treats gmail connections as operator-ready when token handles and oauth env references exist", () => {
-    const host = createHost();
+    const host = createPort();
     host.readConnectionConfigValue = vi.fn((config: Record<string, unknown>, key: string) => {
       const value = config[key];
       return typeof value === "string" ? value : undefined;
@@ -191,16 +193,18 @@ describe("integration-diagnostics-service contract behavior", () => {
 
       const checks = buildIntegrationConnectionChecks(host, connection);
 
-      expect(checks).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          key: "auth",
-          status: "pass",
-        }),
-        expect.objectContaining({
-          key: "auth_mode",
-          status: "pass",
-        }),
-      ]));
+      expect(checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: "auth",
+            status: "pass",
+          }),
+          expect.objectContaining({
+            key: "auth_mode",
+            status: "pass",
+          }),
+        ]),
+      );
     } finally {
       if (originalEnv === undefined) {
         delete process.env.GMAIL_CLIENT_ID;

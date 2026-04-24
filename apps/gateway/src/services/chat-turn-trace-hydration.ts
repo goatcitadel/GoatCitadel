@@ -2,7 +2,7 @@
  * Chat turn trace hydration helpers.
  *
  * Read-only trace hydration and branch/tree derivation helpers over a minimal
- * storage host.
+ * storage deps.
  */
 
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
@@ -14,40 +14,40 @@ type ChatTurnTraceHydrationStorage = Pick<
   "chatExecutionPlans" | "chatSessionBranchState" | "chatToolRuns" | "chatTurnTraces"
 >;
 
-export interface ChatTurnTraceHydrationHost {
+export interface ChatTurnTraceHydrationDependencies {
   readonly storage: ChatTurnTraceHydrationStorage;
 }
 
 export function createHydratedChatTurnTrace(
-  host: ChatTurnTraceHydrationHost,
+  deps: ChatTurnTraceHydrationDependencies,
   turnId: string,
   trace: ChatTurnTraceRecord,
 ): ChatTurnTraceRecord {
   return {
     ...trace,
-    toolRuns: host.storage.chatToolRuns.listByTurn(turnId),
+    toolRuns: deps.storage.chatToolRuns.listByTurn(turnId),
     citations: trace.citations ?? [],
   };
 }
 
 export function listHydratedChatTurnTraces(
-  host: ChatTurnTraceHydrationHost,
+  deps: ChatTurnTraceHydrationDependencies,
   sessionId: string,
   limit = 200,
 ): ChatTurnTraceRecord[] {
-  const traces = host.storage.chatTurnTraces.listBySession(sessionId, limit);
-  const toolRunsByTurnId = host.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
+  const traces = deps.storage.chatTurnTraces.listBySession(sessionId, limit);
+  const toolRunsByTurnId = deps.storage.chatToolRuns.listByTurnIds(traces.map((trace) => trace.turnId));
   const executionPlansById = new Map(
     traces
       .filter((trace) => trace.executionPlanId)
       .map((trace) => {
         try {
-          return [trace.executionPlanId!, host.storage.chatExecutionPlans.get(trace.executionPlanId!)] as const;
+          return [trace.executionPlanId!, deps.storage.chatExecutionPlans.get(trace.executionPlanId!)] as const;
         } catch {
           return undefined;
         }
       })
-      .filter((entry): entry is readonly [string, ReturnType<typeof host.storage.chatExecutionPlans.get>] =>
+      .filter((entry): entry is readonly [string, ReturnType<typeof deps.storage.chatExecutionPlans.get>] =>
         Boolean(entry),
       ),
   );
@@ -74,11 +74,11 @@ export function buildChatTurnChildrenMap(traces: ChatTurnTraceRecord[]): Map<str
 }
 
 export function resolveChatActiveLeafTurnId(
-  host: ChatTurnTraceHydrationHost,
+  deps: ChatTurnTraceHydrationDependencies,
   sessionId: string,
   traces: ChatTurnTraceRecord[],
 ): string | undefined {
-  const branchState = host.storage.chatSessionBranchState.get(sessionId);
+  const branchState = deps.storage.chatSessionBranchState.get(sessionId);
   if (branchState && traces.some((trace) => trace.turnId === branchState.activeLeafTurnId)) {
     return branchState.activeLeafTurnId;
   }
@@ -108,6 +108,6 @@ export function resolveChatActiveLeafTurnId(
     ),
     buildChatTurnChildrenMap(traces),
   );
-  host.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId, newest.finishedAt ?? newest.startedAt);
+  deps.storage.chatSessionBranchState.setActiveLeaf(sessionId, newestLeafTurnId, newest.finishedAt ?? newest.startedAt);
   return newestLeafTurnId;
 }

@@ -32,7 +32,10 @@ async function buildApp(
   options: { registerRateLimit?: boolean } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify();
-  app.decorate("gateway", {
+  app.decorate("gatewayAuth", {
+    getOnboardingStartupState: () => ({
+      completed: false,
+    }),
     getAuthCredentialPlan: () => ({
       mode: baseAuthConfig(mode).mode,
       warnings: [],

@@ -43,9 +43,8 @@ describe("voice routes", () => {
       catalog: [],
     }));
     app = Fastify();
-    app.decorate("gateway", {
-      getVoiceStatus,
-      getVoiceRuntimeStatus,
+    app.decorate("services", {
+      voice: { getVoiceStatus, getVoiceRuntimeStatus },
     } as never);
     await app.register(voiceRoutes);
 
@@ -65,7 +64,7 @@ describe("voice routes", () => {
   });
 
   it("lists recent talk sessions", async () => {
-    const listVoiceTalkSessions = vi.fn(() => ([
+    const listVoiceTalkSessions = vi.fn(() => [
       {
         talkSessionId: "talk-1",
         mode: "push_to_talk",
@@ -74,10 +73,10 @@ describe("voice routes", () => {
         startedAt: "2026-03-08T00:00:00.000Z",
         stoppedAt: "2026-03-08T00:05:00.000Z",
       },
-    ]));
+    ]);
     app = Fastify();
-    app.decorate("gateway", {
-      listVoiceTalkSessions,
+    app.decorate("services", {
+      voice: { listVoiceTalkSessions },
     } as never);
     await app.register(voiceRoutes);
 
@@ -131,10 +130,8 @@ describe("voice routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      installVoiceRuntime,
-      selectVoiceRuntimeModel,
-      removeVoiceRuntimeModel,
+    app.decorate("services", {
+      voice: { installVoiceRuntime, selectVoiceRuntimeModel, removeVoiceRuntimeModel },
     } as never);
     await app.register(voiceRoutes);
 
@@ -172,8 +169,8 @@ describe("voice routes", () => {
       throw new Error("Cannot start Talk Mode while the managed voice runtime is missing.");
     });
     app = Fastify();
-    app.decorate("gateway", {
-      startTalkSession,
+    app.decorate("services", {
+      voice: { startTalkSession },
     } as never);
     await app.register(voiceRoutes);
 
@@ -199,8 +196,8 @@ describe("voice routes", () => {
       throw new Error("Cannot start Wake listener until a managed voice model is selected.");
     });
     app = Fastify();
-    app.decorate("gateway", {
-      startVoiceWake,
+    app.decorate("services", {
+      voice: { startVoiceWake },
     } as never);
     await app.register(voiceRoutes);
 

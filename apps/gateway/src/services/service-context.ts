@@ -3,7 +3,7 @@ import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { LlmService } from "./llm-service.js";
-import type { RuntimeSettings } from "./gateway-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 /**
  * Transitional shared dependency bag for services that still need more than a

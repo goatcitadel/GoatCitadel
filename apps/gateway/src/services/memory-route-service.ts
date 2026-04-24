@@ -1,102 +1,102 @@
-import type { GatewayService } from "./gateway-service.js";
+import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 
-type MemoryRouteGateway = Pick<
-  GatewayService,
-  | "acceptMemoryMaintenanceRecommendation"
-  | "composeMemoryContext"
+type MemoryRoutePort = Pick<
+  MemoryLifecycleService,
+  | "acceptMaintenanceRecommendation"
+  | "composeContext"
   | "forgetMemory"
   | "forgetMemoryItem"
-  | "getMemoryContext"
-  | "getMemoryMaintenancePolicy"
-  | "getMemoryMaintenanceRunProvenance"
-  | "getMemoryMaintenanceStatus"
-  | "getMemoryQmdStats"
+  | "getContext"
+  | "getContextStats"
+  | "getMaintenancePolicy"
+  | "getMaintenanceRunProvenance"
+  | "getMaintenanceStatus"
+  | "listMaintenanceRecommendations"
+  | "listMaintenanceRuns"
   | "listMemoryItemHistory"
   | "listMemoryItems"
-  | "listMemoryMaintenanceRecommendations"
-  | "listMemoryMaintenanceRuns"
-  | "listRecentMemoryContexts"
+  | "listRecentContexts"
+  | "patchMaintenancePolicy"
   | "patchMemoryItem"
-  | "patchMemoryMaintenancePolicy"
-  | "rejectMemoryMaintenanceRecommendation"
-  | "runMemoryMaintenanceNow"
+  | "rejectMaintenanceRecommendation"
+  | "runMaintenanceNow"
 >;
 
 export class MemoryRouteService {
-  public constructor(private readonly gateway: MemoryRouteGateway) {}
+  public constructor(private readonly memory: MemoryRoutePort) {}
 
-  public composeContext(input: Parameters<MemoryRouteGateway["composeMemoryContext"]>[0]) {
-    return this.gateway.composeMemoryContext(input);
+  public composeContext(input: Parameters<MemoryRoutePort["composeContext"]>[0]) {
+    return this.memory.composeContext(input);
   }
 
   public getContext(contextId: string) {
-    return this.gateway.getMemoryContext(contextId);
+    return this.memory.getContext(contextId);
   }
 
   public getMaintenancePolicy(workspaceId?: string) {
-    return this.gateway.getMemoryMaintenancePolicy(workspaceId);
+    return this.memory.getMaintenancePolicy(workspaceId);
   }
 
   public patchMaintenancePolicy(
     workspaceId: string | undefined,
-    patch: Parameters<MemoryRouteGateway["patchMemoryMaintenancePolicy"]>[1],
+    patch: Parameters<MemoryRoutePort["patchMaintenancePolicy"]>[1],
   ) {
-    return this.gateway.patchMemoryMaintenancePolicy(workspaceId, patch);
+    return this.memory.patchMaintenancePolicy(workspaceId, patch);
   }
 
   public getMaintenanceStatus(workspaceId?: string) {
-    return this.gateway.getMemoryMaintenanceStatus(workspaceId);
+    return this.memory.getMaintenanceStatus(workspaceId);
   }
 
   public listMaintenanceRuns(workspaceId: string | undefined, limit: number) {
-    return this.gateway.listMemoryMaintenanceRuns(workspaceId, limit);
+    return this.memory.listMaintenanceRuns(workspaceId, limit);
   }
 
-  public runMaintenanceNow(input: Parameters<MemoryRouteGateway["runMemoryMaintenanceNow"]>[0]) {
-    return this.gateway.runMemoryMaintenanceNow(input);
+  public runMaintenanceNow(input: Parameters<MemoryRoutePort["runMaintenanceNow"]>[0]) {
+    return this.memory.runMaintenanceNow(input);
   }
 
   public getMaintenanceRunProvenance(runId: string) {
-    return this.gateway.getMemoryMaintenanceRunProvenance(runId);
+    return this.memory.getMaintenanceRunProvenance(runId);
   }
 
   public listMaintenanceRecommendations(workspaceId: string | undefined, limit: number) {
-    return this.gateway.listMemoryMaintenanceRecommendations(workspaceId, limit);
+    return this.memory.listMaintenanceRecommendations(workspaceId, limit);
   }
 
   public acceptMaintenanceRecommendation(recommendationId: string) {
-    return this.gateway.acceptMemoryMaintenanceRecommendation(recommendationId);
+    return this.memory.acceptMaintenanceRecommendation(recommendationId);
   }
 
   public rejectMaintenanceRecommendation(recommendationId: string) {
-    return this.gateway.rejectMemoryMaintenanceRecommendation(recommendationId);
+    return this.memory.rejectMaintenanceRecommendation(recommendationId);
   }
 
   public getQmdStats(from: string, to: string) {
-    return this.gateway.getMemoryQmdStats(from, to);
+    return this.memory.getContextStats(from, to);
   }
 
   public listRecentContexts(limit: number) {
-    return this.gateway.listRecentMemoryContexts(limit);
+    return this.memory.listRecentContexts(limit);
   }
 
-  public listItems(input: Parameters<MemoryRouteGateway["listMemoryItems"]>[0]) {
-    return this.gateway.listMemoryItems(input);
+  public listItems(input: Parameters<MemoryRoutePort["listMemoryItems"]>[0]) {
+    return this.memory.listMemoryItems(input);
   }
 
-  public patchItem(itemId: string, patch: Parameters<MemoryRouteGateway["patchMemoryItem"]>[1], actorId: string) {
-    return this.gateway.patchMemoryItem(itemId, patch, actorId);
+  public patchItem(itemId: string, patch: Parameters<MemoryRoutePort["patchMemoryItem"]>[1], actorId: string) {
+    return this.memory.patchMemoryItem(itemId, patch, actorId);
   }
 
   public forgetItem(itemId: string, actorId: string) {
-    return this.gateway.forgetMemoryItem(itemId, actorId);
+    return this.memory.forgetMemoryItem(itemId, actorId);
   }
 
   public listItemHistory(itemId: string, limit: number) {
-    return this.gateway.listMemoryItemHistory(itemId, limit);
+    return this.memory.listMemoryItemHistory(itemId, limit);
   }
 
-  public forget(input: Parameters<MemoryRouteGateway["forgetMemory"]>[0]) {
-    return this.gateway.forgetMemory(input);
+  public forget(input: Parameters<MemoryRoutePort["forgetMemory"]>[0]) {
+    return this.memory.forgetMemory(input);
   }
 }

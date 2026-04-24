@@ -1,6 +1,5 @@
 import fp from "fastify-plugin";
 import type { GatewayRouteServices } from "../services/gateway-route-services.js";
-import { createGatewayRouteServices } from "../services/gateway-route-services.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -9,5 +8,5 @@ declare module "fastify" {
 }
 
 export const routeServicesPlugin = fp(async (fastify) => {
-  fastify.decorate("services", createGatewayRouteServices(fastify.gateway));
+  fastify.decorate("services", fastify.gatewayRuntime.routeServices);
 });

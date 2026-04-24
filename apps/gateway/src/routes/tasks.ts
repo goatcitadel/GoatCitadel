@@ -80,7 +80,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const view = parsed.data.view ?? (parsed.data.includeDeleted ? "all" : "active");
-    const items = fastify.gateway.listTasks(
+    const items = fastify.services.tasks.listTasks(
       parsed.data.limit,
       parsed.data.status,
       parsed.data.cursor,
@@ -98,14 +98,14 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const task = fastify.gateway.createTask(parsed.data);
+    const task = fastify.services.tasks.createTask(parsed.data);
     return reply.code(201).send(task);
   });
 
   fastify.get("/api/v1/tasks/:taskId", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send(fastify.gateway.getTask(taskId));
+      return reply.send(fastify.services.tasks.getTask(taskId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -119,7 +119,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const task = fastify.gateway.updateTask(taskId, parsed.data);
+      const task = fastify.services.tasks.updateTask(taskId, parsed.data);
       return reply.send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -150,9 +150,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
             if (confirmToken !== "PERMANENT_DELETE") {
               return undefined;
             }
-            return fastify.gateway.hardDeleteTask(taskId);
+            return fastify.services.tasks.hardDeleteTask(taskId);
           })()
-        : fastify.gateway.softDeleteTask(taskId, deletedBy, deleteReason);
+        : fastify.services.tasks.softDeleteTask(taskId, deletedBy, deleteReason);
 
     if (mode === "hard" && deleted === undefined) {
       if (confirmToken !== "PERMANENT_DELETE") {
@@ -168,7 +168,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/tasks/:taskId/restore", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
-    const restored = fastify.gateway.restoreTask(taskId);
+    const restored = fastify.services.tasks.restoreTask(taskId);
     if (!restored) {
       return reply.code(404).send({ error: `Task ${taskId} not found or not deleted` });
     }
@@ -178,7 +178,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId/activities", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send({ items: fastify.gateway.listTaskActivities(taskId) });
+      return reply.send({ items: fastify.services.tasks.listTaskActivities(taskId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -192,7 +192,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.code(201).send(fastify.gateway.appendTaskActivity(taskId, parsed.data));
+      return reply.code(201).send(fastify.services.tasks.appendTaskActivity(taskId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -201,7 +201,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId/deliverables", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send({ items: fastify.gateway.listTaskDeliverables(taskId) });
+      return reply.send({ items: fastify.services.tasks.listTaskDeliverables(taskId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -215,7 +215,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.code(201).send(fastify.gateway.appendTaskDeliverable(taskId, parsed.data));
+      return reply.code(201).send(fastify.services.tasks.appendTaskDeliverable(taskId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -224,7 +224,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId/subagents", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send({ items: fastify.gateway.listTaskSubagents(taskId) });
+      return reply.send({ items: fastify.services.tasks.listTaskSubagents(taskId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -238,7 +238,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.code(201).send(fastify.gateway.registerTaskSubagent(taskId, parsed.data));
+      return reply.code(201).send(fastify.services.tasks.registerTaskSubagent(taskId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -252,7 +252,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(fastify.gateway.updateTaskSubagent(agentSessionId, parsed.data));
+      return reply.send(fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

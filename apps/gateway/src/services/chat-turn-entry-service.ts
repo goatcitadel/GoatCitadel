@@ -26,7 +26,7 @@ import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
   preflightChatRoute,
   resolveChatRouteDescriptor,
-  type ChatRouteResolutionHost,
+  type ChatRouteResolutionDependencies,
 } from "./chat-route-resolution.js";
 import {
   buildEmptyAssistantTurnFallbackText,
@@ -34,7 +34,7 @@ import {
   dedupeChatCitations,
   detectDelegationRoles,
   inferDegradedAssistantTurnFailure,
-} from "./gateway-service.js";
+} from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
@@ -147,7 +147,7 @@ export interface ChatTurnResumeHost {
   ): AsyncGenerator<ChatStreamChunk>;
 }
 
-export type ChatTurnPreflightHost = ChatTurnEntryHost & ChatRouteResolutionHost;
+export type ChatTurnPreflightHost = ChatTurnEntryHost & ChatRouteResolutionDependencies;
 
 export async function agentSendChatMessage(
   host: ChatTurnEntryHost,

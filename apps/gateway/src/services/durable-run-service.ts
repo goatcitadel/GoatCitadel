@@ -10,13 +10,22 @@ import type {
   DurableRunTimelineEvent,
   DurableWakeResult,
 } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { Storage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../config.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
 
-export type DurableRunServiceContext = Pick<
-  ServiceContext,
-  "config" | "storage" | "publishRealtime" | "requireFeatureEnabled"
->;
+export interface DurableRunServiceContext {
+  readonly config: GatewayRuntimeConfig;
+  readonly storage: Storage;
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+}
 
 const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
   maxAttempts: 3,
@@ -740,9 +749,7 @@ export class DurableRunService {
         active = false;
         controller.abort(error instanceof Error ? error : new Error(String(error)));
         rejectHeartbeatFailure(
-          error instanceof Error
-            ? error
-            : new Error(`Durable run ${run.runId} lease heartbeat failed.`),
+          error instanceof Error ? error : new Error(`Durable run ${run.runId} lease heartbeat failed.`),
         );
         return;
       }

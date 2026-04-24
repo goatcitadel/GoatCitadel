@@ -15,7 +15,7 @@ import type {
   IntegrationPluginInstallInput,
   IntegrationPluginRecord,
 } from "@goatcitadel/contracts";
-import type { RuntimeSettings } from "./gateway-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
 import {
   buildInstalledIntegrationPluginRecord,
@@ -23,7 +23,7 @@ import {
 } from "./integration-plugin-author-contract.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 
-export interface IntegrationChannelHost {
+export interface IntegrationChannelPort {
   storage: {
     integrationConnections: {
       list(kind?: IntegrationKind, limit?: number): IntegrationConnection[];
@@ -58,7 +58,12 @@ export interface IntegrationChannelHost {
   writeDiscordPairings(records: DiscordPairingRecord[]): void;
   discordRuntimeService: {
     reconnectConnection(connectionId: string): Promise<DiscordRuntimeStatus | undefined>;
-    sendTyping(connectionId: string, target: string, durationMs?: number, signal?: AbortSignal): Promise<ChannelTypingResult>;
+    sendTyping(
+      connectionId: string,
+      target: string,
+      durationMs?: number,
+      signal?: AbortSignal,
+    ): Promise<ChannelTypingResult>;
   };
   resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
@@ -81,23 +86,97 @@ function sanitizePluginId(value: string): string {
   return sanitized.slice(0, 80);
 }
 
+export class IntegrationChannelService {
+  public constructor(private readonly deps: IntegrationChannelPort) {}
+
+  public listIntegrationConnections(kind?: IntegrationKind, limit = 300): IntegrationConnection[] {
+    return listIntegrationConnections(this.deps, kind, limit);
+  }
+
+  public getIntegrationConnection(connectionId: string): IntegrationConnection {
+    return getIntegrationConnection(this.deps, connectionId);
+  }
+
+  public getIntegrationConnectionChannelCapabilities(connectionId: string): ChannelCapabilities {
+    return getIntegrationConnectionChannelCapabilities(this.deps, connectionId);
+  }
+
+  public getIntegrationConnectionChannelRuntimeStatus(connectionId: string): ChannelRuntimeStatus {
+    return getIntegrationConnectionChannelRuntimeStatus(this.deps, connectionId);
+  }
+
+  public runIntegrationConnectionDiagnostics(connectionId: string): Promise<ConnectorDiagnosticReport> {
+    return runIntegrationConnectionDiagnostics(this.deps, connectionId);
+  }
+
+  public createIntegrationConnection(input: IntegrationConnectionCreateInput): IntegrationConnection {
+    return createIntegrationConnection(this.deps, input);
+  }
+
+  public updateIntegrationConnection(
+    connectionId: string,
+    input: IntegrationConnectionUpdateInput,
+  ): IntegrationConnection {
+    return updateIntegrationConnection(this.deps, connectionId, input);
+  }
+
+  public deleteIntegrationConnection(connectionId: string): boolean {
+    return deleteIntegrationConnection(this.deps, connectionId);
+  }
+
+  public listDiscordPairings(connectionId: string): { runtime?: DiscordRuntimeStatus; items: DiscordPairingRecord[] } {
+    return listDiscordPairings(this.deps, connectionId);
+  }
+
+  public approveDiscordPairing(connectionId: string, pairingId: string): DiscordPairingRecord {
+    return approveDiscordPairing(this.deps, connectionId, pairingId);
+  }
+
+  public revokeDiscordPairing(connectionId: string, pairingId: string): DiscordPairingRecord {
+    return revokeDiscordPairing(this.deps, connectionId, pairingId);
+  }
+
+  public reconnectDiscordRuntime(connectionId: string): Promise<DiscordRuntimeStatus | undefined> {
+    return reconnectDiscordRuntime(this.deps, connectionId);
+  }
+
+  public emitTelegramTyping(
+    connection: IntegrationConnection,
+    input: ChannelTypingInput,
+  ): Promise<ChannelTypingResult> {
+    return emitTelegramTypingImpl(this.deps, connection, input);
+  }
+
+  public listIntegrationPlugins(): IntegrationPluginRecord[] {
+    return listIntegrationPlugins(this.deps);
+  }
+
+  public installIntegrationPlugin(input: IntegrationPluginInstallInput): IntegrationPluginRecord {
+    return installIntegrationPlugin(this.deps, input);
+  }
+
+  public setIntegrationPluginEnabled(pluginId: string, enabled: boolean): IntegrationPluginRecord {
+    return setIntegrationPluginEnabled(this.deps, pluginId, enabled);
+  }
+}
+
 export function listIntegrationConnections(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   kind?: IntegrationKind,
   limit = 300,
 ): IntegrationConnection[] {
-  return host.storage.integrationConnections.list(kind, limit);
+  return deps.storage.integrationConnections.list(kind, limit);
 }
 
-export function getIntegrationConnection(host: IntegrationChannelHost, connectionId: string): IntegrationConnection {
-  return host.storage.integrationConnections.get(connectionId);
+export function getIntegrationConnection(deps: IntegrationChannelPort, connectionId: string): IntegrationConnection {
+  return deps.storage.integrationConnections.get(connectionId);
 }
 
 export function getIntegrationConnectionChannelCapabilities(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
 ): ChannelCapabilities {
-  const connection = host.storage.integrationConnections.get(connectionId);
+  const connection = deps.storage.integrationConnections.get(connectionId);
   if (!connection) {
     throw new Error(`Unknown integration connection: ${connectionId}`);
   }
@@ -108,10 +187,10 @@ export function getIntegrationConnectionChannelCapabilities(
 }
 
 export function getIntegrationConnectionChannelRuntimeStatus(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
 ): ChannelRuntimeStatus {
-  const connection = host.storage.integrationConnections.get(connectionId);
+  const connection = deps.storage.integrationConnections.get(connectionId);
   if (!connection) {
     throw new Error(`Unknown integration connection: ${connectionId}`);
   }
@@ -149,7 +228,7 @@ export function getIntegrationConnectionChannelRuntimeStatus(
     return runtimeStatus;
   }
 
-  const discordRuntime = host.getDiscordRuntimeStatus(connectionId);
+  const discordRuntime = deps.getDiscordRuntimeStatus(connectionId);
   if (!discordRuntime) {
     return runtimeStatus;
   }
@@ -172,11 +251,11 @@ export function getIntegrationConnectionChannelRuntimeStatus(
 }
 
 export async function runIntegrationConnectionDiagnostics(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
 ): Promise<ConnectorDiagnosticReport> {
-  host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
-  const connection = host.storage.integrationConnections.get(connectionId);
+  deps.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
+  const connection = deps.storage.integrationConnections.get(connectionId);
   if (!connection) {
     throw new Error(`Unknown integration connection: ${connectionId}`);
   }
@@ -196,8 +275,8 @@ export async function runIntegrationConnectionDiagnostics(
     status: connection.lastError ? "warn" : "pass",
     message: connection.lastError ? `Last error: ${connection.lastError}` : "No recent errors recorded.",
   });
-  checks.push(...host.buildIntegrationConnectionChecks(connection));
-  const liveChecks = await host.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: false });
+  checks.push(...deps.buildIntegrationConnectionChecks(connection));
+  const liveChecks = await deps.runIntegrationConnectionLiveChecks(connection, { includeSandboxSend: false });
   checks.push(...liveChecks.checks);
   const report: ConnectorDiagnosticReport = {
     connectorType: "integration_connection",
@@ -208,16 +287,16 @@ export async function runIntegrationConnectionDiagnostics(
         ? "warn"
         : "ok",
     checks,
-    recommendedNextAction: host.pickConnectorDiagnosticAction(checks),
+    recommendedNextAction: deps.pickConnectorDiagnosticAction(checks),
     checkedAt: new Date().toISOString(),
     probe: liveChecks.probe,
   };
-  host.recordConnectorHealthRun(report);
+  deps.recordConnectorHealthRun(report);
   return report;
 }
 
 export function createIntegrationConnection(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   input: IntegrationConnectionCreateInput,
 ): IntegrationConnection {
   const catalog = INTEGRATION_CATALOG.find((entry) => entry.catalogId === input.catalogId);
@@ -225,7 +304,7 @@ export function createIntegrationConnection(
     throw new Error(`Unknown integration catalog id: ${input.catalogId}`);
   }
 
-  const created = host.storage.integrationConnections.create({
+  const created = deps.storage.integrationConnections.create({
     ...input,
     catalogId: catalog.catalogId,
     kind: catalog.kind,
@@ -234,7 +313,7 @@ export function createIntegrationConnection(
     pluginId: input.pluginId ?? catalog.pluginId,
   });
 
-  host.publishRealtime("system", "integrations", {
+  deps.publishRealtime("system", "integrations", {
     type: "integration_connection_created",
     connectionId: created.connectionId,
     catalogId: created.catalogId,
@@ -243,49 +322,49 @@ export function createIntegrationConnection(
     enabled: created.enabled,
     status: created.status,
   });
-  void host.syncDiscordRuntime();
+  void deps.syncDiscordRuntime();
 
   return created;
 }
 
 export function updateIntegrationConnection(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
   input: IntegrationConnectionUpdateInput,
 ): IntegrationConnection {
-  const updated = host.storage.integrationConnections.update(connectionId, input);
-  host.publishRealtime("system", "integrations", {
+  const updated = deps.storage.integrationConnections.update(connectionId, input);
+  deps.publishRealtime("system", "integrations", {
     type: "integration_connection_updated",
     connectionId: updated.connectionId,
     enabled: updated.enabled,
     status: updated.status,
     lastError: updated.lastError,
   });
-  void host.syncDiscordRuntime();
+  void deps.syncDiscordRuntime();
   return updated;
 }
 
-export function deleteIntegrationConnection(host: IntegrationChannelHost, connectionId: string): boolean {
-  const deleted = host.storage.integrationConnections.delete(connectionId);
+export function deleteIntegrationConnection(deps: IntegrationChannelPort, connectionId: string): boolean {
+  const deleted = deps.storage.integrationConnections.delete(connectionId);
   if (deleted) {
-    host.publishRealtime("system", "integrations", {
+    deps.publishRealtime("system", "integrations", {
       type: "integration_connection_deleted",
       connectionId,
     });
   }
-  void host.syncDiscordRuntime();
+  void deps.syncDiscordRuntime();
   return deleted;
 }
 
 export function listDiscordPairings(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
 ): { runtime?: DiscordRuntimeStatus; items: DiscordPairingRecord[] } {
-  const connection = host.getIntegrationConnection(connectionId);
-  host.assertDiscordConnection(connection);
+  const connection = deps.getIntegrationConnection(connectionId);
+  deps.assertDiscordConnection(connection);
   return {
-    runtime: host.getDiscordRuntimeStatus(connectionId),
-    items: host
+    runtime: deps.getDiscordRuntimeStatus(connectionId),
+    items: deps
       .readDiscordPairings()
       .filter((item) => item.connectionId === connectionId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -293,13 +372,13 @@ export function listDiscordPairings(
 }
 
 export function approveDiscordPairing(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
   pairingId: string,
 ): DiscordPairingRecord {
-  const connection = host.getIntegrationConnection(connectionId);
-  host.assertDiscordConnection(connection);
-  const pairings = host.readDiscordPairings();
+  const connection = deps.getIntegrationConnection(connectionId);
+  deps.assertDiscordConnection(connection);
+  const pairings = deps.readDiscordPairings();
   const existing = pairings.find((item) => item.connectionId === connectionId && item.pairingId === pairingId);
   if (!existing) {
     throw new Error(`Unknown Discord pairing: ${pairingId}`);
@@ -328,18 +407,18 @@ export function approveDiscordPairing(
     }
     return item;
   });
-  host.writeDiscordPairings(next);
+  deps.writeDiscordPairings(next);
   return next.find((item) => item.pairingId === pairingId)!;
 }
 
 export function revokeDiscordPairing(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
   pairingId: string,
 ): DiscordPairingRecord {
-  const connection = host.getIntegrationConnection(connectionId);
-  host.assertDiscordConnection(connection);
-  const pairings = host.readDiscordPairings();
+  const connection = deps.getIntegrationConnection(connectionId);
+  deps.assertDiscordConnection(connection);
+  const pairings = deps.readDiscordPairings();
   const existing = pairings.find((item) => item.connectionId === connectionId && item.pairingId === pairingId);
   if (!existing) {
     throw new Error(`Unknown Discord pairing: ${pairingId}`);
@@ -351,28 +430,28 @@ export function revokeDiscordPairing(
     revokedAt: now,
     updatedAt: now,
   };
-  host.writeDiscordPairings(pairings.map((item) => (item.pairingId === pairingId ? revoked : item)));
+  deps.writeDiscordPairings(pairings.map((item) => (item.pairingId === pairingId ? revoked : item)));
   return revoked;
 }
 
 export async function reconnectDiscordRuntime(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connectionId: string,
 ): Promise<DiscordRuntimeStatus | undefined> {
-  const connection = host.getIntegrationConnection(connectionId);
-  host.assertDiscordConnection(connection);
-  return host.discordRuntimeService.reconnectConnection(connectionId);
+  const connection = deps.getIntegrationConnection(connectionId);
+  deps.assertDiscordConnection(connection);
+  return deps.discordRuntimeService.reconnectConnection(connectionId);
 }
 
 export async function emitTelegramTypingImpl(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   connection: IntegrationConnection,
   input: ChannelTypingInput,
 ): Promise<ChannelTypingResult> {
   const token =
-    host.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv") ??
-    host.resolveConnectionSecret(connection.config, "token", "tokenEnv");
-  const chatId = input.target.trim() || host.readConnectionConfigValue(connection.config, "defaultChatId");
+    deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv") ??
+    deps.resolveConnectionSecret(connection.config, "token", "tokenEnv");
+  const chatId = input.target.trim() || deps.readConnectionConfigValue(connection.config, "defaultChatId");
   if (!token) {
     return {
       channelKey: "telegram",
@@ -394,7 +473,7 @@ export async function emitTelegramTypingImpl(
     };
   }
   const telegramApiUrl = `https://api.telegram.org/bot${token}/sendChatAction`;
-  if (!host.isConnectionUrlAllowlisted(telegramApiUrl)) {
+  if (!deps.isConnectionUrlAllowlisted(telegramApiUrl)) {
     return {
       channelKey: "telegram",
       connectionId: connection.connectionId,
@@ -413,7 +492,7 @@ export async function emitTelegramTypingImpl(
       threadId: input.threadId,
       durationMs: input.durationMs,
       signal: input.signal,
-      fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+      fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
     });
   } catch (error) {
     return {
@@ -427,16 +506,16 @@ export async function emitTelegramTypingImpl(
   }
 }
 
-export function listIntegrationPlugins(host: IntegrationChannelHost): IntegrationPluginRecord[] {
-  return host.readIntegrationPlugins();
+export function listIntegrationPlugins(deps: IntegrationChannelPort): IntegrationPluginRecord[] {
+  return deps.readIntegrationPlugins();
 }
 
 export function installIntegrationPlugin(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   input: IntegrationPluginInstallInput,
 ): IntegrationPluginRecord {
   const now = new Date().toISOString();
-  const plugins = host.readIntegrationPlugins();
+  const plugins = deps.readIntegrationPlugins();
   const installMetadata = resolveIntegrationPluginInstallMetadata(input.source);
   const nextId = sanitizePluginId(input.pluginId ?? installMetadata.manifest?.pluginId ?? input.source);
   const existing = plugins.find((item) => item.pluginId === nextId);
@@ -447,7 +526,7 @@ export function installIntegrationPlugin(
       source: input.source,
       existing,
     });
-    host.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === nextId ? updated : item)));
+    deps.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === nextId ? updated : item)));
     return updated;
   }
 
@@ -456,8 +535,8 @@ export function installIntegrationPlugin(
     pluginId: nextId,
     source: input.source,
   });
-  host.writeIntegrationPlugins([created, ...plugins]);
-  host.publishRealtime("system", "integrations", {
+  deps.writeIntegrationPlugins([created, ...plugins]);
+  deps.publishRealtime("system", "integrations", {
     type: "integration_plugin_installed",
     pluginId: created.pluginId,
     source: input.source,
@@ -466,12 +545,12 @@ export function installIntegrationPlugin(
 }
 
 export function setIntegrationPluginEnabled(
-  host: IntegrationChannelHost,
+  deps: IntegrationChannelPort,
   pluginId: string,
   enabled: boolean,
 ): IntegrationPluginRecord {
   const now = new Date().toISOString();
-  const plugins = host.readIntegrationPlugins();
+  const plugins = deps.readIntegrationPlugins();
   const current = plugins.find((item) => item.pluginId === pluginId);
   if (!current) {
     throw new Error(`Unknown integration plugin: ${pluginId}`);
@@ -481,8 +560,8 @@ export function setIntegrationPluginEnabled(
     enabled,
     updatedAt: now,
   };
-  host.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === pluginId ? updated : item)));
-  host.publishRealtime("system", "integrations", {
+  deps.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === pluginId ? updated : item)));
+  deps.publishRealtime("system", "integrations", {
     type: enabled ? "integration_plugin_enabled" : "integration_plugin_disabled",
     pluginId,
   });

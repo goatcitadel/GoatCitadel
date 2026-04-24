@@ -2,9 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import type { ChatTurnDispatchHost } from "./chat-turn-dispatch-service.js";
 
-vi.mock("./gateway-service.js", () => ({
+vi.mock("./chat-turn-helpers.js", () => ({
   dedupeChatCitations: (items: unknown[]) => items,
-  isPersistableChatStreamChunk: () => true,
   splitIntoChunks: (value: string) => [value],
 }));
 

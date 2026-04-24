@@ -28,11 +28,13 @@ const docsIngestSchema = z.object({
   source: z.string().min(1),
   namespace: z.string().min(1),
   title: z.string().optional(),
-  chunking: z.object({
-    targetChars: z.number().int().positive().optional(),
-    overlapChars: z.number().int().nonnegative().optional(),
-    maxChunks: z.number().int().positive().optional(),
-  }).optional(),
+  chunking: z
+    .object({
+      targetChars: z.number().int().positive().optional(),
+      overlapChars: z.number().int().nonnegative().optional(),
+      maxChunks: z.number().int().positive().optional(),
+    })
+    .optional(),
   metadata: z.record(z.unknown()).optional(),
   sessionId: z.string().min(1).optional(),
   agentId: z.string().min(1).optional(),
@@ -63,7 +65,7 @@ export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.knowledgeMemoryWrite(parsed.data));
+    return reply.send(await fastify.services.knowledge.knowledgeMemoryWrite(parsed.data));
   });
 
   fastify.post("/api/v1/knowledge/memory/search", async (request, reply) => {
@@ -71,7 +73,7 @@ export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.knowledgeMemorySearch(parsed.data));
+    return reply.send(await fastify.services.knowledge.knowledgeMemorySearch(parsed.data));
   });
 
   fastify.post("/api/v1/knowledge/docs/ingest", async (request, reply) => {
@@ -79,7 +81,7 @@ export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.knowledgeDocsIngest(parsed.data));
+    return reply.send(await fastify.services.knowledge.knowledgeDocsIngest(parsed.data));
   });
 
   fastify.post("/api/v1/knowledge/embeddings/index", async (request, reply) => {
@@ -87,7 +89,7 @@ export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.knowledgeEmbeddingsIndex(parsed.data));
+    return reply.send(await fastify.services.knowledge.knowledgeEmbeddingsIndex(parsed.data));
   });
 
   fastify.post("/api/v1/knowledge/embeddings/query", async (request, reply) => {
@@ -95,6 +97,6 @@ export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.knowledgeEmbeddingsQuery(parsed.data));
+    return reply.send(await fastify.services.knowledge.knowledgeEmbeddingsQuery(parsed.data));
   });
 };

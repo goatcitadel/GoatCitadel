@@ -64,7 +64,7 @@ export const assemblyRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.gateway.listAssemblyRuns(parsed.data.limit ?? 50) });
+    return reply.send({ items: fastify.services.assembly.listAssemblyRuns(parsed.data.limit ?? 50) });
   });
 
   fastify.post("/api/v1/assembly/runs", async (request, reply) => {
@@ -72,12 +72,12 @@ export const assemblyRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.code(201).send(await fastify.gateway.createAssemblyRun(parsed.data));
+    return reply.code(201).send(await fastify.services.assembly.createAssemblyRun(parsed.data));
   });
 
   fastify.get("/api/v1/assembly/runs/:runId", async (request, reply) => {
     const runId = (request.params as { runId: string }).runId;
-    return reply.send(fastify.gateway.getAssemblyRunDetail(runId));
+    return reply.send(fastify.services.assembly.getAssemblyRunDetail(runId));
   });
 
   fastify.get("/api/v1/assembly/reputation", async (request, reply) => {
@@ -85,6 +85,6 @@ export const assemblyRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.gateway.listAssemblyReputations(parsed.data.limit ?? 50) });
+    return reply.send({ items: fastify.services.assembly.listAssemblyReputations(parsed.data.limit ?? 50) });
   });
 };

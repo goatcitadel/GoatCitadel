@@ -61,7 +61,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     const scope = parsed.data.scope ?? "inspectable";
     return reply.send({
       scope,
-      items: fastify.gateway.listCapabilityCatalog(scope),
+      items: fastify.services.capabilities.listCapabilityCatalog(scope),
     });
   });
 
@@ -71,7 +71,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getCapabilityCatalogSnapshot(parsed.data.snapshotId));
+      return reply.send(fastify.services.capabilities.getCapabilityCatalogSnapshot(parsed.data.snapshotId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -83,7 +83,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listCapabilityProposals(parsed.data.limit ?? 100),
+      items: fastify.services.capabilities.listCapabilityProposals(parsed.data.limit ?? 100),
     });
   });
 
@@ -93,7 +93,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createCapabilityProposal(parsed.data));
+      return reply.code(201).send(fastify.services.capabilities.createCapabilityProposal(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -105,7 +105,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getCapabilityProposalDetail(parsed.data.proposalId));
+      return reply.send(fastify.services.capabilities.getCapabilityProposalDetail(parsed.data.proposalId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -117,7 +117,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getCapabilityCandidateDetail(parsed.data.candidateId));
+      return reply.send(fastify.services.capabilities.getCapabilityCandidateDetail(parsed.data.candidateId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -135,7 +135,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.promoteCapabilityCandidate(params.data.candidateId, body.data.versionId));
+      return reply.send(
+        fastify.services.capabilities.promoteCapabilityCandidate(params.data.candidateId, body.data.versionId),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -153,7 +155,9 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.revokeCapabilityCandidate(params.data.candidateId, body.data.versionId));
+      return reply.send(
+        fastify.services.capabilities.revokeCapabilityCandidate(params.data.candidateId, body.data.versionId),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -172,7 +176,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        fastify.gateway.rollbackCapabilityCandidate(params.data.candidateId, body.data.targetVersionId),
+        fastify.services.capabilities.rollbackCapabilityCandidate(params.data.candidateId, body.data.targetVersionId),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -185,7 +189,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listCodeModeRuns(parsed.data.limit ?? 100),
+      items: fastify.services.capabilities.listCodeModeRuns(parsed.data.limit ?? 100),
     });
   });
 
@@ -195,7 +199,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getCodeModeRun(parsed.data.runId));
+      return reply.send(fastify.services.capabilities.getCodeModeRun(parsed.data.runId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -207,7 +211,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await fastify.gateway.createCodeModeRun(parsed.data));
+      return reply.code(201).send(await fastify.services.capabilities.createCodeModeRun(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

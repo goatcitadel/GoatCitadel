@@ -1,26 +1,24 @@
 import type { OrchestrationPlan, OrchestrationRun, MemoryContextPack } from "@goatcitadel/contracts";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
-import type { GatewayService } from "./gateway-service.js";
 
-type OrchestrationRouteGateway = Pick<
-  GatewayService,
-  | "approvePhase"
-  | "createOrchestrationPlan"
-  | "getRun"
-  | "listRunCheckpoints"
-  | "listRunContexts"
-  | "runOrchestrationPlan"
->;
+export interface OrchestrationRoutePort {
+  createOrchestrationPlan(plan: OrchestrationPlan): Promise<OrchestrationRun>;
+  runOrchestrationPlan(planId: string): Promise<OrchestrationRun>;
+  approvePhase(runId: string, phaseId: string, approvedBy: string, costIncrementUsd: number): Promise<unknown>;
+  getRun(runId: string): OrchestrationRun;
+  listRunCheckpoints(runId: string): OrchestrationCheckpoint[];
+  listRunContexts(runId: string): MemoryContextPack[];
+}
 
 export class OrchestrationRouteService {
-  public constructor(private readonly gateway: OrchestrationRouteGateway) {}
+  public constructor(private readonly orchestration: OrchestrationRoutePort) {}
 
   public async createPlan(plan: OrchestrationPlan): Promise<OrchestrationRun> {
-    return this.gateway.createOrchestrationPlan(plan);
+    return this.orchestration.createOrchestrationPlan(plan);
   }
 
   public async runPlan(planId: string): Promise<OrchestrationRun> {
-    return this.gateway.runOrchestrationPlan(planId);
+    return this.orchestration.runOrchestrationPlan(planId);
   }
 
   public async approvePhase(
@@ -29,18 +27,18 @@ export class OrchestrationRouteService {
     approvedBy: string,
     costIncrementUsd: number,
   ): Promise<unknown> {
-    return this.gateway.approvePhase(runId, phaseId, approvedBy, costIncrementUsd);
+    return this.orchestration.approvePhase(runId, phaseId, approvedBy, costIncrementUsd);
   }
 
   public getRun(runId: string): OrchestrationRun {
-    return this.gateway.getRun(runId);
+    return this.orchestration.getRun(runId);
   }
 
   public listRunCheckpoints(runId: string): OrchestrationCheckpoint[] {
-    return this.gateway.listRunCheckpoints(runId);
+    return this.orchestration.listRunCheckpoints(runId);
   }
 
   public listRunContexts(runId: string): MemoryContextPack[] {
-    return this.gateway.listRunContexts(runId);
+    return this.orchestration.listRunContexts(runId);
   }
 }

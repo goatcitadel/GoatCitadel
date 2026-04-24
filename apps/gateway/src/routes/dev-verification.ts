@@ -40,15 +40,15 @@ const memoryItemSeedSchema = z.object({
 });
 
 export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
-  const devVerificationEnabled = () => fastify.gateway.isDevDiagnosticsEnabled();
+  const devVerificationEnabled = () => fastify.services.devVerification.isDevDiagnosticsEnabled();
 
   fastify.get("/api/v1/dev/verification/status", async (_request, reply) => {
     if (!devVerificationEnabled()) {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
-    const llmConfig = fastify.gateway.getLlmConfig();
+    const llmConfig = fastify.services.devVerification.getLlmConfig();
     const providers = llmConfig.providers.map((provider) => {
-      const status = fastify.gateway.getProviderSecretStatus(provider.providerId);
+      const status = fastify.services.devVerification.getProviderSecretStatus(provider.providerId);
       return {
         providerId: provider.providerId,
         label: provider.label,
@@ -64,7 +64,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       activeProviderId: llmConfig.activeProviderId,
       activeModel: llmConfig.activeModel,
       providers,
-      latestDiagnosticsCount: fastify.gateway.listDevDiagnostics({ limit: 500 }).items.length,
+      latestDiagnosticsCount: fastify.services.devVerification.listDevDiagnostics({ limit: 500 }).items.length,
     });
   });
 
@@ -76,7 +76,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.gateway.listDevDiagnostics(parsed.data));
+    return reply.send(fastify.services.devVerification.listDevDiagnostics(parsed.data));
   });
 
   fastify.get("/api/v1/dev/verification/route-access-manifest", async (_request, reply) => {
@@ -101,19 +101,19 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const workspace = fastify.gateway.createWorkspace({
+    const workspace = fastify.services.devVerification.createWorkspace({
       name: parsed.data.workspaceName,
       slug: `verification-${randomUUID().slice(0, 8)}`,
       description: "Deterministic verification workspace seeded for automated testing.",
     });
     const sessions = [
       ...Array.from({ length: Math.max(0, parsed.data.sessionCount - 1) }, (_item, index) =>
-        fastify.gateway.createChatSession({
+        fastify.services.devVerification.createChatSession({
           title: `${parsed.data.sessionTitle} ${index + 2}`,
           workspaceId: workspace.workspaceId,
         }),
       ),
-      fastify.gateway.createChatSession({
+      fastify.services.devVerification.createChatSession({
         title: parsed.data.sessionTitle,
         workspaceId: workspace.workspaceId,
       }),
@@ -237,9 +237,9 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const now = new Date().toISOString();
     const turnId = randomUUID();
     const userMessageId = randomUUID();
-    const storage = fastify.gateway.storage;
+    const storage = fastify.services.devVerification.storage;
 
-    const approval = await fastify.gateway.createApproval({
+    const approval = await fastify.services.devVerification.createApproval({
       kind: "shell.exec",
       riskLevel: "danger",
       payload: {
@@ -347,7 +347,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const storage = fastify.gateway.storage;
+    const storage = fastify.services.devVerification.storage;
     const itemId = `mem_${randomUUID().replace(/-/g, "")}`;
     const now = new Date().toISOString();
     storage.db
@@ -413,7 +413,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const now = new Date().toISOString();
     const orphanLeaseHeartbeatAt = new Date(Date.now() - 30_000).toISOString();
     const orphanLeaseExpiresAt = new Date(Date.now() - 15_000).toISOString();
-    const orphanApproval = await fastify.gateway.createApproval({
+    const orphanApproval = await fastify.services.devVerification.createApproval({
       kind: "verification.approval.wait",
       riskLevel: "danger",
       payload: {
@@ -424,17 +424,23 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         title: "Verification orphaned approval wait",
       },
     });
-    const orphanApprovalResolved = fastify.gateway.storage.approvals.resolve(orphanApproval.approvalId, {
-      decision: "approve",
-      resolvedBy: "verification-seed",
-      resolutionNote: "Seeded resolved approval for orphan recovery verification.",
-    });
-    const orphanRunId = fastify.gateway.storage.approvalWaitRuns.getRunId(orphanApproval.approvalId);
+    const orphanApprovalResolved = fastify.services.devVerification.storage.approvals.resolve(
+      orphanApproval.approvalId,
+      {
+        decision: "approve",
+        resolvedBy: "verification-seed",
+        resolutionNote: "Seeded resolved approval for orphan recovery verification.",
+      },
+    );
+    const orphanRunId = fastify.services.devVerification.storage.approvalWaitRuns.getRunId(orphanApproval.approvalId);
     if (!orphanRunId) {
       return reply.code(500).send({ error: "Failed to seed orphan approval wait run." });
     }
-    fastify.gateway.storage.approvalWaitRuns.markResolved(orphanApproval.approvalId, orphanApprovalResolved.resolvedAt);
-    fastify.gateway.storage.durableRuns.updateRun({
+    fastify.services.devVerification.storage.approvalWaitRuns.markResolved(
+      orphanApproval.approvalId,
+      orphanApprovalResolved.resolvedAt,
+    );
+    fastify.services.devVerification.storage.durableRuns.updateRun({
       runId: orphanRunId,
       status: "running",
       startedAt: now,
@@ -446,7 +452,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       updatedAt: now,
     });
 
-    const deadLetterApproval = await fastify.gateway.createApproval({
+    const deadLetterApproval = await fastify.services.devVerification.createApproval({
       kind: "verification.approval.wait",
       riskLevel: "danger",
       payload: {
@@ -457,20 +463,25 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         title: "Verification dead-letter approval wait",
       },
     });
-    const deadLetterApprovalResolved = fastify.gateway.storage.approvals.resolve(deadLetterApproval.approvalId, {
-      decision: "approve",
-      resolvedBy: "verification-seed",
-      resolutionNote: "Seeded resolved approval for dead-letter recovery verification.",
-    });
-    const deadLetterRunId = fastify.gateway.storage.approvalWaitRuns.getRunId(deadLetterApproval.approvalId);
+    const deadLetterApprovalResolved = fastify.services.devVerification.storage.approvals.resolve(
+      deadLetterApproval.approvalId,
+      {
+        decision: "approve",
+        resolvedBy: "verification-seed",
+        resolutionNote: "Seeded resolved approval for dead-letter recovery verification.",
+      },
+    );
+    const deadLetterRunId = fastify.services.devVerification.storage.approvalWaitRuns.getRunId(
+      deadLetterApproval.approvalId,
+    );
     if (!deadLetterRunId) {
       return reply.code(500).send({ error: "Failed to seed dead-letter approval wait run." });
     }
-    fastify.gateway.storage.approvalWaitRuns.markResolved(
+    fastify.services.devVerification.storage.approvalWaitRuns.markResolved(
       deadLetterApproval.approvalId,
       deadLetterApprovalResolved.resolvedAt,
     );
-    fastify.gateway.storage.durableRuns.updateRun({
+    fastify.services.devVerification.storage.durableRuns.updateRun({
       runId: deadLetterRunId,
       status: "dead_lettered",
       startedAt: now,
@@ -478,7 +489,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       lastError: "Seeded dead letter for durable recovery verification.",
       updatedAt: now,
     });
-    const deadLetter = fastify.gateway.storage.durableRuns.upsertDeadLetter({
+    const deadLetter = fastify.services.devVerification.storage.durableRuns.upsertDeadLetter({
       runId: deadLetterRunId,
       reason: "verification_seed_dead_letter",
       payload: {
@@ -506,7 +517,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(404).send({ error: "Development verification endpoints are disabled." });
     }
 
-    const storage = fastify.gateway.storage.realtimeEvents;
+    const storage = fastify.services.devVerification.storage.realtimeEvents;
     const oldCreatedAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     // Use a near-future cutoff so the seed deterministically clears any retained preexisting
     // events before appending the explicit verification events. That guarantees a real replay gap.
@@ -519,7 +530,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       oldCreatedAt,
     );
     const prunedCount = storage.pruneOlderThan(pruneCutoff);
-    const explicitEvent = fastify.gateway.publishRealtime(
+    const explicitEvent = fastify.services.devVerification.publishRealtime(
       "verification_memory_refresh",
       "memory",
       {
@@ -535,7 +546,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         },
       },
     );
-    const compatibilityEvent = fastify.gateway.publishRealtime("approval_hint_emitted", "approvals", {
+    const compatibilityEvent = fastify.services.devVerification.publishRealtime("approval_hint_emitted", "approvals", {
       kind: "verification_compatibility_seed",
       note: "Compatibility fallback verification event.",
     });
@@ -543,7 +554,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.code(201).send({
       staleCursor: String(staleEvent.sequence),
       prunedCount,
-      bounds: fastify.gateway.getRealtimeEventSequenceBounds(),
+      bounds: fastify.services.devVerification.getRealtimeEventSequenceBounds(),
       explicitEvent,
       compatibilityEvent,
     });
@@ -563,7 +574,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       if (parsed.data.scenario === "stream") {
         let chunkCount = 0;
         let preview = "";
-        for await (const chunk of fastify.gateway.createChatCompletionStream(payload)) {
+        for await (const chunk of fastify.services.devVerification.createChatCompletionStream(payload)) {
           chunkCount += 1;
           if (!preview) {
             preview = JSON.stringify(chunk).slice(0, 240);
@@ -580,7 +591,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const result = await fastify.gateway.createChatCompletion(payload);
+      const result = await fastify.services.devVerification.createChatCompletion(payload);
       const firstChoice = Array.isArray(result.choices) ? result.choices[0] : undefined;
       const content =
         typeof firstChoice?.message?.content === "string"

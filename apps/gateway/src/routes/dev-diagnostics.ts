@@ -1,3 +1,4 @@
+import type { DevDiagnosticsEvent } from "@goatcitadel/contracts";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
@@ -17,18 +18,18 @@ const streamQuerySchema = z.object({
 
 export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/dev/diagnostics", async (request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!fastify.services.devDiagnostics.isDevDiagnosticsEnabled()) {
       return reply.code(404).send({ error: "Development diagnostics are disabled." });
     }
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.gateway.listDevDiagnostics(parsed.data));
+    return reply.send(fastify.services.devDiagnostics.listDevDiagnostics(parsed.data));
   });
 
   fastify.get("/api/v1/dev/diagnostics/stream", async (request, reply) => {
-    if (!fastify.gateway.isDevDiagnosticsEnabled()) {
+    if (!fastify.services.devDiagnostics.isDevDiagnosticsEnabled()) {
       return reply.code(404).send({ error: "Development diagnostics are disabled." });
     }
     const parsed = streamQuerySchema.safeParse(request.query);
@@ -50,17 +51,19 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
       raw.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    const replay = fastify.gateway.listDevDiagnostics({
-      level: parsed.data.level,
-      category: parsed.data.category,
-      correlationId: parsed.data.correlationId,
-      limit: parsed.data.replay,
-    }).items.reverse();
+    const replay = fastify.services.devDiagnostics
+      .listDevDiagnostics({
+        level: parsed.data.level,
+        category: parsed.data.category,
+        correlationId: parsed.data.correlationId,
+        limit: parsed.data.replay,
+      })
+      .items.reverse();
     for (const item of replay) {
       send(item);
     }
 
-    const unsubscribe = fastify.gateway.subscribeDevDiagnostics((event) => {
+    const unsubscribe = fastify.services.devDiagnostics.subscribeDevDiagnostics((event: DevDiagnosticsEvent) => {
       if (parsed.data.level && event.level !== parsed.data.level) {
         return;
       }

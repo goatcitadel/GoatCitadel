@@ -6,9 +6,10 @@ import {
   type DurableRunCreateRequest,
   type DurableRunRecord,
   type RealtimeEventLinks,
+  type RealtimeEvent,
 } from "@goatcitadel/contracts";
-import type { RequestAttribution } from "@goatcitadel/storage";
-import type { ServiceContext } from "./service-context.js";
+import type { RequestAttribution, Storage } from "@goatcitadel/storage";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 export interface ApprovalWaitRunServiceDeps {
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
@@ -16,9 +17,20 @@ export interface ApprovalWaitRunServiceDeps {
   getRequestAttribution?: () => RequestAttribution | undefined;
 }
 
+export interface ApprovalWaitRunServiceContext {
+  readonly storage: Storage;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+}
+
 export class ApprovalWaitRunService {
   public constructor(
-    private readonly ctx: Pick<ServiceContext, "storage" | "isFeatureEnabled" | "publishRealtime">,
+    private readonly ctx: ApprovalWaitRunServiceContext,
     private readonly deps: ApprovalWaitRunServiceDeps,
   ) {}
 

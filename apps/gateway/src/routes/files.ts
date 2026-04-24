@@ -36,7 +36,7 @@ const createTemplateBodySchema = z.object({
 
 export const filesRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/files/templates", async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listFileTemplates() });
+    return reply.send({ items: fastify.services.files.listFileTemplates() });
   });
 
   fastify.post("/api/v1/files/templates/:templateId/create", async (request, reply) => {
@@ -51,7 +51,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const created = await fastify.gateway.createWorkspaceFileFromTemplate(
+      const created = await fastify.services.files.createWorkspaceFileFromTemplate(
         params.data.templateId,
         body.data.targetPath,
       );
@@ -68,7 +68,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const items = await fastify.gateway.listWorkspaceFiles(parsed.data.dir, parsed.data.limit);
+      const items = await fastify.services.files.listWorkspaceFiles(parsed.data.dir, parsed.data.limit);
       return reply.send({ items });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -82,10 +82,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const items = await fastify.gateway.listWorkspacePathSuggestions(
-        parsed.data.root,
-        parsed.data.limit,
-      );
+      const items = await fastify.services.files.listWorkspacePathSuggestions(parsed.data.root, parsed.data.limit);
       return reply.send({ items });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -99,10 +96,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const uploaded = await fastify.gateway.uploadWorkspaceFile(
-        parsed.data.relativePath,
-        parsed.data.content,
-      );
+      const uploaded = await fastify.services.files.uploadWorkspaceFile(parsed.data.relativePath, parsed.data.content);
       return reply.code(201).send(uploaded);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -116,7 +110,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const file = await fastify.gateway.downloadWorkspaceFile(parsed.data.relativePath);
+      const file = await fastify.services.files.downloadWorkspaceFile(parsed.data.relativePath);
 
       if (parsed.data.raw) {
         reply.header("Content-Type", file.contentType);
@@ -149,7 +143,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const file = await fastify.gateway.downloadWorkspaceFile(parsed.data.relativePath);
+      const file = await fastify.services.files.downloadWorkspaceFile(parsed.data.relativePath);
       if (!file.isText) {
         return reply.code(400).send({ error: "Preview supports text HTML files only" });
       }

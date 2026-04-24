@@ -13,7 +13,7 @@ import { splitChatPrefsPatch, shouldAllowCrossProviderFallback } from "./chat-se
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
 type RuntimeProvider = LlmRuntimeConfig["providers"][number];
 
-export interface ChatRouteResolutionHost {
+export interface ChatRouteResolutionDependencies {
   readonly storage: Pick<Storage, "chatSessionPrefs">;
   readonly llmService: Pick<LlmService, "getRuntimeConfig">;
   resolveFallbackTargets(
@@ -168,13 +168,13 @@ function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPrefligh
 }
 
 export function resolveChatRouteDescriptor(
-  host: ChatRouteResolutionHost,
+  deps: ChatRouteResolutionDependencies,
   sessionId: string,
   input: RoutingPreflightRequest,
 ): ResolvedChatRouteDescriptor {
-  const sessionPrefs = host.storage.chatSessionPrefs.ensure(sessionId);
+  const sessionPrefs = deps.storage.chatSessionPrefs.ensure(sessionId);
   const previewPrefs = buildPreviewPrefs(sessionPrefs, input);
-  const runtime = host.llmService.getRuntimeConfig({
+  const runtime = deps.llmService.getRuntimeConfig({
     includeKeychainForActiveProvider: true,
     useCache: true,
   });
@@ -248,12 +248,12 @@ export function resolveChatRouteDescriptor(
     !effectiveProviderId || !effectiveModel
       ? "off"
       : shouldAllowCrossProviderFallback(requestShape) &&
-          host.resolveFallbackTargets(runtime, effectiveProviderId, effectiveModel).length > 0
+          deps.resolveFallbackTargets(runtime, effectiveProviderId, effectiveModel).length > 0
         ? "armed"
         : "off";
   const fallbackTarget =
     fallbackPolicy === "armed" && effectiveProviderId && effectiveModel
-      ? host.resolveFallbackTargets(runtime, effectiveProviderId, effectiveModel)[0]
+      ? deps.resolveFallbackTargets(runtime, effectiveProviderId, effectiveModel)[0]
       : undefined;
   const fallbackResult = !fallbackTarget
     ? "not_applicable"
@@ -292,15 +292,15 @@ export function resolveChatRouteDescriptor(
 }
 
 export async function preflightChatRoute(
-  host: ChatRouteResolutionHost,
+  deps: ChatRouteResolutionDependencies,
   sessionId: string,
   input: RoutingPreflightRequest,
 ): Promise<RoutingPreflightResult> {
-  if ((input.action === "retry" || input.action === "edit") && input.turnId && host.requireChatTurnContext) {
-    await host.requireChatTurnContext(sessionId, input.turnId);
+  if ((input.action === "retry" || input.action === "edit") && input.turnId && deps.requireChatTurnContext) {
+    await deps.requireChatTurnContext(sessionId, input.turnId);
   }
 
-  const descriptor = resolveChatRouteDescriptor(host, sessionId, input);
+  const descriptor = resolveChatRouteDescriptor(deps, sessionId, input);
   let runtimeReachability: RoutingPreflightResult["runtimeReachability"] = "not_checked";
   let blockedReason = descriptor.blockedReason;
 
@@ -308,10 +308,10 @@ export async function preflightChatRoute(
     !blockedReason &&
     descriptor.runtimeClass === "local" &&
     descriptor.runtimeProvider?.providerId &&
-    host.listLlmModels
+    deps.listLlmModels
   ) {
     try {
-      const models = await host.listLlmModels(descriptor.runtimeProvider.providerId);
+      const models = await deps.listLlmModels(descriptor.runtimeProvider.providerId);
       runtimeReachability = models.length > 0 ? "reachable" : "models_unavailable";
       if (models.length === 0) {
         blockedReason = `No models are currently available for ${descriptor.runtimeProvider.label}.`;

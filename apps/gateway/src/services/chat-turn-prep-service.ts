@@ -52,10 +52,10 @@ import {
   mergeChatSystemInstructions,
   normalizeChatInputParts,
   parseLooseJsonRecord,
-  type PreparedChatExecutionPlanResolution,
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
-} from "./gateway-service.js";
+} from "./chat-turn-planning-helpers.js";
+import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import type { LlmService } from "./llm-service.js";
 import type { ResolvedThreadKnowledgeContext } from "./chat-thread-knowledge-service.js";
 

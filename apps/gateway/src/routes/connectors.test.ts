@@ -14,7 +14,7 @@ describe("connectors routes", () => {
   });
 
   it("lists connector records and forwards connectorType filters", async () => {
-    const listConnectorRecords = vi.fn(() => ([
+    const listConnectorRecords = vi.fn(() => [
       {
         connectorId: "mcp:srv-1",
         connectorType: "mcp_server",
@@ -23,11 +23,9 @@ describe("connectors routes", () => {
         status: "active",
         capabilities: [],
       },
-    ]));
+    ]);
     app = Fastify();
-    app.decorate("gateway", {
-      listConnectorRecords,
-    } as never);
+    app.decorate("services", { connectors: { listConnectorRecords } } as never);
     await app.register(connectorsRoutes);
 
     const response = await app.inject({

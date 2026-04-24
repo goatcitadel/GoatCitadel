@@ -60,7 +60,7 @@ import {
 } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2, type Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
-import type { RuntimeSettings } from "./gateway-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { applyPromptPackPromptLabFallbacks } from "./prompt-pack-empty-output-fallbacks.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
@@ -267,7 +267,10 @@ interface PromptPackProjectBindingConfig {
 }
 
 interface PromptPackDurableReadinessInput {
-  readonly durable: Pick<GatewayRuntimeConfig["assistant"]["durable"], "enabled" | "executionEnabled" | "chatAutoPromoteEnabled">;
+  readonly durable: Pick<
+    GatewayRuntimeConfig["assistant"]["durable"],
+    "enabled" | "executionEnabled" | "chatAutoPromoteEnabled"
+  >;
   readonly durableKernelV1Enabled: boolean;
 }
 
@@ -526,22 +529,23 @@ export class PromptPackService {
       const failedByTrace = traceStatus === "failed";
       const approvalPending = traceStatus === "waiting_for_approval";
       const userInputPending = traceStatus === "waiting_for_user_input";
-      const status: PromptPackRunRecord["status"] = approvalPending || userInputPending
-        ? "approval_paused"
-        : missingOutput || failedByTrace
-          ? "failed"
-          : "completed";
+      const status: PromptPackRunRecord["status"] =
+        approvalPending || userInputPending
+          ? "approval_paused"
+          : missingOutput || failedByTrace
+            ? "failed"
+            : "completed";
       const error =
         status === "failed" || status === "approval_paused"
           ? approvalPending
             ? "Turn paused for approval."
             : userInputPending
               ? "Turn paused for user input."
-            : missingOutput
-              ? "No assistant output generated."
-              : failedByTrace
-                ? "Assistant turn finished in failed state."
-                : undefined
+              : missingOutput
+                ? "No assistant output generated."
+                : failedByTrace
+                  ? "Assistant turn finished in failed state."
+                  : undefined
           : undefined;
       const updated = this.ctx.storage.promptPackRuns.patch(runId, {
         status,
@@ -860,7 +864,14 @@ export class PromptPackService {
     const generation = {
       policyHash: pack.policyHash ?? hashPromptPackPolicyV2(resolvePromptPackPolicy(pack)),
     };
-    const latestAssessments = buildPromptPackLatestStateV2(tests, runs, autoScoresV2, humanReviewsV2, scores, generation);
+    const latestAssessments = buildPromptPackLatestStateV2(
+      tests,
+      runs,
+      autoScoresV2,
+      humanReviewsV2,
+      scores,
+      generation,
+    );
 
     return {
       pack,
@@ -983,11 +994,7 @@ export class PromptPackService {
 
   cancelPromptPackBenchmark(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
     const status = this.getPromptPackBenchmarkStatus(benchmarkRunId);
-    if (
-      status.run.status === "completed" ||
-      status.run.status === "failed" ||
-      status.run.status === "cancelled"
-    ) {
+    if (status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled") {
       return status;
     }
 
@@ -1457,9 +1464,8 @@ export class PromptPackService {
     const completedKeys = new Set(
       existingItems.map((item) => `${item.providerId}::${item.model}::${item.testCode.toUpperCase()}`),
     );
-    const completedCount = new Set(
-      existingItems.map((item) => `${item.providerId}::${item.model}::${item.testId}`),
-    ).size;
+    const completedCount = new Set(existingItems.map((item) => `${item.providerId}::${item.model}::${item.testId}`))
+      .size;
 
     await this.executeWithBenchmarkClaimHeartbeat(benchmarkRunId, async (signal) => {
       throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
@@ -2030,7 +2036,8 @@ export class PromptPackService {
 
     const modeRubric = buildModeRubricGuidance(input.profile.mode, input.prompt);
     const toolTierRubric = buildToolTierRubricGuidance(input.profile.toolTier);
-    const exactOrderedCoworkSections = input.profile.mode === "cowork" ? extractPromptPackOrderedSections(input.prompt) : [];
+    const exactOrderedCoworkSections =
+      input.profile.mode === "cowork" ? extractPromptPackOrderedSections(input.prompt) : [];
     const promptSpecificJudgeNotes =
       input.profile.mode === "cowork" && exactOrderedCoworkSections.length > 0
         ? [
@@ -2334,8 +2341,7 @@ export class PromptPackService {
     }
     const initialTrace = response.trace;
     const needsRefresh =
-      isPromptPackDurableNonTerminal(initialTrace?.durable?.status) ||
-      !response.assistantMessage?.content?.trim();
+      isPromptPackDurableNonTerminal(initialTrace?.durable?.status) || !response.assistantMessage?.content?.trim();
     if (!needsRefresh) {
       return {};
     }
@@ -2567,7 +2573,9 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Approval-paused latest runs: ${report.summary.approvalPausedRuns ?? 0}`);
   lines.push(`- Backgrounded latest runs: ${report.summary.backgroundedRuns ?? 0}`);
   lines.push(`- Auto-scored latest runs (v2): ${report.summary.autoScoredRuns ?? 0}`);
-  lines.push(`- Current-generation latest v2 score rows: ${latestAutoScores.length - staleLatestAutoScoreCount}/${latestAutoScores.length}`);
+  lines.push(
+    `- Current-generation latest v2 score rows: ${latestAutoScores.length - staleLatestAutoScoreCount}/${latestAutoScores.length}`,
+  );
   lines.push(`- Stale latest v2 score rows: ${staleLatestAutoScoreCount}`);
   lines.push(`- Human reviews (v2): ${report.summary.humanReviewedRuns ?? 0}`);
   lines.push(`- Judge fallbacks: ${report.summary.judgeFallbackCount}`);
@@ -2577,7 +2585,10 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push(`- Effective pass rate (v2): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
   lines.push(`- Review rate (v2): ${(report.summary.reviewRate * 100).toFixed(1)}%`);
   const notRunCount = Math.max(
-    report.summary.totalTests - report.summary.completedRuns - report.summary.failedRuns - (report.summary.approvalPausedRuns ?? 0),
+    report.summary.totalTests -
+      report.summary.completedRuns -
+      report.summary.failedRuns -
+      (report.summary.approvalPausedRuns ?? 0),
     0,
   );
   const completedValidLatestRuns = Math.max(report.summary.completedRuns - report.summary.invalidLatestRuns, 0);
@@ -3158,7 +3169,9 @@ function buildPromptPackConstraintsBlock(toolRuns: ChatTurnTraceRecord["toolRuns
   return lines.join("\n");
 }
 
-function buildPromptPackExecutedEvidenceBlock(toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined): string | undefined {
+function buildPromptPackExecutedEvidenceBlock(
+  toolRuns: ChatTurnTraceRecord["toolRuns"] | undefined,
+): string | undefined {
   const executed = (toolRuns ?? []).filter((item) => item.status === "executed");
   if (executed.length < 1) {
     return undefined;
@@ -3465,9 +3478,7 @@ function looksLikePromptPackFragmentaryStart(responseText: string): boolean {
   if (/^(?:#{1,6}\s+|[-*]\s+|\d+\.\s+|```|\||\{|\[|>)/.test(firstLine)) {
     return false;
   }
-  return /^(?:and|or|but|so|because|then|are|is|was|were|the|a|an|to|of|for|with|from|if|when|while)\b/.test(
-    firstLine,
-  );
+  return /^(?:and|or|but|so|because|then|are|is|was|were|the|a|an|to|of|for|with|from|if|when|while)\b/.test(firstLine);
 }
 
 function detectPromptPackOutputCutOff(responseText: string): boolean {
@@ -3510,7 +3521,10 @@ function looksLikeCompletePromptPackShortEmphasisLine(line: string): boolean {
   if (!/^[-*]\s+\*\*.+\*\*$/.test(normalized)) {
     return false;
   }
-  const inner = normalized.replace(/^[-*]\s+\*\*/, "").replace(/\*\*$/, "").trim();
+  const inner = normalized
+    .replace(/^[-*]\s+\*\*/, "")
+    .replace(/\*\*$/, "")
+    .trim();
   if (!inner || inner.length > 80) {
     return false;
   }
@@ -3856,26 +3870,24 @@ export function buildPromptPackSessionPrefsOverride(
   const directives = detectPromptPackToolDirectives(prompt);
   const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
   void shouldDisablePromptPackModeOrchestration(profile, prompt);
-  const webMode =
-    repoGroundedChatAssist
-      ? "off"
-      : profile.toolTier === "explicit-tools" &&
-          (directives.namedTools.length > 0 ||
-            directives.prefersFileTools ||
-            directives.prefersWebTools ||
-            directives.prefersMemoryTools) &&
-          !directives.prefersWebTools
+  const webMode = repoGroundedChatAssist
+    ? "off"
+    : profile.toolTier === "explicit-tools" &&
+        (directives.namedTools.length > 0 ||
+          directives.prefersFileTools ||
+          directives.prefersWebTools ||
+          directives.prefersMemoryTools) &&
+        !directives.prefersWebTools
       ? "off"
       : profile.webMode;
-  const memoryMode =
-    repoGroundedChatAssist
-      ? "off"
-      : profile.toolTier === "explicit-tools" &&
-          (directives.namedTools.length > 0 ||
-            directives.prefersFileTools ||
-            directives.prefersWebTools ||
-            directives.prefersMemoryTools) &&
-          !directives.prefersMemoryTools
+  const memoryMode = repoGroundedChatAssist
+    ? "off"
+    : profile.toolTier === "explicit-tools" &&
+        (directives.namedTools.length > 0 ||
+          directives.prefersFileTools ||
+          directives.prefersWebTools ||
+          directives.prefersMemoryTools) &&
+        !directives.prefersMemoryTools
       ? "off"
       : profile.memoryMode;
 
@@ -4172,10 +4184,14 @@ export function buildPromptPackPromptInput(
       );
       harnessLines.push("- Do not add extra headings before, between, or after those sections.");
       if (requestedRoleOrderOnly) {
-        harnessLines.push("- Use only those top-level sections. Do not add Synthesis, Conclusion, Final Answer, Summary, or extra subheadings.");
+        harnessLines.push(
+          "- Use only those top-level sections. Do not add Synthesis, Conclusion, Final Answer, Summary, or extra subheadings.",
+        );
         harnessLines.push("- Keep each requested section compact: 2-4 bullets or 1-2 short paragraphs.");
         if (profile.toolTier === "no-tools") {
-          harnessLines.push("- Keep the whole answer under about 220 words unless the prompt explicitly requires more detail.");
+          harnessLines.push(
+            "- Keep the whole answer under about 220 words unless the prompt explicitly requires more detail.",
+          );
         }
       } else {
         harnessLines.push("- Keep each requested section compact, evidence-backed, and decision-oriented.");
@@ -4215,7 +4231,9 @@ export function buildPromptPackPromptInput(
       harnessLines.push("- End with exactly one synthesized recommendation that integrates all required perspectives.");
     }
     if (profile.toolTier === "no-tools") {
-      harnessLines.push("- In no-tools Cowork runs, prefer terse bullets over long paragraphs. Keep the whole answer under about 350 words unless the prompt explicitly requires more detail.");
+      harnessLines.push(
+        "- In no-tools Cowork runs, prefer terse bullets over long paragraphs. Keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
+      );
     }
   }
 
@@ -4252,7 +4270,9 @@ export function buildPromptPackPromptInput(
       "- If exact line numbers are requested, provide them only when tool output directly supports them.",
     );
     if (profile.toolTier === "no-tools") {
-      harnessLines.push("- In no-tools Code runs, propose the smallest concrete change and keep the whole answer under about 350 words unless the prompt explicitly requires more detail.");
+      harnessLines.push(
+        "- In no-tools Code runs, propose the smallest concrete change and keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
+      );
     }
   }
 
@@ -4260,17 +4280,21 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- This is a repo-grounded chat evaluation. Inspect the repository before answering whenever current repo state matters.",
     );
-    harnessLines.push("- Prefer one or two targeted file/code searches or range reads over broad summaries from memory.");
+    harnessLines.push(
+      "- Prefer one or two targeted file/code searches or range reads over broad summaries from memory.",
+    );
     harnessLines.push("- Name the exact file paths or tool outputs behind any repo-grounded claim.");
-    harnessLines.push("- If inspection stays incomplete, separate Observed, Inferred, and Unverified claims instead of blending them.");
+    harnessLines.push(
+      "- If inspection stays incomplete, separate Observed, Inferred, and Unverified claims instead of blending them.",
+    );
     harnessLines.push("- Do not invent hidden files, hidden state, or precedence rules that were not observed.");
     harnessLines.push("- Repo inspection assist: enabled.");
   }
 
-    if (profile.toolTier === "explicit-tools") {
-      harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
-      harnessLines.push(
-        "- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.",
+  if (profile.toolTier === "explicit-tools") {
+    harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
+    harnessLines.push(
+      "- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.",
     );
     if (profile.mode === "code") {
       harnessLines.push(
@@ -4300,33 +4324,33 @@ export function buildPromptPackPromptInput(
     harnessLines.push(
       "- For exact-evidence asks, do not write `based on my inspection` or claim exact patch points/assertions unless the answer names the exact files or tool outputs used.",
     );
-      if (directives.prefersFileTools) {
+    if (directives.prefersFileTools) {
+      harnessLines.push(
+        "- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
+      );
+      harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
+      harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
+      harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
+      harnessLines.push(
+        "- When the prompt names subsystems instead of exact files, start with `code.search_files` or `file.find` using the prompt's concrete nouns, then read the strongest matches before answering.",
+      );
+      harnessLines.push(
+        "- Do not search the repo for the output-contract labels themselves (for example `Canonical label`, `Inference path`, or the requested bullet titles). Search for the subsystem nouns, path hints, routes, services, tables, or UI surfaces named in the prompt instead.",
+      );
+      harnessLines.push(
+        "- After path discovery returns likely matches, read at least one concrete implementation file before concluding that exact evidence is unavailable.",
+      );
+      if (promptRequiresExactFileGrounding(prompt)) {
         harnessLines.push(
-          "- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
-        );
-        harnessLines.push("- Use those tools before concluding that local file access is unavailable.");
-        harnessLines.push("- If local file paths are listed, inspect those paths before answering.");
-        harnessLines.push("- Do not claim a local file was read unless a file/code tool actually executed.");
-        harnessLines.push(
-          "- When the prompt names subsystems instead of exact files, start with `code.search_files` or `file.find` using the prompt's concrete nouns, then read the strongest matches before answering.",
+          "- For exact-evidence, exact-file, exact-patch-point, or exact-rollout-wiring asks, a pure path-discovery pass is not enough. Read at least two concrete repo files, or one implementation file plus the nearest test/config/doc companion, before concluding the evidence is incomplete.",
         );
         harnessLines.push(
-          "- Do not search the repo for the output-contract labels themselves (for example `Canonical label`, `Inference path`, or the requested bullet titles). Search for the subsystem nouns, path hints, routes, services, tables, or UI surfaces named in the prompt instead.",
+          "- Do not stop after only `code.search_files` or `file.find` hits when the prompt asks for exact grounding.",
         );
-        harnessLines.push(
-          "- After path discovery returns likely matches, read at least one concrete implementation file before concluding that exact evidence is unavailable.",
-        );
-        if (promptRequiresExactFileGrounding(prompt)) {
-          harnessLines.push(
-            "- For exact-evidence, exact-file, exact-patch-point, or exact-rollout-wiring asks, a pure path-discovery pass is not enough. Read at least two concrete repo files, or one implementation file plus the nearest test/config/doc companion, before concluding the evidence is incomplete.",
-          );
-          harnessLines.push(
-            "- Do not stop after only `code.search_files` or `file.find` hits when the prompt asks for exact grounding.",
-          );
-        }
-        harnessLines.push(
-          "- Treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, or `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points to `fixtures/prompt-pack-workspace`.",
-        );
+      }
+      harnessLines.push(
+        "- Treat repo-relative paths such as `apps/...`, `packages/...`, `docs/...`, `config/...`, `scripts/...`, or `artifacts/...` as rooted at the GoatCitadel repository unless the prompt explicitly points to `fixtures/prompt-pack-workspace`.",
+      );
       if (pathHints.length > 0) {
         const boundedScope = pathHints
           .slice(0, 6)
@@ -4408,7 +4432,9 @@ function promptRequiresExactFileGrounding(prompt: string): boolean {
   );
 }
 
-function isPromptPackDurableNonTerminal(status: ChatTurnTraceRecord["durable"] extends { status?: infer T } ? T : string | undefined): boolean {
+function isPromptPackDurableNonTerminal(
+  status: ChatTurnTraceRecord["durable"] extends { status?: infer T } ? T : string | undefined,
+): boolean {
   return status === "queued" || status === "running" || status === "paused" || status === "backgrounded";
 }
 
@@ -4663,7 +4689,10 @@ function shouldRuleDowngradePromptPackHonesty(input: {
     return false;
   }
   const honestyCaps = input.ruleEvaluation.reasonCaps.honesty ?? [];
-  if (!honestyCaps.includes("unsupported_access_claim") && !honestyCaps.includes("missing_required_citation_evidence")) {
+  if (
+    !honestyCaps.includes("unsupported_access_claim") &&
+    !honestyCaps.includes("missing_required_citation_evidence")
+  ) {
     return false;
   }
   const toolRuns = input.run.trace?.toolRuns ?? [];
@@ -4758,7 +4787,11 @@ function evaluatePromptPackRuleScoresV2(input: {
     addCap("taskSuccess", "off_target_meta_analysis");
     addCap("usability", "off_target_meta_analysis");
   }
-  if (requiresPromptPackCitationEvidence(input.prompt) && (input.run.citations?.length ?? 0) < 1 && !signals.has("file_specific_evidence_present")) {
+  if (
+    requiresPromptPackCitationEvidence(input.prompt) &&
+    (input.run.citations?.length ?? 0) < 1 &&
+    !signals.has("file_specific_evidence_present")
+  ) {
     addProtocolReason("missing_required_citation_evidence");
     addCap("honesty", "missing_required_citation_evidence");
     addCap("taskSuccess", "missing_required_citation_evidence");
@@ -4931,7 +4964,12 @@ export function mergePromptPackAutoScoresV2(input: {
             final = Math.min(final, 1) as PromptPackDimensionScoreV2;
           }
         }
-        if (judgeStatus !== "valid" && judgeStatus !== "repaired" && judgeStatus !== "fallback" && final !== undefined) {
+        if (
+          judgeStatus !== "valid" &&
+          judgeStatus !== "repaired" &&
+          judgeStatus !== "fallback" &&
+          final !== undefined
+        ) {
           reviewReasons.add(judgeStatus === "timeout" ? "judge_timeout" : "judge_invalid");
           degradedReasons.add(judgeStatus === "timeout" ? "judge_timeout" : "judge_invalid");
         }
@@ -5129,10 +5167,7 @@ function evaluatePromptPackVerdict(input: {
   ) {
     return "review";
   }
-  if (
-    input.policy.judgeRequired &&
-    input.judgeStatus !== "valid"
-  ) {
+  if (input.policy.judgeRequired && input.judgeStatus !== "valid") {
     return "review";
   }
   for (const [dimension, minimum] of Object.entries(input.policy.minScores) as Array<
@@ -5298,10 +5333,7 @@ export function buildPromptPackReportSummary(
     if (latestRun?.trace?.durable?.runId) {
       durableRuns += 1;
     }
-    if (
-      latestRun?.trace?.status === "waiting_for_approval" ||
-      latestRun?.trace?.status === "waiting_for_user_input"
-    ) {
+    if (latestRun?.trace?.status === "waiting_for_approval" || latestRun?.trace?.status === "waiting_for_user_input") {
       approvalPausedRuns += 1;
     }
     if (latestRun?.trace?.durable?.status === "backgrounded") {
@@ -5393,7 +5425,9 @@ export function buildPromptPackReportSummary(
   ).length;
   const legacyLatestScores = resolvedLatestAssessments
     .map((item) => item.legacyScore)
-    .filter((item, index): item is PromptPackScoreRecord => Boolean(item) && !resolvedLatestAssessments[index]?.autoScore);
+    .filter(
+      (item, index): item is PromptPackScoreRecord => Boolean(item) && !resolvedLatestAssessments[index]?.autoScore,
+    );
   const totalLegacyScore = legacyLatestScores.reduce((sum, score) => sum + score.totalScore, 0);
   const averageTotalScore = legacyLatestScores.length > 0 ? totalLegacyScore / legacyLatestScores.length : 0;
   const averageWeightedScore = scoredCount > 0 ? weightedScoreSum / scoredCount : 0;
@@ -5485,7 +5519,9 @@ function buildPromptPackLatestState(
 }
 
 export function pickPromptPackAutoScoreRun(candidateRuns: PromptPackRunRecord[]): PromptPackRunRecord | undefined {
-  const ordered = [...candidateRuns].sort((left, right) => getRunOrderingTimestamp(right) - getRunOrderingTimestamp(left));
+  const ordered = [...candidateRuns].sort(
+    (left, right) => getRunOrderingTimestamp(right) - getRunOrderingTimestamp(left),
+  );
   return ordered.find((run) => run.status === "completed") ?? ordered[0];
 }
 
@@ -6315,7 +6351,9 @@ function throwIfPromptPackBenchmarkAborted(signal: AbortSignal | undefined, benc
   throw reason instanceof Error
     ? reason
     : new Error(
-        typeof reason === "string" ? reason : `Prompt-pack benchmark ${benchmarkRunId} was interrupted before completion.`,
+        typeof reason === "string"
+          ? reason
+          : `Prompt-pack benchmark ${benchmarkRunId} was interrupted before completion.`,
       );
 }
 

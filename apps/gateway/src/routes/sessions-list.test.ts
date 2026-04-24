@@ -111,14 +111,14 @@ describe("sessions routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      listSessions: vi.fn(() => []),
-      getSession: vi.fn(),
-      getTranscript: vi.fn(),
-      getSessionSummary: vi.fn(),
-      listSessionTimeline: vi.fn(),
-    } as never);
     app.decorate("services", {
+      sessionsList: {
+        listSessions: vi.fn(() => []),
+        getSession: vi.fn(),
+        getTranscript: vi.fn(),
+        getSessionSummary: vi.fn(),
+        listSessionTimeline: vi.fn(),
+      },
       runtimeLifecycle: {
         getLifecycle: getRuntimeLifecycle,
         exportLifecycle: vi.fn(),
@@ -178,14 +178,14 @@ describe("sessions routes", () => {
 
   it("rejects runtime lifecycle requests without an identifier", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      listSessions: vi.fn(() => []),
-      getSession: vi.fn(),
-      getTranscript: vi.fn(),
-      getSessionSummary: vi.fn(),
-      listSessionTimeline: vi.fn(),
-    } as never);
     app.decorate("services", {
+      sessionsList: {
+        listSessions: vi.fn(() => []),
+        getSession: vi.fn(),
+        getTranscript: vi.fn(),
+        getSessionSummary: vi.fn(),
+        listSessionTimeline: vi.fn(),
+      },
       runtimeLifecycle: {
         getLifecycle: vi.fn(),
         exportLifecycle: vi.fn(),
@@ -273,14 +273,14 @@ describe("sessions routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      listSessions: vi.fn(() => []),
-      getSession: vi.fn(),
-      getTranscript: vi.fn(),
-      getSessionSummary: vi.fn(),
-      listSessionTimeline: vi.fn(),
-    } as never);
     app.decorate("services", {
+      sessionsList: {
+        listSessions: vi.fn(() => []),
+        getSession: vi.fn(),
+        getTranscript: vi.fn(),
+        getSessionSummary: vi.fn(),
+        listSessionTimeline: vi.fn(),
+      },
       runtimeLifecycle: {
         getLifecycle: vi.fn(),
         exportLifecycle,

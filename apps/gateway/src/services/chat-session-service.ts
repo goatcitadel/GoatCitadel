@@ -2,7 +2,7 @@
  * Chat session service.
  *
  * Owns chat session CRUD / archive / prefs / binding behavior behind a
- * narrow host contract so GatewayService can act as composition root
+ * narrow deps contract so GatewayService can act as composition root
  * instead of the only usable session owner.
  *
  * Pattern reference: comms-service.ts, settings-auth-service.ts.
@@ -35,7 +35,7 @@ import { buildGeneratedArtifactReference } from "./chat-generated-artifact-servi
 
 const log = logger.child("chat-session-service");
 
-export interface ChatSessionHost {
+export interface ChatSessionDependencies {
   readonly storage: Storage;
   readonly operatorSummaryCache: {
     invalidate(): void;
@@ -52,22 +52,22 @@ export interface ChatSessionHost {
   patchSessionAutonomyPrefs(sessionId: string, patch: ReturnType<typeof splitChatPrefsPatch>["autonomyPatch"]): void;
 }
 
-export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQuery = {}): ChatSessionRecord[] {
-  const workspaceId = host.normalizeWorkspaceId(query.workspaceId);
+export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessionListQuery = {}): ChatSessionRecord[] {
+  const workspaceId = deps.normalizeWorkspaceId(query.workspaceId);
   const scope = query.scope ?? "all";
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
   const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
-  const allSessions = host.storage.sessions.list(20000);
-  const projects = host.storage.chatProjects.list("all", 2000, workspaceId);
+  const allSessions = deps.storage.sessions.list(20000);
+  const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
   const sessionIds = allSessions.map((session) => session.sessionId);
-  const metaBySessionId = host.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
+  const metaBySessionId = deps.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
   const prefsModeBySessionId = new Map(
-    sessionIds.map((sessionId) => [sessionId, host.storage.chatSessionPrefs.get(sessionId)?.mode ?? "chat"]),
+    sessionIds.map((sessionId) => [sessionId, deps.storage.chatSessionPrefs.get(sessionId)?.mode ?? "chat"]),
   );
-  const projectLinkBySessionId = host.storage.chatSessionProjects.listBySessionIds(sessionIds);
-  const generatedArtifactsBySessionId = host.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
+  const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
+  const generatedArtifactsBySessionId = deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
 
   let records = allSessions.map((session) => {
     const meta = metaBySessionId.get(session.sessionId) ?? {
@@ -79,14 +79,19 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
     };
     const link = projectLinkBySessionId.get(session.sessionId);
     const project = link ? projectById.get(link.projectId) : undefined;
-    return toChatSessionRecord(session, { ...meta, mode: prefsModeBySessionId.get(session.sessionId) ?? "chat" }, project, {
-      generatedArtifacts: (generatedArtifactsBySessionId.get(session.sessionId) ?? [])
-        .slice(0, 6)
-        .map(buildGeneratedArtifactReference),
-    });
+    return toChatSessionRecord(
+      session,
+      { ...meta, mode: prefsModeBySessionId.get(session.sessionId) ?? "chat" },
+      project,
+      {
+        generatedArtifacts: (generatedArtifactsBySessionId.get(session.sessionId) ?? [])
+          .slice(0, 6)
+          .map(buildGeneratedArtifactReference),
+      },
+    );
   });
 
-  records = records.filter((record) => host.normalizeWorkspaceId(record.workspaceId) === workspaceId);
+  records = records.filter((record) => deps.normalizeWorkspaceId(record.workspaceId) === workspaceId);
   if (!includeHidden) {
     records = records.filter((record) => record.includeInHistory);
   }
@@ -110,7 +115,7 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
 
   const searchHitsBySessionId = query.q?.trim()
     ? buildSessionSearchHits(
-        host,
+        deps,
         records.map((record) => record.sessionId),
         query.q.trim(),
       )
@@ -178,8 +183,11 @@ export function listChatSessions(host: ChatSessionHost, query: ChatSessionListQu
   return records.slice(0, limit);
 }
 
-export function createChatSession(host: ChatSessionHost, input: ChatSessionCreateInput = {}): ChatSessionRecord {
-  const workspaceId = host.normalizeWorkspaceId(input.workspaceId);
+export function createChatSession(
+  deps: ChatSessionDependencies,
+  input: ChatSessionCreateInput = {},
+): ChatSessionRecord {
+  const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const route = {
     channel: "mission",
@@ -192,7 +200,7 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
     sessionId: `sess_${createHash("sha256").update(`${route.channel}:${route.account}:${route.peer}`).digest("hex").slice(0, 24)}`,
   };
   const now = new Date().toISOString();
-  host.storage.sessions.upsert({
+  deps.storage.sessions.upsert({
     sessionId: resolution.sessionId,
     sessionKey: resolution.sessionKey,
     kind: resolution.kind,
@@ -201,11 +209,11 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
     displayName: input.title?.trim() || undefined,
     timestamp: now,
   });
-  host.operatorSummaryCache.invalidate();
-  host.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
-  host.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-  host.ensureChatSessionRuntimeGrants(resolution.sessionId);
-  host.storage.chatSessionMeta.patch(
+  deps.operatorSummaryCache.invalidate();
+  deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
+  deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+  deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
+  deps.storage.chatSessionMeta.patch(
     resolution.sessionId,
     {
       workspaceId,
@@ -218,7 +226,7 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
     },
     now,
   );
-  host.storage.chatSessionBindings.upsert(
+  deps.storage.chatSessionBindings.upsert(
     {
       sessionId: resolution.sessionId,
       workspaceId,
@@ -228,20 +236,20 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
     now,
   );
   if (input.projectId) {
-    const project = host.storage.chatProjects.get(input.projectId);
-    if (host.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
+    const project = deps.storage.chatProjects.get(input.projectId);
+    if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
       throw new Error("project workspace does not match requested session workspace");
     }
-    host.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
+    deps.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
   }
   if (input.mode) {
-    updateChatSessionPrefs(host, resolution.sessionId, buildChatModePrefsPatch(input.mode));
+    updateChatSessionPrefs(deps, resolution.sessionId, buildChatModePrefsPatch(input.mode));
   }
-  const created = host.requireChatSession(resolution.sessionId);
+  const created = deps.requireChatSession(resolution.sessionId);
   if (!created) {
     throw new Error(`Failed to create chat session ${resolution.sessionId}`);
   }
-  host.publishRealtime("chat_session_updated", "chat", {
+  deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_created",
     sessionId: created.sessionId,
     sessionKey: created.sessionKey,
@@ -250,19 +258,19 @@ export function createChatSession(host: ChatSessionHost, input: ChatSessionCreat
 }
 
 export function updateChatSession(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   sessionId: string,
   input: { title?: string; folderId?: string; folderName?: string; tags?: string[] },
 ): ChatSessionRecord {
-  host.getSession(sessionId);
-  host.storage.chatSessionMeta.patch(sessionId, {
+  deps.getSession(sessionId);
+  deps.storage.chatSessionMeta.patch(sessionId, {
     title: input.title,
     folderId: input.folderId,
     folderName: input.folderName,
     tags: input.tags,
   });
-  const updated = host.requireChatSession(sessionId);
-  host.publishRealtime("chat_session_title_updated", "chat", {
+  const updated = deps.requireChatSession(sessionId);
+  deps.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
     sessionId: updated.sessionId,
     title: updated.title,
@@ -273,8 +281,8 @@ export function updateChatSession(
   return updated;
 }
 
-export function maybeAutoTitleChatSession(host: ChatSessionHost, sessionId: string, content: string): void {
-  const meta = host.storage.chatSessionMeta.ensure(sessionId);
+export function maybeAutoTitleChatSession(deps: ChatSessionDependencies, sessionId: string, content: string): void {
+  const meta = deps.storage.chatSessionMeta.ensure(sessionId);
   if (meta.title?.trim()) {
     return;
   }
@@ -282,27 +290,27 @@ export function maybeAutoTitleChatSession(host: ChatSessionHost, sessionId: stri
   if (!derivedTitle) {
     return;
   }
-  host.storage.chatSessionMeta.patch(sessionId, { title: derivedTitle });
-  host.publishRealtime("chat_session_title_updated", "chat", {
+  deps.storage.chatSessionMeta.patch(sessionId, { title: derivedTitle });
+  deps.publishRealtime("chat_session_title_updated", "chat", {
     type: "chat_session_title_updated",
     sessionId,
     title: derivedTitle,
   });
 }
 
-export function pinChatSession(host: ChatSessionHost, sessionId: string): ChatSessionRecord {
-  host.getSession(sessionId);
-  host.storage.chatSessionMeta.patch(sessionId, { pinned: true });
-  const updated = host.requireChatSession(sessionId);
-  host.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_pinned", updated));
+export function pinChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+  deps.getSession(sessionId);
+  deps.storage.chatSessionMeta.patch(sessionId, { pinned: true });
+  const updated = deps.requireChatSession(sessionId);
+  deps.publishRealtime("chat_session_updated", "chat", buildChatSessionUpdatedPayload("chat_session_pinned", updated));
   return updated;
 }
 
-export function unpinChatSession(host: ChatSessionHost, sessionId: string): ChatSessionRecord {
-  host.getSession(sessionId);
-  host.storage.chatSessionMeta.patch(sessionId, { pinned: false });
-  const updated = host.requireChatSession(sessionId);
-  host.publishRealtime(
+export function unpinChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+  deps.getSession(sessionId);
+  deps.storage.chatSessionMeta.patch(sessionId, { pinned: false });
+  const updated = deps.requireChatSession(sessionId);
+  deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_unpinned", updated),
@@ -310,14 +318,14 @@ export function unpinChatSession(host: ChatSessionHost, sessionId: string): Chat
   return updated;
 }
 
-export function archiveChatSession(host: ChatSessionHost, sessionId: string): ChatSessionRecord {
-  host.getSession(sessionId);
-  host.storage.chatSessionMeta.patch(sessionId, {
+export function archiveChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+  deps.getSession(sessionId);
+  deps.storage.chatSessionMeta.patch(sessionId, {
     lifecycleStatus: "archived",
     archivedAt: new Date().toISOString(),
   });
-  const updated = host.requireChatSession(sessionId);
-  host.publishRealtime(
+  const updated = deps.requireChatSession(sessionId);
+  deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_archived", updated),
@@ -325,14 +333,14 @@ export function archiveChatSession(host: ChatSessionHost, sessionId: string): Ch
   return updated;
 }
 
-export function restoreChatSession(host: ChatSessionHost, sessionId: string): ChatSessionRecord {
-  host.getSession(sessionId);
-  host.storage.chatSessionMeta.patch(sessionId, {
+export function restoreChatSession(deps: ChatSessionDependencies, sessionId: string): ChatSessionRecord {
+  deps.getSession(sessionId);
+  deps.storage.chatSessionMeta.patch(sessionId, {
     lifecycleStatus: "active",
     archivedAt: undefined,
   });
-  const updated = host.requireChatSession(sessionId);
-  host.publishRealtime(
+  const updated = deps.requireChatSession(sessionId);
+  deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_restored", updated),
@@ -341,16 +349,16 @@ export function restoreChatSession(host: ChatSessionHost, sessionId: string): Ch
 }
 
 export async function deleteChatSession(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   sessionId: string,
 ): Promise<{ deleted: boolean; sessionId: string }> {
-  host.getSession(sessionId);
-  const result = host.storage.deleteChatSessionData(sessionId);
-  host.clearChatTurnWriteLease(sessionId);
-  host.operatorSummaryCache.invalidate();
+  deps.getSession(sessionId);
+  const result = deps.storage.deleteChatSessionData(sessionId);
+  deps.clearChatTurnWriteLease(sessionId);
+  deps.operatorSummaryCache.invalidate();
   const cleanupResults = await Promise.allSettled([
-    host.storage.transcripts.delete(sessionId),
-    ...result.cleanupRelPaths.map((storageRelPath) => host.removeChatSessionStoredFile(storageRelPath)),
+    deps.storage.transcripts.delete(sessionId),
+    ...result.cleanupRelPaths.map((storageRelPath) => deps.removeChatSessionStoredFile(storageRelPath)),
   ]);
   for (const cleanupResult of cleanupResults) {
     if (cleanupResult.status === "rejected") {
@@ -360,7 +368,7 @@ export async function deleteChatSession(
       });
     }
   }
-  host.publishRealtime("chat_session_deleted", "chat", {
+  deps.publishRealtime("chat_session_deleted", "chat", {
     type: "chat_session_deleted",
     sessionId,
     mode: "hard",
@@ -372,12 +380,12 @@ export async function deleteChatSession(
 }
 
 export async function archiveChatSessionsBulk(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   input: ChatSessionBulkArchiveInput = {},
 ): Promise<ChatSessionBulkArchiveResult> {
-  const workspaceId = host.normalizeWorkspaceId(input.workspaceId);
+  const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const scope = input.scope ?? "mission";
-  const candidates = listChatSessions(host, {
+  const candidates = listChatSessions(deps, {
     workspaceId,
     scope,
     view: "active",
@@ -389,7 +397,7 @@ export async function archiveChatSessionsBulk(
 
   for (const session of candidates) {
     try {
-      const archived = archiveChatSession(host, session.sessionId);
+      const archived = archiveChatSession(deps, session.sessionId);
       archivedSessionIds.push(archived.sessionId);
     } catch (error) {
       failures.push({
@@ -412,35 +420,35 @@ export async function archiveChatSessionsBulk(
 }
 
 export function assignChatSessionProject(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   sessionId: string,
   projectId?: string,
 ): ChatSessionRecord {
-  host.getSession(sessionId);
-  const meta = host.storage.chatSessionMeta.ensure(sessionId);
-  const workspaceId = host.normalizeWorkspaceId(meta.workspaceId);
+  deps.getSession(sessionId);
+  const meta = deps.storage.chatSessionMeta.ensure(sessionId);
+  const workspaceId = deps.normalizeWorkspaceId(meta.workspaceId);
   if (!projectId) {
-    host.storage.chatSessionProjects.unassign(sessionId);
-    resetWorkbenchForProjectChange(host, sessionId, undefined);
-    const updated = host.requireChatSession(sessionId);
-    host.publishRealtime(
+    deps.storage.chatSessionProjects.unassign(sessionId);
+    resetWorkbenchForProjectChange(deps, sessionId, undefined);
+    const updated = deps.requireChatSession(sessionId);
+    deps.publishRealtime(
       "chat_session_updated",
       "chat",
       buildChatSessionUpdatedPayload("chat_session_project_unassigned", updated),
     );
     return updated;
   }
-  const project = host.storage.chatProjects.get(projectId);
-  if (host.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
+  const project = deps.storage.chatProjects.get(projectId);
+  if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
     throw new Error("project workspace does not match session workspace");
   }
-  const currentProjectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
-  host.storage.chatSessionProjects.assign(sessionId, projectId);
+  const currentProjectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
+  deps.storage.chatSessionProjects.assign(sessionId, projectId);
   if (currentProjectId !== projectId) {
-    resetWorkbenchForProjectChange(host, sessionId, projectId);
+    resetWorkbenchForProjectChange(deps, sessionId, projectId);
   }
-  const updated = host.requireChatSession(sessionId);
-  host.publishRealtime(
+  const updated = deps.requireChatSession(sessionId);
+  deps.publishRealtime(
     "chat_session_updated",
     "chat",
     buildChatSessionUpdatedPayload("chat_session_project_assigned", updated),
@@ -448,8 +456,8 @@ export function assignChatSessionProject(
   return updated;
 }
 
-function resetWorkbenchForProjectChange(host: ChatSessionHost, sessionId: string, projectId?: string): void {
-  host.storage.chatSessionWorkbench.patch(sessionId, {
+function resetWorkbenchForProjectChange(deps: ChatSessionDependencies, sessionId: string, projectId?: string): void {
+  deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId,
     baseRef: undefined,
     worktreePath: undefined,
@@ -461,13 +469,16 @@ function resetWorkbenchForProjectChange(host: ChatSessionHost, sessionId: string
   });
 }
 
-export function getChatSessionBinding(host: ChatSessionHost, sessionId: string): ChatSessionBindingRecord | undefined {
-  host.getSession(sessionId);
-  return host.storage.chatSessionBindings.get(sessionId);
+export function getChatSessionBinding(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+): ChatSessionBindingRecord | undefined {
+  deps.getSession(sessionId);
+  return deps.storage.chatSessionBindings.get(sessionId);
 }
 
 export function setChatSessionBinding(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   input: {
     sessionId: string;
     transport: "llm" | "integration";
@@ -476,23 +487,23 @@ export function setChatSessionBinding(
     writable?: boolean;
   },
 ): ChatSessionBindingRecord {
-  host.getSession(input.sessionId);
-  const sessionMeta = host.storage.chatSessionMeta.ensure(input.sessionId);
+  deps.getSession(input.sessionId);
+  const sessionMeta = deps.storage.chatSessionMeta.ensure(input.sessionId);
   if (input.transport === "integration") {
     if (!input.connectionId?.trim() || !input.target?.trim()) {
       throw new Error("connectionId and target are required for integration transport");
     }
-    host.storage.integrationConnections.get(input.connectionId);
+    deps.storage.integrationConnections.get(input.connectionId);
   }
-  const binding = host.storage.chatSessionBindings.upsert({
+  const binding = deps.storage.chatSessionBindings.upsert({
     sessionId: input.sessionId,
-    workspaceId: host.normalizeWorkspaceId(sessionMeta.workspaceId),
+    workspaceId: deps.normalizeWorkspaceId(sessionMeta.workspaceId),
     transport: input.transport,
     connectionId: input.connectionId?.trim() || undefined,
     target: input.target?.trim() || undefined,
     writable: input.writable,
   });
-  host.publishRealtime("chat_session_updated", "chat", {
+  deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_binding_updated",
     sessionId: input.sessionId,
     transport: binding.transport,
@@ -500,27 +511,27 @@ export function setChatSessionBinding(
   return binding;
 }
 
-export function getChatSessionPrefs(host: ChatSessionHost, sessionId: string): ChatSessionPrefsRecord {
-  host.getSession(sessionId);
-  const prefs = host.ensureChatSessionModelDefaults(sessionId, host.storage.chatSessionPrefs.ensure(sessionId));
-  return host.hydrateChatPrefsWithAutonomy(sessionId, prefs);
+export function getChatSessionPrefs(deps: ChatSessionDependencies, sessionId: string): ChatSessionPrefsRecord {
+  deps.getSession(sessionId);
+  const prefs = deps.ensureChatSessionModelDefaults(sessionId, deps.storage.chatSessionPrefs.ensure(sessionId));
+  return deps.hydrateChatPrefsWithAutonomy(sessionId, prefs);
 }
 
 export function updateChatSessionPrefs(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   sessionId: string,
   input: ChatSessionPrefsPatch,
 ): ChatSessionPrefsRecord {
-  host.getSession(sessionId);
+  deps.getSession(sessionId);
   const normalizedInput = applyChatModePresetToPatch(input);
   const { basePatch, autonomyPatch } = splitChatPrefsPatch(normalizedInput);
   if (Object.keys(autonomyPatch).length > 0) {
-    host.patchSessionAutonomyPrefs(sessionId, autonomyPatch);
+    deps.patchSessionAutonomyPrefs(sessionId, autonomyPatch);
   }
-  const updated = host.storage.chatSessionPrefs.patch(sessionId, basePatch);
-  const normalized = host.ensureChatSessionModelDefaults(sessionId, updated);
-  const hydrated = host.hydrateChatPrefsWithAutonomy(sessionId, normalized);
-  host.publishRealtime("chat_session_updated", "chat", {
+  const updated = deps.storage.chatSessionPrefs.patch(sessionId, basePatch);
+  const normalized = deps.ensureChatSessionModelDefaults(sessionId, updated);
+  const hydrated = deps.hydrateChatPrefsWithAutonomy(sessionId, normalized);
+  deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_prefs_updated",
     sessionId,
     prefs: hydrated,
@@ -537,7 +548,7 @@ interface SessionMessageSearchHitRow {
 }
 
 function buildSessionSearchHits(
-  host: ChatSessionHost,
+  deps: ChatSessionDependencies,
   sessionIds: string[],
   query: string,
   limit = 160,
@@ -546,7 +557,7 @@ function buildSessionSearchHits(
     return new Map();
   }
   const placeholders = sessionIds.map(() => "?").join(", ");
-  const rows = host.storage.gatewaySql
+  const rows = deps.storage.gatewaySql
     .prepare(
       `
         SELECT

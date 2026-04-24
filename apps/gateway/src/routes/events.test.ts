@@ -3,6 +3,10 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { eventsRoutes } from "./events.js";
 
+function decorateRealtimeEvents(app: FastifyInstance, methods: Record<string, unknown>) {
+  app.decorate("services", { realtimeEvents: methods } as never);
+}
+
 describe("events stream route", () => {
   let app: FastifyInstance | null = null;
 
@@ -25,7 +29,7 @@ describe("events stream route", () => {
         cb(new Error("blocked"), false);
       },
     });
-    app.decorate("gateway", {
+    decorateRealtimeEvents(app, {
       listRealtimeEvents: () => [],
       listRealtimeEventsAfterSequence: () => [],
       getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
@@ -37,7 +41,7 @@ describe("events stream route", () => {
       }),
       touchRealtimeStreamLease: () => undefined,
       closeRealtimeStreamLease: () => undefined,
-    } as never);
+    });
     await app.register(eventsRoutes);
 
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -63,15 +67,17 @@ describe("events stream route", () => {
   it("emits SSE event ids from the realtime sequence", async () => {
     app = Fastify();
     await app.register(cors, { origin: true });
-    app.decorate("gateway", {
-      listRealtimeEvents: () => [{
-        eventId: "event-1",
-        sequence: 42,
-        eventType: "system",
-        source: "tests",
-        timestamp: "2026-03-20T10:00:00.000Z",
-        payload: { ok: true },
-      }],
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [
+        {
+          eventId: "event-1",
+          sequence: 42,
+          eventType: "system",
+          source: "tests",
+          timestamp: "2026-03-20T10:00:00.000Z",
+          payload: { ok: true },
+        },
+      ],
       listRealtimeEventsAfterSequence: () => [],
       getRealtimeEventSequenceBounds: () => ({ oldestSequence: 42, newestSequence: 42 }),
       subscribeRealtime: () => () => undefined,
@@ -82,7 +88,7 @@ describe("events stream route", () => {
       }),
       touchRealtimeStreamLease: () => undefined,
       closeRealtimeStreamLease: () => undefined,
-    } as never);
+    });
     await app.register(eventsRoutes);
 
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -94,16 +100,16 @@ describe("events stream route", () => {
     const chunk = await reader!.read();
     const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
     expect(text.includes("id: 42")).toBe(true);
-    expect(text.includes("\"sequence\":42")).toBe(true);
+    expect(text.includes('"sequence":42')).toBe(true);
     expect(text.includes("event: stream-ready")).toBe(true);
-    expect(text.includes("\"leaseId\":\"lease-2\"")).toBe(true);
+    expect(text.includes('"leaseId":"lease-2"')).toBe(true);
     await reader!.cancel();
   });
 
   it("signals replay gaps when the requested cursor falls behind retention", async () => {
     app = Fastify();
     await app.register(cors, { origin: true });
-    app.decorate("gateway", {
+    decorateRealtimeEvents(app, {
       listRealtimeEvents: () => [],
       listRealtimeEventsAfterSequence: () => [],
       getRealtimeEventSequenceBounds: () => ({ oldestSequence: 100, newestSequence: 150 }),
@@ -115,7 +121,7 @@ describe("events stream route", () => {
       }),
       touchRealtimeStreamLease: () => undefined,
       closeRealtimeStreamLease: () => undefined,
-    } as never);
+    });
     await app.register(eventsRoutes);
 
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -127,7 +133,7 @@ describe("events stream route", () => {
     const chunk = await reader!.read();
     const text = new TextDecoder().decode(chunk.value ?? new Uint8Array());
     expect(text.includes("event: replay-gap")).toBe(true);
-    expect(text.includes("\"oldestCursor\":100")).toBe(true);
+    expect(text.includes('"oldestCursor":100')).toBe(true);
     await reader!.cancel();
   });
 });

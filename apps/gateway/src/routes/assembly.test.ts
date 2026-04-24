@@ -16,7 +16,7 @@ describe("assembly routes", () => {
   it("validates assembly run creation", async () => {
     const createAssemblyRun = vi.fn();
     app = Fastify();
-    app.decorate("gateway", { createAssemblyRun } as never);
+    app.decorate("services", { assembly: { createAssemblyRun } } as never);
     await app.register(assemblyRoutes);
 
     const response = await app.inject({
@@ -52,11 +52,8 @@ describe("assembly routes", () => {
     const getAssemblyRunDetail = vi.fn(() => ({ run: { runId: "assembly-1" }, rounds: [], artifacts: [] }));
     const listAssemblyReputations = vi.fn(() => [{ modelRef: "openai:gpt-5" }]);
     app = Fastify();
-    app.decorate("gateway", {
-      createAssemblyRun,
-      listAssemblyRuns,
-      getAssemblyRunDetail,
-      listAssemblyReputations,
+    app.decorate("services", {
+      assembly: { createAssemblyRun, listAssemblyRuns, getAssemblyRunDetail, listAssemblyReputations },
     } as never);
     await app.register(assemblyRoutes);
 

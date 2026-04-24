@@ -2,8 +2,10 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
+  const skills = fastify.services.skills;
+
   const sendBankrMigrationResponse = () => ({
-    error: fastify.gateway.getBankrOptionalMigrationMessage(),
+    error: skills.getBankrOptionalMigrationMessage(),
     code: "bankr_builtin_disabled",
     docsPath: "docs/OPTIONAL_BANKR_SKILL.md",
     templatePath: "templates/skills/bankr-optional/SKILL.md",
@@ -31,14 +33,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     requireFirstUseConfirmation: z.boolean().optional(),
   });
 
-  const bankrActionTypeSchema = z.enum([
-    "read",
-    "trade",
-    "transfer",
-    "sign",
-    "submit",
-    "deploy",
-  ]);
+  const bankrActionTypeSchema = z.enum(["read", "trade", "transfer", "sign", "submit", "deploy"]);
 
   const bankrPolicyPatchSchema = z.object({
     enabled: z.boolean().optional(),
@@ -90,11 +85,11 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/skills", async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listSkills() });
+    return reply.send({ items: skills.listSkills() });
   });
 
   fastify.post("/api/v1/skills/reload", async (_request, reply) => {
-    const items = await fastify.gateway.reloadSkills();
+    const items = await skills.reloadSkills();
     return reply.send({ items });
   });
 
@@ -103,17 +98,19 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.listSkillSources(parsed.data.q, parsed.data.limit));
+    return reply.send(await skills.listSkillSources(parsed.data.q, parsed.data.limit));
   });
 
   fastify.get("/api/v1/skills/lookup", async (request, reply) => {
-    const parsed = sourceQuerySchema.extend({
-      q: z.string().trim().min(1),
-    }).safeParse(request.query);
+    const parsed = sourceQuerySchema
+      .extend({
+        q: z.string().trim().min(1),
+      })
+      .safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.gateway.lookupSkillSources(parsed.data.q, parsed.data.limit));
+    return reply.send(await skills.lookupSkillSources(parsed.data.q, parsed.data.limit));
   });
 
   fastify.post("/api/v1/skills/import/validate", async (request, reply) => {
@@ -122,7 +119,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.validateSkillImport(parsed.data));
+      return reply.send(await skills.validateSkillImport(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -134,7 +131,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await fastify.gateway.installSkillImport(parsed.data));
+      return reply.code(201).send(await skills.installSkillImport(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -146,7 +143,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listSkillImportHistory(parsed.data.limit),
+      items: skills.listSkillImportHistory(parsed.data.limit),
     });
   });
 
@@ -161,7 +158,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const decision = fastify.gateway.resolveSkillActivation(parsed.data);
+    const decision = skills.resolveSkillActivation(parsed.data);
     return reply.send(decision);
   });
 
@@ -177,11 +174,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const updated = fastify.gateway.setSkillState(
-        params.data.skillId,
-        body.data.state,
-        body.data.note,
-      );
+      const updated = skills.setSkillState(params.data.skillId, body.data.state, body.data.note);
       return reply.send(updated);
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -194,11 +187,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const items = fastify.gateway.bulkSetSkillState(
-        parsed.data.skillIds,
-        parsed.data.state,
-        parsed.data.note,
-      );
+      const items = skills.bulkSetSkillState(parsed.data.skillIds, parsed.data.state, parsed.data.note);
       return reply.send({ items });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
@@ -206,7 +195,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/skills/activation-policies", async (_request, reply) => {
-    return reply.send(fastify.gateway.getSkillActivationPolicy());
+    return reply.send(skills.getSkillActivationPolicy());
   });
 
   fastify.patch("/api/v1/skills/activation-policies", async (request, reply) => {
@@ -214,40 +203,40 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.gateway.updateSkillActivationPolicy(parsed.data));
+    return reply.send(skills.updateSkillActivationPolicy(parsed.data));
   });
 
   fastify.get("/api/v1/skills/bankr/policy", async (_request, reply) => {
-    if (!fastify.gateway.isFeatureEnabled("bankrBuiltinEnabled")) {
+    if (!skills.isBankrBuiltinEnabled()) {
       return reply.code(410).send(sendBankrMigrationResponse());
     }
-    return reply.send(fastify.gateway.getBankrSafetyPolicy());
+    return reply.send(skills.getBankrSafetyPolicy());
   });
 
   fastify.patch("/api/v1/skills/bankr/policy", async (request, reply) => {
-    if (!fastify.gateway.isFeatureEnabled("bankrBuiltinEnabled")) {
+    if (!skills.isBankrBuiltinEnabled()) {
       return reply.code(410).send(sendBankrMigrationResponse());
     }
     const parsed = bankrPolicyPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.gateway.updateBankrSafetyPolicy(parsed.data));
+    return reply.send(skills.updateBankrSafetyPolicy(parsed.data));
   });
 
   fastify.post("/api/v1/skills/bankr/preview", async (request, reply) => {
-    if (!fastify.gateway.isFeatureEnabled("bankrBuiltinEnabled")) {
+    if (!skills.isBankrBuiltinEnabled()) {
       return reply.code(410).send(sendBankrMigrationResponse());
     }
     const parsed = bankrPreviewSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.gateway.previewBankrAction(parsed.data));
+    return reply.send(skills.previewBankrAction(parsed.data));
   });
 
   fastify.get("/api/v1/skills/bankr/audit", async (request, reply) => {
-    if (!fastify.gateway.isFeatureEnabled("bankrBuiltinEnabled")) {
+    if (!skills.isBankrBuiltinEnabled()) {
       return reply.code(410).send(sendBankrMigrationResponse());
     }
     const parsed = bankrAuditQuerySchema.safeParse(request.query);
@@ -255,7 +244,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listBankrActionAudit(parsed.data.limit ?? 100, parsed.data.cursor),
+      items: skills.listBankrActionAudit(parsed.data.limit ?? 100, parsed.data.cursor),
     });
   });
 };

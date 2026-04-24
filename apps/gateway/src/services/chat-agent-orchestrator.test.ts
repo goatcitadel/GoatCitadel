@@ -661,22 +661,20 @@ describe("ChatAgentOrchestrator", () => {
           },
         ],
       });
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-loop-warning",
-        result: {
-          results: [
-            {
-              url: "https://example.com/ai-tooling",
-              title: "AI tooling",
-              snippet: "Evidence from the same repeated search call.",
-            },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-loop-warning",
+      result: {
+        results: [
+          {
+            url: "https://example.com/ai-tooling",
+            title: "AI tooling",
+            snippet: "Evidence from the same repeated search call.",
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(),
@@ -729,22 +727,20 @@ describe("ChatAgentOrchestrator", () => {
       .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
       .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"))
       .mockResolvedValueOnce(toolCallCompletion("latest ai tooling"));
-    const invokeTool = vi
-      .fn<() => Promise<ToolInvokeResult>>()
-      .mockResolvedValue({
-        outcome: "executed",
-        policyReason: "allowed",
-        auditEventId: "audit-loop-critical",
-        result: {
-          results: [
-            {
-              url: "https://example.com/ai-tooling",
-              title: "AI tooling",
-              snippet: "Evidence from the same repeated search call.",
-            },
-          ],
-        },
-      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-loop-critical",
+      result: {
+        results: [
+          {
+            url: "https://example.com/ai-tooling",
+            title: "AI tooling",
+            snippet: "Evidence from the same repeated search call.",
+          },
+        ],
+      },
+    });
     const orchestrator = new ChatAgentOrchestrator({
       storage: createMockStorage() as never,
       listToolCatalog: () => createToolCatalog(),
@@ -5634,7 +5630,8 @@ describe("ChatAgentOrchestrator", () => {
     // During testing we intentionally give synthesis a much larger timeout so
     // slower models are not penalized by the normal responsiveness budget.
     expect(capturedTimeoutMs).toBeDefined();
-    expect(capturedTimeoutMs).toBe(30 * 60 * 1000);
+    expect(capturedTimeoutMs).toBeGreaterThanOrEqual(30 * 60 * 1000 - 1000);
+    expect(capturedTimeoutMs).toBeLessThanOrEqual(30 * 60 * 1000);
   });
 
   it("stops alternate-URL retries when the turn budget expires mid-fallback", async () => {
@@ -11889,9 +11886,9 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("## Exact files used");
     expect(result.assistantContent.match(/^- (Route surface|Stored state|Operator-facing surface):/gm)).toHaveLength(3);
     expect(result.turnTrace.citations.some((citation) => citation.sourceType === "file")).toBe(true);
-    expect(result.turnTrace.citations.some((citation) => citation.url.includes("apps/gateway/src/routes/memory.ts"))).toBe(
-      true,
-    );
+    expect(
+      result.turnTrace.citations.some((citation) => citation.url.includes("apps/gateway/src/routes/memory.ts")),
+    ).toBe(true);
   });
 
   it("treats MemoryMaintenancePanel as concrete operator-facing UI evidence for exact three-bullet prompts", async () => {

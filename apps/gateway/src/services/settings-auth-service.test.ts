@@ -5,9 +5,9 @@ vi.mock("node:sqlite", () => ({
   StatementSync: class StatementSync {},
 }));
 
-import { getSettings, updateSettings, type SettingsRuntimeHost } from "./settings-auth-service.js";
+import { getSettings, updateSettings, type SettingsRuntimeDependencies } from "./settings-auth-service.js";
 
-function buildHost(): SettingsRuntimeHost {
+function buildHost(): SettingsRuntimeDependencies {
   let flags = {
     durableKernelV1Enabled: true,
     replayOverridesV1Enabled: false,

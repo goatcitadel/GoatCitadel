@@ -15,14 +15,20 @@ describe("dashboard observe aggregate routes", () => {
 
   it("returns the unified timeline aggregate", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      isFeatureEnabled: vi.fn(() => true),
-      listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
-      listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
-      listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
-      listCronReviewQueue: vi.fn(() => [{ itemId: "review-1" }]),
-      listImprovementReports: vi.fn(() => [{ reportId: "report-1" }]),
-      listDecisionReplayRuns: vi.fn(() => [{ runId: "run-1" }]),
+    app.decorate("services", {
+      dashboard: {
+        isFeatureEnabled: vi.fn(() => true),
+        listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
+        listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
+      },
+      cron: {
+        listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
+        listCronReviewQueue: vi.fn(() => [{ itemId: "review-1" }]),
+      },
+      improvement: {
+        listImprovementReports: vi.fn(() => [{ reportId: "report-1" }]),
+        listDecisionReplayRuns: vi.fn(() => [{ runId: "run-1" }]),
+      },
     } as never);
     await app.register(dashboardRoutes);
 
@@ -51,14 +57,20 @@ describe("dashboard observe aggregate routes", () => {
       throw new Error("Feature flag cronReviewQueueV1Enabled is disabled.");
     });
     app = Fastify();
-    app.decorate("gateway", {
-      isFeatureEnabled: vi.fn((flag: string) => flag !== "cronReviewQueueV1Enabled"),
-      listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
-      listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
-      listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
-      listCronReviewQueue,
-      listImprovementReports: vi.fn(() => [{ reportId: "report-1" }]),
-      listDecisionReplayRuns: vi.fn(() => [{ runId: "run-1" }]),
+    app.decorate("services", {
+      dashboard: {
+        isFeatureEnabled: vi.fn((flag: string) => flag !== "cronReviewQueueV1Enabled"),
+        listRealtimeEvents: vi.fn(() => [{ eventId: "evt-1", sequence: 1 }]),
+        listSessions: vi.fn(() => [{ sessionId: "session-1" }]),
+      },
+      cron: {
+        listCronJobs: vi.fn(() => [{ jobId: "job-1" }]),
+        listCronReviewQueue,
+      },
+      improvement: {
+        listImprovementReports: vi.fn(() => [{ reportId: "report-1" }]),
+        listDecisionReplayRuns: vi.fn(() => [{ runId: "run-1" }]),
+      },
     } as never);
     await app.register(dashboardRoutes);
 
@@ -79,14 +91,23 @@ describe("dashboard observe aggregate routes", () => {
 
   it("returns the unified health aggregate", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      getSystemVitals: vi.fn(() => ({ hostname: "goat-box", platform: "win32", release: "11" })),
-      getDaemonStatus: vi.fn(() => ({ running: true, state: "running" })),
-      listDaemonLogs: vi.fn(() => [{ timestamp: "2026-04-10T00:00:00.000Z", level: "info", message: "ready" }]),
-      costSummary: vi.fn(() => [{ key: "day", tokenTotal: 42, costUsd: 1.23 }]),
-      costUsageAvailability: vi.fn(() => ({ trackedEvents: 1, unknownEvents: 0, totalAgentEvents: 1 })),
-      getMemoryQmdStats: vi.fn(() => ({ totalRuns: 4, compressionPercent: 22, expansionPercent: 0, efficiencyLabel: "reduced" })),
-      listBackups: vi.fn(async () => [{ backupId: "backup-1", createdAt: "2026-04-10T00:00:00.000Z", files: [] }]),
+    app.decorate("services", {
+      dashboard: {
+        getSystemVitals: vi.fn(() => ({ hostname: "goat-box", platform: "win32", release: "11" })),
+        costSummary: vi.fn(() => [{ key: "day", tokenTotal: 42, costUsd: 1.23 }]),
+        costUsageAvailability: vi.fn(() => ({ trackedEvents: 1, unknownEvents: 0, totalAgentEvents: 1 })),
+        getMemoryQmdStats: vi.fn(() => ({
+          totalRuns: 4,
+          compressionPercent: 22,
+          expansionPercent: 0,
+          efficiencyLabel: "reduced",
+        })),
+        listBackups: vi.fn(async () => [{ backupId: "backup-1", createdAt: "2026-04-10T00:00:00.000Z", files: [] }]),
+      },
+      daemon: {
+        getDaemonStatus: vi.fn(() => ({ running: true, state: "running" })),
+        listDaemonLogs: vi.fn(() => [{ timestamp: "2026-04-10T00:00:00.000Z", level: "info", message: "ready" }]),
+      },
     } as never);
     await app.register(dashboardRoutes);
 

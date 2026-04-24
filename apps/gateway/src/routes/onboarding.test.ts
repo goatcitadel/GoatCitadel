@@ -20,14 +20,22 @@ describe("onboarding routes", () => {
       settings: {
         llm: { providers: [], activeProviderId: "", activeModel: "" },
         auth: { allowLoopbackBypass: true },
-        mesh: { enabled: false, mode: "lan", nodeId: "", mdns: true, staticPeers: [], requireMtls: false, tailnetEnabled: false },
+        mesh: {
+          enabled: false,
+          mode: "lan",
+          nodeId: "",
+          mdns: true,
+          staticPeers: [],
+          requireMtls: false,
+          tailnetEnabled: false,
+        },
         defaultToolProfile: "standard",
         budgetMode: "balanced",
         networkAllowlist: [],
       },
     }));
     app = Fastify();
-    app.decorate("gateway", { getOnboardingState } as never);
+    app.decorate("services", { onboarding: { getOnboardingState } } as never);
     await app.register(onboardingRoutes);
 
     const response = await app.inject({
@@ -46,7 +54,7 @@ describe("onboarding routes", () => {
       completedBy: "mission-control",
     }));
     app = Fastify();
-    app.decorate("gateway", { getOnboardingStartupState } as never);
+    app.decorate("services", { onboarding: { getOnboardingStartupState } } as never);
     await app.register(onboardingRoutes);
 
     const response = await app.inject({
@@ -61,7 +69,7 @@ describe("onboarding routes", () => {
   it("validates bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn();
     app = Fastify();
-    app.decorate("gateway", { bootstrapOnboarding } as never);
+    app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
     await app.register(onboardingRoutes);
 
     const response = await app.inject({
@@ -84,7 +92,7 @@ describe("onboarding routes", () => {
   it("accepts explicit env-backed provider persistence in bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn((input) => input);
     app = Fastify();
-    app.decorate("gateway", { bootstrapOnboarding } as never);
+    app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
     await app.register(onboardingRoutes);
 
     const response = await app.inject({
@@ -111,24 +119,26 @@ describe("onboarding routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(bootstrapOnboarding).toHaveBeenCalledWith(expect.objectContaining({
-      llm: expect.objectContaining({
-        upsertProvider: expect.objectContaining({
-          persistSecretToSecureStore: false,
-          request: expect.objectContaining({
-            proxy: expect.objectContaining({
-              url: "http://proxy.internal:8080",
+    expect(bootstrapOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        llm: expect.objectContaining({
+          upsertProvider: expect.objectContaining({
+            persistSecretToSecureStore: false,
+            request: expect.objectContaining({
+              proxy: expect.objectContaining({
+                url: "http://proxy.internal:8080",
+              }),
             }),
           }),
         }),
       }),
-    }));
+    );
   });
 
   it("marks onboarding complete", async () => {
     const markOnboardingComplete = vi.fn(() => ({ completed: true }));
     app = Fastify();
-    app.decorate("gateway", { markOnboardingComplete } as never);
+    app.decorate("services", { onboarding: { markOnboardingComplete } } as never);
     await app.register(onboardingRoutes);
 
     const response = await app.inject({

@@ -14,11 +14,9 @@ describe("addons routes", () => {
   });
 
   it("lists the addon catalog", async () => {
-    const listAddonsCatalog = vi.fn(() => ([
-      { addonId: "arena", label: "Arena" },
-    ]));
+    const listAddonsCatalog = vi.fn(() => [{ addonId: "arena", label: "Arena" }]);
     app = Fastify();
-    app.decorate("gateway", { listAddonsCatalog } as never);
+    app.decorate("services", { addons: { listAddonsCatalog } } as never);
     await app.register(addonsRoutes);
 
     const response = await app.inject({
@@ -34,7 +32,7 @@ describe("addons routes", () => {
   it("validates install payloads before delegating", async () => {
     const installAddon = vi.fn();
     app = Fastify();
-    app.decorate("gateway", { installAddon } as never);
+    app.decorate("services", { addons: { installAddon } } as never);
     await app.register(addonsRoutes);
 
     const response = await app.inject({
@@ -62,7 +60,7 @@ describe("addons routes", () => {
       removedPath: "C:/Users/test/.GoatCitadel/addons/arena",
     }));
     app = Fastify();
-    app.decorate("gateway", { getAddonStatus, uninstallAddon } as never);
+    app.decorate("services", { addons: { getAddonStatus, uninstallAddon } } as never);
     await app.register(addonsRoutes);
 
     const statusResponse = await app.inject({

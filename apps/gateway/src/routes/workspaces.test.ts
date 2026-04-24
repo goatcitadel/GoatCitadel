@@ -14,7 +14,7 @@ describe("workspace and guidance routes", () => {
   });
 
   it("lists workspaces through gateway service", async () => {
-    const listWorkspaces = vi.fn(() => ([
+    const listWorkspaces = vi.fn(() => [
       {
         workspaceId: "default",
         name: "Default",
@@ -23,11 +23,9 @@ describe("workspace and guidance routes", () => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
-    ]));
+    ]);
     app = Fastify();
-    app.decorate("gateway", {
-      listWorkspaces,
-    } as never);
+    app.decorate("services", { workspaces: { listWorkspaces } } as never);
     await app.register(workspacesRoutes);
 
     const response = await app.inject({
@@ -43,9 +41,7 @@ describe("workspace and guidance routes", () => {
 
   it("rejects workspace security doc override endpoint by schema", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      updateWorkspaceGuidance: vi.fn(),
-    } as never);
+    app.decorate("services", { workspaces: { updateWorkspaceGuidance: vi.fn() } } as never);
     await app.register(workspacesRoutes);
 
     const response = await app.inject({
@@ -69,9 +65,7 @@ describe("workspace and guidance routes", () => {
       content: "# Security Policy",
     }));
     app = Fastify();
-    app.decorate("gateway", {
-      updateGlobalGuidance,
-    } as never);
+    app.decorate("services", { workspaces: { updateGlobalGuidance } } as never);
     await app.register(workspacesRoutes);
 
     const response = await app.inject({
@@ -86,4 +80,3 @@ describe("workspace and guidance routes", () => {
     expect(updateGlobalGuidance).toHaveBeenCalledWith("security", "# Security Policy");
   });
 });
-

@@ -133,18 +133,23 @@ function createDelegationHarness() {
   gateway.getSession = vi.fn(() => ({ sessionId: "sess-1" }));
   gateway.ensureChatSessionModelDefaults = vi.fn((_sessionId: string, nextPrefs: ChatSessionPrefsRecord) => nextPrefs);
   gateway.normalizeWorkspaceId = vi.fn((workspaceId?: string) => workspaceId ?? "default");
-  gateway.createTask = vi.fn(() => ({ taskId: "task-1" }));
-  gateway.appendTaskActivity = vi.fn();
-  gateway.appendTaskDeliverable = vi.fn();
-  gateway.updateTask = vi.fn();
-  gateway.registerTaskSubagent = vi.fn();
-  gateway.updateTaskSubagent = vi.fn();
+  gateway.taskLifecycleService = {
+    createTask: vi.fn(() => ({ taskId: "task-1" })),
+    appendTaskActivity: vi.fn(),
+    appendTaskDeliverable: vi.fn(),
+    updateTask: vi.fn(),
+    registerTaskSubagent: vi.fn(),
+    updateTaskSubagent: vi.fn(),
+  };
   gateway.extractAndPersistLearnedMemory = vi.fn();
   gateway.scheduleChatMemoryContextPrewarm = vi.fn();
   gateway.createChatSession = vi.fn((input: { title: string }) => {
     childSessionCounter += 1;
     const sessionId = `delegate-session-${childSessionCounter}`;
-    const role = input.title.replace(/^Delegate · /, "").trim().toLowerCase();
+    const role = input.title
+      .replace(/^Delegate · /, "")
+      .trim()
+      .toLowerCase();
     sessionRoles.set(sessionId, role);
     return { sessionId };
   });
@@ -169,22 +174,24 @@ function createDelegationHarness() {
       patch: vi.fn(),
     },
     chatDelegationSteps: {
-      create: vi.fn((input: {
-        stepId: string;
-        runId: string;
-        role: string;
-        index: number;
-        status: ChatDelegationStepRecord["status"];
-        startedAt: string;
-        finishedAt?: string;
-        durationMs?: number;
-        error?: string;
-        failureGuidance?: string;
-      }) => {
-        const record = createStepRecord(input);
-        steps.set(record.stepId, record);
-        return record;
-      }),
+      create: vi.fn(
+        (input: {
+          stepId: string;
+          runId: string;
+          role: string;
+          index: number;
+          status: ChatDelegationStepRecord["status"];
+          startedAt: string;
+          finishedAt?: string;
+          durationMs?: number;
+          error?: string;
+          failureGuidance?: string;
+        }) => {
+          const record = createStepRecord(input);
+          steps.set(record.stepId, record);
+          return record;
+        },
+      ),
       patch: vi.fn((stepId: string, patch: Partial<ChatDelegationStepRecord>) => {
         const current = steps.get(stepId)!;
         const next = {
@@ -194,7 +201,9 @@ function createDelegationHarness() {
         steps.set(stepId, next);
         return next;
       }),
-      listByRun: vi.fn((runId: string) => [...steps.values()].filter((step) => step.runId === runId).sort((a, b) => a.index - b.index)),
+      listByRun: vi.fn((runId: string) =>
+        [...steps.values()].filter((step) => step.runId === runId).sort((a, b) => a.index - b.index),
+      ),
     },
   };
 
@@ -215,8 +224,14 @@ function createDelegationHarness() {
       inheritDelegatedSessionToolGrants: ReturnType<typeof vi.fn>;
       updateChatSessionPrefs: ReturnType<typeof vi.fn>;
       agentSendChatMessage: ReturnType<typeof vi.fn>;
-      registerTaskSubagent: ReturnType<typeof vi.fn>;
-      updateTask: ReturnType<typeof vi.fn>;
+      taskLifecycleService: {
+        appendTaskActivity: ReturnType<typeof vi.fn>;
+        appendTaskDeliverable: ReturnType<typeof vi.fn>;
+        createTask: ReturnType<typeof vi.fn>;
+        registerTaskSubagent: ReturnType<typeof vi.fn>;
+        updateTask: ReturnType<typeof vi.fn>;
+        updateTaskSubagent: ReturnType<typeof vi.fn>;
+      };
     },
     steps,
     sessionRoles,
@@ -238,11 +253,11 @@ describe("GatewayService.runChatDelegation", () => {
   it("uses a real child session runtime and persists truthful lineage for sequential delegation", async () => {
     const { gateway } = createDelegationHarness();
 
-    const result = await GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
+    const result = (await GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
       objective: "Design the change",
       roles: ["architect"],
       mode: "sequential",
-    }) as ChatDelegateResponse;
+    })) as ChatDelegateResponse;
 
     expect(gateway.createChatSession).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -251,7 +266,7 @@ describe("GatewayService.runChatDelegation", () => {
         mode: "cowork",
       }),
     );
-    expect(gateway.registerTaskSubagent).toHaveBeenCalledWith(
+    expect(gateway.taskLifecycleService.registerTaskSubagent).toHaveBeenCalledWith(
       "task-1",
       expect.objectContaining({
         agentSessionId: "delegate-session-1",
@@ -369,7 +384,7 @@ describe("GatewayService.runChatDelegation", () => {
       return buildResponse(role, childSessionId, role === "architect");
     });
 
-    const result = await GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
+    const result = (await GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
       objective: "Run the split",
       roles: ["architect", "qa", "synth"],
       mode: "parallel",
@@ -378,7 +393,7 @@ describe("GatewayService.runChatDelegation", () => {
         { stepId: "qa-step", index: 1, role: "qa", parallelizable: true },
         { stepId: "synth-step", index: 2, role: "synth", parallelizable: false, dependsOnStepIds: ["architect-step"] },
       ],
-    }) as ChatDelegateResponse;
+    })) as ChatDelegateResponse;
 
     expect(result.steps).toEqual(
       expect.arrayContaining([
@@ -391,6 +406,6 @@ describe("GatewayService.runChatDelegation", () => {
       expect.any(String),
       expect.objectContaining({ status: "partial" }),
     );
-    expect(gateway.updateTask).toHaveBeenCalledWith("task-1", { status: "blocked" });
+    expect(gateway.taskLifecycleService.updateTask).toHaveBeenCalledWith("task-1", { status: "blocked" });
   });
 });

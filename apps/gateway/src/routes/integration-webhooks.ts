@@ -124,7 +124,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await fastify.gateway.ingestChannelMessage(
+      const result = await fastify.services.integrationWebhooks.ingestChannelMessage(
         params.data.channel,
         request.idempotencyKey,
         parsed.data,
@@ -172,7 +172,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         };
       },
       dispatch: async ({ connectionId, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.gateway, {
+        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "telegram",
           connectionId,
           idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
@@ -207,7 +207,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
 
       let connection;
       try {
-        connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+        connection = fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
       } catch (error) {
         return reply.code(404).send({ error: (error as Error).message });
       }
@@ -278,7 +278,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         };
       },
       dispatch: async ({ connectionId, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.gateway, {
+        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "whatsapp",
           connectionId,
           idempotencyKey: deriveWhatsAppWebhookIdempotencyKey(connectionId, request.body, rawBody),
@@ -358,7 +358,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         };
       },
       dispatch: async ({ connectionId, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.gateway, {
+        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "slack",
           connectionId,
           idempotencyKey: deriveSlackWebhookIdempotencyKey(connectionId, request.body, rawBody),
@@ -425,7 +425,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         };
       },
       dispatch: async ({ connectionId, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.gateway, {
+        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "line",
           connectionId,
           idempotencyKey: deriveLineWebhookIdempotencyKey(connectionId, request.body, rawBody),
@@ -493,7 +493,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           };
         }
         if (normalized.kind === "activity") {
-          fastify.gateway.recordDevDiagnostic({
+          fastify.services.integrationWebhooks.recordDevDiagnostic({
             level: "info",
             category: "channels",
             event: "nextcloud-talk.webhook.activity",
@@ -522,7 +522,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
         };
       },
       dispatch: async ({ connectionId, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.gateway, {
+        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "nextcloud-talk",
           connectionId,
           idempotencyKey: deriveNextcloudTalkWebhookIdempotencyKey(connectionId, rawBody),

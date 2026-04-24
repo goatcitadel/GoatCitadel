@@ -11,7 +11,7 @@ import type {
   ApprovalReplayResult,
   ApprovalResolveResult,
   RemoteApprovalActionTokenIssueResult,
-} from "./gateway-service.js";
+} from "./approval-types.js";
 import type { ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
 import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 

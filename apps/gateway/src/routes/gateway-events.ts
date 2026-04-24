@@ -17,12 +17,16 @@ const bodySchema = z.object({
   message: z.object({
     role: z.enum(["user", "assistant"]),
     content: z.string().min(1),
-    attachments: z.array(z.object({
-      attachmentId: z.string().min(1),
-      fileName: z.string().min(1),
-      mimeType: z.string().min(1),
-      sizeBytes: z.number().int().nonnegative(),
-    })).optional(),
+    attachments: z
+      .array(
+        z.object({
+          attachmentId: z.string().min(1),
+          fileName: z.string().min(1),
+          mimeType: z.string().min(1),
+          sizeBytes: z.number().int().nonnegative(),
+        }),
+      )
+      .optional(),
   }),
   taskId: z.string().min(1).optional(),
   usage: z
@@ -43,7 +47,7 @@ export const gatewayEventsRoute: FastifyPluginAsync = async (fastify) => {
     }
 
     const idempotencyKey = (request as typeof request & { idempotencyKey: string }).idempotencyKey;
-    const result = await fastify.gateway.ingestEvent(idempotencyKey, parsed.data);
+    const result = await fastify.services.gatewayEvents.ingestEvent(idempotencyKey, parsed.data);
     return reply.code(200).send(result);
   });
 };

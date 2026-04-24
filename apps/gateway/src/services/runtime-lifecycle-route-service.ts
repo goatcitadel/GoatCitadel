@@ -1,25 +1,31 @@
-import type { RuntimeLifecycleExportQuery, RuntimeLifecycleQuery } from "@goatcitadel/contracts";
-import type { GatewayService } from "./gateway-service.js";
+import type {
+  RuntimeLifecycleExportQuery,
+  RuntimeLifecycleQuery,
+  RuntimeLifecycleResponse,
+  SessionTimelineItem,
+  TranscriptEvent,
+} from "@goatcitadel/contracts";
 import { RuntimeLifecycleExportService } from "./runtime-lifecycle-export-service.js";
 
-type RuntimeLifecycleRouteGateway = Pick<
-  GatewayService,
-  "getRuntimeLifecycle" | "getTranscript" | "listSessionTimeline"
->;
+export interface RuntimeLifecycleRoutePort {
+  getRuntimeLifecycle(input: RuntimeLifecycleQuery): Promise<RuntimeLifecycleResponse>;
+  getTranscript(sessionId: string): Promise<TranscriptEvent[]>;
+  listSessionTimeline(sessionId: string, limit?: number): Promise<SessionTimelineItem[]>;
+}
 
 export class RuntimeLifecycleRouteService {
   private readonly exportService: RuntimeLifecycleExportService;
 
-  public constructor(private readonly gateway: RuntimeLifecycleRouteGateway) {
+  public constructor(private readonly lifecycle: RuntimeLifecycleRoutePort) {
     this.exportService = new RuntimeLifecycleExportService({
-      getRuntimeLifecycle: (input) => this.gateway.getRuntimeLifecycle(input),
-      getTranscript: (sessionId) => this.gateway.getTranscript(sessionId),
-      listSessionTimeline: (sessionId, limit) => this.gateway.listSessionTimeline(sessionId, limit),
+      getRuntimeLifecycle: (input) => this.lifecycle.getRuntimeLifecycle(input),
+      getTranscript: (sessionId) => this.lifecycle.getTranscript(sessionId),
+      listSessionTimeline: (sessionId, limit) => this.lifecycle.listSessionTimeline(sessionId, limit),
     });
   }
 
   public getLifecycle(input: RuntimeLifecycleQuery) {
-    return this.gateway.getRuntimeLifecycle(input);
+    return this.lifecycle.getRuntimeLifecycle(input);
   }
 
   public exportLifecycle(input: RuntimeLifecycleExportQuery) {

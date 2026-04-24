@@ -136,13 +136,13 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listChannelSetupDrafts(parsed.data),
+      items: fastify.services.channelSetup.listChannelSetupDrafts(parsed.data),
     });
   });
 
   fastify.get("/api/v1/channels/setup-definitions", async (_request, reply) => {
     return reply.send({
-      items: fastify.gateway.listChannelSetupDefinitions(),
+      items: fastify.services.channelSetup.listChannelSetupDefinitions(),
     });
   });
 
@@ -152,7 +152,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getChannelSetupDefinition(params.data.catalogId));
+      return reply.send(fastify.services.channelSetup.getChannelSetupDefinition(params.data.catalogId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -164,7 +164,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createChannelSetupDraft(parsed.data));
+      return reply.code(201).send(fastify.services.channelSetup.createChannelSetupDraft(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -182,7 +182,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.updateChannelSetupDraft(params.data.draftId, parsed.data));
+      return reply.send(fastify.services.channelSetup.updateChannelSetupDraft(params.data.draftId, parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -194,7 +194,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.validateChannelSetupDraft(params.data.draftId));
+      return reply.send(fastify.services.channelSetup.validateChannelSetupDraft(params.data.draftId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -206,7 +206,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.testChannelSetupDraft(params.data.draftId));
+      return reply.send(await fastify.services.channelSetup.testChannelSetupDraft(params.data.draftId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -218,7 +218,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.finalizeChannelSetupDraft(params.data.draftId));
+      return reply.send(await fastify.services.channelSetup.finalizeChannelSetupDraft(params.data.draftId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -230,7 +230,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createChannelSetupRepairDraft(params.data.connectionId));
+      return reply
+        .code(201)
+        .send(fastify.services.channelSetup.createChannelSetupRepairDraft(params.data.connectionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -242,7 +244,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createChannelSetupRotateSecretDraft(params.data.connectionId));
+      return reply
+        .code(201)
+        .send(fastify.services.channelSetup.createChannelSetupRotateSecretDraft(params.data.connectionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -254,7 +258,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.retestChannelConnection(params.data.connectionId));
+      return reply.send(await fastify.services.channelSetup.retestChannelConnection(params.data.connectionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -265,7 +269,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: fastify.gateway.listIntegrationCatalog(parsed.data.kind) });
+    return reply.send({ items: fastify.services.integrations.listIntegrationCatalog(parsed.data.kind) });
   });
 
   fastify.get("/api/v1/integrations/catalog/:catalogId/form-schema", async (request, reply) => {
@@ -274,7 +278,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getIntegrationFormSchema(params.data.catalogId));
+      return reply.send(fastify.services.integrations.getIntegrationFormSchema(params.data.catalogId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -286,7 +290,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
+      items: fastify.services.integrations.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
     });
   });
 
@@ -296,7 +300,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createIntegrationConnection(parsed.data));
+      return reply.code(201).send(fastify.services.integrations.createIntegrationConnection(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -314,7 +318,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.updateIntegrationConnection(params.data.connectionId, parsed.data));
+      return reply.send(
+        fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, parsed.data),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -325,7 +331,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    const deleted = fastify.gateway.deleteIntegrationConnection(params.data.connectionId);
+    const deleted = fastify.services.integrations.deleteIntegrationConnection(params.data.connectionId);
     return reply.send({ deleted });
   });
 
@@ -342,7 +348,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(
-        await fastify.gateway.invokeIntegrationConnectionAction(
+        await fastify.services.integrations.invokeIntegrationConnectionAction(
           params.data.connectionId,
           params.data.actionId,
           parsed.data,
@@ -363,7 +369,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.listDiscordPairings(params.data.connectionId));
+      return reply.send(fastify.services.integrations.listDiscordPairings(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
@@ -378,7 +384,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: params.error.flatten() });
       }
       try {
-        return reply.send(fastify.gateway.approveDiscordPairing(params.data.connectionId, params.data.pairingId));
+        return reply.send(
+          fastify.services.integrations.approveDiscordPairing(params.data.connectionId, params.data.pairingId),
+        );
       } catch (error) {
         const message = (error as Error).message;
         return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
@@ -394,7 +402,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(400).send({ error: params.error.flatten() });
       }
       try {
-        return reply.send(fastify.gateway.revokeDiscordPairing(params.data.connectionId, params.data.pairingId));
+        return reply.send(
+          fastify.services.integrations.revokeDiscordPairing(params.data.connectionId, params.data.pairingId),
+        );
       } catch (error) {
         const message = (error as Error).message;
         return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
@@ -408,7 +418,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.reconnectDiscordRuntime(params.data.connectionId));
+      return reply.send(await fastify.services.integrations.reconnectDiscordRuntime(params.data.connectionId));
     } catch (error) {
       const message = (error as Error).message;
       return reply.code(message.toLowerCase().includes("unknown") ? 404 : 409).send({ error: message });
@@ -417,12 +427,12 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/integrations/plugins", async (_request, reply) => {
     return reply.send({
-      items: fastify.gateway.listIntegrationPlugins(),
+      items: fastify.services.integrations.listIntegrationPlugins(),
     });
   });
 
   fastify.get("/api/v1/integrations/obsidian/status", async (_request, reply) => {
-    return reply.send(await fastify.gateway.getObsidianIntegrationStatus());
+    return reply.send(await fastify.services.obsidian.getObsidianIntegrationStatus());
   });
 
   fastify.patch("/api/v1/integrations/obsidian/config", async (request, reply) => {
@@ -431,7 +441,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.updateObsidianIntegrationConfig(parsed.data));
+      return reply.send(fastify.services.obsidian.updateObsidianIntegrationConfig(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -439,7 +449,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/integrations/obsidian/test", async (_request, reply) => {
     try {
-      return reply.send(await fastify.gateway.testObsidianIntegration());
+      return reply.send(await fastify.services.obsidian.testObsidianIntegration());
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -452,7 +462,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send({
-        items: await fastify.gateway.searchObsidianNotes(parsed.data.query, parsed.data.limit),
+        items: await fastify.services.obsidian.searchObsidianNotes(parsed.data.query, parsed.data.limit),
       });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -465,7 +475,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.readObsidianNote(parsed.data.path));
+      return reply.send(await fastify.services.obsidian.readObsidianNote(parsed.data.path));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -477,7 +487,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.appendObsidianNote(parsed.data.path, parsed.data.markdownBlock));
+      return reply.send(
+        await fastify.services.obsidian.appendObsidianNote(parsed.data.path, parsed.data.markdownBlock),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -489,7 +501,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.captureObsidianInboxEntry(parsed.data));
+      return reply.send(await fastify.services.obsidian.captureObsidianInboxEntry(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -501,7 +513,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.installIntegrationPlugin(parsed.data));
+      return reply.code(201).send(fastify.services.integrations.installIntegrationPlugin(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -513,7 +525,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.setIntegrationPluginEnabled(params.data.pluginId, true));
+      return reply.send(fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, true));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -525,7 +537,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.setIntegrationPluginEnabled(params.data.pluginId, false));
+      return reply.send(fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, false));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -537,7 +549,9 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.runIntegrationConnectionDiagnostics(params.data.connectionId));
+      return reply.send(
+        await fastify.services.integrations.runIntegrationConnectionDiagnostics(params.data.connectionId),
+      );
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown integration connection");

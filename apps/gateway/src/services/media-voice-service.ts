@@ -262,24 +262,26 @@ export class MediaVoiceService {
 
   public listMediaJobs(sessionId?: string): MediaJobRecord[] {
     const rows = toMediaJobRows(
-      this.deps.gatewaySql
-        .prepare(
-          sessionId
-            ? `
+      sessionId
+        ? this.deps.gatewaySql
+            .prepare(
+              `
       SELECT * FROM media_jobs
       WHERE session_id = @sessionId
       ORDER BY created_at DESC
       LIMIT 500
-    `
-            : `
+    `,
+            )
+            .all({ sessionId })
+        : this.deps.gatewaySql
+            .prepare(
+              `
       SELECT * FROM media_jobs
       ORDER BY created_at DESC
       LIMIT 500
     `,
-        )
-        .all({
-          sessionId,
-        }),
+            )
+            .all(),
     );
     return rows.map(mapMediaJobRow);
   }

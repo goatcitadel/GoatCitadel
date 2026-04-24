@@ -32,7 +32,7 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
         return reply.code(400).send({ error: parsed.error.flatten() });
       }
       try {
-        const uploaded = await fastify.gateway.uploadChatAttachment(parsed.data);
+        const uploaded = await fastify.services.chatAttachments.uploadChatAttachment(parsed.data);
         return reply.code(201).send(uploaded);
       } catch (error) {
         return reply.code(400).send({ error: (error as Error).message });
@@ -46,7 +46,7 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getChatAttachment(params.data.attachmentId));
+      return reply.send(fastify.services.chatAttachments.getChatAttachment(params.data.attachmentId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -64,7 +64,9 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      const { record, bytes } = await fastify.gateway.readChatAttachmentContent(params.data.attachmentId);
+      const { record, bytes } = await fastify.services.chatAttachments.readChatAttachmentContent(
+        params.data.attachmentId,
+      );
       reply.header("Content-Type", record.mimeType || "application/octet-stream");
       reply.header(
         "Content-Disposition",

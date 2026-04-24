@@ -23,7 +23,6 @@ describe("route access manifest", () => {
   it("tracks access classes for the control-plane route surface", async () => {
     app = Fastify();
     installRouteAccessTracking(app);
-    app.decorate("gateway", {} as never);
     app.decorate("services", {
       authAdmin: {},
       approvals: {},

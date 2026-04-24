@@ -18,16 +18,20 @@ import type {
   MemoryMaintenanceRunSourceRecord,
   MemoryMaintenanceStateRecord,
   MemoryMaintenanceStatusRecord,
+  RealtimeEvent,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../config.js";
+import type { LlmService } from "./llm-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import {
   DEFAULT_MEMORY_WORKSPACE_ID,
   matchesMemoryWorkspaceScope,
   MEMORY_RECOMMENDATION_DEDUP_WINDOW_MS,
   shouldSuppressMaintenanceRecommendation,
 } from "./memory-lifecycle-policy.js";
-import type { ServiceContext } from "./service-context.js";
 
 const MEMORY_MAINTENANCE_WORKFLOW_KEY = "memory.maintenance";
 const MEMORY_MAINTENANCE_WORKFLOW_VERSION = "memory.maintenance.v1";
@@ -81,16 +85,20 @@ interface DueEvaluation {
   thresholdsMet: boolean;
 }
 
-export type MemoryMaintenanceServiceContext = Pick<
-  ServiceContext,
-  | "storage"
-  | "config"
-  | "llmService"
-  | "publishRealtime"
-  | "requireFeatureEnabled"
-  | "isFeatureEnabled"
-  | "normalizeWorkspaceId"
->;
+export interface MemoryMaintenanceServiceContext {
+  readonly storage: Storage;
+  readonly config: GatewayRuntimeConfig;
+  readonly llmService: LlmService;
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+  requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+  normalizeWorkspaceId(workspaceId?: string): string;
+}
 
 export class MemoryMaintenanceService {
   public constructor(
@@ -1315,7 +1323,9 @@ function throwIfMemoryMaintenanceAborted(signal?: AbortSignal): void {
     return;
   }
   const reason = signal.reason;
-  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Memory maintenance aborted.");
+  throw reason instanceof Error
+    ? reason
+    : new Error(typeof reason === "string" ? reason : "Memory maintenance aborted.");
 }
 
 function isMemoryMaintenanceAbortError(error: unknown, signal?: AbortSignal): boolean {

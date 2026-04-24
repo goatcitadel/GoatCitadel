@@ -1,52 +1,71 @@
-import type { GatewayService } from "./gateway-service.js";
+import type {
+  CompanionSessionExchangeInput,
+  CompanionSessionRefreshInput,
+  DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
+  DeviceAccessRequestCreateInput,
+} from "@goatcitadel/contracts";
 
-type AuthAdminRouteGateway = Pick<
-  GatewayService,
-  | "createBackup"
-  | "createDeviceAccessRequest"
-  | "exchangeCompanionSessionFromDeviceGrant"
-  | "getAuthCredentialPlan"
-  | "getCompanionSessionInfo"
-  | "getCompanionSessionRecord"
-  | "getDeviceAccessRequestStatus"
-  | "getRetentionPolicy"
-  | "listBackups"
-  | "listCompanionAuditEvents"
-  | "listCompanionSessions"
-  | "listDeviceAccessGrants"
-  | "pruneRetention"
-  | "resolveGatewayInstallToken"
-  | "revokeCompanionSession"
-  | "revokeDeviceAccessGrant"
-  | "rotateCompanionSession"
-  | "runDatabaseCutover"
-  | "updateRetentionPolicy"
-  | "verifyBackup"
-  | "verifyDatabaseCutover"
->;
+export interface DeviceAccessRequestMetadata {
+  requestedOrigin?: string;
+  requestedIp?: string;
+  userAgent?: string;
+  correlationId?: string;
+  traceId?: string;
+  originSurface?: string;
+}
+
+export interface CompanionSessionListOptions {
+  view?: "active" | "all";
+  grantId?: string;
+  limit?: number;
+}
+
+export interface CompanionAuditListOptions {
+  sessionId?: string;
+  grantId?: string;
+  limit?: number;
+}
+
+export interface AuthAdminRoutePort {
+  createBackup(input: unknown): unknown;
+  createDeviceAccessRequest(input: DeviceAccessRequestCreateInput, metadata: DeviceAccessRequestMetadata): unknown;
+  exchangeCompanionSessionFromDeviceGrant(grantId: string, input: CompanionSessionExchangeInput): unknown;
+  getAuthCredentialPlan(): unknown;
+  getCompanionSessionInfo(sessionId: string): unknown;
+  getCompanionSessionRecord(sessionId: string): unknown;
+  getDeviceAccessRequestStatus(requestId: string, secret: string): unknown;
+  getRetentionPolicy(): unknown;
+  listBackups(limit: number): unknown;
+  listCompanionAuditEvents(input?: CompanionAuditListOptions): unknown;
+  listCompanionSessions(input?: CompanionSessionListOptions): unknown;
+  listDeviceAccessGrants(): DeviceAccessGrantContractRecord[];
+  pruneRetention(input: unknown): unknown;
+  resolveGatewayInstallToken(input: unknown): unknown;
+  revokeCompanionSession(sessionId: string, actorId: string): unknown;
+  revokeDeviceAccessGrant(grantId: string, actorId: string): Promise<DeviceAccessGrantContractRecord>;
+  rotateCompanionSession(input: CompanionSessionRefreshInput): unknown;
+  runDatabaseCutover(input: unknown): unknown;
+  updateRetentionPolicy(patch: unknown): unknown;
+  verifyBackup(input: unknown): unknown;
+  verifyDatabaseCutover(input: unknown): unknown;
+}
 
 export class AuthAdminRouteService {
-  public constructor(private readonly gateway: AuthAdminRouteGateway) {}
+  public constructor(private readonly gateway: AuthAdminRoutePort) {}
 
   public getAuthCredentialPlan() {
     return this.gateway.getAuthCredentialPlan();
   }
 
-  public createDeviceAccessRequest(
-    input: Parameters<AuthAdminRouteGateway["createDeviceAccessRequest"]>[0],
-    metadata: Parameters<AuthAdminRouteGateway["createDeviceAccessRequest"]>[1],
-  ) {
+  public createDeviceAccessRequest(input: DeviceAccessRequestCreateInput, metadata: DeviceAccessRequestMetadata) {
     return this.gateway.createDeviceAccessRequest(input, metadata);
   }
 
-  public rotateCompanionSession(input: Parameters<AuthAdminRouteGateway["rotateCompanionSession"]>[0]) {
+  public rotateCompanionSession(input: CompanionSessionRefreshInput) {
     return this.gateway.rotateCompanionSession(input);
   }
 
-  public exchangeCompanionSessionFromDeviceGrant(
-    grantId: string,
-    input: Parameters<AuthAdminRouteGateway["exchangeCompanionSessionFromDeviceGrant"]>[1],
-  ) {
+  public exchangeCompanionSessionFromDeviceGrant(grantId: string, input: CompanionSessionExchangeInput) {
     return this.gateway.exchangeCompanionSessionFromDeviceGrant(grantId, input);
   }
 
@@ -54,7 +73,7 @@ export class AuthAdminRouteService {
     return this.gateway.getCompanionSessionInfo(sessionId);
   }
 
-  public listCompanionSessions(input: Parameters<AuthAdminRouteGateway["listCompanionSessions"]>[0]) {
+  public listCompanionSessions(input?: CompanionSessionListOptions) {
     return this.gateway.listCompanionSessions(input);
   }
 
@@ -66,7 +85,7 @@ export class AuthAdminRouteService {
     return this.gateway.revokeCompanionSession(sessionId, actorId?.trim() || "operator");
   }
 
-  public listCompanionAuditEvents(input: Parameters<AuthAdminRouteGateway["listCompanionAuditEvents"]>[0]) {
+  public listCompanionAuditEvents(input?: CompanionAuditListOptions) {
     return this.gateway.listCompanionAuditEvents(input);
   }
 
@@ -78,7 +97,7 @@ export class AuthAdminRouteService {
     return this.gateway.revokeDeviceAccessGrant(grantId, actorId?.trim() || "operator");
   }
 
-  public resolveGatewayInstallToken(input: Parameters<AuthAdminRouteGateway["resolveGatewayInstallToken"]>[0]) {
+  public resolveGatewayInstallToken(input: unknown) {
     return this.gateway.resolveGatewayInstallToken(input);
   }
 
@@ -90,11 +109,11 @@ export class AuthAdminRouteService {
     return this.gateway.getRetentionPolicy();
   }
 
-  public updateRetentionPolicy(patch: Parameters<AuthAdminRouteGateway["updateRetentionPolicy"]>[0]) {
+  public updateRetentionPolicy(patch: unknown) {
     return this.gateway.updateRetentionPolicy(patch);
   }
 
-  public pruneRetention(input: Parameters<AuthAdminRouteGateway["pruneRetention"]>[0]) {
+  public pruneRetention(input: unknown) {
     return this.gateway.pruneRetention(input);
   }
 
@@ -102,19 +121,19 @@ export class AuthAdminRouteService {
     return this.gateway.listBackups(limit);
   }
 
-  public createBackup(input: Parameters<AuthAdminRouteGateway["createBackup"]>[0]) {
+  public createBackup(input: unknown) {
     return this.gateway.createBackup(input);
   }
 
-  public verifyBackup(input: Parameters<AuthAdminRouteGateway["verifyBackup"]>[0]) {
+  public verifyBackup(input: unknown) {
     return this.gateway.verifyBackup(input);
   }
 
-  public runDatabaseCutover(input: Parameters<AuthAdminRouteGateway["runDatabaseCutover"]>[0]) {
+  public runDatabaseCutover(input: unknown) {
     return this.gateway.runDatabaseCutover(input);
   }
 
-  public verifyDatabaseCutover(input: Parameters<AuthAdminRouteGateway["verifyDatabaseCutover"]>[0]) {
+  public verifyDatabaseCutover(input: unknown) {
     return this.gateway.verifyDatabaseCutover(input);
   }
 }

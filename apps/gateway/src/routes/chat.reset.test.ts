@@ -23,9 +23,11 @@ describe("prompt-pack reset route", () => {
     const resetPromptPackRunsAndScores = vi.fn();
 
     app = Fastify();
-    app.decorate("gateway", {
-      getPromptPackExport,
-      resetPromptPackRunsAndScores,
+    app.decorate("services", {
+      promptPacks: {
+        getPromptPackExport,
+        resetPromptPackRunsAndScores,
+      },
     } as never);
     await app.register(promptPackRoutes);
 
@@ -62,9 +64,11 @@ describe("prompt-pack reset route", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      getPromptPackExport: vi.fn(),
-      resetPromptPackRunsAndScores,
+    app.decorate("services", {
+      promptPacks: {
+        getPromptPackExport: vi.fn(),
+        resetPromptPackRunsAndScores,
+      },
     } as never);
     await app.register(promptPackRoutes);
 

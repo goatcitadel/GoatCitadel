@@ -58,10 +58,10 @@ describe("webhook-handler-factory contract behavior", () => {
   });
 
   it("rejects oversized inbound payloads before connector lookup", async () => {
-    const gateway = {
+    const integrationWebhooks = {
       getIntegrationConnection: vi.fn(),
     };
-    const handler = createWebhookHandler({ gateway } as any, {
+    const handler = createWebhookHandler({ services: { integrationWebhooks } } as any, {
       source: "telegram",
       connectorKey: "telegram",
       connectorLabel: "Telegram",
@@ -85,15 +85,17 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(reply.payload).toEqual({
       error: `Inbound channel payload too large. Max ${CHANNEL_INBOUND_MAX_BYTES} bytes.`,
     });
-    expect(gateway.getIntegrationConnection).not.toHaveBeenCalled();
+    expect(integrationWebhooks.getIntegrationConnection).not.toHaveBeenCalled();
   });
 
   it("logs verification failures and returns the declared status without dispatching", async () => {
     const dispatch = vi.fn();
     const handler = createWebhookHandler(
       {
-        gateway: {
-          getIntegrationConnection: vi.fn(() => ({ key: "telegram", config: {} })),
+        services: {
+          integrationWebhooks: {
+            getIntegrationConnection: vi.fn(() => ({ key: "telegram", config: {} })),
+          },
         },
       } as any,
       {
@@ -135,8 +137,10 @@ describe("webhook-handler-factory contract behavior", () => {
     const dispatch = vi.fn();
     const handler = createWebhookHandler(
       {
-        gateway: {
-          getIntegrationConnection: vi.fn(() => ({ key: "telegram", config: {} })),
+        services: {
+          integrationWebhooks: {
+            getIntegrationConnection: vi.fn(() => ({ key: "telegram", config: {} })),
+          },
         },
       } as any,
       {

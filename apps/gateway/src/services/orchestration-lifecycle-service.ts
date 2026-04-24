@@ -18,6 +18,11 @@ import {
 import type { OrchestrationEngine } from "@goatcitadel/orchestration";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import type { DurableWorkflowExecutionContext } from "./durable-execution-service.js";
+import {
+  applyOrchestrationPhaseHookPatch,
+  parseOrchestrationPhaseHookPatch,
+  parseOrchestrationRunHookPatch,
+} from "./hook-patch-helpers.js";
 
 const DEFAULT_WORKSPACE_ID = "default";
 const DEFAULT_WORKTREE_BASE_REF = "HEAD";
@@ -92,13 +97,6 @@ export interface OrchestrationLifecycleHost {
     options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
   ): void;
   scheduleOrchestrationMemoryContext(plan: OrchestrationPlan, run: OrchestrationRun): void;
-  parseOrchestrationRunHookPatch(value: Record<string, unknown>): OrchestrationRunHookPatch | undefined;
-  parseOrchestrationPhaseHookPatch(value: Record<string, unknown>): OrchestrationPhaseHookPatch | undefined;
-  applyOrchestrationPhaseHookPatch(
-    plan: OrchestrationPlan,
-    phaseId: string,
-    patch: OrchestrationPhaseHookPatch,
-  ): OrchestrationPlan;
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
   getDurableRun(runId: string): DurableRunRecord;
   requestDurableRunProcessing(runId: string): void;
@@ -449,7 +447,7 @@ export async function runOrchestrationPlan(
       maxRuntimeMinutes: plan.maxRuntimeMinutes,
       maxCostUsd: plan.maxCostUsd,
     },
-    parsePatch: (value) => host.parseOrchestrationRunHookPatch(value),
+    parsePatch: (value) => parseOrchestrationRunHookPatch(value),
     mergePatch: (current, next) => ({
       ...(current ?? {}),
       ...next,
@@ -533,7 +531,7 @@ export async function approvePhase(
       approvedBy,
       costIncrementUsd,
     },
-    parsePatch: (value) => host.parseOrchestrationPhaseHookPatch(value),
+    parsePatch: (value) => parseOrchestrationPhaseHookPatch(value),
     mergePatch: (current, next) => ({
       ...(current ?? {}),
       ...next,
@@ -543,7 +541,7 @@ export async function approvePhase(
     throw new Error(phaseBeforeHook.blockedBy.reason);
   }
   if (phaseBeforeHook.patch) {
-    plan = host.applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
+    plan = applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
     host.storage.orchestration.upsertPlan(plan);
     const patchedPhase = findPhaseInPlan(plan, phaseId);
     if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {

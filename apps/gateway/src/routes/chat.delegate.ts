@@ -53,7 +53,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.gateway.runChatDelegation(params.data.sessionId, body.data));
+      return reply.send(await fastify.services.chatDelegate.runChatDelegation(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -114,7 +114,10 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     };
 
     try {
-      for await (const chunk of fastify.gateway.runChatDelegationStream(params.data.sessionId, body.data)) {
+      for await (const chunk of fastify.services.chatDelegate.runChatDelegationStream(
+        params.data.sessionId,
+        body.data,
+      )) {
         if (controller.signal.aborted) {
           break;
         }
@@ -143,7 +146,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.getChatDelegationRun(params.data.sessionId, params.data.runId));
+      return reply.send(fastify.services.chatDelegate.getChatDelegationRun(params.data.sessionId, params.data.runId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -161,7 +164,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.gateway.suggestChatDelegation(params.data.sessionId, body.data));
+      return reply.send(await fastify.services.chatDelegate.suggestChatDelegation(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -179,7 +182,7 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.gateway.acceptChatDelegation(params.data.sessionId, body.data));
+      return reply.send(await fastify.services.chatDelegate.acceptChatDelegation(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

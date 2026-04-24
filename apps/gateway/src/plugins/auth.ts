@@ -180,7 +180,7 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     if (providedBearerToken) {
-      const deviceGrant = fastify.gateway.validateDeviceAccessToken(providedBearerToken);
+      const deviceGrant = fastify.gatewayAuth.validateDeviceAccessToken(providedBearerToken);
       if (deviceGrant) {
         setAuthActor(request, deviceGrant.actorId, "device");
         request.authDeviceId = deviceGrant.deviceId;
@@ -193,7 +193,7 @@ export const authPlugin = fp(async (fastify) => {
         return;
       }
 
-      const companionSession = fastify.gateway.validateCompanionAccessToken(providedBearerToken);
+      const companionSession = fastify.gatewayAuth.validateCompanionAccessToken(providedBearerToken);
       if (companionSession) {
         setAuthActor(request, companionSession.actorId, "companion");
         request.authDeviceId = companionSession.deviceId;
@@ -279,7 +279,7 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     try {
-      fastify.gateway.verifyCompanionRequestSignature({
+      fastify.gatewayAuth.verifyCompanionRequestSignature({
         sessionId: request.authCompanionSessionId,
         method: request.method,
         path: request.url,
@@ -334,7 +334,7 @@ function isAuthMisconfigured(auth: {
 
 function isOnboardingComplete(fastify: FastifyInstance): boolean {
   try {
-    return Boolean(fastify.gateway?.getOnboardingStartupState?.().completed);
+    return Boolean(fastify.gatewayAuth.getOnboardingStartupState().completed);
   } catch (error) {
     // Safe default: "complete" disables the onboarding recovery bypass and keeps auth enforced.
     fastify.log.warn(

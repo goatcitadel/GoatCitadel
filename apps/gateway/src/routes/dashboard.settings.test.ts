@@ -17,9 +17,7 @@ describe("dashboard settings routes", () => {
     const updateSettings = vi.fn((input: Record<string, unknown>) => input);
 
     app = Fastify();
-    app.decorate("gateway", {
-      updateSettings,
-    } as never);
+    app.decorate("services", { settings: { updateSettings } } as never);
     await app.register(dashboardRoutes);
 
     const response = await app.inject({
@@ -46,9 +44,7 @@ describe("dashboard settings routes", () => {
     const updateSettings = vi.fn((input: Record<string, unknown>) => input);
 
     app = Fastify();
-    app.decorate("gateway", {
-      updateSettings,
-    } as never);
+    app.decorate("services", { settings: { updateSettings } } as never);
     await app.register(dashboardRoutes);
 
     const response = await app.inject({

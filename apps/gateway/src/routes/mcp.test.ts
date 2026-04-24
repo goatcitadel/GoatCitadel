@@ -24,18 +24,20 @@ describe("mcp routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      invokeMcpTool,
-      listMcpServers: vi.fn(),
-      createMcpServer: vi.fn(),
-      updateMcpServer: vi.fn(),
-      deleteMcpServer: vi.fn(),
-      connectMcpServer: vi.fn(),
-      disconnectMcpServer: vi.fn(),
-      startMcpOAuth: vi.fn(),
-      completeMcpOAuth: vi.fn(),
-      listMcpTools: vi.fn(),
-      updateMcpServerPolicy: vi.fn(),
+    app.decorate("services", {
+      mcp: {
+        invokeMcpTool,
+        listMcpServers: vi.fn(),
+        createMcpServer: vi.fn(),
+        updateMcpServer: vi.fn(),
+        deleteMcpServer: vi.fn(),
+        connectMcpServer: vi.fn(),
+        disconnectMcpServer: vi.fn(),
+        startMcpOAuth: vi.fn(),
+        completeMcpOAuth: vi.fn(),
+        listMcpTools: vi.fn(),
+        updateMcpServerPolicy: vi.fn(),
+      },
     } as never);
     await app.register(mcpRoutes);
 
@@ -86,18 +88,20 @@ describe("mcp routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      invokeMcpTool: vi.fn(),
-      listMcpServers: vi.fn(),
-      createMcpServer: vi.fn(),
-      updateMcpServer: vi.fn(),
-      deleteMcpServer: vi.fn(),
-      connectMcpServer,
-      disconnectMcpServer: vi.fn(),
-      startMcpOAuth: vi.fn(),
-      completeMcpOAuth: vi.fn(),
-      listMcpTools: vi.fn(),
-      updateMcpServerPolicy: vi.fn(),
+    app.decorate("services", {
+      mcp: {
+        invokeMcpTool: vi.fn(),
+        listMcpServers: vi.fn(),
+        createMcpServer: vi.fn(),
+        updateMcpServer: vi.fn(),
+        deleteMcpServer: vi.fn(),
+        connectMcpServer,
+        disconnectMcpServer: vi.fn(),
+        startMcpOAuth: vi.fn(),
+        completeMcpOAuth: vi.fn(),
+        listMcpTools: vi.fn(),
+        updateMcpServerPolicy: vi.fn(),
+      },
     } as never);
     await app.register(mcpRoutes);
 
@@ -121,21 +125,23 @@ describe("mcp routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      invokeMcpTool: vi.fn(),
-      listMcpServers: vi.fn(),
-      createMcpServer: vi.fn(),
-      updateMcpServer: vi.fn(),
-      deleteMcpServer: vi.fn(),
-      connectMcpServer,
-      disconnectMcpServer: vi.fn(),
-      startMcpOAuth: vi.fn(),
-      completeMcpOAuth: vi.fn(),
-      listMcpTools: vi.fn(),
-      updateMcpServerPolicy: vi.fn(),
-      listMcpTemplates: vi.fn(),
-      listMcpTemplateDiscovery: vi.fn(),
-      runMcpServerHealthCheck: vi.fn(),
+    app.decorate("services", {
+      mcp: {
+        invokeMcpTool: vi.fn(),
+        listMcpServers: vi.fn(),
+        createMcpServer: vi.fn(),
+        updateMcpServer: vi.fn(),
+        deleteMcpServer: vi.fn(),
+        connectMcpServer,
+        disconnectMcpServer: vi.fn(),
+        startMcpOAuth: vi.fn(),
+        completeMcpOAuth: vi.fn(),
+        listMcpTools: vi.fn(),
+        updateMcpServerPolicy: vi.fn(),
+        listMcpTemplates: vi.fn(),
+        listMcpTemplateDiscovery: vi.fn(),
+        runMcpServerHealthCheck: vi.fn(),
+      },
     } as never);
     await app.register(mcpRoutes);
 
@@ -157,21 +163,23 @@ describe("mcp routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      invokeMcpTool: vi.fn(),
-      listMcpServers: vi.fn(),
-      createMcpServer: vi.fn(),
-      updateMcpServer: vi.fn(),
-      deleteMcpServer: vi.fn(),
-      connectMcpServer: vi.fn(),
-      disconnectMcpServer: vi.fn(),
-      startMcpOAuth: vi.fn(),
-      completeMcpOAuth: vi.fn(),
-      listMcpTools: vi.fn(),
-      updateMcpServerPolicy: vi.fn(),
-      listMcpTemplates: vi.fn(),
-      listMcpTemplateDiscovery: vi.fn(),
-      runMcpServerHealthCheck,
+    app.decorate("services", {
+      mcp: {
+        invokeMcpTool: vi.fn(),
+        listMcpServers: vi.fn(),
+        createMcpServer: vi.fn(),
+        updateMcpServer: vi.fn(),
+        deleteMcpServer: vi.fn(),
+        connectMcpServer: vi.fn(),
+        disconnectMcpServer: vi.fn(),
+        startMcpOAuth: vi.fn(),
+        completeMcpOAuth: vi.fn(),
+        listMcpTools: vi.fn(),
+        updateMcpServerPolicy: vi.fn(),
+        listMcpTemplates: vi.fn(),
+        listMcpTemplateDiscovery: vi.fn(),
+        runMcpServerHealthCheck,
+      },
     } as never);
     await app.register(mcpRoutes);
 
@@ -193,21 +201,23 @@ describe("mcp routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      invokeMcpTool: vi.fn(),
-      listMcpServers: vi.fn(),
-      createMcpServer: vi.fn(),
-      updateMcpServer: vi.fn(),
-      deleteMcpServer: vi.fn(),
-      connectMcpServer: vi.fn(),
-      disconnectMcpServer: vi.fn(),
-      startMcpOAuth: vi.fn(),
-      completeMcpOAuth: vi.fn(),
-      listMcpTools: vi.fn(),
-      updateMcpServerPolicy: vi.fn(),
-      listMcpTemplates: vi.fn(),
-      listMcpTemplateDiscovery: vi.fn(),
-      runMcpServerHealthCheck,
+    app.decorate("services", {
+      mcp: {
+        invokeMcpTool: vi.fn(),
+        listMcpServers: vi.fn(),
+        createMcpServer: vi.fn(),
+        updateMcpServer: vi.fn(),
+        deleteMcpServer: vi.fn(),
+        connectMcpServer: vi.fn(),
+        disconnectMcpServer: vi.fn(),
+        startMcpOAuth: vi.fn(),
+        completeMcpOAuth: vi.fn(),
+        listMcpTools: vi.fn(),
+        updateMcpServerPolicy: vi.fn(),
+        listMcpTemplates: vi.fn(),
+        listMcpTemplateDiscovery: vi.fn(),
+        runMcpServerHealthCheck,
+      },
     } as never);
     await app.register(mcpRoutes);
 

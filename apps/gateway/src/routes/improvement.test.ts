@@ -58,10 +58,12 @@ describe("improvement routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      listCapabilityGapEvents,
-      listRepairCandidates,
-      updateRepairCandidateValidation,
+    app.decorate("services", {
+      improvement: {
+        listCapabilityGapEvents,
+        listRepairCandidates,
+        updateRepairCandidateValidation,
+      },
     } as never);
     await app.register(improvementRoutes);
 
@@ -114,13 +116,15 @@ describe("improvement routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      listImprovementSignals,
-      getImprovementSignal,
-      listImprovementCandidates,
-      getImprovementCandidate,
-      getImprovementActivation,
-      getHarnessAuditReport,
+    app.decorate("services", {
+      improvement: {
+        listImprovementSignals,
+        getImprovementSignal,
+        listImprovementCandidates,
+        getImprovementCandidate,
+        getImprovementActivation,
+        getHarnessAuditReport,
+      },
     } as never);
     await app.register(improvementRoutes);
 
@@ -179,10 +183,12 @@ describe("improvement routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      requestImprovementActivation,
-      pauseImprovementActivation,
-      rollbackImprovementActivation,
+    app.decorate("services", {
+      improvement: {
+        requestImprovementActivation,
+        pauseImprovementActivation,
+        rollbackImprovementActivation,
+      },
     } as never);
     await app.register(improvementRoutes);
 
@@ -232,14 +238,16 @@ describe("improvement routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      getImprovementSignal,
-      getImprovementCandidate,
-      getImprovementActivation,
-      updateRepairCandidateValidation,
-      requestImprovementActivation,
-      pauseImprovementActivation,
-      rollbackImprovementActivation,
+    app.decorate("services", {
+      improvement: {
+        getImprovementSignal,
+        getImprovementCandidate,
+        getImprovementActivation,
+        updateRepairCandidateValidation,
+        requestImprovementActivation,
+        pauseImprovementActivation,
+        rollbackImprovementActivation,
+      },
     } as never);
     await app.register(improvementRoutes);
 

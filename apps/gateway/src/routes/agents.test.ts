@@ -52,9 +52,7 @@ describe("agents routes", () => {
       ],
     }));
     app = Fastify();
-    app.decorate("gateway", {
-      listImportedAgentCatalog,
-    } as never);
+    app.decorate("services", { agents: { listImportedAgentCatalog } } as never);
     await app.register(agentsRoutes);
 
     const response = await app.inject({
@@ -92,9 +90,7 @@ describe("agents routes", () => {
       },
     }));
     app = Fastify();
-    app.decorate("gateway", {
-      importAgencyAgentCatalog,
-    } as never);
+    app.decorate("services", { agents: { importAgencyAgentCatalog } } as never);
     await app.register(agentsRoutes);
 
     const response = await app.inject({
@@ -136,9 +132,7 @@ describe("agents routes", () => {
       },
     }));
     app = Fastify();
-    app.decorate("gateway", {
-      activateImportedAgentCatalogEntryForSession,
-    } as never);
+    app.decorate("services", { agents: { activateImportedAgentCatalogEntryForSession } } as never);
     await app.register(agentsRoutes);
 
     const response = await app.inject({

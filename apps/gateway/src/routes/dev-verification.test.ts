@@ -31,6 +31,10 @@ vi.mock("@goatcitadel/storage", () => ({
 
 import { devVerificationRoutes } from "./dev-verification.js";
 
+function decorateDevVerification(app: FastifyInstance, methods: Record<string, unknown>) {
+  app.decorate("services", { devVerification: methods } as never);
+}
+
 describe("dev verification routes", () => {
   let app: FastifyInstance | null = null;
   let tempRoot: string | null = null;
@@ -53,7 +57,7 @@ describe("dev verification routes", () => {
   it("returns provider readiness when enabled", async () => {
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       getLlmConfig: () => ({
         activeProviderId: "glm",
@@ -79,7 +83,7 @@ describe("dev verification routes", () => {
       listDevDiagnostics: () => ({
         items: [{ id: "evt-1" }],
       }),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -134,11 +138,11 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createWorkspace,
       createChatSession,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: tempRoot,
       dbPath: path.join(tempRoot, "data", "index.db"),
@@ -192,7 +196,7 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createApproval,
       storage: {
@@ -215,7 +219,7 @@ describe("dev verification routes", () => {
           setActiveLeaf: branchSetActiveLeaf,
         },
       },
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -288,7 +292,7 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       storage: {
         db: {
@@ -297,7 +301,7 @@ describe("dev verification routes", () => {
           })),
         },
       },
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -374,7 +378,7 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createApproval,
       storage: {
@@ -390,7 +394,7 @@ describe("dev verification routes", () => {
           upsertDeadLetter,
         },
       },
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -441,13 +445,13 @@ describe("dev verification routes", () => {
   it("wraps provider exercise failures in a successful response payload", async () => {
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion: vi.fn(async () => {
         throw new Error("provider unavailable");
       }),
       createChatCompletionStream: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -483,11 +487,11 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion,
       createChatCompletionStream: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -529,11 +533,11 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion,
       createChatCompletionStream: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -575,11 +579,11 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       createChatCompletion,
       createChatCompletionStream: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -633,9 +637,9 @@ describe("dev verification routes", () => {
         tracked: true,
       },
     ] as never);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);
@@ -703,7 +707,7 @@ describe("dev verification routes", () => {
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
-    app.decorate("gateway", {
+    decorateDevVerification(app, {
       isDevDiagnosticsEnabled: () => true,
       storage: {
         realtimeEvents: {
@@ -716,7 +720,7 @@ describe("dev verification routes", () => {
         oldestSequence: 8,
         newestSequence: 9,
       }),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       rootDir: "f:/tmp/goatcitadel-dev",
     } as never);

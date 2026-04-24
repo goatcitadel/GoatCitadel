@@ -21,12 +21,12 @@ const downloadJobParamsSchema = z.object({
 
 export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llamacpp/status", async (_request, reply) => {
-    return reply.send(await fastify.gateway.refreshLlamaCppRuntime());
+    return reply.send(await fastify.services.llamaCpp.refreshLlamaCppRuntime());
   });
 
   fastify.get("/api/v1/llamacpp/install", async (_request, reply) => {
     try {
-      return reply.send(await fastify.gateway.detectLlamaCppInstall());
+      return reply.send(await fastify.services.llamaCpp.detectLlamaCppInstall());
     } catch (error) {
       return reply.code(500).send({ error: (error as Error).message });
     }
@@ -34,7 +34,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/llamacpp/models", async (_request, reply) => {
     try {
-      const items = await fastify.gateway.listLlamaCppModels();
+      const items = await fastify.services.llamaCpp.listLlamaCppModels();
       return reply.send({ items });
     } catch (error) {
       return reply.code(503).send({ error: (error as Error).message });
@@ -43,7 +43,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/llamacpp/start", async (_request, reply) => {
     try {
-      return reply.send(await fastify.gateway.startLlamaCppRuntime());
+      return reply.send(await fastify.services.llamaCpp.startLlamaCppRuntime());
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -51,7 +51,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/llamacpp/stop", async (_request, reply) => {
     try {
-      return reply.send(await fastify.gateway.stopLlamaCppRuntime());
+      return reply.send(await fastify.services.llamaCpp.stopLlamaCppRuntime());
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -59,7 +59,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/llamacpp/refresh", async (_request, reply) => {
     try {
-      return reply.send(await fastify.gateway.refreshLlamaCppRuntime());
+      return reply.send(await fastify.services.llamaCpp.refreshLlamaCppRuntime());
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -71,7 +71,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "Invalid advisor request" });
     }
     try {
-      return reply.send(await fastify.gateway.adviseLlamaCppRuntime(parsed.data));
+      return reply.send(await fastify.services.llamaCpp.adviseLlamaCppRuntime(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -83,7 +83,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "Invalid Hugging Face request" });
     }
     try {
-      return reply.code(202).send(await fastify.gateway.startLlamaCppHuggingFaceDownload(parsed.data));
+      return reply.code(202).send(await fastify.services.llamaCpp.startLlamaCppHuggingFaceDownload(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -95,7 +95,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.issues[0]?.message ?? "Invalid download job id" });
     }
     try {
-      return reply.send(fastify.gateway.getLlamaCppHuggingFaceDownload(params.data.jobId));
+      return reply.send(fastify.services.llamaCpp.getLlamaCppHuggingFaceDownload(params.data.jobId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -107,7 +107,7 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.issues[0]?.message ?? "Invalid download job id" });
     }
     try {
-      return reply.send(fastify.gateway.cancelLlamaCppHuggingFaceDownload(params.data.jobId));
+      return reply.send(fastify.services.llamaCpp.cancelLlamaCppHuggingFaceDownload(params.data.jobId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

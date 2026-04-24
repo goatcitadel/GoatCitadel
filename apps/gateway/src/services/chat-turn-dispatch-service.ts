@@ -21,13 +21,12 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { dedupeChatCitations, splitIntoChunks } from "./chat-turn-helpers.js";
 import {
-  dedupeChatCitations,
   isPersistableChatStreamChunk,
-  splitIntoChunks,
   type InspectableChatStreamChunk,
   type PreparedChatExecutionPlanResolution,
-} from "./gateway-service.js";
+} from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";

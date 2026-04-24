@@ -36,7 +36,7 @@ type IngestChannelMessageInput = {
   metadata?: Record<string, unknown>;
 };
 
-type GatewayLike = {
+export type IntegrationWebhookRouteLike = {
   getIntegrationConnection(connectionId: string): IntegrationConnectionRecord;
   ingestChannelMessage: (
     channel: string,
@@ -67,7 +67,7 @@ type GatewayLike = {
 };
 
 type FastifyWithGateway = {
-  gateway: GatewayLike;
+  services: { integrationWebhooks: IntegrationWebhookRouteLike };
 };
 
 type WebhookRequest = FastifyRequest & Partial<WebhookRawBodyRequest>;
@@ -136,7 +136,7 @@ export function createWebhookHandler<TParsed>(
 
     let connection: IntegrationConnectionRecord;
     try {
-      connection = fastify.gateway.getIntegrationConnection(params.data.connectionId);
+      connection = fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -179,7 +179,7 @@ export function createWebhookHandler<TParsed>(
 }
 
 export async function dispatchInboundWebhookMessage(
-  gateway: GatewayLike,
+  integrationWebhooks: IntegrationWebhookRouteLike,
   options: {
     channel: string;
     connectionId: string;
@@ -192,8 +192,12 @@ export async function dispatchInboundWebhookMessage(
     };
   },
 ) {
-  const ingestResult = await gateway.ingestChannelMessage(options.channel, options.idempotencyKey, options.message);
-  gateway.setChatSessionBinding({
+  const ingestResult = await integrationWebhooks.ingestChannelMessage(
+    options.channel,
+    options.idempotencyKey,
+    options.message,
+  );
+  integrationWebhooks.setChatSessionBinding({
     sessionId: ingestResult.session.sessionId,
     transport: "integration",
     connectionId: options.connectionId,
@@ -204,12 +208,12 @@ export async function dispatchInboundWebhookMessage(
   let responseTurnId: string | undefined;
   if (!ingestResult.deduped) {
     const response = options.responseOptions
-      ? await gateway.respondToExistingChatMessage(
+      ? await integrationWebhooks.respondToExistingChatMessage(
           ingestResult.session.sessionId,
           options.message.eventId,
           options.responseOptions,
         )
-      : await gateway.respondToExistingChatMessage(ingestResult.session.sessionId, options.message.eventId);
+      : await integrationWebhooks.respondToExistingChatMessage(ingestResult.session.sessionId, options.message.eventId);
     responseTurnId = response.turnId;
   }
 

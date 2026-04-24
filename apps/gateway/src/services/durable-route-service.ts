@@ -1,78 +1,78 @@
-import type { GatewayService } from "./gateway-service.js";
+import type { DurableOperatorService } from "./durable-operator-service.js";
 
-type DurableRouteGateway = Pick<
-  GatewayService,
-  | "cancelDurableRun"
-  | "createDurableRun"
-  | "getDurableDiagnostics"
-  | "getDurableRun"
-  | "listDurableDeadLetters"
-  | "listDurableRunCheckpoints"
-  | "listDurableRunTimeline"
-  | "listDurableRuns"
-  | "pauseDurableRun"
-  | "recoverDurableDeadLetter"
-  | "resumeDurableRun"
-  | "retryDurableRun"
-  | "wakeDurableRun"
+type DurableRoutePort = Pick<
+  DurableOperatorService,
+  | "cancelRun"
+  | "createRun"
+  | "getDiagnostics"
+  | "getRun"
+  | "listDeadLetters"
+  | "listRunCheckpoints"
+  | "listRunTimeline"
+  | "listRuns"
+  | "pauseRun"
+  | "recoverDeadLetter"
+  | "resumeRun"
+  | "retryRun"
+  | "wakeRun"
 >;
 
 export class DurableRouteService {
-  public constructor(private readonly gateway: DurableRouteGateway) {}
+  public constructor(private readonly durable: DurableRoutePort) {}
 
   public getDiagnostics() {
-    return this.gateway.getDurableDiagnostics();
+    return this.durable.getDiagnostics();
   }
 
   public listRuns(limit: number) {
-    return this.gateway.listDurableRuns(limit);
+    return this.durable.listRuns(limit);
   }
 
   public listDeadLetters(limit: number) {
-    return this.gateway.listDurableDeadLetters(limit);
+    return this.durable.listDeadLetters(limit);
   }
 
   public listRunCheckpoints(runId: string, limit: number) {
-    return this.gateway.listDurableRunCheckpoints(runId, limit);
+    return this.durable.listRunCheckpoints(runId, limit);
   }
 
-  public createRun(input: Parameters<DurableRouteGateway["createDurableRun"]>[0]) {
-    return this.gateway.createDurableRun(input);
+  public createRun(input: Parameters<DurableRoutePort["createRun"]>[0]) {
+    return this.durable.createRun(input);
   }
 
   public getRun(runId: string) {
-    return this.gateway.getDurableRun(runId);
+    return this.durable.getRun(runId);
   }
 
   public listRunTimeline(runId: string, limit: number) {
-    return this.gateway.listDurableRunTimeline(runId, limit);
+    return this.durable.listRunTimeline(runId, limit);
   }
 
   public pauseRun(runId: string, actorId: string) {
-    return this.gateway.pauseDurableRun(runId, actorId);
+    return this.durable.pauseRun(runId, actorId);
   }
 
   public resumeRun(runId: string, actorId: string) {
-    return this.gateway.resumeDurableRun(runId, actorId);
+    return this.durable.resumeRun(runId, actorId);
   }
 
   public cancelRun(runId: string, actorId: string) {
-    return this.gateway.cancelDurableRun(runId, actorId);
+    return this.durable.cancelRun(runId, actorId);
   }
 
   public retryRun(runId: string, reason: string | undefined, actorId: string) {
-    return this.gateway.retryDurableRun(runId, reason, actorId);
+    return this.durable.retryRun(runId, reason, actorId);
   }
 
-  public wakeRun(runId: string, input: Parameters<DurableRouteGateway["wakeDurableRun"]>[1]) {
-    return this.gateway.wakeDurableRun(runId, input);
+  public wakeRun(runId: string, input: Parameters<DurableRoutePort["wakeRun"]>[1]) {
+    return this.durable.wakeRun(runId, input);
   }
 
   public recoverDeadLetter(
     entryId: string,
     actorId: string,
-    options?: Parameters<DurableRouteGateway["recoverDurableDeadLetter"]>[2],
+    options?: Parameters<DurableRoutePort["recoverDeadLetter"]>[2],
   ) {
-    return this.gateway.recoverDurableDeadLetter(entryId, actorId, options);
+    return this.durable.recoverDeadLetter(entryId, actorId, options);
   }
 }

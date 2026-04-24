@@ -29,7 +29,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import type { RuntimeSettings } from "./gateway-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const PROACTIVE_SCHEDULER_INTERVAL_MS = 120_000;
@@ -1767,10 +1767,7 @@ export class ChatProactiveService {
     return completed;
   }
 
-  async executeDurableProactiveTickRun(
-    run: DurableRunRecord,
-    context?: { signal?: AbortSignal },
-  ): Promise<void> {
+  async executeDurableProactiveTickRun(run: DurableRunRecord, context?: { signal?: AbortSignal }): Promise<void> {
     throwIfProactiveDurableRunAborted(context?.signal);
     const payload = this.parseProactiveTickWorkflowPayload(run);
     if (!payload) {
@@ -2159,5 +2156,7 @@ function throwIfProactiveDurableRunAborted(signal?: AbortSignal): void {
     return;
   }
   const reason = signal.reason;
-  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Durable proactive run aborted.");
+  throw reason instanceof Error
+    ? reason
+    : new Error(typeof reason === "string" ? reason : "Durable proactive run aborted.");
 }

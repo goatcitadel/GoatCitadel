@@ -15,11 +15,11 @@ describe("skills routes bankr migration", () => {
 
   it("returns 410 migration guidance when Bankr built-in is disabled", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      isFeatureEnabled: vi.fn((flag: string) => flag !== "bankrBuiltinEnabled"),
-      getBankrOptionalMigrationMessage: vi.fn(
-        () => "Bankr built-in is disabled. Install optional skill.",
-      ),
+    app.decorate("services", {
+      skills: {
+        isBankrBuiltinEnabled: vi.fn(() => false),
+        getBankrOptionalMigrationMessage: vi.fn(() => "Bankr built-in is disabled. Install optional skill."),
+      },
     } as never);
     await app.register(skillsRoutes);
 
@@ -49,10 +49,12 @@ describe("skills routes bankr migration", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      isFeatureEnabled: vi.fn(() => true),
-      getBankrOptionalMigrationMessage: vi.fn(() => ""),
-      getBankrSafetyPolicy: getPolicy,
+    app.decorate("services", {
+      skills: {
+        isBankrBuiltinEnabled: vi.fn(() => true),
+        getBankrOptionalMigrationMessage: vi.fn(() => ""),
+        getBankrSafetyPolicy: getPolicy,
+      },
     } as never);
     await app.register(skillsRoutes);
 
@@ -95,10 +97,12 @@ describe("skills routes bankr migration", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      isFeatureEnabled: vi.fn(() => true),
-      getBankrOptionalMigrationMessage: vi.fn(() => ""),
-      lookupSkillSources: lookup,
+    app.decorate("services", {
+      skills: {
+        isBankrBuiltinEnabled: vi.fn(() => true),
+        getBankrOptionalMigrationMessage: vi.fn(() => ""),
+        lookupSkillSources: lookup,
+      },
     } as never);
     await app.register(skillsRoutes);
 

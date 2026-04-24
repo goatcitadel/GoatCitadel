@@ -24,6 +24,39 @@ const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
   await fastify.register(integrationWebhookRoutes);
 };
 
+const gatewayAuthMethodNames = new Set([
+  "validateDeviceAccessToken",
+  "validateCompanionAccessToken",
+  "verifyCompanionRequestSignature",
+]);
+
+function decorateIntegrationServices(app: FastifyInstance, methods: Record<string, unknown>) {
+  const routeMethods: Record<string, unknown> = {};
+  const gatewayMethods: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(methods)) {
+    if (gatewayAuthMethodNames.has(key)) {
+      gatewayMethods[key] = value;
+      continue;
+    }
+    routeMethods[key] = value;
+  }
+  if (Object.keys(routeMethods).length > 0) {
+    app.decorate("services", {
+      channelSetup: routeMethods,
+      integrations: routeMethods,
+      obsidian: routeMethods,
+      integrationWebhooks: routeMethods,
+    } as never);
+  }
+  app.decorate("gatewayAuth", {
+    getOnboardingStartupState: () => ({ completed: true }),
+    validateDeviceAccessToken: () => undefined,
+    validateCompanionAccessToken: () => undefined,
+    verifyCompanionRequestSignature: () => undefined,
+    ...gatewayMethods,
+  } as never);
+}
+
 describe("integrations inbound route guards", () => {
   let app: FastifyInstance | null = null;
 
@@ -38,9 +71,9 @@ describe("integrations inbound route guards", () => {
   it("rejects channel inbound payloads with oversized content-length", async () => {
     const ingestChannelMessage = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       ingestChannelMessage,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -66,9 +99,9 @@ describe("integrations inbound route guards", () => {
       sessionId: "sess-1",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       ingestChannelMessage,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -111,9 +144,9 @@ describe("integrations inbound route guards", () => {
       checkedAt: "2026-03-22T00:00:00.000Z",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       runIntegrationConnectionDiagnostics,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -145,9 +178,9 @@ describe("integrations inbound route guards", () => {
       },
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       invokeIntegrationConnectionAction,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -161,11 +194,9 @@ describe("integrations inbound route guards", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(invokeIntegrationConnectionAction).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
-      "read",
-      { input: { query: "sample" } },
-    );
+    expect(invokeIntegrationConnectionAction).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", "read", {
+      input: { query: "sample" },
+    });
     expect(response.json()).toEqual(
       expect.objectContaining({
         catalogId: "productivity.apple-notes",
@@ -187,9 +218,9 @@ describe("integrations inbound route guards", () => {
       items: [],
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       listDiscordPairings,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -230,10 +261,10 @@ describe("integrations inbound route guards", () => {
       revokedAt: "2026-03-29T02:00:00.000Z",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       approveDiscordPairing,
       revokeDiscordPairing,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const approveResponse = await app.inject({
@@ -267,9 +298,9 @@ describe("integrations inbound route guards", () => {
       lastReconnectAt: "2026-03-29T03:00:00.000Z",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       reconnectDiscordRuntime,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -312,11 +343,11 @@ describe("integrations inbound route guards", () => {
       return plugins.find((plugin) => plugin.pluginId === pluginId)!;
     });
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       listIntegrationPlugins,
       installIntegrationPlugin,
       setIntegrationPluginEnabled,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const installResponse = await app.inject({
@@ -403,14 +434,14 @@ describe("integrations inbound route guards", () => {
       turnId: "turn-1",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection,
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
       recordDevDiagnostic: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -538,14 +569,14 @@ describe("integrations inbound route guards", () => {
     const signature = buildSlackSignature(timestamp, payload, "slack-signing-secret");
 
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection,
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
       recordDevDiagnostic: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -652,13 +683,13 @@ describe("integrations inbound route guards", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection,
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -721,7 +752,7 @@ describe("integrations inbound route guards", () => {
 
   it("completes the WhatsApp webhook verification challenge", async () => {
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -730,7 +761,7 @@ describe("integrations inbound route guards", () => {
           webhookVerifyToken: "whatsapp-verify-token",
         },
       })),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -820,13 +851,13 @@ describe("integrations inbound route guards", () => {
     const signature = buildWhatsAppWebhookSignature(payload, "whatsapp-app-secret");
 
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection,
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -890,7 +921,7 @@ describe("integrations inbound route guards", () => {
   it("rejects unsigned WhatsApp webhooks", async () => {
     app = Fastify();
     const warn = vi.spyOn(app.log, "warn").mockImplementation(() => undefined);
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -900,7 +931,7 @@ describe("integrations inbound route guards", () => {
           webhookVerifyToken: "whatsapp-verify-token",
         },
       })),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -987,13 +1018,13 @@ describe("integrations inbound route guards", () => {
     const signature = buildLineWebhookSignature(payload, "line-channel-secret");
 
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection,
       ingestChannelMessage,
       setChatSessionBinding,
       respondToExistingChatMessage,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1055,7 +1086,7 @@ describe("integrations inbound route guards", () => {
 
   it("rejects unsigned LINE webhooks", async () => {
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -1064,7 +1095,7 @@ describe("integrations inbound route guards", () => {
           channelSecret: "line-channel-secret",
         },
       })),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1102,7 +1133,7 @@ describe("integrations inbound route guards", () => {
     const ingestChannelMessage = vi.fn();
 
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -1110,7 +1141,7 @@ describe("integrations inbound route guards", () => {
         config: { signingSecret: "slack-signing-secret" },
       })),
       ingestChannelMessage,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1143,14 +1174,14 @@ describe("integrations inbound route guards", () => {
 
   it("rejects unsigned Slack webhooks", async () => {
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
         key: "slack",
         config: { signingSecret: "slack-signing-secret" },
       })),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1180,14 +1211,14 @@ describe("integrations inbound route guards", () => {
 
   it("rejects Telegram webhooks with the wrong secret token", async () => {
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
         key: "telegram",
         config: { webhookSecret: "telegram-webhook-secret" },
       })),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1217,7 +1248,7 @@ describe("integrations inbound route guards", () => {
 
   it("rejects unsigned Nextcloud Talk webhooks", async () => {
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -1225,7 +1256,7 @@ describe("integrations inbound route guards", () => {
         config: { token: "nextcloud-secret" },
       })),
       recordDevDiagnostic: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1254,7 +1285,7 @@ describe("integrations inbound route guards", () => {
 
   it("rejects Nextcloud webhooks for non-Nextcloud connectors", async () => {
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -1262,7 +1293,7 @@ describe("integrations inbound route guards", () => {
         config: { token: "discord-token" },
       })),
       recordDevDiagnostic: vi.fn(),
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1297,7 +1328,7 @@ describe("integrations inbound route guards", () => {
     const ingestChannelMessage = vi.fn();
     const recordDevDiagnostic = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateDeviceAccessToken: vi.fn(() => undefined),
       getIntegrationConnection: vi.fn(() => ({
         connectionId: "11111111-1111-1111-1111-111111111111",
@@ -1306,7 +1337,7 @@ describe("integrations inbound route guards", () => {
       })),
       ingestChannelMessage,
       recordDevDiagnostic,
-    } as never);
+    });
     app.decorate("gatewayConfig", {
       assistant: {
         auth: {
@@ -1372,9 +1403,9 @@ describe("channel setup routes", () => {
       wizard: { steps: [] },
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       getChannelSetupDefinition,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -1399,9 +1430,9 @@ describe("channel setup routes", () => {
       },
     ]);
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       listChannelSetupDefinitions,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -1439,9 +1470,9 @@ describe("channel setup routes", () => {
       },
     ]);
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       listChannelSetupDrafts,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const response = await app.inject({
@@ -1493,10 +1524,10 @@ describe("channel setup routes", () => {
       updatedAt: "2026-03-29T00:10:00.000Z",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       createChannelSetupDraft,
       updateChannelSetupDraft,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const createResponse = await app.inject({
@@ -1577,11 +1608,11 @@ describe("channel setup routes", () => {
       },
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       validateChannelSetupDraft,
       testChannelSetupDraft,
       finalizeChannelSetupDraft,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const validateResponse = await app.inject({
@@ -1649,11 +1680,11 @@ describe("channel setup routes", () => {
       recommendedNextAction: "Finalize the connection.",
     }));
     app = Fastify();
-    app.decorate("gateway", {
+    decorateIntegrationServices(app, {
       createChannelSetupRepairDraft,
       createChannelSetupRotateSecretDraft,
       retestChannelConnection,
-    } as never);
+    });
     await app.register(integrationsRoutes);
 
     const repairResponse = await app.inject({

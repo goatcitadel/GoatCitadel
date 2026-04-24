@@ -12,11 +12,11 @@ const installSchema = z.object({
 
 export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/addons/catalog", async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listAddonsCatalog() });
+    return reply.send({ items: fastify.services.addons.listAddonsCatalog() });
   });
 
   fastify.get("/api/v1/addons/installed", async (_request, reply) => {
-    return reply.send({ items: await fastify.gateway.listInstalledAddons() });
+    return reply.send({ items: await fastify.services.addons.listInstalledAddons() });
   });
 
   fastify.get("/api/v1/addons/:addonId/status", async (request, reply) => {
@@ -25,7 +25,7 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.getAddonStatus(parsed.data.addonId));
+      return reply.send(await fastify.services.addons.getAddonStatus(parsed.data.addonId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -43,7 +43,7 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.code(201).send(await fastify.gateway.installAddon(params.data.addonId, body.data));
+      return reply.code(201).send(await fastify.services.addons.installAddon(params.data.addonId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -55,7 +55,7 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.updateAddon(params.data.addonId));
+      return reply.send(await fastify.services.addons.updateAddon(params.data.addonId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -67,7 +67,7 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.launchAddon(params.data.addonId));
+      return reply.send(await fastify.services.addons.launchAddon(params.data.addonId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -79,7 +79,7 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.stopAddon(params.data.addonId));
+      return reply.send(await fastify.services.addons.stopAddon(params.data.addonId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -91,7 +91,7 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.uninstallAddon(params.data.addonId));
+      return reply.send(await fastify.services.addons.uninstallAddon(params.data.addonId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

@@ -15,8 +15,8 @@ describe("dev diagnostics routes", () => {
 
   it("returns 404 when dev diagnostics are disabled", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      isDevDiagnosticsEnabled: () => false,
+    app.decorate("services", {
+      devDiagnostics: { isDevDiagnosticsEnabled: () => false },
     } as never);
     await app.register(devDiagnosticsRoutes);
 
@@ -30,20 +30,21 @@ describe("dev diagnostics routes", () => {
 
   it("lists diagnostics with forwarded filters", async () => {
     const listDevDiagnostics = vi.fn(() => ({
-      items: [{
-        id: "evt-1",
-        timestamp: "2026-03-08T00:00:00.000Z",
-        level: "info",
-        category: "gateway",
-        event: "request.start",
-        message: "request started",
-        source: "gateway",
-      }],
+      items: [
+        {
+          id: "evt-1",
+          timestamp: "2026-03-08T00:00:00.000Z",
+          level: "info",
+          category: "gateway",
+          event: "request.start",
+          message: "request started",
+          source: "gateway",
+        },
+      ],
     }));
     app = Fastify();
-    app.decorate("gateway", {
-      isDevDiagnosticsEnabled: () => true,
-      listDevDiagnostics,
+    app.decorate("services", {
+      devDiagnostics: { isDevDiagnosticsEnabled: () => true, listDevDiagnostics },
     } as never);
     await app.register(devDiagnosticsRoutes);
 
@@ -60,15 +61,17 @@ describe("dev diagnostics routes", () => {
       limit: 25,
     });
     expect(response.json()).toEqual({
-      items: [{
-        id: "evt-1",
-        timestamp: "2026-03-08T00:00:00.000Z",
-        level: "info",
-        category: "gateway",
-        event: "request.start",
-        message: "request started",
-        source: "gateway",
-      }],
+      items: [
+        {
+          id: "evt-1",
+          timestamp: "2026-03-08T00:00:00.000Z",
+          level: "info",
+          category: "gateway",
+          event: "request.start",
+          message: "request started",
+          source: "gateway",
+        },
+      ],
     });
   });
 });

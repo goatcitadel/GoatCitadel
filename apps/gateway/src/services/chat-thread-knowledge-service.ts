@@ -12,7 +12,7 @@ import type { KnowledgeChunkRecord, Storage } from "@goatcitadel/storage";
 const FULL_TEXT_SOURCE_CHAR_LIMIT = 12_000;
 const FULL_TEXT_TOTAL_CHAR_BUDGET = 32_000;
 
-export interface ChatThreadKnowledgeHost {
+export interface ChatThreadKnowledgeDependencies {
   readonly storage: Pick<Storage, "chatAttachments" | "chatThreadKnowledgeAttachments" | "gatewaySql" | "knowledge">;
   getSession(sessionId: string): unknown;
   readChatAttachmentContent(attachmentId: string): Promise<{ bytes: Buffer; record: ChatAttachmentRecord }>;
@@ -46,19 +46,19 @@ export interface ResolvedThreadKnowledgeContext {
 }
 
 export function listChatThreadKnowledgeAttachments(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   sessionId: string,
 ): ThreadKnowledgeAttachmentRecord[] {
   const normalizedSessionId = sessionId.trim();
   if (!normalizedSessionId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
   }
-  host.getSession(normalizedSessionId);
-  return host.storage.chatThreadKnowledgeAttachments.listBySession(normalizedSessionId);
+  deps.getSession(normalizedSessionId);
+  return deps.storage.chatThreadKnowledgeAttachments.listBySession(normalizedSessionId);
 }
 
 export async function attachChatThreadKnowledgeAttachment(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   sessionId: string,
   input: AttachThreadKnowledgeAttachmentInput,
 ): Promise<ThreadKnowledgeAttachmentRecord> {
@@ -66,30 +66,30 @@ export async function attachChatThreadKnowledgeAttachment(
   if (!normalizedSessionId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "sessionId" });
   }
-  host.getSession(normalizedSessionId);
+  deps.getSession(normalizedSessionId);
   const namespace = buildThreadKnowledgeNamespace(normalizedSessionId);
   const now = new Date().toISOString();
 
   if (input.chatAttachmentId?.trim()) {
-    const attachment = host.storage.chatAttachments.get(input.chatAttachmentId.trim());
+    const attachment = deps.storage.chatAttachments.get(input.chatAttachmentId.trim());
     if (attachment.sessionId !== normalizedSessionId) {
       throw new ValidationError({ message: "Thread knowledge attachments must come from the same chat session." });
     }
-    const existingAttachment = host.storage.chatThreadKnowledgeAttachments
+    const existingAttachment = deps.storage.chatThreadKnowledgeAttachments
       .listBySession(normalizedSessionId)
       .find((item) => item.chatAttachmentId === attachment.attachmentId && item.retrievalMode === input.retrievalMode);
     if (existingAttachment?.ingestStatus === "ready") {
       return existingAttachment;
     }
     const created = existingAttachment
-      ? resetThreadKnowledgeAttachmentForRetry(host, existingAttachment, {
+      ? resetThreadKnowledgeAttachmentForRetry(deps, existingAttachment, {
           sourceRef: attachment.fileName,
           title: input.title?.trim() || attachment.fileName,
           namespace: input.retrievalMode === "retrieval" ? namespace : undefined,
           chatAttachmentId: attachment.attachmentId,
           now,
         })
-      : host.storage.chatThreadKnowledgeAttachments.create({
+      : deps.storage.chatThreadKnowledgeAttachments.create({
           attachmentId: buildStableThreadKnowledgeAttachmentId([
             normalizedSessionId,
             attachment.attachmentId,
@@ -107,7 +107,7 @@ export async function attachChatThreadKnowledgeAttachment(
           updatedAt: now,
         });
     try {
-      const text = await extractAttachmentKnowledgeText(host, attachment);
+      const text = await extractAttachmentKnowledgeText(deps, attachment);
       if (!text.trim()) {
         throw new Error(
           input.retrievalMode === "full_text"
@@ -116,7 +116,7 @@ export async function attachChatThreadKnowledgeAttachment(
         );
       }
       if (input.retrievalMode === "full_text") {
-        return host.storage.chatThreadKnowledgeAttachments.patch(
+        return deps.storage.chatThreadKnowledgeAttachments.patch(
           created.attachmentId,
           {
             ingestStatus: "ready",
@@ -128,7 +128,7 @@ export async function attachChatThreadKnowledgeAttachment(
           now,
         );
       }
-      const document = host.storage.knowledge.createDocument(
+      const document = deps.storage.knowledge.createDocument(
         {
           namespace,
           sourceType: "file",
@@ -141,14 +141,14 @@ export async function attachChatThreadKnowledgeAttachment(
         },
         now,
       );
-      const chunks = host.storage.knowledge.appendChunks(
+      const chunks = deps.storage.knowledge.appendChunks(
         document.docId,
         chunkKnowledgeText(text).map((content) => ({
           content,
         })),
         now,
       );
-      return host.storage.chatThreadKnowledgeAttachments.patch(
+      return deps.storage.chatThreadKnowledgeAttachments.patch(
         created.attachmentId,
         {
           ingestStatus: "ready",
@@ -162,7 +162,7 @@ export async function attachChatThreadKnowledgeAttachment(
         now,
       );
     } catch (error) {
-      return host.storage.chatThreadKnowledgeAttachments.patch(
+      return deps.storage.chatThreadKnowledgeAttachments.patch(
         created.attachmentId,
         {
           ingestStatus: "failed",
@@ -179,7 +179,7 @@ export async function attachChatThreadKnowledgeAttachment(
     throw new ValidationError({ message: "Either chatAttachmentId or url is required." });
   }
   const normalizedUrlKey = normalizeKnowledgeUrlKey(url);
-  const existingUrlAttachment = host.storage.chatThreadKnowledgeAttachments
+  const existingUrlAttachment = deps.storage.chatThreadKnowledgeAttachments
     .listBySession(normalizedSessionId)
     .find(
       (item) =>
@@ -191,13 +191,13 @@ export async function attachChatThreadKnowledgeAttachment(
     return existingUrlAttachment;
   }
   const created = existingUrlAttachment
-    ? resetThreadKnowledgeAttachmentForRetry(host, existingUrlAttachment, {
+    ? resetThreadKnowledgeAttachmentForRetry(deps, existingUrlAttachment, {
         sourceRef: url,
         title: input.title?.trim() || url,
         namespace,
         now,
       })
-    : host.storage.chatThreadKnowledgeAttachments.create({
+    : deps.storage.chatThreadKnowledgeAttachments.create({
         attachmentId: buildStableThreadKnowledgeAttachmentId([
           normalizedSessionId,
           normalizedUrlKey,
@@ -214,7 +214,7 @@ export async function attachChatThreadKnowledgeAttachment(
         updatedAt: now,
       });
   try {
-    const result = await host.knowledgeDocsIngest({
+    const result = await deps.knowledgeDocsIngest({
       sourceType: "url",
       source: url,
       namespace,
@@ -228,13 +228,13 @@ export async function attachChatThreadKnowledgeAttachment(
     const normalizedResult = toPlainRecord(result);
     const document = readKnowledgeDocumentResult(normalizedResult);
     const chunksSaved = readKnowledgeChunksSaved(normalizedResult);
-    const documentText = document?.docId ? resolveDocumentKnowledgeText(host, document.docId) : "";
-    const chunkCount = document?.docId ? host.storage.knowledge.listChunksByDocument(document.docId, 500).length : 0;
+    const documentText = document?.docId ? resolveDocumentKnowledgeText(deps, document.docId) : "";
+    const chunkCount = document?.docId ? deps.storage.knowledge.listChunksByDocument(document.docId, 500).length : 0;
     const usableChunkCount = Math.max(chunksSaved ?? 0, chunkCount);
     if (!document?.docId || usableChunkCount <= 0 || !documentText.trim()) {
       throw new Error("This source did not produce readable knowledge content.");
     }
-    return host.storage.chatThreadKnowledgeAttachments.patch(
+    return deps.storage.chatThreadKnowledgeAttachments.patch(
       created.attachmentId,
       {
         ingestStatus: "ready",
@@ -247,7 +247,7 @@ export async function attachChatThreadKnowledgeAttachment(
       now,
     );
   } catch (error) {
-    return host.storage.chatThreadKnowledgeAttachments.patch(
+    return deps.storage.chatThreadKnowledgeAttachments.patch(
       created.attachmentId,
       {
         ingestStatus: "failed",
@@ -260,7 +260,7 @@ export async function attachChatThreadKnowledgeAttachment(
 }
 
 export function removeChatThreadKnowledgeAttachment(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   sessionId: string,
   attachmentId: string,
 ): { deleted: boolean; attachmentId: string } {
@@ -272,17 +272,17 @@ export function removeChatThreadKnowledgeAttachment(
   if (!normalizedAttachmentId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "attachmentId" });
   }
-  host.getSession(normalizedSessionId);
-  const current = host.storage.chatThreadKnowledgeAttachments.get(normalizedAttachmentId);
+  deps.getSession(normalizedSessionId);
+  const current = deps.storage.chatThreadKnowledgeAttachments.get(normalizedAttachmentId);
   if (current.sessionId !== normalizedSessionId) {
     throw new ValidationError({ message: "Thread knowledge attachment does not belong to this session." });
   }
   const documentId = current.documentId?.trim() || undefined;
-  const deleted = host.storage.chatThreadKnowledgeAttachments.delete(normalizedAttachmentId);
+  const deleted = deps.storage.chatThreadKnowledgeAttachments.delete(normalizedAttachmentId);
   if (deleted && documentId) {
-    const remainingReferences = host.storage.chatThreadKnowledgeAttachments.listByDocumentId(documentId);
+    const remainingReferences = deps.storage.chatThreadKnowledgeAttachments.listByDocumentId(documentId);
     if (remainingReferences.length === 0) {
-      host.storage.knowledge.deleteDocument(documentId);
+      deps.storage.knowledge.deleteDocument(documentId);
     }
   }
   return {
@@ -292,11 +292,11 @@ export function removeChatThreadKnowledgeAttachment(
 }
 
 export async function resolveThreadKnowledgeContext(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   sessionId: string,
   query: string,
 ): Promise<ResolvedThreadKnowledgeContext> {
-  const attachments = host.storage.chatThreadKnowledgeAttachments
+  const attachments = deps.storage.chatThreadKnowledgeAttachments
     .listBySession(sessionId)
     .filter((item) => item.ingestStatus === "ready");
   if (attachments.length === 0) {
@@ -315,9 +315,9 @@ export async function resolveThreadKnowledgeContext(
   const now = new Date().toISOString();
 
   for (const attachment of fullTextAttachments) {
-    const text = await resolveFullTextAttachmentContent(host, attachment);
+    const text = await resolveFullTextAttachmentContent(deps, attachment);
     if (!text.trim()) {
-      host.storage.chatThreadKnowledgeAttachments.patch(
+      deps.storage.chatThreadKnowledgeAttachments.patch(
         attachment.attachmentId,
         {
           ingestStatus: "failed",
@@ -365,7 +365,7 @@ export async function resolveThreadKnowledgeContext(
       if (item.documentId?.trim()) {
         return true;
       }
-      host.storage.chatThreadKnowledgeAttachments.patch(
+      deps.storage.chatThreadKnowledgeAttachments.patch(
         item.attachmentId,
         {
           ingestStatus: "failed",
@@ -381,7 +381,7 @@ export async function resolveThreadKnowledgeContext(
     if (retrievalReadyAttachments.length > 0) {
       try {
         const queryResult = toPlainRecord(
-          await host.knowledgeEmbeddingsQuery({
+          await deps.knowledgeEmbeddingsQuery({
             namespace,
             query: query.trim(),
             limit: Math.max(4, Math.min(12, retrievalReadyAttachments.length * 4)),
@@ -389,7 +389,7 @@ export async function resolveThreadKnowledgeContext(
           }),
         );
         const docsById = new Map(
-          host.storage.knowledge.listDocuments(namespace, 500).map((document) => [document.docId, document] as const),
+          deps.storage.knowledge.listDocuments(namespace, 500).map((document) => [document.docId, document] as const),
         );
         const retrievalByDocId = new Map(
           retrievalReadyAttachments.filter((item) => item.documentId).map((item) => [item.documentId!, item] as const),
@@ -401,7 +401,7 @@ export async function resolveThreadKnowledgeContext(
             continue;
           }
           const doc = docsById.get(item.docId);
-          const chunk = findChunkById(host.storage.knowledge.listChunksByDocument(item.docId, 200), item.chunkId);
+          const chunk = findChunkById(deps.storage.knowledge.listChunksByDocument(item.docId, 200), item.chunkId);
           citations.push(
             buildKnowledgeCitationRecord(attachment, {
               title: doc?.title ?? attachment.title,
@@ -438,7 +438,7 @@ export async function resolveThreadKnowledgeContext(
           ].join("\n\n")
         : undefined,
     citations,
-    attachments: host.storage.chatThreadKnowledgeAttachments.listBySession(sessionId),
+    attachments: deps.storage.chatThreadKnowledgeAttachments.listBySession(sessionId),
   };
 }
 
@@ -447,7 +447,7 @@ export function buildThreadKnowledgeNamespace(sessionId: string): string {
 }
 
 function resetThreadKnowledgeAttachmentForRetry(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   attachment: ThreadKnowledgeAttachmentRecord,
   input: {
     sourceRef: string;
@@ -459,14 +459,14 @@ function resetThreadKnowledgeAttachmentForRetry(
 ): ThreadKnowledgeAttachmentRecord {
   const currentDocumentId = attachment.documentId?.trim() || undefined;
   if (currentDocumentId) {
-    const remainingReferences = host.storage.chatThreadKnowledgeAttachments
+    const remainingReferences = deps.storage.chatThreadKnowledgeAttachments
       .listByDocumentId(currentDocumentId)
       .filter((item) => item.attachmentId !== attachment.attachmentId);
     if (remainingReferences.length === 0) {
-      host.storage.knowledge.deleteDocument(currentDocumentId);
+      deps.storage.knowledge.deleteDocument(currentDocumentId);
     }
   }
-  return host.storage.chatThreadKnowledgeAttachments.patch(
+  return deps.storage.chatThreadKnowledgeAttachments.patch(
     attachment.attachmentId,
     {
       sourceRef: input.sourceRef,
@@ -484,28 +484,28 @@ function resetThreadKnowledgeAttachmentForRetry(
 }
 
 async function resolveFullTextAttachmentContent(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   attachment: ThreadKnowledgeAttachmentRecord,
 ): Promise<string> {
   if (attachment.documentId) {
-    return resolveDocumentKnowledgeText(host, attachment.documentId);
+    return resolveDocumentKnowledgeText(deps, attachment.documentId);
   }
   if (!attachment.chatAttachmentId) {
     return "";
   }
-  const record = host.storage.chatAttachments.get(attachment.chatAttachmentId);
-  return extractAttachmentKnowledgeText(host, record);
+  const record = deps.storage.chatAttachments.get(attachment.chatAttachmentId);
+  return extractAttachmentKnowledgeText(deps, record);
 }
 
 async function extractAttachmentKnowledgeText(
-  host: ChatThreadKnowledgeHost,
+  deps: ChatThreadKnowledgeDependencies,
   attachment: ChatAttachmentRecord,
 ): Promise<string> {
   const transcriptOrOcr =
     attachment.transcriptText?.trim() || attachment.ocrText?.trim() || attachment.extractPreview?.trim();
   if (looksTextLikeMimeType(attachment.mimeType)) {
     try {
-      const content = await host.readChatAttachmentContent(attachment.attachmentId);
+      const content = await deps.readChatAttachmentContent(attachment.attachmentId);
       const decoded = content.bytes.toString("utf8").trim();
       if (looksUsefulDecodedText(decoded)) {
         return decoded.slice(0, 40_000);
@@ -517,8 +517,8 @@ async function extractAttachmentKnowledgeText(
   return transcriptOrOcr ?? "";
 }
 
-function resolveDocumentKnowledgeText(host: ChatThreadKnowledgeHost, documentId: string): string {
-  return host.storage.knowledge
+function resolveDocumentKnowledgeText(deps: ChatThreadKnowledgeDependencies, documentId: string): string {
+  return deps.storage.knowledge
     .listChunksByDocument(documentId, 500)
     .map((chunk) => chunk.content.trim())
     .filter(Boolean)

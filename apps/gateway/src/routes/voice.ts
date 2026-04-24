@@ -37,7 +37,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.transcribeVoice(parsed.data));
+      return reply.send(await fastify.services.voice.transcribeVoice(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -49,7 +49,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await fastify.gateway.startTalkSession(parsed.data));
+      return reply.code(201).send(await fastify.services.voice.startTalkSession(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -61,7 +61,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listVoiceTalkSessions(parsed.data.limit),
+      items: fastify.services.voice.listVoiceTalkSessions(parsed.data.limit),
     });
   });
 
@@ -71,7 +71,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.stopTalkSession(params.data.id));
+      return reply.send(fastify.services.voice.stopTalkSession(params.data.id));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -79,22 +79,22 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/voice/wake/start", async (_request, reply) => {
     try {
-      return reply.send(await fastify.gateway.startVoiceWake());
+      return reply.send(await fastify.services.voice.startVoiceWake());
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
 
   fastify.post("/api/v1/voice/wake/stop", async (_request, reply) => {
-    return reply.send(fastify.gateway.stopVoiceWake());
+    return reply.send(fastify.services.voice.stopVoiceWake());
   });
 
   fastify.get("/api/v1/voice/status", async (_request, reply) => {
-    return reply.send(await fastify.gateway.getVoiceStatus());
+    return reply.send(await fastify.services.voice.getVoiceStatus());
   });
 
   fastify.get("/api/v1/voice/runtime", async (_request, reply) => {
-    return reply.send(await fastify.gateway.getVoiceRuntimeStatus());
+    return reply.send(await fastify.services.voice.getVoiceRuntimeStatus());
   });
 
   fastify.post("/api/v1/voice/runtime/install", async (request, reply) => {
@@ -103,7 +103,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.installVoiceRuntime(parsed.data));
+      return reply.send(await fastify.services.voice.installVoiceRuntime(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -115,7 +115,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.selectVoiceRuntimeModel(params.data.modelId));
+      return reply.send(await fastify.services.voice.selectVoiceRuntimeModel(params.data.modelId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -127,7 +127,7 @@ export const voiceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.removeVoiceRuntimeModel(params.data.modelId));
+      return reply.send(await fastify.services.voice.removeVoiceRuntimeModel(params.data.modelId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

@@ -8,7 +8,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 
-export interface MemoryFacadeHost {
+export interface KnowledgeFacadePort {
   invokeAndUnwrap(
     request: ToolInvokeRequest,
     realtimeType: string,
@@ -18,11 +18,35 @@ export interface MemoryFacadeHost {
 const KNOWLEDGE_SESSION = "session:operator:knowledge";
 const KNOWLEDGE_AGENT = "operator";
 
+export class KnowledgeFacadeService {
+  public constructor(private readonly deps: KnowledgeFacadePort) {}
+
+  public knowledgeMemoryWrite(input: MemoryWriteInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeMemoryWrite(this.deps, input);
+  }
+
+  public knowledgeMemorySearch(input: MemorySearchQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeMemorySearch(this.deps, input);
+  }
+
+  public knowledgeDocsIngest(input: DocsIngestInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeDocsIngest(this.deps, input);
+  }
+
+  public knowledgeEmbeddingsIndex(input: EmbeddingIndexInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeEmbeddingsIndex(this.deps, input);
+  }
+
+  public knowledgeEmbeddingsQuery(input: EmbeddingQueryInput): Promise<ToolInvokeResult | Record<string, unknown>> {
+    return knowledgeEmbeddingsQuery(this.deps, input);
+  }
+}
+
 export async function knowledgeMemoryWrite(
-  host: MemoryFacadeHost,
+  deps: KnowledgeFacadePort,
   input: MemoryWriteInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return deps.invokeAndUnwrap(
     {
       toolName: "memory.write",
       args: {
@@ -42,10 +66,10 @@ export async function knowledgeMemoryWrite(
 }
 
 export async function knowledgeMemorySearch(
-  host: MemoryFacadeHost,
+  deps: KnowledgeFacadePort,
   input: MemorySearchQuery,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return deps.invokeAndUnwrap(
     {
       toolName: "memory.search",
       args: {
@@ -63,10 +87,10 @@ export async function knowledgeMemorySearch(
 }
 
 export async function knowledgeDocsIngest(
-  host: MemoryFacadeHost,
+  deps: KnowledgeFacadePort,
   input: DocsIngestInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return deps.invokeAndUnwrap(
     {
       toolName: "docs.ingest",
       args: {
@@ -86,10 +110,10 @@ export async function knowledgeDocsIngest(
 }
 
 export async function knowledgeEmbeddingsIndex(
-  host: MemoryFacadeHost,
+  deps: KnowledgeFacadePort,
   input: EmbeddingIndexInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return deps.invokeAndUnwrap(
     {
       toolName: "embeddings.index",
       args: {
@@ -106,10 +130,10 @@ export async function knowledgeEmbeddingsIndex(
 }
 
 export async function knowledgeEmbeddingsQuery(
-  host: MemoryFacadeHost,
+  deps: KnowledgeFacadePort,
   input: EmbeddingQueryInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return deps.invokeAndUnwrap(
     {
       toolName: "embeddings.query",
       args: {

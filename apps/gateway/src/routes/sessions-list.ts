@@ -60,7 +60,7 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    const items = fastify.gateway.listSessions(parsed.data.limit, parsed.data.cursor);
+    const items = fastify.services.sessionsList.listSessions(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last ? `${last.updatedAt}|${last.sessionId}` : undefined;
 
@@ -69,18 +69,18 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/sessions/:sessionId", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
-    return reply.send(fastify.gateway.getSession(sessionId));
+    return reply.send(fastify.services.sessionsList.getSession(sessionId));
   });
 
   fastify.get("/api/v1/sessions/:sessionId/transcript", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
-    const events = await fastify.gateway.getTranscript(sessionId);
+    const events = await fastify.services.sessionsList.getTranscript(sessionId);
     return reply.send({ items: events });
   });
 
   fastify.get("/api/v1/sessions/:sessionId/summary", async (request, reply) => {
     const sessionId = (request.params as { sessionId: string }).sessionId;
-    return reply.send(await fastify.gateway.getSessionSummary(sessionId));
+    return reply.send(await fastify.services.sessionsList.getSessionSummary(sessionId));
   });
 
   fastify.get("/api/v1/sessions/:sessionId/timeline", async (request, reply) => {
@@ -89,6 +89,6 @@ export const sessionsListRoute: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send({ items: await fastify.gateway.listSessionTimeline(sessionId, parsed.data.limit) });
+    return reply.send({ items: await fastify.services.sessionsList.listSessionTimeline(sessionId, parsed.data.limit) });
   });
 };

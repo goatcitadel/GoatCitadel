@@ -19,9 +19,7 @@ describe("dashboard memory file route", () => {
     ]);
 
     app = Fastify();
-    app.decorate("gateway", {
-      listMemoryFiles,
-    } as never);
+    app.decorate("services", { dashboard: { listMemoryFiles } } as never);
     await app.register(dashboardRoutes);
 
     const response = await app.inject({

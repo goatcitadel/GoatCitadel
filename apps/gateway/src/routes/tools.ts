@@ -24,18 +24,24 @@ const createGrantSchema = z.object({
   scope: grantScopeSchema,
   scopeRef: z.string().optional(),
   grantType: z.enum(["one_time", "ttl", "persistent"]).optional(),
-  constraints: z.object({
-    allowedHosts: z.array(z.string().min(1)).optional(),
-    allowedPaths: z.array(z.string().min(1)).optional(),
-    referenceRoots: z.array(z.object({
-      label: z.string().min(1),
-      rootPath: z.string().min(1),
-      access: z.literal("read_only"),
-    })).optional(),
-    maxWritesPerHour: z.number().int().positive().optional(),
-    maxCallsPerHour: z.number().int().positive().optional(),
-    mutationAllowed: z.boolean().optional(),
-  }).optional(),
+  constraints: z
+    .object({
+      allowedHosts: z.array(z.string().min(1)).optional(),
+      allowedPaths: z.array(z.string().min(1)).optional(),
+      referenceRoots: z
+        .array(
+          z.object({
+            label: z.string().min(1),
+            rootPath: z.string().min(1),
+            access: z.literal("read_only"),
+          }),
+        )
+        .optional(),
+      maxWritesPerHour: z.number().int().positive().optional(),
+      maxCallsPerHour: z.number().int().positive().optional(),
+      mutationAllowed: z.boolean().optional(),
+    })
+    .optional(),
   createdBy: z.string().min(1),
   expiresAt: z.string().datetime().optional(),
   usesRemaining: z.number().int().positive().optional(),
@@ -47,7 +53,7 @@ const revokeParamsSchema = z.object({
 
 export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tools/catalog", async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listToolCatalog() });
+    return reply.send({ items: fastify.services.tools.listToolCatalog() });
   });
 
   fastify.post("/api/v1/tools/access/evaluate", async (request, reply) => {
@@ -56,7 +62,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    return reply.send(fastify.gateway.evaluateToolAccess(parsed.data));
+    return reply.send(fastify.services.tools.evaluateToolAccess(parsed.data));
   });
 
   fastify.get("/api/v1/tools/grants", async (request, reply) => {
@@ -66,7 +72,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     return reply.send({
-      items: fastify.gateway.listToolGrants(parsed.data.scope, parsed.data.scopeRef, parsed.data.limit),
+      items: fastify.services.tools.listToolGrants(parsed.data.scope, parsed.data.scopeRef, parsed.data.limit),
     });
   });
 
@@ -77,7 +83,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const created = fastify.gateway.createToolGrant(parsed.data);
+      const created = fastify.services.tools.createToolGrant(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -90,7 +96,7 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
 
-    const revoked = fastify.gateway.revokeToolGrant(params.data.grantId);
+    const revoked = fastify.services.tools.revokeToolGrant(params.data.grantId);
     if (!revoked) {
       return reply.code(404).send({ error: `Tool grant ${params.data.grantId} not found or already revoked` });
     }

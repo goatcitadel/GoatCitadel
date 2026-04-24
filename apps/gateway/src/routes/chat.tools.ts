@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type { CodeModeApprovalQueueItem } from "../services/capability-system-service.js";
 
 const chatToolDecisionSchema = z.object({
   sessionId: z.string().min(1),
@@ -21,7 +22,9 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
     if (!query.success) {
       return reply.code(400).send({ error: query.error.flatten() });
     }
-    const items = fastify.gateway.listChatPendingApprovals(query.data.sessionId);
+    const items = fastify.services.chatTools.listChatPendingApprovals(
+      query.data.sessionId,
+    ) as CodeModeApprovalQueueItem[];
     const activeItems = items.filter((item) => !item.stale);
     return reply.send({
       items,
@@ -36,7 +39,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      const result = await fastify.gateway.getChatToolArtifactContent(params.data.artifactId);
+      const result = await fastify.services.chatTools.getChatToolArtifactContent(params.data.artifactId);
       return reply.send(result);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -49,21 +52,26 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      const result = await fastify.gateway.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "approve", {
-        allowScope: body.data.allowScope ?? "once",
+      const result = await fastify.services.chatTools.resolveChatToolApproval(
+        body.data.sessionId,
+        body.data.approvalId,
+        "approve",
+        {
+          allowScope: body.data.allowScope ?? "once",
+        },
+      );
+      return reply.send({
+        ok: true,
+        approvalId: body.data.approvalId,
+        allowScope: result.allowScope,
+        grant: result.grant,
+        resumed: result.resumed,
+        resumedTurnId: result.resumedTurnId,
+        resumedRunId: result.resumedRunId,
       });
-        return reply.send({
-          ok: true,
-          approvalId: body.data.approvalId,
-          allowScope: result.allowScope,
-          grant: result.grant,
-          resumed: result.resumed,
-          resumedTurnId: result.resumedTurnId,
-          resumedRunId: result.resumedRunId,
-        });
-      } catch (error) {
-        return reply.code(400).send({ error: (error as Error).message });
-      }
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.post("/api/v1/chat/tools/deny", async (request, reply) => {
@@ -72,7 +80,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      await fastify.gateway.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "reject");
+      await fastify.services.chatTools.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "reject");
       return reply.send({ ok: true, approvalId: body.data.approvalId });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

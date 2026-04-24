@@ -23,7 +23,7 @@ import { resolveChannelConfigTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 
-export interface IntegrationDiagnosticsHost {
+export interface IntegrationDiagnosticsPort {
   readonly config: {
     toolPolicy: {
       tools: {
@@ -43,8 +43,25 @@ export interface IntegrationDiagnosticsHost {
   resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
 }
 
+export class IntegrationDiagnosticsService {
+  public constructor(private readonly deps: IntegrationDiagnosticsPort) {}
+
+  public buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"] {
+    return buildIntegrationConnectionChecks(this.deps, connection);
+  }
+
+  public runIntegrationConnectionLiveChecks(
+    connection: IntegrationConnection,
+    options: {
+      includeSandboxSend: boolean;
+    },
+  ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe?: ChannelProbeReport }> {
+    return runIntegrationConnectionLiveChecks(this.deps, connection, options);
+  }
+}
+
 export function buildIntegrationConnectionChecks(
-  host: IntegrationDiagnosticsHost,
+  deps: IntegrationDiagnosticsPort,
   connection: IntegrationConnection,
 ): ConnectorDiagnosticReport["checks"] {
   const checks: ConnectorDiagnosticReport["checks"] = [];
@@ -54,8 +71,8 @@ export function buildIntegrationConnectionChecks(
   const channelCapabilities =
     connection.kind === "channel" ? describeChannelCapabilities(connection.key, config) : undefined;
   const requireSecretRef = (key: string, label: string, directKey: string, envKey: string) => {
-    const direct = host.readConnectionConfigValue(config, directKey);
-    const envName = host.readConnectionConfigValue(config, envKey);
+    const direct = deps.readConnectionConfigValue(config, directKey);
+    const envName = deps.readConnectionConfigValue(config, envKey);
     const envPresent = envName ? Boolean(process.env[envName]) : false;
     checks.push({
       key,
@@ -76,7 +93,7 @@ export function buildIntegrationConnectionChecks(
       return;
     }
     const safeRemote = !urlValue || connectionUrlHelpers.isConnectionUrlRemoteSafe(urlValue);
-    const allowlisted = !urlValue || host.isConnectionUrlAllowlisted(urlValue);
+    const allowlisted = !urlValue || deps.isConnectionUrlAllowlisted(urlValue);
     checks.push({
       key,
       status: !urlValue ? "fail" : !safeRemote ? "fail" : allowlisted ? "pass" : "warn",
@@ -112,38 +129,38 @@ export function buildIntegrationConnectionChecks(
         checks.push({
           key: "auth",
           status:
-            host.readConnectionConfigValue(config, "webhookUrl") ||
-            host.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(host, config, "botTokenEnv")
+            deps.readConnectionConfigValue(config, "webhookUrl") ||
+            deps.readConnectionConfigValue(config, "botToken") ||
+            hasConnectionEnvValue(deps, config, "botTokenEnv")
               ? "pass"
               : "fail",
           message:
-            host.readConnectionConfigValue(config, "webhookUrl") ||
-            host.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(host, config, "botTokenEnv")
+            deps.readConnectionConfigValue(config, "webhookUrl") ||
+            deps.readConnectionConfigValue(config, "botToken") ||
+            hasConnectionEnvValue(deps, config, "botTokenEnv")
               ? "Slack bot token or webhook is configured."
               : "Slack bot token or webhook is missing.",
         });
-        checkUrl("url", "Slack webhook URL", host.readConnectionConfigValue(config, "webhookUrl"), false);
+        checkUrl("url", "Slack webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
         requireText("target", "Default Slack channel", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "discord":
         checks.push({
           key: "auth",
           status:
-            host.readConnectionConfigValue(config, "webhookUrl") ||
-            host.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(host, config, "botTokenEnv")
+            deps.readConnectionConfigValue(config, "webhookUrl") ||
+            deps.readConnectionConfigValue(config, "botToken") ||
+            hasConnectionEnvValue(deps, config, "botTokenEnv")
               ? "pass"
               : "fail",
           message:
-            host.readConnectionConfigValue(config, "webhookUrl") ||
-            host.readConnectionConfigValue(config, "botToken") ||
-            hasConnectionEnvValue(host, config, "botTokenEnv")
+            deps.readConnectionConfigValue(config, "webhookUrl") ||
+            deps.readConnectionConfigValue(config, "botToken") ||
+            hasConnectionEnvValue(deps, config, "botTokenEnv")
               ? "Discord bot token or webhook is configured."
               : "Discord bot token or webhook is missing.",
         });
-        checkUrl("url", "Discord webhook URL", host.readConnectionConfigValue(config, "webhookUrl"), false);
+        checkUrl("url", "Discord webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), false);
         requireText("target", "Default Discord channel", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "telegram":
@@ -151,14 +168,14 @@ export function buildIntegrationConnectionChecks(
         requireText("target", "Default Telegram chat", resolveChannelConfigTarget(connection.key, config), "warn");
         checks.push({
           key: "url",
-          status: isHostAllowlisted(host, "api.telegram.org") ? "pass" : "warn",
-          message: isHostAllowlisted(host, "api.telegram.org")
+          status: isHostAllowlisted(deps, "api.telegram.org") ? "pass" : "warn",
+          message: isHostAllowlisted(deps, "api.telegram.org")
             ? "Telegram API host is allowlisted."
             : "Telegram API host is not allowlisted.",
         });
         break;
       case "google-chat":
-        checkUrl("url", "Google Chat webhook URL", host.readConnectionConfigValue(config, "webhookUrl"), true);
+        checkUrl("url", "Google Chat webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
         requireText(
           "target",
           "Default Google Chat thread key",
@@ -167,14 +184,14 @@ export function buildIntegrationConnectionChecks(
         );
         break;
       case "teams":
-        checkUrl("url", "Teams webhook URL", host.readConnectionConfigValue(config, "webhookUrl"), true);
+        checkUrl("url", "Teams webhook URL", deps.readConnectionConfigValue(config, "webhookUrl"), true);
         break;
       case "whatsapp":
         requireSecretRef("auth", "WhatsApp access token", "accessToken", "accessTokenEnv");
         requireText(
           "sender",
           "WhatsApp phone number id",
-          host.readConnectionConfigValue(config, "phoneNumberId"),
+          deps.readConnectionConfigValue(config, "phoneNumberId"),
           "warn",
         );
         requireText("target", "Default WhatsApp recipient", resolveChannelConfigTarget(connection.key, config), "warn");
@@ -183,13 +200,13 @@ export function buildIntegrationConnectionChecks(
         checkUrl(
           "url",
           "Signal bridge URL",
-          host.readConnectionConfigValue(config, "baseUrl") ?? host.readConnectionConfigValue(config, "bridgeUrl"),
+          deps.readConnectionConfigValue(config, "baseUrl") ?? deps.readConnectionConfigValue(config, "bridgeUrl"),
           true,
         );
         requireText("target", "Default Signal recipient", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "mattermost":
-        checkUrl("url", "Mattermost server URL", host.readConnectionConfigValue(config, "serverUrl"), true);
+        checkUrl("url", "Mattermost server URL", deps.readConnectionConfigValue(config, "serverUrl"), true);
         requireSecretRef("auth", "Mattermost bot token", "botToken", "botTokenEnv");
         requireText("target", "Default Mattermost channel", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
@@ -197,14 +214,14 @@ export function buildIntegrationConnectionChecks(
         checkUrl(
           "url",
           "iMessage bridge URL",
-          host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl"),
+          deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl"),
           true,
         );
         requireSecretRef("auth", "iMessage bridge password", "password", "passwordEnv");
         requireText("target", "Default iMessage handle", resolveChannelConfigTarget(connection.key, config), "warn");
         break;
       case "nextcloud-talk":
-        checkUrl("url", "Nextcloud base URL", host.readConnectionConfigValue(config, "baseUrl"), true);
+        checkUrl("url", "Nextcloud base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
         requireSecretRef("auth", "Nextcloud Talk token", "token", "tokenEnv");
         requireText(
           "target",
@@ -223,19 +240,19 @@ export function buildIntegrationConnectionChecks(
         break;
       case "zalouser": {
         const baseUrl =
-          host.readConnectionConfigValue(config, "baseUrl") ??
-          host.readConnectionConfigValue(config, "bridgeUrl") ??
-          host.readConnectionConfigValue(config, "serverUrl");
+          deps.readConnectionConfigValue(config, "baseUrl") ??
+          deps.readConnectionConfigValue(config, "bridgeUrl") ??
+          deps.readConnectionConfigValue(config, "serverUrl");
         checkUrl("url", "Zalo User bridge URL", baseUrl, true);
         const hasAuth = Boolean(
-          host.readConnectionConfigValue(config, "authToken") ||
-          hasConnectionEnvValue(host, config, "authTokenEnv") ||
-          host.readConnectionConfigValue(config, "authorization") ||
-          hasConnectionEnvValue(host, config, "authorizationEnv") ||
-          host.readConnectionConfigValue(config, "basicAuth") ||
-          hasConnectionEnvValue(host, config, "basicAuthEnv") ||
-          host.readConnectionConfigValue(config, "accessToken") ||
-          hasConnectionEnvValue(host, config, "accessTokenEnv"),
+          deps.readConnectionConfigValue(config, "authToken") ||
+          hasConnectionEnvValue(deps, config, "authTokenEnv") ||
+          deps.readConnectionConfigValue(config, "authorization") ||
+          hasConnectionEnvValue(deps, config, "authorizationEnv") ||
+          deps.readConnectionConfigValue(config, "basicAuth") ||
+          hasConnectionEnvValue(deps, config, "basicAuthEnv") ||
+          deps.readConnectionConfigValue(config, "accessToken") ||
+          hasConnectionEnvValue(deps, config, "accessTokenEnv"),
         );
         checks.push({
           key: "auth",
@@ -260,68 +277,68 @@ export function buildIntegrationConnectionChecks(
         break;
     }
   } else if (connection.kind === "model_provider") {
-    checkUrl("url", "Provider base URL", host.readConnectionConfigValue(config, "baseUrl"), true);
-    requireText("target", "Default model", host.readConnectionConfigValue(config, "model"), "warn");
-    const isLocal = connectionUrlHelpers.isConnectionValueLocalUrl(host.readConnectionConfigValue(config, "baseUrl"));
+    checkUrl("url", "Provider base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
+    requireText("target", "Default model", deps.readConnectionConfigValue(config, "model"), "warn");
+    const isLocal = connectionUrlHelpers.isConnectionValueLocalUrl(deps.readConnectionConfigValue(config, "baseUrl"));
     checks.push({
       key: "auth",
       status:
-        isLocal || host.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(host, config, "apiKeyEnv")
+        isLocal || deps.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(deps, config, "apiKeyEnv")
           ? "pass"
           : "fail",
       message: isLocal
         ? "Local model endpoint does not require an API key."
-        : host.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(host, config, "apiKeyEnv")
+        : deps.readConnectionConfigValue(config, "apiKey") || hasConnectionEnvValue(deps, config, "apiKeyEnv")
           ? "API key is configured."
           : "API key is missing.",
     });
   } else if (connection.kind === "automation") {
     if (connection.key === "webhooks") {
-      checkUrl("url", "Webhook base URL", host.readConnectionConfigValue(config, "baseUrl"), true);
+      checkUrl("url", "Webhook base URL", deps.readConnectionConfigValue(config, "baseUrl"), true);
     }
     if (connection.key === "gmail") {
-      requireText("auth", "Gmail refresh token handle", host.readConnectionConfigValue(config, "refreshTokenHandle"));
+      requireText("auth", "Gmail refresh token handle", deps.readConnectionConfigValue(config, "refreshTokenHandle"));
       checks.push({
         key: "auth_mode",
         status:
-          hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
+          hasConnectionEnvValue(deps, config, "clientIdEnv") && hasConnectionEnvValue(deps, config, "clientSecretEnv")
             ? "pass"
             : "warn",
         message:
-          hasConnectionEnvValue(host, config, "clientIdEnv") && hasConnectionEnvValue(host, config, "clientSecretEnv")
+          hasConnectionEnvValue(deps, config, "clientIdEnv") && hasConnectionEnvValue(deps, config, "clientSecretEnv")
             ? "OAuth client env references are configured."
             : "OAuth client env references are not fully configured yet.",
       });
     }
     if (connection.key === "gif-search") {
-      requireText("provider", "GIF search provider", host.readConnectionConfigValue(config, "provider"), "warn");
+      requireText("provider", "GIF search provider", deps.readConnectionConfigValue(config, "provider"), "warn");
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(host, config, "apiKeyEnv") || host.readConnectionConfigValue(config, "apiKey")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv") || deps.readConnectionConfigValue(config, "apiKey")
             ? "GIF search API key is configured."
             : "GIF search API key is missing.",
       });
     }
     if (connection.key === "peekaboo-screen" || connection.key === "camera-photo-video") {
       const bridgeUrl =
-        host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+        deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
       checkUrl("url", "Local bridge URL", bridgeUrl, true);
       checks.push({
         key: "bridge_auth",
         status:
           connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ||
-          host.readConnectionConfigValue(config, "authToken") ||
-          hasConnectionEnvValue(host, config, "authTokenEnv")
+          deps.readConnectionConfigValue(config, "authToken") ||
+          hasConnectionEnvValue(deps, config, "authTokenEnv")
             ? "pass"
             : "warn",
         message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
           ? "Local bridge URL is configured."
-          : host.readConnectionConfigValue(config, "authToken") || hasConnectionEnvValue(host, config, "authTokenEnv")
+          : deps.readConnectionConfigValue(config, "authToken") || hasConnectionEnvValue(deps, config, "authTokenEnv")
             ? "Remote bridge authentication is configured."
             : "Remote bridge authentication is not configured.",
       });
@@ -331,19 +348,19 @@ export function buildIntegrationConnectionChecks(
       checks.push({
         key: "auth",
         status:
-          hasConnectionEnvValue(host, config, "apiKeyEnv") && hasConnectionEnvValue(host, config, "tokenEnv")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv") && hasConnectionEnvValue(deps, config, "tokenEnv")
             ? "pass"
             : "fail",
         message:
-          hasConnectionEnvValue(host, config, "apiKeyEnv") && hasConnectionEnvValue(host, config, "tokenEnv")
+          hasConnectionEnvValue(deps, config, "apiKeyEnv") && hasConnectionEnvValue(deps, config, "tokenEnv")
             ? "Trello API credentials are configured."
             : "Trello API credentials are missing.",
       });
-      requireText("target", "Default Trello board", host.readConnectionConfigValue(config, "defaultBoardId"), "warn");
+      requireText("target", "Default Trello board", deps.readConnectionConfigValue(config, "defaultBoardId"), "warn");
     }
     if (["apple-notes", "apple-reminders", "things3", "bear"].includes(connection.key)) {
       const bridgeUrl =
-        host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+        deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
       checkUrl("url", "Local bridge URL", bridgeUrl, true);
       checks.push({
         key: "host_requirement",
@@ -356,28 +373,28 @@ export function buildIntegrationConnectionChecks(
   } else if (connection.kind === "platform") {
     if (connection.key === "macos-menubar-voice") {
       const bridgeUrl =
-        host.readConnectionConfigValue(config, "bridgeUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+        deps.readConnectionConfigValue(config, "bridgeUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
       checkUrl("url", "macOS bridge URL", bridgeUrl, true);
       checks.push({
         key: "host_requirement",
         status: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl) ? "pass" : "warn",
         message: connectionUrlHelpers.isConnectionValueLocalUrl(bridgeUrl)
-          ? "macOS bridge is configured on a local host."
-          : "macOS Menu Bar + Voice expects a trusted local bridge or agent host.",
+          ? "macOS bridge is configured on a local host"
+          : "macOS Menu Bar + Voice expects a trusted local bridge or agent host",
       });
     }
     if (connection.key === "ios-canvas-camera-voice") {
-      requireText("device", "Device ID", host.readConnectionConfigValue(config, "deviceId"), "warn");
+      requireText("device", "Device ID", deps.readConnectionConfigValue(config, "deviceId"), "warn");
       checks.push({
         key: "companion",
         status:
-          host.readConnectionConfigValue(config, "companionSessionId") ||
-          host.readConnectionConfigValue(config, "bridgeUrl")
+          deps.readConnectionConfigValue(config, "companionSessionId") ||
+          deps.readConnectionConfigValue(config, "bridgeUrl")
             ? "pass"
             : "warn",
         message:
-          host.readConnectionConfigValue(config, "companionSessionId") ||
-          host.readConnectionConfigValue(config, "bridgeUrl")
+          deps.readConnectionConfigValue(config, "companionSessionId") ||
+          deps.readConnectionConfigValue(config, "bridgeUrl")
             ? "A companion session or bridge target is configured."
             : "Pair an iOS companion session or bridge target before claiming this capability as ready.",
       });
@@ -388,7 +405,7 @@ export function buildIntegrationConnectionChecks(
 }
 
 export async function runIntegrationConnectionLiveChecks(
-  host: IntegrationDiagnosticsHost,
+  deps: IntegrationDiagnosticsPort,
   connection: IntegrationConnection,
   options: {
     includeSandboxSend: boolean;
@@ -401,15 +418,15 @@ export async function runIntegrationConnectionLiveChecks(
   switch (connection.key) {
     case "slack": {
       const token =
-        host.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-        host.resolveConnectionSecret(config, "token", "tokenEnv");
+        deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+        deps.resolveConnectionSecret(config, "token", "tokenEnv");
       if (!token) {
         return {
           checks: [
             {
               key: "auth_live",
-              status: host.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
-              message: host.readConnectionConfigValue(config, "webhookUrl")
+              status: deps.readConnectionConfigValue(config, "webhookUrl") ? "warn" : "fail",
+              message: deps.readConnectionConfigValue(config, "webhookUrl")
                 ? "Webhook-mode Slack connections cannot be probed non-destructively without a bot token."
                 : "Slack live auth probe skipped because no bot token is configured.",
             },
@@ -418,105 +435,105 @@ export async function runIntegrationConnectionLiveChecks(
       }
       return runSlackBotLiveChecks({
         token,
-        channel: host.readConnectionConfigValue(config, "defaultChannel"),
-        threadTs: host.readConnectionConfigValue(config, "defaultThreadTs"),
+        channel: deps.readConnectionConfigValue(config, "defaultChannel"),
+        threadTs: deps.readConnectionConfigValue(config, "defaultThreadTs"),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "discord":
-      return runDiscordConnectionLiveChecks(host, connection, options.includeSandboxSend);
+      return runDiscordConnectionLiveChecks(deps, connection, options.includeSandboxSend);
     case "telegram": {
       const token =
-        host.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-        host.resolveConnectionSecret(config, "token", "tokenEnv");
+        deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+        deps.resolveConnectionSecret(config, "token", "tokenEnv");
       if (!token) {
         return { checks: [] };
       }
       return runTelegramBotLiveChecks({
         token,
-        chatId: host.readConnectionConfigValue(config, "defaultChatId"),
-        parseMode: host.readConnectionConfigValue(config, "parseMode"),
+        chatId: deps.readConnectionConfigValue(config, "defaultChatId"),
+        parseMode: deps.readConnectionConfigValue(config, "parseMode"),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "whatsapp": {
       const accessToken =
-        host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-        host.resolveConnectionSecret(config, "token", "tokenEnv");
+        deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+        deps.resolveConnectionSecret(config, "token", "tokenEnv");
       const phoneNumberId =
-        host.readConnectionConfigValue(config, "phoneNumberId") ?? host.readConnectionConfigValue(config, "senderId");
+        deps.readConnectionConfigValue(config, "phoneNumberId") ?? deps.readConnectionConfigValue(config, "senderId");
       if (!accessToken || !phoneNumberId) {
         return { checks: [] };
       }
       return runWhatsAppCloudLiveChecks({
         accessToken,
         phoneNumberId,
-        defaultTarget: host.readConnectionConfigValue(config, "defaultTarget"),
-        baseUrl: host.readConnectionConfigValue(config, "baseUrl"),
-        apiVersion: host.readConnectionConfigValue(config, "apiVersion"),
+        defaultTarget: deps.readConnectionConfigValue(config, "defaultTarget"),
+        baseUrl: deps.readConnectionConfigValue(config, "baseUrl"),
+        apiVersion: deps.readConnectionConfigValue(config, "apiVersion"),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "signal": {
       const baseUrl =
-        host.readConnectionConfigValue(config, "baseUrl") ?? host.readConnectionConfigValue(config, "bridgeUrl");
+        deps.readConnectionConfigValue(config, "baseUrl") ?? deps.readConnectionConfigValue(config, "bridgeUrl");
       if (!baseUrl) {
         return { checks: [] };
       }
       return runSignalBridgeLiveChecks({
         baseUrl,
         accountId:
-          host.readConnectionConfigValue(config, "accountId") ?? host.readConnectionConfigValue(config, "account"),
+          deps.readConnectionConfigValue(config, "accountId") ?? deps.readConnectionConfigValue(config, "account"),
         defaultTarget: resolveChannelConfigTarget(connection.key, config),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "google-chat":
       return runWebhookDestinationLiveChecks({
         channelKey: "google-chat",
-        webhookUrl: host.readConnectionConfigValue(config, "webhookUrl"),
+        webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
         includeSandboxSend: options.includeSandboxSend,
-        defaultThreadKey: host.readConnectionConfigValue(config, "defaultThreadKey"),
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        defaultThreadKey: deps.readConnectionConfigValue(config, "defaultThreadKey"),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     case "teams":
       return runWebhookDestinationLiveChecks({
         channelKey: "teams",
-        webhookUrl: host.readConnectionConfigValue(config, "webhookUrl"),
+        webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
         includeSandboxSend: options.includeSandboxSend,
-        cardTitle: host.readConnectionConfigValue(config, "cardTitle"),
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        cardTitle: deps.readConnectionConfigValue(config, "cardTitle"),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     case "mattermost": {
       const token =
-        host.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-        host.resolveConnectionSecret(config, "token", "tokenEnv");
+        deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+        deps.resolveConnectionSecret(config, "token", "tokenEnv");
       const serverUrl =
-        host.readConnectionConfigValue(config, "serverUrl") ?? host.readConnectionConfigValue(config, "baseUrl");
+        deps.readConnectionConfigValue(config, "serverUrl") ?? deps.readConnectionConfigValue(config, "baseUrl");
       if (!token || !serverUrl) {
         return { checks: [] };
       }
       return runMattermostBotLiveChecks({
         serverUrl,
         token,
-        defaultChannel: host.readConnectionConfigValue(config, "defaultChannel"),
-        defaultTeam: host.readConnectionConfigValue(config, "defaultTeam"),
+        defaultChannel: deps.readConnectionConfigValue(config, "defaultChannel"),
+        defaultTeam: deps.readConnectionConfigValue(config, "defaultTeam"),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "imessage": {
       const bridgeUrl =
-        host.readConnectionConfigValue(config, "bridgeUrl") ??
-        host.readConnectionConfigValue(config, "baseUrl") ??
-        host.readConnectionConfigValue(config, "serverUrl");
+        deps.readConnectionConfigValue(config, "bridgeUrl") ??
+        deps.readConnectionConfigValue(config, "baseUrl") ??
+        deps.readConnectionConfigValue(config, "serverUrl");
       const password =
-        host.resolveConnectionSecret(config, "password", "passwordEnv") ??
-        host.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
+        deps.resolveConnectionSecret(config, "password", "passwordEnv") ??
+        deps.resolveConnectionSecret(config, "apiPassword", "apiPasswordEnv");
       if (!bridgeUrl || !password) {
         return { checks: [] };
       }
@@ -524,31 +541,31 @@ export async function runIntegrationConnectionLiveChecks(
         bridgeUrl,
         password,
         defaultHandle:
-          host.readConnectionConfigValue(config, "defaultHandle") ??
-          host.readConnectionConfigValue(config, "defaultTarget"),
+          deps.readConnectionConfigValue(config, "defaultHandle") ??
+          deps.readConnectionConfigValue(config, "defaultTarget"),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "line": {
       const channelAccessToken =
-        host.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv") ??
-        host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-        host.resolveConnectionSecret(config, "token", "tokenEnv");
+        deps.resolveConnectionSecret(config, "channelAccessToken", "channelAccessTokenEnv") ??
+        deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+        deps.resolveConnectionSecret(config, "token", "tokenEnv");
       if (!channelAccessToken) {
         return { checks: [] };
       }
       return runLineBotLiveChecks({
         channelAccessToken,
-        defaultTarget: host.readConnectionConfigValue(config, "defaultTarget"),
+        defaultTarget: deps.readConnectionConfigValue(config, "defaultTarget"),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "zalo": {
       const accessToken =
-        host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
-        host.resolveConnectionSecret(config, "token", "tokenEnv");
+        deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv") ??
+        deps.resolveConnectionSecret(config, "token", "tokenEnv");
       if (!accessToken) {
         return { checks: [] };
       }
@@ -556,24 +573,24 @@ export async function runIntegrationConnectionLiveChecks(
         accessToken,
         defaultTarget: resolveChannelConfigTarget(connection.key, config),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     case "zalouser": {
       const baseUrl =
-        host.readConnectionConfigValue(config, "baseUrl") ??
-        host.readConnectionConfigValue(config, "bridgeUrl") ??
-        host.readConnectionConfigValue(config, "serverUrl");
+        deps.readConnectionConfigValue(config, "baseUrl") ??
+        deps.readConnectionConfigValue(config, "bridgeUrl") ??
+        deps.readConnectionConfigValue(config, "serverUrl");
       if (!baseUrl) {
         return { checks: [] };
       }
       return runZaloUserBridgeLiveChecks({
         baseUrl,
-        authorizationHeader: resolveZaloUserConnectionAuthorizationHeader(host, config),
-        profile: host.readConnectionConfigValue(config, "profile"),
+        authorizationHeader: resolveZaloUserConnectionAuthorizationHeader(deps, config),
+        profile: deps.readConnectionConfigValue(config, "profile"),
         defaultTarget: resolveChannelConfigTarget(connection.key, config),
         includeSandboxSend: options.includeSandboxSend,
-        fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+        fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
     }
     default:
@@ -582,36 +599,36 @@ export async function runIntegrationConnectionLiveChecks(
 }
 
 function hasConnectionEnvValue(
-  host: IntegrationDiagnosticsHost,
+  deps: IntegrationDiagnosticsPort,
   config: Record<string, unknown>,
   key: string,
 ): boolean {
-  const envName = host.readConnectionConfigValue(config, key);
+  const envName = deps.readConnectionConfigValue(config, key);
   return Boolean(envName && process.env[envName]?.trim());
 }
 
-function isHostAllowlisted(host: IntegrationDiagnosticsHost, hostname: string): boolean {
-  if (host.config.toolPolicy.tools.profile === "danger") {
+function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
+  if (deps.config.toolPolicy.tools.profile === "danger") {
     return true;
   }
-  return connectionUrlHelpers.isHostAllowlistedInList(hostname, host.config.toolPolicy.sandbox.networkAllowlist);
+  return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
 }
 
 function resolveZaloUserConnectionAuthorizationHeader(
-  host: IntegrationDiagnosticsHost,
+  deps: IntegrationDiagnosticsPort,
   config: Record<string, unknown>,
 ): string | undefined {
-  const explicit = host.resolveConnectionSecret(config, "authorization", "authorizationEnv");
+  const explicit = deps.resolveConnectionSecret(config, "authorization", "authorizationEnv");
   if (explicit) {
     return explicit;
   }
   const bearer =
-    host.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
-    host.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
+    deps.resolveConnectionSecret(config, "authToken", "authTokenEnv") ??
+    deps.resolveConnectionSecret(config, "accessToken", "accessTokenEnv");
   if (bearer) {
     return `Bearer ${bearer}`;
   }
-  const basic = host.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv");
+  const basic = deps.resolveConnectionSecret(config, "basicAuth", "basicAuthEnv");
   if (basic) {
     return /^Basic\s+/i.test(basic) ? basic : `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
   }
@@ -619,22 +636,22 @@ function resolveZaloUserConnectionAuthorizationHeader(
 }
 
 async function runDiscordConnectionLiveChecks(
-  host: IntegrationDiagnosticsHost,
+  deps: IntegrationDiagnosticsPort,
   connection: IntegrationConnection,
   includeSandboxSend: boolean,
 ): Promise<{ checks: ConnectorDiagnosticReport["checks"]; probe: ChannelProbeReport }> {
   const config = connection.config;
   const token =
-    host.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
-    host.resolveConnectionSecret(config, "token", "tokenEnv");
-  const runtimeMode = host.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
+    deps.resolveConnectionSecret(config, "botToken", "botTokenEnv") ??
+    deps.resolveConnectionSecret(config, "token", "tokenEnv");
+  const runtimeMode = deps.readConnectionConfigValue(config, "runtimeMode") === "gateway" ? "gateway" : "bridge";
   return runDiscordBotLiveChecks({
     token,
-    channelId: host.readConnectionConfigValue(config, "defaultChannelId"),
+    channelId: deps.readConnectionConfigValue(config, "defaultChannelId"),
     runtimeMode,
-    webhookUrl: host.readConnectionConfigValue(config, "webhookUrl"),
+    webhookUrl: deps.readConnectionConfigValue(config, "webhookUrl"),
     includeSandboxSend,
-    runtimeStatus: runtimeMode === "gateway" ? host.getDiscordRuntimeStatus(connection.connectionId) : undefined,
-    fetcher: (url, init) => host.fetchWithDiagnosticsTimeout(url, init),
+    runtimeStatus: runtimeMode === "gateway" ? deps.getDiscordRuntimeStatus(connection.connectionId) : undefined,
+    fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
   });
 }

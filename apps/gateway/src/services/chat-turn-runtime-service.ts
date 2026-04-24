@@ -7,7 +7,7 @@ import type {
   ChatStreamChunk,
 } from "@goatcitadel/contracts";
 import * as chatTurnEntryService from "./chat-turn-entry-service.js";
-import type { ChatTurnPreflightHost, ChatTurnResumeHost } from "./chat-turn-entry-service.js";
+import type { ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 
 export interface ChatTurnRuntime {
   agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
@@ -30,7 +30,7 @@ export interface ChatTurnRuntime {
 }
 
 export class ChatTurnRuntimeService implements ChatTurnRuntime {
-  public constructor(private readonly host: ChatTurnPreflightHost & ChatTurnResumeHost) {}
+  public constructor(private readonly host: ChatTurnRuntimeHost) {}
 
   public agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse> {
     return chatTurnEntryService.agentSendChatMessage(this.host, sessionId, input);

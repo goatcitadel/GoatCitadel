@@ -2,7 +2,7 @@
  * Chat slash-command parser/dispatcher.
  *
  * Parses chat slash commands and dispatches them through an explicit command
- * runtime host. Pure parsing helpers stay separate from mutable command
+ * runtime deps. Pure parsing helpers stay separate from mutable command
  * execution.
  */
 
@@ -23,7 +23,7 @@ import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from ".
 import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 
-export interface ChatCommandHost {
+export interface ChatCommandDependencies {
   readonly storage: {
     chatSessionMeta: {
       ensure(sessionId: string): { workspaceId?: string };
@@ -74,7 +74,6 @@ export interface ChatCommandHost {
     };
   };
   installSkillImport(input: { sourceRef: string; confirmHighRisk?: boolean }): Promise<{ installedSkillId?: string }>;
-  listChatCommandCatalog(): Array<{ usage: string; description: string }>;
   listMcpServers(): McpServerRecord[];
   listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
   listSkills(): Array<{ skillId: string; state: string; note?: string }>;
@@ -167,12 +166,104 @@ export type ChatCommandResult = {
   session?: ChatSessionRecord;
 };
 
+export interface ChatCommandCatalogItem {
+  command: string;
+  usage: string;
+  description: string;
+}
+
+export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
+  return [
+    { command: "/new", usage: "/new [title]", description: "Start a fresh session." },
+    { command: "/mode", usage: "/mode chat|cowork|code", description: "Switch session mode." },
+    { command: "/plan", usage: "/plan [on|off]", description: "Show or set advisory planning mode." },
+    {
+      command: "/model",
+      usage: "/model <model-id|provider-id/model-id>",
+      description: "Override provider/model for this session.",
+    },
+    { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
+    { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
+    { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
+    { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
+    { command: "/think", usage: "/think minimal|standard|extended", description: "Set thinking depth." },
+    { command: "/tool", usage: "/tool safe_auto|manual", description: "Set tool autonomy mode." },
+    {
+      command: "/proactive",
+      usage: "/proactive off|suggest|auto_safe|auto_full",
+      description: "Set proactive mode.",
+    },
+    { command: "/retrieval", usage: "/retrieval standard|layered", description: "Set retrieval routing mode." },
+    { command: "/reflect", usage: "/reflect off|on", description: "Toggle reflection retry mode." },
+    { command: "/research", usage: "/research <query>", description: "Run quick research for current session." },
+    {
+      command: "/delegate",
+      usage: "/delegate <role1,role2,...> :: <objective>",
+      description: "Run task-backed role delegation.",
+    },
+    {
+      command: "/pipeline",
+      usage: "/pipeline prd|build|triage|release :: <objective>",
+      description: "Run a built-in delegation template.",
+    },
+    {
+      command: "/score",
+      usage: "/score <TEST-##> <routing> <honesty> <handoff> <robustness> <usability>",
+      description: "Score the latest run for a prompt-pack test.",
+    },
+    { command: "/pack", usage: "/pack run <TEST-##|all>", description: "Run prompt-pack tests from Prompt Lab." },
+    { command: "/skills", usage: "/skills", description: "List installed skills and their runtime state." },
+    {
+      command: "/skill",
+      usage: "/skill enable|sleep|disable <skillId>",
+      description: "Change an installed skill's runtime state.",
+    },
+    { command: "/skill", usage: "/skill search <query>", description: "Search skill import sources." },
+    {
+      command: "/skill",
+      usage: "/skill lookup <query-or-url>",
+      description: "Resolve the best-fit skill source or listing.",
+    },
+    {
+      command: "/skill",
+      usage: "/skill install <sourceRef> [--confirm-high-risk]",
+      description: "Validate and install a skill, disabled by default.",
+    },
+    { command: "/mcp", usage: "/mcp", description: "List configured MCP servers and connection state." },
+    {
+      command: "/mcp",
+      usage: "/mcp connect|disconnect <serverId>",
+      description: "Connect or disconnect a configured MCP server.",
+    },
+    { command: "/mcp", usage: "/mcp templates [query]", description: "List known MCP server templates." },
+    {
+      command: "/mcp",
+      usage: "/mcp add-template <templateId>",
+      description: "Add an MCP template definition in a disconnected state.",
+    },
+    {
+      command: "/project",
+      usage: "/project <project-id|none>",
+      description: "Assign or clear this session project.",
+    },
+    {
+      command: "/attach",
+      usage: "/attach <attachment-id>",
+      description: "Reference an attachment id in your next send.",
+    },
+    { command: "/run", usage: "/run research <query>", description: "Run a named workflow from chat." },
+    { command: "/approve", usage: "/approve <approval-id>", description: "Approve a pending inline tool request." },
+    { command: "/deny", usage: "/deny <approval-id>", description: "Deny a pending inline tool request." },
+    { command: "/help", usage: "/help", description: "Show command catalog." },
+  ];
+}
+
 export async function parseChatCommand(
-  host: ChatCommandHost,
+  deps: ChatCommandDependencies,
   sessionId: string,
   commandText: string,
 ): Promise<ChatCommandResult> {
-  host.getSession(sessionId);
+  deps.getSession(sessionId);
   const parsed = parseSlashCommand(commandText);
   if (!parsed) {
     return {
@@ -195,8 +286,7 @@ export async function parseChatCommand(
   }
 
   if (command === "/help") {
-    const help = host
-      .listChatCommandCatalog()
+    const help = listChatCommandCatalog()
       .map((item) => `${item.usage} - ${item.description}`)
       .join("\n");
     return {
@@ -208,10 +298,10 @@ export async function parseChatCommand(
   }
 
   if (command === "/new") {
-    const sourcePrefs = host.getChatSessionPrefs(sessionId);
-    const sourceProjectId = host.storage.chatSessionProjects.get(sessionId)?.projectId;
-    const session = host.createChatSession({
-      workspaceId: host.storage.chatSessionMeta.ensure(sessionId).workspaceId,
+    const sourcePrefs = deps.getChatSessionPrefs(sessionId);
+    const sourceProjectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
+    const session = deps.createChatSession({
+      workspaceId: deps.storage.chatSessionMeta.ensure(sessionId).workspaceId,
       title: args.join(" ").trim() || undefined,
       projectId: sourceProjectId,
     });
@@ -221,7 +311,7 @@ export async function parseChatCommand(
       updatedAt: _sourceUpdatedAt,
       ...prefsPatch
     } = sourcePrefs;
-    const prefs = host.updateChatSessionPrefs(session.sessionId, prefsPatch);
+    const prefs = deps.updateChatSessionPrefs(session.sessionId, prefsPatch);
     return {
       ok: true,
       command,
@@ -239,14 +329,14 @@ export async function parseChatCommand(
     if (mode !== "chat" && mode !== "cowork" && mode !== "code") {
       return { ok: false, command, args, message: "Usage: /mode chat|cowork|code" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, { mode });
+    const prefs = deps.updateChatSessionPrefs(sessionId, { mode });
     return { ok: true, command, args, prefs, message: `Mode set to ${prefs.mode}.` };
   }
 
   if (command === "/plan") {
     const next = (args[0] ?? "").toLowerCase();
     if (!next) {
-      const prefs = host.getChatSessionPrefs(sessionId);
+      const prefs = deps.getChatSessionPrefs(sessionId);
       return {
         ok: true,
         command,
@@ -258,7 +348,7 @@ export async function parseChatCommand(
     if (next !== "on" && next !== "off") {
       return { ok: false, command, args, message: "Usage: /plan [on|off]" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, {
+    const prefs = deps.updateChatSessionPrefs(sessionId, {
       planningMode: next === "on" ? "advisory" : "off",
     });
     return {
@@ -275,7 +365,7 @@ export async function parseChatCommand(
     if (!target) {
       return { ok: false, command, args, message: "Usage: /model <model-id|provider-id/model-id>" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, {
+    const prefs = deps.updateChatSessionPrefs(sessionId, {
       providerId: target.providerId,
       model: target.model,
     });
@@ -288,7 +378,7 @@ export async function parseChatCommand(
     if (!["auto", "off", "quick", "deep"].includes(webMode)) {
       return { ok: false, command, args, message: "Usage: /web auto|off|quick|deep" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, { webMode });
+    const prefs = deps.updateChatSessionPrefs(sessionId, { webMode });
     return { ok: true, command, args, prefs, message: `Web mode set to ${prefs.webMode}.` };
   }
 
@@ -297,15 +387,15 @@ export async function parseChatCommand(
     if (!["auto", "on", "off"].includes(memoryMode)) {
       return { ok: false, command, args, message: "Usage: /memory auto|on|off" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, { memoryMode });
+    const prefs = deps.updateChatSessionPrefs(sessionId, { memoryMode });
     return { ok: true, command, args, prefs, message: `Memory mode set to ${prefs.memoryMode}.` };
   }
 
   if (command === "/dream") {
-    const workspaceId = host.normalizeWorkspaceId(host.storage.chatSessionMeta.ensure(sessionId).workspaceId);
+    const workspaceId = deps.normalizeWorkspaceId(deps.storage.chatSessionMeta.ensure(sessionId).workspaceId);
     const subcommand = (args[0] ?? "").toLowerCase();
     if (!subcommand) {
-      const run = host.runMemoryMaintenanceNow({ workspaceId, triggerSource: "manual" });
+      const run = deps.runMemoryMaintenanceNow({ workspaceId, triggerSource: "manual" });
       return {
         ok: true,
         command,
@@ -314,9 +404,9 @@ export async function parseChatCommand(
       };
     }
     if (subcommand === "status") {
-      const status = host.getMemoryMaintenanceStatus(workspaceId);
-      const providerId = status.policy.providerId ?? host.getSettings().llm.activeProviderId;
-      const model = status.policy.model ?? host.getSettings().llm.activeModel;
+      const status = deps.getMemoryMaintenanceStatus(workspaceId);
+      const providerId = status.policy.providerId ?? deps.getSettings().llm.activeProviderId;
+      const model = status.policy.model ?? deps.getSettings().llm.activeModel;
       const providerMode = status.policy.providerId || status.policy.model ? "pinned" : "active default";
       const scheduleSummary = status.policy.schedule
         ? `${status.policy.schedule.frequency} ${String(status.policy.schedule.hour).padStart(2, "0")}:${String(status.policy.schedule.minute).padStart(2, "0")} ${status.policy.timeZone}`
@@ -346,7 +436,7 @@ export async function parseChatCommand(
     if (!["minimal", "standard", "extended"].includes(thinkingLevel)) {
       return { ok: false, command, args, message: "Usage: /think minimal|standard|extended" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, { thinkingLevel });
+    const prefs = deps.updateChatSessionPrefs(sessionId, { thinkingLevel });
     return { ok: true, command, args, prefs, message: `Thinking level set to ${prefs.thinkingLevel}.` };
   }
 
@@ -355,7 +445,7 @@ export async function parseChatCommand(
     if (!["safe_auto", "manual"].includes(toolAutonomy)) {
       return { ok: false, command, args, message: "Usage: /tool safe_auto|manual" };
     }
-    const prefs = host.updateChatSessionPrefs(sessionId, { toolAutonomy });
+    const prefs = deps.updateChatSessionPrefs(sessionId, { toolAutonomy });
     return { ok: true, command, args, prefs, message: `Tool autonomy set to ${prefs.toolAutonomy}.` };
   }
 
@@ -364,8 +454,8 @@ export async function parseChatCommand(
     if (!["off", "suggest", "auto_safe", "auto_full"].includes(proactiveMode)) {
       return { ok: false, command, args, message: "Usage: /proactive off|suggest|auto_safe|auto_full" };
     }
-    const policy = host.updateChatSessionProactivePolicy(sessionId, { proactiveMode });
-    const prefs = host.getChatSessionPrefs(sessionId);
+    const policy = deps.updateChatSessionProactivePolicy(sessionId, { proactiveMode });
+    const prefs = deps.getChatSessionPrefs(sessionId);
     return {
       ok: true,
       command,
@@ -380,8 +470,8 @@ export async function parseChatCommand(
     if (!["standard", "layered"].includes(retrievalMode)) {
       return { ok: false, command, args, message: "Usage: /retrieval standard|layered" };
     }
-    host.updateChatSessionProactivePolicy(sessionId, { retrievalMode });
-    const prefs = host.getChatSessionPrefs(sessionId);
+    deps.updateChatSessionProactivePolicy(sessionId, { retrievalMode });
+    const prefs = deps.getChatSessionPrefs(sessionId);
     return {
       ok: true,
       command,
@@ -396,8 +486,8 @@ export async function parseChatCommand(
     if (!["off", "on"].includes(reflectionMode)) {
       return { ok: false, command, args, message: "Usage: /reflect off|on" };
     }
-    host.updateChatSessionProactivePolicy(sessionId, { reflectionMode });
-    const prefs = host.getChatSessionPrefs(sessionId);
+    deps.updateChatSessionProactivePolicy(sessionId, { reflectionMode });
+    const prefs = deps.getChatSessionPrefs(sessionId);
     return {
       ok: true,
       command,
@@ -412,7 +502,7 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /research <query>" };
     }
-    const research = await host.runChatResearch(sessionId, {
+    const research = await deps.runChatResearch(sessionId, {
       query,
       mode: "quick",
     });
@@ -430,7 +520,7 @@ export async function parseChatCommand(
     if (error || !objective || roles.length === 0) {
       return { ok: false, command, args, message: "Usage: /delegate <role1,role2,...> :: <objective>" };
     }
-    const run = await host.runChatDelegation(sessionId, {
+    const run = await deps.runChatDelegation(sessionId, {
       objective,
       roles,
       mode: "sequential",
@@ -448,7 +538,7 @@ export async function parseChatCommand(
     if (!parsedPipeline) {
       return { ok: false, command, args, message: "Usage: /pipeline prd|build|triage|release :: <objective>" };
     }
-    const run = await host.runChatDelegation(sessionId, {
+    const run = await deps.runChatDelegation(sessionId, {
       objective: parsedPipeline.objective,
       roles: parsedPipeline.roles,
       mode: "sequential",
@@ -474,7 +564,7 @@ export async function parseChatCommand(
         message: "Usage: /score <TEST-##> <routing> <honesty> <handoff> <robustness> <usability>",
       };
     }
-    const score = await host.scorePromptPackLatestRunByCode({
+    const score = await deps.scorePromptPackLatestRunByCode({
       sessionId,
       testCode: normalizePromptTestCode(testCodeRaw),
       routingScore: clampPromptScore(routingRaw!),
@@ -498,7 +588,7 @@ export async function parseChatCommand(
       return { ok: false, command, args, message: "Usage: /pack run <TEST-##|all>" };
     }
     const selector = normalizePromptTestCode(args[1] ?? "all");
-    const results = await host.runPromptPackFromChat(sessionId, selector);
+    const results = await deps.runPromptPackFromChat(sessionId, selector);
     return {
       ok: true,
       command,
@@ -508,7 +598,7 @@ export async function parseChatCommand(
   }
 
   if (command === "/skills") {
-    const skills = host.listSkills();
+    const skills = deps.listSkills();
     if (skills.length === 0) {
       return { ok: true, command, args, message: "No installed skills found." };
     }
@@ -531,7 +621,7 @@ export async function parseChatCommand(
         return { ok: false, command, args, message: `Usage: /skill ${action} <skillId>` };
       }
       const state = action === "enable" ? "enabled" : action === "sleep" ? "sleep" : "disabled";
-      const updated = host.setSkillState(skillId, state, `Updated from chat command ${commandText.trim()}`);
+      const updated = deps.setSkillState(skillId, state, `Updated from chat command ${commandText.trim()}`);
       return {
         ok: true,
         command,
@@ -544,7 +634,7 @@ export async function parseChatCommand(
       if (!query) {
         return { ok: false, command, args, message: "Usage: /skill search <query>" };
       }
-      const results = await host.listSkillSources(query, 5);
+      const results = await deps.listSkillSources(query, 5);
       if (results.items.length === 0) {
         return { ok: true, command, args, message: `No skill source matches found for "${query}".` };
       }
@@ -567,7 +657,7 @@ export async function parseChatCommand(
       if (!query) {
         return { ok: false, command, args, message: "Usage: /skill lookup <query-or-url>" };
       }
-      const result = await host.lookupSkillSources(query, 5);
+      const result = await deps.lookupSkillSources(query, 5);
       const bestMatch = result.bestMatch ?? result.items[0];
       if (!bestMatch) {
         return { ok: true, command, args, message: `No skill source resolution found for "${query}".` };
@@ -606,7 +696,7 @@ export async function parseChatCommand(
           message: "Usage: /skill install <sourceRef> [--confirm-high-risk]",
         };
       }
-      const validation = await host.validateSkillImport({ sourceRef });
+      const validation = await deps.validateSkillImport({ sourceRef });
       if (!validation.valid) {
         return {
           ok: false,
@@ -623,7 +713,7 @@ export async function parseChatCommand(
           message: "High-risk skill import requires --confirm-high-risk.",
         };
       }
-      const installed = await host.installSkillImport({ sourceRef, confirmHighRisk });
+      const installed = await deps.installSkillImport({ sourceRef, confirmHighRisk });
       return {
         ok: true,
         command,
@@ -643,7 +733,7 @@ export async function parseChatCommand(
   if (command === "/mcp") {
     const action = (args[0] ?? "").toLowerCase();
     if (!action) {
-      const servers = host.listMcpServers();
+      const servers = deps.listMcpServers();
       if (servers.length === 0) {
         return { ok: true, command, args, message: "No MCP servers configured." };
       }
@@ -666,7 +756,7 @@ export async function parseChatCommand(
       }
       let updated: McpServerRecord;
       try {
-        updated = action === "connect" ? await host.connectMcpServer(serverId) : host.disconnectMcpServer(serverId);
+        updated = action === "connect" ? await deps.connectMcpServer(serverId) : deps.disconnectMcpServer(serverId);
       } catch (error) {
         return {
           ok: false,
@@ -684,7 +774,7 @@ export async function parseChatCommand(
     }
     if (action === "templates") {
       const query = args.slice(1).join(" ").trim().toLowerCase();
-      const templates = host.listMcpTemplates().filter((template) => {
+      const templates = deps.listMcpTemplates().filter((template) => {
         if (!query) {
           return true;
         }
@@ -714,11 +804,11 @@ export async function parseChatCommand(
       if (!templateId) {
         return { ok: false, command, args, message: "Usage: /mcp add-template <templateId>" };
       }
-      const template = host.listMcpTemplates().find((item) => item.templateId.toLowerCase() === templateId);
+      const template = deps.listMcpTemplates().find((item) => item.templateId.toLowerCase() === templateId);
       if (!template) {
         return { ok: false, command, args, message: `Unknown MCP template ${templateId}.` };
       }
-      const existing = host
+      const existing = deps
         .listMcpServers()
         .find((server) => server.label.toLowerCase() === template.label.toLowerCase());
       if (existing) {
@@ -729,7 +819,7 @@ export async function parseChatCommand(
           message: `MCP template ${template.templateId} already exists as ${existing.serverId}.`,
         };
       }
-      const created = host.createMcpServer({
+      const created = deps.createMcpServer({
         label: template.label,
         transport: template.transport,
         command: template.command,
@@ -760,7 +850,7 @@ export async function parseChatCommand(
 
   if (command === "/project") {
     const nextProject = args.join(" ").trim();
-    const updated = host.assignChatSessionProject(
+    const updated = deps.assignChatSessionProject(
       sessionId,
       !nextProject || nextProject === "none" ? undefined : nextProject,
     );
@@ -794,7 +884,7 @@ export async function parseChatCommand(
     if (!query) {
       return { ok: false, command, args, message: "Usage: /run research <query>" };
     }
-    const research = await host.runChatResearch(sessionId, {
+    const research = await deps.runChatResearch(sessionId, {
       query,
       mode: "quick",
     });
@@ -812,7 +902,7 @@ export async function parseChatCommand(
     if (!approvalId) {
       return { ok: false, command, args, message: "Usage: /approve <approval-id>" };
     }
-    await host.resolveChatToolApproval(sessionId, approvalId, "approve");
+    await deps.resolveChatToolApproval(sessionId, approvalId, "approve");
     return { ok: true, command, args, message: `Approved ${approvalId}.` };
   }
 
@@ -821,7 +911,7 @@ export async function parseChatCommand(
     if (!approvalId) {
       return { ok: false, command, args, message: "Usage: /deny <approval-id>" };
     }
-    await host.resolveChatToolApproval(sessionId, approvalId, "reject");
+    await deps.resolveChatToolApproval(sessionId, approvalId, "reject");
     return { ok: true, command, args, message: `Denied ${approvalId}.` };
   }
 

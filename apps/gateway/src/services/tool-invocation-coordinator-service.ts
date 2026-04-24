@@ -11,6 +11,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { ApprovalInboxRepository } from "@goatcitadel/storage";
 import type { HooksService } from "./hooks-service.js";
+import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
@@ -95,7 +96,6 @@ export interface ToolInvocationCoordinatorHost {
   isValidToolName(name: string): boolean;
   evaluateToolDeploymentGuard(request: ToolInvokeRequest): { reason: string } | null | undefined;
   resolveToolHookWorkspaceId(request: ToolInvokeRequest): string;
-  parseToolCallHookPatch(value: Record<string, unknown>): ToolCallHookPatch | undefined;
   primeToolApprovalLifecycle(approvalId: string, request: ToolInvokeRequest): ApprovalRequest;
   scheduleApprovalExplanationById(approvalId: string): void;
   publishRealtime(
@@ -223,7 +223,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         sessionId: normalizedRequest.sessionId,
         taskId: normalizedRequest.taskId,
       },
-      parsePatch: (value) => this.host.parseToolCallHookPatch(value),
+      parsePatch: (value) => parseToolCallHookPatch(value as Record<string, unknown>),
       mergePatch: (current, next) => ({
         ...(current ?? {}),
         ...next,

@@ -82,7 +82,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     const view = parsed.data.view ?? "active";
-    const items = fastify.gateway.listAgents(view, parsed.data.limit);
+    const items = fastify.services.agents.listAgents(view, parsed.data.limit);
     return reply.send({ items, view });
   });
 
@@ -92,7 +92,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.listImportedAgentCatalog(parsed.data));
+      return reply.send(fastify.services.agents.listImportedAgentCatalog(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -101,7 +101,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/agents/catalog/:entryId", async (request, reply) => {
     const entryId = (request.params as { entryId: string }).entryId;
     try {
-      return reply.send(fastify.gateway.getImportedAgentCatalogEntry(entryId));
+      return reply.send(fastify.services.agents.getImportedAgentCatalogEntry(entryId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -113,7 +113,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const imported = await fastify.gateway.importAgencyAgentCatalog(parsed.data ?? {});
+      const imported = await fastify.services.agents.importAgencyAgentCatalog(parsed.data ?? {});
       return reply.code(201).send(imported);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -127,7 +127,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.patchImportedAgentCatalogEntryState(entryId, parsed.data));
+      return reply.send(fastify.services.agents.patchImportedAgentCatalogEntryState(entryId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -140,7 +140,9 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.activateImportedAgentCatalogEntryForSession(parsed.data.sessionId, entryId));
+      return reply.send(
+        fastify.services.agents.activateImportedAgentCatalogEntryForSession(parsed.data.sessionId, entryId),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -149,7 +151,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/agents/:agentId", async (request, reply) => {
     const agentId = (request.params as { agentId: string }).agentId;
     try {
-      return reply.send(fastify.gateway.getAgent(agentId));
+      return reply.send(fastify.services.agents.getAgent(agentId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -161,7 +163,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.gateway.createAgentProfile(parsed.data);
+      const created = fastify.services.agents.createAgentProfile(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -175,7 +177,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.updateAgentProfile(agentId, parsed.data));
+      return reply.send(fastify.services.agents.updateAgentProfile(agentId, parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -188,7 +190,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.archiveAgentProfile(agentId, parsed.data ?? {}));
+      return reply.send(fastify.services.agents.archiveAgentProfile(agentId, parsed.data ?? {}));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -197,7 +199,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/api/v1/agents/:agentId/restore", async (request, reply) => {
     const agentId = (request.params as { agentId: string }).agentId;
     try {
-      return reply.send(fastify.gateway.restoreAgentProfile(agentId));
+      return reply.send(fastify.services.agents.restoreAgentProfile(agentId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -211,7 +213,7 @@ export const agentsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const deleted = fastify.gateway.hardDeleteAgentProfile(agentId);
+      const deleted = fastify.services.agents.hardDeleteAgentProfile(agentId);
       if (!deleted) {
         return reply.code(404).send({ error: `Agent profile ${agentId} not found` });
       }

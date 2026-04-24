@@ -64,7 +64,11 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gateway.listChatProjects(parsed.data.view, parsed.data.limit, parsed.data.workspaceId),
+      items: fastify.services.chatProjects.listChatProjects(
+        parsed.data.view,
+        parsed.data.limit,
+        parsed.data.workspaceId,
+      ),
       view: parsed.data.view,
     });
   });
@@ -75,7 +79,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      const created = fastify.gateway.createChatProject(parsed.data);
+      const created = fastify.services.chatProjects.createChatProject(parsed.data);
       return reply.code(201).send(created);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
@@ -88,7 +92,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await fastify.gateway.importChatProject(parsed.data));
+      return reply.code(201).send(await fastify.services.chatProjects.importChatProject(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -106,7 +110,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(fastify.gateway.updateChatProject(params.data.projectId, body.data));
+      return reply.send(fastify.services.chatProjects.updateChatProject(params.data.projectId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -118,7 +122,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.archiveChatProject(params.data.projectId));
+      return reply.send(fastify.services.chatProjects.archiveChatProject(params.data.projectId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -130,7 +134,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.restoreChatProject(params.data.projectId));
+      return reply.send(fastify.services.chatProjects.restoreChatProject(params.data.projectId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -150,7 +154,7 @@ export function registerChatProjectRoutes(fastify: FastifyInstance): void {
     if (query.data.mode !== "hard") {
       return reply.code(400).send({ error: "Only hard delete is supported for chat projects." });
     }
-    const deleted = fastify.gateway.hardDeleteChatProject(params.data.projectId);
+    const deleted = fastify.services.chatProjects.hardDeleteChatProject(params.data.projectId);
     return reply.send({ deleted, projectId: params.data.projectId, mode: "hard" as const });
   });
 }

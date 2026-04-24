@@ -1,0 +1,70 @@
+import type { CapabilityCatalogScope } from "@goatcitadel/contracts";
+import type { CapabilitySystemService } from "./capability-system-service.js";
+
+export type CapabilitiesRoutePort = Pick<
+  CapabilitySystemService,
+  | "createCodeModeRun"
+  | "createProposal"
+  | "getCandidateDetail"
+  | "getCatalogSnapshot"
+  | "getCodeModeRun"
+  | "getProposalDetail"
+  | "listCatalog"
+  | "listCodeModeRuns"
+  | "listProposals"
+  | "promoteCandidate"
+  | "revokeCandidate"
+  | "rollbackCandidate"
+>;
+
+export class CapabilitiesRouteService {
+  public constructor(private readonly capabilities: CapabilitiesRoutePort) {}
+
+  public listCapabilityCatalog(scope: CapabilityCatalogScope) {
+    return this.capabilities.listCatalog(scope);
+  }
+
+  public getCapabilityCatalogSnapshot(snapshotId: string) {
+    return this.capabilities.getCatalogSnapshot(snapshotId);
+  }
+
+  public listCapabilityProposals(limit = 100) {
+    return this.capabilities.listProposals(limit);
+  }
+
+  public createCapabilityProposal(input: Parameters<CapabilitiesRoutePort["createProposal"]>[0]) {
+    return this.capabilities.createProposal(input);
+  }
+
+  public getCapabilityProposalDetail(proposalId: string) {
+    return this.capabilities.getProposalDetail(proposalId);
+  }
+
+  public getCapabilityCandidateDetail(candidateId: string) {
+    return this.capabilities.getCandidateDetail(candidateId);
+  }
+
+  public promoteCapabilityCandidate(candidateId: string, versionId?: string) {
+    return this.capabilities.promoteCandidate(candidateId, versionId);
+  }
+
+  public revokeCapabilityCandidate(candidateId: string, versionId?: string) {
+    return this.capabilities.revokeCandidate(candidateId, versionId);
+  }
+
+  public rollbackCapabilityCandidate(candidateId: string, targetVersionId: string) {
+    return this.capabilities.rollbackCandidate(candidateId, targetVersionId);
+  }
+
+  public listCodeModeRuns(limit = 100) {
+    return this.capabilities.listCodeModeRuns(limit);
+  }
+
+  public getCodeModeRun(runId: string) {
+    return this.capabilities.getCodeModeRun(runId);
+  }
+
+  public createCodeModeRun(input: Parameters<CapabilitiesRoutePort["createCodeModeRun"]>[0]) {
+    return this.capabilities.createCodeModeRun(input);
+  }
+}

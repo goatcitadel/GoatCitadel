@@ -1,7 +1,7 @@
-import type { GatewayService } from "./gateway-service.js";
+import type { ApprovalRuntime } from "./approval-runtime-service.js";
 
-type ApprovalsRouteGateway = Pick<
-  GatewayService,
+type ApprovalsRoutePort = Pick<
+  ApprovalRuntime,
   | "createApproval"
   | "createApprovalRemoteActionToken"
   | "getApprovalReplay"
@@ -12,47 +12,47 @@ type ApprovalsRouteGateway = Pick<
 >;
 
 export class ApprovalsRouteService {
-  public constructor(private readonly gateway: ApprovalsRouteGateway) {}
+  public constructor(private readonly approvals: ApprovalsRoutePort) {}
 
-  public async createApproval(input: Parameters<ApprovalsRouteGateway["createApproval"]>[0]) {
-    return this.gateway.createApproval(input);
+  public async createApproval(input: Parameters<ApprovalsRoutePort["createApproval"]>[0]) {
+    return this.approvals.createApproval(input);
   }
 
   public listApprovals(
-    status?: Parameters<ApprovalsRouteGateway["listApprovals"]>[0],
-    limit?: Parameters<ApprovalsRouteGateway["listApprovals"]>[1],
+    status?: Parameters<ApprovalsRoutePort["listApprovals"]>[0],
+    limit?: Parameters<ApprovalsRoutePort["listApprovals"]>[1],
   ) {
-    return this.gateway.listApprovals(status, limit);
+    return this.approvals.listApprovals(status, limit);
   }
 
-  public async resolveApprovalsBulk(input: Parameters<ApprovalsRouteGateway["resolveApprovalsBulk"]>[0]) {
-    return this.gateway.resolveApprovalsBulk(input);
+  public async resolveApprovalsBulk(input: Parameters<ApprovalsRoutePort["resolveApprovalsBulk"]>[0]) {
+    return this.approvals.resolveApprovalsBulk(input);
   }
 
   public async resolveApproval(
-    approvalId: Parameters<ApprovalsRouteGateway["resolveApproval"]>[0],
-    input: Parameters<ApprovalsRouteGateway["resolveApproval"]>[1],
+    approvalId: Parameters<ApprovalsRoutePort["resolveApproval"]>[0],
+    input: Parameters<ApprovalsRoutePort["resolveApproval"]>[1],
   ) {
-    return this.gateway.resolveApproval(approvalId, input);
+    return this.approvals.resolveApproval(approvalId, input);
   }
 
   public createApprovalRemoteActionToken(
-    approvalId: Parameters<ApprovalsRouteGateway["createApprovalRemoteActionToken"]>[0],
-    input: Parameters<ApprovalsRouteGateway["createApprovalRemoteActionToken"]>[1],
+    approvalId: Parameters<ApprovalsRoutePort["createApprovalRemoteActionToken"]>[0],
+    input: Parameters<ApprovalsRoutePort["createApprovalRemoteActionToken"]>[1],
   ) {
-    return this.gateway.createApprovalRemoteActionToken(approvalId, input);
+    return this.approvals.createApprovalRemoteActionToken(approvalId, input);
   }
 
   public async resolveApprovalWithRemoteToken(
-    input: Parameters<ApprovalsRouteGateway["resolveApprovalWithRemoteToken"]>[0],
+    input: Parameters<ApprovalsRoutePort["resolveApprovalWithRemoteToken"]>[0],
   ) {
-    return this.gateway.resolveApprovalWithRemoteToken(input);
+    return this.approvals.resolveApprovalWithRemoteToken(input);
   }
 
   public getApprovalReplay(
-    approvalId: Parameters<ApprovalsRouteGateway["getApprovalReplay"]>[0],
-    replayedBy?: Parameters<ApprovalsRouteGateway["getApprovalReplay"]>[1],
+    approvalId: Parameters<ApprovalsRoutePort["getApprovalReplay"]>[0],
+    replayedBy?: Parameters<ApprovalsRoutePort["getApprovalReplay"]>[1],
   ) {
-    return this.gateway.getApprovalReplay(approvalId, replayedBy);
+    return this.approvals.getApprovalReplay(approvalId, replayedBy);
   }
 }

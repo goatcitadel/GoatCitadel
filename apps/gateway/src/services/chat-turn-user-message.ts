@@ -7,9 +7,9 @@
 
 import type { ChatAttachmentRecord, ChatInputPart, ChatMessageRecord } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { isImageMimeType } from "./gateway-service.js";
+import { isImageMimeType } from "./chat-turn-helpers.js";
 
-export interface ChatTurnUserMessageHost {
+export interface ChatTurnUserMessageDependencies {
   readonly storage: Pick<Storage, "chatAttachments">;
   readChatAttachmentContent(attachmentId: string): Promise<{
     bytes: Buffer;
@@ -37,7 +37,7 @@ export function buildUserMessagePrompt(message: ChatMessageRecord): string {
 }
 
 export function resolveMessageAttachments(
-  host: ChatTurnUserMessageHost,
+  deps: ChatTurnUserMessageDependencies,
   message: ChatMessageRecord,
 ): ChatAttachmentRecord[] {
   const attachmentIds = new Set<string>();
@@ -58,11 +58,11 @@ export function resolveMessageAttachments(
   if (attachmentIds.size === 0) {
     return [];
   }
-  return host.storage.chatAttachments.listByIds([...attachmentIds]).slice(0, 6);
+  return deps.storage.chatAttachments.listByIds([...attachmentIds]).slice(0, 6);
 }
 
 export function buildAttachmentPromptContext(
-  host: ChatTurnUserMessageHost,
+  deps: ChatTurnUserMessageDependencies,
   input: unknown,
   supportsVision = false,
 ): string | undefined {
@@ -77,7 +77,7 @@ export function buildAttachmentPromptContext(
     return undefined;
   }
 
-  const attachments = host.storage.chatAttachments.listByIds(attachmentIds).slice(0, 6);
+  const attachments = deps.storage.chatAttachments.listByIds(attachmentIds).slice(0, 6);
   if (attachments.length === 0) {
     return undefined;
   }
@@ -101,7 +101,7 @@ export function buildAttachmentPromptContext(
 }
 
 export async function buildAttachmentMessageParts(
-  host: ChatTurnUserMessageHost,
+  deps: ChatTurnUserMessageDependencies,
   input: unknown,
   prompt: string,
   supportsVision: boolean,
@@ -116,7 +116,7 @@ export async function buildAttachmentMessageParts(
     return undefined;
   }
 
-  const attachments = host.storage.chatAttachments.listByIds(attachmentIds).slice(0, 4);
+  const attachments = deps.storage.chatAttachments.listByIds(attachmentIds).slice(0, 4);
   const parts: Array<Record<string, unknown>> = [
     {
       type: "text",
@@ -129,7 +129,7 @@ export async function buildAttachmentMessageParts(
       continue;
     }
     try {
-      const content = await host.readChatAttachmentContent(attachment.attachmentId);
+      const content = await deps.readChatAttachmentContent(attachment.attachmentId);
       if (content.bytes.length > 5 * 1024 * 1024) {
         continue;
       }
@@ -149,16 +149,16 @@ export async function buildAttachmentMessageParts(
 }
 
 export async function buildUserMessageContent(
-  host: ChatTurnUserMessageHost,
+  deps: ChatTurnUserMessageDependencies,
   message: ChatMessageRecord,
   supportsVision: boolean,
 ): Promise<string | Array<Record<string, unknown>>> {
   const prompt = buildUserMessagePrompt(message);
-  const attachments = resolveMessageAttachments(host, message);
-  const contentParts = await buildAttachmentMessageParts(host, attachments, prompt, supportsVision);
+  const attachments = resolveMessageAttachments(deps, message);
+  const contentParts = await buildAttachmentMessageParts(deps, attachments, prompt, supportsVision);
   if (contentParts) {
     return contentParts;
   }
-  const attachmentContext = buildAttachmentPromptContext(host, attachments, supportsVision);
+  const attachmentContext = buildAttachmentPromptContext(deps, attachments, supportsVision);
   return attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
 }

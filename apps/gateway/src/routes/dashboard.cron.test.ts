@@ -14,20 +14,13 @@ describe("dashboard cron routes", () => {
   });
 
   it("creates a cron job", async () => {
-    const createCronJob = vi.fn((input: {
-      jobId: string;
-      name: string;
-      schedule: string;
-      enabled?: boolean;
-    }) => ({
+    const createCronJob = vi.fn((input: { jobId: string; name: string; schedule: string; enabled?: boolean }) => ({
       ...input,
       enabled: input.enabled ?? true,
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      createCronJob,
-    } as never);
+    app.decorate("services", { cron: { createCronJob } } as never);
     await app.register(dashboardRoutes);
 
     const response = await app.inject({
@@ -59,9 +52,7 @@ describe("dashboard cron routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      setCronJobEnabled,
-    } as never);
+    app.decorate("services", { cron: { setCronJobEnabled } } as never);
     await app.register(dashboardRoutes);
 
     const startResponse = await app.inject({
@@ -85,9 +76,7 @@ describe("dashboard cron routes", () => {
     });
 
     app = Fastify();
-    app.decorate("gateway", {
-      runCronJobNow,
-    } as never);
+    app.decorate("services", { cron: { runCronJobNow } } as never);
     await app.register(dashboardRoutes);
 
     const response = await app.inject({

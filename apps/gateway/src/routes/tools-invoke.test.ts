@@ -16,10 +16,12 @@ describe("tools invoke route", () => {
   it("blocks mutating browser actions without verification", async () => {
     const invokeTool = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
-      invokeTool,
-      isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
-      getDeploymentProfile: vi.fn(() => "local_dev"),
+    app.decorate("services", {
+      toolsInvoke: {
+        invokeTool,
+        isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
+        getDeploymentProfile: vi.fn(() => "local_dev"),
+      },
     } as never);
     await app.register(toolsInvokeRoute);
 
@@ -48,10 +50,12 @@ describe("tools invoke route", () => {
   it("passes validated requests to the gateway with safety metadata", async () => {
     const invokeTool = vi.fn(async (input) => ({ ok: true, input }));
     app = Fastify();
-    app.decorate("gateway", {
-      invokeTool,
-      isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
-      getDeploymentProfile: vi.fn(() => "local_dev"),
+    app.decorate("services", {
+      toolsInvoke: {
+        invokeTool,
+        isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
+        getDeploymentProfile: vi.fn(() => "local_dev"),
+      },
     } as never);
     await app.register(toolsInvokeRoute);
 
@@ -76,29 +80,33 @@ describe("tools invoke route", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({
-      args: expect.objectContaining({
-        __gcSafety: {
-          verified: true,
-          confirmed: true,
-          enforced: true,
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          __gcSafety: {
+            verified: true,
+            confirmed: true,
+            enforced: true,
+          },
+        }),
+        trustLevel: "trusted_workspace",
+        authContext: {
+          boundary: "tool_host_boundary",
+          secretRefs: ["keychain:goatcitadel:provider:openai"],
         },
       }),
-      trustLevel: "trusted_workspace",
-      authContext: {
-        boundary: "tool_host_boundary",
-        secretRefs: ["keychain:goatcitadel:provider:openai"],
-      },
-    }));
+    );
   });
 
   it("blocks browser cookie tools outside trusted_local", async () => {
     const invokeTool = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
-      invokeTool,
-      isFeatureEnabled: vi.fn(() => false),
-      getDeploymentProfile: vi.fn(() => "remote_hardened"),
+    app.decorate("services", {
+      toolsInvoke: {
+        invokeTool,
+        isFeatureEnabled: vi.fn(() => false),
+        getDeploymentProfile: vi.fn(() => "remote_hardened"),
+      },
     } as never);
     await app.register(toolsInvokeRoute);
 
@@ -120,10 +128,12 @@ describe("tools invoke route", () => {
   it("enforces confirm-before-submit in remote_hardened even when the feature flag is off", async () => {
     const invokeTool = vi.fn();
     app = Fastify();
-    app.decorate("gateway", {
-      invokeTool,
-      isFeatureEnabled: vi.fn(() => false),
-      getDeploymentProfile: vi.fn(() => "remote_hardened"),
+    app.decorate("services", {
+      toolsInvoke: {
+        invokeTool,
+        isFeatureEnabled: vi.fn(() => false),
+        getDeploymentProfile: vi.fn(() => "remote_hardened"),
+      },
     } as never);
     await app.register(toolsInvokeRoute);
 

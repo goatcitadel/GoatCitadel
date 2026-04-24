@@ -15,21 +15,23 @@ describe("dashboard parity route removal", () => {
 
   async function createApp(): Promise<FastifyInstance> {
     const next = Fastify();
-    next.decorate("gateway", {
-      getDashboardState: vi.fn(() => ({ ok: true })),
-      getSystemVitals: vi.fn(() => ({
-        hostname: "goat-box",
-        platform: "win32",
-        release: "11",
-        uptimeSeconds: 1,
-        loadAverage: [0, 0, 0],
-        cpuCount: 8,
-        memoryTotalBytes: 16,
-        memoryFreeBytes: 8,
-        memoryUsedBytes: 8,
-        processRssBytes: 4,
-        processHeapUsedBytes: 2,
-      })),
+    next.decorate("services", {
+      dashboard: {
+        getDashboardState: vi.fn(() => ({ ok: true })),
+        getSystemVitals: vi.fn(() => ({
+          hostname: "goat-box",
+          platform: "win32",
+          release: "11",
+          uptimeSeconds: 1,
+          loadAverage: [0, 0, 0],
+          cpuCount: 8,
+          memoryTotalBytes: 16,
+          memoryFreeBytes: 8,
+          memoryUsedBytes: 8,
+          processRssBytes: 4,
+          processHeapUsedBytes: 2,
+        })),
+      },
     } as never);
     await next.register(dashboardRoutes);
     return next;

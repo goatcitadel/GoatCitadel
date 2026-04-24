@@ -21,13 +21,15 @@ describe("llm routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      createChatCompletion,
-      getLlmConfig: vi.fn(),
-      listLlmProviders: vi.fn(),
-      updateLlmConfig: vi.fn(),
-      listLlmModels: vi.fn(),
-      previewLlmModels: vi.fn(),
+    app.decorate("services", {
+      llm: {
+        createChatCompletion,
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
     } as never);
     await app.register(llmRoutes);
 
@@ -68,13 +70,15 @@ describe("llm routes", () => {
 
   it("rejects invalid reasoning controls", async () => {
     app = Fastify();
-    app.decorate("gateway", {
-      createChatCompletion: vi.fn(),
-      getLlmConfig: vi.fn(),
-      listLlmProviders: vi.fn(),
-      updateLlmConfig: vi.fn(),
-      listLlmModels: vi.fn(),
-      previewLlmModels: vi.fn(),
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
     } as never);
     await app.register(llmRoutes);
 
@@ -102,13 +106,15 @@ describe("llm routes", () => {
     const updateLlmConfig = vi.fn(async (request) => request);
 
     app = Fastify();
-    app.decorate("gateway", {
-      createChatCompletion: vi.fn(),
-      getLlmConfig: vi.fn(),
-      listLlmProviders: vi.fn(),
-      updateLlmConfig,
-      listLlmModels: vi.fn(),
-      previewLlmModels: vi.fn(),
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig,
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
     } as never);
     await app.register(llmRoutes);
 
@@ -157,13 +163,15 @@ describe("llm routes", () => {
     const previewLlmModels = vi.fn(async (request) => request);
 
     app = Fastify();
-    app.decorate("gateway", {
-      createChatCompletion: vi.fn(),
-      getLlmConfig: vi.fn(),
-      listLlmProviders: vi.fn(),
-      updateLlmConfig: vi.fn(),
-      listLlmModels: vi.fn(),
-      previewLlmModels,
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels,
+      },
     } as never);
     await app.register(llmRoutes);
 
@@ -224,13 +232,15 @@ describe("llm routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      createChatCompletion: vi.fn(),
-      getLlmConfigWithDetails,
-      listLlmProviders: vi.fn(),
-      updateLlmConfig: vi.fn(),
-      listLlmModels: vi.fn(),
-      previewLlmModels: vi.fn(),
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfigWithDetails,
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+      },
     } as never);
     await app.register(llmRoutes);
 
@@ -264,14 +274,16 @@ describe("llm routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      createChatCompletion: vi.fn(),
-      getLlmConfig: vi.fn(),
-      listLlmProviders: vi.fn(),
-      updateLlmConfig: vi.fn(),
-      listLlmModels: vi.fn(),
-      previewLlmModels: vi.fn(),
-      generateImage,
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+        generateImage,
+      },
     } as never);
     await app.register(llmRoutes);
 

@@ -19,8 +19,10 @@ describe("prompt-pack benchmark routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      runPromptPackBenchmark,
+    app.decorate("services", {
+      promptPacks: {
+        runPromptPackBenchmark,
+      },
     } as never);
     await app.register(promptPackRoutes);
 
@@ -67,8 +69,10 @@ describe("prompt-pack benchmark routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      getPromptPackBenchmarkStatus,
+    app.decorate("services", {
+      promptPacks: {
+        getPromptPackBenchmarkStatus,
+      },
     } as never);
     await app.register(promptPackRoutes);
 
@@ -107,8 +111,10 @@ describe("prompt-pack benchmark routes", () => {
     }));
 
     app = Fastify();
-    app.decorate("gateway", {
-      cancelPromptPackBenchmark,
+    app.decorate("services", {
+      promptPacks: {
+        cancelPromptPackBenchmark,
+      },
     } as never);
     await app.register(promptPackRoutes);
 

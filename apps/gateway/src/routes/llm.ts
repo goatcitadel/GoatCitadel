@@ -178,11 +178,11 @@ const chatCompletionSchema = z.object({
 
 export const llmRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/llm/providers", async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listLlmProviders() });
+    return reply.send({ items: fastify.services.llm.listLlmProviders() });
   });
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {
-    return reply.send(fastify.gateway.getLlmConfigWithDetails());
+    return reply.send(fastify.services.llm.getLlmConfigWithDetails());
   });
 
   fastify.patch("/api/v1/llm/config", async (request, reply) => {
@@ -191,7 +191,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.updateLlmConfig(parsed.data));
+      return reply.send(fastify.services.llm.updateLlmConfig(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -204,7 +204,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send({ items: await fastify.gateway.listLlmModels(parsed.data.providerId) });
+      return reply.send({ items: await fastify.services.llm.listLlmModels(parsed.data.providerId) });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -217,7 +217,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.gateway.previewLlmModels(parsed.data));
+      return reply.send(await fastify.services.llm.previewLlmModels(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -230,7 +230,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(await fastify.gateway.generateImage(parsed.data));
+      return reply.send(await fastify.services.llm.generateImage(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -243,7 +243,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await fastify.gateway.createChatCompletion(parsed.data);
+      const result = await fastify.services.llm.createChatCompletion(parsed.data);
       return reply.send(result);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

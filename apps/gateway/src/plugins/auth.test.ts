@@ -39,7 +39,7 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
   } satisfies AuthConfig;
 
   const app = Fastify();
-  app.decorate("gateway", {
+  app.decorate("gatewayAuth", {
     getOnboardingStartupState: () => ({
       completed: false,
     }),
@@ -157,11 +157,11 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
         persistedToEnv: false,
         warnings: [],
       }),
-      createDeviceAccessRequest: app.gateway.createDeviceAccessRequest,
-      getDeviceAccessRequestStatus: app.gateway.getDeviceAccessRequestStatus,
-      exchangeCompanionSessionFromDeviceGrant: app.gateway.exchangeCompanionSessionFromDeviceGrant,
-      rotateCompanionSession: app.gateway.rotateCompanionSession,
-      getCompanionSessionInfo: app.gateway.getCompanionSessionInfo,
+      createDeviceAccessRequest: app.gatewayAuth.createDeviceAccessRequest,
+      getDeviceAccessRequestStatus: app.gatewayAuth.getDeviceAccessRequestStatus,
+      exchangeCompanionSessionFromDeviceGrant: app.gatewayAuth.exchangeCompanionSessionFromDeviceGrant,
+      rotateCompanionSession: app.gatewayAuth.rotateCompanionSession,
+      getCompanionSessionInfo: app.gatewayAuth.getCompanionSessionInfo,
       listCompanionSessions: () => [],
       getCompanionSessionRecord: () => undefined,
       revokeCompanionSession: async () => ({ revoked: true }),
@@ -268,8 +268,8 @@ describe("auth plugin", () => {
 
     const validateDeviceAccessToken = vi.fn(() => undefined);
     const validateCompanionAccessToken = vi.fn(() => undefined);
-    app.gateway.validateDeviceAccessToken = validateDeviceAccessToken;
-    app.gateway.validateCompanionAccessToken = validateCompanionAccessToken;
+    app.gatewayAuth.validateDeviceAccessToken = validateDeviceAccessToken;
+    app.gatewayAuth.validateCompanionAccessToken = validateCompanionAccessToken;
 
     const response = await app.inject({
       method: "GET",

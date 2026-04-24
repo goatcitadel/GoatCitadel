@@ -4,14 +4,89 @@ import { describe, expect, it } from "vitest";
 const SERVICES_DIR = new URL(".", import.meta.url);
 const HOST_GUARD_EXCLUDED_PATHS = new Set([
   "gateway-service.ts",
+  "gateway-runtime-factory.ts",
   "service-context.ts",
   "gateway/build-service-context.ts",
 ]);
 
 const HOST_COUPLING_PATTERNS = [
-  /import\s+type\s+\{\s*GatewayService\s*\}\s+from\s+"\.\/gateway-service\.js";/m,
+  /import\s+(?:type\s+)?\{[^}]*\bGatewayService\b[^}]*\}\s+from\s+"[^"]*gateway-service\.js";/m,
   /type\s+\w+Host\s*=\s*GatewayService\b/m,
   /GatewayService\["[^"]+"\]/m,
+];
+
+const EXTRACTED_GATEWAY_SERVICE_SYMBOLS = [
+  "ApprovalReplayResult",
+  "ApprovalResolveResult",
+  "DurableChatTurnExecutionPayload",
+  "DurableChatTurnUserInputResumeRecord",
+  "InspectableChatStreamChunk",
+  "PersistableChatStreamChunk",
+  "PreparedChatExecutionPlanResolution",
+  "RemoteApprovalActionTokenIssueResult",
+  "RuntimeSettings",
+  "ResolvedRuntimeGuidance",
+  "CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT",
+  "CHAT_PLANNER_MAX_STEPS",
+  "CHAT_PLANNER_MIN_STEPS",
+  "ChatTurnCancelledError",
+  "CompanionAccessValidationResult",
+  "CompanionSessionRecord",
+  "DEFAULT_DELEGATION_ROLES",
+  "applyExecutionPlanDraftToOrchestrationPlan",
+  "buildCompanionSigningPayload",
+  "buildDelegationFailureGuidance",
+  "buildEmptyAssistantTurnFallbackText",
+  "buildExecutionPlanDraftFromOrchestrationPlan",
+  "buildMemoryContextSystemMessage",
+  "buildPlanningModeSystemInstruction",
+  "buildRetrievalTrace",
+  "buildRoleGapSpecialistSuggestion",
+  "buildSpecialistMatchReason",
+  "buildSpecialistSuggestionFromCapability",
+  "calculateSavings",
+  "coercePlannerExecutionPlanDraft",
+  "createChatCompletionDeadline",
+  "decodeBase64Url",
+  "dedupeChatCitations",
+  "delayChatCompletionRetry",
+  "detectDelegationRoles",
+  "extractCompletionText",
+  "extractSpecialistObjectiveKeywords",
+  "extractPromptFromMessages",
+  "getRemainingChatCompletionTimeoutMs",
+  "inferDegradedAssistantTurnFailure",
+  "inferSpecialistBaseRole",
+  "isChatTurnCancelledError",
+  "isCompanionSessionCurrentlyActive",
+  "isCompanionSessionOperatorActive",
+  "isCompanionSessionRefreshable",
+  "isImageMimeType",
+  "isPersistableChatStreamChunk",
+  "isRecord",
+  "mapCompanionSessionRow",
+  "mergeChatSystemInstructions",
+  "mergeExecutionPlanStepStatuses",
+  "mergeSpecialistEvidence",
+  "mergeSpecialistRoutingHints",
+  "normalizeChatInputParts",
+  "normalizeChatCompletionAttemptError",
+  "normalizeCompanionAuditEvent",
+  "normalizeCompanionNonce",
+  "normalizeCompanionRequestPath",
+  "normalizeCompanionSignature",
+  "normalizeSpecialistCandidateFingerprint",
+  "normalizeToolProtocolRetryRequest",
+  "parseLooseJsonRecord",
+  "renderExecutionPlanAsMarkdown",
+  "scoreSpecialistCandidateMatch",
+  "shouldRetryToolProtocolError",
+  "shouldRetryTransientProviderError",
+  "splitIntoChunks",
+  "toCompanionSessionAdminRecord",
+  "toCompanionSessionInfoResponse",
+  "toTitleCase",
+  "truncateSummaryLine",
 ];
 
 async function collectServiceFiles(dir: URL, prefix = ""): Promise<string[]> {
@@ -33,17 +108,13 @@ async function collectServiceFiles(dir: URL, prefix = ""): Promise<string[]> {
   return files;
 }
 
-function isGatewayRouteServiceAdapter(relativePath: string): boolean {
-  return relativePath === "gateway-route-services.ts" || relativePath.endsWith("-route-service.ts");
-}
-
 describe("gateway service host guard", () => {
   it("does not allow GatewayService host coupling outside gateway-service.ts", async () => {
     const files = await collectServiceFiles(SERVICES_DIR);
     const offenders: string[] = [];
 
     for (const relativePath of files) {
-      if (HOST_GUARD_EXCLUDED_PATHS.has(relativePath) || isGatewayRouteServiceAdapter(relativePath)) {
+      if (HOST_GUARD_EXCLUDED_PATHS.has(relativePath)) {
         continue;
       }
       const source = await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8");
@@ -55,4 +126,49 @@ describe("gateway service host guard", () => {
     offenders.sort();
     expect(offenders).toEqual([]);
   });
+
+  it("does not allow imports of extracted helper and payload types from gateway-service.ts", async () => {
+    const files = await collectServiceFiles(SERVICES_DIR);
+    const offenders: string[] = [];
+
+    for (const relativePath of files) {
+      if (relativePath === "gateway-service.ts") {
+        continue;
+      }
+      const source = await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8");
+      const importedSymbols = extractGatewayServiceNamedImports(source);
+      const extractedImports = importedSymbols.filter((symbol) => EXTRACTED_GATEWAY_SERVICE_SYMBOLS.includes(symbol));
+      if (extractedImports.length > 0) {
+        offenders.push(`${relativePath}: ${extractedImports.sort().join(", ")}`);
+      }
+    }
+
+    offenders.sort();
+    expect(offenders).toEqual([]);
+  });
 });
+
+function extractGatewayServiceNamedImports(source: string): string[] {
+  const importedSymbols: string[] = [];
+  const importPattern =
+    /\b(?:import|export)\s+(?:type\s+)?\{(?<symbols>[\s\S]*?)\}\s+from\s+"[^"]*gateway-service\.js";?/g;
+  for (const match of source.matchAll(importPattern)) {
+    const symbols = match.groups?.symbols;
+    if (!symbols) {
+      continue;
+    }
+    importedSymbols.push(
+      ...symbols
+        .split(",")
+        .map((symbol) =>
+          symbol
+            .trim()
+            .replace(/^type\s+/, "")
+            .split(/\s+as\s+/i)[0]
+            ?.trim(),
+        )
+        .filter((symbol): symbol is string => Boolean(symbol)),
+    );
+  }
+  return importedSymbols;
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { withRouteAccess } from "./route-access.js";
 
 const listQuerySchema = z.object({
@@ -24,7 +25,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const requestedSequenceCursor = parseSequenceCursor(parsed.data.cursor);
-    const bounds = fastify.gateway.getRealtimeEventSequenceBounds();
+    const bounds = fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
     if (
       requestedSequenceCursor !== undefined &&
       bounds.oldestSequence !== undefined &&
@@ -38,7 +39,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    const items = fastify.gateway.listRealtimeEvents(parsed.data.limit, parsed.data.cursor);
+    const items = fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.limit, parsed.data.cursor);
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last ? String(last.sequence) : undefined;
     return reply.send({ items, nextCursor });
@@ -83,13 +84,13 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       parseSequenceCursor(parsed.data.afterCursor) ??
       parseSequenceCursor(readLastEventId(request.headers["last-event-id"]));
     const clientId = parsed.data.clientId?.trim() || randomUUID();
-    const lease = fastify.gateway.openRealtimeStreamLease({
+    const lease = fastify.services.realtimeEvents.openRealtimeStreamLease({
       streamName: "events",
       clientId,
       requestedCursor,
       connectedAt: new Date().toISOString(),
     });
-    const bounds = fastify.gateway.getRealtimeEventSequenceBounds();
+    const bounds = fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
     if (
       requestedCursor !== undefined &&
       bounds.oldestSequence !== undefined &&
@@ -101,7 +102,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         oldestCursor: bounds.oldestSequence,
         newestCursor: bounds.newestSequence,
       });
-      fastify.gateway.closeRealtimeStreamLease({
+      fastify.services.realtimeEvents.closeRealtimeStreamLease({
         leaseId: lease.leaseId,
         closeReason: "replay_gap",
       });
@@ -112,13 +113,13 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
 
     const replay =
       requestedCursor !== undefined
-        ? fastify.gateway.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
-        : fastify.gateway.listRealtimeEvents(parsed.data.replay).reverse();
+        ? fastify.services.realtimeEvents.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
+        : fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.replay).reverse();
     for (const event of replay) {
       send(event, event.sequence);
     }
     const latestReplayEvent = replay[replay.length - 1];
-    fastify.gateway.touchRealtimeStreamLease({
+    fastify.services.realtimeEvents.touchRealtimeStreamLease({
       leaseId: lease.leaseId,
       requestedCursor,
       lastSentSequence: latestReplayEvent?.sequence,
@@ -133,10 +134,10 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       lastSentSequence: latestReplayEvent?.sequence,
     });
 
-    const unsubscribe = fastify.gateway.subscribeRealtime((event) => {
+    const unsubscribe = fastify.services.realtimeEvents.subscribeRealtime((event: RealtimeEvent) => {
       try {
         send(event, event.sequence);
-        fastify.gateway.touchRealtimeStreamLease({
+        fastify.services.realtimeEvents.touchRealtimeStreamLease({
           leaseId: lease.leaseId,
           lastSentSequence: event.sequence,
           lastEventAt: event.timestamp,
@@ -149,7 +150,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     const keepAlive = setInterval(() => {
       try {
         raw.write(": keep-alive\n\n");
-        fastify.gateway.touchRealtimeStreamLease({
+        fastify.services.realtimeEvents.touchRealtimeStreamLease({
           leaseId: lease.leaseId,
         });
       } catch {
@@ -165,7 +166,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       closed = true;
       clearInterval(keepAlive);
       unsubscribe();
-      fastify.gateway.closeRealtimeStreamLease({
+      fastify.services.realtimeEvents.closeRealtimeStreamLease({
         leaseId: lease.leaseId,
         closeReason,
       });

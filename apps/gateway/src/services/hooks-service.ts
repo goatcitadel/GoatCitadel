@@ -14,8 +14,10 @@ import {
   type HookUpdateInput,
   type HookWebhookResponse,
   ValidationError,
+  type RealtimeEvent,
 } from "@goatcitadel/contracts";
-import type { ServiceContext } from "./service-context.js";
+import type { Storage } from "@goatcitadel/storage";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 const DEFAULT_HOOK_DELIVERY_RETRY_POLICY = {
   maxAttempts: 3,
@@ -47,10 +49,17 @@ interface CircuitBreakerState {
   trippedAt?: number;
 }
 
-export type HooksServiceContext = Pick<
-  ServiceContext,
-  "storage" | "publishRealtime" | "normalizeWorkspaceId" | "isFeatureEnabled"
->;
+export interface HooksServiceContext {
+  readonly storage: Storage;
+  publishRealtime(
+    eventType: string,
+    source: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
+  normalizeWorkspaceId(workspaceId?: string): string;
+  isFeatureEnabled(flag: keyof RuntimeSettings["features"]): boolean;
+}
 
 export class HooksService {
   private readonly activeExecutions = new Set<string>();

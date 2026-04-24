@@ -29,18 +29,14 @@ import {
   normalizeToolProtocolRetryRequest,
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
-} from "./gateway-service.js";
+} from "./llm-completion-helpers.js";
+import {
+  applyLlmRequestHookPatch,
+  mergeLlmRequestHookPatch,
+  parseLlmModelSelectHookPatch,
+  parseLlmRequestHookPatch,
+} from "./hook-patch-helpers.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
-
-type LlmRequestHookPatch = {
-  providerId?: string;
-  model?: string;
-  prependMessages?: ChatCompletionRequest["messages"];
-  appendMessages?: ChatCompletionRequest["messages"];
-  tools?: Array<Record<string, unknown>>;
-  toolChoice?: string | Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-};
 
 export interface LlmCompletionHost {
   readonly config: Pick<GatewayRuntimeConfig, "assistant">;
@@ -52,15 +48,6 @@ export interface LlmCompletionHost {
   >;
   resolveMemoryWorkspaceRelativeDir(workspace: string | undefined, sessionId: string | undefined): string;
   resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string;
-  parseLlmModelSelectHookPatch(value: unknown):
-    | {
-        providerId?: string;
-        model?: string;
-      }
-    | undefined;
-  parseLlmRequestHookPatch(value: unknown): LlmRequestHookPatch | undefined;
-  mergeLlmRequestHookPatch(current: LlmRequestHookPatch | undefined, next: LlmRequestHookPatch): LlmRequestHookPatch;
-  applyLlmRequestHookPatch(request: ChatCompletionRequest, patch: LlmRequestHookPatch): ChatCompletionRequest;
   persistContextManifestForCompletionRequest(input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
@@ -173,7 +160,7 @@ export async function createChatCompletion(
       model: hookableRequest.model,
       messageCount: hookableRequest.messages.length,
     },
-    parsePatch: (value) => host.parseLlmModelSelectHookPatch(value),
+    parsePatch: (value) => parseLlmModelSelectHookPatch(value as Record<string, unknown>),
     mergePatch: (current, next) => ({
       ...(current ?? {}),
       ...next,
@@ -210,14 +197,14 @@ export async function createChatCompletion(
       toolChoice: hookableRequest.tool_choice,
       metadata: hookableRequest.metadata ?? {},
     },
-    parsePatch: (value) => host.parseLlmRequestHookPatch(value),
-    mergePatch: (current, next) => host.mergeLlmRequestHookPatch(current, next),
+    parsePatch: (value) => parseLlmRequestHookPatch(value as Record<string, unknown>),
+    mergePatch: (current, next) => mergeLlmRequestHookPatch(current, next),
   });
   if (llmRequestHook.blockedBy) {
     throw new Error(llmRequestHook.blockedBy.reason);
   }
   if (llmRequestHook.patch) {
-    hookableRequest = host.applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
+    hookableRequest = applyLlmRequestHookPatch(hookableRequest, llmRequestHook.patch);
   }
   host.persistContextManifestForCompletionRequest({
     request: hookableRequest,

@@ -284,7 +284,7 @@ function createGatewayMocks() {
 async function buildApp(mode: AuthConfig["mode"]) {
   const { gateway, spies } = createGatewayMocks();
   const app = Fastify();
-  app.decorate("gateway", gateway as never);
+  app.decorate("gatewayAuth", gateway as never);
   app.decorate("services", {
     authAdmin: {
       getAuthCredentialPlan: gateway.getAuthCredentialPlan,

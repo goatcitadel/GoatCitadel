@@ -58,7 +58,7 @@ import type {
   WeeklyImprovementReportRecord,
   WeeklyImprovementSpecialistSuggestionRecord,
 } from "@goatcitadel/contracts";
-import type { RuntimeSettings } from "./gateway-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";

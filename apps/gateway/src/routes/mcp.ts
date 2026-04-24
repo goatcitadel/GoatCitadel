@@ -86,16 +86,16 @@ const MUTATION_ROUTE_OPTIONS = {
 
 export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/mcp/servers", READ_ROUTE_OPTIONS, async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listMcpServers() });
+    return reply.send({ items: fastify.services.mcp.listMcpServers() });
   });
 
   fastify.get("/api/v1/mcp/templates", READ_ROUTE_OPTIONS, async (_request, reply) => {
-    return reply.send({ items: fastify.gateway.listMcpTemplates() });
+    return reply.send({ items: fastify.services.mcp.listMcpTemplates() });
   });
 
   fastify.get("/api/v1/mcp/templates/discovery", READ_ROUTE_OPTIONS, async (_request, reply) => {
     try {
-      return reply.send({ items: fastify.gateway.listMcpTemplateDiscovery() });
+      return reply.send({ items: fastify.services.mcp.listMcpTemplateDiscovery() });
     } catch (error) {
       return reply.code(409).send({ error: (error as Error).message });
     }
@@ -107,7 +107,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.gateway.createMcpServer(parsed.data));
+      return reply.code(201).send(fastify.services.mcp.createMcpServer(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -125,7 +125,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.updateMcpServer(params.data.serverId, body.data));
+      return reply.send(fastify.services.mcp.updateMcpServer(params.data.serverId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -136,7 +136,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    return reply.send(fastify.gateway.deleteMcpServer(params.data.serverId));
+    return reply.send(fastify.services.mcp.deleteMcpServer(params.data.serverId));
   });
 
   fastify.post("/api/v1/mcp/servers/:serverId/connect", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
@@ -145,7 +145,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.connectMcpServer(params.data.serverId));
+      return reply.send(await fastify.services.mcp.connectMcpServer(params.data.serverId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -157,7 +157,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.disconnectMcpServer(params.data.serverId));
+      return reply.send(fastify.services.mcp.disconnectMcpServer(params.data.serverId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -169,7 +169,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.startMcpOAuth(params.data.serverId));
+      return reply.send(fastify.services.mcp.startMcpOAuth(params.data.serverId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -187,7 +187,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(await fastify.gateway.completeMcpOAuth(params.data.serverId, body.data.code, body.data.state));
+      return reply.send(
+        await fastify.services.mcp.completeMcpOAuth(params.data.serverId, body.data.code, body.data.state),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -199,7 +201,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send({ items: fastify.gateway.listMcpTools(params.data.serverId) });
+      return reply.send({ items: fastify.services.mcp.listMcpTools(params.data.serverId) });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -211,7 +213,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.gateway.invokeMcpTool(parsed.data));
+      return reply.send(await fastify.services.mcp.invokeMcpTool(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -229,7 +231,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(fastify.gateway.updateMcpServerPolicy(params.data.serverId, body.data));
+      return reply.send(fastify.services.mcp.updateMcpServerPolicy(params.data.serverId, body.data));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -241,7 +243,7 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: params.error.flatten() });
     }
     try {
-      return reply.send(fastify.gateway.runMcpServerHealthCheck(params.data.serverId));
+      return reply.send(fastify.services.mcp.runMcpServerHealthCheck(params.data.serverId));
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("unknown mcp server");
