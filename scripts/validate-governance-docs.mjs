@@ -279,6 +279,16 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
 
 const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
+for (const [index, line] of releaseEvidence.split(/\r?\n/).entries()) {
+  if (
+    /\]\(\.\.\/apps\/mission-control\//.test(line) &&
+    !/(compatibility-only|legacy|rollback|parity)/i.test(line)
+  ) {
+    errors.push(
+      `docs/1_0_RELEASE_EVIDENCE.md:${index + 1} cites apps/mission-control without labeling it compatibility-only evidence.`,
+    );
+  }
+}
 for (const linkTarget of extractRelativeMarkdownLinks(releaseEvidence)) {
   const resolvedTarget = path.resolve(path.dirname(releaseEvidencePath), linkTarget);
   try {

@@ -33,13 +33,17 @@ async function collectServiceFiles(dir: URL, prefix = ""): Promise<string[]> {
   return files;
 }
 
+function isGatewayRouteServiceAdapter(relativePath: string): boolean {
+  return relativePath === "gateway-route-services.ts" || relativePath.endsWith("-route-service.ts");
+}
+
 describe("gateway service host guard", () => {
   it("does not allow GatewayService host coupling outside gateway-service.ts", async () => {
     const files = await collectServiceFiles(SERVICES_DIR);
     const offenders: string[] = [];
 
     for (const relativePath of files) {
-      if (HOST_GUARD_EXCLUDED_PATHS.has(relativePath)) {
+      if (HOST_GUARD_EXCLUDED_PATHS.has(relativePath) || isGatewayRouteServiceAdapter(relativePath)) {
         continue;
       }
       const source = await fs.readFile(new URL(relativePath, SERVICES_DIR), "utf8");

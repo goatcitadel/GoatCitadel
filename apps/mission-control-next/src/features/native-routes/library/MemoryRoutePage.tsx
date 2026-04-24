@@ -59,6 +59,11 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   }, [memory.data?.memoryItems, search]);
 
   const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
+  const sectionErrors = memory.data?.sectionErrors;
+  const memoryAdminState = memory.data?.memoryAdminState ?? "unknown";
+  const memoryAdminTruthUnknown = memoryAdminState === "unknown";
+  const memoryCanMutate = memoryAdminState === "enabled";
+  const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
 
   return (
     <NativePageFrame
@@ -73,6 +78,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         <div className={`mc-next-runtime-notice tone-${memory.notice.tone}`}>
           <span>{memory.notice.message}</span>
         </div>
+      ) : null}
+      {sectionErrors?.settings ? (
+        <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}
       <NativeGrid>
         <NativeCard
@@ -104,10 +112,31 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             <StatusChip tone="muted">
               Forgotten {memory.data?.memoryItems.filter((item) => item.lifecycleState === "forgotten").length ?? 0}
             </StatusChip>
+            <StatusChip
+              tone={memoryAdminState === "enabled" ? "success" : memoryAdminTruthUnknown ? "warning" : "muted"}
+            >
+              Admin {memoryAdminState}
+            </StatusChip>
           </div>
+          <SectionTruthNotice
+            message={
+              sectionErrors?.memoryItems ??
+              (memoryAdminTruthUnknown
+                ? "Memory item truth is gated because settings truth could not be loaded."
+                : memoryAdminState === "disabled"
+                  ? "Memory lifecycle admin is disabled by settings."
+                  : null)
+            }
+          />
           <div className="mc-next-approvals-list">
             {visibleItems.length === 0 ? (
-              <p className="mc-next-directory-empty">No memory items match the current filter.</p>
+              <p className="mc-next-directory-empty">
+                {memoryAdminTruthUnknown
+                  ? "Memory item truth is unavailable until backend settings truth reloads."
+                  : memoryAdminState === "disabled"
+                    ? "Memory lifecycle admin is disabled in settings."
+                    : "No memory items match the current filter."}
+              </p>
             ) : (
               visibleItems.map((item) => (
                 <button
@@ -175,6 +204,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   <input
                     className="mc-next-settings-input"
                     value={draft.title}
+                    disabled={!memoryCanMutate}
                     onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
                   />
                 </label>
@@ -183,6 +213,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   <input
                     className="mc-next-settings-input"
                     value={draft.ttlOverrideSeconds}
+                    disabled={!memoryCanMutate}
                     onChange={(event) =>
                       setDraft((current) => ({ ...current, ttlOverrideSeconds: event.target.value }))
                     }
@@ -194,6 +225,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   <select
                     className="mc-next-settings-input"
                     value={draft.pinned ? "true" : "false"}
+                    disabled={!memoryCanMutate}
                     onChange={(event) => setDraft((current) => ({ ...current, pinned: event.target.value === "true" }))}
                   >
                     <option value="true">Pinned</option>
@@ -205,6 +237,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   <textarea
                     className="mc-next-settings-textarea"
                     value={draft.content}
+                    disabled={!memoryCanMutate}
                     onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
                   />
                 </label>
@@ -213,7 +246,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <button
                   type="button"
                   className="gc-button"
-                  disabled={memory.busyKey === `item:${memory.selectedItem.itemId}`}
+                  disabled={!memoryCanMutate || memory.busyKey === `item:${memory.selectedItem.itemId}`}
                   onClick={() =>
                     void memory.saveItemPatch(memory.selectedItem!.itemId, {
                       title: draft.title,
@@ -230,7 +263,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <button
                   type="button"
                   className="gc-button danger"
-                  disabled={memory.busyKey === `forget:${memory.selectedItem.itemId}`}
+                  disabled={!memoryCanMutate || memory.busyKey === `forget:${memory.selectedItem.itemId}`}
                   onClick={() => void memory.forgetSelectedItem()}
                 >
                   Forget item
@@ -238,6 +271,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               </div>
               <div className="mc-next-settings-code-block">
                 <span>Item history</span>
+                <SectionTruthNotice message={sectionErrors?.memoryHistory ?? null} />
                 {memory.data?.memoryHistory.length ? (
                   <ul className="mc-next-approvals-compact-list">
                     {memory.data.memoryHistory.slice(0, 10).map((entry) => (
@@ -264,10 +298,25 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           title="Maintenance posture"
           subtitle="Policy, runs, recommendations, and durable linkage stay visible as operator truth."
           stats={[
-            { label: "Enabled", value: memory.data?.maintenanceStatus?.policy.enabled ? "yes" : "no" },
+            {
+              label: "Enabled",
+              value: memoryAdminTruthUnknown
+                ? "unknown"
+                : memory.data?.maintenanceStatus?.policy.enabled
+                  ? "yes"
+                  : "no",
+            },
             { label: "Durable ready", value: memory.data?.maintenanceDurableReady ? "yes" : "no" },
           ]}
         >
+          <SectionTruthNotice
+            message={
+              sectionErrors?.maintenanceStatus ??
+              sectionErrors?.maintenanceRuns ??
+              sectionErrors?.maintenanceRecommendations ??
+              (memoryAdminTruthUnknown ? "Maintenance state is unavailable until settings truth reloads." : null)
+            }
+          />
           {memory.data?.maintenanceEnabled ? (
             <>
               {memory.policyDraft ? (
@@ -277,6 +326,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <select
                       className="mc-next-settings-input"
                       value={memory.policyDraft.enabled ? "true" : "false"}
+                      disabled={!maintenanceControlsReady}
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -293,6 +343,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <select
                       className="mc-next-settings-input"
                       value={memory.policyDraft.runMode}
+                      disabled={!maintenanceControlsReady}
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -315,6 +366,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <input
                       className="mc-next-settings-input"
                       value={memory.policyDraft.providerId}
+                      disabled={!maintenanceControlsReady}
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -328,6 +380,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     <input
                       className="mc-next-settings-input"
                       value={memory.policyDraft.model}
+                      disabled={!maintenanceControlsReady}
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -342,7 +395,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <button
                   type="button"
                   className="gc-button"
-                  disabled={memory.busyKey === "maintenance:run"}
+                  disabled={!maintenanceControlsReady || memory.busyKey === "maintenance:run"}
                   onClick={() => void memory.runMaintenance()}
                 >
                   Run maintenance now
@@ -350,7 +403,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <button
                   type="button"
                   className="gc-button"
-                  disabled={!memory.policyDirty || memory.busyKey === "maintenance:policy"}
+                  disabled={!maintenanceControlsReady || !memory.policyDirty || memory.busyKey === "maintenance:policy"}
                   onClick={() => void memory.savePolicy()}
                 >
                   Save policy
@@ -379,7 +432,11 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               </div>
             </>
           ) : (
-            <p className="mc-next-directory-empty">Memory maintenance is not enabled in this workspace.</p>
+            <p className="mc-next-directory-empty">
+              {memoryAdminTruthUnknown
+                ? "Memory maintenance truth is unavailable until backend settings truth reloads."
+                : "Memory maintenance is not enabled in this workspace."}
+            </p>
           )}
         </NativeCard>
         <NativeCard
@@ -403,6 +460,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                           <button
                             type="button"
                             className="gc-button subtle"
+                            disabled={!maintenanceControlsReady}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
                           >
                             Accept
@@ -410,6 +468,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                           <button
                             type="button"
                             className="gc-button subtle"
+                            disabled={!maintenanceControlsReady}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
                           >
                             Reject
@@ -449,6 +508,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             <div className="mc-next-settings-stack">
               <div className="mc-next-settings-code-block">
                 <span>Selected run detail</span>
+                <SectionTruthNotice
+                  message={
+                    sectionErrors?.selectedRunProvenance ??
+                    sectionErrors?.selectedDurableRun ??
+                    sectionErrors?.selectedDurableTimeline ??
+                    null
+                  }
+                />
                 {memory.selectedRun ? (
                   <>
                     <p>
@@ -480,6 +547,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             { label: "Impact", value: memory.data?.qmdStats ? describeQmdImpact(memory.data.qmdStats) : "Stable" },
           ]}
         >
+          <SectionTruthNotice message={sectionErrors?.qmdStats ?? null} />
           <div className="mc-next-runtime-metric-grid">
             <div className="mc-next-runtime-metric">
               <span>Original tokens</span>
@@ -510,6 +578,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           title="Memory files"
           subtitle="File and QMD evidence stay available as secondary context, not the main memory story."
         >
+          <SectionTruthNotice message={sectionErrors?.files ?? null} />
           {(fileAreas.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
               {fileAreas.slice(0, 8).map((area) => (
@@ -540,5 +609,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         />
       </NativeGrid>
     </NativePageFrame>
+  );
+}
+
+function SectionTruthNotice({ message }: { message: string | null | undefined }) {
+  if (!message) {
+    return null;
+  }
+  return (
+    <div className="mc-next-runtime-notice tone-warning">
+      <span>{message}</span>
+    </div>
   );
 }

@@ -5,7 +5,9 @@ on:
   pull_request:
     paths:
       - "apps/mission-control/**"
+      - "apps/mission-control-next/**"
       - "apps/gateway/**"
+      - "packages/mission-control-shared/**"
       - "scripts/verification/**"
       - ".github/workflows/verification-visual-regression.yml"
       - "package.json"
@@ -15,7 +17,9 @@ on:
       - main
     paths:
       - "apps/mission-control/**"
+      - "apps/mission-control-next/**"
       - "apps/gateway/**"
+      - "packages/mission-control-shared/**"
       - "scripts/verification/**"
       - ".github/workflows/verification-visual-regression.yml"
       - "package.json"
@@ -50,6 +54,8 @@ jobs:
         run: pnpm exec playwright install chromium
 
       - name: Run visual-regression verification
+        env:
+          GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
         run: pnpm verify:visual:regression
 
       - name: Run review generation

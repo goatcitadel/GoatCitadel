@@ -43,4 +43,7 @@ USER goatcitadel
 
 EXPOSE 4173 8787
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.GATEWAY_PORT || '8787') + '/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+
 CMD ["node", "scripts/docker-start.mjs"]

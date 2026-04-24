@@ -1368,6 +1368,7 @@ function createChatModeOrchestrationFoundationSchema(db: DatabaseSync): void {
 }
 
 function createChatImageRoutePreferenceSchema(db: DatabaseSync): void {
+  createChatSessionPrefsTableIfMissing(db);
   addColumnIfMissing(db, "chat_session_prefs", "image_provider_id", "TEXT");
   addColumnIfMissing(db, "chat_session_prefs", "image_model", "TEXT");
 }
@@ -2004,34 +2005,8 @@ function createV11ExpansionSchema(db: DatabaseSync): void {
 }
 
 function createAgenticChatSchema(db: DatabaseSync): void {
+  createChatSessionPrefsTableIfMissing(db);
   db.exec(`
-    CREATE TABLE IF NOT EXISTS chat_session_prefs (
-      session_id TEXT PRIMARY KEY,
-      mode TEXT NOT NULL DEFAULT 'chat',
-      planning_mode TEXT NOT NULL DEFAULT 'off',
-      provider_id TEXT,
-      model TEXT,
-      image_provider_id TEXT,
-      image_model TEXT,
-      web_mode TEXT NOT NULL DEFAULT 'auto',
-      memory_mode TEXT NOT NULL DEFAULT 'auto',
-      thinking_level TEXT NOT NULL DEFAULT 'standard',
-      tool_autonomy TEXT NOT NULL DEFAULT 'safe_auto',
-      vision_fallback_model TEXT,
-      orchestration_enabled INTEGER NOT NULL DEFAULT 1,
-      orchestration_intensity TEXT NOT NULL DEFAULT 'balanced',
-      orchestration_visibility TEXT NOT NULL DEFAULT 'summarized',
-      orchestration_provider_preference TEXT NOT NULL DEFAULT 'balanced',
-      orchestration_review_depth TEXT NOT NULL DEFAULT 'standard',
-      orchestration_parallelism TEXT NOT NULL DEFAULT 'auto',
-      code_auto_apply TEXT NOT NULL DEFAULT 'aggressive_auto',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_chat_session_prefs_updated
-      ON chat_session_prefs(updated_at DESC);
-
     CREATE TABLE IF NOT EXISTS chat_turn_traces (
       turn_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -2131,6 +2106,37 @@ function createAgenticChatSchema(db: DatabaseSync): void {
       ON chat_inline_approvals(session_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_inline_approvals_turn
       ON chat_inline_approvals(turn_id, created_at DESC);
+  `);
+}
+
+function createChatSessionPrefsTableIfMissing(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_session_prefs (
+      session_id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL DEFAULT 'chat',
+      planning_mode TEXT NOT NULL DEFAULT 'off',
+      provider_id TEXT,
+      model TEXT,
+      image_provider_id TEXT,
+      image_model TEXT,
+      web_mode TEXT NOT NULL DEFAULT 'auto',
+      memory_mode TEXT NOT NULL DEFAULT 'auto',
+      thinking_level TEXT NOT NULL DEFAULT 'standard',
+      tool_autonomy TEXT NOT NULL DEFAULT 'safe_auto',
+      vision_fallback_model TEXT,
+      orchestration_enabled INTEGER NOT NULL DEFAULT 1,
+      orchestration_intensity TEXT NOT NULL DEFAULT 'balanced',
+      orchestration_visibility TEXT NOT NULL DEFAULT 'summarized',
+      orchestration_provider_preference TEXT NOT NULL DEFAULT 'balanced',
+      orchestration_review_depth TEXT NOT NULL DEFAULT 'standard',
+      orchestration_parallelism TEXT NOT NULL DEFAULT 'auto',
+      code_auto_apply TEXT NOT NULL DEFAULT 'aggressive_auto',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_session_prefs_updated
+      ON chat_session_prefs(updated_at DESC);
   `);
 }
 

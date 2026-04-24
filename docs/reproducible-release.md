@@ -8,9 +8,8 @@ This process covers the signed installer artifacts published by `.github/workflo
 
 - `windows-x64`
 - `windows-arm64`
-- `darwin-x64`
-- `darwin-arm64`
-- `linux-x64`
+
+macOS and Linux package scripts are not current release proof. They stay development-only until the release workflow emits signed artifacts and smoke evidence for those targets.
 
 ## Locked Inputs
 
@@ -26,11 +25,9 @@ The release lane treats these files as the minimum rebuild inputs:
 
 ## Toolchain
 
-- Node `22.x` in GitHub Actions
+- Node `24.x` in GitHub Actions
 - pnpm `10.31.0`
 - Inno Setup `6.x` for Windows packaging
-- `pkgbuild` on the GitHub-hosted macOS runner
-- GNU `tar` on the GitHub-hosted Linux runner
 - `zip` for the final proof bundle assembly
 - `cosign` keyless signing in the release job
 
@@ -42,18 +39,17 @@ The release workflow uses these commands:
 pnpm install --frozen-lockfile
 pnpm package:bundle --target <target>
 pnpm package:windows --target <windows-target>
-pnpm package:macos --target <darwin-target>
-pnpm package:linux --target linux-x64
 pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom-path>
 node scripts/release/sign-release-artifacts.mjs --artifacts-dir <artifact-dir>
 node scripts/release/assemble-release-package.mjs --version <version> --artifacts-dir <artifact-dir> --sbom-file <sbom-path>
+node scripts/release/write-release-certificate.mjs --version <version> --artifacts-dir <artifact-dir> --proof-zip <zip-path>
 ```
 
 ## Environment Notes
 
-- Installer builds run on GitHub-hosted Windows, macOS, and Ubuntu runners.
+- Installer builds run on GitHub-hosted Windows runners.
 - The final release package is assembled on Ubuntu after the per-platform artifacts are downloaded.
-- GitHub Actions context values are copied into `provenance/build-metadata.json` and `provenance/slsa-attestation.json`.
+- GitHub Actions context values are copied into `provenance/build-metadata.json`, `provenance/slsa-attestation.json`, and the separate `release-certificate.json`.
 
 ## Verification
 
@@ -64,6 +60,7 @@ To validate a published release:
 3. Verify the installer signature with the adjacent `.sig` and `.pem` files.
 4. Inspect `provenance/build-metadata.json` for the exact tag, commit, workflow run, and toolchain versions.
 5. Inspect `SBOM/*.cyclonedx.json` for the dependency inventory used for the release.
+6. Inspect `release-certificate.json` and require every required lane to be `success` with an empty `acceptedFailures` array before treating the build as 1.0-ready.
 
 ## Local Rebuild
 

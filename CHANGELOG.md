@@ -10,6 +10,7 @@ All notable changes to GoatCitadel are documented in this file.
   - signed installer checksums and cosign certificate sidecars
   - CycloneDX SBOM generation in CI
   - assembled release ZIP with artifacts, docs, and provenance metadata
+  - commit-bound `release-certificate.json` covering required lane status, artifact digests, proof ZIP digest, Trivy status, and accepted failures
 - Release-facing docs for reproducible builds, supported platforms, smoke tests, and dependency policy.
 - `CODEOWNERS` coverage for release-bearing paths.
 - Guided `llama.cpp` setup and integration flow:
@@ -20,7 +21,8 @@ All notable changes to GoatCitadel are documented in this file.
 ### Changed
 
 - `SECURITY.md` now reflects the shipped `1.x` support posture instead of the pre-1.0 beta line.
-- Release workflow is expanded from raw installer publishing to a signed proof-package handoff.
+- Release workflow is expanded from raw installer publishing to a signed Windows proof-package handoff with commit-bound release certification.
+- Packaging docs now explicitly label macOS/Linux release artifacts as development-only until those workflow matrices produce signed proof.
 - Approval control routes are now explicitly operator-fenced, while remote approval token resolution remains on its separate capability-token path.
 - Mission Control Channel Setup now shows only shipped guided channels instead of mixing visible built-ins with manual/later-state copy.
 - Remote approval delivery now keeps connector delivery auth boundaries explicit instead of implying that approval-control fencing covers the delivery path.

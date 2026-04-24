@@ -79,4 +79,48 @@ describe("route access manifest", () => {
       tracked: true,
     });
   });
+
+  it("classifies the full api surface even when routes do not opt in locally", async () => {
+    app = Fastify();
+    installRouteAccessTracking(app);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+        },
+      },
+    } as never);
+    app.decorate("requireOperatorAuth", async () => undefined);
+
+    app.get("/api/v1/tools/catalog", async () => ({ ok: true }));
+    app.post("/api/v1/integrations/connections/:connectionId/telegram/webhook", async () => ({ ok: true }));
+    app.get("/api/v1/unclassified/new-surface", async () => ({ ok: true }));
+    await app.ready();
+
+    expect(listMissingTrackedRouteAccessClasses(app)).toEqual([]);
+    expect(
+      app.routeAccessManifest.find((entry) => entry.method === "GET" && entry.url === "/api/v1/tools/catalog"),
+    ).toMatchObject({
+      accessClass: "operator",
+      tracked: true,
+    });
+    expect(
+      app.routeAccessManifest.find(
+        (entry) =>
+          entry.method === "POST" && entry.url === "/api/v1/integrations/connections/:connectionId/telegram/webhook",
+      ),
+    ).toMatchObject({
+      accessClass: "webhook",
+      tracked: true,
+    });
+    expect(
+      app.routeAccessManifest.find(
+        (entry) => entry.method === "GET" && entry.url === "/api/v1/unclassified/new-surface",
+      ),
+    ).toMatchObject({
+      accessClass: "operator",
+      tracked: true,
+    });
+  });
 });

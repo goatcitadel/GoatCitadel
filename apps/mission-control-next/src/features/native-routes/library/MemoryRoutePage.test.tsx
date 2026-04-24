@@ -156,8 +156,22 @@ const memorySnapshot = vi.hoisted(() => ({
     selectedDurableRun: { runId: "durable-1", status: "completed" },
     selectedDurableTimeline: [],
     memoryAdminEnabled: true,
+    memoryAdminState: "enabled",
     maintenanceEnabled: true,
     maintenanceDurableReady: true,
+    sectionErrors: {
+      settings: null,
+      files: null,
+      qmdStats: null,
+      memoryItems: null,
+      memoryHistory: null,
+      maintenanceStatus: null,
+      maintenanceRuns: null,
+      maintenanceRecommendations: null,
+      selectedRunProvenance: null,
+      selectedDurableRun: null,
+      selectedDurableTimeline: null,
+    },
   },
 }));
 

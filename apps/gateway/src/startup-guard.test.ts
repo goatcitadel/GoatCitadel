@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  INSECURE_LOCAL_ONLY_OVERRIDE_ENV,
   isLoopbackHost,
   resolveAllowUnauthNetwork,
   resolveWarnUnauthNonLoopback,
@@ -19,29 +20,35 @@ describe("startup guard helpers", () => {
     expect(resolveWarnUnauthNonLoopback("false")).toBe(false);
     expect(resolveAllowUnauthNetwork(undefined)).toBe(false);
     expect(resolveAllowUnauthNetwork("true")).toBe(true);
+    expect(INSECURE_LOCAL_ONLY_OVERRIDE_ENV).toBe("GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY");
   });
 
   it("requires auth for non-loopback bind", () => {
-    expect(shouldWarnUnauthNonLoopbackBind("0.0.0.0", {
-      mode: "none",
-      allowLoopbackBypass: false,
-      token: { queryParam: "access_token" },
-      basic: {},
-    })).toBe(true);
+    expect(
+      shouldWarnUnauthNonLoopbackBind("0.0.0.0", {
+        mode: "none",
+        allowLoopbackBypass: false,
+        token: { queryParam: "access_token" },
+        basic: {},
+      }),
+    ).toBe(true);
 
-    expect(shouldWarnUnauthNonLoopbackBind("0.0.0.0", {
-      mode: "token",
-      allowLoopbackBypass: false,
-      token: { value: "tok", queryParam: "access_token" },
-      basic: {},
-    })).toBe(false);
+    expect(
+      shouldWarnUnauthNonLoopbackBind("0.0.0.0", {
+        mode: "token",
+        allowLoopbackBypass: false,
+        token: { value: "tok", queryParam: "access_token" },
+        basic: {},
+      }),
+    ).toBe(false);
 
-    expect(shouldWarnUnauthNonLoopbackBind("127.0.0.1", {
-      mode: "none",
-      allowLoopbackBypass: false,
-      token: { queryParam: "access_token" },
-      basic: {},
-    })).toBe(false);
+    expect(
+      shouldWarnUnauthNonLoopbackBind("127.0.0.1", {
+        mode: "none",
+        allowLoopbackBypass: false,
+        token: { queryParam: "access_token" },
+        basic: {},
+      }),
+    ).toBe(false);
   });
 });
-

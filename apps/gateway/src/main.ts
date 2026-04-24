@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import { buildApp } from "./app.js";
 import {
+  INSECURE_LOCAL_ONLY_OVERRIDE_ENV,
   resolveAllowUnauthNetwork,
   resolveWarnUnauthNonLoopback,
   shouldWarnUnauthNonLoopbackBind,
@@ -69,12 +70,12 @@ try {
         {
           host,
           authMode: app.gatewayConfig.assistant.auth.mode,
-          overrideEnv: "GOATCITADEL_ALLOW_UNAUTH_NETWORK=1",
+          overrideEnv: `${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true`,
         },
         "Refusing to bind gateway to non-loopback host without configured auth.",
       );
       throw new Error(
-        "Unsafe gateway bind blocked: non-loopback host requires auth. Set GOATCITADEL_AUTH_MODE and credentials or GOATCITADEL_ALLOW_UNAUTH_NETWORK=1 to override.",
+        `Unsafe gateway bind blocked: non-loopback host requires auth. Set GOATCITADEL_AUTH_MODE and credentials or ${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true to override intentionally.`,
       );
     }
     if (warnUnauthNonLoopback) {

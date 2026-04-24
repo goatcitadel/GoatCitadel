@@ -1,5 +1,7 @@
 import type { AuthConfig } from "./config.js";
 
+export const INSECURE_LOCAL_ONLY_OVERRIDE_ENV = "GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY";
+
 export function resolveWarnUnauthNonLoopback(rawValue = process.env.GOATCITADEL_WARN_UNAUTH_NON_LOOPBACK): boolean {
   const raw = rawValue?.trim().toLowerCase();
   if (!raw) {
@@ -8,7 +10,7 @@ export function resolveWarnUnauthNonLoopback(rawValue = process.env.GOATCITADEL_
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-export function resolveAllowUnauthNetwork(rawValue = process.env.GOATCITADEL_ALLOW_UNAUTH_NETWORK): boolean {
+export function resolveAllowUnauthNetwork(rawValue = process.env[INSECURE_LOCAL_ONLY_OVERRIDE_ENV]): boolean {
   const raw = rawValue?.trim().toLowerCase();
   if (!raw) {
     return false;
@@ -16,10 +18,7 @@ export function resolveAllowUnauthNetwork(rawValue = process.env.GOATCITADEL_ALL
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-export function shouldWarnUnauthNonLoopbackBind(
-  bindHost: string,
-  auth: AuthConfig,
-): boolean {
+export function shouldWarnUnauthNonLoopbackBind(bindHost: string, auth: AuthConfig): boolean {
   if (isLoopbackHost(bindHost)) {
     return false;
   }
@@ -37,9 +36,5 @@ export function isLoopbackHost(value: string): boolean {
   if (!hostValue) {
     return false;
   }
-  return hostValue === "127.0.0.1"
-    || hostValue === "localhost"
-    || hostValue === "::1"
-    || hostValue === "[::1]";
+  return hostValue === "127.0.0.1" || hostValue === "localhost" || hostValue === "::1" || hostValue === "[::1]";
 }
-

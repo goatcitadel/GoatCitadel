@@ -29,6 +29,22 @@ type Notice = {
   message: string;
 };
 
+type MemoryAdminState = "enabled" | "disabled" | "unknown";
+
+type MemoryOperatorSectionErrors = {
+  settings: string | null;
+  files: string | null;
+  qmdStats: string | null;
+  memoryItems: string | null;
+  memoryHistory: string | null;
+  maintenanceStatus: string | null;
+  maintenanceRuns: string | null;
+  maintenanceRecommendations: string | null;
+  selectedRunProvenance: string | null;
+  selectedDurableRun: string | null;
+  selectedDurableTimeline: string | null;
+};
+
 type MemoryOperatorSnapshot = {
   files: Awaited<ReturnType<typeof fetchMemoryFiles>>["items"];
   qmdStats: Awaited<ReturnType<typeof fetchMemoryQmdStats>> | null;
@@ -41,8 +57,10 @@ type MemoryOperatorSnapshot = {
   selectedDurableRun: Awaited<ReturnType<typeof fetchDurableRun>> | null;
   selectedDurableTimeline: Awaited<ReturnType<typeof fetchDurableRunTimeline>>["items"];
   memoryAdminEnabled: boolean;
+  memoryAdminState: MemoryAdminState;
   maintenanceEnabled: boolean;
   maintenanceDurableReady: boolean;
+  sectionErrors: MemoryOperatorSectionErrors;
 };
 
 export function useMemoryOperatorSnapshot(workspaceId = "default") {
@@ -57,23 +75,53 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
   const [policyDirty, setPolicyDirty] = useState(false);
 
   const load = useCallback(async () => {
-    const [settings, filesRes, qmdStats, itemsRes] = await Promise.all([
-      fetchSettings().catch(() => null),
-      fetchMemoryFiles("memory").catch(() => ({ items: [] })),
-      fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
-      fetchMemoryItems({ limit: 200, status: "all" }).catch(() => ({ items: [] })),
+    const sectionErrors = createEmptySectionErrors();
+    const [settings, filesRes, qmdStats] = await Promise.all([
+      fetchSettings().catch((settingsError) => {
+        sectionErrors.settings = getErrorMessage(settingsError);
+        return null;
+      }),
+      fetchMemoryFiles("memory").catch((filesError) => {
+        sectionErrors.files = getErrorMessage(filesError);
+        return { items: [] };
+      }),
+      fetchMemoryQmdStats(undefined, undefined, 8).catch((qmdError) => {
+        sectionErrors.qmdStats = getErrorMessage(qmdError);
+        return null;
+      }),
     ]);
 
-    const memoryAdminEnabled = settings?.features.memoryLifecycleAdminV1Enabled ?? true;
+    const memoryAdminState: MemoryAdminState = settings
+      ? settings.features.memoryLifecycleAdminV1Enabled
+        ? "enabled"
+        : "disabled"
+      : "unknown";
+    const memoryAdminEnabled = memoryAdminState === "enabled";
     const maintenanceEnabled = settings?.features.memoryMaintenanceV1Enabled ?? false;
     const maintenanceDurableReady = settings?.features.durableKernelV1Enabled ?? false;
+
+    const itemsRes = memoryAdminEnabled
+      ? await fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
+          sectionErrors.memoryItems = getErrorMessage(itemsError);
+          return { items: [] };
+        })
+      : { items: [] };
 
     const [maintenanceStatusRes, maintenanceRunsRes, maintenanceRecommendationsRes] =
       maintenanceEnabled && maintenanceDurableReady
         ? await Promise.all([
-            fetchMemoryMaintenanceStatus(workspaceId).catch(() => null),
-            fetchMemoryMaintenanceRuns(workspaceId, 40).catch(() => ({ items: [] })),
-            fetchMemoryMaintenanceRecommendations(workspaceId, 20).catch(() => ({ items: [] })),
+            fetchMemoryMaintenanceStatus(workspaceId).catch((statusError) => {
+              sectionErrors.maintenanceStatus = getErrorMessage(statusError);
+              return null;
+            }),
+            fetchMemoryMaintenanceRuns(workspaceId, 40).catch((runsError) => {
+              sectionErrors.maintenanceRuns = getErrorMessage(runsError);
+              return { items: [] };
+            }),
+            fetchMemoryMaintenanceRecommendations(workspaceId, 20).catch((recommendationsError) => {
+              sectionErrors.maintenanceRecommendations = getErrorMessage(recommendationsError);
+              return { items: [] };
+            }),
           ])
         : [null, { items: [] }, { items: [] }];
 
@@ -89,8 +137,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       selectedDurableRun: null,
       selectedDurableTimeline: [],
       memoryAdminEnabled,
+      memoryAdminState,
       maintenanceEnabled,
       maintenanceDurableReady,
+      sectionErrors,
     } satisfies MemoryOperatorSnapshot;
   }, [workspaceId]);
 
@@ -156,11 +206,25 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
             ? {
                 ...current,
                 memoryHistory: history.items,
+                sectionErrors: { ...current.sectionErrors, memoryHistory: null },
               }
             : current,
         );
       })
-      .catch(() => undefined);
+      .catch((historyError) => {
+        if (cancelled) {
+          return;
+        }
+        setData((current) =>
+          current
+            ? {
+                ...current,
+                memoryHistory: [],
+                sectionErrors: { ...current.sectionErrors, memoryHistory: getErrorMessage(historyError) },
+              }
+            : current,
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -183,11 +247,22 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     }
     let cancelled = false;
     void Promise.all([
-      fetchMemoryMaintenanceRunProvenance(selectedRun.runId).catch(() => null),
-      selectedRun.durableRunId ? fetchDurableRun(selectedRun.durableRunId).catch(() => null) : Promise.resolve(null),
+      fetchMemoryMaintenanceRunProvenance(selectedRun.runId)
+        .then((provenance) => ({ value: provenance, error: null }))
+        .catch((provenanceError) => ({ value: null, error: getErrorMessage(provenanceError) })),
       selectedRun.durableRunId
-        ? fetchDurableRunTimeline(selectedRun.durableRunId, 80).catch(() => ({ items: [] }))
-        : Promise.resolve({ items: [] }),
+        ? fetchDurableRun(selectedRun.durableRunId)
+            .then((durableRun) => ({ value: durableRun, error: null }))
+            .catch((durableRunError) => ({ value: null, error: getErrorMessage(durableRunError) }))
+        : Promise.resolve({ value: null, error: null }),
+      selectedRun.durableRunId
+        ? fetchDurableRunTimeline(selectedRun.durableRunId, 80)
+            .then((durableTimeline) => ({ value: durableTimeline, error: null }))
+            .catch((durableTimelineError) => ({
+              value: { items: [] },
+              error: getErrorMessage(durableTimelineError),
+            }))
+        : Promise.resolve({ value: { items: [] }, error: null }),
     ]).then(([provenance, durableRun, durableTimeline]) => {
       if (cancelled) {
         return;
@@ -196,9 +271,15 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         current
           ? {
               ...current,
-              selectedRunProvenance: provenance,
-              selectedDurableRun: durableRun,
-              selectedDurableTimeline: durableTimeline.items,
+              selectedRunProvenance: provenance.value,
+              selectedDurableRun: durableRun.value,
+              selectedDurableTimeline: durableTimeline.value.items,
+              sectionErrors: {
+                ...current.sectionErrors,
+                selectedRunProvenance: provenance.error,
+                selectedDurableRun: durableRun.error,
+                selectedDurableTimeline: durableTimeline.error,
+              },
             }
           : current,
       );
@@ -222,6 +303,13 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       itemId: string,
       patch: { title?: string; content?: string; pinned?: boolean; ttlOverrideSeconds?: number | null },
     ) => {
+      if (data?.memoryAdminState !== "enabled") {
+        setNotice({
+          tone: "warning",
+          message: "Memory admin settings are not confirmed, so item changes are locked.",
+        });
+        return;
+      }
       setBusyKey(`item:${itemId}`);
       setNotice(null);
       try {
@@ -241,11 +329,18 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         setBusyKey(null);
       }
     },
-    [],
+    [data?.memoryAdminState],
   );
 
   const forgetSelectedItem = useCallback(async () => {
     if (!selectedItem) {
+      return;
+    }
+    if (data?.memoryAdminState !== "enabled") {
+      setNotice({
+        tone: "warning",
+        message: "Memory admin settings are not confirmed, so item changes are locked.",
+      });
       return;
     }
     setBusyKey(`forget:${selectedItem.itemId}`);
@@ -266,9 +361,16 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     } finally {
       setBusyKey(null);
     }
-  }, [selectedItem]);
+  }, [data?.memoryAdminState, selectedItem]);
 
   const runMaintenance = useCallback(async () => {
+    if (!data?.maintenanceEnabled || !data.maintenanceDurableReady) {
+      setNotice({
+        tone: "warning",
+        message: "Memory maintenance settings are not confirmed, so maintenance actions are locked.",
+      });
+      return;
+    }
     setBusyKey("maintenance:run");
     setNotice(null);
     try {
@@ -280,10 +382,17 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     } finally {
       setBusyKey(null);
     }
-  }, [reload, workspaceId]);
+  }, [data?.maintenanceDurableReady, data?.maintenanceEnabled, reload, workspaceId]);
 
   const savePolicy = useCallback(async () => {
     if (!policyDraft) {
+      return;
+    }
+    if (!data?.maintenanceEnabled || !data.maintenanceDurableReady) {
+      setNotice({
+        tone: "warning",
+        message: "Memory maintenance settings are not confirmed, so policy changes are locked.",
+      });
       return;
     }
     setBusyKey("maintenance:policy");
@@ -299,10 +408,17 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     } finally {
       setBusyKey(null);
     }
-  }, [policyDraft, reload, workspaceId]);
+  }, [data?.maintenanceDurableReady, data?.maintenanceEnabled, policyDraft, reload, workspaceId]);
 
   const resolveRecommendation = useCallback(
     async (recommendationId: string, decision: "accept" | "reject") => {
+      if (!data?.maintenanceEnabled || !data.maintenanceDurableReady) {
+        setNotice({
+          tone: "warning",
+          message: "Memory maintenance settings are not confirmed, so recommendations are locked.",
+        });
+        return;
+      }
       setBusyKey(`recommendation:${recommendationId}:${decision}`);
       setNotice(null);
       try {
@@ -322,7 +438,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         setBusyKey(null);
       }
     },
-    [reload],
+    [data?.maintenanceDurableReady, data?.maintenanceEnabled, reload],
   );
 
   return {
@@ -347,6 +463,22 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     runMaintenance,
     savePolicy,
     resolveRecommendation,
+  };
+}
+
+function createEmptySectionErrors(): MemoryOperatorSectionErrors {
+  return {
+    settings: null,
+    files: null,
+    qmdStats: null,
+    memoryItems: null,
+    memoryHistory: null,
+    maintenanceStatus: null,
+    maintenanceRuns: null,
+    maintenanceRecommendations: null,
+    selectedRunProvenance: null,
+    selectedDurableRun: null,
+    selectedDurableTimeline: null,
   };
 }
 

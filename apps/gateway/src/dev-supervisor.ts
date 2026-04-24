@@ -12,6 +12,7 @@ import {
   setGoatcitadelTerminalTitle,
 } from "./runtime-ux.js";
 import {
+  INSECURE_LOCAL_ONLY_OVERRIDE_ENV,
   isLoopbackHost,
   resolveAllowUnauthNetwork,
   resolveWarnUnauthNonLoopback,
@@ -533,7 +534,7 @@ function assertGatewayBindIsSafeForDev(host: string): void {
   throw new Error(
     `Unsafe gateway bind blocked for local dev: GATEWAY_HOST=${host}. ` +
       "Set GATEWAY_HOST=127.0.0.1 for local-only access, configure GOATCITADEL_AUTH_MODE with credentials, " +
-      "or explicitly set GOATCITADEL_ALLOW_UNAUTH_NETWORK=1 to override.",
+      `or explicitly set ${INSECURE_LOCAL_ONLY_OVERRIDE_ENV}=true to override.`,
   );
 }
 

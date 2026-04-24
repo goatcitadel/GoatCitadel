@@ -107,7 +107,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
   {
     slug: "library-memory",
     href: "/library/memory",
-    readyText: "Memory posture",
+    readyText: "Memory",
     expectedArea: "library",
     expectedSection: "memory",
     interaction: "open-inspector",
@@ -179,7 +179,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
   {
     slug: "ops-approvals",
     href: "/ops/approvals",
-    readyText: "Approval inbox",
+    readyText: "Approvals",
     expectedArea: "ops",
     expectedSection: "approvals",
     interaction: "open-inspector",
@@ -187,7 +187,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
   {
     slug: "ops-costs",
     href: "/ops/costs",
-    readyText: "Spend breakdown",
+    readyText: "Costs",
     expectedArea: "ops",
     expectedSection: "costs",
     interaction: "open-inspector",

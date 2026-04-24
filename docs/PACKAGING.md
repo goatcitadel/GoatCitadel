@@ -6,11 +6,15 @@ GoatCitadel now has a packaged runtime contract for installer work.
 
 - `windows-x64`
 - `windows-arm64`
+
+The current tagged release workflow publishes Windows proof only. macOS and Linux bundle scripts remain development lanes until their installer artifacts, signing/notarization story, and smoke evidence are wired into `.github/workflows/release-installers.yml`.
+
+Deferred targets:
+
 - `darwin-x64`
 - `darwin-arm64`
 - `linux-x64`
-
-`linux-arm64` remains deferred until the managed voice runtime matrix reaches parity.
+- `linux-arm64`
 
 ## Bundle layout
 
@@ -61,35 +65,33 @@ The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Star
 
 ## macOS packaging
 
-macOS packages currently emit a `.pkg` payload per architecture:
+macOS package scripts are experimental and are not published by the current release workflow:
 
 - `GoatCitadel-Setup-darwin-x64.pkg`
 - `GoatCitadel-Setup-darwin-arm64.pkg`
 
-The package installs GoatCitadel into `/Applications/GoatCitadel`.
+Do not cite macOS packages as release proof until the workflow emits, signs, and smoke-tests them.
 
 ## Linux packaging
 
-Linux x64 currently emits:
+Linux package scripts are experimental and are not published by the current release workflow:
 
 - `GoatCitadel-Setup-linux-x64.tar.gz`
 
-This is the first package artifact for the Linux lane while the richer package-manager story hardens.
+Do not cite Linux packages as release proof until the workflow emits, signs, and smoke-tests them.
 
 ## Build commands
 
 ```text
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
-pnpm package:macos --target darwin-arm64
-pnpm package:linux --target linux-x64
 ```
 
 ## Release workflow
 
-The GitHub Actions release workflow builds bundles for the full supported matrix, packages Windows/macOS/Linux artifacts, and is shaped for signing and notarization through repository secrets.
+The GitHub Actions release workflow currently builds and publishes Windows x64/arm64 installers. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
 
-Tagged releases now assemble a proof bundle alongside the raw installers. The proof bundle includes:
+Tagged releases assemble a proof bundle alongside the raw installers. The proof bundle includes:
 
 - the packaged installers
 - `.sha256` checksum files
@@ -97,3 +99,5 @@ Tagged releases now assemble a proof bundle alongside the raw installers. The pr
 - a CycloneDX SBOM
 - reproducibility and platform docs
 - generated handoff and provenance metadata
+
+The release job also writes `release-certificate.json`, which binds the release artifacts and required verification-lane status to the exact commit. A release should not be treated as 1.0-ready unless that certificate is green with no accepted failures.

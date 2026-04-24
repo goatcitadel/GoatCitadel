@@ -12,9 +12,25 @@ interface JsonResponse<T = unknown> {
 }
 
 let smokeRunId = randomUUID();
+const DEFAULT_SMOKE_STEP_TIMEOUT_MS = 30_000;
 
 function smokeIdempotencyKey(base: string): string {
   return `${base}-${smokeRunId}`;
+}
+
+function writeSmokeInfo(message: string): void {
+  process.stdout.write(`${message}\n`);
+}
+
+function writeSmokeError(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+function formatSmokeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ?? error.message;
+  }
+  return String(error);
 }
 
 export async function runSmoke(): Promise<void> {
@@ -24,6 +40,7 @@ export async function runSmoke(): Promise<void> {
   const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
   const priorAuthMode = process.env.GOATCITADEL_AUTH_MODE;
   const priorDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
+  const priorInsecureLocalOverride = process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY;
 
   try {
     await cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
@@ -33,24 +50,25 @@ export async function runSmoke(): Promise<void> {
     process.env.GOATCITADEL_ROOT_DIR = tempRoot;
     process.env.GOATCITADEL_AUTH_MODE = "none";
     process.env.GOATCITADEL_DISABLE_SECRET_STORE = "true";
+    process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY = "true";
 
     const app = await buildApp();
     try {
-      await smokeHealth(app);
-      await smokeGatewayEvents(app);
-      await smokeSessions(app);
-      await smokeChat(app);
-      await smokePromptPacks(app);
-      await smokeTools(app);
-      await smokeNativeToolsExpansion(app);
-      await smokeApprovals(app);
-      await smokeAgents(app);
-      await smokeIntegrations(app);
-      await smokeSecrets(app);
-      await smokeMesh(app);
-      await smokeNpu(app);
-      await smokeOnboarding(app);
-      console.log("Smoke tests passed.");
+      await runSmokeStep("health", () => smokeHealth(app));
+      await runSmokeStep("gateway-events", () => smokeGatewayEvents(app));
+      await runSmokeStep("sessions", () => smokeSessions(app));
+      await runSmokeStep("chat", () => smokeChat(app));
+      await runSmokeStep("prompt-packs", () => smokePromptPacks(app));
+      await runSmokeStep("tools", () => smokeTools(app));
+      await runSmokeStep("native-tools-expansion", () => smokeNativeToolsExpansion(app));
+      await runSmokeStep("approvals", () => smokeApprovals(app));
+      await runSmokeStep("agents", () => smokeAgents(app));
+      await runSmokeStep("integrations", () => smokeIntegrations(app));
+      await runSmokeStep("secrets", () => smokeSecrets(app));
+      await runSmokeStep("mesh", () => smokeMesh(app));
+      await runSmokeStep("npu", () => smokeNpu(app));
+      await runSmokeStep("onboarding", () => smokeOnboarding(app));
+      writeSmokeInfo("Smoke tests passed.");
     } finally {
       await app.close();
     }
@@ -70,7 +88,44 @@ export async function runSmoke(): Promise<void> {
     } else {
       process.env.GOATCITADEL_DISABLE_SECRET_STORE = priorDisableSecretStore;
     }
+    if (priorInsecureLocalOverride === undefined) {
+      delete process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY;
+    } else {
+      process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY = priorInsecureLocalOverride;
+    }
     await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runSmokeStep(name: string, fn: () => Promise<void>): Promise<void> {
+  writeSmokeInfo(`[smoke] ${name}...`);
+  await withSmokeStepTimeout(name, fn());
+  writeSmokeInfo(`[smoke] ${name} ok`);
+}
+
+async function withSmokeStepTimeout<T>(name: string, promise: Promise<T>): Promise<T> {
+  const timeoutMs = Number.parseInt(
+    process.env.GOATCITADEL_SMOKE_STEP_TIMEOUT_MS ?? String(DEFAULT_SMOKE_STEP_TIMEOUT_MS),
+    10,
+  );
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return promise;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Smoke step ${name} timed out after ${timeoutMs}ms.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -116,7 +171,10 @@ async function smokeChat(app: Awaited<ReturnType<typeof buildApp>>): Promise<voi
   });
   assert.equal(sessionsRes.statusCode, 200);
   const sessionsBody = JSON.parse(sessionsRes.body) as { items: Array<{ sessionId: string }> };
-  assert.equal(sessionsBody.items.some((item) => item.sessionId === sessionId), true);
+  assert.equal(
+    sessionsBody.items.some((item) => item.sessionId === sessionId),
+    true,
+  );
 
   const messagesRes = await app.inject({
     method: "GET",
@@ -185,7 +243,10 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   });
   assert.equal(listed.statusCode, 200);
   const listedBody = JSON.parse(listed.body) as { items: Array<{ packId: string }> };
-  assert.equal(listedBody.items.some((item) => item.packId === packId), true);
+  assert.equal(
+    listedBody.items.some((item) => item.packId === packId),
+    true,
+  );
 
   const run = await postJson<{
     runId: string;
@@ -338,7 +399,10 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
   });
   assert.equal(catalogRes.statusCode, 200);
   const catalog = JSON.parse(catalogRes.body) as { items: Array<{ toolName: string }> };
-  assert.equal(catalog.items.some((item) => item.toolName === "memory.write"), true);
+  assert.equal(
+    catalog.items.some((item) => item.toolName === "memory.write"),
+    true,
+  );
 
   const createGrant = await postJson<{ grantId: string }>(
     app,
@@ -467,14 +531,19 @@ async function smokeApprovals(app: Awaited<ReturnType<typeof buildApp>>): Promis
   });
   assert.equal(invalidList.statusCode, 400);
 
-  const created = await postJson(app, "/api/v1/approvals", {
-    kind: "shell.exec",
-    riskLevel: "danger",
-    payload: { command: "dir" },
-    preview: { command: "dir" },
-  }, {
-    "Idempotency-Key": smokeIdempotencyKey("smoke-approval-create-1"),
-  });
+  const created = await postJson(
+    app,
+    "/api/v1/approvals",
+    {
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+    },
+    {
+      "Idempotency-Key": smokeIdempotencyKey("smoke-approval-create-1"),
+    },
+  );
   assert.equal(created.statusCode, 201);
   const approval = created.body as { approvalId: string; status: string };
   assert.equal(approval.status, "pending");
@@ -692,25 +761,30 @@ async function smokeOnboarding(app: Awaited<ReturnType<typeof buildApp>>): Promi
   };
   assert.equal(Array.isArray(initialBody.checklist), true);
 
-  const bootstrap = await postJson(app, "/api/v1/onboarding/bootstrap", {
-    budgetMode: "balanced",
-    defaultToolProfile: "minimal",
-    networkAllowlist: ["127.0.0.1", "localhost"],
-    llm: {
-      activeProviderId: "openai",
-      activeModel: "gpt-5",
-      upsertProvider: {
-        providerId: "openai",
-        apiKey: "sk-smoke-value",
-        apiKeyEnv: "OPENAI_API_KEY",
-        persistSecretToSecureStore: false,
+  const bootstrap = await postJson(
+    app,
+    "/api/v1/onboarding/bootstrap",
+    {
+      budgetMode: "balanced",
+      defaultToolProfile: "minimal",
+      networkAllowlist: ["127.0.0.1", "localhost"],
+      llm: {
+        activeProviderId: "openai",
+        activeModel: "gpt-5",
+        upsertProvider: {
+          providerId: "openai",
+          apiKey: "sk-smoke-value",
+          apiKeyEnv: "OPENAI_API_KEY",
+          persistSecretToSecureStore: false,
+        },
       },
+      markComplete: true,
+      completedBy: "smoke",
     },
-    markComplete: true,
-    completedBy: "smoke",
-  }, {
-    "Idempotency-Key": smokeIdempotencyKey("smoke-onboarding-bootstrap-1"),
-  });
+    {
+      "Idempotency-Key": smokeIdempotencyKey("smoke-onboarding-bootstrap-1"),
+    },
+  );
   assert.equal(bootstrap.statusCode, 200);
   const bootstrapBody = bootstrap.body as {
     appliedAt: string;
@@ -749,8 +823,8 @@ const smokeScriptPath = path.resolve(fileURLToPath(import.meta.url));
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (invokedPath === smokeScriptPath) {
   runSmoke().catch((error) => {
-    console.error("Smoke tests failed.");
-    console.error(error);
+    writeSmokeError("Smoke tests failed.");
+    writeSmokeError(formatSmokeError(error));
     process.exitCode = 1;
   });
 }

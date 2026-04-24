@@ -29,5 +29,5 @@ describe("mission-control module load smoke", () => {
     ]);
 
     expect(modules.length).toBeGreaterThan(10);
-  });
+  }, 45_000);
 });

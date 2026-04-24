@@ -6,6 +6,11 @@ function buildApp(approvals: Record<string, unknown>, requireOperatorAuth = vi.f
   const app = Fastify();
   app.decorate("services", { approvals } as never);
   app.decorate("requireOperatorAuth", requireOperatorAuth as never);
+  app.decorateRequest("idempotencyKey", "");
+  app.addHook("preHandler", async (request) => {
+    const value = request.headers["idempotency-key"];
+    request.idempotencyKey = typeof value === "string" ? value : "";
+  });
   return {
     app,
     requireOperatorAuth,
@@ -48,8 +53,8 @@ describe("approvals routes", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("allows remote approval creation when override env is enabled", async () => {
-    vi.stubEnv("GOATCITADEL_ALLOW_REMOTE_APPROVAL_CREATE", "1");
+  it("allows remote approval creation with a scoped token and source metadata", async () => {
+    vi.stubEnv("GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN", "remote-create-token");
     const createApproval = vi.fn(async () => ({
       approvalId: "apr_123",
       kind: "tool.invoke",
@@ -69,6 +74,8 @@ describe("approvals routes", () => {
       method: "POST",
       url: "/api/v1/approvals",
       headers: {
+        "idempotency-key": "approval-create-1",
+        "x-goatcitadel-approval-create-token": "remote-create-token",
         "x-forwarded-for": "100.64.0.9",
       },
       payload: {
@@ -76,11 +83,52 @@ describe("approvals routes", () => {
         riskLevel: "danger",
         payload: {},
         preview: {},
+        sourceConnectorId: "slack",
+        sourceTraceId: "evt-123",
       },
     });
 
     expect(response.statusCode).toBe(201);
     expect(createApproval).toHaveBeenCalledTimes(1);
+    expect(createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkage: expect.objectContaining({
+          connectorId: "slack",
+          traceId: "evt-123",
+        }),
+      }),
+    );
+  });
+
+  it("rejects remote approval creation with a bad scoped token", async () => {
+    vi.stubEnv("GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN", "remote-create-token");
+    const createApproval = vi.fn();
+    const built = buildApp({
+      createApproval,
+    });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: {
+        "idempotency-key": "approval-create-1",
+        "x-goatcitadel-approval-create-token": "wrong",
+        "x-forwarded-for": "100.64.0.9",
+      },
+      payload: {
+        kind: "tool.invoke",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+        sourceConnectorId: "slack",
+        sourceTraceId: "evt-123",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(createApproval).not.toHaveBeenCalled();
   });
 
   it("issues remote action tokens for approval resolution", async () => {

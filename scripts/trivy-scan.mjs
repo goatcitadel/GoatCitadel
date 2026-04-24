@@ -5,6 +5,27 @@ import path from "node:path";
 
 const target = process.argv[2] ?? ".";
 const trivyBinary = resolveTrivyBinary();
+const skipDirs = [
+  ".git",
+  ".codex-tmp",
+  ".turbo",
+  ".worktrees",
+  "node_modules",
+  "tmp",
+  "artifacts",
+  "apps/gateway/backups",
+  "apps/gateway/coverage",
+  "apps/gateway/coverage-exercise",
+  "apps/gateway/coverage-smoke",
+  "apps/gateway/dist",
+  "apps/mission-control/coverage",
+  "apps/mission-control/dist",
+  "apps/mission-control/dist-node",
+  "apps/mission-control-next/coverage",
+  "apps/mission-control-next/dist",
+  "data/audit",
+  "data/transcripts",
+];
 const version = spawnSync(trivyBinary, ["--version"], { stdio: "pipe", encoding: "utf8" });
 if (version.status !== 0) {
   console.error("Trivy is not installed or not on PATH. Install it before running `pnpm security:trivy`.");
@@ -15,7 +36,9 @@ if (version.status !== 0) {
     "--scanners",
     "vuln,secret,misconfig",
     "--skip-dirs",
-    "node_modules,tmp,apps/mission-control/dist-node,apps/gateway/backups,data/audit,data/transcripts",
+    skipDirs.join(","),
+    "--timeout",
+    "15m",
     "--exit-code",
     "1",
     target,

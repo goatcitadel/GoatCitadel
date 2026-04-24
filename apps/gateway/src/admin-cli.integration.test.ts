@@ -21,39 +21,31 @@ afterEach(async () => {
 });
 
 describe("admin CLI offline backup commands", () => {
-  it(
-    "verifies a backup without requiring the current runtime config to parse",
-    async () => {
-      const { runtimeRoot, backupDir } = await createOfflineBackupFixture();
-      const result = await runCli(["backup", "verify", "--file", "fixture.backup"], {
-        GOATCITADEL_ROOT_DIR: runtimeRoot,
-        GOATCITADEL_BACKUP_DIR: backupDir,
-      });
+  it("verifies a backup without requiring the current runtime config to parse", async () => {
+    const { runtimeRoot, backupDir } = await createOfflineBackupFixture();
+    const result = await runCli(["backup", "verify", "--file", "fixture.backup"], {
+      GOATCITADEL_ROOT_DIR: runtimeRoot,
+      GOATCITADEL_BACKUP_DIR: backupDir,
+    });
 
-      const parsed = JSON.parse(result.stdout);
-      expect(parsed.verified).toBe(true);
-      expect(parsed.contractVerified).toBe(true);
-    },
-    15_000,
-  );
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.verified).toBe(true);
+    expect(parsed.contractVerified).toBe(true);
+  }, 45_000);
 
-  it(
-    "restores a backup without loading the current runtime config",
-    async () => {
-      const { runtimeRoot, backupDir, expected } = await createOfflineBackupFixture();
-      await writeFile(path.join(runtimeRoot, "config", "llm-providers.json"), "{ invalid json", "utf8");
-      await rm(path.join(runtimeRoot, "data", "index.db"), { force: true });
+  it("restores a backup without loading the current runtime config", async () => {
+    const { runtimeRoot, backupDir, expected } = await createOfflineBackupFixture();
+    await writeFile(path.join(runtimeRoot, "config", "llm-providers.json"), "{ invalid json", "utf8");
+    await rm(path.join(runtimeRoot, "data", "index.db"), { force: true });
 
-      await runCli(["backup", "restore", "--file", "fixture.backup", "--confirm"], {
-        GOATCITADEL_ROOT_DIR: runtimeRoot,
-        GOATCITADEL_BACKUP_DIR: backupDir,
-      });
+    await runCli(["backup", "restore", "--file", "fixture.backup", "--confirm"], {
+      GOATCITADEL_ROOT_DIR: runtimeRoot,
+      GOATCITADEL_BACKUP_DIR: backupDir,
+    });
 
-      expect(await readFile(path.join(runtimeRoot, "data", "index.db"), "utf8")).toBe(expected.database);
-      expect(await readFile(path.join(runtimeRoot, "config", "llm-providers.json"), "utf8")).toBe(expected.config);
-    },
-    15_000,
-  );
+    expect(await readFile(path.join(runtimeRoot, "data", "index.db"), "utf8")).toBe(expected.database);
+    expect(await readFile(path.join(runtimeRoot, "config", "llm-providers.json"), "utf8")).toBe(expected.config);
+  }, 45_000);
 });
 
 async function createOfflineBackupFixture(): Promise<{

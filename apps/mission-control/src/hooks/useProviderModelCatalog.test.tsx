@@ -150,6 +150,9 @@ describe("useProviderModelCatalog", () => {
       "models/gemini-2.5-flash-lite",
       "models/gemini-2.5-pro",
       "models/gemini-flash-latest",
+      "gemini-3.1-flash-image-preview",
+      "gemini-3-pro-image-preview",
+      "gemini-2.5-flash-image",
     ]);
   });
 
@@ -236,6 +239,9 @@ describe("useProviderModelCatalog", () => {
         "models/gemini-2.5-flash-lite",
         "models/gemini-2.5-pro",
         "models/gemini-flash-latest",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "gemini-2.5-flash-image",
       ],
       source: "fallback",
       warning: "preview unavailable",

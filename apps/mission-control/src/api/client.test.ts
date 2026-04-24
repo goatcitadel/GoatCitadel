@@ -121,8 +121,10 @@ describe("isTrustedGatewayHost", () => {
     expect(readStoredGatewayAuthState()).toMatchObject({
       mode: "basic",
       username: "operator",
-      password: "secret",
     });
+    expect(readStoredGatewayAuthState()).not.toHaveProperty("password");
+    expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).not.toContain("secret");
+    expect(window.localStorage.getItem("goatcitadel.gateway.auth")).not.toContain("secret");
   });
 
   it("clears the persisted last-route shell state with auth reset", () => {

@@ -1,6 +1,7 @@
 import path from "node:path";
 
-export const DEFAULT_UI_PACKAGE = "@goatcitadel/mission-control";
+export const DEFAULT_UI_PACKAGE = "@goatcitadel/mission-control-next";
+export const LEGACY_UI_PACKAGE = "@goatcitadel/mission-control";
 
 const DISPLAY_NAMES = new Map([
   ["@goatcitadel/mission-control", "Mission Control"],

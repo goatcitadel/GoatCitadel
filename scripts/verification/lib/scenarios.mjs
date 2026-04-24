@@ -43,7 +43,7 @@ import {
   stopVerificationStack,
   waitForHttp,
 } from "./runtime.mjs";
-import { DEFAULT_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
+import { DEFAULT_UI_PACKAGE, LEGACY_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
 
 const PROVIDER_SCENARIOS = ["simple", "stream", "structured", "tools"];
 const UNSUPPORTED_PROVIDER_SCENARIOS = {
@@ -2878,6 +2878,7 @@ export async function runRuntimeTruthLane(context, options = {}) {
 
 export async function runAuthMatrixLane(context, options = {}) {
   const operatorToken = "verification-auth-matrix-token";
+  const approvalCreateToken = "verification-approval-create-token";
   const operatorHeaders = {
     Authorization: `Bearer ${operatorToken}`,
   };
@@ -2886,6 +2887,7 @@ export async function runAuthMatrixLane(context, options = {}) {
     gatewayEnv: {
       GOATCITADEL_AUTH_MODE: "token",
       GOATCITADEL_AUTH_TOKEN: operatorToken,
+      GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN: approvalCreateToken,
       GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "false",
     },
   });
@@ -2908,12 +2910,25 @@ export async function runAuthMatrixLane(context, options = {}) {
         const deviceAndCompanion = await createAuthMatrixCredentials(stack.gatewayUrl, operatorHeaders);
         const sseToken = await issueOperatorSseToken(stack.gatewayUrl, operatorHeaders);
         const manifestItems = Array.isArray(manifestResponse.body?.items) ? manifestResponse.body.items : [];
+        const missingTracked = Array.isArray(manifestResponse.body?.missingTracked)
+          ? manifestResponse.body.missingTracked
+          : [];
+        if (missingTracked.length > 0) {
+          throw new Error(
+            `auth-matrix route-access manifest has unclassified tracked routes: ${clampString(JSON.stringify(missingTracked), 800)}`,
+          );
+        }
         const accessClasses = [...new Set(manifestItems.map((item) => item.accessClass).filter(Boolean))];
         const results = [];
+        const skippedAccessClasses = [];
 
         for (const accessClass of accessClasses) {
           const representative = selectRepresentativeManifestRoute(manifestItems, accessClass);
           if (!representative) {
+            if (accessClass === "webhook") {
+              skippedAccessClasses.push(accessClass);
+              continue;
+            }
             throw new Error(`auth-matrix could not find a representative route for ${accessClass}`);
           }
           const expectations = buildAuthMatrixExpectations(accessClass);
@@ -2944,15 +2959,25 @@ export async function runAuthMatrixLane(context, options = {}) {
           }
         }
 
+        await assertHighRiskRouteFamiliesAreOperatorGated(stack.gatewayUrl, manifestItems, {
+          operatorHeaders,
+          deviceToken: deviceAndCompanion.deviceToken,
+          companionToken: deviceAndCompanion.companionToken,
+        });
+        const approvalIngressResults = await assertApprovalIngressMatrix(stack.gatewayUrl, approvalCreateToken);
+
         const outPath = path.join(context.artifactRoot, "diagnostics", "auth-matrix-route-access.json");
         await writeJson(outPath, {
           manifest: manifestResponse.body,
           results,
+          approvalIngressResults,
+          skippedAccessClasses,
         });
         return {
           status: "passed",
           metrics: {
             representedAccessClasses: accessClasses.length,
+            skippedAccessClasses: skippedAccessClasses.length,
             checks: results.length,
           },
           artifacts: emptyArtifacts({
@@ -2966,6 +2991,123 @@ export async function runAuthMatrixLane(context, options = {}) {
   }
 }
 
+async function assertApprovalIngressMatrix(gatewayUrl, approvalCreateToken) {
+  const body = {
+    kind: "tool_request",
+    riskLevel: "caution",
+    payload: { toolName: "verification.approval.create" },
+    preview: { summary: "Auth matrix remote approval creation proof" },
+    sourceConnectorId: "auth-matrix-connector",
+    sourceTraceId: "auth-matrix-trace",
+  };
+  const probes = [
+    {
+      label: "missing-create-token",
+      expectedAllowed: false,
+      response: await requestJson(gatewayUrl, "/api/v1/approvals", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "auth-matrix-approval-create-missing-token",
+        },
+        body,
+      }),
+    },
+    {
+      label: "bad-create-token",
+      expectedAllowed: false,
+      response: await requestJson(gatewayUrl, "/api/v1/approvals", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "auth-matrix-approval-create-bad-token",
+          "X-GoatCitadel-Approval-Create-Token": "bad-token",
+        },
+        body,
+      }),
+    },
+    {
+      label: "valid-create-token",
+      expectedAllowed: true,
+      response: await requestJson(gatewayUrl, "/api/v1/approvals", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": "auth-matrix-approval-create-valid-token",
+          "X-GoatCitadel-Approval-Create-Token": approvalCreateToken,
+        },
+        body,
+      }),
+    },
+  ];
+
+  const results = [];
+  for (const probe of probes) {
+    const allowed = isAllowedStatus(probe.response.status);
+    if (allowed !== probe.expectedAllowed) {
+      throw new Error(
+        `auth-matrix remote approval create ${probe.label} expected ${probe.expectedAllowed ? "allowed" : "denied"}, got ${probe.response.status} with ${clampString(JSON.stringify(probe.response.body ?? null), 400)}`,
+      );
+    }
+    results.push({
+      label: probe.label,
+      status: probe.response.status,
+      allowed,
+    });
+  }
+  return results;
+}
+
+async function assertHighRiskRouteFamiliesAreOperatorGated(gatewayUrl, manifestItems, credentials) {
+  const representatives = [
+    { family: "mcp", method: "GET", url: "/api/v1/mcp/servers" },
+    { family: "tools", method: "GET", url: "/api/v1/tools/catalog" },
+    { family: "llm", method: "GET", url: "/api/v1/llm/config" },
+    { family: "integrations", method: "GET", url: "/api/v1/integrations/catalog" },
+    { family: "addons", method: "GET", url: "/api/v1/addons/catalog" },
+    { family: "capabilities", method: "GET", url: "/api/v1/capabilities/catalog" },
+    { family: "code-mode", method: "GET", url: "/api/v1/code-mode/runs" },
+  ];
+
+  for (const representative of representatives) {
+    const manifestItem = manifestItems.find(
+      (item) => item.method === representative.method && item.url === representative.url,
+    );
+    if (!manifestItem?.accessClass) {
+      throw new Error(
+        `auth-matrix high-risk route ${representative.method} ${representative.url} is missing route-access metadata`,
+      );
+    }
+    if (manifestItem.accessClass !== "operator") {
+      throw new Error(
+        `auth-matrix high-risk route ${representative.method} ${representative.url} must be operator-gated, got ${manifestItem.accessClass}`,
+      );
+    }
+
+    const operatorProbe = await requestJson(gatewayUrl, representative.url, {
+      method: representative.method,
+      headers: credentials.operatorHeaders,
+    });
+    if (!isAllowedStatus(operatorProbe.status)) {
+      throw new Error(
+        `auth-matrix high-risk route ${representative.family} rejected operator caller with ${operatorProbe.status}`,
+      );
+    }
+
+    for (const caller of ["device", "companion"]) {
+      const token = caller === "device" ? credentials.deviceToken : credentials.companionToken;
+      const deniedProbe = await requestJson(gatewayUrl, representative.url, {
+        method: representative.method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (deniedProbe.status !== 403) {
+        throw new Error(
+          `auth-matrix high-risk route ${representative.family} expected ${caller} to be denied with 403, got ${deniedProbe.status}`,
+        );
+      }
+    }
+  }
+}
+
 export async function runUiParityLane(context, options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: false,
@@ -2976,7 +3118,7 @@ export async function runUiParityLane(context, options = {}) {
     },
   });
   const nextUi = await startVerificationUiProcess(context, stack.gatewayUrl, NEXT_UI_PACKAGE, "ui-parity-next");
-  const legacyUi = await startVerificationUiProcess(context, stack.gatewayUrl, DEFAULT_UI_PACKAGE, "ui-parity-legacy");
+  const legacyUi = await startVerificationUiProcess(context, stack.gatewayUrl, LEGACY_UI_PACKAGE, "ui-parity-legacy");
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-ui-parity");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
@@ -3038,7 +3180,7 @@ export async function runUiParityLane(context, options = {}) {
               baseUrl: legacyUi.uiUrl,
               href: "/?space=operate&page=approvals",
               route: { href: "?space=operate&page=approvals", readyText: "Approvals" },
-              packageName: DEFAULT_UI_PACKAGE,
+              packageName: LEGACY_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
               needle: approvalNeedle,
@@ -3058,7 +3200,7 @@ export async function runUiParityLane(context, options = {}) {
               baseUrl: legacyUi.uiUrl,
               href: "/?space=observe&page=costs",
               route: { href: "?space=observe&page=costs", readyText: "Health" },
-              packageName: DEFAULT_UI_PACKAGE,
+              packageName: LEGACY_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
               needle: "Health",
@@ -3078,7 +3220,7 @@ export async function runUiParityLane(context, options = {}) {
               baseUrl: legacyUi.uiUrl,
               href: "/?space=observe&page=activity&tab=activity",
               route: { href: "?space=observe&page=activity&tab=activity", readyText: "Timeline" },
-              packageName: DEFAULT_UI_PACKAGE,
+              packageName: LEGACY_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
               needle: activityNeedle,
@@ -3098,7 +3240,7 @@ export async function runUiParityLane(context, options = {}) {
               baseUrl: legacyUi.uiUrl,
               href: "/?space=observe&page=artifacts&tab=memory",
               route: { href: "?space=observe&page=artifacts&tab=memory", readyText: "Artifacts" },
-              packageName: DEFAULT_UI_PACKAGE,
+              packageName: LEGACY_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
               needle: memoryNeedle,
@@ -4562,6 +4704,9 @@ async function issueOperatorSseToken(gatewayUrl, operatorHeaders) {
 }
 
 function selectRepresentativeManifestRoute(manifestItems, accessClass) {
+  if (accessClass === "webhook") {
+    return null;
+  }
   const preferredRoutes = {
     public: [{ method: "POST", url: "/api/v1/auth/device-requests" }],
     "authenticated-read": [{ method: "GET", url: "/api/v1/events" }],
@@ -4648,9 +4793,9 @@ function buildAuthMatrixExpectations(accessClass) {
       };
     case "webhook":
       return {
-        unauthenticated: true,
+        unauthenticated: false,
         badToken: false,
-        operator: true,
+        operator: false,
       };
     default:
       return {

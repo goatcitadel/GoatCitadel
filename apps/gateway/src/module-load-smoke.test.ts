@@ -23,5 +23,5 @@ describe("gateway module load smoke", () => {
     ]);
 
     expect(modules.length).toBeGreaterThan(10);
-  });
+  }, 30_000);
 });

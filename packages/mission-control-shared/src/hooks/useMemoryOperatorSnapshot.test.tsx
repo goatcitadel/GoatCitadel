@@ -246,8 +246,44 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.selectedItem?.lifecycleState).toBe("active");
     expect(latest?.selectedRun?.runId).toBe("run-1");
     expect(latest?.data?.selectedDurableRun?.status).toBe("completed");
+    expect(latest?.data?.memoryAdminState).toBe("enabled");
     expect(latest?.policyDraft?.timeZone).toBe("America/Los_Angeles");
     expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-1", 100);
+  });
+
+  it("fails closed when settings truth cannot be loaded", async () => {
+    apiMocks.fetchSettings.mockRejectedValue(new Error("settings unavailable"));
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+    await flush();
+
+    expect(latest?.loading).toBe(false);
+    expect(latest?.error).toBeNull();
+    expect(latest?.data?.memoryAdminState).toBe("unknown");
+    expect(latest?.data?.memoryAdminEnabled).toBe(false);
+    expect(latest?.data?.memoryItems).toEqual([]);
+    expect(latest?.data?.maintenanceEnabled).toBe(false);
+    expect(latest?.data?.sectionErrors.settings).toBe("settings unavailable");
+    expect(apiMocks.fetchMemoryItems).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await latest?.saveItemPatch("mem-1", { title: "Should not save" });
+    });
+
+    expect(apiMocks.patchMemoryItem).not.toHaveBeenCalled();
+    expect(latest?.notice).toEqual({
+      tone: "warning",
+      message: "Memory admin settings are not confirmed, so item changes are locked.",
+    });
   });
 
   it("updates and forgets the selected item without losing lifecycle truth", async () => {

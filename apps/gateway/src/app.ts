@@ -291,7 +291,10 @@ export async function buildApp() {
 
   await app.register(gatewayPlugin);
   await app.register(routeServicesPlugin);
-  assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins);
+  assertDeploymentProfileStartupSafety(app.gatewayConfig, allowedOrigins, {
+    bindHost: process.env.GATEWAY_HOST ?? "127.0.0.1",
+    tailnetDevOriginsEnabled: allowTailnetDevOrigins,
+  });
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin, {
     mutationStore: app.gateway.storage.mutationIdempotency,

@@ -39,6 +39,7 @@ const MAX_AUTH_TOKEN_LENGTH = 4096;
 const MAX_BASIC_CREDENTIAL_LENGTH = 8192;
 const MAX_ACTIVE_SSE_TOKENS = 10_000;
 const MAX_ACTIVE_SSE_TOKENS_PER_ACTOR = 50;
+const REMOTE_APPROVAL_CREATE_TOKEN_HEADER = "x-goatcitadel-approval-create-token";
 
 export const authPlugin = fp(async (fastify) => {
   const sseTokens = new Map<string, SseTokenRecord>();
@@ -108,6 +109,11 @@ export const authPlugin = fp(async (fastify) => {
     const auth = fastify.gatewayConfig.assistant.auth;
     if (auth.mode === "none") {
       setAuthActor(request, "auth:none", "none");
+      return;
+    }
+    if (isRemoteApprovalCreateRequest(request) && validateRemoteApprovalCreateToken(request)) {
+      const provided = readHeaderToken(request.headers[REMOTE_APPROVAL_CREATE_TOKEN_HEADER]);
+      setAuthActor(request, `approval-create:${tokenFingerprint(provided ?? "unknown")}`, "none");
       return;
     }
 
@@ -430,6 +436,25 @@ function isAsciiWhitespaceCode(code: number): boolean {
 function isLoopbackAddress(ip: string): boolean {
   const normalized = ip.replace("::ffff:", "");
   return normalized === "127.0.0.1" || normalized === "::1";
+}
+
+function isRemoteApprovalCreateRequest(request: FastifyRequest): boolean {
+  return request.method.toUpperCase() === "POST" && request.url.split("?", 1)[0] === "/api/v1/approvals";
+}
+
+function validateRemoteApprovalCreateToken(request: FastifyRequest): boolean {
+  const expected = resolveRemoteApprovalCreateToken();
+  if (!expected) {
+    return false;
+  }
+  const provided = readHeaderToken(request.headers[REMOTE_APPROVAL_CREATE_TOKEN_HEADER]);
+  return Boolean(provided && timingSafeStringEqual(provided, expected));
+}
+
+function resolveRemoteApprovalCreateToken(): string | undefined {
+  const envName = process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN_ENV?.trim();
+  const fromNamedEnv = envName ? process.env[envName]?.trim() : undefined;
+  return fromNamedEnv || process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN?.trim() || undefined;
 }
 
 function timingSafeStringEqual(left: string, right: string): boolean {
