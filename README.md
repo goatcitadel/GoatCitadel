@@ -94,8 +94,14 @@ What it does not guarantee:
 Primary Postgres-backed compose path:
 
 ```powershell
-$env:GOATCITADEL_AUTH_TOKEN = "<long random token>"
-$env:GOATCITADEL_POSTGRES_PASSWORD = "<long random password>"
+pnpm secrets:docker | Tee-Object -FilePath .env
+docker compose up --build
+```
+
+Or, from a packaged/source launcher:
+
+```powershell
+goatcitadel secrets generate --docker-env | Tee-Object -FilePath .env
 docker compose up --build
 ```
 
@@ -106,7 +112,7 @@ Default container endpoints:
 
 The compose file binds published ports to `127.0.0.1` by default. To expose it on another interface, set `GOATCITADEL_DOCKER_BIND_IP` intentionally and keep auth/origin controls tight.
 
-Before exposing GoatCitadel beyond your own machine, set non-placeholder values for:
+Before exposing GoatCitadel beyond your own machine, keep long generated values for:
 
 - `GOATCITADEL_AUTH_TOKEN`
 - `GOATCITADEL_POSTGRES_PASSWORD`

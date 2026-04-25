@@ -35,6 +35,9 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
 
+      - name: Run docs checks
+        run: pnpm docs:check
+
       - name: Run fast verification
         run: pnpm verify:fast
 

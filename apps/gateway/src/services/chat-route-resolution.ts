@@ -2,16 +2,19 @@ import {
   applyChatModePresetToPatch,
   inferProviderForModelId,
   providerAllowsForeignModelIds,
+  type RoutingDecisionSnapshot,
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
   type ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
+import { createHash } from "node:crypto";
 import type { Storage } from "@goatcitadel/storage";
 import type { LlmService } from "./llm-service.js";
 import { splitChatPrefsPatch, shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
 
 type LlmRuntimeConfig = ReturnType<LlmService["getRuntimeConfig"]>;
 type RuntimeProvider = LlmRuntimeConfig["providers"][number];
+const ROUTING_DECISION_TTL_MS = 30_000;
 
 export interface ChatRouteResolutionDependencies {
   readonly storage: Pick<Storage, "chatSessionPrefs">;
@@ -324,7 +327,7 @@ export async function preflightChatRoute(
     runtimeReachability = "not_checked";
   }
 
-  return {
+  const resultWithoutDecision = {
     requestedProviderId: descriptor.requestedProviderId,
     requestedModel: descriptor.requestedModel,
     effectiveProviderId: descriptor.effectiveProviderId,
@@ -337,5 +340,80 @@ export async function preflightChatRoute(
     runtimeClass: descriptor.runtimeClass,
     blockedReason,
     degradedReason: descriptor.degradedReason,
+  } satisfies Omit<RoutingPreflightResult, "decision">;
+
+  return {
+    ...resultWithoutDecision,
+    decision: createRoutingDecisionSnapshot(input, resultWithoutDecision),
   };
+}
+
+export function createRoutingDecisionSnapshot(
+  input: RoutingPreflightRequest,
+  result: Omit<RoutingPreflightResult, "decision">,
+  now = new Date(),
+): RoutingDecisionSnapshot {
+  const issuedAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + ROUTING_DECISION_TTL_MS).toISOString();
+  const snapshotWithoutFingerprint = {
+    action: input.action,
+    turnId: input.turnId,
+    issuedAt,
+    expiresAt,
+    requestedProviderId: result.requestedProviderId,
+    requestedModel: result.requestedModel,
+    effectiveProviderId: result.effectiveProviderId,
+    effectiveModel: result.effectiveModel,
+    selectionSource: result.selectionSource,
+    normalizationReason: result.normalizationReason,
+    fallbackPolicy: result.fallbackPolicy,
+    fallbackResult: result.fallbackResult,
+    runtimeReachability: result.runtimeReachability,
+    runtimeClass: result.runtimeClass,
+    blockedReason: result.blockedReason,
+    degradedReason: result.degradedReason,
+  };
+  return {
+    ...snapshotWithoutFingerprint,
+    fingerprint: createRoutingDecisionFingerprint(snapshotWithoutFingerprint),
+  };
+}
+
+export function createRoutingDecisionFingerprint(
+  input: Omit<RoutingDecisionSnapshot, "fingerprint" | "issuedAt" | "expiresAt" | "selectionSource"> & {
+    selectionSource?: RoutingDecisionSnapshot["selectionSource"];
+    issuedAt?: string;
+    expiresAt?: string;
+  },
+): string {
+  const payload = {
+    action: input.action,
+    turnId: input.turnId,
+    requestedProviderId: input.requestedProviderId,
+    requestedModel: input.requestedModel,
+    effectiveProviderId: input.effectiveProviderId,
+    effectiveModel: input.effectiveModel,
+    selectionSource: input.selectionSource,
+    normalizationReason: input.normalizationReason,
+    fallbackPolicy: input.fallbackPolicy,
+    fallbackResult: input.fallbackResult,
+    runtimeReachability: input.runtimeReachability,
+    runtimeClass: input.runtimeClass,
+    blockedReason: input.blockedReason,
+    degradedReason: input.degradedReason,
+  };
+  return createHash("sha256").update(stableJson(payload)).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableJson(entryValue)}`).join(",")}}`;
 }

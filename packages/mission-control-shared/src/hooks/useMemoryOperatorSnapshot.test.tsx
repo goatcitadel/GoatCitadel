@@ -68,6 +68,7 @@ describe("useMemoryOperatorSnapshot", () => {
     apiMocks.fetchSettings.mockResolvedValue({
       features: {
         memoryLifecycleAdminV1Enabled: true,
+        memoryLifecycleAutoForgetEnabled: true,
         memoryMaintenanceV1Enabled: true,
         durableKernelV1Enabled: true,
       },

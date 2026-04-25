@@ -1217,6 +1217,7 @@ export interface ChatSendMessageRequest {
   parts?: ChatInputPart[];
   providerId?: string;
   model?: string;
+  routeDecision?: RoutingDecisionSnapshot;
   signal?: AbortSignal;
   useMemory?: boolean;
   attachments?: string[];
@@ -1247,6 +1248,26 @@ export interface RoutingPreflightRequest {
   prefsOverride?: ChatSessionPrefsPatch;
 }
 
+export interface RoutingDecisionSnapshot {
+  action: RoutingPreflightAction;
+  turnId?: string;
+  issuedAt: string;
+  expiresAt: string;
+  requestedProviderId?: string;
+  requestedModel?: string;
+  effectiveProviderId?: string;
+  effectiveModel?: string;
+  selectionSource: RoutingPreflightSelectionSource;
+  normalizationReason?: string;
+  fallbackPolicy: RoutingPreflightFallbackPolicy;
+  fallbackResult: RoutingPreflightFallbackResult;
+  runtimeReachability: RoutingPreflightRuntimeReachability;
+  runtimeClass: RoutingPreflightRuntimeClass;
+  blockedReason?: string;
+  degradedReason?: string;
+  fingerprint: string;
+}
+
 export interface RoutingPreflightResult {
   requestedProviderId?: string;
   requestedModel?: string;
@@ -1260,6 +1281,7 @@ export interface RoutingPreflightResult {
   runtimeClass: RoutingPreflightRuntimeClass;
   blockedReason?: string;
   degradedReason?: string;
+  decision: RoutingDecisionSnapshot;
 }
 
 export interface ChatSendMessageResponse {

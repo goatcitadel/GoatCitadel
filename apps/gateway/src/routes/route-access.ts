@@ -50,6 +50,12 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/approvals/remote-resolve", accessClass: "public" },
   { prefix: "/api/v1/events/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/events", accessClass: "authenticated-read" },
+  { prefix: "/api/v1/llm", accessClass: "operator" },
+  { prefix: "/api/v1/tools", accessClass: "operator" },
+  { prefix: "/api/v1/mcp", accessClass: "operator" },
+  { prefix: "/api/v1/addons", accessClass: "operator" },
+  { prefix: "/api/v1/capabilities", accessClass: "operator" },
+  { prefix: "/api/v1/code-mode", accessClass: "operator" },
   { prefix: "/api/v1/dev/diagnostics/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/dev", accessClass: "operator" },
   { prefix: "/api/v1/channels/:channel/inbound", accessClass: "webhook" },
@@ -58,6 +64,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/integrations/connections/:connectionId/slack/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/line/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/nextcloud-talk/webhook", accessClass: "webhook" },
+  { prefix: "/api/v1/integrations", accessClass: "operator" },
 ];
 
 export function withRouteAccess(

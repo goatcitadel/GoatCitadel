@@ -92,12 +92,30 @@ describe("route access manifest", () => {
     } as never);
     app.decorate("requireOperatorAuth", async () => undefined);
 
+    app.get("/api/v1/llm/providers", async () => ({ ok: true }));
     app.get("/api/v1/tools/catalog", async () => ({ ok: true }));
+    app.get("/api/v1/mcp/servers", async () => ({ ok: true }));
+    app.get("/api/v1/addons/catalog", async () => ({ ok: true }));
+    app.get("/api/v1/capabilities/catalog", async () => ({ ok: true }));
+    app.post("/api/v1/code-mode/runs", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/telegram/webhook", async () => ({ ok: true }));
     app.get("/api/v1/unclassified/new-surface", async () => ({ ok: true }));
     await app.ready();
 
     expect(listMissingTrackedRouteAccessClasses(app)).toEqual([]);
+    for (const url of [
+      "/api/v1/llm/providers",
+      "/api/v1/tools/catalog",
+      "/api/v1/mcp/servers",
+      "/api/v1/addons/catalog",
+      "/api/v1/capabilities/catalog",
+      "/api/v1/code-mode/runs",
+    ]) {
+      expect(app.routeAccessManifest.find((entry) => entry.url === url)).toMatchObject({
+        accessClass: "operator",
+        tracked: true,
+      });
+    }
     expect(
       app.routeAccessManifest.find((entry) => entry.method === "GET" && entry.url === "/api/v1/tools/catalog"),
     ).toMatchObject({

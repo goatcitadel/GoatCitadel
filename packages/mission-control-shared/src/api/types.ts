@@ -466,6 +466,7 @@ export interface RuntimeSettingsResponse {
     memoryMaintenanceV1Enabled: boolean;
     replayOverridesV1Enabled: boolean;
     memoryLifecycleAdminV1Enabled: boolean;
+    memoryLifecycleAutoForgetEnabled: boolean;
     connectorDiagnosticsV1Enabled: boolean;
     computerUseGuardrailsV1Enabled: boolean;
     bankrBuiltinEnabled: boolean;

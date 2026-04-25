@@ -39,6 +39,17 @@ vi.mock("./chat-turn-entry-service.js", () => ({
     fallbackResult: "not_applicable",
     runtimeReachability: "not_checked",
     runtimeClass: "cloud",
+    decision: {
+      action: "send",
+      issuedAt: "2026-04-24T00:00:00.000Z",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      selectionSource: "global",
+      fallbackPolicy: "off",
+      fallbackResult: "not_applicable",
+      runtimeReachability: "not_checked",
+      runtimeClass: "cloud",
+      fingerprint: "route-fingerprint",
+    },
   })),
   resumeAgentChatTurnStream: vi.fn(async function* () {
     yield {

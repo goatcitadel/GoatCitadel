@@ -628,6 +628,8 @@ const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const maintenanceSchedulerDisabled =
   process.env.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER?.trim().toLowerCase() === "true";
 const MEMORY_FLUSH_HISTORY_DAYS = 30;
+const MEMORY_FLUSH_EXPIRED_BATCH_LIMIT = 500;
+const MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT = 10_000;
 const COST_REPORT_LOOKBACK_HOURS = 1;
 const COST_REPORT_OUTPUT_DIR = "artifacts/cost-reports";
 const UPDATE_REVIEW_OUTPUT_DIR = "artifacts/update-review";
@@ -2000,10 +2002,9 @@ export class GatewayService {
     const prunedExpiredContextPacks = this.storage.memoryContexts.pruneExpired(nowIso);
     const prunedOldContextPacks = this.storage.memoryContexts.pruneOlderThan(cutoffIso);
     const prunedOldQmdRuns = this.storage.memoryQmdRuns.pruneOlderThan(cutoffIso);
-    const expiredMemoryItems = this.memoryLifecycleService.forgetExpiredActiveMemoryItems({
-      nowIso,
-      limit: 500,
-    });
+    const expiredMemoryLedger = this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled")
+      ? this.forgetExpiredMemoryItemsForFlush(nowIso)
+      : this.inspectExpiredMemoryItemsForFlush(nowIso);
 
     this.storage.systemSettings.set(MEMORY_FLUSH_DAILY_DEDUP_SETTING_KEY, dayKey);
     const finishedAt = new Date().toISOString();
@@ -2019,12 +2020,74 @@ export class GatewayService {
       prunedExpiredContextPacks,
       prunedOldContextPacks,
       prunedOldQmdRuns,
-      expiredMemoryItemCount: expiredMemoryItems.totalCount,
-      forgottenExpiredMemoryItemCount: expiredMemoryItems.forgottenItems.length,
-      retainedPinnedExpiredMemoryItemCount: expiredMemoryItems.retainedPinnedCount,
-      expiredMemoryItemIds: expiredMemoryItems.forgottenItems.map((item) => item.itemId),
-      expiredMemoryNamespacesSample: [...new Set(expiredMemoryItems.forgottenItems.map((item) => item.namespace))],
+      expiredActiveMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
+      expiredMemoryItemCount: expiredMemoryLedger.expiredActiveCount,
+      forgottenExpiredMemoryItemCount: expiredMemoryLedger.forgottenCount,
+      retainedPinnedExpiredMemoryItemCount: expiredMemoryLedger.retainedPinnedCount,
+      remainingExpiredUnpinnedMemoryItemCount: expiredMemoryLedger.remainingExpiredUnpinnedCount,
+      expiredMemoryFlushTruncated: expiredMemoryLedger.truncated,
+      memoryLifecycleAutoForgetEnabled: this.isFeatureEnabled("memoryLifecycleAutoForgetEnabled"),
+      expiredMemoryItemIds: expiredMemoryLedger.forgottenItems.map((item) => item.itemId),
+      expiredMemoryNamespacesSample: [...new Set(expiredMemoryLedger.forgottenItems.map((item) => item.namespace))],
+      retainedPinnedExpiredMemoryItemIds: expiredMemoryLedger.retainedPinnedItems.map((item) => item.itemId),
+      retainedPinnedExpiredMemoryNamespacesSample: [
+        ...new Set(expiredMemoryLedger.retainedPinnedItems.map((item) => item.namespace)),
+      ],
     });
+  }
+
+  private forgetExpiredMemoryItemsForFlush(nowIso: string): {
+    expiredActiveCount: number;
+    forgottenCount: number;
+    retainedPinnedCount: number;
+    remainingExpiredUnpinnedCount: number;
+    truncated: boolean;
+    forgottenItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["forgottenItems"];
+    retainedPinnedItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["retainedPinnedItems"];
+  } {
+    const forgottenItems: ReturnType<MemoryLifecycleService["forgetExpiredActiveMemoryItems"]>["forgottenItems"] = [];
+    while (forgottenItems.length < MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT) {
+      const remainingCapacity = MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT - forgottenItems.length;
+      const batch = this.memoryLifecycleService.forgetExpiredActiveMemoryItems({
+        nowIso,
+        limit: Math.min(MEMORY_FLUSH_EXPIRED_BATCH_LIMIT, remainingCapacity),
+      });
+      forgottenItems.push(...batch.forgottenItems);
+      if (batch.forgottenItems.length === 0 || batch.remainingUnpinnedCount === 0) {
+        break;
+      }
+    }
+    const ledger = this.memoryLifecycleService.inspectExpiredActiveMemoryLedger({ nowIso });
+    return {
+      expiredActiveCount: ledger.totalCount + forgottenItems.length,
+      forgottenCount: forgottenItems.length,
+      retainedPinnedCount: ledger.retainedPinnedCount,
+      remainingExpiredUnpinnedCount: ledger.unpinnedCount,
+      truncated: ledger.unpinnedCount > 0,
+      forgottenItems,
+      retainedPinnedItems: ledger.retainedPinnedItems,
+    };
+  }
+
+  private inspectExpiredMemoryItemsForFlush(nowIso: string): {
+    expiredActiveCount: number;
+    forgottenCount: number;
+    retainedPinnedCount: number;
+    remainingExpiredUnpinnedCount: number;
+    truncated: boolean;
+    forgottenItems: [];
+    retainedPinnedItems: ReturnType<MemoryLifecycleService["inspectExpiredActiveMemoryLedger"]>["retainedPinnedItems"];
+  } {
+    const ledger = this.memoryLifecycleService.inspectExpiredActiveMemoryLedger({ nowIso });
+    return {
+      expiredActiveCount: ledger.totalCount,
+      forgottenCount: 0,
+      retainedPinnedCount: ledger.retainedPinnedCount,
+      remainingExpiredUnpinnedCount: ledger.unpinnedCount,
+      truncated: ledger.unpinnedCount > 0,
+      forgottenItems: [],
+      retainedPinnedItems: ledger.retainedPinnedItems,
+    };
   }
 
   private async runCostReportSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
@@ -5625,6 +5688,8 @@ export class GatewayService {
       durableKernelV1Enabled: true,
       replayOverridesV1Enabled: patch.replayOverridesV1Enabled ?? current.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: patch.memoryLifecycleAdminV1Enabled ?? current.memoryLifecycleAdminV1Enabled,
+      memoryLifecycleAutoForgetEnabled:
+        patch.memoryLifecycleAutoForgetEnabled ?? current.memoryLifecycleAutoForgetEnabled,
       memoryMaintenanceV1Enabled: patch.memoryMaintenanceV1Enabled ?? current.memoryMaintenanceV1Enabled,
       connectorDiagnosticsV1Enabled: patch.connectorDiagnosticsV1Enabled ?? current.connectorDiagnosticsV1Enabled,
       computerUseGuardrailsV1Enabled: patch.computerUseGuardrailsV1Enabled ?? current.computerUseGuardrailsV1Enabled,
@@ -5652,6 +5717,8 @@ export class GatewayService {
       durableKernelV1Enabled: true,
       replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
       memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
+      memoryLifecycleAutoForgetEnabled:
+        stored?.memoryLifecycleAutoForgetEnabled ?? fromConfig.memoryLifecycleAutoForgetEnabled ?? true,
       memoryMaintenanceV1Enabled: stored?.memoryMaintenanceV1Enabled ?? fromConfig.memoryMaintenanceV1Enabled,
       connectorDiagnosticsV1Enabled: stored?.connectorDiagnosticsV1Enabled ?? fromConfig.connectorDiagnosticsV1Enabled,
       computerUseGuardrailsV1Enabled:

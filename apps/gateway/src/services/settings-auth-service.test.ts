@@ -12,6 +12,7 @@ function buildHost(): SettingsRuntimeDependencies {
     durableKernelV1Enabled: true,
     replayOverridesV1Enabled: false,
     memoryLifecycleAdminV1Enabled: false,
+    memoryLifecycleAutoForgetEnabled: true,
     memoryMaintenanceV1Enabled: false,
     connectorDiagnosticsV1Enabled: false,
     computerUseGuardrailsV1Enabled: true,

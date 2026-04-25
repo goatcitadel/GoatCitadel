@@ -96,10 +96,7 @@
     "server": {
       "baseUrl": "http://127.0.0.1:8080/v1",
       "command": "llama-server",
-      "extraArgs": [
-        "--reasoning",
-        "off"
-      ],
+      "extraArgs": ["--reasoning", "off"],
       "healthPath": "/health",
       "modelsPath": "/v1/models",
       "startTimeoutMs": 20000,
@@ -163,6 +160,7 @@
     "durableKernelV1Enabled": true,
     "replayOverridesV1Enabled": false,
     "memoryLifecycleAdminV1Enabled": false,
+    "memoryLifecycleAutoForgetEnabled": true,
     "memoryMaintenanceV1Enabled": false,
     "connectorDiagnosticsV1Enabled": false,
     "computerUseGuardrailsV1Enabled": true,

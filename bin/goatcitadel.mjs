@@ -2,6 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import readline from "node:readline/promises";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
@@ -102,6 +103,11 @@ async function main() {
 
   if (command === "uninstall") {
     await uninstallInstall();
+    return;
+  }
+
+  if (command === "secrets") {
+    secrets(rest);
     return;
   }
 
@@ -1177,6 +1183,7 @@ Commands:
   onboard    Run TUI onboarding wizard
   tui        Run terminal Mission Control
   tools      Tool access CLI (catalog/grants/invoke)
+  secrets    Generate deployment secrets (generate --docker-env)
   voice      Managed local voice runtime (install/status/models/select/remove)
   verify     Unattended verification lanes (fast/install/all/review/soak/deep:core/deep:ecosystem)
   admin      Backup/retention admin CLI
@@ -1214,11 +1221,34 @@ function resolveTaskTitle(currentCommand) {
       return "TUI";
     case "doctor":
       return "Doctor";
+    case "secrets":
+      return "Secrets";
     case "verify":
       return "Verify";
     default:
       return "CLI";
   }
+}
+
+function secrets(argv) {
+  const subcommand = argv[0];
+  const format = argv[1];
+  if (subcommand !== "generate" || (format && format !== "--docker-env")) {
+    console.log("Usage: goatcitadel secrets generate --docker-env");
+    process.exitCode = subcommand === "generate" ? 0 : 1;
+    return;
+  }
+  const authToken = randomDockerSecret();
+  let postgresPassword = randomDockerSecret();
+  while (postgresPassword === authToken) {
+    postgresPassword = randomDockerSecret();
+  }
+  console.log(`GOATCITADEL_AUTH_TOKEN=${authToken}`);
+  console.log(`GOATCITADEL_POSTGRES_PASSWORD=${postgresPassword}`);
+}
+
+function randomDockerSecret() {
+  return randomBytes(32).toString("base64url");
 }
 
 function setTerminalTitle(task) {

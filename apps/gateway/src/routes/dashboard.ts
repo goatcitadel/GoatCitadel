@@ -152,6 +152,7 @@ const updateSettingsSchema = z.object({
       durableKernelV1Enabled: z.boolean().optional(),
       replayOverridesV1Enabled: z.boolean().optional(),
       memoryLifecycleAdminV1Enabled: z.boolean().optional(),
+      memoryLifecycleAutoForgetEnabled: z.boolean().optional(),
       memoryMaintenanceV1Enabled: z.boolean().optional(),
       connectorDiagnosticsV1Enabled: z.boolean().optional(),
       computerUseGuardrailsV1Enabled: z.boolean().optional(),

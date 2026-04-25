@@ -2,6 +2,23 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        password="$${POSTGRES_PASSWORD:-}"
+        if [ -z "$$password" ] || [ "$$password" = "change-this-postgres-password" ] || [ "$${#password}" -lt 32 ]; then
+          echo "[postgres] GOATCITADEL_POSTGRES_PASSWORD must be a non-placeholder random value with at least 32 characters." >&2
+          exit 1
+        fi
+        case "$$password" in
+          password|postgres|goatcitadel|secret|token|changeme)
+            echo "[postgres] GOATCITADEL_POSTGRES_PASSWORD is too weak. Generate a fresh random value." >&2
+            exit 1
+            ;;
+        esac
+        exec docker-entrypoint.sh "$$@"
+    command: ["postgres"]
     environment:
       POSTGRES_DB: goatcitadel
       POSTGRES_USER: postgres

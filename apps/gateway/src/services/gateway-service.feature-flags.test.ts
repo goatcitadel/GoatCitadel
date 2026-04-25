@@ -13,6 +13,7 @@ function createFeatureFlags() {
     durableKernelV1Enabled: false,
     replayOverridesV1Enabled: false,
     memoryLifecycleAdminV1Enabled: false,
+    memoryLifecycleAutoForgetEnabled: true,
     memoryMaintenanceV1Enabled: false,
     connectorDiagnosticsV1Enabled: false,
     computerUseGuardrailsV1Enabled: true,
@@ -120,5 +121,138 @@ describe("GatewayService durable feature flags", () => {
     expect(() => GatewayService.prototype.requireFeatureEnabled.call(gateway, "memoryLifecycleAdminV1Enabled")).toThrow(
       ConflictError,
     );
+  });
+
+  it("drains expired unpinned memory across multiple flush batches", () => {
+    const nowIso = "2026-04-24T00:00:00.000Z";
+    const forgottenItems = Array.from({ length: 1200 }, (_, index) => ({
+      itemId: `memory-${index}`,
+      namespace: index % 2 === 0 ? "user" : "workspace",
+    }));
+    const forgetExpiredActiveMemoryItems = vi.fn((input: { limit: number }) => {
+      const batch = forgottenItems.splice(0, input.limit);
+      return {
+        totalCount: 0,
+        retainedPinnedCount: 2,
+        remainingUnpinnedCount: forgottenItems.length,
+        forgottenItems: batch,
+        retainedPinnedItems: [],
+      };
+    });
+    const inspectExpiredActiveMemoryLedger = vi.fn(() => ({
+      totalCount: 2,
+      retainedPinnedCount: 2,
+      unpinnedCount: 0,
+      retainedPinnedItems: [
+        { itemId: "pinned-1", namespace: "user" },
+        { itemId: "pinned-2", namespace: "workspace" },
+      ],
+    }));
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+      memoryLifecycleService: {
+        forgetExpiredActiveMemoryItems: typeof forgetExpiredActiveMemoryItems;
+        inspectExpiredActiveMemoryLedger: typeof inspectExpiredActiveMemoryLedger;
+      };
+    };
+    gateway.memoryLifecycleService = {
+      forgetExpiredActiveMemoryItems,
+      inspectExpiredActiveMemoryLedger,
+    };
+
+    const result = (
+      GatewayService.prototype as unknown as {
+        forgetExpiredMemoryItemsForFlush(this: typeof gateway, nowIso: string): Record<string, unknown>;
+      }
+    ).forgetExpiredMemoryItemsForFlush.call(gateway, nowIso);
+
+    expect(forgetExpiredActiveMemoryItems).toHaveBeenCalledTimes(3);
+    expect(forgetExpiredActiveMemoryItems).toHaveBeenNthCalledWith(1, { nowIso, limit: 500 });
+    expect(result).toMatchObject({
+      expiredActiveCount: 1202,
+      forgottenCount: 1200,
+      retainedPinnedCount: 2,
+      remainingExpiredUnpinnedCount: 0,
+      truncated: false,
+    });
+  });
+
+  it("reports a truncated expired-memory backlog when the flush safety cap is reached", () => {
+    const nowIso = "2026-04-24T00:00:00.000Z";
+    const forgetExpiredActiveMemoryItems = vi.fn(() => ({
+      totalCount: 0,
+      retainedPinnedCount: 0,
+      remainingUnpinnedCount: 500,
+      forgottenItems: Array.from({ length: 500 }, (_, index) => ({
+        itemId: `memory-${index}`,
+        namespace: "user",
+      })),
+      retainedPinnedItems: [],
+    }));
+    const inspectExpiredActiveMemoryLedger = vi.fn(() => ({
+      totalCount: 500,
+      retainedPinnedCount: 0,
+      unpinnedCount: 500,
+      retainedPinnedItems: [],
+    }));
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+      memoryLifecycleService: {
+        forgetExpiredActiveMemoryItems: typeof forgetExpiredActiveMemoryItems;
+        inspectExpiredActiveMemoryLedger: typeof inspectExpiredActiveMemoryLedger;
+      };
+    };
+    gateway.memoryLifecycleService = {
+      forgetExpiredActiveMemoryItems,
+      inspectExpiredActiveMemoryLedger,
+    };
+
+    const result = (
+      GatewayService.prototype as unknown as {
+        forgetExpiredMemoryItemsForFlush(this: typeof gateway, nowIso: string): Record<string, unknown>;
+      }
+    ).forgetExpiredMemoryItemsForFlush.call(gateway, nowIso);
+
+    expect(forgetExpiredActiveMemoryItems).toHaveBeenCalledTimes(20);
+    expect(result).toMatchObject({
+      expiredActiveCount: 10500,
+      forgottenCount: 10000,
+      remainingExpiredUnpinnedCount: 500,
+      truncated: true,
+    });
+  });
+
+  it("inspects expired memory without forgetting when auto-forget is disabled", () => {
+    const nowIso = "2026-04-24T00:00:00.000Z";
+    const forgetExpiredActiveMemoryItems = vi.fn();
+    const inspectExpiredActiveMemoryLedger = vi.fn(() => ({
+      totalCount: 3,
+      retainedPinnedCount: 1,
+      unpinnedCount: 2,
+      retainedPinnedItems: [{ itemId: "pinned-1", namespace: "user" }],
+    }));
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+      memoryLifecycleService: {
+        forgetExpiredActiveMemoryItems: typeof forgetExpiredActiveMemoryItems;
+        inspectExpiredActiveMemoryLedger: typeof inspectExpiredActiveMemoryLedger;
+      };
+    };
+    gateway.memoryLifecycleService = {
+      forgetExpiredActiveMemoryItems,
+      inspectExpiredActiveMemoryLedger,
+    };
+
+    const result = (
+      GatewayService.prototype as unknown as {
+        inspectExpiredMemoryItemsForFlush(this: typeof gateway, nowIso: string): Record<string, unknown>;
+      }
+    ).inspectExpiredMemoryItemsForFlush.call(gateway, nowIso);
+
+    expect(forgetExpiredActiveMemoryItems).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      expiredActiveCount: 3,
+      forgottenCount: 0,
+      retainedPinnedCount: 1,
+      remainingExpiredUnpinnedCount: 2,
+      truncated: true,
+    });
   });
 });

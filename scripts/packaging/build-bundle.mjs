@@ -57,6 +57,7 @@ async function main() {
   );
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
   copyDirectory(uiTarget.distDir, missionControlDistDir);
+  writeUiTargetManifest(appRoot);
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
   copyIfExists(path.join(repoRoot, ".env.example"), path.join(templatesRoot, ".env.example"));
   copyIfExists(path.join(repoRoot, "skills"), path.join(templatesRoot, "skills"));
@@ -250,6 +251,12 @@ function writeReleaseManifest({
         id: "mission-control",
         required: true,
         path: "app/mission-control/dist",
+        uiTarget: {
+          packageName: uiTarget.packageName,
+          packageDirName: uiTarget.packageDirName,
+          displayName: uiTarget.displayName,
+          compatibilityPath: true,
+        },
         description: `Built ${uiTarget.displayName} operator surface.`,
       },
       {
@@ -277,6 +284,22 @@ function writeReleaseManifest({
     },
   };
   fs.writeFileSync(path.join(packagedAppRoot, "release-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function writeUiTargetManifest(packagedAppRoot) {
+  const manifest = {
+    packageName: uiTarget.packageName,
+    packageDirName: uiTarget.packageDirName,
+    displayName: uiTarget.displayName,
+    sourceDistDir: path.relative(repoRoot, uiTarget.distDir).replaceAll("\\", "/"),
+    packagedDistDir: "mission-control/dist",
+    compatibilityPath: true,
+  };
+  fs.writeFileSync(
+    path.join(packagedAppRoot, "mission-control", "ui-target-manifest.json"),
+    JSON.stringify(manifest, null, 2),
+    "utf8",
+  );
 }
 
 function listFiles(rootDir) {

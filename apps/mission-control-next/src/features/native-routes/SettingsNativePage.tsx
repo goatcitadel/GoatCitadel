@@ -135,6 +135,16 @@ type Notice = {
   message: string;
 };
 
+type NativeLoadIssue = {
+  label: string;
+  message: string;
+};
+
+type NativeLoadResult<T> = {
+  data: T;
+  issue: NativeLoadIssue | null;
+};
+
 type SettingsSectionProps = SettingsNativePageProps & {
   section: string;
 };
@@ -188,28 +198,30 @@ function renderSettingsSection(props: SettingsSectionProps) {
 function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [settings, workspaces, integrations, mcpServers, tools, addons] = await Promise.all([
-      fetchSettings(),
-      fetchWorkspaces("all", 400),
-      fetchIntegrationConnections(),
-      fetchMcpServers(),
-      fetchToolCatalog(),
-      fetchInstalledAddons(),
+      nativeLoad("Settings", fetchSettings(), null),
+      nativeLoad("Workspaces", fetchWorkspaces("all", 400), { items: [] }),
+      nativeLoad("Integrations", fetchIntegrationConnections(), { items: [] }),
+      nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
+      nativeLoad("Tools", fetchToolCatalog(), { items: [] }),
+      nativeLoad("Add-ons", fetchInstalledAddons(), { items: [] }),
     ]);
     return {
-      settings,
-      workspaces: workspaces.items,
-      integrations: integrations.items,
-      mcpServers: mcpServers.items,
-      tools: tools.items,
-      addons: addons.items,
+      issues: nativeLoadIssues([settings, workspaces, integrations, mcpServers, tools, addons]),
+      settings: settings.data,
+      workspaces: workspaces.data.items,
+      integrations: integrations.data.items,
+      mcpServers: mcpServers.data.items,
+      tools: tools.data.items,
+      addons: addons.data.items,
     };
   }, []);
-  const { loading, error, data } = useAsyncLoad(load);
+  const { loading, error, data, reload } = useAsyncLoad(load);
 
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel
             title="Mission Control posture"
             subtitle="Core defaults and system posture at a glance."
@@ -1188,11 +1200,12 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [settings, grants] = await Promise.all([
       fetchSettings(),
-      fetchDeviceAccessGrants("all").catch(() => ({ items: [] })),
+      nativeLoad("Device grants", fetchDeviceAccessGrants("all"), { items: [] }),
     ]);
     return {
       settings,
-      grants: grants.items,
+      issues: nativeLoadIssues([grants]),
+      grants: grants.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -1274,6 +1287,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="Gateway access"
@@ -1408,17 +1422,20 @@ function RuntimeSection(_props: SettingsSectionProps) {
     const shouldLoadNpuModels =
       settings.npu.enabled && (settings.npu.status.healthy || settings.npu.status.processState === "running");
     const [daemon, voiceRuntime, llamaModels, npuModels] = await Promise.all([
-      fetchDaemonStatus().catch(() => null),
-      fetchVoiceRuntimeStatus().catch(() => null),
-      fetchLlamaCppModels().catch(() => ({ items: [] })),
-      shouldLoadNpuModels ? fetchNpuModels().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      nativeLoad("Daemon status", fetchDaemonStatus(), null),
+      nativeLoad("Voice runtime", fetchVoiceRuntimeStatus(), null),
+      nativeLoad("llama.cpp models", fetchLlamaCppModels(), { items: [] }),
+      shouldLoadNpuModels
+        ? nativeLoad("NPU models", fetchNpuModels(), { items: [] })
+        : Promise.resolve({ data: { items: [] }, issue: null }),
     ]);
     return {
       settings,
-      daemon,
-      voiceRuntime,
-      llamaModels: llamaModels.items,
-      npuModels: npuModels.items,
+      issues: nativeLoadIssues([daemon, voiceRuntime, llamaModels, npuModels]),
+      daemon: daemon.data,
+      voiceRuntime: voiceRuntime.data,
+      llamaModels: llamaModels.data.items,
+      npuModels: npuModels.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -1518,6 +1535,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsStack>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel title="Runtime posture" subtitle="Providers, local runtimes, and attached systems.">
             <SettingsMetricGrid
               items={[
@@ -2154,18 +2172,19 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
 function IntegrationsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [catalog, connections, plugins, meetStatus, meetSessions] = await Promise.all([
-      fetchIntegrationCatalog(),
-      fetchIntegrationConnections(),
-      fetchIntegrationPlugins(),
-      fetchGoogleMeetPrerequisiteStatus(),
-      fetchGoogleMeetSessions(6),
+      nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
+      nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
+      nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
+      nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
+      nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
     ]);
     return {
-      catalog: catalog.items.filter((item) => item.kind !== "channel"),
-      connections: connections.items.filter((item) => item.kind !== "channel"),
-      plugins: plugins.items,
-      meetStatus,
-      meetSessions,
+      issues: nativeLoadIssues([catalog, connections, plugins, meetStatus, meetSessions]),
+      catalog: catalog.data.items.filter((item) => item.kind !== "channel"),
+      connections: connections.data.items.filter((item) => item.kind !== "channel"),
+      plugins: plugins.data.items,
+      meetStatus: meetStatus.data,
+      meetSessions: meetSessions.data,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -2310,6 +2329,7 @@ function IntegrationsSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="Connected integrations"
@@ -2599,14 +2619,15 @@ function labelForMeetPrerequisite(id: string): string {
 function ChannelsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [definitions, drafts, connections] = await Promise.all([
-      fetchChannelSetupDefinitions().catch(() => ({ items: [] })),
-      fetchChannelSetupDrafts({ limit: 100 }).catch(() => ({ items: [] })),
-      fetchIntegrationConnections("channel").catch(() => ({ items: [] })),
+      nativeLoad("Channel definitions", fetchChannelSetupDefinitions(), { items: [] }),
+      nativeLoad("Channel drafts", fetchChannelSetupDrafts({ limit: 100 }), { items: [] }),
+      nativeLoad("Channel connections", fetchIntegrationConnections("channel"), { items: [] }),
     ]);
     return {
-      definitions: definitions.items,
-      drafts: drafts.items,
-      connections: connections.items,
+      issues: nativeLoadIssues([definitions, drafts, connections]),
+      definitions: definitions.data.items,
+      drafts: drafts.data.items,
+      connections: connections.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -2741,6 +2762,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="Channel definitions"
@@ -2894,12 +2916,13 @@ function ChannelsSection(_props: SettingsSectionProps) {
 function McpSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [servers, templates] = await Promise.all([
-      fetchMcpServers().catch(() => ({ items: [] })),
-      fetchMcpTemplates().catch(() => ({ items: [] })),
+      nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
+      nativeLoad("MCP templates", fetchMcpTemplates(), { items: [] }),
     ]);
     return {
-      servers: servers.items,
-      templates: templates.items,
+      issues: nativeLoadIssues([servers, templates]),
+      servers: servers.data.items,
+      templates: templates.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -3009,6 +3032,7 @@ function McpSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="MCP servers"
@@ -3256,10 +3280,14 @@ function McpSection(_props: SettingsSectionProps) {
 
 function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [tools, grants] = await Promise.all([fetchToolCatalog(), fetchToolGrants({ limit: 400 })]);
+    const [tools, grants] = await Promise.all([
+      nativeLoad("Tool catalog", fetchToolCatalog(), { items: [] }),
+      nativeLoad("Tool grants", fetchToolGrants({ limit: 400 }), { items: [] }),
+    ]);
     return {
-      tools: tools.items,
-      grants: grants.items,
+      issues: nativeLoadIssues([tools, grants]),
+      tools: tools.data.items,
+      grants: grants.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -3344,6 +3372,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="Tool catalog"
@@ -3489,10 +3518,14 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
 
 function AddonsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, installed] = await Promise.all([fetchAddonsCatalog(), fetchInstalledAddons()]);
+    const [catalog, installed] = await Promise.all([
+      nativeLoad("Add-on catalog", fetchAddonsCatalog(), { items: [] }),
+      nativeLoad("Installed add-ons", fetchInstalledAddons(), { items: [] }),
+    ]);
     return {
-      catalog: catalog.items,
-      installed: installed.items,
+      issues: nativeLoadIssues([catalog, installed]),
+      catalog: catalog.data.items,
+      installed: installed.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -3562,6 +3595,7 @@ function AddonsSection(_props: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel
             title="Add-on catalog"
             subtitle="Optional add-on runtimes and their current install posture."
@@ -3737,6 +3771,50 @@ function useAsyncLoad<T>(loader: () => Promise<T>) {
     ...state,
     reload,
   };
+}
+
+async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): Promise<NativeLoadResult<T>> {
+  try {
+    return {
+      data: await promise,
+      issue: null,
+    };
+  } catch (error) {
+    return {
+      data: fallback,
+      issue: {
+        label,
+        message: getErrorMessage(error),
+      },
+    };
+  }
+}
+
+function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
+  return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
+}
+
+function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIssue[]; onRetry: () => void }) {
+  if (issues.length === 0) {
+    return null;
+  }
+  return (
+    <SettingsPanel title="Some data could not load" subtitle="The rest of this settings page is still usable.">
+      <SettingsActionList
+        items={issues.map((issue) => ({
+          label: issue.label,
+          description: issue.message,
+          tone: "warning",
+        }))}
+      />
+      <div className="mc-next-settings-actions">
+        <button type="button" className="mc-next-secondary-button" onClick={() => void onRetry()}>
+          <RefreshCw className="h-4 w-4" />
+          Retry
+        </button>
+      </div>
+    </SettingsPanel>
+  );
 }
 
 function SettingsPageFrame({

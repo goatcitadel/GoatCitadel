@@ -88,6 +88,7 @@ export interface RuntimeSettings {
     durableKernelV1Enabled: boolean;
     replayOverridesV1Enabled: boolean;
     memoryLifecycleAdminV1Enabled: boolean;
+    memoryLifecycleAutoForgetEnabled: boolean;
     memoryMaintenanceV1Enabled: boolean;
     connectorDiagnosticsV1Enabled: boolean;
     computerUseGuardrailsV1Enabled: boolean;

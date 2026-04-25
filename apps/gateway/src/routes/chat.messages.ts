@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import {
   sessionParamsSchema,
@@ -11,6 +11,26 @@ import {
 const listMessagesSchema = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
   cursor: z.string().optional(),
+});
+
+const routeDecisionSchema = z.object({
+  action: z.enum(["send", "retry", "edit"]),
+  turnId: z.string().optional(),
+  issuedAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+  requestedProviderId: z.string().optional(),
+  requestedModel: z.string().optional(),
+  effectiveProviderId: z.string().optional(),
+  effectiveModel: z.string().optional(),
+  selectionSource: z.enum(["manual", "session", "global"]),
+  normalizationReason: z.string().optional(),
+  fallbackPolicy: z.enum(["off", "armed"]),
+  fallbackResult: z.enum(["not_applicable", "same_boundary", "local_to_cloud", "cloud_to_local"]),
+  runtimeReachability: z.enum(["not_checked", "reachable", "unreachable", "models_unavailable"]),
+  runtimeClass: z.enum(["local", "cloud", "unknown"]),
+  blockedReason: z.string().optional(),
+  degradedReason: z.string().optional(),
+  fingerprint: z.string().min(1),
 });
 
 const sendMessageSchema = z.object({
@@ -48,6 +68,7 @@ const sendMessageSchema = z.object({
     .optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  routeDecision: routeDecisionSchema.optional(),
   useMemory: z.boolean().optional(),
   attachments: z.array(z.string()).optional(),
   mode: z.enum(["chat", "cowork", "code"]).optional(),
@@ -186,6 +207,14 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+        sessionId: params.data.sessionId,
+        action: "send",
+        body: body.data,
+      });
+      if (decisionRejected) {
+        return;
+      }
       const sent = await fastify.services.chatMessages.agentSendChatMessage(params.data.sessionId, body.data);
       return reply.send(sent);
     } catch (error) {
@@ -238,6 +267,18 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           body: body.success ? undefined : body.error.flatten(),
         },
       });
+    }
+    try {
+      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+        sessionId: params.data.sessionId,
+        action: "send",
+        body: body.data,
+      });
+      if (decisionRejected) {
+        return;
+      }
+    } catch (error) {
+      return sendChatWriteError(reply, error);
     }
 
     return streamSseReply(reply, request, params.data.sessionId, (signal) =>
@@ -348,6 +389,15 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+        sessionId: params.data.sessionId,
+        action: "retry",
+        turnId: params.data.turnId,
+        body: body.data,
+      });
+      if (decisionRejected) {
+        return;
+      }
       return reply.send(
         await fastify.services.chatMessages.retryChatTurn(params.data.sessionId, params.data.turnId, body.data),
       );
@@ -367,6 +417,19 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         },
       });
     }
+    try {
+      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+        sessionId: params.data.sessionId,
+        action: "retry",
+        turnId: params.data.turnId,
+        body: body.data,
+      });
+      if (decisionRejected) {
+        return;
+      }
+    } catch (error) {
+      return sendChatWriteError(reply, error);
+    }
     return streamSseReply(reply, request, params.data.sessionId, (signal) =>
       fastify.services.chatMessages.retryChatTurnStream(params.data.sessionId, params.data.turnId, body.data, signal),
     );
@@ -384,6 +447,15 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
+      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+        sessionId: params.data.sessionId,
+        action: "edit",
+        turnId: params.data.turnId,
+        body: body.data,
+      });
+      if (decisionRejected) {
+        return;
+      }
       return reply.send(
         await fastify.services.chatMessages.editChatTurn(params.data.sessionId, params.data.turnId, body.data),
       );
@@ -402,6 +474,19 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
           body: body.success ? undefined : body.error.flatten(),
         },
       });
+    }
+    try {
+      const decisionRejected = await requireFreshRouteDecision(reply, fastify.services.chatMessages, {
+        sessionId: params.data.sessionId,
+        action: "edit",
+        turnId: params.data.turnId,
+        body: body.data,
+      });
+      if (decisionRejected) {
+        return;
+      }
+    } catch (error) {
+      return sendChatWriteError(reply, error);
     }
     return streamSseReply(reply, request, params.data.sessionId, (signal) =>
       fastify.services.chatMessages.editChatTurnStream(params.data.sessionId, params.data.turnId, body.data, signal),
@@ -430,5 +515,73 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
+  });
+}
+
+async function requireFreshRouteDecision(
+  reply: FastifyReply,
+  chatMessages: {
+    routePreflight: (
+      sessionId: string,
+      input: z.infer<typeof routePreflightSchema>,
+    ) => Promise<{ decision: { fingerprint: string }; blockedReason?: string }>;
+  },
+  input: {
+    sessionId: string;
+    action: "send" | "retry" | "edit";
+    turnId?: string;
+    body: Partial<z.infer<typeof sendMessageSchema>> & { routeDecision?: z.infer<typeof routeDecisionSchema> };
+  },
+) {
+  const decision = input.body.routeDecision;
+  if (!decision) {
+    sendRouteChanged(reply, "route_decision_required");
+    return true;
+  }
+  if (decision.action !== input.action || (decision.turnId ?? undefined) !== (input.turnId ?? undefined)) {
+    sendRouteChanged(reply, "route_action_mismatch");
+    return true;
+  }
+  const expiresAtMs = Date.parse(decision.expiresAt);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    sendRouteChanged(reply, "route_decision_expired");
+    return true;
+  }
+  if (
+    (input.body.providerId ?? undefined) !== (decision.effectiveProviderId ?? undefined) ||
+    (input.body.model ?? undefined) !== (decision.effectiveModel ?? undefined)
+  ) {
+    sendRouteChanged(reply, "route_effective_mismatch");
+    return true;
+  }
+  const current = await chatMessages.routePreflight(input.sessionId, {
+    action: input.action,
+    turnId: input.turnId,
+    providerId: decision.requestedProviderId,
+    model: decision.requestedModel,
+    mode: input.body.mode,
+    webMode: input.body.webMode,
+    thinkingLevel: input.body.thinkingLevel,
+    prefsOverride: input.body.prefsOverride,
+  });
+  if (current.blockedReason) {
+    sendRouteChanged(reply, "route_blocked", current.blockedReason);
+    return true;
+  }
+  if (current.decision.fingerprint !== decision.fingerprint) {
+    sendRouteChanged(reply, "route_fingerprint_mismatch");
+    return true;
+  }
+  return false;
+}
+
+function sendRouteChanged(reply: FastifyReply, reason: string, detail?: string) {
+  return reply.code(409).send({
+    error: {
+      code: "route_changed",
+      message: "The provider route changed. Refresh route status and send again.",
+      reason,
+      detail,
+    },
   });
 }

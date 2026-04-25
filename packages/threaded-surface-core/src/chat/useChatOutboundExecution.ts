@@ -113,6 +113,7 @@ export function useChatOutboundExecution(input: {
     sessionId?: string | null;
     action: OutboundQueueItem["action"];
     turnId?: string | null;
+    force?: boolean;
   }) => Promise<RoutingPreflightResult | null>;
   isRoutePreflightAcknowledged: (hash: string) => boolean;
 }) {
@@ -579,6 +580,7 @@ export function useChatOutboundExecution(input: {
           sessionId: session.sessionId,
           action: item.action,
           turnId: item.targetTurnId,
+          force: true,
         });
         if (routePreflight?.blockedReason) {
           throw new Error(routePreflight.blockedReason);
@@ -598,12 +600,18 @@ export function useChatOutboundExecution(input: {
           message: `Resolved route for ${item.action}`,
           level: "debug",
           context: {
+            requestedProviderId: routePreflight?.requestedProviderId,
+            requestedModel: routePreflight?.requestedModel,
             providerId: routePreflight?.effectiveProviderId,
             model: routePreflight?.effectiveModel,
             selectionSource: routePreflight?.selectionSource,
             fallbackPolicy: routePreflight?.fallbackPolicy,
+            routeDecisionFingerprint: routePreflight?.decision.fingerprint,
           },
         });
+        const routeExecutionProviderId = routePreflight?.effectiveProviderId ?? executionProviderId;
+        const routeExecutionModel = routePreflight?.effectiveModel ?? executionModel;
+        const routeExecutionDecision = routePreflight?.decision;
         const targetTurn = item.targetTurnId
           ? (threadRef.current?.turns.find((turn) => turn.turnId === item.targetTurnId) ?? null)
           : null;
@@ -791,8 +799,9 @@ export function useChatOutboundExecution(input: {
                   session.sessionId,
                   item.targetTurnId,
                   {
-                    providerId: executionProviderId,
-                    model: executionModel,
+                    providerId: routeExecutionProviderId,
+                    model: routeExecutionModel,
+                    routeDecision: routeExecutionDecision,
                     mode: currentPrefs?.mode,
                     webMode: currentPrefs?.webMode,
                     memoryMode: currentPrefs?.memoryMode,
@@ -810,8 +819,9 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: executionProviderId,
-                    model: executionModel,
+                    providerId: routeExecutionProviderId,
+                    model: routeExecutionModel,
+                    routeDecision: routeExecutionDecision,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -827,8 +837,9 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: executionProviderId,
-                    model: executionModel,
+                    providerId: routeExecutionProviderId,
+                    model: routeExecutionModel,
+                    routeDecision: routeExecutionDecision,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -866,8 +877,9 @@ export function useChatOutboundExecution(input: {
           const sent =
             item.action === "retry" && item.targetTurnId
               ? await retryChatTurn(session.sessionId, item.targetTurnId, {
-                  providerId: executionProviderId,
-                  model: executionModel,
+                  providerId: routeExecutionProviderId,
+                  model: routeExecutionModel,
+                  routeDecision: routeExecutionDecision,
                   mode: currentPrefs?.mode,
                   webMode: currentPrefs?.webMode,
                   memoryMode: currentPrefs?.memoryMode,
@@ -879,8 +891,9 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: executionProviderId,
-                    model: executionModel,
+                    providerId: routeExecutionProviderId,
+                    model: routeExecutionModel,
+                    routeDecision: routeExecutionDecision,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
@@ -890,8 +903,9 @@ export function useChatOutboundExecution(input: {
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
                     mode: currentPrefs?.mode ?? "chat",
-                    providerId: executionProviderId,
-                    model: executionModel,
+                    providerId: routeExecutionProviderId,
+                    model: routeExecutionModel,
+                    routeDecision: routeExecutionDecision,
                     webMode: currentPrefs?.webMode ?? "auto",
                     memoryMode: currentPrefs?.memoryMode ?? "auto",
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",

@@ -70,6 +70,16 @@ type Notice = {
   message: string;
 };
 
+type NativeLoadIssue = {
+  label: string;
+  message: string;
+};
+
+type NativeLoadResult<T> = {
+  data: T;
+  issue: NativeLoadIssue | null;
+};
+
 export function NativeRoutePages(props: NativeRoutePagesProps) {
   const { route } = props;
 
@@ -92,6 +102,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
   const section = route.section ?? "workspace";
   const [state, setState] = useState<
     LoadState<{
+      issues: NativeLoadIssue[];
       tasks: TaskCardRecord[];
       operators: Array<{ operatorId: string; sessionCount: number; activeSessions: number; lastActivityAt?: string }>;
     }>
@@ -104,7 +115,13 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
   useEffect(() => {
     let cancelled = false;
     setState((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([fetchTasksByView("active", undefined, activeWorkspaceId), fetchOperators()])
+    void Promise.all([
+      nativeLoad("Cowork tasks", fetchTasksByView("active", undefined, activeWorkspaceId), {
+        items: [],
+        view: "active",
+      }),
+      nativeLoad("Operators", fetchOperators(), { items: [] }),
+    ])
       .then(([tasks, operators]) => {
         if (cancelled) {
           return;
@@ -113,7 +130,8 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
           loading: false,
           error: null,
           data: {
-            tasks: tasks.items.map((item) => ({
+            issues: nativeLoadIssues([tasks, operators]),
+            tasks: tasks.data.items.map((item) => ({
               taskId: item.taskId,
               title: item.title,
               status: item.status,
@@ -122,7 +140,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
               updatedAt: item.updatedAt,
               assignedAgentId: item.assignedAgentId,
             })),
-            operators: operators.items,
+            operators: operators.data.items,
           },
         });
       })
@@ -234,6 +252,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       loading={state.loading}
       error={state.error}
     >
+      <LibraryLoadWarnings issues={state.data?.issues ?? []} />
       {content}
     </NativePageFrame>
   );
@@ -288,16 +307,21 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
   });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [agents, catalog] = await Promise.all([
-      fetchAgents("all", 160).catch(() => ({ items: [] })),
-      fetchImportedAgentCatalog({
-        workspaceId: activeWorkspaceId,
-        limit: 40,
-        state: "all",
-      }).catch(() => ({ workspaceId: activeWorkspaceId, divisions: [], items: [] })),
+      nativeLoad("Agent profiles", fetchAgents("all", 160), { items: [] }),
+      nativeLoad(
+        "Imported agent catalog",
+        fetchImportedAgentCatalog({
+          workspaceId: activeWorkspaceId,
+          limit: 40,
+          state: "all",
+        }),
+        { workspaceId: activeWorkspaceId, divisions: [], items: [] },
+      ),
     ]);
     return {
-      agents: agents.items,
-      catalog: catalog.items,
+      issues: nativeLoadIssues([agents, catalog]),
+      agents: agents.data.items,
+      catalog: catalog.data.items,
     };
   }, [activeWorkspaceId]);
 
@@ -385,6 +409,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
   return (
     <LibrarySectionShell loading={loading} error={error}>
       {notice ? <LibraryNotice notice={notice} /> : null}
+      <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Agent profiles"
@@ -564,16 +589,21 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [skills, sources, history, policy] = await Promise.all([
-      fetchSkills().catch(() => ({ items: [] })),
-      fetchSkillSources({ limit: 10 }).catch(() => ({ items: [] })),
-      fetchSkillImportHistory(10).catch(() => ({ items: [] })),
-      fetchSkillActivationPolicies().catch(() => null),
+      nativeLoad("Skills", fetchSkills(), { items: [] }),
+      nativeLoad("Skill sources", fetchSkillSources({ limit: 10 }), {
+        generatedAt: "1970-01-01T00:00:00.000Z",
+        items: [],
+        providers: [],
+      }),
+      nativeLoad("Skill import history", fetchSkillImportHistory(10), { items: [] }),
+      nativeLoad("Skill activation policy", fetchSkillActivationPolicies(), null),
     ]);
     return {
-      skills: skills.items,
-      sources: sources.items,
-      history: history.items,
-      policy,
+      issues: nativeLoadIssues([skills, sources, history, policy]),
+      skills: skills.data.items,
+      sources: sources.data.items,
+      history: history.data.items,
+      policy: policy.data,
     };
   }, []);
 
@@ -615,6 +645,7 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
   return (
     <LibrarySectionShell loading={loading} error={error}>
       {notice ? <LibraryNotice notice={notice} /> : null}
+      <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Installed skills"
@@ -763,14 +794,15 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
     error: null,
     data: null,
   });
-  const { loading, error, data } = useAsyncLoad(async () => {
+  const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [files, qmd] = await Promise.all([
-      fetchMemoryFiles("memory").catch(() => ({ items: [] })),
-      fetchMemoryQmdStats(undefined, undefined, 8).catch(() => null),
+      nativeLoad("Memory files", fetchMemoryFiles("memory"), { items: [] }),
+      nativeLoad("QMD stats", fetchMemoryQmdStats(undefined, undefined, 8), null),
     ]);
     return {
-      files: files.items,
-      qmd,
+      issues: nativeLoadIssues([files, qmd]),
+      files: files.data.items,
+      qmd: qmd.data,
     };
   }, []);
 
@@ -821,6 +853,7 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
 
   return (
     <LibrarySectionShell loading={loading} error={error}>
+      <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Knowledge sources"
@@ -919,12 +952,13 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
   });
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [files, templates] = await Promise.all([
-      fetchFilesList(".", 120).catch(() => ({ items: [] })),
-      fetchFileTemplates().catch(() => ({ items: [] })),
+      nativeLoad("Files", fetchFilesList(".", 120), { items: [] }),
+      nativeLoad("File templates", fetchFileTemplates(), { items: [] }),
     ]);
     return {
-      files: files.items,
-      templates: templates.items,
+      issues: nativeLoadIssues([files, templates]),
+      files: files.data.items,
+      templates: templates.data.items,
     };
   }, []);
 
@@ -1002,6 +1036,7 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
   return (
     <LibrarySectionShell loading={loading} error={error}>
       {notice ? <LibraryNotice notice={notice} /> : null}
+      <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Workspace files"
@@ -1102,12 +1137,17 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
   const [surfaceFilter, setSurfaceFilter] = useState<ChatGeneratedArtifactRecord["sourceSurface"] | "all">("all");
   const [search, setSearch] = useState("");
   const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const artifacts = await fetchChatGeneratedArtifacts({
-      workspaceId: activeWorkspaceId,
-      limit: 80,
-    }).catch(() => ({ items: [] }));
+    const artifacts = await nativeLoad(
+      "Artifacts",
+      fetchChatGeneratedArtifacts({
+        workspaceId: activeWorkspaceId,
+        limit: 80,
+      }),
+      { items: [] },
+    );
     return {
-      artifacts: artifacts.items,
+      issues: nativeLoadIssues([artifacts]),
+      artifacts: artifacts.data.items,
     };
   }, [activeWorkspaceId]);
 
@@ -1135,6 +1175,7 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
 
   return (
     <LibrarySectionShell loading={loading} error={error}>
+      <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Generated artifacts"
@@ -1435,6 +1476,53 @@ function LibraryEmptyState({ label }: { label: string }) {
 
 function LibraryNotice({ notice }: { notice: Notice }) {
   return <div className={`mc-next-settings-notice ${notice.tone}`}>{notice.message}</div>;
+}
+
+async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): Promise<NativeLoadResult<T>> {
+  try {
+    return {
+      data: await promise,
+      issue: null,
+    };
+  } catch (error) {
+    return {
+      data: fallback,
+      issue: {
+        label,
+        message: getErrorMessage(error),
+      },
+    };
+  }
+}
+
+function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
+  return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
+}
+
+function LibraryLoadWarnings({ issues, onRetry }: { issues: NativeLoadIssue[]; onRetry?: () => void }) {
+  if (issues.length === 0) {
+    return null;
+  }
+  return (
+    <NativeCard title="Some data could not load" subtitle="The rest of this route is still usable.">
+      <NativeList
+        items={issues.map((issue) => ({
+          title: issue.label,
+          meta: "Load warning",
+          body: issue.message,
+        }))}
+        emptyLabel="All data loaded."
+      />
+      {onRetry ? (
+        <div className="mc-next-settings-actions">
+          <button type="button" className="mc-next-secondary-button" onClick={() => void onRetry()}>
+            <RefreshCw className="h-4 w-4" />
+            Retry
+          </button>
+        </div>
+      ) : null}
+    </NativeCard>
+  );
 }
 
 function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<unknown>) {

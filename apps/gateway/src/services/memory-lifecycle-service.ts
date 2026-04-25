@@ -223,23 +223,13 @@ export class MemoryLifecycleService {
   public forgetExpiredActiveMemoryItems(input: { limit?: number; nowIso?: string; actorId?: string } = {}): {
     totalCount: number;
     retainedPinnedCount: number;
+    remainingUnpinnedCount: number;
+    retainedPinnedItems: MemoryItemRecord[];
     forgottenItems: MemoryItemRecord[];
   } {
     const nowIso = input.nowIso ?? new Date().toISOString();
     const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
-    const countRows = this.deps.admin.gatewaySql
-      .prepare(
-        `
-      SELECT
-        COUNT(*) AS totalCount,
-        SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END) AS retainedPinnedCount
-      FROM memory_items
-      WHERE status = 'active'
-        AND expires_at IS NOT NULL
-        AND expires_at <= @now
-    `,
-      )
-      .get({ now: nowIso }) as { totalCount?: number | null; retainedPinnedCount?: number | null } | undefined;
+    const ledger = this.inspectExpiredActiveMemoryLedger({ nowIso });
     const rows = this.deps.admin.gatewaySql
       .prepare(
         `
@@ -273,9 +263,71 @@ export class MemoryLifecycleService {
       this.forgetMemoryItemInternal(row.item_id, input.actorId ?? "memory-flush", { requireFeature: false }),
     );
     return {
+      totalCount: ledger.totalCount,
+      retainedPinnedCount: ledger.retainedPinnedCount,
+      remainingUnpinnedCount: Math.max(0, ledger.unpinnedCount - forgottenItems.length),
+      retainedPinnedItems: ledger.retainedPinnedItems,
+      forgottenItems,
+    };
+  }
+
+  public inspectExpiredActiveMemoryLedger(input: { nowIso?: string; retainedPinnedLimit?: number } = {}): {
+    totalCount: number;
+    retainedPinnedCount: number;
+    unpinnedCount: number;
+    retainedPinnedItems: MemoryItemRecord[];
+  } {
+    const nowIso = input.nowIso ?? new Date().toISOString();
+    const retainedPinnedLimit = Math.max(0, Math.min(25, Math.floor(input.retainedPinnedLimit ?? 10)));
+    const countRows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT
+        COUNT(*) AS totalCount,
+        SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END) AS retainedPinnedCount,
+        SUM(CASE WHEN pinned = 0 THEN 1 ELSE 0 END) AS unpinnedCount
+      FROM memory_items
+      WHERE status = 'active'
+        AND expires_at IS NOT NULL
+        AND expires_at <= @now
+    `,
+      )
+      .get({ now: nowIso }) as
+      | { totalCount?: number | null; retainedPinnedCount?: number | null; unpinnedCount?: number | null }
+      | undefined;
+    const retainedRows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT item_id, namespace, title, content, metadata_json, pinned, ttl_override_seconds, expires_at, status,
+             created_at, updated_at, forgotten_at
+      FROM memory_items
+      WHERE status = 'active'
+        AND expires_at IS NOT NULL
+        AND expires_at <= @now
+        AND pinned = 1
+      ORDER BY expires_at ASC, updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all({ now: nowIso, limit: retainedPinnedLimit }) as Array<{
+      item_id: string;
+      namespace: string;
+      title: string;
+      content: string;
+      metadata_json: string | null;
+      pinned: number;
+      ttl_override_seconds: number | null;
+      expires_at: string | null;
+      status: MemoryItemRecord["status"];
+      created_at: string;
+      updated_at: string;
+      forgotten_at: string | null;
+    }>;
+    return {
       totalCount: Number(countRows?.totalCount ?? 0),
       retainedPinnedCount: Number(countRows?.retainedPinnedCount ?? 0),
-      forgottenItems,
+      unpinnedCount: Number(countRows?.unpinnedCount ?? 0),
+      retainedPinnedItems: retainedRows.map((row) => mapMemoryItemRow(this.deps.admin, row)),
     };
   }
 

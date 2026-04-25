@@ -143,6 +143,56 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("blocks a parallel approval resolve while the first matching mutation is in progress", async () => {
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const firstStartedPromise = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const calls: Array<Record<string, unknown>> = [];
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/approvals/:approvalId/resolve", async (request) => {
+        calls.push((request as { body: Record<string, unknown> }).body);
+        firstStarted();
+        await firstCanFinish;
+        return { ok: true };
+      });
+    });
+
+    try {
+      const headers = { "Idempotency-Key": "idem-approval-parallel-1" };
+      const payload = { decision: "approve" };
+      const first = app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-1/resolve",
+        headers,
+        payload,
+      });
+      await firstStartedPromise;
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-1/resolve",
+        headers,
+        payload,
+      });
+      releaseFirst();
+      const firstResponse = await first;
+
+      expect(firstResponse.statusCode).toBe(200);
+      expect(second.statusCode).toBe(409);
+      expect(second.json()).toEqual({
+        error: "Request already in progress for this Idempotency-Key",
+      });
+      expect(calls).toEqual([payload]);
+    } finally {
+      releaseFirst();
+      await app.close();
+    }
+  });
+
   it("releases failed claims so a later retry can execute", async () => {
     let attempts = 0;
     const { app } = await buildApp((fastify) => {

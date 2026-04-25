@@ -2,6 +2,33 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { chatRoutes } from "./chat.js";
 
+function testRouteDecision(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    action: "send",
+    issuedAt: "2026-04-24T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    requestedProviderId: "openai",
+    requestedModel: "gpt-5.1",
+    effectiveProviderId: "openai",
+    effectiveModel: "gpt-5.1",
+    selectionSource: "manual",
+    fallbackPolicy: "off",
+    fallbackResult: "not_applicable",
+    runtimeReachability: "not_checked",
+    runtimeClass: "cloud",
+    fingerprint: "route-fingerprint",
+    ...overrides,
+  };
+}
+
+function matchingRoutePreflight(overrides: Partial<Record<string, unknown>> = {}) {
+  const decision = testRouteDecision(overrides);
+  return {
+    ...decision,
+    decision,
+  };
+}
+
 describe("chat routes additional coverage", () => {
   let app: FastifyInstance | null = null;
 
@@ -371,8 +398,9 @@ describe("chat routes additional coverage", () => {
       yield { type: "delta", value: "Hello" };
       yield { type: "done" };
     });
+    const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
-    app.decorate("services", { chatMessages: { agentSendChatMessageStream } } as never);
+    app.decorate("services", { chatMessages: { agentSendChatMessageStream, routePreflight } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({
@@ -380,6 +408,9 @@ describe("chat routes additional coverage", () => {
       url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
       payload: {
         content: "Hello",
+        providerId: "openai",
+        model: "gpt-5.1",
+        routeDecision: testRouteDecision(),
       },
     });
 
@@ -439,13 +470,136 @@ describe("chat routes additional coverage", () => {
     });
   });
 
+  it("requires a fresh route decision before HTTP agent send", async () => {
+    const agentSendChatMessage = vi.fn();
+    const routePreflight = vi.fn(async () => matchingRoutePreflight());
+    app = Fastify();
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
+    await app.register(chatRoutes);
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "Hello",
+      },
+    });
+    expect(missing.statusCode).toBe(409);
+    expect(missing.json().error).toMatchObject({ code: "route_changed", reason: "route_decision_required" });
+
+    const expired = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "Hello",
+        routeDecision: testRouteDecision({ expiresAt: "2000-01-01T00:00:00.000Z" }),
+      },
+    });
+    expect(expired.statusCode).toBe(409);
+    expect(expired.json().error).toMatchObject({ code: "route_changed", reason: "route_decision_expired" });
+    expect(agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects agent send when the route decision fingerprint changed", async () => {
+    const agentSendChatMessage = vi.fn();
+    const routePreflight = vi.fn(async () => matchingRoutePreflight({ fingerprint: "current-fingerprint" }));
+    app = Fastify();
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "Hello",
+        providerId: "openai",
+        model: "gpt-5.1",
+        routeDecision: testRouteDecision({ fingerprint: "stale-fingerprint" }),
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toMatchObject({ code: "route_changed", reason: "route_fingerprint_mismatch" });
+    expect(agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it("validates fallback decisions against the requested route while sending the effective route", async () => {
+    const agentSendChatMessage = vi.fn(async () => ({ turnId: "turn-1" }));
+    const decision = testRouteDecision({
+      requestedProviderId: "ollama",
+      requestedModel: "llama3.2",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.1",
+      fallbackPolicy: "armed",
+      fallbackResult: "local_to_cloud",
+      fingerprint: "fallback-fingerprint",
+    });
+    const routePreflight = vi.fn(async () => matchingRoutePreflight(decision));
+    app = Fastify();
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "Hello",
+        providerId: "openai",
+        model: "gpt-5.1",
+        routeDecision: decision,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        action: "send",
+        providerId: "ollama",
+        model: "llama3.2",
+      }),
+    );
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-5.1",
+      }),
+    );
+  });
+
+  it("rejects agent send when the execution payload disagrees with the effective route decision", async () => {
+    const agentSendChatMessage = vi.fn();
+    const routePreflight = vi.fn(async () => matchingRoutePreflight());
+    app = Fastify();
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "Hello",
+        providerId: "anthropic",
+        model: "claude-sonnet-4.5",
+        routeDecision: testRouteDecision(),
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toMatchObject({ code: "route_changed", reason: "route_effective_mismatch" });
+    expect(routePreflight).not.toHaveBeenCalled();
+    expect(agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
   it("emits an error chunk without a fabricated done chunk when SSE streaming fails", async () => {
     const agentSendChatMessageStream = vi.fn(async function* () {
       yield* [];
       throw new Error("stream exploded");
     });
+    const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
-    app.decorate("services", { chatMessages: { agentSendChatMessageStream } } as never);
+    app.decorate("services", { chatMessages: { agentSendChatMessageStream, routePreflight } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({
@@ -453,6 +607,9 @@ describe("chat routes additional coverage", () => {
       url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
       payload: {
         content: "Hello",
+        providerId: "openai",
+        model: "gpt-5.1",
+        routeDecision: testRouteDecision(),
       },
     });
 
@@ -1101,8 +1258,9 @@ describe("chat routes additional coverage", () => {
       error.name = "ChatTurnWriteConflictError";
       throw error;
     });
+    const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
-    app.decorate("services", { chatMessages: { agentSendChatMessage } } as never);
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({
@@ -1110,6 +1268,9 @@ describe("chat routes additional coverage", () => {
       url: "/api/v1/chat/sessions/sess-1/agent-send",
       payload: {
         content: "Hello",
+        providerId: "openai",
+        model: "gpt-5.1",
+        routeDecision: testRouteDecision(),
       },
     });
 
@@ -1120,8 +1281,9 @@ describe("chat routes additional coverage", () => {
     const agentSendChatMessage = vi.fn(async () => {
       throw new Error("database exploded");
     });
+    const routePreflight = vi.fn(async () => matchingRoutePreflight());
     app = Fastify();
-    app.decorate("services", { chatMessages: { agentSendChatMessage } } as never);
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
     await app.register(chatRoutes);
 
     const response = await app.inject({
@@ -1129,6 +1291,9 @@ describe("chat routes additional coverage", () => {
       url: "/api/v1/chat/sessions/sess-1/agent-send",
       payload: {
         content: "Hello",
+        providerId: "openai",
+        model: "gpt-5.1",
+        routeDecision: testRouteDecision(),
       },
     });
 

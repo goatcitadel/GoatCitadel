@@ -235,8 +235,14 @@ Important posture notes:
 Primary stack:
 
 ```powershell
-$env:GOATCITADEL_AUTH_TOKEN = "<long random token>"
-$env:GOATCITADEL_POSTGRES_PASSWORD = "<long random password>"
+pnpm secrets:docker | Tee-Object -FilePath .env
+docker compose up --build
+```
+
+The source and packaged launcher can generate the same `.env` content:
+
+```powershell
+goatcitadel secrets generate --docker-env | Tee-Object -FilePath .env
 docker compose up --build
 ```
 
@@ -247,7 +253,7 @@ Default endpoints:
 
 The compose file publishes ports on `127.0.0.1` by default. Set `GOATCITADEL_DOCKER_BIND_IP` only when you intentionally want another host/interface to reach the stack.
 
-Set these to non-placeholder values before the stack starts:
+Set these to generated, non-placeholder values before the stack starts:
 
 - `GOATCITADEL_AUTH_TOKEN`
 - `GOATCITADEL_POSTGRES_PASSWORD`
@@ -265,8 +271,7 @@ The compose file already enables:
 Mission Control is served from a built Vite preview image. If you want to use a non-local hostname, set these at build time and rebuild:
 
 ```bash
-export GOATCITADEL_AUTH_TOKEN="<long random token>"
-export GOATCITADEL_POSTGRES_PASSWORD="<long random password>"
+node scripts/generate-docker-secrets.mjs --docker-env > .env
 GOATCITADEL_VITE_ALLOWED_HOSTS=your-host.example \
 VITE_GATEWAY_ALLOWED_HOSTS=your-host.example \
 docker compose up --build
@@ -353,7 +358,7 @@ If you expose GoatCitadel beyond loopback, set these explicitly:
 GATEWAY_HOST=0.0.0.0
 GATEWAY_PORT=8787
 GOATCITADEL_AUTH_MODE=token
-GOATCITADEL_AUTH_TOKEN=replace-with-long-random-token
+GOATCITADEL_AUTH_TOKEN=<value from goatcitadel secrets generate --docker-env>
 GOATCITADEL_WARN_UNAUTH_NON_LOOPBACK=true
 GOATCITADEL_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 GOATCITADEL_VITE_ALLOWED_HOSTS=localhost,127.0.0.1

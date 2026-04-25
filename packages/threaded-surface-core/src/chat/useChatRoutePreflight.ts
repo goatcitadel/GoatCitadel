@@ -113,7 +113,12 @@ export function useChatRoutePreflight(input: {
   }, [displayKey, displayRequest, enabled, fetchPreflight]);
 
   const ensureFreshPreflight = useCallback(
-    async (override: { action: RoutingPreflightAction; turnId?: string | null; sessionId?: string | null }) => {
+    async (override: {
+      action: RoutingPreflightAction;
+      turnId?: string | null;
+      sessionId?: string | null;
+      force?: boolean;
+    }) => {
       const targetSessionId = override.sessionId ?? sessionId;
       if (!targetSessionId) {
         return null;
@@ -126,7 +131,7 @@ export function useChatRoutePreflight(input: {
       const cacheKey = `${targetSessionId}:${stableHash(request)}`;
       const cached = cacheRef.current.get(cacheKey);
       const stale = !cached || Date.now() - cached.fetchedAt >= PREFLIGHT_TTL_MS;
-      const next = await fetchPreflight(request, { force: stale, sessionId: targetSessionId });
+      const next = await fetchPreflight(request, { force: override.force || stale, sessionId: targetSessionId });
       if (displayKey === cacheKey) {
         setResult(next);
         setError(null);

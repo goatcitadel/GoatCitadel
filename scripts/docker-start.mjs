@@ -2,6 +2,12 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import {
+  PLACEHOLDER_AUTH_TOKEN,
+  PLACEHOLDER_POSTGRES_PASSWORD,
+  validateDistinctDockerSecrets,
+  validateRequiredDockerSecret,
+} from "./lib/docker-secrets.mjs";
 import { resolveUiTarget } from "./lib/ui-target.mjs";
 
 const rootDir = process.cwd();
@@ -10,11 +16,9 @@ const gatewayPort = process.env.GATEWAY_PORT ?? "8787";
 const gatewayHost = process.env.GATEWAY_HOST ?? "0.0.0.0";
 const missionControlPort = process.env.MISSION_CONTROL_PORT ?? "4173";
 const missionControlHost = process.env.MISSION_CONTROL_HOST ?? "0.0.0.0";
-const PLACEHOLDER_AUTH_TOKEN = "change-this-goatcitadel-token";
-const PLACEHOLDER_POSTGRES_PASSWORD = "change-this-postgres-password";
-
 assertRequiredSecret("GOATCITADEL_AUTH_TOKEN", PLACEHOLDER_AUTH_TOKEN);
 assertRequiredSecret("GOATCITADEL_POSTGRES_PASSWORD", PLACEHOLDER_POSTGRES_PASSWORD);
+assertDistinctSecrets("GOATCITADEL_AUTH_TOKEN", "GOATCITADEL_POSTGRES_PASSWORD");
 
 const children = new Set();
 let shuttingDown = false;
@@ -92,13 +96,17 @@ function launch(label, command, args, options = {}) {
 }
 
 function assertRequiredSecret(name, placeholder) {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    console.error(`[docker-start] ${name} is required. Set it to a long random value before running docker compose.`);
+  const error = validateRequiredDockerSecret(name, process.env[name], placeholder);
+  if (error) {
+    console.error(`[docker-start] ${error}`);
     process.exit(1);
   }
-  if (value === placeholder) {
-    console.error(`[docker-start] ${name} still uses the documented placeholder. Replace it before startup.`);
+}
+
+function assertDistinctSecrets(leftName, rightName) {
+  const error = validateDistinctDockerSecrets(leftName, process.env[leftName], rightName, process.env[rightName]);
+  if (error) {
+    console.error(`[docker-start] ${error}`);
     process.exit(1);
   }
 }
