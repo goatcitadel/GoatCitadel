@@ -113,6 +113,7 @@ describe("useProviderModelCatalog", () => {
     apiMocks.fetchLlmModels.mockImplementation(async (providerId?: string) => ({
       items:
         providerId === "glm" ? [{ id: "glm-5" }, { id: "glm-5-air" }] : [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+      source: "remote",
     }));
     latest = null;
   });

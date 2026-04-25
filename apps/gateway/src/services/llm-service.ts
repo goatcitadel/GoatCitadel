@@ -399,7 +399,6 @@ export class LlmService {
   }
 
   public getOpenAICodexOAuthStatus(): OpenAICodexOAuthStatus {
-    this.assertKnownOpenAICodexProvider();
     return this.openAICodexOAuth.getStatus();
   }
 
@@ -414,7 +413,6 @@ export class LlmService {
   }
 
   public deleteOpenAICodexOAuthCredential(): OpenAICodexOAuthStatus {
-    this.assertKnownOpenAICodexProvider();
     return this.openAICodexOAuth.deleteCredential();
   }
 
@@ -449,6 +447,11 @@ export class LlmService {
     const resolved = await this.resolveProvider(providerId);
     const result = await this.fetchModelsForResolvedProvider(resolved);
     return result.items;
+  }
+
+  public async listModelsWithSource(providerId?: string): Promise<ModelDiscoveryResult> {
+    const resolved = await this.resolveProvider(providerId);
+    return this.fetchModelsForResolvedProvider(resolved);
   }
 
   public async previewModels(input: LlmModelPreviewRequest): Promise<LlmModelPreviewResponse> {

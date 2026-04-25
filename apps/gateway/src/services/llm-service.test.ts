@@ -2351,6 +2351,56 @@ describe("LlmService", () => {
     }
   });
 
+  it("marks OpenAI Codex model discovery as fallback-only", async () => {
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore: createNoopSecretStore() });
+
+    const result = await service.listModelsWithSource("openai-codex");
+
+    expect(result.source).toBe("fallback");
+    expect(result.items.map((model) => model.id)).toContain("gpt-5.5");
+  });
+
+  it("can report and delete orphan OpenAI Codex OAuth credentials without provider config", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(
+      {
+        activeProviderId: "openai",
+        activeModel: "gpt-5.4-mini",
+        providers: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-responses",
+            defaultModel: "gpt-5.4-mini",
+          },
+        ],
+      },
+      process.env,
+      { secretStore },
+    );
+
+    expect(service.getOpenAICodexOAuthStatus()).toMatchObject({
+      providerId: "openai-codex",
+      connected: true,
+    });
+    expect(service.deleteOpenAICodexOAuthCredential()).toMatchObject({
+      providerId: "openai-codex",
+      connected: false,
+    });
+    await expect(service.startOpenAICodexOAuthDeviceFlow()).rejects.toThrow(/Unknown LLM provider: openai-codex/);
+    await expect(service.pollOpenAICodexOAuthDeviceFlow("flow-1")).rejects.toThrow(
+      /Unknown LLM provider: openai-codex/,
+    );
+  });
+
   it("posts OpenAI Codex chat through Responses with OAuth bearer auth and Codex defaults", async () => {
     const secretStore = createTrackedSecretStore({
       "provider:openai-codex:oauth": JSON.stringify({

@@ -311,6 +311,38 @@ describe("llm routes", () => {
     });
   });
 
+  it("returns model discovery source with model lists", async () => {
+    const listLlmModels = vi.fn(async () => ({
+      items: [{ id: "gpt-5.5" }],
+      source: "fallback" as const,
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels,
+        previewLlmModels: vi.fn(),
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/llm/models?providerId=openai-codex",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listLlmModels).toHaveBeenCalledWith("openai-codex");
+    expect(response.json()).toEqual({
+      items: [{ id: "gpt-5.5" }],
+      source: "fallback",
+    });
+  });
+
   it("accepts image generation requests", async () => {
     const generateImage = vi.fn(async (request) => ({
       operation: "edit",

@@ -44,6 +44,8 @@ function describeProviderRuntime(provider: ChatContextDockPanelsProps["providerO
   switch (provider.modelProbeState) {
     case "ready":
       return provider.isLocalRuntime ? "Runtime reachable" : "Provider reachable";
+    case "fallback":
+      return "Suggested models";
     case "empty":
       return provider.isLocalRuntime ? "Runtime degraded" : "Models unavailable";
     case "error":

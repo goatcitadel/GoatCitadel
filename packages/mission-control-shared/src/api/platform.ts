@@ -187,7 +187,7 @@ export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
 
 export async function fetchLlmModels(
   providerId?: string,
-): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
+): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }>; source: "remote" | "fallback" }> {
   const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
   return request(`/api/v1/llm/models${query}`);
 }

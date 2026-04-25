@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- SettingsNativePage intentionally keeps the new settings routes in one editable module while the product surface is still settling. */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { providerTemplates } from "@goatcitadel/contracts";
 import {
   AlertTriangle,
   Cable,
@@ -7,6 +8,7 @@ import {
   Gauge,
   HardDrive,
   KeyRound,
+  ExternalLink,
   Package2,
   Play,
   Plug2,
@@ -104,6 +106,7 @@ import {
   validateChannelSetupDraft,
   type IntegrationConnection,
   type OpenAICodexDeviceStartResponse,
+  type OpenAICodexDevicePollResponse,
   type OpenAICodexOAuthStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
@@ -449,6 +452,13 @@ type ProviderEditorDraft = {
   apiKeyEnv: string;
 };
 
+type SettingsWizardStepState = "complete" | "active" | "pending";
+
+const OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY = "goatcitadel:openai-codex:oauth-flow";
+const OPENAI_CODEX_AUTH_HOST = "auth.openai.com";
+const OPENAI_CODEX_MIN_POLL_MS = 1_000;
+const OPENAI_CODEX_DEFAULT_POLL_MS = 5_000;
+
 function createEmptyProviderEditorDraft(): ProviderEditorDraft {
   return {
     providerId: "",
@@ -481,15 +491,133 @@ function buildProviderEditorDraft(
   };
 }
 
+function buildChatGptOAuthProviderDraft(): ProviderEditorDraft {
+  const template = providerTemplates.find((item) => item.providerId === "openai-codex");
+  return {
+    providerId: template?.providerId ?? "openai-codex",
+    label: template?.label ?? "OpenAI Codex (ChatGPT OAuth)",
+    baseUrl: template?.baseUrl ?? "https://chatgpt.com/backend-api/codex",
+    apiStyle: template?.apiStyle === "openai-codex-responses" ? template.apiStyle : "openai-codex-responses",
+    defaultModel: template?.defaultModel ?? "gpt-5.5",
+    apiKeyEnv: "",
+  };
+}
+
+function isTrustedOpenAICodexVerificationUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === OPENAI_CODEX_AUTH_HOST;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeOpenAICodexPollDelayMs(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.max(value, OPENAI_CODEX_MIN_POLL_MS)
+    : OPENAI_CODEX_DEFAULT_POLL_MS;
+}
+
+function isStoredOpenAICodexOAuthFlow(value: unknown): value is OpenAICodexDeviceStartResponse {
+  const candidate = value as OpenAICodexDeviceStartResponse;
+  const expiresAt = Date.parse(candidate?.expiresAt);
+  return (
+    candidate?.providerId === "openai-codex" &&
+    typeof candidate.flowId === "string" &&
+    candidate.flowId.trim().length > 0 &&
+    typeof candidate.verificationUrl === "string" &&
+    isTrustedOpenAICodexVerificationUrl(candidate.verificationUrl) &&
+    typeof candidate.userCode === "string" &&
+    candidate.userCode.trim().length > 0 &&
+    typeof candidate.expiresAt === "string" &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > Date.now() &&
+    typeof candidate.pollAfterMs === "number" &&
+    Number.isFinite(candidate.pollAfterMs) &&
+    candidate.pollAfterMs > 0
+  );
+}
+
+function removeStoredOpenAICodexOAuthFlow(storage: Storage | undefined): void {
+  try {
+    storage?.removeItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY);
+  } catch {
+    // Ignore unavailable browser storage.
+  }
+}
+
+function getBrowserStorage(kind: "localStorage" | "sessionStorage"): Storage | undefined {
+  try {
+    return globalThis[kind];
+  } catch {
+    return undefined;
+  }
+}
+
+function readStoredOpenAICodexOAuthFlowFrom(storage: Storage | undefined): OpenAICodexDeviceStartResponse | null {
+  try {
+    const raw = storage?.getItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isStoredOpenAICodexOAuthFlow(parsed)) {
+      removeStoredOpenAICodexOAuthFlow(storage);
+      return null;
+    }
+    return parsed;
+  } catch {
+    removeStoredOpenAICodexOAuthFlow(storage);
+    return null;
+  }
+}
+
+function readStoredOpenAICodexOAuthFlow(): OpenAICodexDeviceStartResponse | null {
+  const sessionFlow = readStoredOpenAICodexOAuthFlowFrom(getBrowserStorage("sessionStorage"));
+  const localFlow = readStoredOpenAICodexOAuthFlowFrom(getBrowserStorage("localStorage"));
+  return sessionFlow ?? localFlow;
+}
+
+function writeStoredOpenAICodexOAuthFlow(flow: OpenAICodexDeviceStartResponse): void {
+  try {
+    getBrowserStorage("localStorage")?.setItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY, JSON.stringify(flow));
+    getBrowserStorage("sessionStorage")?.setItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY, JSON.stringify(flow));
+  } catch {
+    // Browser storage is a convenience for refresh recovery; pairing still works without it.
+  }
+}
+
+function clearStoredOpenAICodexOAuthFlow(): void {
+  removeStoredOpenAICodexOAuthFlow(getBrowserStorage("localStorage"));
+  removeStoredOpenAICodexOAuthFlow(getBrowserStorage("sessionStorage"));
+}
+
+function formatOpenAICodexOAuthExpiry(flow: OpenAICodexDeviceStartResponse | null): string | null {
+  if (!flow) {
+    return null;
+  }
+  const expiresAt = Date.parse(flow.expiresAt);
+  if (!Number.isFinite(expiresAt)) {
+    return null;
+  }
+  const minutes = Math.max(1, Math.ceil((expiresAt - Date.now()) / 60_000));
+  if (minutes > 240) {
+    return null;
+  }
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
 function isLikelyLocalProviderBaseUrl(baseUrl: string | undefined): boolean {
   const normalized = (baseUrl ?? "").trim().toLowerCase();
   return /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(normalized);
 }
 
-function formatProviderProbeStateLabel(value?: "not_checked" | "ready" | "empty" | "error"): string {
+function formatProviderProbeStateLabel(value?: "not_checked" | "ready" | "fallback" | "empty" | "error"): string {
   switch (value) {
     case "ready":
-      return "Ready";
+      return "Verified";
+    case "fallback":
+      return "Suggested";
     case "empty":
       return "No models";
     case "error":
@@ -511,7 +639,8 @@ function formatCheckedAtLabel(value?: string): string {
 }
 
 function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
-  const { config, providers, loading, error, reload, loadModelsForProvider } = useProviderModelCatalog("system");
+  const { config, providers, loading, error, reload, loadModelsForProvider, getCachedModelProbe } =
+    useProviderModelCatalog("system");
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [routingProviderId, setRoutingProviderId] = useState("");
   const [routingModel, setRoutingModel] = useState("");
@@ -523,8 +652,11 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [providerSaveBusy, setProviderSaveBusy] = useState(false);
   const [providerProbeBusyId, setProviderProbeBusyId] = useState<string | null>(null);
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
-  const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(null);
+  const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(
+    readStoredOpenAICodexOAuthFlow,
+  );
   const [codexOAuthBusy, setCodexOAuthBusy] = useState(false);
+  const codexOAuthPollInFlightRef = useRef<string | null>(null);
   const [secretState, setSecretState] = useState<LoadState<Awaited<ReturnType<typeof fetchProviderSecretStatus>>>>({
     loading: false,
     error: null,
@@ -534,9 +666,12 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     () => new Map((config?.providerConfigs ?? []).map((provider) => [provider.providerId, provider] as const)),
     [config?.providerConfigs],
   );
+  const codexOAuthProvider = providers.find((item) => item.providerId === "openai-codex") ?? null;
   const selectedProvider = providers.find((item) => item.providerId === selectedProviderId) ?? providers[0] ?? null;
   const selectedProviderConfig = selectedProvider ? providerConfigMap.get(selectedProvider.providerId) : undefined;
   const availableModels = selectedProvider?.models ?? [];
+  const routingProvider = providers.find((item) => item.providerId === routingProviderId) ?? null;
+  const routingUsesFallbackModels = routingProvider?.modelProbeState === "fallback";
   const providerRequestValidation = useMemo(() => {
     try {
       return {
@@ -553,6 +688,58 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   const selectedProviderIsLocal = isLikelyLocalProviderBaseUrl(selectedProvider?.baseUrl);
   const selectedProviderIsCodexOAuth = selectedProvider?.providerId === "openai-codex";
   const draftIsCodexOAuth = providerDraft.providerId.trim().toLowerCase() === "openai-codex";
+  const hasCodexOAuthProvider = Boolean(codexOAuthProvider);
+  const codexOAuthConnected = Boolean(codexOAuthStatus?.connected);
+  const hasCodexOAuthCredential = Boolean(codexOAuthStatus?.connected || codexOAuthStatus?.requiresReauth);
+  const hasOrphanCodexOAuthCredential = !hasCodexOAuthProvider && hasCodexOAuthCredential;
+  const codexOAuthExpiryLabel = useMemo(() => formatOpenAICodexOAuthExpiry(codexOAuthFlow), [codexOAuthFlow]);
+  const codexOAuthWizardSteps = useMemo(
+    () => [
+      {
+        label: "Provider",
+        description: hasCodexOAuthProvider
+          ? "GoatCitadel has the OpenAI Codex provider template ready."
+          : "Add the built-in OpenAI Codex provider template.",
+        state: hasCodexOAuthProvider ? ("complete" as const) : ("active" as const),
+      },
+      {
+        label: "ChatGPT login",
+        description: codexOAuthConnected
+          ? "A ChatGPT OAuth credential is stored securely in the OS keychain."
+          : codexOAuthFlow
+            ? "Use the active device code below."
+            : "Generate a short code and sign in with OpenAI.",
+        state: codexOAuthConnected || codexOAuthFlow ? ("complete" as const) : ("active" as const),
+      },
+      {
+        label: "OpenAI approval",
+        description: codexOAuthConnected
+          ? "OpenAI approved the login."
+          : codexOAuthFlow
+            ? `Enter exactly ${codexOAuthFlow.userCode} on the OpenAI page.`
+            : "The OpenAI page opens after the code is created.",
+        state: codexOAuthConnected
+          ? ("complete" as const)
+          : codexOAuthFlow
+            ? ("active" as const)
+            : ("pending" as const),
+      },
+      {
+        label: "Done",
+        description: codexOAuthConnected
+          ? "GoatCitadel can use the connected ChatGPT/Codex plan."
+          : codexOAuthFlow
+            ? "GoatCitadel is checking automatically; this tab can stay open."
+            : "After approval, GoatCitadel confirms the connection here.",
+        state: codexOAuthConnected
+          ? ("complete" as const)
+          : codexOAuthFlow
+            ? ("active" as const)
+            : ("pending" as const),
+      },
+    ],
+    [codexOAuthConnected, codexOAuthFlow, hasCodexOAuthProvider],
+  );
   const selectedProviderRuntimePosture = selectedProvider
     ? selectedProviderIsLocal
       ? "Local runtime"
@@ -582,30 +769,12 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   useEffect(() => {
     if (!selectedProviderId) {
       setSecretState({ loading: false, error: null, data: null });
-      setCodexOAuthStatus(null);
-      setCodexOAuthFlow(null);
       return;
     }
     if (selectedProviderId === "openai-codex") {
-      let cancelled = false;
       setSecretState({ loading: false, error: null, data: null });
-      void fetchOpenAICodexOAuthStatus()
-        .then((data) => {
-          if (!cancelled) {
-            setCodexOAuthStatus(data);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setCodexOAuthStatus(null);
-          }
-        });
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
-    setCodexOAuthStatus(null);
-    setCodexOAuthFlow(null);
     let cancelled = false;
     setSecretState({ loading: true, error: null, data: null });
     void fetchProviderSecretStatus(selectedProviderId)
@@ -623,6 +792,27 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       cancelled = true;
     };
   }, [selectedProviderId]);
+
+  useEffect(() => {
+    if (!hasCodexOAuthProvider) {
+      setCodexOAuthFlow(null);
+    }
+    let cancelled = false;
+    void fetchOpenAICodexOAuthStatus()
+      .then((data) => {
+        if (!cancelled) {
+          setCodexOAuthStatus(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCodexOAuthStatus(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasCodexOAuthProvider]);
 
   useEffect(() => {
     if (selectedProviderId) {
@@ -657,7 +847,12 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           activeModel: routingModel,
         },
       });
-      setNotice({ tone: "success", message: "Provider routing updated." });
+      setNotice({
+        tone: routingUsesFallbackModels ? "warning" : "success",
+        message: routingUsesFallbackModels
+          ? "Provider routing updated with a suggested model that has not been account-verified."
+          : "Provider routing updated.",
+      });
       await reload();
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
@@ -697,12 +892,62 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
-  const handleStartCodexOAuth = async () => {
+  const handleCodexOAuthPollResult = useCallback(
+    async (result: OpenAICodexDevicePollResponse, options: { showPendingNotice?: boolean } = {}) => {
+      if (result.status === "connected") {
+        setCodexOAuthFlow(null);
+        clearStoredOpenAICodexOAuthFlow();
+        setCodexOAuthStatus(await fetchOpenAICodexOAuthStatus());
+        setNotice({ tone: "success", message: "OpenAI Codex OAuth connected." });
+        await reload();
+        return false;
+      }
+      if (result.status === "expired") {
+        setCodexOAuthFlow(null);
+        clearStoredOpenAICodexOAuthFlow();
+        setNotice({ tone: "warning", message: "OpenAI Codex device pairing expired. Start a new OAuth pairing." });
+        return false;
+      }
+      if (result.status === "failed") {
+        setCodexOAuthFlow(null);
+        clearStoredOpenAICodexOAuthFlow();
+        setNotice({ tone: "error", message: result.error ?? "OpenAI Codex OAuth pairing failed." });
+        return false;
+      }
+      if (options.showPendingNotice) {
+        setNotice({ tone: "info", message: "Still waiting for OpenAI approval for this exact code." });
+      }
+      return true;
+    },
+    [reload],
+  );
+
+  const openCodexOAuthVerificationUrl = useCallback((verificationUrl: string) => {
+    if (!isTrustedOpenAICodexVerificationUrl(verificationUrl)) {
+      setNotice({ tone: "error", message: "OpenAI verification URL was not trusted. Start a new ChatGPT login." });
+      return;
+    }
+    globalThis.open?.(verificationUrl, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const handleStartCodexOAuth = async (openVerificationPage = false) => {
     setCodexOAuthBusy(true);
     try {
       const flow = await startOpenAICodexOAuthDeviceFlow();
+      if (!isStoredOpenAICodexOAuthFlow(flow)) {
+        throw new Error("OpenAI Codex OAuth start returned an invalid device pairing flow.");
+      }
       setCodexOAuthFlow(flow);
-      setNotice({ tone: "success", message: "OpenAI Codex device pairing started." });
+      writeStoredOpenAICodexOAuthFlow(flow);
+      if (openVerificationPage) {
+        openCodexOAuthVerificationUrl(flow.verificationUrl);
+      }
+      setNotice({
+        tone: "success",
+        message: openVerificationPage
+          ? "ChatGPT login started. If the OpenAI page did not open, use the Open OpenAI page button."
+          : "ChatGPT login started. Use the code shown below on the OpenAI page.",
+      });
     } catch (oauthError) {
       setNotice({ tone: "error", message: getErrorMessage(oauthError) });
     } finally {
@@ -710,34 +955,30 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
+  const handleRestartCodexOAuth = async () => {
+    setCodexOAuthFlow(null);
+    clearStoredOpenAICodexOAuthFlow();
+    await handleStartCodexOAuth(true);
+  };
+
   const handlePollCodexOAuth = async () => {
     if (!codexOAuthFlow) {
       setNotice({ tone: "warning", message: "Start OpenAI Codex device pairing first." });
       return;
     }
+    if (codexOAuthPollInFlightRef.current === codexOAuthFlow.flowId) {
+      setNotice({ tone: "info", message: "GoatCitadel is already checking this OpenAI code." });
+      return;
+    }
     setCodexOAuthBusy(true);
+    codexOAuthPollInFlightRef.current = codexOAuthFlow.flowId;
     try {
       const result = await pollOpenAICodexOAuthDeviceFlow(codexOAuthFlow.flowId);
-      if (result.status === "connected") {
-        setCodexOAuthFlow(null);
-        setCodexOAuthStatus(await fetchOpenAICodexOAuthStatus());
-        setNotice({ tone: "success", message: "OpenAI Codex OAuth connected." });
-        await reload();
-        return;
-      }
-      if (result.status === "expired") {
-        setCodexOAuthFlow(null);
-        setNotice({ tone: "warning", message: "OpenAI Codex device pairing expired." });
-        return;
-      }
-      if (result.status === "failed") {
-        setNotice({ tone: "error", message: result.error ?? "OpenAI Codex OAuth pairing failed." });
-        return;
-      }
-      setNotice({ tone: "info", message: "OpenAI Codex is still waiting for device approval." });
+      await handleCodexOAuthPollResult(result, { showPendingNotice: true });
     } catch (oauthError) {
       setNotice({ tone: "error", message: getErrorMessage(oauthError) });
     } finally {
+      codexOAuthPollInFlightRef.current = null;
       setCodexOAuthBusy(false);
     }
   };
@@ -747,12 +988,108 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     try {
       setCodexOAuthStatus(await deleteOpenAICodexOAuthCredential());
       setCodexOAuthFlow(null);
+      clearStoredOpenAICodexOAuthFlow();
       setNotice({ tone: "success", message: "OpenAI Codex OAuth disconnected." });
       await reload();
     } catch (oauthError) {
       setNotice({ tone: "error", message: getErrorMessage(oauthError) });
     } finally {
       setCodexOAuthBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!codexOAuthFlow) {
+      return;
+    }
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const flowId = codexOAuthFlow.flowId;
+    const scheduleNextPoll = (delayMs: number) => {
+      if (cancelled) {
+        return;
+      }
+      timeoutId = globalThis.setTimeout(
+        pollCurrentFlow,
+        Math.max(normalizeOpenAICodexPollDelayMs(delayMs), OPENAI_CODEX_MIN_POLL_MS),
+      );
+    };
+    const pollCurrentFlow = () => {
+      if (codexOAuthPollInFlightRef.current === flowId) {
+        scheduleNextPoll(codexOAuthFlow.pollAfterMs);
+        return;
+      }
+      codexOAuthPollInFlightRef.current = flowId;
+      setCodexOAuthBusy(true);
+      void pollOpenAICodexOAuthDeviceFlow(flowId)
+        .then(async (result) => {
+          if (cancelled) {
+            return;
+          }
+          const shouldContinue = await handleCodexOAuthPollResult(result);
+          if (shouldContinue) {
+            scheduleNextPoll(result.retryAfterMs ?? codexOAuthFlow.pollAfterMs);
+          }
+        })
+        .catch((pollError) => {
+          if (!cancelled) {
+            setNotice({ tone: "error", message: getErrorMessage(pollError) });
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            if (codexOAuthPollInFlightRef.current === flowId) {
+              codexOAuthPollInFlightRef.current = null;
+            }
+            setCodexOAuthBusy(false);
+          }
+        });
+    };
+    pollCurrentFlow();
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        globalThis.clearTimeout(timeoutId);
+      }
+      if (codexOAuthPollInFlightRef.current === flowId) {
+        codexOAuthPollInFlightRef.current = null;
+      }
+    };
+  }, [codexOAuthFlow, handleCodexOAuthPollResult]);
+
+  const handleAddChatGptOAuthProvider = async () => {
+    if (hasCodexOAuthProvider) {
+      setEditorMode("selected");
+      setSelectedProviderId("openai-codex");
+      setNotice({ tone: "info", message: "OpenAI Codex is already configured. Connect ChatGPT OAuth below." });
+      return;
+    }
+    const draft = buildChatGptOAuthProviderDraft();
+    setProviderSaveBusy(true);
+    try {
+      await patchSettings({
+        llm: {
+          upsertProvider: {
+            providerId: draft.providerId,
+            label: draft.label,
+            baseUrl: draft.baseUrl,
+            apiStyle: draft.apiStyle,
+            authMode: "codex-oauth",
+            defaultModel: draft.defaultModel,
+          },
+        },
+      });
+      await reload();
+      setEditorMode("selected");
+      setProviderDraft(draft);
+      setProviderTransportDraft(createEmptyLlmTransportDraft());
+      setSelectedProviderId(draft.providerId);
+      setNotice({ tone: "success", message: "ChatGPT provider added. Start ChatGPT login below." });
+      void loadModelsForProvider(draft.providerId, { force: true });
+    } catch (saveError) {
+      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    } finally {
+      setProviderSaveBusy(false);
     }
   };
 
@@ -803,6 +1140,18 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     });
   };
 
+  const handleOpenCodexOAuthVerification = () => {
+    if (!codexOAuthFlow?.verificationUrl) {
+      return;
+    }
+    openCodexOAuthVerificationUrl(codexOAuthFlow.verificationUrl);
+  };
+
+  const handleShowCodexOAuthProviderDetail = () => {
+    setEditorMode("selected");
+    setSelectedProviderId("openai-codex");
+  };
+
   const handleRefreshModels = async (providerId: string) => {
     const normalized = providerId.trim();
     if (!normalized) {
@@ -812,10 +1161,13 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     setProviderProbeBusyId(normalized);
     try {
       const items = await loadModelsForProvider(normalized, { force: true });
+      const probe = getCachedModelProbe(normalized);
+      const fallbackOnly = probe?.state === "fallback";
       setNotice({
-        tone: items.length > 0 ? "success" : "warning",
-        message:
-          items.length > 0
+        tone: items.length > 0 && !fallbackOnly ? "success" : "warning",
+        message: fallbackOnly
+          ? `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
+          : items.length > 0
             ? `Refreshed ${items.length} models for ${normalized}.`
             : `Probe completed for ${normalized}, but no models were returned.`,
       });
@@ -840,6 +1192,15 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
           ]}
         >
           <SettingsButtonRow>
+            <button
+              type="button"
+              className="mc-next-button"
+              onClick={() => void handleAddChatGptOAuthProvider()}
+              disabled={providerSaveBusy}
+            >
+              <KeyRound size={16} />
+              {hasCodexOAuthProvider ? "ChatGPT setup" : "Add ChatGPT setup"}
+            </button>
             <button type="button" className="mc-next-button-secondary" onClick={handleStartNewProviderDraft}>
               <Plus size={16} />
               New provider draft
@@ -879,6 +1240,8 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     const provider = providers.find((item) => item.providerId === nextProviderId);
                     setRoutingProviderId(nextProviderId);
                     setRoutingModel(provider?.defaultModel ?? provider?.models[0] ?? "");
+                    setEditorMode("selected");
+                    setSelectedProviderId(nextProviderId);
                   }}
                 >
                   {providers.map((item) => (
@@ -902,11 +1265,164 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 </select>
               </SettingsField>
             </SettingsFieldGrid>
+            {routingUsesFallbackModels ? (
+              <SettingsNotice
+                notice={{
+                  tone: "warning",
+                  message:
+                    "These models are suggested from GoatCitadel's provider template, not verified from your account catalog yet.",
+                }}
+              />
+            ) : null}
             <SettingsButtonRow>
               <button type="button" className="mc-next-button" onClick={() => void handleSaveRouting()}>
                 <Save size={16} />
                 Save routing
               </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
+          <SettingsPanel
+            title="Connect ChatGPT for Codex"
+            subtitle="One guided path. No API key needed."
+            stats={[
+              {
+                label: "Provider",
+                value: hasCodexOAuthProvider ? "Ready" : "Missing",
+              },
+              {
+                label: "Login",
+                value: codexOAuthConnected
+                  ? "Connected"
+                  : codexOAuthStatus?.requiresReauth
+                    ? "Reauth"
+                    : codexOAuthFlow
+                      ? "Waiting"
+                      : "Not started",
+              },
+            ]}
+          >
+            <SettingsWizardSteps steps={codexOAuthWizardSteps} />
+            {hasOrphanCodexOAuthCredential ? (
+              <SettingsNotice
+                notice={{
+                  tone: "warning",
+                  message:
+                    "A ChatGPT OAuth credential exists in secure storage, but the OpenAI Codex provider is missing. Add the provider to use it, or disconnect to remove the stored credential.",
+                }}
+              />
+            ) : !hasCodexOAuthProvider ? (
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Start here. GoatCitadel will add the built-in OpenAI Codex provider, then this card will switch to ChatGPT login.",
+                }}
+              />
+            ) : codexOAuthConnected ? (
+              <SettingsNotice
+                notice={{
+                  tone: "success",
+                  message: `Done. ChatGPT OAuth is connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`,
+                }}
+              />
+            ) : codexOAuthFlow ? (
+              <div className="mc-next-settings-oauth-code-card">
+                <span>Use this exact OpenAI code</span>
+                <strong>{codexOAuthFlow.userCode}</strong>
+                <p>
+                  Open the OpenAI page, enter this code, approve the request, then return here. GoatCitadel checks
+                  automatically{codexOAuthExpiryLabel ? ` for about ${codexOAuthExpiryLabel}` : ""}.
+                </p>
+              </div>
+            ) : (
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Press Start ChatGPT login. GoatCitadel will create a short OpenAI code and open the approval page.",
+                }}
+              />
+            )}
+            {codexOAuthFlow ? (
+              <SettingsFieldGrid>
+                <SettingsField label="OpenAI page">
+                  <input className="mc-next-settings-input" value={codexOAuthFlow.verificationUrl} readOnly />
+                </SettingsField>
+                <SettingsField label="Current code">
+                  <input className="mc-next-settings-input" value={codexOAuthFlow.userCode} readOnly />
+                </SettingsField>
+              </SettingsFieldGrid>
+            ) : null}
+            <SettingsButtonRow>
+              {!hasCodexOAuthProvider ? (
+                <button
+                  type="button"
+                  className="mc-next-button"
+                  onClick={() => void handleAddChatGptOAuthProvider()}
+                  disabled={providerSaveBusy}
+                >
+                  <KeyRound size={16} />
+                  Add provider and continue
+                </button>
+              ) : codexOAuthFlow ? (
+                <button
+                  type="button"
+                  className="mc-next-button"
+                  onClick={handleOpenCodexOAuthVerification}
+                  disabled={codexOAuthBusy}
+                >
+                  <ExternalLink size={16} />
+                  Open OpenAI page
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="mc-next-button"
+                  onClick={() => void handleStartCodexOAuth(true)}
+                  disabled={codexOAuthBusy}
+                >
+                  <KeyRound size={16} />
+                  {codexOAuthConnected ? "Reconnect ChatGPT" : "Start ChatGPT login"}
+                </button>
+              )}
+              {codexOAuthFlow ? (
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void handlePollCodexOAuth()}
+                  disabled={codexOAuthBusy}
+                >
+                  <RefreshCw size={16} />I approved, check now
+                </button>
+              ) : null}
+              {codexOAuthFlow ? (
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void handleRestartCodexOAuth()}
+                  disabled={codexOAuthBusy}
+                >
+                  <RotateCcw size={16} />
+                  Get a new code
+                </button>
+              ) : null}
+              {hasCodexOAuthProvider && !codexOAuthFlow ? (
+                <button type="button" className="mc-next-button-secondary" onClick={handleShowCodexOAuthProviderDetail}>
+                  <SlidersHorizontal size={16} />
+                  Advanced details
+                </button>
+              ) : null}
+              {hasCodexOAuthCredential ? (
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void handleDisconnectCodexOAuth()}
+                  disabled={codexOAuthBusy}
+                >
+                  <Trash2 size={16} />
+                  Disconnect
+                </button>
+              ) : null}
             </SettingsButtonRow>
           </SettingsPanel>
           <SettingsPanel
@@ -936,9 +1452,19 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     {
                       label: "Probe",
                       value: formatProviderProbeStateLabel(selectedProvider.modelProbeState),
-                      meta: formatCheckedAtLabel(selectedProvider.modelProbeCheckedAt),
+                      meta:
+                        selectedProvider.modelProbeState === "fallback"
+                          ? "Template suggestions; not account-verified"
+                          : formatCheckedAtLabel(selectedProvider.modelProbeCheckedAt),
                     },
-                    { label: "Models", value: String(availableModels.length), meta: "Known to the runtime" },
+                    {
+                      label: "Models",
+                      value: String(availableModels.length),
+                      meta:
+                        selectedProvider.modelProbeState === "fallback"
+                          ? "Suggested, not verified"
+                          : "Known to the runtime",
+                    },
                     {
                       label: "Runtime posture",
                       value: selectedProviderRuntimePosture,
@@ -962,48 +1488,89 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   <>
                     <SettingsNotice
                       notice={{
-                        tone: codexOAuthStatus?.connected ? "success" : "info",
-                        message: codexOAuthStatus?.connected
-                          ? `OpenAI Codex OAuth connected${codexOAuthStatus.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`
-                          : "OpenAI Codex uses ChatGPT OAuth stored in the OS keychain.",
+                        tone: codexOAuthConnected ? "success" : "info",
+                        message: codexOAuthConnected
+                          ? `OpenAI Codex OAuth connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`
+                          : codexOAuthFlow
+                            ? `ChatGPT login is waiting for code ${codexOAuthFlow.userCode}. Finish approval on the OpenAI page.`
+                            : "No API key goes here. OpenAI Codex uses the ChatGPT login flow from the setup card above.",
                       }}
                     />
                     {codexOAuthFlow ? (
-                      <SettingsNotice
-                        notice={{
-                          tone: "info",
-                          message: `Open ${codexOAuthFlow.verificationUrl} and enter code ${codexOAuthFlow.userCode}.`,
-                        }}
-                      />
+                      <>
+                        <SettingsFieldGrid>
+                          <SettingsField label="OpenAI page">
+                            <input className="mc-next-settings-input" value={codexOAuthFlow.verificationUrl} readOnly />
+                          </SettingsField>
+                          <SettingsField label="Current code">
+                            <input className="mc-next-settings-input" value={codexOAuthFlow.userCode} readOnly />
+                          </SettingsField>
+                        </SettingsFieldGrid>
+                      </>
                     ) : null}
                     <SettingsButtonRow>
-                      <button
-                        type="button"
-                        className="mc-next-button"
-                        onClick={() => void handleStartCodexOAuth()}
-                        disabled={codexOAuthBusy}
-                      >
-                        <KeyRound size={16} />
-                        {codexOAuthStatus?.connected ? "Reconnect OAuth" : "Connect OAuth"}
-                      </button>
+                      {codexOAuthFlow ? (
+                        <button
+                          type="button"
+                          className="mc-next-button"
+                          onClick={handleOpenCodexOAuthVerification}
+                          disabled={codexOAuthBusy}
+                        >
+                          <ExternalLink size={16} />
+                          Open OpenAI page
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="mc-next-button"
+                          onClick={() => void handleStartCodexOAuth(true)}
+                          disabled={codexOAuthBusy}
+                        >
+                          <KeyRound size={16} />
+                          {codexOAuthConnected ? "Reconnect ChatGPT" : "Start ChatGPT login"}
+                        </button>
+                      )}
+                      {codexOAuthFlow ? (
+                        <>
+                          <button
+                            type="button"
+                            className="mc-next-button-secondary"
+                            onClick={() => void handlePollCodexOAuth()}
+                            disabled={codexOAuthBusy}
+                          >
+                            <RefreshCw size={16} />I approved, check now
+                          </button>
+                          <button
+                            type="button"
+                            className="mc-next-button-secondary"
+                            onClick={() => void handleRestartCodexOAuth()}
+                            disabled={codexOAuthBusy}
+                          >
+                            <RotateCcw size={16} />
+                            Get a new code
+                          </button>
+                        </>
+                      ) : null}
                       <button
                         type="button"
                         className="mc-next-button-secondary"
-                        onClick={() => void handlePollCodexOAuth()}
-                        disabled={codexOAuthBusy || !codexOAuthFlow}
+                        onClick={() => void handleRefreshModels(selectedProvider.providerId)}
+                        disabled={providerProbeBusyId === selectedProvider.providerId}
                       >
                         <RefreshCw size={16} />
-                        Check pairing
+                        {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
                       </button>
-                      <button
-                        type="button"
-                        className="mc-next-button-secondary"
-                        onClick={() => void handleDisconnectCodexOAuth()}
-                        disabled={codexOAuthBusy || !codexOAuthStatus?.connected}
-                      >
-                        <Trash2 size={16} />
-                        Disconnect OAuth
-                      </button>
+                      {codexOAuthConnected ? (
+                        <button
+                          type="button"
+                          className="mc-next-button-secondary"
+                          onClick={() => void handleDisconnectCodexOAuth()}
+                          disabled={codexOAuthBusy}
+                        >
+                          <Trash2 size={16} />
+                          Disconnect
+                        </button>
+                      ) : null}
                     </SettingsButtonRow>
                   </>
                 ) : (
@@ -3944,6 +4511,28 @@ function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: st
         </div>
       ))}
     </div>
+  );
+}
+
+function SettingsWizardSteps({
+  steps,
+}: {
+  steps: Array<{ label: string; description: string; state: SettingsWizardStepState }>;
+}) {
+  return (
+    <ol className="mc-next-settings-wizard">
+      {steps.map((step, index) => (
+        <li key={step.label} className={`mc-next-settings-wizard-step ${step.state}`}>
+          <span className="mc-next-settings-wizard-index">
+            {step.state === "complete" ? <CheckCircle2 size={15} /> : index + 1}
+          </span>
+          <div>
+            <strong>{step.label}</strong>
+            <p>{step.description}</p>
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 }
 

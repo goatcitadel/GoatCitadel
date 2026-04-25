@@ -8,7 +8,10 @@ const PROVIDER_MODELS_POSITIVE_TTL_MS = 5 * 60 * 1000;
 const PROVIDER_MODELS_NEGATIVE_TTL_MS = 30 * 1000;
 
 const sharedProviderModelCache = new Map<string, ProviderModelCacheEntry>();
-const sharedProviderModelRequests = new Map<string, Promise<string[]>>();
+const sharedProviderModelRequests = new Map<string, Promise<ProviderModelLoadResult>>();
+
+export type ProviderModelProbeState = "not_checked" | "ready" | "fallback" | "empty" | "error";
+export type ProviderModelProbeSource = "remote" | "fallback";
 
 export interface ProviderModelCatalogOption {
   providerId: string;
@@ -22,7 +25,8 @@ export interface ProviderModelCatalogOption {
   hasApiKey?: boolean;
   capabilities?: RuntimeSettingsResponse["llm"]["providers"][number]["capabilities"];
   models: string[];
-  modelProbeState?: "not_checked" | "ready" | "empty" | "error";
+  modelProbeState?: ProviderModelProbeState;
+  modelProbeSource?: ProviderModelProbeSource;
   modelProbeCheckedAt?: string;
 }
 
@@ -32,11 +36,17 @@ export interface ProviderModelPreviewResult {
   warning?: string;
 }
 
-interface ProviderModelCacheEntry {
+export interface ProviderModelCacheEntry {
   items: string[];
   expiresAt: number;
-  state: "not_checked" | "ready" | "empty" | "error";
+  state: ProviderModelProbeState;
+  source?: ProviderModelProbeSource;
   checkedAt?: string;
+}
+
+interface ProviderModelLoadResult {
+  items: string[];
+  source?: ProviderModelProbeSource;
 }
 
 export function dedupeProviderModels(values: Array<string | undefined | null>): string[] {
@@ -95,6 +105,7 @@ function buildProviderCatalog(
         ...(cached?.items ?? []),
       ]),
       modelProbeState: cached?.state ?? "not_checked",
+      modelProbeSource: cached?.source,
       modelProbeCheckedAt: cached?.checkedAt,
     } satisfies ProviderModelCatalogOption;
   });
@@ -187,20 +198,23 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
 
       const inFlight = sharedProviderModelRequests.get(normalized);
       if (inFlight) {
-        return inFlight;
+        return (await inFlight).items;
       }
 
       const request = (async () => {
         try {
           const response = await fetchLlmModels(normalized);
           const items = dedupeProviderModels(response.items.map((item) => item.id));
+          const state: ProviderModelProbeState =
+            items.length === 0 ? "empty" : response.source === "fallback" ? "fallback" : "ready";
           sharedProviderModelCache.set(normalized, {
             items,
             expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
-            state: items.length > 0 ? "ready" : "empty",
+            state,
+            source: response.source,
             checkedAt: new Date().toISOString(),
           });
-          return items;
+          return { items, source: response.source };
         } catch {
           sharedProviderModelCache.set(normalized, {
             items: [],
@@ -208,7 +222,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
             state: "error",
             checkedAt: new Date().toISOString(),
           });
-          return [];
+          return { items: [] };
         } finally {
           sharedProviderModelRequests.delete(normalized);
           syncProviderState();
@@ -216,7 +230,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
       })();
 
       sharedProviderModelRequests.set(normalized, request);
-      return request;
+      return (await request).items;
     },
     [syncProviderState],
   );
@@ -227,6 +241,14 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
       return [];
     }
     return getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, Date.now())?.items ?? [];
+  }, []);
+
+  const getCachedModelProbe = useCallback((providerId: string): ProviderModelCacheEntry | undefined => {
+    const normalized = providerId.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    return getValidProviderModelCacheEntry(sharedProviderModelCache, normalized, Date.now());
   }, []);
 
   useEffect(() => {
@@ -258,6 +280,7 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
     reload,
     loadModelsForProvider,
     getCachedModels,
+    getCachedModelProbe,
   };
 }
 

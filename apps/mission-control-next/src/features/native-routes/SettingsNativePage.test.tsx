@@ -1,5 +1,5 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsNativePage } from "./SettingsNativePage";
 
 const mocks = vi.hoisted(() => ({
@@ -88,7 +88,7 @@ const mocks = vi.hoisted(() => ({
     flowId: "flow-1",
     verificationUrl: "https://auth.openai.com/codex/device",
     userCode: "ABCD-EFGH",
-    expiresAt: "2026-04-24T12:00:00.000Z",
+    expiresAt: "2099-04-24T12:00:00.000Z",
     pollAfterMs: 5000,
   })),
   pollOpenAICodexOAuthDeviceFlow: vi.fn(async () => ({
@@ -104,6 +104,7 @@ const mocks = vi.hoisted(() => ({
     requiresReauth: false,
   })),
   loadModelsForProvider: vi.fn(async () => ["gpt-5.4-mini"]),
+  getCachedModelProbe: vi.fn((): any => undefined),
   reload: vi.fn(async () => undefined),
   providerCatalogState: {
     config: {
@@ -165,6 +166,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () 
   useProviderModelCatalog: () => ({
     ...mocks.providerCatalogState,
     loadModelsForProvider: mocks.loadModelsForProvider,
+    getCachedModelProbe: mocks.getCachedModelProbe,
     reload: mocks.reload,
   }),
 }));
@@ -200,6 +202,50 @@ function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): R
   return match;
 }
 
+const OAUTH_STORAGE_KEY = "goatcitadel:openai-codex:oauth-flow";
+
+function setCodexProviderCatalogState(overrides: Record<string, unknown> = {}) {
+  mocks.providerCatalogState = {
+    config: {
+      activeProviderId: "openai-codex",
+      activeModel: "openai-codex/gpt-5.5",
+      providers: [],
+      providerConfigs: [
+        {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+          defaultModel: "gpt-5.5",
+        },
+      ],
+    },
+    providers: [
+      {
+        providerId: "openai-codex",
+        label: "OpenAI Codex (ChatGPT OAuth)",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        defaultModel: "gpt-5.5",
+        apiStyle: "openai-codex-responses",
+        authMode: "codex-oauth",
+        oauthStatus: {
+          connected: false,
+          requiresReauth: false,
+        },
+        models: ["gpt-5.5", "gpt-5.5-pro"],
+        hasApiKey: false,
+        apiKeySource: "none",
+        modelProbeState: "ready" as const,
+        modelProbeCheckedAt: "2026-04-22T10:00:00.000Z",
+        ...overrides,
+      },
+    ],
+    loading: false,
+    error: null,
+  };
+}
+
 function collectText(node: ReactTestInstance): string {
   return node.children
     .map((child) => {
@@ -214,9 +260,74 @@ function collectText(node: ReactTestInstance): string {
     .join(" ");
 }
 
+function installBrowserStorageMock(
+  initial: Record<string, string> | { local?: Record<string, string>; session?: Record<string, string> } = {},
+) {
+  const partitioned = "local" in initial || "session" in initial;
+  const localStore = new Map(Object.entries(partitioned ? (initial.local ?? {}) : initial));
+  const sessionStore = new Map(Object.entries(partitioned ? (initial.session ?? {}) : initial));
+  const previousLocalStorage = globalThis.localStorage;
+  const previousSessionStorage = globalThis.sessionStorage;
+  const buildStorage = (store: Map<string, string>) => ({
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      store.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      store.delete(key);
+    }),
+    clear: vi.fn(() => {
+      store.clear();
+    }),
+  });
+  const localStorage = buildStorage(localStore);
+  const sessionStorage = buildStorage(sessionStore);
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: localStorage,
+  });
+  Object.defineProperty(globalThis, "sessionStorage", {
+    configurable: true,
+    value: sessionStorage,
+  });
+  return () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: previousLocalStorage,
+    });
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: previousSessionStorage,
+    });
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  globalThis.localStorage?.clear();
+  globalThis.sessionStorage?.clear();
+  mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
+    providerId: "openai-codex",
+    available: true,
+    connected: false,
+    requiresReauth: false,
+  });
+  mocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+    providerId: "openai-codex",
+    flowId: "flow-1",
+    verificationUrl: "https://auth.openai.com/codex/device",
+    userCode: "ABCD-EFGH",
+    expiresAt: "2099-04-24T12:00:00.000Z",
+    pollAfterMs: 5000,
+  });
+  mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+    providerId: "openai-codex",
+    flowId: "flow-1",
+    status: "connected",
+    accountLabel: "user@example.com",
+  });
   mocks.loadModelsForProvider = vi.fn(async () => ["gpt-5.4-mini"]);
+  mocks.getCachedModelProbe = vi.fn(() => undefined);
   mocks.reload = vi.fn(async () => undefined);
   mocks.providerCatalogState = {
     config: {
@@ -329,6 +440,33 @@ describe("SettingsNativePage providers", () => {
     });
   });
 
+  it("can add the ChatGPT OAuth provider from Settings when it is not already configured", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Add provider and continue").props.onClick();
+    });
+
+    expect(mocks.patchSettings).toHaveBeenCalledWith({
+      llm: {
+        upsertProvider: {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+          defaultModel: "gpt-5.5",
+        },
+      },
+    });
+    expect(mocks.reload).toHaveBeenCalled();
+    expect(mocks.loadModelsForProvider).toHaveBeenCalledWith("openai-codex", { force: true });
+  });
+
   it("supports forced model probes and secure secret save/delete flows", async () => {
     let renderer: ReactTestRenderer | null = null;
     const previousWindow = globalThis.window;
@@ -374,6 +512,12 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("renders OAuth controls and hides API-key controls for OpenAI Codex", async () => {
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "flow-1",
+      status: "pending",
+      retryAfterMs: 5000,
+    } as any);
     mocks.providerCatalogState = {
       config: {
         activeProviderId: "openai-codex",
@@ -424,14 +568,302 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("OpenAI Codex (ChatGPT OAuth)");
     expect(text).toContain("openai-codex-responses");
     expect(text).toContain("ChatGPT/Codex plan");
-    expect(text).toContain("Connect OAuth");
-    expect(text).toContain("Check pairing");
-    expect(text).toContain("Disconnect OAuth");
+    expect(text).toContain("ChatGPT setup");
+    expect(text).toContain("Provider");
+    expect(text).toContain("ChatGPT login");
+    expect(text).toContain("OpenAI approval");
+    expect(text).toContain("Done");
+    expect(text).toContain("Start ChatGPT login");
+    expect(text).toContain("No API key goes here.");
+    expect(text).not.toContain("Draft ChatGPT OAuth provider");
     expect(text).not.toContain("Save secret");
     expect(text).not.toContain("Delete secret");
     expect(renderer!.root.findAllByProps({ placeholder: "Paste a new API key to save" })).toHaveLength(0);
     expect(renderer!.root.findAllByProps({ placeholder: "OPENAI_API_KEY" })).toHaveLength(0);
+
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+    });
+
+    expect(mocks.startOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+    const pairingText = collectText(renderer!.root);
+    expect(pairingText).toContain("ABCD-EFGH");
+    expect(pairingText).toContain("Open OpenAI page");
+    expect(pairingText).toContain("Use this exact OpenAI code");
+    expect(pairingText).toContain("I approved, check now");
+    expect(pairingText).toContain("Get a new code");
   });
+
+  it("restores an in-progress ChatGPT OAuth pairing after a Settings refresh", async () => {
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "flow-1",
+      status: "pending",
+      retryAfterMs: 5000,
+    } as any);
+    const restoreBrowserStorage = installBrowserStorageMock({
+      "goatcitadel:openai-codex:oauth-flow": JSON.stringify({
+        providerId: "openai-codex",
+        flowId: "flow-1",
+        verificationUrl: "https://auth.openai.com/codex/device",
+        userCode: "ABCD-EFGH",
+        expiresAt: "2099-04-24T12:00:00.000Z",
+        pollAfterMs: 5000,
+      }),
+    });
+    mocks.providerCatalogState = {
+      config: {
+        activeProviderId: "openai-codex",
+        activeModel: "openai-codex/gpt-5.5",
+        providers: [],
+        providerConfigs: [
+          {
+            providerId: "openai-codex",
+            label: "OpenAI Codex (ChatGPT OAuth)",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            apiStyle: "openai-codex-responses",
+            authMode: "codex-oauth",
+            defaultModel: "gpt-5.5",
+          },
+        ],
+      },
+      providers: [
+        {
+          providerId: "openai-codex",
+          label: "OpenAI Codex (ChatGPT OAuth)",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          defaultModel: "gpt-5.5",
+          apiStyle: "openai-codex-responses",
+          authMode: "codex-oauth",
+          oauthStatus: {
+            connected: false,
+            requiresReauth: false,
+          },
+          models: ["gpt-5.5"],
+          hasApiKey: false,
+          apiKeySource: "none",
+          modelProbeState: "ready" as const,
+          modelProbeCheckedAt: "2026-04-22T10:00:00.000Z",
+        },
+      ],
+      loading: false,
+      error: null,
+    };
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("Use this exact OpenAI code");
+      expect(text).toContain("ABCD-EFGH");
+      expect(text).toContain("Open OpenAI page");
+    } finally {
+      restoreBrowserStorage();
+    }
+  });
+
+  it("prefers a valid session OAuth flow over stale local storage", async () => {
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "session-flow",
+      status: "pending",
+      retryAfterMs: 5000,
+    } as any);
+    setCodexProviderCatalogState({ models: ["gpt-5.5"] });
+    const restoreBrowserStorage = installBrowserStorageMock({
+      local: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "expired-flow",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "OLD-CODE",
+          expiresAt: "2026-04-24T12:00:00.000Z",
+          pollAfterMs: 5000,
+        }),
+      },
+      session: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "session-flow",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "SESSION-CODE",
+          expiresAt: "2099-04-24T12:00:00.000Z",
+          pollAfterMs: 5000,
+        }),
+      },
+    });
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("SESSION-CODE");
+      expect(text).not.toContain("OLD-CODE");
+      expect(globalThis.localStorage.getItem(OAUTH_STORAGE_KEY)).toBeNull();
+      expect(globalThis.sessionStorage.getItem(OAUTH_STORAGE_KEY)).toContain("SESSION-CODE");
+    } finally {
+      restoreBrowserStorage();
+    }
+  });
+
+  it("rejects invalid stored OAuth expiry and untrusted verification URLs", async () => {
+    setCodexProviderCatalogState({ models: ["gpt-5.5"] });
+    const restoreBrowserStorage = installBrowserStorageMock({
+      session: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "bad-flow",
+          verificationUrl: "https://evil.example.test/codex/device",
+          userCode: "EVIL-CODE",
+          expiresAt: "not-a-date",
+          pollAfterMs: 5000,
+        }),
+      },
+    });
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("Start ChatGPT login");
+      expect(text).not.toContain("EVIL-CODE");
+      expect(globalThis.sessionStorage.getItem(OAUTH_STORAGE_KEY)).toBeNull();
+    } finally {
+      restoreBrowserStorage();
+    }
+  });
+
+  it("does not overlap automatic OAuth polling and honors retryAfterMs", async () => {
+    vi.useFakeTimers();
+    setCodexProviderCatalogState({ models: ["gpt-5.5"] });
+    let resolveFirstPoll: (value: unknown) => void = () => undefined;
+    const firstPoll = new Promise((resolve) => {
+      resolveFirstPoll = resolve;
+    });
+    mocks.pollOpenAICodexOAuthDeviceFlow
+      .mockImplementationOnce(() => firstPoll as any)
+      .mockResolvedValue({
+        providerId: "openai-codex",
+        flowId: "flow-1",
+        status: "pending",
+        retryAfterMs: 7000,
+      } as any);
+    const restoreBrowserStorage = installBrowserStorageMock({
+      session: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "flow-1",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "ABCD-EFGH",
+          expiresAt: "2099-04-24T12:00:00.000Z",
+          pollAfterMs: 5000,
+        }),
+      },
+    });
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveFirstPoll({
+          providerId: "openai-codex",
+          flowId: "flow-1",
+          status: "pending",
+          retryAfterMs: 7000,
+        });
+        await firstPoll;
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6999);
+      });
+      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(mocks.pollOpenAICodexOAuthDeviceFlow).toHaveBeenCalledTimes(2);
+      renderer!.unmount();
+    } finally {
+      restoreBrowserStorage();
+    }
+  });
+
+  it("shows and can disconnect an orphan ChatGPT OAuth credential", async () => {
+    mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
+      providerId: "openai-codex",
+      available: true,
+      connected: true,
+      accountLabel: "user@example.com",
+      requiresReauth: false,
+    } as any);
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("credential exists in secure storage");
+    expect(text).toContain("provider is missing");
+
+    await act(async () => {
+      findButton(renderer!.root, "Disconnect").props.onClick();
+    });
+    expect(mocks.deleteOpenAICodexOAuthCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels fallback-only Codex model catalogs as suggested and unverified", async () => {
+    setCodexProviderCatalogState({
+      modelProbeState: "fallback" as const,
+      modelProbeSource: "fallback" as const,
+      models: ["gpt-5.5"],
+    });
+    mocks.getCachedModelProbe.mockReturnValue({
+      items: ["gpt-5.5"],
+      expiresAt: Date.now() + 60_000,
+      state: "fallback",
+      source: "fallback",
+      checkedAt: "2026-04-22T10:00:00.000Z",
+    });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    let text = collectText(renderer!.root);
+    expect(text).toContain("Suggested");
+    expect(text).toContain("Template suggestions; not account-verified");
+
+    await act(async () => {
+      findButton(renderer!.root, "Refresh models").props.onClick();
+    });
+
+    text = collectText(renderer!.root);
+    expect(text).toContain("not verified against your account");
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("SettingsNativePage integrations", () => {

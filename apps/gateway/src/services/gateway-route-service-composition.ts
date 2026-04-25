@@ -640,7 +640,7 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
         ...gateway.getLlmConfig(),
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
-      listLlmModels: (providerId) => gateway.llmService.listModels(providerId),
+      listLlmModels: (providerId) => gateway.llmService.listModelsWithSource(providerId),
       listLlmProviders: () => gateway.llmService.listProviders(),
       pollOpenAICodexOAuthDeviceFlow: (flowId) => gateway.llmService.pollOpenAICodexOAuthDeviceFlow(flowId),
       previewLlmModels: (input) => gateway.llmService.previewModels(input),

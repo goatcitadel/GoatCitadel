@@ -613,7 +613,7 @@ export class TuiApiClient {
 
   public async fetchLlmModels(
     providerId?: string,
-  ): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }> }> {
+  ): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }>; source: "remote" | "fallback" }> {
     const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
     return this.request(`/api/v1/llm/models${query}`, { method: "GET" });
   }

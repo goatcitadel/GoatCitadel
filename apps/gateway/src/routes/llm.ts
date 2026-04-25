@@ -251,7 +251,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send({ items: await fastify.services.llm.listLlmModels(parsed.data.providerId) });
+      return reply.send(await fastify.services.llm.listLlmModels(parsed.data.providerId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

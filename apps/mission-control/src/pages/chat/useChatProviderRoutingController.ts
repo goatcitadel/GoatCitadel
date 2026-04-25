@@ -70,6 +70,12 @@ function describeRuntimeStatus(provider: ChatModelProviderOption | undefined): {
         summary: provider.isLocalRuntime ? "Runtime reachable" : "Provider reachable",
         tone: "success",
       };
+    case "fallback":
+      return {
+        status: "degraded",
+        summary: "Model list suggested, not account-verified",
+        tone: "warning",
+      };
     case "empty":
       return {
         status: "degraded",
@@ -106,7 +112,8 @@ export function useChatProviderRoutingController(input: {
       imageEdit?: boolean;
     };
     models: string[];
-    modelProbeState?: "not_checked" | "ready" | "empty" | "error";
+    modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
+    modelProbeSource?: "remote" | "fallback";
     modelProbeCheckedAt?: string;
   }>;
   getCachedModels: (providerId: string) => string[];
@@ -146,6 +153,7 @@ export function useChatProviderRoutingController(input: {
           input.prefs?.providerId === provider.providerId ? input.prefs.model : undefined,
         ]),
         modelProbeState: provider.modelProbeState,
+        modelProbeSource: provider.modelProbeSource,
         modelProbeCheckedAt: provider.modelProbeCheckedAt,
       };
     });

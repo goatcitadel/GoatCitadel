@@ -644,6 +644,106 @@
   line-height: 1.45;
 }
 
+.mc-next-settings-wizard {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-settings-wizard-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.82rem 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-settings-wizard-step.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
+}
+
+.mc-next-settings-wizard-step.complete {
+  border-color: color-mix(in oklab, oklch(0.74 0.16 154) 30%, var(--border));
+}
+
+.mc-next-settings-wizard-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.mc-next-settings-wizard-step.complete .mc-next-settings-wizard-index {
+  border-color: color-mix(in oklab, oklch(0.74 0.16 154) 36%, var(--border));
+  color: oklch(0.74 0.16 154);
+}
+
+.mc-next-settings-wizard-step.pending {
+  opacity: 0.72;
+}
+
+.mc-next-settings-wizard-step strong {
+  display: block;
+  font-size: 0.96rem;
+  line-height: 1.35;
+}
+
+.mc-next-settings-wizard-step p {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.mc-next-settings-oauth-code-card {
+  display: grid;
+  gap: 0.42rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
+  border-radius: 0.95rem;
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 14%, transparent), transparent 62%),
+    color-mix(in oklab, var(--card) 94%, transparent);
+}
+
+.mc-next-settings-oauth-code-card span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mc-next-settings-oauth-code-card strong {
+  max-width: 100%;
+  font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+  font-size: clamp(1.9rem, 4vw, 3.2rem);
+  line-height: 1;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-settings-oauth-code-card p {
+  max-width: 58rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 .mc-next-settings-selectable-list,
 .mc-next-settings-action-list {
   display: grid;
