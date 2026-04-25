@@ -88,7 +88,7 @@ function inferInstallSourceType(source: string): IntegrationPluginInstallSourceT
     return "unknown";
   }
   if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.endsWith(".git") || trimmed.includes("github.com") ? "git" : "url";
+    return trimmed.endsWith(".git") || isGitHubHttpsUrl(trimmed) ? "git" : "url";
   }
   if (/^(git\+|ssh:\/\/|git@)/i.test(trimmed)) {
     return "git";
@@ -97,6 +97,15 @@ function inferInstallSourceType(source: string): IntegrationPluginInstallSourceT
     return "npm";
   }
   return path.isAbsolute(trimmed) || trimmed.startsWith(".") ? "local" : "manual";
+}
+
+function isGitHubHttpsUrl(source: string): boolean {
+  try {
+    const parsed = new URL(source);
+    return parsed.hostname.toLowerCase() === "github.com";
+  } catch {
+    return false;
+  }
 }
 
 function normalizeInstallSourceDisplay(source: string, sourceType: IntegrationPluginInstallSourceType): string {

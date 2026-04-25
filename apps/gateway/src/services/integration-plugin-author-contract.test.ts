@@ -122,6 +122,18 @@ describe("integration plugin author contract", () => {
       "unverified_source",
     ]);
   });
+
+  it("classifies GitHub URL sources by hostname instead of substring", () => {
+    expect(resolveIntegrationPluginInstallMetadata("https://github.com/example/plugin").sourceMetadata.type).toBe(
+      "git",
+    );
+    expect(resolveIntegrationPluginInstallMetadata("https://github.com.example.test/plugin").sourceMetadata.type).toBe(
+      "url",
+    );
+    expect(resolveIntegrationPluginInstallMetadata("https://example.test/github.com/plugin").sourceMetadata.type).toBe(
+      "url",
+    );
+  });
 });
 
 function referencePluginSource(): string {

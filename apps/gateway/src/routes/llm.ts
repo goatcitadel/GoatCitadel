@@ -200,33 +200,63 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/llm/providers/openai-codex/oauth/device/start", async (_request, reply) => {
-    try {
-      return reply.send(await fastify.services.llm.startOpenAICodexOAuthDeviceFlow());
-    } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
-    }
-  });
+  fastify.post(
+    "/api/v1/llm/providers/openai-codex/oauth/device/start",
+    {
+      config: {
+        rateLimit: {
+          max: 180,
+        },
+      },
+    },
+    async (_request, reply) => {
+      try {
+        return reply.send(await fastify.services.llm.startOpenAICodexOAuthDeviceFlow());
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
 
-  fastify.post("/api/v1/llm/providers/openai-codex/oauth/device/poll", async (request, reply) => {
-    const parsed = codexOAuthPollSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply.send(await fastify.services.llm.pollOpenAICodexOAuthDeviceFlow(parsed.data.flowId));
-    } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
-    }
-  });
+  fastify.post(
+    "/api/v1/llm/providers/openai-codex/oauth/device/poll",
+    {
+      config: {
+        rateLimit: {
+          max: 180,
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsed = codexOAuthPollSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
+      try {
+        return reply.send(await fastify.services.llm.pollOpenAICodexOAuthDeviceFlow(parsed.data.flowId));
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
 
-  fastify.delete("/api/v1/llm/providers/openai-codex/oauth", async (_request, reply) => {
-    try {
-      return reply.send(fastify.services.llm.deleteOpenAICodexOAuthCredential());
-    } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
-    }
-  });
+  fastify.delete(
+    "/api/v1/llm/providers/openai-codex/oauth",
+    {
+      config: {
+        rateLimit: {
+          max: 180,
+        },
+      },
+    },
+    async (_request, reply) => {
+      try {
+        return reply.send(fastify.services.llm.deleteOpenAICodexOAuthCredential());
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
 
   fastify.get("/api/v1/llm/config", async (_request, reply) => {
     return reply.send(fastify.services.llm.getLlmConfigWithDetails());

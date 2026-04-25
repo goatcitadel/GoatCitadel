@@ -70,53 +70,64 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const approvals = fastify.services.approvals;
 
-  fastify.post("/api/v1/approvals", withRouteAccess(fastify, "webhook"), async (request, reply) => {
-    const parsed = createSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
+  fastify.post(
+    "/api/v1/approvals",
+    {
+      config: {
+        goatcitadelRouteAccessClass: "webhook",
+        rateLimit: {
+          max: 180,
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsed = createSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
 
-    const ingress = validateApprovalCreateIngress(request, parsed.data);
-    if (!ingress.ok) {
-      return reply.code(ingress.statusCode).send({ error: ingress.error });
-    }
+      const ingress = validateApprovalCreateIngress(request, parsed.data);
+      if (!ingress.ok) {
+        return reply.code(ingress.statusCode).send({ error: ingress.error });
+      }
 
-    if (!request.idempotencyKey?.trim()) {
-      return reply.code(400).send({
-        error: "Idempotency-Key header is required for approval creation.",
-      });
-    }
+      if (!request.idempotencyKey?.trim()) {
+        return reply.code(400).send({
+          error: "Idempotency-Key header is required for approval creation.",
+        });
+      }
 
-    if (ingress.kind === "remote" && (!parsed.data.sourceConnectorId || !parsed.data.sourceTraceId)) {
-      return reply.code(400).send({
-        error: "Remote approval creation requires sourceConnectorId and sourceTraceId.",
-      });
-    }
+      if (ingress.kind === "remote" && (!parsed.data.sourceConnectorId || !parsed.data.sourceTraceId)) {
+        return reply.code(400).send({
+          error: "Remote approval creation requires sourceConnectorId and sourceTraceId.",
+        });
+      }
 
-    if (ingress.kind !== "remote" && !isLoopbackRequest(request) && !isOperatorAuthenticatedRequest(request)) {
-      return reply.code(403).send({
-        error:
-          "Approval creation is restricted to loopback, operator-authenticated, or scoped remote-connector callers.",
-      });
-    }
+      if (ingress.kind !== "remote" && !isLoopbackRequest(request) && !isOperatorAuthenticatedRequest(request)) {
+        return reply.code(403).send({
+          error:
+            "Approval creation is restricted to loopback, operator-authenticated, or scoped remote-connector callers.",
+        });
+      }
 
-    const { sourceConnectorId, sourceTraceId, ...approvalInput } = parsed.data;
-    const linkage = {
-      ...(approvalInput.linkage ?? {}),
-      ...(sourceConnectorId ? { connectorId: sourceConnectorId } : {}),
-      ...(sourceTraceId ? { traceId: sourceTraceId } : {}),
-    };
+      const { sourceConnectorId, sourceTraceId, ...approvalInput } = parsed.data;
+      const linkage = {
+        ...(approvalInput.linkage ?? {}),
+        ...(sourceConnectorId ? { connectorId: sourceConnectorId } : {}),
+        ...(sourceTraceId ? { traceId: sourceTraceId } : {}),
+      };
 
-    try {
-      const approval = await approvals.createApproval({
-        ...approvalInput,
-        ...(Object.keys(linkage).length > 0 ? { linkage } : {}),
-      });
-      return reply.code(201).send(approval);
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
+      try {
+        const approval = await approvals.createApproval({
+          ...approvalInput,
+          ...(Object.keys(linkage).length > 0 ? { linkage } : {}),
+        });
+        return reply.code(201).send(approval);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
   fastify.get("/api/v1/approvals", operatorOnly, async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);

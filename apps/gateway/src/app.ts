@@ -252,20 +252,6 @@ export async function buildApp() {
   });
 
   if (rateLimitConfig.enabled) {
-    await app.register(rateLimit, {
-      global: false,
-      timeWindow: "1 minute",
-      keyGenerator: (request) => request.ip,
-      allowList: ["127.0.0.1", "::1", "::ffff:127.0.0.1"],
-      max: rateLimitConfig.maxGeneral,
-      skipOnError: true,
-      addHeaders: {
-        "x-ratelimit-limit": true,
-        "x-ratelimit-remaining": true,
-        "x-ratelimit-reset": true,
-      },
-    });
-
     app.addHook("onRoute", (routeOptions) => {
       const bucket = classifyRateLimitBucket(routeOptions.url, routeOptions.method);
       const max =
@@ -286,6 +272,20 @@ export async function buildApp() {
           max: existingMax === undefined ? max : Math.min(existingMax, max),
         },
       };
+    });
+
+    await app.register(rateLimit, {
+      global: false,
+      timeWindow: "1 minute",
+      keyGenerator: (request) => request.ip,
+      allowList: ["127.0.0.1", "::1", "::ffff:127.0.0.1"],
+      max: rateLimitConfig.maxGeneral,
+      skipOnError: true,
+      addHeaders: {
+        "x-ratelimit-limit": true,
+        "x-ratelimit-remaining": true,
+        "x-ratelimit-reset": true,
+      },
     });
   }
 
