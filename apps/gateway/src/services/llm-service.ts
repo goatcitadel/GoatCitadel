@@ -844,6 +844,10 @@ export class LlmService {
     model: string,
   ): Promise<ChatCompletionResponse> {
     const payload = buildOpenAiResponsesPayload(request, model, resolved.provider);
+    const codexResponsesProvider = isOpenAICodexResponsesProvider(resolved.provider);
+    if (codexResponsesProvider) {
+      payload.stream = true;
+    }
     const target = this.buildRequestTarget(resolved, "responses", `${resolved.provider.baseUrl}/responses`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
     const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
@@ -853,6 +857,13 @@ export class LlmService {
     }
     if (!response.ok) {
       throw new Error(await buildHttpError("responses request", response));
+    }
+
+    if (codexResponsesProvider && response.body) {
+      return applyEstimatedCostToChatResponse(await collectOpenAiResponsesStreamCompletion(response, model), {
+        providerId: resolved.provider.providerId,
+        model,
+      });
     }
 
     const json = (await response.json()) as Record<string, unknown>;
@@ -882,7 +893,9 @@ export class LlmService {
     }
 
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.includes("text/event-stream") || !response.body) {
+    const shouldParseAsSse =
+      isOpenAICodexResponsesProvider(resolved.provider) || contentType.includes("text/event-stream");
+    if (!shouldParseAsSse || !response.body) {
       const json = (await response.json()) as Record<string, unknown>;
       yield applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
         providerId: resolved.provider.providerId,
@@ -891,7 +904,7 @@ export class LlmService {
       return;
     }
 
-    for await (const event of streamJsonSseResponse(response)) {
+    for await (const event of streamJsonSseResponse(response, { forceSse: shouldParseAsSse })) {
       const eventType = typeof event.type === "string" ? event.type : "";
       if (eventType === "response.output_text.delta") {
         yield {
@@ -2054,9 +2067,17 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
   return null;
 }
 
-async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record<string, unknown>> {
+async function* streamJsonSseResponse(
+  response: Response,
+  options?: { forceSse?: boolean },
+): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!contentType.includes("text/event-stream") || !response.body) {
+  if (!response.body) {
+    const json = (await response.json()) as Record<string, unknown>;
+    yield json;
+    return;
+  }
+  if (!options?.forceSse && !contentType.includes("text/event-stream")) {
     const json = (await response.json()) as Record<string, unknown>;
     yield json;
     return;
@@ -2088,6 +2109,19 @@ async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record
         }
       }
     }
+    if (buffer.trim()) {
+      const dataLines = buffer
+        .split(/\r?\n/g)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .filter(Boolean);
+      for (const payload of parseSseFramePayloads(dataLines)) {
+        if (payload === "[DONE]") {
+          return;
+        }
+        yield payload;
+      }
+    }
   } finally {
     try {
       reader.releaseLock();
@@ -2113,7 +2147,9 @@ function buildOpenAiResponsesPayload(
   }
   if (request.temperature !== undefined) payload.temperature = request.temperature;
   if (request.top_p !== undefined) payload.top_p = request.top_p;
-  if (request.max_tokens !== undefined) payload.max_output_tokens = request.max_tokens;
+  if (request.max_tokens !== undefined && !isOpenAICodexResponsesProvider(provider)) {
+    payload.max_output_tokens = request.max_tokens;
+  }
   if (request.reasoning?.effort) payload.reasoning = { effort: request.reasoning.effort };
   if (request.verbosity)
     payload.text = { ...(isRecord(payload.text) ? payload.text : {}), verbosity: request.verbosity };
@@ -2166,6 +2202,54 @@ function applyOpenAiResponsesProviderDefaults(
 
 function isOpenAICodexResponsesProvider(provider: Pick<LlmProviderConfig, "providerId" | "apiStyle">): boolean {
   return provider.providerId.trim().toLowerCase() === "openai-codex" || provider.apiStyle === "openai-codex-responses";
+}
+
+async function collectOpenAiResponsesStreamCompletion(
+  response: Response,
+  model: string,
+): Promise<ChatCompletionResponse> {
+  let outputText = "";
+  for await (const event of streamJsonSseResponse(response, { forceSse: true })) {
+    const eventType = typeof event.type === "string" ? event.type : "";
+    if (eventType === "response.output_text.delta") {
+      outputText += String(event.delta ?? "");
+      continue;
+    }
+    if (eventType === "response.completed" && isRecord(event.response)) {
+      const completion = adaptOpenAiResponsesResponse(event.response);
+      const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
+      if (outputText && (typeof message?.content !== "string" || message.content.length === 0)) {
+        return {
+          ...completion,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: outputText },
+              finish_reason: completion.choices?.[0]?.finish_reason ?? "stop",
+            },
+          ],
+        };
+      }
+      return completion;
+    }
+    if (eventType === "response.failed") {
+      throw new Error("responses stream failed");
+    }
+  }
+
+  return {
+    id: "response",
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: outputText },
+        finish_reason: "stop",
+      },
+    ],
+  };
 }
 
 function isOpenAIGpt5Model(model: string): boolean {

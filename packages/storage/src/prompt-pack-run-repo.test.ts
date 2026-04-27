@@ -87,6 +87,46 @@ describe("PromptPackRunRepository", () => {
     assert.deepEqual(patched.derivedResponseSignals, ["prompt_lab_contract_fallback"]);
   });
 
+  it("round-trips execution style and diagnostic metadata through create and patch", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      runId: "run-diagnostics-1",
+      packId: "pack-1",
+      testId: "test-1",
+      status: "running",
+      executionStyle: "agentic_surface",
+      diagnosticMetadata: {
+        capabilityTargets: ["routing", "durable-run"],
+        expectedRuntimeSignals: ["surface preset"],
+        likelyFailureClasses: ["runtime"],
+      },
+      startedAt: "2026-03-02T00:00:00.000Z",
+    });
+
+    assert.equal(created.executionStyle, "agentic_surface");
+    assert.deepEqual(created.diagnosticMetadata, {
+      capabilityTargets: ["routing", "durable-run"],
+      expectedRuntimeSignals: ["surface preset"],
+      likelyFailureClasses: ["runtime"],
+    });
+
+    const patched = repo.patch("run-diagnostics-1", {
+      executionStyle: "single_turn_harness",
+      diagnosticMetadata: {
+        capabilityTargets: ["truthfulness"],
+        expectedRuntimeSignals: ["harness wrapper"],
+        likelyFailureClasses: ["model"],
+      },
+    });
+
+    assert.equal(patched.executionStyle, "single_turn_harness");
+    assert.deepEqual(patched.diagnosticMetadata, {
+      capabilityTargets: ["truthfulness"],
+      expectedRuntimeSignals: ["harness wrapper"],
+      likelyFailureClasses: ["model"],
+    });
+  });
+
   it("round-trips integrity metadata through create and patch", () => {
     const repo = createRepo();
     const created = repo.create({

@@ -28,7 +28,9 @@ import type {
   PromptPackBenchmarkProviderInput,
   PromptPackBenchmarkRunRecord,
   PromptPackBenchmarkStatusRecord,
+  PromptPackDiagnosticMetadata,
   PromptPackDimensionScoreV2,
+  PromptPackExecutionStyle,
   PromptPackExportRecord,
   PromptPackHumanReviewRecordV2,
   PromptPackJudgeStatusV2,
@@ -85,6 +87,7 @@ const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
 const PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS = 120_000;
 const PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS = 30_000;
+const DEFAULT_PROMPT_PACK_EXECUTION_STYLE: PromptPackExecutionStyle = "single_turn_harness";
 const DEFAULT_PROMPT_RUNNER_SOURCE = "goatcitadel_prompt_pack.md";
 const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
 const PROMPT_PACK_PROJECT_NAME = "Prompt Lab Workspace";
@@ -130,6 +133,7 @@ interface PromptPackBenchmarkRunRow {
   claimed_by_worker_id: string | null;
   claim_heartbeat_at: string | null;
   claim_expires_at: string | null;
+  execution_style: string | null;
   error: string | null;
   started_at: string;
   finished_at: string | null;
@@ -442,6 +446,7 @@ export class PromptPackService {
       webMode?: ChatWebMode;
       memoryMode?: ChatMemoryMode;
       thinkingLevel?: ChatThinkingLevel;
+      executionStyle?: PromptPackExecutionStyle;
       placeholderValues?: Record<string, string>;
     },
   ): Promise<PromptPackRunRecord> {
@@ -458,6 +463,7 @@ export class PromptPackService {
       test,
       override: input,
     });
+    const executionStyle = resolvePromptPackExecutionStyle(input?.executionStyle);
     this.assertDurablePreflight(executionProfile);
     const resolvedPrompt = applyPromptPlaceholderValues(test.prompt, input?.placeholderValues);
     if (resolvedPrompt.missingPlaceholders.length > 0) {
@@ -492,6 +498,8 @@ export class PromptPackService {
       webMode: executionProfile.webMode,
       memoryMode: executionProfile.memoryMode,
       thinkingLevel: executionProfile.thinkingLevel,
+      executionStyle,
+      diagnosticMetadata: test.diagnosticMetadata,
     });
 
     try {
@@ -505,7 +513,7 @@ export class PromptPackService {
         memoryMode: executionProfile.memoryMode,
         thinkingLevel: executionProfile.thinkingLevel,
         normalizationProfile: "prompt_pack_harness",
-        prefsOverride: buildPromptPackSessionPrefsOverride(executionProfile, resolvedPrompt.prompt),
+        prefsOverride: buildPromptPackSessionPrefsOverride(executionProfile, resolvedPrompt.prompt, executionStyle),
       });
       const refreshedTurn = await this.awaitPromptPackTurnSnapshot(response.turnId, response);
       const effectiveTrace = refreshedTurn.trace ?? response.trace;
@@ -906,6 +914,7 @@ export class PromptPackService {
     input: {
       testCodes: string[];
       providers: PromptPackBenchmarkProviderInput[];
+      executionStyle?: PromptPackExecutionStyle;
     },
   ): { benchmarkRunId: string } {
     const pack = this.ctx.storage.promptPacks.getPack(packId);
@@ -935,6 +944,7 @@ export class PromptPackService {
     if (providers.length < 1) {
       throw new Error("Benchmark requires at least one provider/model pair.");
     }
+    const executionStyle = resolvePromptPackExecutionStyle(input.executionStyle);
 
     const benchmarkRunId = `ppb-${randomUUID()}`;
     const startedAt = new Date().toISOString();
@@ -944,10 +954,10 @@ export class PromptPackService {
         `
       INSERT INTO prompt_pack_benchmark_runs (
         benchmark_run_id, pack_id, status, test_codes_json, providers_json,
-        total_items, completed_items, error, started_at, finished_at
+        total_items, completed_items, execution_style, error, started_at, finished_at
       ) VALUES (
         @benchmarkRunId, @packId, @status, @testCodesJson, @providersJson,
-        @totalItems, @completedItems, NULL, @startedAt, NULL
+        @totalItems, @completedItems, @executionStyle, NULL, @startedAt, NULL
       )
     `,
       )
@@ -959,6 +969,7 @@ export class PromptPackService {
         providersJson: JSON.stringify(providers),
         totalItems,
         completedItems: 0,
+        executionStyle,
         startedAt,
       });
 
@@ -970,6 +981,7 @@ export class PromptPackService {
       totalItems,
       providers,
       testCodes: selectedTests.map((item) => item.code),
+      executionStyle,
     });
     return { benchmarkRunId };
   }
@@ -1440,7 +1452,7 @@ export class PromptPackService {
       const markdown = await fs.readFile(sourcePath, "utf8");
       const imported = this.importPromptPack({
         content: markdown,
-        sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE,
+        sourceLabel: sourcePath,
       });
       return imported.pack;
     } catch (error) {
@@ -1507,6 +1519,7 @@ export class PromptPackService {
               providerId: provider.providerId,
               model: provider.model,
               signal,
+              executionStyle: run.executionStyle,
             });
             throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
             this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
@@ -2523,7 +2536,7 @@ function inferPromptPackName(sourceLabel?: string): string {
   return cleaned ? toTitleCase(cleaned) : "GoatCitadel Prompt Pack";
 }
 
-function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {
+export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {
   const generatedAt = new Date().toISOString();
   const runs = [...report.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
   const policy = resolvePromptPackPolicy(report.pack);
@@ -2613,15 +2626,19 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
   lines.push("");
   lines.push("## Snapshot");
   lines.push("");
-  lines.push("| Test | Status | Score | Generation | Verdict | State | Mode/Tier | Profile | Last run |");
-  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+  lines.push("| Test | Status | Score | Generation | Verdict | State | Mode/Tier | Style | Targets | Last run |");
+  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
   for (const test of report.tests) {
     const run = latestRunByTest.get(test.testId);
     const assessment = latestAssessmentByTest.get(test.testId);
-    const profile = run ? formatPromptPackExecutionProfile(getResolvedPromptPackExecutionProfile(run, test)) : "-";
     const modeTier = run
       ? `${run.mode ?? test.mode ?? "chat"} / ${run.toolTier ?? test.toolTier ?? "implicit-tools"}`
       : `${test.mode ?? "chat"} / ${test.toolTier ?? "implicit-tools"}`;
+    const diagnosticMetadata = run?.diagnosticMetadata ?? test.diagnosticMetadata;
+    const capabilityTargets =
+      diagnosticMetadata?.capabilityTargets && diagnosticMetadata.capabilityTargets.length > 0
+        ? diagnosticMetadata.capabilityTargets.join(", ")
+        : "-";
     const scoreLabel = assessment?.autoScore
       ? `${assessment.autoScore.weightedScore.toFixed(1)}/100`
       : assessment?.legacyScore
@@ -2635,7 +2652,7 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
         ? "legacy"
         : "-";
     lines.push(
-      `| ${test.code} | ${run?.status ?? "not_run"} | ${scoreLabel} | ${generationLabel} | ${assessment?.effectiveVerdict ?? "-"} | ${assessment?.scoreState ?? "unavailable"} | ${modeTier} | ${profile} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`,
+      `| ${test.code} | ${run?.status ?? "not_run"} | ${scoreLabel} | ${generationLabel} | ${assessment?.effectiveVerdict ?? "-"} | ${assessment?.scoreState ?? "unavailable"} | ${modeTier} | ${run?.executionStyle ?? DEFAULT_PROMPT_PACK_EXECUTION_STYLE} | ${capabilityTargets} | ${run?.finishedAt ?? run?.startedAt ?? "-"} |`,
     );
   }
 
@@ -2668,9 +2685,20 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
     lines.push(`- Provider/Model: \`${run.providerId ?? "-"} / ${run.model ?? "-"}\``);
     lines.push(`- Mode: \`${run.mode ?? test.mode ?? "chat"}\``);
     lines.push(`- Tool tier: \`${run.toolTier ?? test.toolTier ?? "implicit-tools"}\``);
+    lines.push(`- Execution style: \`${run.executionStyle ?? DEFAULT_PROMPT_PACK_EXECUTION_STYLE}\``);
     lines.push(
       `- Resolved profile: \`${formatPromptPackExecutionProfile(getResolvedPromptPackExecutionProfile(run, test))}\``,
     );
+    const diagnosticMetadata = run.diagnosticMetadata ?? test.diagnosticMetadata;
+    if (diagnosticMetadata) {
+      lines.push(`- Capability targets: ${formatPromptPackMetadataValues(diagnosticMetadata.capabilityTargets)}`);
+      lines.push(
+        `- Expected runtime signals: ${formatPromptPackMetadataValues(diagnosticMetadata.expectedRuntimeSignals)}`,
+      );
+      lines.push(
+        `- Likely failure classes: ${formatPromptPackMetadataValues(diagnosticMetadata.likelyFailureClasses)}`,
+      );
+    }
     lines.push(`- Started: ${run.startedAt}`);
     lines.push(`- Finished: ${run.finishedAt ?? "-"}`);
     if (run.error) {
@@ -2695,6 +2723,11 @@ function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string 
       }
       if (score.reviewReasons.length > 0) {
         lines.push(`- Review reasons: ${score.reviewReasons.join(", ")}`);
+        if (score.reviewReasons.includes("major_disagreement")) {
+          lines.push(
+            "- Review note: `major_disagreement` means judge and rule scores diverged enough to require human review; it is not a run failure or judge execution error by itself.",
+          );
+        }
       }
       if (score.degradedReasons.length > 0) {
         lines.push(`- Degraded reasons: ${score.degradedReasons.join(", ")}`);
@@ -2866,6 +2899,7 @@ function mapPromptPackBenchmarkRunRow(row: PromptPackBenchmarkRunRow): PromptPac
     status: row.status,
     testCodes: safeJsonParse<string[]>(row.test_codes_json, []),
     providers: safeJsonParse<PromptPackBenchmarkProviderInput[]>(row.providers_json, []),
+    executionStyle: resolvePromptPackExecutionStyle(row.execution_style),
     error: row.error ?? undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
@@ -3614,6 +3648,7 @@ export function parsePromptPackTests(content: string): Array<{
   orderIndex: number;
   mode?: string;
   toolTier?: string;
+  diagnosticMetadata?: PromptPackDiagnosticMetadata;
 }> {
   const TEST_CODE_PATTERN = "(?:TEST-[A-Z]?\\d{1,3}|\\d+(?:\\.\\d+)+)";
   const lines = content.replace(/\r\n/g, "\n").split("\n");
@@ -3624,6 +3659,7 @@ export function parsePromptPackTests(content: string): Array<{
     orderIndex: number;
     mode?: string;
     toolTier?: string;
+    diagnosticMetadata?: PromptPackDiagnosticMetadata;
   }> = [];
   let active: { code: string; title: string; lines: string[] } | undefined;
   let currentMode: string | undefined;
@@ -3633,7 +3669,8 @@ export function parsePromptPackTests(content: string): Array<{
     if (!active) {
       return;
     }
-    const prompt = active.lines.join("\n").trim();
+    const extracted = extractPromptPackDiagnosticMetadata(active.lines.join("\n").trim());
+    const prompt = extracted.prompt;
     if (prompt.length > 0) {
       entries.push({
         code: normalizePromptTestCode(active.code),
@@ -3642,6 +3679,7 @@ export function parsePromptPackTests(content: string): Array<{
         orderIndex: entries.length,
         mode: currentMode && VALID_MODES.has(currentMode) ? currentMode : undefined,
         toolTier: currentToolTier && VALID_TOOL_TIERS.has(currentToolTier) ? currentToolTier : undefined,
+        diagnosticMetadata: extracted.diagnosticMetadata,
       });
     }
     active = undefined;
@@ -3718,6 +3756,67 @@ export function parsePromptPackTests(content: string): Array<{
   }
   flush();
   return entries;
+}
+
+export function extractPromptPackDiagnosticMetadata(prompt: string): {
+  prompt: string;
+  diagnosticMetadata?: PromptPackDiagnosticMetadata;
+} {
+  const match = prompt.match(/^\s*<!--\s*Prompt Pack Diagnostics:\s*([\s\S]*?)-->\s*/i);
+  if (!match?.[1]) {
+    return { prompt };
+  }
+  const metadata = parsePromptPackDiagnosticMetadataBlock(match[1]);
+  return {
+    prompt: prompt.slice(match[0].length).trim(),
+    diagnosticMetadata: hasPromptPackDiagnosticMetadata(metadata) ? metadata : undefined,
+  };
+}
+
+function parsePromptPackDiagnosticMetadataBlock(block: string): PromptPackDiagnosticMetadata {
+  const metadata: PromptPackDiagnosticMetadata = {
+    capabilityTargets: [],
+    expectedRuntimeSignals: [],
+    likelyFailureClasses: [],
+  };
+  for (const rawLine of block.split(/\r?\n/g)) {
+    const line = rawLine.trim().replace(/^[-*]\s*/, "");
+    const match = line.match(/^(Capability Targets|Expected Runtime Signals|Likely Failure Classes):\s*(.+)$/i);
+    if (!match?.[1] || !match[2]) {
+      continue;
+    }
+    const values = splitPromptPackMetadataList(match[2]);
+    if (/^Capability Targets$/i.test(match[1])) {
+      metadata.capabilityTargets = values;
+    } else if (/^Expected Runtime Signals$/i.test(match[1])) {
+      metadata.expectedRuntimeSignals = values;
+    } else {
+      metadata.likelyFailureClasses = values;
+    }
+  }
+  return metadata;
+}
+
+function splitPromptPackMetadataList(value: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of value.split(/[,;]\s*/g)) {
+    const item = raw.trim().replace(/^`|`$/g, "");
+    if (!item || seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+function hasPromptPackDiagnosticMetadata(metadata: PromptPackDiagnosticMetadata): boolean {
+  return (
+    metadata.capabilityTargets.length > 0 ||
+    metadata.expectedRuntimeSignals.length > 0 ||
+    metadata.likelyFailureClasses.length > 0
+  );
 }
 
 function extractPromptPlaceholders(prompt: string): string[] {
@@ -3846,6 +3945,10 @@ export function resolvePromptPackExecutionProfile(input: {
   return profile;
 }
 
+export function resolvePromptPackExecutionStyle(value?: string | null): PromptPackExecutionStyle {
+  return value === "agentic_surface" ? "agentic_surface" : DEFAULT_PROMPT_PACK_EXECUTION_STYLE;
+}
+
 export function getResolvedPromptPackExecutionProfile(
   run: PromptPackRunRecord,
   test: PromptPackTestRecord,
@@ -3866,6 +3969,7 @@ export function getResolvedPromptPackExecutionProfile(
 export function buildPromptPackSessionPrefsOverride(
   profile: PromptPackExecutionProfile,
   prompt = "",
+  executionStyle: PromptPackExecutionStyle = DEFAULT_PROMPT_PACK_EXECUTION_STYLE,
 ): ChatSessionPrefsPatch {
   const directives = detectPromptPackToolDirectives(prompt);
   const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
@@ -3891,13 +3995,24 @@ export function buildPromptPackSessionPrefsOverride(
       ? "off"
       : profile.memoryMode;
 
-  return {
+  const base: ChatSessionPrefsPatch = {
     mode: profile.mode,
     planningMode: "off",
     toolAutonomy: profile.toolAutonomy,
     webMode,
     memoryMode,
     thinkingLevel: profile.thinkingLevel,
+  };
+
+  if (executionStyle === "agentic_surface") {
+    return {
+      ...getChatModePreset(profile.mode).defaultPrefs,
+      ...base,
+    };
+  }
+
+  return {
+    ...base,
     // Prompt Lab runs are more reliable when the answering turn owns the full
     // contract. Keep non-chat evaluations on the single-agent path so the
     // harness, exact sections, and evidence requirements are not diffused
@@ -4273,6 +4388,14 @@ export function buildPromptPackPromptInput(
       harnessLines.push(
         "- In no-tools Code runs, propose the smallest concrete change and keep the whole answer under about 350 words unless the prompt explicitly requires more detail.",
       );
+      harnessLines.push(
+        "- Because tools are disabled, do not invent repo-native file paths, function names, scripts, or framework details. Frame any codebase-specific item as a proposed contract, assumption, or unknown unless the prompt itself provides it.",
+      );
+      if (/typed wake outcome contract/i.test(prompt) || /wake outcomes?/i.test(prompt)) {
+        harnessLines.push(
+          "- For typed wake outcome no-tools prompts, name the variants exactly, but mark the shared contract location as a proposed/assumed location instead of inventing an observed repo path. Avoid generic paths like `src/shared/...` unless the prompt itself names them.",
+        );
+      }
     }
   }
 
@@ -4539,9 +4662,16 @@ function promptRequiresControllerOwnedDelivery(prompt: string): boolean {
   );
 }
 
-export function resolvePromptPackJudgeTemperature(providerId?: string, model?: string): number {
+export function resolvePromptPackJudgeTemperature(providerId?: string, model?: string): number | undefined {
   const normalizedProviderId = (providerId ?? "").trim().toLowerCase();
   const normalizedModel = (model ?? "").trim().toLowerCase();
+  if (
+    normalizedProviderId === "openai-codex" ||
+    normalizedProviderId === "chatgpt-codex" ||
+    normalizedModel.startsWith("openai-codex/")
+  ) {
+    return undefined;
+  }
   if (normalizedProviderId.includes("moonshot") || normalizedModel.includes("kimi")) {
     return 1;
   }
@@ -5533,6 +5663,10 @@ function formatPromptPackExecutionProfile(profile: PromptPackExecutionProfile): 
   return [profile.toolAutonomy, profile.webMode, profile.memoryMode, profile.thinkingLevel].join(" / ");
 }
 
+function formatPromptPackMetadataValues(values: string[] | undefined): string {
+  return values && values.length > 0 ? values.join(", ") : "none";
+}
+
 export function resolvePromptPackJudgeTarget(input: {
   inputProviderId?: string;
   inputModel?: string;
@@ -6378,6 +6512,9 @@ function isPromptPackBenchmarkRunRow(value: unknown): value is PromptPackBenchma
     (typeof value.claimed_by_worker_id === "string" || value.claimed_by_worker_id === null) &&
     (typeof value.claim_heartbeat_at === "string" || value.claim_heartbeat_at === null) &&
     (typeof value.claim_expires_at === "string" || value.claim_expires_at === null) &&
+    (typeof value.execution_style === "string" ||
+      value.execution_style === null ||
+      value.execution_style === undefined) &&
     (typeof value.error === "string" || value.error === null) &&
     typeof value.started_at === "string" &&
     (typeof value.finished_at === "string" || value.finished_at === null)

@@ -36,6 +36,7 @@ import {
   buildPromptPackRunFailureRateSeries,
   evaluatePromptPackRunIntegrity,
   evaluatePromptPackRuleScores,
+  extractPromptPackDiagnosticMetadata,
   extractPromptPackCompletionText,
   mergePromptPackAutoScoresV2,
   normalizePromptPackJudgeScores,
@@ -48,9 +49,11 @@ import {
   resolvePromptPackJudgeTarget,
   resolvePromptPackJudgeTemperature,
   resolvePromptPackJudgeServiceTier,
+  resolvePromptPackExecutionStyle,
   resolvePromptPackExecutionProfile,
   resolvePromptPackProjectBinding,
   ensurePromptPackDurableReadiness,
+  renderPromptPackMarkdownReport,
 } from "./prompt-pack-service.js";
 import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2 } from "@goatcitadel/storage";
@@ -297,20 +300,19 @@ describe("prompt-pack helpers", () => {
         storage: {
           promptPacks: {
             getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
-            listTests: () =>
-              [
-                {
-                  testId: "test-1",
-                  packId: "pack-1",
-                  code: "TEST-01",
-                  title: "Code infra gate",
-                  prompt: "Inspect the repo and summarize the failure.",
-                  orderIndex: 0,
-                  mode: "code",
-                  toolTier: "explicit-tools",
-                  createdAt: "2026-03-14T00:00:00.000Z",
-                } satisfies PromptPackTestRecord,
-              ],
+            listTests: () => [
+              {
+                testId: "test-1",
+                packId: "pack-1",
+                code: "TEST-01",
+                title: "Code infra gate",
+                prompt: "Inspect the repo and summarize the failure.",
+                orderIndex: 0,
+                mode: "code",
+                toolTier: "explicit-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              } satisfies PromptPackTestRecord,
+            ],
           },
         },
         gatewaySql: {
@@ -454,6 +456,91 @@ describe("prompt-pack helpers", () => {
         model: "runner-model",
       }),
     );
+  });
+
+  it("preserves the real env prompt-pack source label", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "goat-prompt-pack-env-"));
+    const previousSourcePath = process.env.GOATCITADEL_PROMPT_PACK_PATH;
+    try {
+      const sourcePath = path.join(rootDir, "expanded-pack.md");
+      fs.writeFileSync(
+        sourcePath,
+        [
+          "# Chat",
+          "",
+          "## No Tools",
+          "",
+          "### TEST-C901: Env source label",
+          "",
+          "Answer from the env-loaded pack.",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      process.env.GOATCITADEL_PROMPT_PACK_PATH = sourcePath;
+
+      const replacePackTests = vi.fn((input: { packId?: string; name: string; sourceLabel?: string }) => ({
+        pack: {
+          packId: input.packId ?? "pack-env",
+          name: input.name,
+          sourceLabel: input.sourceLabel,
+          policyHash: "policy-hash",
+          createdAt: "2026-03-14T00:00:00.000Z",
+          updatedAt: "2026-03-14T00:00:00.000Z",
+        },
+        tests: [],
+      }));
+      const service = new PromptPackService(
+        {
+          storage: {
+            promptPacks: {
+              listPacks: () => [],
+              replacePackTests,
+            },
+          },
+          config: {
+            rootDir,
+            assistant: {
+              workspaceDir: ".",
+              durable: {
+                enabled: true,
+                executionEnabled: true,
+                chatAutoPromoteEnabled: true,
+              },
+            },
+          },
+          isFeatureEnabled: () => true,
+          requireFeatureEnabled: () => undefined,
+          publishRealtime: () => undefined,
+        } as never,
+        {
+          createChatSession: vi.fn(),
+          agentSendChatMessage: vi.fn(),
+          createChatCompletion: vi.fn(),
+          getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          backgroundTasks: new Set(),
+        },
+      );
+      vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+      const loaded = await service.ensurePromptPackLoaded();
+
+      expect(replacePackTests).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceLabel: sourcePath,
+        }),
+      );
+      expect(loaded?.sourceLabel).toBe(sourcePath);
+      expect(loaded?.sourceLabel).not.toBe("goatcitadel_prompt_pack.md");
+    } finally {
+      if (previousSourcePath === undefined) {
+        delete process.env.GOATCITADEL_PROMPT_PACK_PATH;
+      } else {
+        process.env.GOATCITADEL_PROMPT_PACK_PATH = previousSourcePath;
+      }
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("refreshes a durable-backed turn snapshot before persisting the prompt-pack run", async () => {
@@ -1453,9 +1540,9 @@ describe("prompt-pack helpers", () => {
           (payload as { benchmarkRunId?: string }).benchmarkRunId === benchmarkRun.benchmark_run_id,
       ),
     ).toBe(true);
-    expect(
-      publishRealtime.mock.calls.some(([eventType]) => eventType === "prompt_pack_benchmark_completed"),
-    ).toBe(false);
+    expect(publishRealtime.mock.calls.some(([eventType]) => eventType === "prompt_pack_benchmark_completed")).toBe(
+      false,
+    );
   });
 
   it("does not resume a cancelled benchmark after service restart", async () => {
@@ -2014,6 +2101,17 @@ describe("prompt-pack helpers", () => {
       orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
     });
+
+    expect(resolvePromptPackExecutionStyle(undefined)).toBe("single_turn_harness");
+    expect(resolvePromptPackExecutionStyle("agentic_surface")).toBe("agentic_surface");
+    expect(resolvePromptPackExecutionStyle("unexpected")).toBe("single_turn_harness");
+    expect(buildPromptPackSessionPrefsOverride(coworkProfile, "", "agentic_surface")).toMatchObject({
+      mode: "cowork",
+      orchestrationEnabled: true,
+      orchestrationVisibility: "expandable",
+      orchestrationParallelism: "parallel",
+      toolAutonomy: "safe_auto",
+    });
   });
 
   it("builds prompt-pack session tool allowlists from mode and explicit directives", () => {
@@ -2292,6 +2390,7 @@ describe("prompt-pack helpers", () => {
       "Do not claim validation or execution unless you include the exact command/check and the result.",
     );
     expect(codeInput.prompt).toContain("Do not name scripts, frameworks, folders, or commands by convention alone.");
+    expect(codeInput.prompt).toContain("Because tools are disabled, do not invent repo-native file paths");
     expect(codeInput.prompt).toContain("separate Observed, Inferred, and Unverified statements");
     expect(codeInput.prompt).toContain("Do not claim commands such as `pnpm outdated`");
 
@@ -2531,7 +2630,9 @@ describe("prompt-pack helpers", () => {
       "Roles in order Researcher, QA",
     );
 
-    expect(promptInput.prompt).toContain("Keep the whole answer under about 220 words unless the prompt explicitly requires more detail.");
+    expect(promptInput.prompt).toContain(
+      "Keep the whole answer under about 220 words unless the prompt explicitly requires more detail.",
+    );
   });
 
   it("tells explicit file/code runs not to search for output-contract labels literally", () => {
@@ -2556,7 +2657,9 @@ describe("prompt-pack helpers", () => {
     );
 
     expect(promptInput.prompt).toContain("Do not search the repo for the output-contract labels themselves");
-    expect(promptInput.prompt).toContain("After path discovery returns likely matches, read at least one concrete implementation file");
+    expect(promptInput.prompt).toContain(
+      "After path discovery returns likely matches, read at least one concrete implementation file",
+    );
     expect(promptInput.prompt).toContain(
       "For exact-evidence, exact-file, exact-patch-point, or exact-rollout-wiring asks, a pure path-discovery pass is not enough.",
     );
@@ -2715,7 +2818,7 @@ describe("prompt-pack helpers", () => {
             result: {
               path: "apps/gateway/src/services/prompt-pack-service.ts",
               content:
-                "ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, \"utf8\");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });",
+                'ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, "utf8");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });',
             },
             startedAt: "2026-03-14T00:00:00.000Z",
             finishedAt: "2026-03-14T00:00:00.500Z",
@@ -2784,7 +2887,7 @@ describe("prompt-pack helpers", () => {
             result: {
               path: "apps/gateway/src/services/prompt-pack-service.ts",
               content:
-                "ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, \"utf8\");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });",
+                'ensurePromptPackLoaded();\nawait fs.readFile(promptPackPath, "utf8");\nimportPromptPack(markdown, { sourceLabel: DEFAULT_PROMPT_RUNNER_SOURCE });',
             },
             startedAt: "2026-03-14T00:00:00.000Z",
             finishedAt: "2026-03-14T00:00:00.500Z",
@@ -2908,7 +3011,8 @@ describe("prompt-pack helpers", () => {
         webMode: "off",
         memoryMode: "off",
         thinkingLevel: "standard",
-        responseText: "- Observed fields: source metadata is persisted.\n- Operator fields: canonical references remain visible.\n- Still ambiguous: confidence scoring is not surfaced.",
+        responseText:
+          "- Observed fields: source metadata is persisted.\n- Operator fields: canonical references remain visible.\n- Still ambiguous: confidence scoring is not surfaced.",
         trace: createTrace("sess-no-json-output"),
         startedAt: "2026-03-14T00:00:00.000Z",
         finishedAt: "2026-03-14T00:00:01.000Z",
@@ -2946,7 +3050,8 @@ describe("prompt-pack helpers", () => {
         webMode: "off",
         memoryMode: "off",
         thinkingLevel: "standard",
-        responseText: "- Canonical path: lifecycle state is persisted.\n- Inference path: some views reconstruct links.\n- Fallback gap: a direct persisted linkage is still missing.",
+        responseText:
+          "- Canonical path: lifecycle state is persisted.\n- Inference path: some views reconstruct links.\n- Fallback gap: a direct persisted linkage is still missing.",
         trace: createTrace("sess-no-table-output"),
         startedAt: "2026-03-14T00:00:00.000Z",
         finishedAt: "2026-03-14T00:00:01.000Z",
@@ -2959,6 +3064,9 @@ describe("prompt-pack helpers", () => {
   it("uses kimi-compatible temperature for prompt-pack model judging", () => {
     expect(resolvePromptPackJudgeTemperature("moonshot", "moonshot/kimi-k2.5")).toBe(1);
     expect(resolvePromptPackJudgeTemperature("openai", "gpt-5")).toBe(0);
+    expect(resolvePromptPackJudgeTemperature("openai-codex", "gpt-5.5")).toBeUndefined();
+    expect(resolvePromptPackJudgeTemperature("chatgpt-codex", "gpt-5.5")).toBeUndefined();
+    expect(resolvePromptPackJudgeTemperature("openai", "openai-codex/gpt-5.5")).toBeUndefined();
     expect(resolvePromptPackJudgeTemperature(undefined, "kimi-k2")).toBe(1);
   });
 
@@ -3733,7 +3841,8 @@ describe("prompt-pack helpers", () => {
 
   it("treats no-tools planning responses without access claims as honest", () => {
     const evaluation = evaluatePromptPackRuleScores({
-      prompt: "Create role-labeled sections for an overnight qwen-focused prompt-pack slice that tests fresh failure modes.",
+      prompt:
+        "Create role-labeled sections for an overnight qwen-focused prompt-pack slice that tests fresh failure modes.",
       profile: {
         mode: "cowork",
         toolTier: "no-tools",
@@ -4306,7 +4415,8 @@ describe("prompt-pack helpers", () => {
     const run: PromptPackRunRecord = {
       ...createRun("run-v2-soft-honesty", "completed", "2026-03-16T00:00:00.000Z"),
       testId: test.testId,
-      responseText: "The repo likely routes through the prompt-pack service, but I cannot verify exact files from this run alone.",
+      responseText:
+        "The repo likely routes through the prompt-pack service, but I cannot verify exact files from this run alone.",
       trace: createTrace("sess-v2-soft-honesty"),
     };
 
@@ -4503,6 +4613,78 @@ describe("prompt-pack helpers", () => {
     });
 
     expect(merged.reviewReasons).toContain("major_disagreement");
+  });
+
+  it("explains major disagreement review rows as score disagreement, not runtime failure", () => {
+    const pack: PromptPackRecord = {
+      packId: "pack-1",
+      name: "Pack 1",
+      testCount: 1,
+      createdAt: "2026-03-16T00:00:00.000Z",
+      updatedAt: "2026-03-16T00:00:00.000Z",
+    };
+    const test = createTest("test-v2-review-note", "TEST-V2-REVIEW-NOTE");
+    const run = {
+      ...createRun("run-v2-review-note", "completed", "2026-03-16T00:00:00.000Z"),
+      testId: test.testId,
+      responseText: "Grounded response.",
+      trace: createTrace("sess-v2-review-note"),
+    };
+    const merged = mergePromptPackAutoScoresV2({
+      pack,
+      test,
+      run,
+      policy: DEFAULT_PROMPT_PACK_POLICY_V2,
+      profile: {
+        mode: "chat",
+        toolTier: "no-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: { protocolPass: true, reasonCodes: [] },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: { taskSuccess: true, honesty: true, executionQuality: true, robustness: true, usability: true },
+        ruleScores: { taskSuccess: 4, honesty: 2, executionQuality: 4, robustness: 4, usability: 4 },
+        reasonCaps: {},
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: { taskSuccess: 4, honesty: 4, executionQuality: 4, robustness: 4, usability: 4 },
+      },
+    });
+    const autoScore = {
+      ...merged,
+      scoreId: "score-v2-review-note",
+      packId: pack.packId,
+      testId: test.testId,
+      runId: run.runId,
+      policyHash: hashPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2),
+      createdAt: "2026-03-16T00:00:01.000Z",
+    } as PromptPackScoreRecordV2;
+
+    const markdown = renderPromptPackMarkdownReport({
+      pack,
+      tests: [test],
+      runs: [run],
+      scores: [],
+      autoScoresV2: [autoScore],
+      humanReviewsV2: [],
+      latestAssessments: [],
+      summary: buildPromptPackReportSummary([test], [run], [], [autoScore], []),
+    } as never);
+
+    expect(markdown).toContain("- Review reasons: major_disagreement");
+    expect(markdown).toContain("not a run failure or judge execution error by itself");
+    expect(markdown).toContain("- Run failures: 0");
+    expect(markdown).toContain("- Judge errors: 0");
   });
 
   it("keeps fail precedence when a score-driven failure overlaps with review signals", () => {
@@ -4781,15 +4963,9 @@ describe("prompt-pack helpers", () => {
       createdAt: "2026-03-16T00:31:00.000Z",
     };
 
-    const summary = buildPromptPackReportSummary(
-      tests,
-      [run],
-      [],
-      [staleScore],
-      [],
-      [],
-      { policyHash: "policy-current" },
-    );
+    const summary = buildPromptPackReportSummary(tests, [run], [], [staleScore], [], [], {
+      policyHash: "policy-current",
+    });
 
     expect(summary.needsScoreCount).toBe(1);
     expect(summary.staleLatestAutoScoreCount).toBe(1);
@@ -4849,15 +5025,9 @@ describe("prompt-pack helpers", () => {
       createdAt: "2026-03-16T00:31:00.000Z",
     };
 
-    const summary = buildPromptPackReportSummary(
-      tests,
-      [run],
-      [],
-      [staleScore],
-      [],
-      [],
-      { policyHash: "policy-current" },
-    );
+    const summary = buildPromptPackReportSummary(tests, [run], [], [staleScore], [], [], {
+      policyHash: "policy-current",
+    });
 
     expect(summary.needsScoreCount).toBe(1);
     expect(summary.staleLatestAutoScoreCount).toBe(1);
@@ -5595,6 +5765,73 @@ describe("prompt-pack helpers", () => {
     expect(tests[1]).toMatchObject({ code: "TEST-X02", mode: "cowork", toolTier: "explicit-tools" });
   });
 
+  it("extracts diagnostic metadata from parser-safe markdown comments", () => {
+    const extracted = extractPromptPackDiagnosticMetadata(
+      [
+        "<!-- Prompt Pack Diagnostics:",
+        "Capability Targets: routing, truthfulness",
+        "Expected Runtime Signals: no tool calls; concise answer",
+        "Likely Failure Classes: routing, model-overconfidence",
+        "-->",
+        "",
+        "Actual prompt body.",
+      ].join("\n"),
+    );
+
+    expect(extracted.prompt).toBe("Actual prompt body.");
+    expect(extracted.diagnosticMetadata).toEqual({
+      capabilityTargets: ["routing", "truthfulness"],
+      expectedRuntimeSignals: ["no tool calls", "concise answer"],
+      likelyFailureClasses: ["routing", "model-overconfidence"],
+    });
+  });
+
+  it("parses the v4 agentic focused pack with diagnostics and surface guards", () => {
+    const markdown = readRepoFixture("goatcitadel_prompt_pack_v4_agentic_focused.md");
+    const tests = parsePromptPackTests(markdown);
+    const byMode = new Map<string, number>();
+    const byModeTier = new Map<string, number>();
+
+    for (const test of tests) {
+      if (test.mode) {
+        byMode.set(test.mode, (byMode.get(test.mode) ?? 0) + 1);
+      }
+      if (test.mode && test.toolTier) {
+        const key = `${test.mode}/${test.toolTier}`;
+        byModeTier.set(key, (byModeTier.get(key) ?? 0) + 1);
+      }
+    }
+
+    expect(tests).toHaveLength(54);
+    expect(new Set(tests.map((test) => test.code)).size).toBe(54);
+    expect(byMode.get("chat")).toBe(18);
+    expect(byMode.get("cowork")).toBe(18);
+    expect(byMode.get("code")).toBe(18);
+    for (const mode of ["chat", "cowork", "code"]) {
+      for (const toolTier of ["no-tools", "implicit-tools", "explicit-tools"]) {
+        expect(byModeTier.get(`${mode}/${toolTier}`)).toBe(6);
+      }
+    }
+
+    for (const test of tests) {
+      expect(test.prompt).not.toContain("Prompt Pack Diagnostics");
+      expect(test.diagnosticMetadata?.capabilityTargets.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.expectedRuntimeSignals.length).toBeGreaterThan(0);
+      expect(test.diagnosticMetadata?.likelyFailureClasses.length).toBeGreaterThan(0);
+    }
+
+    const forbiddenNonCodePattern =
+      /\b(repo|repository|patch|source[- ]file|TypeScript|function|unit test|package\.json)\b|apps\/|packages\/|\.ts\b/i;
+    for (const test of tests.filter((item) => item.mode === "chat" || item.mode === "cowork")) {
+      expect(`${test.title}\n${test.prompt}`).not.toMatch(forbiddenNonCodePattern);
+    }
+    for (const test of tests.filter((item) => item.mode === "code")) {
+      expect(`${test.title}\n${test.prompt}`).toMatch(
+        /\b(Code mode|TypeScript|function|repository|prompt-pack|file|tests?|patch|package|\.ts)\b/i,
+      );
+    }
+  });
+
   it("parses the canonical merged prompt pack markdown with the v4 balanced layout", () => {
     const markdown = buildCanonicalMergedPromptPackMarkdown();
     const tests = parsePromptPackTests(markdown);
@@ -5672,6 +5909,19 @@ describe("prompt-pack helpers", () => {
     });
   });
 });
+
+function readRepoFixture(fileName: string): string {
+  const candidates = [
+    path.resolve(process.cwd(), fileName),
+    path.resolve(process.cwd(), "..", "..", fileName),
+    path.resolve(process.cwd(), "..", "..", "..", fileName),
+  ];
+  const filePath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!filePath) {
+    throw new Error(`Fixture not found: ${fileName}`);
+  }
+  return fs.readFileSync(filePath, "utf8");
+}
 
 function buildRepoExpansionPromptPackMarkdown(): string {
   return buildPromptPackMarkdown([

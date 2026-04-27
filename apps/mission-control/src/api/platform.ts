@@ -58,7 +58,7 @@ export interface OpenAICodexDeviceStartResponse {
   flowId: string;
   providerId: "openai-codex";
   verificationUrl: string;
-  userCode: string;
+  userCode?: string;
   expiresAt: string;
   pollAfterMs: number;
 }

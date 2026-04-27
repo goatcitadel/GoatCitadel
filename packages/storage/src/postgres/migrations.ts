@@ -680,4 +680,19 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS image_model TEXT;
     `,
   },
+  {
+    version: 21,
+    name: "prompt_pack_agentic_diagnostics_repairs",
+    sql: `
+      ALTER TABLE prompt_pack_tests
+        ADD COLUMN IF NOT EXISTS diagnostic_metadata_json TEXT;
+
+      ALTER TABLE prompt_pack_runs
+        ADD COLUMN IF NOT EXISTS execution_style TEXT,
+        ADD COLUMN IF NOT EXISTS diagnostic_metadata_json TEXT;
+
+      ALTER TABLE prompt_pack_benchmark_runs
+        ADD COLUMN IF NOT EXISTS execution_style TEXT;
+    `,
+  },
 ];

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
+  PromptPackDiagnosticMetadata,
   PromptPackPolicySource,
   PromptPackPolicyV2,
   PromptPackRecord,
@@ -31,6 +32,7 @@ interface PromptPackTestRow {
   order_index: number;
   mode: string | null;
   tool_tier: string | null;
+  diagnostic_metadata_json: string | null;
   created_at: string;
 }
 
@@ -72,8 +74,12 @@ export class PromptPackRepository {
     `);
     this.deleteTestsByPackStmt = db.prepare("DELETE FROM prompt_pack_tests WHERE pack_id = ?");
     this.insertTestStmt = db.prepare(`
-      INSERT INTO prompt_pack_tests (test_id, pack_id, code, title, prompt, order_index, mode, tool_tier, created_at)
-      VALUES (@testId, @packId, @code, @title, @prompt, @orderIndex, @mode, @toolTier, @createdAt)
+      INSERT INTO prompt_pack_tests (
+        test_id, pack_id, code, title, prompt, order_index, mode, tool_tier, diagnostic_metadata_json, created_at
+      )
+      VALUES (
+        @testId, @packId, @code, @title, @prompt, @orderIndex, @mode, @toolTier, @diagnosticMetadataJson, @createdAt
+      )
     `);
     this.listTestsStmt = db.prepare(`
       SELECT * FROM prompt_pack_tests
@@ -130,6 +136,7 @@ export class PromptPackRepository {
       orderIndex: number;
       mode?: string;
       toolTier?: string;
+      diagnosticMetadata?: PromptPackDiagnosticMetadata;
     }>;
     policyV2?: PromptPackPolicyV2;
     policySource?: PromptPackPolicySource;
@@ -171,6 +178,7 @@ export class PromptPackRepository {
           orderIndex: test.orderIndex,
           mode: test.mode ?? null,
           toolTier: test.toolTier ?? null,
+          diagnosticMetadataJson: test.diagnosticMetadata ? JSON.stringify(test.diagnosticMetadata) : null,
           createdAt: now,
         });
       }
@@ -189,12 +197,10 @@ function mapPackRow(row: PromptPackRow): PromptPackRecord {
   const policy =
     policySource === "pack_override" ? (storedPolicy ?? DEFAULT_PROMPT_PACK_POLICY_V2) : DEFAULT_PROMPT_PACK_POLICY_V2;
   const storedPolicyHash =
-    typeof row.policy_v2_hash === "string" && row.policy_v2_hash.trim().length > 0
-      ? row.policy_v2_hash
-      : undefined;
+    typeof row.policy_v2_hash === "string" && row.policy_v2_hash.trim().length > 0 ? row.policy_v2_hash : undefined;
   const policyHash =
     policySource === "pack_override"
-      ? storedPolicyHash ?? hashPromptPackPolicyV2(storedPolicy ?? policy)
+      ? (storedPolicyHash ?? hashPromptPackPolicyV2(storedPolicy ?? policy))
       : hashPromptPackPolicyV2(policy);
   return {
     packId: row.pack_id,
@@ -219,6 +225,9 @@ function mapTestRow(row: PromptPackTestRow): PromptPackTestRecord {
     orderIndex: row.order_index,
     mode: (row.mode as PromptPackTestRecord["mode"]) ?? undefined,
     toolTier: (row.tool_tier as PromptPackTestRecord["toolTier"]) ?? undefined,
+    diagnosticMetadata: row.diagnostic_metadata_json
+      ? safeJsonParse<PromptPackDiagnosticMetadata | undefined>(row.diagnostic_metadata_json, undefined)
+      : undefined,
     createdAt: row.created_at,
   };
 }
@@ -265,6 +274,7 @@ function isPromptPackTestRow(value: unknown): value is PromptPackTestRow {
     typeof value.order_index === "number" &&
     (typeof value.mode === "string" || value.mode === null) &&
     (typeof value.tool_tier === "string" || value.tool_tier === null) &&
+    (typeof value.diagnostic_metadata_json === "string" || value.diagnostic_metadata_json === null) &&
     typeof value.created_at === "string"
   );
 }
@@ -273,8 +283,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function safeJsonParse<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizePolicySource(value?: string | null): PromptPackPolicySource | undefined {
   return value === "pack_override" || value === "inherited_default" ? value : undefined;
 }
-
-

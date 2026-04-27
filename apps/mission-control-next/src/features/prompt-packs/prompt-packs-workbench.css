@@ -603,6 +603,12 @@
   color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
 }
 
+.mc-pp-chip.diagnostic {
+  border-color: color-mix(in oklab, var(--mc-area-color) 28%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 9%, transparent);
+  color: color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
+}
+
 .mc-pp-detail {
   align-content: start;
 }
@@ -713,9 +719,21 @@
 }
 
 .mc-pp-placeholder-grid,
+.mc-pp-diagnostic-stack,
 .mc-pp-review-grid {
   display: grid;
   gap: 0.8rem;
+}
+
+.mc-pp-diagnostic-group {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.mc-pp-diagnostic-group > span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
 }
 
 .mc-pp-evidence-stack {

@@ -2,6 +2,7 @@ import type { DatabaseClient } from "./db.js";
 import type {
   ChatCitationRecord,
   ChatTurnTraceRecord,
+  PromptPackDiagnosticMetadata,
   PromptPackRunIntegrityRecord,
   PromptPackRunRecord,
 } from "@goatcitadel/contracts";
@@ -21,6 +22,8 @@ interface PromptPackRunRow {
   web_mode: PromptPackRunRecord["webMode"] | null;
   memory_mode: PromptPackRunRecord["memoryMode"] | null;
   thinking_level: PromptPackRunRecord["thinkingLevel"] | null;
+  execution_style: PromptPackRunRecord["executionStyle"] | null;
+  diagnostic_metadata_json: string | null;
   response_text: string | null;
   derived_response_text: string | null;
   derived_response_signals_json: string | null;
@@ -46,12 +49,12 @@ export class PromptPackRunRepository {
       INSERT INTO prompt_pack_runs (
         run_id, pack_id, test_id, session_id, status, provider_id, model,
         mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
-        response_text, derived_response_text, derived_response_signals_json,
+        execution_style, diagnostic_metadata_json, response_text, derived_response_text, derived_response_signals_json,
         trace_json, citations_json, integrity_json, error, started_at, finished_at
       ) VALUES (
         @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
         @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
-        @responseText, @derivedResponseText, @derivedResponseSignalsJson,
+        @executionStyle, @diagnosticMetadataJson, @responseText, @derivedResponseText, @derivedResponseSignalsJson,
         @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
       )
     `);
@@ -65,6 +68,8 @@ export class PromptPackRunRepository {
         web_mode = CASE WHEN @hasWebMode = 1 THEN @webMode ELSE web_mode END,
         memory_mode = CASE WHEN @hasMemoryMode = 1 THEN @memoryMode ELSE memory_mode END,
         thinking_level = CASE WHEN @hasThinkingLevel = 1 THEN @thinkingLevel ELSE thinking_level END,
+        execution_style = CASE WHEN @hasExecutionStyle = 1 THEN @executionStyle ELSE execution_style END,
+        diagnostic_metadata_json = CASE WHEN @hasDiagnosticMetadata = 1 THEN @diagnosticMetadataJson ELSE diagnostic_metadata_json END,
         response_text = CASE WHEN @hasResponseText = 1 THEN @responseText ELSE response_text END,
         derived_response_text = CASE WHEN @hasDerivedResponseText = 1 THEN @derivedResponseText ELSE derived_response_text END,
         derived_response_signals_json = CASE WHEN @hasDerivedResponseSignals = 1 THEN @derivedResponseSignalsJson ELSE derived_response_signals_json END,
@@ -112,6 +117,8 @@ export class PromptPackRunRepository {
     webMode?: PromptPackRunRecord["webMode"];
     memoryMode?: PromptPackRunRecord["memoryMode"];
     thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
+    executionStyle?: PromptPackRunRecord["executionStyle"];
+    diagnosticMetadata?: PromptPackDiagnosticMetadata;
     responseText?: string;
     derivedResponseText?: string;
     derivedResponseSignals?: string[];
@@ -136,6 +143,8 @@ export class PromptPackRunRepository {
       webMode: input.webMode ?? null,
       memoryMode: input.memoryMode ?? null,
       thinkingLevel: input.thinkingLevel ?? null,
+      executionStyle: input.executionStyle ?? null,
+      diagnosticMetadataJson: input.diagnosticMetadata ? JSON.stringify(input.diagnosticMetadata) : null,
       responseText: input.responseText ?? null,
       derivedResponseText: input.derivedResponseText ?? null,
       derivedResponseSignalsJson: input.derivedResponseSignals ? JSON.stringify(input.derivedResponseSignals) : null,
@@ -159,6 +168,8 @@ export class PromptPackRunRepository {
       webMode?: PromptPackRunRecord["webMode"];
       memoryMode?: PromptPackRunRecord["memoryMode"];
       thinkingLevel?: PromptPackRunRecord["thinkingLevel"];
+      executionStyle?: PromptPackRunRecord["executionStyle"];
+      diagnosticMetadata?: PromptPackDiagnosticMetadata;
       responseText?: string;
       derivedResponseText?: string;
       derivedResponseSignals?: string[];
@@ -184,6 +195,10 @@ export class PromptPackRunRepository {
       memoryMode: input.memoryMode ?? null,
       hasThinkingLevel: input.thinkingLevel !== undefined ? 1 : 0,
       thinkingLevel: input.thinkingLevel ?? null,
+      hasExecutionStyle: input.executionStyle !== undefined ? 1 : 0,
+      executionStyle: input.executionStyle ?? null,
+      hasDiagnosticMetadata: input.diagnosticMetadata !== undefined ? 1 : 0,
+      diagnosticMetadataJson: input.diagnosticMetadata !== undefined ? JSON.stringify(input.diagnosticMetadata) : null,
       hasResponseText: input.responseText !== undefined ? 1 : 0,
       responseText: input.responseText ?? null,
       hasDerivedResponseText: input.derivedResponseText !== undefined ? 1 : 0,
@@ -249,6 +264,10 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
     webMode: row.web_mode ?? undefined,
     memoryMode: row.memory_mode ?? undefined,
     thinkingLevel: row.thinking_level ?? undefined,
+    executionStyle: row.execution_style ?? undefined,
+    diagnosticMetadata: row.diagnostic_metadata_json
+      ? safeJsonParse<PromptPackDiagnosticMetadata | undefined>(row.diagnostic_metadata_json, undefined)
+      : undefined,
     responseText: row.response_text ?? undefined,
     derivedResponseText: row.derived_response_text ?? undefined,
     derivedResponseSignals: row.derived_response_signals_json
@@ -299,6 +318,8 @@ function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
     (typeof value.web_mode === "string" || value.web_mode === null) &&
     (typeof value.memory_mode === "string" || value.memory_mode === null) &&
     (typeof value.thinking_level === "string" || value.thinking_level === null) &&
+    (typeof value.execution_style === "string" || value.execution_style === null) &&
+    (typeof value.diagnostic_metadata_json === "string" || value.diagnostic_metadata_json === null) &&
     (typeof value.response_text === "string" || value.response_text === null) &&
     (typeof value.derived_response_text === "string" || value.derived_response_text === null) &&
     (typeof value.derived_response_signals_json === "string" || value.derived_response_signals_json === null) &&
@@ -314,5 +335,3 @@ function isPromptPackRunRow(value: unknown): value is PromptPackRunRow {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

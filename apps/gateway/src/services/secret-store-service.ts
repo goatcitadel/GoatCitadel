@@ -135,10 +135,11 @@ export class SecretStoreService {
 
   private setWindowsCredential(account: string, secret: string): void {
     const script = `
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$vault = New-Object Windows.Security.Credentials.PasswordVault
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+[Windows.Security.Credentials.PasswordCredential,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+$vault = [Windows.Security.Credentials.PasswordVault]::new()
 try { $existing = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT); $vault.Remove($existing) } catch {}
-$credential = New-Object Windows.Security.Credentials.PasswordCredential($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT, $env:GOATCITADEL_SECRET_VALUE)
+$credential = [Windows.Security.Credentials.PasswordCredential]::new($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT, $env:GOATCITADEL_SECRET_VALUE)
 $vault.Add($credential)
 Write-Output "ok"
 `;
@@ -151,8 +152,8 @@ Write-Output "ok"
 
   private getWindowsCredential(account: string): string | undefined {
     const script = `
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$vault = New-Object Windows.Security.Credentials.PasswordVault
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+$vault = [Windows.Security.Credentials.PasswordVault]::new()
 try {
   $credential = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT)
   $credential.RetrievePassword()
@@ -179,8 +180,8 @@ try {
 
   private deleteWindowsCredential(account: string): void {
     const script = `
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$vault = New-Object Windows.Security.Credentials.PasswordVault
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+$vault = [Windows.Security.Credentials.PasswordVault]::new()
 try {
   $credential = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT)
   $vault.Remove($credential)

@@ -452,6 +452,7 @@ function createMockStorage(): unknown {
     chatSessionProjects: {
       get: () => undefined,
     },
+    _getTrace: (turnId: string) => traces.get(turnId),
     chatExecutionPlans: {
       listBySession: () => [],
     },
@@ -7885,6 +7886,221 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("Missing required tool evidence");
   });
 
+  it("retries prompt-lab repo searches from the repo root when a prompt path is missing", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "- This is a Code evaluation. Prefer concrete repo evidence.",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and propose the exact minimal automated test that proves overlapping skill families are blocked from being installed into `skills/extra`.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Add the duplicate-family regression beside `apps/gateway/src/services/skill-import-service.test.ts` using the existing skill import fixture shape.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files" && request.args.path === "skills/extra") {
+        return {
+          outcome: "blocked",
+          policyReason:
+            "execution error: ENOENT: no such file or directory, stat 'F:\\code\\personal-ai\\skills\\extra'",
+          auditEventId: "audit-missing-skills-extra",
+          result: {},
+        };
+      }
+      if (request.toolName === "code.search_files" && request.args.path === ".") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-root-search-after-missing-path",
+          result: {
+            matches: [
+              {
+                path: "apps/gateway/src/services/skill-import-service.ts",
+                name: "skill-import-service.ts",
+                type: "file",
+              },
+              {
+                path: "apps/gateway/src/services/skill-import-service.test.ts",
+                name: "skill-import-service.test.ts",
+                type: "file",
+              },
+              {
+                path: "docs/SKILL_IMPORT_AND_TRUST_POLICY.md",
+                name: "SKILL_IMPORT_AND_TRUST_POLICY.md",
+                type: "file",
+              },
+            ],
+          },
+        };
+      }
+      if (request.toolName === "file.read_range") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: `audit-read-${String(request.args.path)}`,
+          result: {
+            path: request.args.path,
+            startLine: request.args.startLine,
+            endLine: request.args.endLine,
+            content: "duplicateFamily: existingManifest.duplicateFamily; install rejects overlapping family",
+          },
+        };
+      }
+      throw new Error(`unexpected tool ${request.toolName}`);
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-missing-path-root-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-missing-path-root-search-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "code.search_files",
+      args: expect.objectContaining({ path: "skills/extra" }),
+    });
+    expect(invokeTool.mock.calls[1]?.[0]).toMatchObject({
+      toolName: "code.search_files",
+      args: expect.objectContaining({ path: "." }),
+    });
+    expect(
+      invokeTool.mock.calls.filter(
+        (call) => call[0].toolName === "code.search_files" && call[0].args.path === "skills/extra",
+      ),
+    ).toHaveLength(1);
+    expect(result.assistantContent).toContain("apps/gateway/src/services/skill-import-service.test.ts");
+    expect(result.assistantContent).not.toContain("tool-run budget");
+    expect(result.assistantContent).not.toContain("parts of this answer may be incomplete");
+  });
+
+  it("forces synthesis instead of a prompt-lab budget failure once enough file evidence exists", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Use file tools to inspect these files and produce the exact minimal regression plan:",
+      "- `apps/gateway/src/services/skill-import-service.ts`",
+      "- `apps/gateway/src/services/skill-import-service.test.ts`",
+      "- `docs/SKILL_IMPORT_AND_TRUST_POLICY.md`",
+      "- `packages/contracts/src/skills.ts`",
+      "- `apps/gateway/src/routes/skills.ts`",
+      "- `packages/storage/src/system-settings-repo.ts`",
+    ].join("\n");
+    const synthesisResponse: ChatCompletionResponse = {
+      model: "gemma-4-local",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Use the gathered files to add one focused regression that seeds an existing duplicate family and asserts the second install is rejected.",
+          },
+        },
+      ],
+    };
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gemma-4-local",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-extra-read",
+                  type: "function",
+                  function: {
+                    name: "file_read_range",
+                    arguments: JSON.stringify({
+                      path: "apps/gateway/src/services/skill-import-service.ts",
+                      startLine: 1,
+                      endLine: 40,
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValue(synthesisResponse);
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prefetch-budget-synthesis",
+      result: {
+        path: "prefetched.ts",
+        startLine: 1,
+        endLine: 180,
+        content: "duplicateFamily and import validation evidence",
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-budget-synthesis-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-budget-synthesis-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "llamacpp",
+      model: "gemma-4-local",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(6);
+    expect(createChatCompletion.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(createChatCompletion.mock.calls.some((call) => call[0].tools === undefined)).toBe(true);
+    expect(result.assistantContent).toContain("duplicateFamily and import validation evidence");
+    expect(result.assistantContent).not.toContain("tool-run budget");
+    expect(result.turnTrace.failure?.failureClass).not.toBe("tool_run_budget_exceeded");
+  });
+
   it("prefetches repo search evidence for prompt-lab implicit repo-grounded chat inspections", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -8683,6 +8899,132 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("{{SYSTEM_NAME}}");
   });
 
+  it("repairs runtime lifecycle provenance-map prompts into strict four-bullet evidence", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: implicit-tools",
+      "- This is a repo-grounded chat evaluation. Inspect the repository before answering whenever current repo state matters.",
+      "- Repo inspection assist: enabled.",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and explain how runtime lifecycle currently distinguishes canonical linkage, inferred linkage, and missing linkage across approvals, durable runs, sessions, and turns.",
+      "",
+      "Answer contract:",
+      "- Use exactly four bullets labeled `Canonical`, `Inferred`, `Missing`, and `Overstatement risk`.",
+      "- Ground each of the first three bullets in a concrete observed data path or say it remains unproven.",
+      "- `Overstatement risk` must name one specific operator-facing phrase or surface that could imply too much certainty.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "- `Canonical`: Direct record fields are treated as authoritative links, including `turn_trace` values.",
+              "- `Inferred`: Tool runs and turns are also walked.",
+              "- `Missing`: Missing linkage remains unproven.",
+              '- `Overstatement risk`: `source: "turn_trace"` could imply too much certainty.',
+            ].join("\n\n"),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-runtime-provenance-map-search",
+          result: {
+            matches: [
+              {
+                path: "apps/gateway/src/services/runtime-lifecycle-read-service.ts",
+                name: "runtime-lifecycle-read-service.ts",
+              },
+              { path: "packages/contracts/src/runtime-lifecycle.ts", name: "runtime-lifecycle.ts" },
+              {
+                path: "apps/gateway/src/services/approval-lifecycle-service.ts",
+                name: "approval-lifecycle-service.ts",
+              },
+            ],
+          },
+        };
+      }
+      const pathArg = typeof request.args.path === "string" ? request.args.path : "";
+      const contentByPath: Record<string, string> = {
+        "apps/gateway/src/services/runtime-lifecycle-read-service.ts": [
+          "assignLifecycleField(state.resolution, 'sessionIdSource', 'approval_linkage');",
+          "collectTurnLinks(turns, linked);",
+          "linked.runIds.add(turn.durable.runId);",
+          "state.resolution.turnIdSource = 'turn_trace';",
+          "state.fallbackSources.add('fallback_payload');",
+          "state.fallbackSources.add('fallback_preview');",
+        ].join("\n"),
+        "packages/contracts/src/runtime-lifecycle.ts": [
+          "export interface RuntimeLifecycleQuery {",
+          "  sessionId?: string;",
+          "  turnId?: string;",
+          "  runId?: string;",
+          "  approvalId?: string;",
+          "  taskId?: string;",
+          "}",
+          "linkedRunCount: number;",
+          "linkedApprovalCount: number;",
+        ].join("\n"),
+        "apps/gateway/src/services/approval-lifecycle-service.ts":
+          "return { approvalId, linkage: { sessionId, runId, turnId }, payload, preview };",
+      };
+      return {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: `audit-runtime-provenance-map-read-${pathArg}`,
+        result: {
+          path: pathArg,
+          startLine: 1,
+          endLine: 80,
+          content: contentByPath[pathArg] ?? "runtime lifecycle related evidence",
+        },
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-runtime-lifecycle-provenance-map-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-runtime-lifecycle-provenance-map-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent.split("\n").filter((line) => /^- /.test(line))).toHaveLength(4);
+    expect(result.assistantContent).toContain("- Canonical:");
+    expect(result.assistantContent).toContain("- Inferred:");
+    expect(result.assistantContent).toContain("- Missing:");
+    expect(result.assistantContent).toContain("- Overstatement risk:");
+    expect(result.assistantContent).toContain("packages/contracts/src/runtime-lifecycle.ts");
+    expect(result.assistantContent).toContain("apps/gateway/src/services/runtime-lifecycle-read-service.ts");
+    expect(result.assistantContent).toContain("turn_trace");
+    expect(result.assistantContent).toContain("not canonical proof");
+    expect(result.assistantContent).toContain("runtime lifecycle linked IDs");
+    expect(result.assistantContent).not.toContain("Direct record fields are treated as authoritative links");
+  });
+
   it("repairs explicit event-link propagation prompts into the events route test harness", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -8983,12 +9325,13 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
-      toolName: "code.search_files",
-      args: expect.objectContaining({
-        query: "prompt-pack-service.ts",
-      }),
-    });
+    expect(
+      invokeTool.mock.calls.some(
+        (call) =>
+          call[0].toolName === "file.read_range" &&
+          String(call[0].args.path) === "apps/gateway/src/services/prompt-pack-service.ts",
+      ),
+    ).toBe(true);
     expect(result.assistantContent).toContain("## Observed");
     expect(result.assistantContent).toContain("inspection incomplete");
     expect(result.assistantContent).not.toContain("GOATCITADEL_PROMPT_PACK_PATH");
@@ -9572,6 +9915,202 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("No repo files or tool output were provided");
   });
 
+  it("repairs known prompt-lab exact-test prompts with concrete repo test code", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and propose the exact minimal automated test that proves GoatCitadel can parse `pnpm outdated -r` output even when the dependents column wraps.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Need answer with observed/inferred maybe incomplete.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: `audit-${request.toolName}`,
+          result: {
+            matches: [
+              {
+                path: "apps/gateway/src/services/gateway/update-review.test.ts",
+                name: "update-review.test.ts",
+              },
+              {
+                path: "apps/gateway/src/services/gateway/update-review.ts",
+                name: "update-review.ts",
+              },
+            ],
+          },
+        };
+      }
+      const pathArg = typeof request.args?.path === "string" ? request.args.path : "";
+      return {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: `audit-${request.toolName}`,
+        result: {
+          path: pathArg,
+          startLine: 1,
+          endLine: 120,
+          content: pathArg.endsWith("update-review.test.ts")
+            ? "describe('parsePnpmOutdatedOutput', () => { it('parses pnpm outdated table output with wrapped dependents', () => {}); });"
+            : "export function parsePnpmOutdatedOutput(output: string): DependencyUpdateReviewItem[] { return []; }",
+        },
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-known-test-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-known-test-repair-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("apps/gateway/src/services/gateway/update-review.test.ts");
+    expect(result.assistantContent).toContain("parsePnpmOutdatedOutput");
+    expect(result.assistantContent).toContain("@goatcitadel/orchestration");
+    expect(result.assistantContent).not.toContain("Need answer with observed/inferred");
+  });
+
+  it("retries prompt-lab synthesis when the provider stops during a tool call after evidence is gathered", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and propose the exact minimal automated test that proves GoatCitadel can parse `pnpm outdated -r` output even when the dependents column wraps.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-partial-1",
+                  type: "function",
+                  function: {
+                    name: "code_search_files",
+                    arguments: '{"query":"more evidence"',
+                  },
+                },
+              ],
+            },
+            finish_reason: "length",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Use the existing `apps/gateway/src/services/gateway/update-review.test.ts` parser test.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: `audit-${request.toolName}`,
+          result: {
+            matches: [
+              {
+                path: "apps/gateway/src/services/gateway/update-review.test.ts",
+                name: "update-review.test.ts",
+              },
+              {
+                path: "apps/gateway/src/services/gateway/update-review.ts",
+                name: "update-review.ts",
+              },
+            ],
+          },
+        };
+      }
+      const pathArg = typeof request.args?.path === "string" ? request.args.path : "";
+      return {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: `audit-${request.toolName}`,
+        result: {
+          path: pathArg,
+          startLine: 1,
+          endLine: 80,
+          content: pathArg.endsWith("update-review.test.ts")
+            ? "it('parses pnpm outdated table output with wrapped dependents', () => {});"
+            : "export function parsePnpmOutdatedOutput(output: string) { return []; }",
+        },
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-partial-tool-retry-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-partial-tool-retry-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(2);
+    expect(result.assistantContent).toContain("apps/gateway/src/services/gateway/update-review.test.ts");
+    expect(result.turnTrace.failure?.message ?? "").not.toContain("tool calls were fully assembled");
+    expect(result.turnTrace.completion?.status).toBe("complete");
+  });
+
   it("prefetches ranked concrete reads for prompt-lab explicit code inspections instead of clarifying or reading low-signal artifacts", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -10127,10 +10666,11 @@ describe("ChatAgentOrchestrator", () => {
       historyMessages: [{ role: "user", content: wrappedPrompt }],
     });
 
-    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
-      toolName: "code.search_files",
-      args: expect.objectContaining({ query: "durable.ts" }),
-    });
+    expect(
+      invokeTool.mock.calls.some(
+        ([request]) => request.toolName === "code.search_files" && request.args.query === "durable.ts",
+      ),
+    ).toBe(true);
     expect(result.assistantContent).toContain("packages/contracts/src/durable.ts");
     expect(result.assistantContent).toContain("DurableRunService.wakeDurableRun");
     expect(result.assistantContent).toContain("ApprovalEffectsService.handleWakeEffect");
@@ -10470,8 +11010,10 @@ describe("ChatAgentOrchestrator", () => {
           content: "export class ApprovalWaitRunRepository {}",
         },
       });
+    const storage = createMockStorage() as any;
+    const turnId = randomUUID();
     const orchestrator = new ChatAgentOrchestrator({
-      storage: createMockStorage() as never,
+      storage: storage as never,
       listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
       createChatCompletion,
       invokeTool,
@@ -10479,7 +11021,7 @@ describe("ChatAgentOrchestrator", () => {
 
     const result = await orchestrator.run({
       sessionId: "sess-d139-repair-1",
-      turnId: randomUUID(),
+      turnId,
       userMessageId: "msg-d139-repair-1",
       content: wrappedPrompt,
       mode: "code",
@@ -10502,6 +11044,102 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("Assert:");
     expect(result.assistantContent).toContain("Failure signature:");
     expect(result.assistantContent).not.toContain("need to keep investigating");
+    expect(storage._getTrace(turnId)?.failure).toBeUndefined();
+  });
+
+  it("repairs cowork extra-heading minimal test prompts toward the orchestrator normalization path", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and propose the exact minimal automated test that catches small models adding fake cowork headings or inline contract echoes.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "Target `packages/threaded-surface-core/src/pure-helpers.test.ts`; prove requested behavior holds.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d128-search-1",
+        result: {
+          matches: [
+            {
+              path: "apps/gateway/src/services/chat-agent-orchestrator.test.ts",
+              name: "chat-agent-orchestrator.test.ts",
+              type: "file",
+            },
+            {
+              path: "apps/gateway/src/services/chat-agent-orchestrator.ts",
+              name: "chat-agent-orchestrator.ts",
+              type: "file",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d128-read-test",
+        result: {
+          path: "apps/gateway/src/services/chat-agent-orchestrator.test.ts",
+          content:
+            "it('does not misread inline Prompt Lab cowork section contracts as extra qwen role headings', async () => {});",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-d128-read-source",
+        result: {
+          path: "apps/gateway/src/services/chat-agent-orchestrator.ts",
+          content:
+            "function normalizeCoworkRoleContractOutput() {}\nfunction looksLikePromptLabInstructionEchoContent() {}\nfunction repairRequestedRoleOrderOnlyCoworkOutput() {}",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-d128-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-d128-repair-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("apps/gateway/src/services/chat-agent-orchestrator.test.ts");
+    expect(result.assistantContent).toContain("normalizeCoworkRoleContractOutput");
+    expect(result.assistantContent).toContain("Prompt Lab Run Contract");
+    expect(result.assistantContent).toContain("Researcher");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).toContain("Failure signature:");
+    expect(result.assistantContent).not.toContain("packages/threaded-surface-core");
   });
 
   it("repairs cowork workspace-route regression prompts into grounded route and repo checks", async () => {
@@ -10637,6 +11275,222 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("archive-view filtering");
     expect(result.assistantContent).toContain("guidance doc-type divergence");
     expect(result.assistantContent).not.toContain('Say "keep going"');
+  });
+
+  it("repairs cowork guidance precedence prompts into Architect Coder QA regression slices", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect guidance precedence, repo-binding, and operator-visible override clarity. Produce the smallest fresh regression slice in role-labeled sections for Architect, Coder, and QA.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [{ index: 0, message: { role: "assistant", content: "Guidance probably loads correctly." } }],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-w105-search-1",
+        result: {
+          matches: [
+            { path: "apps/gateway/src/services/guidance-document-helpers.ts", name: "guidance-document-helpers.ts" },
+            { path: "apps/gateway/src/services/gateway-service.ts", name: "gateway-service.ts" },
+            { path: "apps/gateway/src/services/tool-path-resolution.ts", name: "tool-path-resolution.ts" },
+            { path: "packages/storage/src/chat-session-binding-repo.ts", name: "chat-session-binding-repo.ts" },
+          ],
+        },
+      })
+      .mockResolvedValue({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-w105-read",
+        result: {
+          path: "apps/gateway/src/services/gateway-service.ts",
+          content: "resolveRuntimeGuidance(); listWorkspaceGuidance();",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-w105-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-w105-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Architect");
+    expect(result.assistantContent).toContain("Coder");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).toContain("workspaceFilesUsed");
+    expect(result.assistantContent).toContain("explicit ambiguity line");
+    expect(result.assistantContent).not.toContain("Guidance probably loads correctly");
+  });
+
+  it("reruns cowork contract repair after Prompt Lab evidence normalization", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "- Required role order: Architect, Coder, QA",
+      "",
+      "## User Task",
+      "Inspect the repo if needed and produce role-labeled sections describing the smallest fresh regression slice for guidance precedence, repo binding, and operator-visible override clarity.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "## Observed Loading Chain\n- Guidance loads through helper and service files.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-w105-post-harness-search",
+          result: {
+            matches: [
+              { path: "apps/gateway/src/services/guidance-document-helpers.ts", name: "guidance-document-helpers.ts" },
+              { path: "apps/gateway/src/services/gateway-service.ts", name: "gateway-service.ts" },
+              { path: "apps/gateway/src/services/tool-path-resolution.ts", name: "tool-path-resolution.ts" },
+            ],
+          },
+        };
+      }
+      return {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-w105-post-harness-read",
+        result: {
+          path: String(request.args.path),
+          content: "resolveGuidancePath(); readGuidanceDocument(); resolveRuntimeGuidance(); listWorkspaceGuidance();",
+        },
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-w105-post-harness-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-w105-post-harness-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Architect");
+    expect(result.assistantContent).toContain("Coder");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).toContain("workspaceFilesUsed");
+    expect(result.assistantContent).not.toContain("## Observed Loading Chain");
+  });
+
+  it("repairs Rank 1 cowork hardening prompts across contract wake lifecycle and worker seams", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect approval wake, durable runs, lifecycle reads, and cross-system Rank 1 hardening. Produce role-labeled Architect and QA sections with the Rank 1 suite across all named seams.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [{ index: 0, message: { role: "assistant", content: "QA\n- Add a wake ordering test." } }],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>(async (request) => {
+      if (request.toolName === "code.search_files") {
+        return {
+          outcome: "executed",
+          policyReason: "allowed",
+          auditEventId: "audit-w137-search",
+          result: {
+            matches: [
+              { path: "packages/contracts/src/durable.ts", name: "durable.ts" },
+              { path: "apps/gateway/src/services/durable-run-service.ts", name: "durable-run-service.ts" },
+              {
+                path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+                name: "approval-resolution-effects-service.ts",
+              },
+              {
+                path: "apps/gateway/src/services/runtime-lifecycle-read-service.ts",
+                name: "runtime-lifecycle-read-service.ts",
+              },
+            ],
+          },
+        };
+      }
+      return {
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-w137-read",
+        result: { path: String(request.args.path), content: "wakeDurableRun(); DurableWakeResult; lifecycle;" },
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-w137-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-w137-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Architect");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).toContain("typed `DurableWakeResult`");
+    expect(result.assistantContent).toContain("two-worker lease recovery");
+    expect(result.assistantContent).toContain("lifecycle canonical-vs-inferred");
   });
 
   it("does not let repo-grounded repair overwrite strict cowork memory role sections", async () => {
@@ -10865,6 +11719,180 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("cron-automation-service.ts");
     expect(result.assistantContent).toContain("update-review.ts");
     expect(result.assistantContent).toContain("prompt-packs.ts");
+    expect(result.assistantContent).not.toContain("## Evidence Used");
+  });
+
+  it("repairs strict paused-versus-waiting evidence answers to exactly the requested bullets", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "",
+      "## User Task",
+      "Use file or code tools to inspect durable-run wake logic, approval wake helpers, and any operator resume path.",
+      "",
+      "Answer contract:",
+      "- Cite at least three exact files.",
+      "- Use exactly four bullets labeled `Files inspected`, `Observed disjointness`, `Counterexample not found`, and `Implicit invariant`.",
+      "- `Observed disjointness` must name the check or branch that keeps `paused` distinct from `waiting`, if it exists.",
+      "- `Counterexample not found` must state the negative search result plainly.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [{ index: 0, message: { role: "assistant", content: "Need answer. - Files inspected: weak." } }],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-paused-search",
+        result: {
+          matches: [
+            { path: "apps/gateway/src/services/durable-run-service.ts", name: "durable-run-service.ts" },
+            {
+              path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+              name: "approval-resolution-effects-service.ts",
+            },
+            { path: "apps/gateway/src/routes/durable.ts", name: "durable.ts" },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-paused-read-1",
+        result: {
+          path: "apps/gateway/src/services/durable-run-service.ts",
+          content:
+            "export async function wakeDurableRun() { if (status === 'paused') return { outcome: 'skipped_paused' }; if (status === 'waiting_for_approval') return { outcome: 'waiting' }; }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-paused-read-2",
+        result: {
+          path: "apps/gateway/src/services/approval-resolution-effects-service.ts",
+          content:
+            "async function handleWakeEffect() { const result = await wakeDurableRun(); if (result.outcome === 'woke') markResolved(); else skipEffect(); }",
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-paused-read-3",
+        result: {
+          path: "apps/gateway/src/routes/durable.ts",
+          content: 'fastify.post("/api/v1/durable/runs/:runId/events/wake", async () => wakeDurableRun());',
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-c145-repair",
+      turnId: randomUUID(),
+      userMessageId: "msg-c145-repair",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toMatch(/^- Files inspected:/);
+    expect(result.assistantContent).toContain("- Observed disjointness:");
+    expect(result.assistantContent).toContain("- Counterexample not found:");
+    expect(result.assistantContent).toContain("- Implicit invariant:");
+    expect(result.assistantContent).not.toContain("Need answer");
+    expect(result.assistantContent.match(/^- /gm) ?? []).toHaveLength(4);
+  });
+
+  it("keeps event-link cowork repairs on producer-storage-api propagation", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "",
+      "## User Task",
+      "Create role-labeled sections for the next regression checks proving explicit event links and classification survive from producer to operator-visible API/UI surfaces.",
+      "",
+      "Answer contract:",
+      "- Keep exactly these sections in order: `Architect`, `QA`.",
+      "- Do not add any extra headings.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "Architect\n- Read storage directly.\n\nQA\n- Check a panel." },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-w140-search",
+        result: {
+          matches: [
+            { path: "apps/gateway/src/services/gateway-service.ts", name: "gateway-service.ts" },
+            { path: "packages/storage/src/realtime-event-repo.ts", name: "realtime-event-repo.ts" },
+            { path: "apps/gateway/src/routes/events.ts", name: "events.ts" },
+            { path: "packages/mission-control-shared/src/api/types.ts", name: "types.ts" },
+          ],
+        },
+      })
+      .mockResolvedValue({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-w140-read",
+        result: {
+          path: "apps/gateway/src/services/gateway-service.ts",
+          content: "publishRealtime({ eventClass, eventAuthority, links }); realtimeEvents.append();",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-w140-repair",
+      turnId: randomUUID(),
+      userMessageId: "msg-w140-repair",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Architect");
+    expect(result.assistantContent).toContain("QA");
+    expect(result.assistantContent).toContain("producer");
+    expect(result.assistantContent).toContain("storage");
+    expect(result.assistantContent).toMatch(/API|UI/);
+    expect(result.assistantContent).toContain("Missing-field honesty");
     expect(result.assistantContent).not.toContain("## Evidence Used");
   });
 

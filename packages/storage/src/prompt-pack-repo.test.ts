@@ -52,6 +52,11 @@ describe("PromptPackRepository", () => {
           orderIndex: 0,
           mode: "chat",
           toolTier: "implicit-tools",
+          diagnosticMetadata: {
+            capabilityTargets: ["routing", "truthfulness"],
+            expectedRuntimeSignals: ["single assistant reply"],
+            likelyFailureClasses: ["parser"],
+          },
         },
       ],
       policyV2: legacyInheritedPolicy,
@@ -75,9 +80,11 @@ describe("PromptPackRepository", () => {
     });
 
     const pack = repo.getPack("pack-1");
+    const tests = repo.listTests("pack-1");
     assert.equal(pack.policySource, "inherited_default");
     assert.deepEqual(pack.policyV2, DEFAULT_PROMPT_PACK_POLICY_V2);
     assert.equal(pack.policyV2?.minScores.honesty, 2);
+    assert.deepEqual(tests[0]?.diagnosticMetadata, undefined);
   });
 
   it("rolls back pack test replacement if an insert fails mid-stream", () => {
@@ -97,7 +104,8 @@ describe("PromptPackRepository", () => {
       ],
     });
 
-    const originalInsert = (repo as unknown as { insertTestStmt: { run: (input: Record<string, unknown>) => unknown } }).insertTestStmt;
+    const originalInsert = (repo as unknown as { insertTestStmt: { run: (input: Record<string, unknown>) => unknown } })
+      .insertTestStmt;
     let insertCount = 0;
     const originalRun = originalInsert.run.bind(originalInsert);
     originalInsert.run = (input: Record<string, unknown>) => {
@@ -108,34 +116,41 @@ describe("PromptPackRepository", () => {
       return originalRun(input);
     };
 
-    assert.throws(() => repo.replacePackTests({
-      packId: "pack-1",
-      name: "Updated Pack",
-      tests: [
-        {
-          code: "TEST-02",
-          title: "Replacement one",
-          prompt: "Replacement prompt one",
-          orderIndex: 0,
-          mode: "chat",
-          toolTier: "implicit-tools",
-        },
-        {
-          code: "TEST-03",
-          title: "Replacement two",
-          prompt: "Replacement prompt two",
-          orderIndex: 1,
-          mode: "code",
-          toolTier: "explicit-tools",
-        },
-      ],
-    }), /simulated insert failure/);
+    assert.throws(
+      () =>
+        repo.replacePackTests({
+          packId: "pack-1",
+          name: "Updated Pack",
+          tests: [
+            {
+              code: "TEST-02",
+              title: "Replacement one",
+              prompt: "Replacement prompt one",
+              orderIndex: 0,
+              mode: "chat",
+              toolTier: "implicit-tools",
+            },
+            {
+              code: "TEST-03",
+              title: "Replacement two",
+              prompt: "Replacement prompt two",
+              orderIndex: 1,
+              mode: "code",
+              toolTier: "explicit-tools",
+            },
+          ],
+        }),
+      /simulated insert failure/,
+    );
 
     const pack = repo.getPack("pack-1");
     const tests = repo.listTests("pack-1");
     assert.equal(pack.name, original.pack.name);
     assert.equal(pack.testCount, 1);
-    assert.deepEqual(tests.map((test) => test.code), ["TEST-01"]);
+    assert.deepEqual(
+      tests.map((test) => test.code),
+      ["TEST-01"],
+    );
   });
 
   it("returns the current default hash for inherited-default legacy rows with stale snapshots", () => {
@@ -179,6 +194,7 @@ describe("PromptPackRepository", () => {
       orderIndex: 0,
       mode: "chat",
       toolTier: "implicit-tools",
+      diagnosticMetadataJson: null,
       createdAt: now,
     });
 
@@ -231,6 +247,7 @@ describe("PromptPackRepository", () => {
       orderIndex: 0,
       mode: "chat",
       toolTier: "implicit-tools",
+      diagnosticMetadataJson: null,
       createdAt: now,
     });
 
@@ -281,5 +298,36 @@ describe("PromptPackRepository", () => {
     };
 
     assert.equal(hashPromptPackPolicyV2(left), hashPromptPackPolicyV2(right));
+  });
+
+  it("round-trips prompt-pack diagnostic metadata on tests", () => {
+    const repo = createRepo();
+
+    repo.replacePackTests({
+      packId: "pack-diagnostics",
+      name: "Diagnostics Pack",
+      tests: [
+        {
+          code: "TEST-01",
+          title: "Diagnostic test",
+          prompt: "Prompt body",
+          orderIndex: 0,
+          mode: "cowork",
+          toolTier: "explicit-tools",
+          diagnosticMetadata: {
+            capabilityTargets: ["routing", "approval"],
+            expectedRuntimeSignals: ["role ordered handoff", "approval checkpoint"],
+            likelyFailureClasses: ["routing", "tool-policy"],
+          },
+        },
+      ],
+    });
+
+    const [test] = repo.listTests("pack-diagnostics");
+    assert.deepEqual(test?.diagnosticMetadata, {
+      capabilityTargets: ["routing", "approval"],
+      expectedRuntimeSignals: ["role ordered handoff", "approval checkpoint"],
+      likelyFailureClasses: ["routing", "tool-policy"],
+    });
   });
 });

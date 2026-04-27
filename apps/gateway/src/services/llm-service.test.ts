@@ -2422,25 +2422,17 @@ describe("LlmService", () => {
       authorizationHeader = headers.get("authorization") ?? "";
       payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
       return new Response(
-        JSON.stringify({
-          id: "resp_codex_chat",
-          model: "gpt-5.5",
-          output: [
-            {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "ok" }],
-            },
-          ],
-          usage: {
-            input_tokens: 11,
-            output_tokens: 2,
-            total_tokens: 13,
-          },
-        }),
+        [
+          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_chat"}',
+          "",
+          'data: {"type":"response.completed","response":{"id":"resp_codex_chat","model":"gpt-5.5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":11,"output_tokens":2,"total_tokens":13}}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
         {
           status: 200,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "text/plain; charset=utf-8" },
         },
       );
     }) as unknown as typeof fetch;
@@ -2449,6 +2441,7 @@ describe("LlmService", () => {
       const completion = await service.chatCompletions({
         providerId: "openai-codex",
         model: "openai-codex/gpt-5.5",
+        max_tokens: 256,
         messages: [
           { role: "developer", content: "Be concise." },
           { role: "user", content: "hello" },
@@ -2480,6 +2473,7 @@ describe("LlmService", () => {
     expect(payloadBody).toMatchObject({
       model: "gpt-5.5",
       instructions: "Be concise.",
+      stream: true,
       store: false,
       parallel_tool_calls: true,
       text: { verbosity: "low" },
@@ -2495,6 +2489,112 @@ describe("LlmService", () => {
       name: "lookup_status",
       description: "Look up runtime status.",
     });
+    expect(payloadBody?.max_output_tokens).toBeUndefined();
+  });
+
+  it("adapts non-stream OpenAI Codex chat calls from the stream-only Responses bridge", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+    let payloadBody: Record<string, unknown> | undefined;
+
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      return new Response(
+        [
+          'data: {"type":"response.output_text.delta","delta":"hel","response_id":"resp_codex_chat"}',
+          "",
+          'data: {"type":"response.output_text.delta","delta":"lo","response_id":"resp_codex_chat"}',
+          "",
+          'data: {"type":"response.completed","response":{"id":"resp_codex_chat","model":"gpt-5.5","output":[],"usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6}}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const completion = await service.chatCompletions({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+        messages: [{ role: "user", content: "hello" }],
+      });
+
+      expect((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.content).toBe("hello");
+      expect(completion.usage?.total_tokens).toBe(6);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(payloadBody).toMatchObject({
+      model: "gpt-5.5",
+      stream: true,
+      store: false,
+    });
+  });
+
+  it("parses named OpenAI Codex SSE events even when the bridge omits an event-stream content type", async () => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 10 * 60_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        [
+          "event: response.output_text.delta",
+          'data: {"type":"response.output_text.delta","delta":"ok","response_id":"resp_codex_chat"}',
+          "",
+          "event: response.completed",
+          'data: {"type":"response.completed","response":{"id":"resp_codex_chat","model":"gpt-5.5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const chunks: Array<Record<string, unknown>> = [];
+      for await (const chunk of service.chatCompletionsStream({
+        providerId: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+        messages: [{ role: "user", content: "hello" }],
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks[0]).toMatchObject({
+        choices: [{ delta: { content: "ok" } }],
+      });
+      expect(chunks.at(-1)).toMatchObject({
+        choices: [{ finish_reason: "stop" }],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("preserves explicit OpenAI Codex Responses verbosity and parallel tool call settings", async () => {

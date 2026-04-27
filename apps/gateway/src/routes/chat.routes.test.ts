@@ -568,6 +568,59 @@ describe("chat routes additional coverage", () => {
     );
   });
 
+  it("preserves session-selected route decisions when validating send freshness", async () => {
+    const agentSendChatMessage = vi.fn(async () => ({ turnId: "turn-1" }));
+    const decision = testRouteDecision({
+      requestedProviderId: "openai-codex",
+      requestedModel: "gpt-5.5",
+      effectiveProviderId: "openai-codex",
+      effectiveModel: "gpt-5.5",
+      selectionSource: "session",
+      fingerprint: "session-route-fingerprint",
+    });
+    const routePreflight = vi.fn(async () => matchingRoutePreflight(decision));
+    app = Fastify();
+    app.decorate("services", { chatMessages: { agentSendChatMessage, routePreflight } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "Hello",
+        providerId: "openai-codex",
+        model: "gpt-5.5",
+        routeDecision: decision,
+        mode: "chat",
+        webMode: "auto",
+        thinkingLevel: "standard",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledTimes(1);
+    const [, preflightInput] = routePreflight.mock.calls[0] as [string, Record<string, unknown>];
+    expect(preflightInput).toMatchObject({
+      action: "send",
+      mode: "chat",
+      webMode: "auto",
+      thinkingLevel: "standard",
+      prefsOverride: {
+        providerId: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+    expect(preflightInput.providerId).toBeUndefined();
+    expect(preflightInput.model).toBeUndefined();
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        providerId: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    );
+  });
+
   it("rejects agent send when the execution payload disagrees with the effective route decision", async () => {
     const agentSendChatMessage = vi.fn();
     const routePreflight = vi.fn(async () => matchingRoutePreflight());

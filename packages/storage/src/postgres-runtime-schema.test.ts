@@ -152,4 +152,15 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS image_provider_id TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS image_model TEXT/);
   });
+
+  it("repairs prompt-pack agentic diagnostic columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 21);
+
+    assert.equal(repairMigration?.name, "prompt_pack_agentic_diagnostics_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_tests/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS diagnostic_metadata_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_runs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS execution_style TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_benchmark_runs/);
+  });
 });

@@ -572,14 +572,19 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Provider");
     expect(text).toContain("ChatGPT login");
     expect(text).toContain("OpenAI approval");
+    expect(text).toContain("OAuth missing");
     expect(text).toContain("Done");
     expect(text).toContain("Start ChatGPT login");
     expect(text).toContain("No API key goes here.");
+    expect(text).toContain("ChatGPT login is managed by the setup card above.");
     expect(text).not.toContain("Draft ChatGPT OAuth provider");
     expect(text).not.toContain("Save secret");
     expect(text).not.toContain("Delete secret");
     expect(renderer!.root.findAllByProps({ placeholder: "Paste a new API key to save" })).toHaveLength(0);
     expect(renderer!.root.findAllByProps({ placeholder: "OPENAI_API_KEY" })).toHaveLength(0);
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Start ChatGPT login")),
+    ).toHaveLength(1);
 
     await act(async () => {
       findButton(renderer!.root, "Start ChatGPT login").props.onClick();
@@ -592,6 +597,162 @@ describe("SettingsNativePage providers", () => {
     expect(pairingText).toContain("Use this exact OpenAI code");
     expect(pairingText).toContain("I approved, check now");
     expect(pairingText).toContain("Get a new code");
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Open OpenAI page")),
+    ).toHaveLength(1);
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("I approved, check now")),
+    ).toHaveLength(1);
+    expect(
+      renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("Get a new code")),
+    ).toHaveLength(1);
+  });
+
+  it("renders the browser callback ChatGPT OAuth flow when OpenAI does not return a device code", async () => {
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "browser-flow",
+      status: "pending",
+      retryAfterMs: 5000,
+    } as any);
+    mocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "browser-flow",
+      verificationUrl:
+        "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann",
+      expiresAt: "2099-04-24T12:00:00.000Z",
+      pollAfterMs: 5000,
+    } as any);
+    setCodexProviderCatalogState({ hasApiKey: false });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("OpenAI browser login");
+    expect(text).toContain("Awaiting approval");
+    expect(text).toContain("Complete the OpenAI browser approval");
+    expect(text).toContain("Open OpenAI page");
+    expect(text).toContain("I approved, check now");
+    expect(text).toContain("Restart login");
+    expect(text).not.toContain("Use this exact OpenAI code");
+    expect(text).not.toContain("Current code");
+  });
+
+  it("keeps connected ChatGPT OAuth status from being overwritten by a stale status read", async () => {
+    let resolveInitialStatus: (value: unknown) => void = () => undefined;
+    const initialStatus = new Promise((resolve) => {
+      resolveInitialStatus = resolve;
+    });
+    mocks.fetchOpenAICodexOAuthStatus
+      .mockImplementationOnce(() => initialStatus as any)
+      .mockResolvedValue({
+        providerId: "openai-codex",
+        available: true,
+        connected: true,
+        accountLabel: "user@example.com",
+        requiresReauth: false,
+      } as any);
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "flow-1",
+      status: "connected",
+      accountLabel: "user@example.com",
+    } as any);
+    setCodexProviderCatalogState({ hasApiKey: false });
+    const restoreBrowserStorage = installBrowserStorageMock({
+      session: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "flow-1",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "ABCD-EFGH",
+          expiresAt: "2099-04-24T12:00:00.000Z",
+          pollAfterMs: 5000,
+        }),
+      },
+    });
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        resolveInitialStatus({
+          providerId: "openai-codex",
+          available: true,
+          connected: false,
+          requiresReauth: false,
+        });
+        await initialStatus;
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("OpenAI Codex OAuth connected.");
+      expect(text).toContain("OAuth connected");
+      expect(text).toContain("Done. ChatGPT OAuth is connected as user@example.com");
+      expect(text).not.toContain("OpenAI approved the login, but GoatCitadel could not confirm");
+    } finally {
+      restoreBrowserStorage();
+    }
+  });
+
+  it("does not show a connected success banner when status confirmation stays disconnected", async () => {
+    mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
+      providerId: "openai-codex",
+      available: true,
+      connected: false,
+      requiresReauth: false,
+    } as any);
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValue({
+      providerId: "openai-codex",
+      flowId: "flow-1",
+      status: "connected",
+      accountLabel: "user@example.com",
+    } as any);
+    setCodexProviderCatalogState({ hasApiKey: false });
+    const restoreBrowserStorage = installBrowserStorageMock({
+      session: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "flow-1",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "ABCD-EFGH",
+          expiresAt: "2099-04-24T12:00:00.000Z",
+          pollAfterMs: 5000,
+        }),
+      },
+    });
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("OpenAI approved the login, but GoatCitadel could not confirm");
+      expect(text).toContain("OAuth missing");
+      expect(text).not.toContain("OpenAI Codex OAuth connected.");
+    } finally {
+      restoreBrowserStorage();
+    }
   });
 
   it("restores an in-progress ChatGPT OAuth pairing after a Settings refresh", async () => {

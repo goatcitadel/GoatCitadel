@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { LlmProviderOAuthStatus } from "@goatcitadel/contracts";
 import {
   SecretStoreService,
@@ -8,13 +9,20 @@ import {
 
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
+const OPENAI_CODEX_AUTHORIZE_URL = `${OPENAI_AUTH_BASE_URL}/oauth/authorize`;
+const OPENAI_CODEX_TOKEN_URL = `${OPENAI_AUTH_BASE_URL}/oauth/token`;
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
-const OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5_000;
-const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
-const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
+const OPENAI_CODEX_OAUTH_TIMEOUT_MS = 15 * 60_000;
+const OPENAI_CODEX_OAUTH_DEFAULT_INTERVAL_MS = 5_000;
+const OPENAI_CODEX_OAUTH_MIN_INTERVAL_MS = 1_000;
+const OPENAI_CODEX_CALLBACK_HOST = "127.0.0.1";
+const OPENAI_CODEX_CALLBACK_PORT = 1455;
+const OPENAI_CODEX_CALLBACK_PATH = "/auth/callback";
 const OPENAI_CODEX_OAUTH_ACCOUNT = "provider:openai-codex:oauth";
 const OPENAI_CODEX_REFRESH_SKEW_MS = 60_000;
+const OPENAI_CODEX_SCOPE = "openid profile email offline_access";
+const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
+const OPENAI_CODEX_PROFILE_CLAIM = "https://api.openai.com/profile";
 
 export interface OpenAICodexOAuthStatus extends LlmProviderOAuthStatus {
   providerId: typeof OPENAI_CODEX_PROVIDER_ID;
@@ -25,7 +33,7 @@ export interface OpenAICodexDeviceStartResponse {
   flowId: string;
   providerId: typeof OPENAI_CODEX_PROVIDER_ID;
   verificationUrl: string;
-  userCode: string;
+  userCode?: string;
   expiresAt: string;
   pollAfterMs: number;
 }
@@ -41,9 +49,18 @@ export interface OpenAICodexDevicePollResponse {
   error?: string;
 }
 
+interface OpenAICodexCallbackConfig {
+  host: string;
+  port: number;
+  path: string;
+  redirectUri: string;
+}
+
 interface PendingDeviceFlow {
-  deviceAuthId: string;
-  userCode: string;
+  codeVerifier: string;
+  state: string;
+  authorizationCode?: string;
+  error?: string;
   expiresAt: number;
   intervalMs: number;
 }
@@ -57,18 +74,6 @@ interface OpenAICodexOAuthCredential {
   requiresReauth?: boolean;
 }
 
-interface DeviceCodeUserCodePayload {
-  device_auth_id?: unknown;
-  user_code?: unknown;
-  usercode?: unknown;
-  interval?: unknown;
-}
-
-interface DeviceCodeTokenPayload {
-  authorization_code?: unknown;
-  code_verifier?: unknown;
-}
-
 interface OAuthTokenPayload {
   access_token?: unknown;
   refresh_token?: unknown;
@@ -77,11 +82,24 @@ interface OAuthTokenPayload {
 
 export class OpenAICodexOAuthService {
   private readonly pendingFlows = new Map<string, PendingDeviceFlow>();
+  private readonly callbackConfig: OpenAICodexCallbackConfig;
+  private callbackServer: Server | null = null;
+  private callbackServerStart: Promise<void> | null = null;
 
   public constructor(
     private readonly secretStore: SecretStoreService,
     private readonly fetchFn: typeof fetch = fetch,
-  ) {}
+    callbackOptions: Partial<OpenAICodexCallbackConfig> = {},
+  ) {
+    const port = callbackOptions.port ?? OPENAI_CODEX_CALLBACK_PORT;
+    const path = callbackOptions.path ?? OPENAI_CODEX_CALLBACK_PATH;
+    this.callbackConfig = {
+      host: callbackOptions.host ?? OPENAI_CODEX_CALLBACK_HOST,
+      port,
+      path,
+      redirectUri: callbackOptions.redirectUri ?? `http://localhost:${port}${path}`,
+    };
+  }
 
   public getStatus(): OpenAICodexOAuthStatus {
     const available = this.secretStore.isAvailable();
@@ -98,45 +116,26 @@ export class OpenAICodexOAuthService {
 
   public async startDeviceFlow(): Promise<OpenAICodexDeviceStartResponse> {
     this.assertKeychainAvailable();
-    const response = await this.fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/usercode`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        client_id: OPENAI_CODEX_CLIENT_ID,
-      }),
-      redirect: "manual",
-    });
-    const bodyText = await response.text();
-    if (!response.ok) {
-      throw new Error(formatOpenAIAuthError("OpenAI Codex device-code start failed", response, bodyText));
-    }
-
-    const body = parseJsonObject(bodyText) as DeviceCodeUserCodePayload | null;
-    const deviceAuthId = trimNonEmptyString(body?.device_auth_id);
-    const userCode = trimNonEmptyString(body?.user_code) ?? trimNonEmptyString(body?.usercode);
-    if (!deviceAuthId || !userCode) {
-      throw new Error("OpenAI Codex device-code response was missing the device id or user code.");
-    }
+    await this.ensureCallbackServer();
 
     const flowId = randomUUID();
-    const intervalMs = normalizePositiveMilliseconds(body?.interval) ?? OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS;
-    const expiresAt = Date.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
+    const state = randomBytes(16).toString("hex");
+    const pkce = createPkcePair();
+    const expiresAt = Date.now() + OPENAI_CODEX_OAUTH_TIMEOUT_MS;
+
     this.pendingFlows.set(flowId, {
-      deviceAuthId,
-      userCode,
+      codeVerifier: pkce.verifier,
+      state,
       expiresAt,
-      intervalMs,
+      intervalMs: OPENAI_CODEX_OAUTH_DEFAULT_INTERVAL_MS,
     });
 
     return {
       flowId,
       providerId: OPENAI_CODEX_PROVIDER_ID,
-      verificationUrl: `${OPENAI_AUTH_BASE_URL}/codex/device`,
-      userCode,
+      verificationUrl: this.buildAuthorizationUrl({ state, codeChallenge: pkce.challenge }),
       expiresAt: new Date(expiresAt).toISOString(),
-      pollAfterMs: intervalMs,
+      pollAfterMs: OPENAI_CODEX_OAUTH_DEFAULT_INTERVAL_MS,
     };
   }
 
@@ -160,20 +159,17 @@ export class OpenAICodexOAuthService {
         requiresReauth: true,
       };
     }
-
-    const response = await this.fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        device_auth_id: flow.deviceAuthId,
-        user_code: flow.userCode,
-      }),
-      redirect: "manual",
-    });
-    const bodyText = await response.text();
-    if (response.status === 403 || response.status === 404) {
+    if (flow.error) {
+      this.pendingFlows.delete(flowId);
+      return {
+        flowId,
+        providerId: OPENAI_CODEX_PROVIDER_ID,
+        status: "failed",
+        requiresReauth: true,
+        error: flow.error,
+      };
+    }
+    if (!flow.authorizationCode) {
       return {
         flowId,
         providerId: OPENAI_CODEX_PROVIDER_ID,
@@ -181,31 +177,9 @@ export class OpenAICodexOAuthService {
         retryAfterMs: resolveNextPollDelayMs(flow.intervalMs, flow.expiresAt),
       };
     }
-    if (!response.ok) {
-      return {
-        flowId,
-        providerId: OPENAI_CODEX_PROVIDER_ID,
-        status: "failed",
-        requiresReauth: true,
-        error: formatOpenAIAuthError("OpenAI Codex device authorization failed", response, bodyText),
-      };
-    }
-
-    const body = parseJsonObject(bodyText) as DeviceCodeTokenPayload | null;
-    const authorizationCode = trimNonEmptyString(body?.authorization_code);
-    const codeVerifier = trimNonEmptyString(body?.code_verifier);
-    if (!authorizationCode || !codeVerifier) {
-      return {
-        flowId,
-        providerId: OPENAI_CODEX_PROVIDER_ID,
-        status: "failed",
-        requiresReauth: true,
-        error: "OpenAI Codex device authorization response was missing the exchange code.",
-      };
-    }
 
     try {
-      const credential = await this.exchangeAuthorizationCode(authorizationCode, codeVerifier);
+      const credential = await this.exchangeAuthorizationCode(flow.authorizationCode, flow.codeVerifier);
       this.saveCredential(credential);
       this.pendingFlows.delete(flowId);
       return {
@@ -216,6 +190,7 @@ export class OpenAICodexOAuthService {
         expiresAt: credential.expiresAt ? new Date(credential.expiresAt).toISOString() : undefined,
       };
     } catch (error) {
+      this.pendingFlows.delete(flowId);
       return {
         flowId,
         providerId: OPENAI_CODEX_PROVIDER_ID,
@@ -230,6 +205,12 @@ export class OpenAICodexOAuthService {
     this.assertKeychainAvailable();
     this.secretStore.deleteSecret(OPENAI_CODEX_OAUTH_ACCOUNT);
     return this.getStatus();
+  }
+
+  public close(): void {
+    this.callbackServer?.close();
+    this.callbackServer = null;
+    this.callbackServerStart = null;
   }
 
   public async resolveAccessToken(): Promise<string> {
@@ -282,6 +263,113 @@ export class OpenAICodexOAuthService {
     this.secretStore.setSecret(OPENAI_CODEX_OAUTH_ACCOUNT, JSON.stringify(credential));
   }
 
+  private async ensureCallbackServer(): Promise<void> {
+    if (this.callbackServer?.listening) {
+      return;
+    }
+    if (this.callbackServerStart) {
+      return this.callbackServerStart;
+    }
+
+    const server = createServer((request, response) => this.handleOAuthCallback(request, response));
+    this.callbackServer = server;
+    this.callbackServerStart = new Promise((resolve, reject) => {
+      const handleError = (error: Error & { code?: unknown }) => {
+        server.off("listening", handleListening);
+        this.callbackServer = null;
+        this.callbackServerStart = null;
+        const code = typeof error.code === "string" ? ` (${error.code})` : "";
+        reject(
+          new Error(
+            `OpenAI Codex OAuth could not start the local callback server at http://${this.callbackConfig.host}:${this.callbackConfig.port}${this.callbackConfig.path}${code}. Close anything using that port and start ChatGPT login again.`,
+          ),
+        );
+      };
+      const handleListening = () => {
+        server.off("error", handleError);
+        resolve();
+      };
+      server.once("error", handleError);
+      server.once("listening", handleListening);
+      server.listen(this.callbackConfig.port, this.callbackConfig.host);
+    });
+
+    return this.callbackServerStart;
+  }
+
+  private handleOAuthCallback(request: IncomingMessage, response: ServerResponse): void {
+    try {
+      const url = new URL(request.url ?? "", "http://localhost");
+      if (url.pathname !== this.callbackConfig.path) {
+        writeOAuthHtml(response, 404, "OpenAI Codex login", "Callback route not found.");
+        return;
+      }
+
+      const state = trimNonEmptyString(url.searchParams.get("state"));
+      const flowEntry = state ? this.findPendingFlowByState(state) : undefined;
+      if (!flowEntry) {
+        writeOAuthHtml(response, 400, "OpenAI Codex login", "This login request is no longer active.");
+        return;
+      }
+
+      const { flowId, flow } = flowEntry;
+      if (Date.now() >= flow.expiresAt) {
+        this.pendingFlows.delete(flowId);
+        writeOAuthHtml(response, 400, "OpenAI Codex login", "This login request expired. Start ChatGPT login again.");
+        return;
+      }
+
+      const authorizationError = trimNonEmptyString(url.searchParams.get("error"));
+      if (authorizationError) {
+        const description = trimNonEmptyString(url.searchParams.get("error_description"));
+        flow.error = description ? `${authorizationError}: ${description}` : authorizationError;
+        writeOAuthHtml(response, 400, "OpenAI Codex login", "OpenAI rejected the login request.");
+        return;
+      }
+
+      const authorizationCode = trimNonEmptyString(url.searchParams.get("code"));
+      if (!authorizationCode) {
+        flow.error = "OpenAI callback did not include an authorization code.";
+        writeOAuthHtml(response, 400, "OpenAI Codex login", "OpenAI did not return an authorization code.");
+        return;
+      }
+
+      flow.authorizationCode = authorizationCode;
+      writeOAuthHtml(
+        response,
+        200,
+        "OpenAI Codex login complete",
+        "OpenAI authentication completed. You can close this window and return to GoatCitadel.",
+      );
+    } catch {
+      writeOAuthHtml(response, 500, "OpenAI Codex login", "Internal error while processing OAuth callback.");
+    }
+  }
+
+  private findPendingFlowByState(state: string): { flowId: string; flow: PendingDeviceFlow } | undefined {
+    for (const [flowId, flow] of this.pendingFlows) {
+      if (flow.state === state) {
+        return { flowId, flow };
+      }
+    }
+    return undefined;
+  }
+
+  private buildAuthorizationUrl(params: { state: string; codeChallenge: string }): string {
+    const url = new URL(OPENAI_CODEX_AUTHORIZE_URL);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("client_id", OPENAI_CODEX_CLIENT_ID);
+    url.searchParams.set("redirect_uri", this.callbackConfig.redirectUri);
+    url.searchParams.set("scope", OPENAI_CODEX_SCOPE);
+    url.searchParams.set("code_challenge", params.codeChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("state", params.state);
+    url.searchParams.set("id_token_add_organizations", "true");
+    url.searchParams.set("codex_cli_simplified_flow", "true");
+    url.searchParams.set("originator", "pi");
+    return url.toString();
+  }
+
   private async exchangeAuthorizationCode(
     authorizationCode: string,
     codeVerifier: string,
@@ -290,11 +378,11 @@ export class OpenAICodexOAuthService {
       new URLSearchParams({
         grant_type: "authorization_code",
         code: authorizationCode,
-        redirect_uri: OPENAI_CODEX_DEVICE_CALLBACK_URL,
+        redirect_uri: this.callbackConfig.redirectUri,
         client_id: OPENAI_CODEX_CLIENT_ID,
         code_verifier: codeVerifier,
       }),
-      "OpenAI Codex device token exchange failed",
+      "OpenAI Codex OAuth token exchange failed",
     );
     const accessToken = trimNonEmptyString(body.access_token);
     const refreshToken = trimNonEmptyString(body.refresh_token);
@@ -325,7 +413,7 @@ export class OpenAICodexOAuthService {
   }
 
   private async postOAuthToken(params: URLSearchParams, prefix: string): Promise<OAuthTokenPayload> {
-    const response = await this.fetchFn(`${OPENAI_AUTH_BASE_URL}/oauth/token`, {
+    const response = await this.fetchFn(OPENAI_CODEX_TOKEN_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -340,6 +428,16 @@ export class OpenAICodexOAuthService {
     const body = parseJsonObject(bodyText);
     return (body ?? {}) as OAuthTokenPayload;
   }
+}
+
+function createPkcePair(): { verifier: string; challenge: string } {
+  const verifier = base64Url(randomBytes(32));
+  const challenge = base64Url(createHash("sha256").update(verifier).digest());
+  return { verifier, challenge };
+}
+
+function base64Url(value: Buffer): string {
+  return value.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function buildCredentialFromTokens(params: {
@@ -360,17 +458,6 @@ function buildCredentialFromTokens(params: {
   };
 }
 
-function normalizePositiveMilliseconds(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.trunc(value * 1000);
-  }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const seconds = Number.parseInt(value.trim(), 10);
-    return seconds > 0 ? seconds * 1000 : undefined;
-  }
-  return undefined;
-}
-
 function normalizeTokenLifetimeMs(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.trunc(value * 1000);
@@ -383,7 +470,7 @@ function normalizeTokenLifetimeMs(value: unknown): number | undefined {
 
 function resolveNextPollDelayMs(intervalMs: number, deadlineMs: number): number {
   const remainingMs = Math.max(0, deadlineMs - Date.now());
-  return Math.min(Math.max(intervalMs, OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
+  return Math.min(Math.max(intervalMs, OPENAI_CODEX_OAUTH_MIN_INTERVAL_MS), remainingMs);
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -433,14 +520,24 @@ function resolveCodexAccessTokenExpiry(accessToken: string): number | undefined 
 
 function resolveCodexAuthIdentity(accessToken: string): { accountLabel?: string } {
   const payload = decodeCodexJwtPayload(accessToken);
-  const profile = payload?.["https://api.openai.com/profile"];
+  const profile = payload?.[OPENAI_CODEX_PROFILE_CLAIM];
   const email =
     profile && typeof profile === "object" ? trimNonEmptyString((profile as { email?: unknown }).email) : undefined;
   if (email) {
     return { accountLabel: email };
   }
+
+  const auth = payload?.[OPENAI_CODEX_AUTH_CLAIM];
+  const chatGptAccountId =
+    auth && typeof auth === "object"
+      ? trimNonEmptyString((auth as { chatgpt_account_id?: unknown }).chatgpt_account_id)
+      : undefined;
+  if (chatGptAccountId) {
+    return { accountLabel: `chatgpt-${shortHash(chatGptAccountId)}` };
+  }
+
   const sub = trimNonEmptyString(payload?.sub);
-  return sub ? { accountLabel: `id-${Buffer.from(sub).toString("base64url").slice(0, 12)}` } : {};
+  return sub ? { accountLabel: `id-${shortHash(sub)}` } : {};
 }
 
 function decodeCodexJwtPayload(accessToken: string): Record<string, unknown> | null {
@@ -464,4 +561,41 @@ function normalizeFutureEpochSeconds(value: unknown): number | undefined {
     return Number.parseInt(value.trim(), 10);
   }
   return undefined;
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("base64url").slice(0, 12);
+}
+
+function writeOAuthHtml(response: ServerResponse, statusCode: number, title: string, body: string): void {
+  response.statusCode = statusCode;
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.end(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>${escapeHtml(title)}</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #071016; color: #e7f6f2; }
+      main { max-width: 520px; padding: 32px; border: 1px solid #1f3d45; background: #0b1720; border-radius: 12px; }
+      h1 { margin: 0 0 12px; font-size: 22px; }
+      p { margin: 0; color: #b7cbc8; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(body)}</p>
+    </main>
+  </body>
+</html>`);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

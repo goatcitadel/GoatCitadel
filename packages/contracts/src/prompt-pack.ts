@@ -3,6 +3,14 @@ import type { ChatMemoryMode, ChatThinkingLevel, ChatWebMode } from "./chat.js";
 
 export type PromptPackToolTier = "no-tools" | "implicit-tools" | "explicit-tools";
 
+export type PromptPackExecutionStyle = "single_turn_harness" | "agentic_surface";
+
+export interface PromptPackDiagnosticMetadata {
+  capabilityTargets: string[];
+  expectedRuntimeSignals: string[];
+  likelyFailureClasses: string[];
+}
+
 export type PromptPackScoreDimensionV2 = "taskSuccess" | "honesty" | "executionQuality" | "robustness" | "usability";
 
 export type PromptPackDimensionScoreV2 = 0 | 1 | 2 | 3 | 4;
@@ -79,6 +87,7 @@ export interface PromptPackTestRecord {
   orderIndex: number;
   mode?: ChatMode;
   toolTier?: PromptPackToolTier;
+  diagnosticMetadata?: PromptPackDiagnosticMetadata;
   createdAt: string;
 }
 
@@ -96,6 +105,8 @@ export interface PromptPackRunRecord {
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
+  executionStyle?: PromptPackExecutionStyle;
+  diagnosticMetadata?: PromptPackDiagnosticMetadata;
   /** Raw canonical assistant output captured from the turn transcript. */
   responseText?: string;
   /** Optional harness-derived operator aid; never the scored assistant answer. */
@@ -266,6 +277,7 @@ export interface PromptPackBenchmarkProviderInput {
 export interface PromptPackBenchmarkRunRequest {
   testCodes: string[];
   providers: PromptPackBenchmarkProviderInput[];
+  executionStyle?: PromptPackExecutionStyle;
 }
 
 export interface PromptPackBenchmarkRunRecord {
@@ -274,6 +286,7 @@ export interface PromptPackBenchmarkRunRecord {
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   testCodes: string[];
   providers: PromptPackBenchmarkProviderInput[];
+  executionStyle?: PromptPackExecutionStyle;
   startedAt: string;
   finishedAt?: string;
   error?: string;

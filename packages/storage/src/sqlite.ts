@@ -709,6 +709,16 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "chat_image_route_preferences",
     up: createChatImageRoutePreferenceSchema,
   },
+  {
+    version: 72,
+    name: "prompt_pack_agentic_diagnostics",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "prompt_pack_tests", "diagnostic_metadata_json", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "execution_style", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_runs", "diagnostic_metadata_json", "TEXT");
+      addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_runs", "execution_style", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

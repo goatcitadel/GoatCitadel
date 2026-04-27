@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PromptPackBenchmarkStatusRecord,
+  PromptPackExecutionStyle,
   PromptPackLatestAssessmentRecordV2,
   PromptPackReportRecord,
   PromptPackRunRecord,
@@ -115,6 +116,7 @@ export function PromptPacksWorkbenchPage({
   } | null>(null);
   const [reuseLastModel, setReuseLastModel] = useState(true);
   const [autoScoreOnRun, setAutoScoreOnRun] = useState(true);
+  const [executionStyle, setExecutionStyle] = useState<PromptPackExecutionStyle>("single_turn_harness");
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [benchmarkTestCodes, setBenchmarkTestCodes] = useState(DEFAULT_BENCHMARK_TEST_CODES);
@@ -473,6 +475,7 @@ export function PromptPacksWorkbenchPage({
         sessionId?: string;
         providerId?: string;
         model?: string;
+        executionStyle?: PromptPackExecutionStyle;
         placeholderValues?: Record<string, string>;
       };
       missingPlaceholders: string[];
@@ -494,12 +497,13 @@ export function PromptPacksWorkbenchPage({
       return {
         input: {
           ...selectedRunModel,
+          executionStyle,
           placeholderValues: Object.keys(resolvedPlaceholderValues).length > 0 ? resolvedPlaceholderValues : undefined,
         },
         missingPlaceholders,
       };
     },
-    [placeholderValues, selectedRunModel],
+    [executionStyle, placeholderValues, selectedRunModel],
   );
 
   const runOne = useCallback(
@@ -798,7 +802,7 @@ export function PromptPacksWorkbenchPage({
     setBenchmarkPending(true);
     setError(null);
     try {
-      const started = await runPromptPackBenchmark(selectedPackId, { testCodes, providers });
+      const started = await runPromptPackBenchmark(selectedPackId, { testCodes, providers, executionStyle });
       setBenchmarkRunId(started.benchmarkRunId);
       await loadBenchmarkStatus(started.benchmarkRunId);
       setSuccess(`Benchmark started: ${started.benchmarkRunId}`);
@@ -807,7 +811,7 @@ export function PromptPacksWorkbenchPage({
       setBenchmarkPending(false);
       setError((err as Error).message);
     }
-  }, [benchmarkProvidersInput, benchmarkTestCodes, loadBenchmarkStatus, selectedPackId]);
+  }, [benchmarkProvidersInput, benchmarkTestCodes, executionStyle, loadBenchmarkStatus, selectedPackId]);
 
   const loadTrends = useCallback(async (packId: string) => {
     const response = await fetchPromptPackTrends(packId);
@@ -924,6 +928,11 @@ export function PromptPacksWorkbenchPage({
   const completedDraftDimensions = DIMENSION_ROWS.filter(({ key }) => scoreDraft[key] !== null).length;
   const draftWeightedScore = computeDraftWeightedScore(scoreDraft);
   const draftVerdict = computeDraftVerdict(scoreDraft, scoreDraft.overrideVerdict);
+  const executionStyleDescription =
+    executionStyle === "agentic_surface"
+      ? "Agentic uses the real surface orchestration preset for the selected Chat, Cowork, or Code mode."
+      : "Harness uses the deterministic single-turn Prompt Lab wrapper.";
+  const selectedDiagnosticMetadata = selectedRun?.diagnosticMetadata ?? selectedTest?.diagnosticMetadata;
 
   const summaryCards = [
     {
@@ -960,6 +969,11 @@ export function PromptPacksWorkbenchPage({
         : unscoredCompletedCount > 0
           ? `${unscoredCompletedCount} completed run(s) need scoring`
           : "Ready for the next pass.",
+    },
+    {
+      label: "Execution style",
+      value: formatPromptPackExecutionStyle(executionStyle),
+      detail: executionStyle === "agentic_surface" ? "Surface presets enabled" : "Harness wrapper active",
     },
   ];
 
@@ -1216,12 +1230,36 @@ export function PromptPacksWorkbenchPage({
                   />
                   <span>Auto-score completed runs after execution</span>
                 </label>
+                <div className="mc-pp-field">
+                  <span>Execution style</span>
+                  <div className="mc-pp-filter-row" role="radiogroup" aria-label="Prompt pack execution style">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={executionStyle === "single_turn_harness"}
+                      className={`mc-pp-filter-chip${executionStyle === "single_turn_harness" ? " active" : ""}`}
+                      onClick={() => setExecutionStyle("single_turn_harness")}
+                    >
+                      Harness
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={executionStyle === "agentic_surface"}
+                      className={`mc-pp-filter-chip${executionStyle === "agentic_surface" ? " active" : ""}`}
+                      onClick={() => setExecutionStyle("agentic_surface")}
+                    >
+                      Agentic
+                    </button>
+                  </div>
+                </div>
                 <p className="mc-pp-note">
                   {reuseLastModel && lastSuccessfulModel
                     ? `Reusing ${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}.`
                     : selectedRunModel?.providerId
                       ? `New runs request ${selectedRunModel.providerId}/${selectedRunModel.model ?? "provider default"}.`
-                      : "Select a provider and model to start running this pack."}
+                      : "Select a provider and model to start running this pack."}{" "}
+                  {executionStyleDescription}
                 </p>
               </div>
             </details>
@@ -1286,12 +1324,36 @@ export function PromptPacksWorkbenchPage({
                 />
                 <span>Auto-score completed runs after execution</span>
               </label>
+              <div className="mc-pp-field">
+                <span>Execution style</span>
+                <div className="mc-pp-filter-row" role="radiogroup" aria-label="Prompt pack execution style">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={executionStyle === "single_turn_harness"}
+                    className={`mc-pp-filter-chip${executionStyle === "single_turn_harness" ? " active" : ""}`}
+                    onClick={() => setExecutionStyle("single_turn_harness")}
+                  >
+                    Harness
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={executionStyle === "agentic_surface"}
+                    className={`mc-pp-filter-chip${executionStyle === "agentic_surface" ? " active" : ""}`}
+                    onClick={() => setExecutionStyle("agentic_surface")}
+                  >
+                    Agentic
+                  </button>
+                </div>
+              </div>
               <p className="mc-pp-note">
                 {reuseLastModel && lastSuccessfulModel
                   ? `Reusing ${lastSuccessfulModel.providerId}/${lastSuccessfulModel.model}.`
                   : selectedRunModel?.providerId
                     ? `New runs request ${selectedRunModel.providerId}/${selectedRunModel.model ?? "provider default"}.`
-                    : "Select a provider and model to start running this pack."}
+                    : "Select a provider and model to start running this pack."}{" "}
+                {executionStyleDescription}
               </p>
             </section>
           )}
@@ -1536,6 +1598,11 @@ export function PromptPacksWorkbenchPage({
                               {formatResultCategory(category)}
                             </span>
                           ) : null}
+                          {test.diagnosticMetadata?.capabilityTargets.slice(0, 2).map((target) => (
+                            <span key={target} className="mc-pp-chip diagnostic">
+                              {target}
+                            </span>
+                          ))}
                         </span>
                       </span>
                     </span>
@@ -1640,6 +1707,11 @@ export function PromptPacksWorkbenchPage({
                   </p>
                 </div>
                 <div className="mc-pp-detail-card">
+                  <span>Execution style</span>
+                  <strong>{formatPromptPackExecutionStyle(selectedRun?.executionStyle ?? executionStyle)}</strong>
+                  <p>{selectedRun?.executionStyle ? "Captured on latest run" : "Next run setting"}</p>
+                </div>
+                <div className="mc-pp-detail-card">
                   <span>Effective verdict</span>
                   <strong>
                     {selectedAssessment?.effectiveVerdict ?? selectedAutoScore?.autoVerdict ?? "Unscored"}
@@ -1688,6 +1760,30 @@ export function PromptPacksWorkbenchPage({
                       </div>
                       <pre>{selectedTest.prompt}</pre>
                     </section>
+                    {selectedDiagnosticMetadata ? (
+                      <section className="mc-pp-surface">
+                        <div className="mc-pp-section-heading">
+                          <div>
+                            <h5>Diagnostics</h5>
+                            <p>Capability targets and expected runtime signals captured at import.</p>
+                          </div>
+                        </div>
+                        <div className="mc-pp-diagnostic-stack">
+                          <DiagnosticChipGroup
+                            label="Capability targets"
+                            values={selectedDiagnosticMetadata.capabilityTargets}
+                          />
+                          <DiagnosticChipGroup
+                            label="Expected runtime signals"
+                            values={selectedDiagnosticMetadata.expectedRuntimeSignals}
+                          />
+                          <DiagnosticChipGroup
+                            label="Likely failure classes"
+                            values={selectedDiagnosticMetadata.likelyFailureClasses}
+                          />
+                        </div>
+                      </section>
+                    ) : null}
                     {selectedPlaceholders.length > 0 ? (
                       <section className="mc-pp-surface">
                         <div className="mc-pp-section-heading">
@@ -1779,6 +1875,12 @@ export function PromptPacksWorkbenchPage({
                                   selectedRunModelUsage.fallbackModel,
                                 )
                               : "Not used"}
+                          </strong>
+                        </div>
+                        <div className="mc-pp-evidence-line">
+                          <span>Execution style</span>
+                          <strong>
+                            {formatPromptPackExecutionStyle(selectedRun?.executionStyle ?? executionStyle)}
                           </strong>
                         </div>
                         <div className="mc-pp-evidence-line">
@@ -2103,6 +2205,9 @@ export function PromptPacksWorkbenchPage({
                       {benchmarkStatus ? (
                         <details className="mc-pp-evidence-details" open>
                           <summary>Latest benchmark</summary>
+                          <p className="mc-pp-note">
+                            Execution style: {formatPromptPackExecutionStyle(benchmarkStatus.run.executionStyle)}
+                          </p>
                           <div className="mc-pp-table-wrap">
                             <table className="mc-pp-table">
                               <thead>
@@ -2175,6 +2280,30 @@ export function PromptPacksWorkbenchPage({
       </div>
     </section>
   );
+}
+
+function DiagnosticChipGroup({ label, values }: { label: string; values: string[] | undefined }) {
+  const normalized = values?.filter(Boolean) ?? [];
+  return (
+    <div className="mc-pp-diagnostic-group">
+      <span>{label}</span>
+      <div className="mc-pp-test-meta">
+        {normalized.length > 0 ? (
+          normalized.map((value) => (
+            <span key={value} className="mc-pp-chip diagnostic">
+              {value}
+            </span>
+          ))
+        ) : (
+          <span className="mc-pp-chip">none</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatPromptPackExecutionStyle(style?: PromptPackExecutionStyle): string {
+  return style === "agentic_surface" ? "Agentic" : "Harness";
 }
 
 const DETAIL_TABS: Array<{ id: DetailTab; label: string }> = [

@@ -29,6 +29,7 @@ workspace/chat/
 .assistant/
 .playwright-cli/
 .codex-tmp/
+.codex-smoke/
 .worktrees/*
 !.worktrees/.gitkeep
 .claude/settings.local.json

@@ -3,6 +3,7 @@ import type {
   PromptPackAutoScoreBatchResult,
   PromptPackAutoScoreResult,
   PromptPackBenchmarkStatusRecord,
+  PromptPackExecutionStyle,
   PromptPackExportRecord,
   PromptPackHumanReviewRecordV2,
   PromptPackRecord,
@@ -46,6 +47,7 @@ export async function runPromptPackTest(
     sessionId?: string;
     providerId?: string;
     model?: string;
+    executionStyle?: PromptPackExecutionStyle;
     placeholderValues?: Record<string, string>;
   },
 ): Promise<PromptPackRunRecord> {
@@ -137,6 +139,7 @@ export async function runPromptPackBenchmark(
       providerId: string;
       model: string;
     }>;
+    executionStyle?: PromptPackExecutionStyle;
   },
 ): Promise<{ benchmarkRunId: string }> {
   return request<{ benchmarkRunId: string }>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/benchmark/run`, {

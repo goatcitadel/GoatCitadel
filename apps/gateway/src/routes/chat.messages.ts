@@ -554,15 +554,24 @@ async function requireFreshRouteDecision(
     sendRouteChanged(reply, "route_effective_mismatch");
     return true;
   }
+  const shouldReplayManualSelection = decision.selectionSource === "manual";
+  const shouldReplaySessionSelection = decision.selectionSource === "session";
+  const replayedPrefsOverride = shouldReplaySessionSelection
+    ? {
+        ...(input.body.prefsOverride ?? {}),
+        providerId: decision.requestedProviderId,
+        model: decision.requestedModel,
+      }
+    : input.body.prefsOverride;
   const current = await chatMessages.routePreflight(input.sessionId, {
     action: input.action,
     turnId: input.turnId,
-    providerId: decision.requestedProviderId,
-    model: decision.requestedModel,
+    providerId: shouldReplayManualSelection ? decision.requestedProviderId : undefined,
+    model: shouldReplayManualSelection ? decision.requestedModel : undefined,
     mode: input.body.mode,
     webMode: input.body.webMode,
     thinkingLevel: input.body.thinkingLevel,
-    prefsOverride: input.body.prefsOverride,
+    prefsOverride: replayedPrefsOverride,
   });
   if (current.blockedReason) {
     sendRouteChanged(reply, "route_blocked", current.blockedReason);

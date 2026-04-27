@@ -25,6 +25,7 @@ const promptPackRunBodySchema = z.object({
   sessionId: z.string().optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  executionStyle: z.enum(["single_turn_harness", "agentic_surface"]).optional(),
   mode: z.enum(["chat", "cowork", "code"]).optional(),
   toolTier: z.enum(["no-tools", "implicit-tools", "explicit-tools"]).optional(),
   toolAutonomy: z.enum(["manual", "safe_auto"]).optional(),
@@ -86,6 +87,7 @@ const promptPackBenchmarkRunBodySchema = z.object({
     )
     .min(1)
     .max(10),
+  executionStyle: z.enum(["single_turn_harness", "agentic_surface"]).optional(),
 });
 
 const promptPackBenchmarkParamsSchema = z.object({
@@ -330,6 +332,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
         promptPacks.runPromptPackBenchmark(params.data.packId, {
           testCodes: body.data.testCodes,
           providers: body.data.providers,
+          executionStyle: body.data.executionStyle,
         }),
       );
     } catch (error) {
