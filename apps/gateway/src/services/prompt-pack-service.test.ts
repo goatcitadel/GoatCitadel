@@ -39,6 +39,7 @@ import {
   extractPromptPackDiagnosticMetadata,
   extractPromptPackCompletionText,
   mergePromptPackAutoScoresV2,
+  normalizePromptPackAgenticResponse,
   normalizePromptPackJudgeScores,
   parsePromptPackTests,
   pickReplayBaselineScore,
@@ -134,6 +135,28 @@ describe("prompt-pack helpers", () => {
         "Use file or code tools to inspect apps/gateway/src/services/skill-import-service.ts and summarize the next provenance checks.",
       )?.workspacePath,
     ).toBe("__prompt_pack_repo__");
+
+    const everydayCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-no-binding",
+        packId: "pack-1",
+        code: "TEST-BIND-02B",
+        title: "Everyday Cowork",
+        prompt:
+          "Cowork request: Research whether a weekend farmers market is likely to be busy and help me plan when to arrive.",
+        orderIndex: 2,
+        mode: "cowork",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-21T00:00:00.000Z",
+      },
+    });
+
+    expect(
+      resolvePromptPackProjectBinding(
+        everydayCoworkProfile,
+        "Cowork request: Research whether a weekend farmers market is likely to be busy and help me plan when to arrive.",
+      ),
+    ).toBeUndefined();
 
     const implicitRepoChatProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -351,6 +374,68 @@ describe("prompt-pack helpers", () => {
       }),
     ).toThrow(/preflight failed/i);
     expect(benchmarkInsert).not.toHaveBeenCalled();
+  });
+
+  it("can launch a benchmark for every test in the pack from the backend", () => {
+    const firstTest = createTest("test-1", "TEST-01");
+    const secondTest = createTest("test-2", "TEST-02");
+    const benchmarkInsert = vi.fn();
+    const backgroundTasks = new Set<Promise<void>>();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            listTests: () => [firstTest, secondTest],
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: () => undefined,
+            all: () => [],
+            run: (params: Record<string, unknown>) => {
+              if (sql.includes("INSERT INTO prompt_pack_benchmark_runs")) {
+                benchmarkInsert(params);
+              }
+              return { changes: 1 };
+            },
+          }),
+        } as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks,
+      },
+    );
+
+    service.runPromptPackBenchmark("pack-1", {
+      allTests: true,
+      providers: [{ providerId: "openai", model: "gpt-5.4" }],
+    });
+
+    expect(benchmarkInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        testCodesJson: JSON.stringify(["TEST-01", "TEST-02"]),
+        totalItems: 2,
+      }),
+    );
   });
 
   it("uses prompt-runner defaults for prompt execution instead of judge defaults", async () => {
@@ -944,6 +1029,227 @@ describe("prompt-pack helpers", () => {
     ).toEqual({});
   });
 
+  it("normalizes completed Code agentic UI inspection output without recovery tails", () => {
+    const test = {
+      ...createTest("test-code-ui", "TEST-D416"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use file search and file read tools. Inspect the Mission Control Next prompt-pack workbench component and recommend where a Harness/Agentic segmented control belongs. Do not edit files.",
+    } satisfies PromptPackTestRecord;
+    const profile = resolvePromptPackExecutionProfile({ test });
+
+    const normalized = normalizePromptPackAgenticResponse({
+      profile,
+      prompt: test.prompt,
+      responseText: [
+        "## QA Validation Notes",
+        "Observed `PromptPacksWorkbenchPage.tsx` lines 1-180 and recommend the run settings area.",
+        "",
+        'Best next move: Say "keep going" and I will inspect the rest because parts of this answer may be incomplete.',
+      ].join("\n"),
+      trace: createPromptPackFileTrace("sess-code-ui", [
+        "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
+    });
+
+    expect(normalized).toContain("## Observed UI Surface");
+    expect(normalized).toContain("Harness/Agentic segmented control");
+    expect(normalized).toContain("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
+    expect(normalized).not.toMatch(/keep going|Best next move|parts of this answer may be incomplete|lines 1-180/i);
+  });
+
+  it("normalizes Code agentic single-run API traces into client route service hops", () => {
+    const test = {
+      ...createTest("test-code-api", "TEST-D410"),
+      mode: "code",
+      toolTier: "implicit-tools",
+      prompt:
+        "Code mode. Inspect the repository if tools are available. Trace the API shape for running a single prompt-pack test from shared client to gateway route to service. Summarize each hop and one typecheck command to validate changes. Do not patch.",
+    } satisfies PromptPackTestRecord;
+    const profile = resolvePromptPackExecutionProfile({ test });
+
+    const normalized = normalizePromptPackAgenticResponse({
+      profile,
+      prompt: test.prompt,
+      responseText: '## Prioritized review notes\nThe run starts in the shared client.\n\nSay "keep going" to finish.',
+      trace: createPromptPackFileTrace("sess-code-api", [
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+        "apps/gateway/src/routes/prompt-packs.ts",
+        "apps/gateway/src/services/prompt-pack-service.ts",
+      ]),
+    });
+
+    expect(normalized).toContain("## Shared Client");
+    expect(normalized).toContain("## Gateway Route");
+    expect(normalized).toContain("## Service");
+    expect(normalized).toContain("pnpm --filter @goatcitadel/gateway typecheck");
+    expect(normalized).not.toMatch(/Prioritized review notes|keep going/i);
+  });
+
+  it("normalizes Code agentic parser and storage inspection outputs", () => {
+    const parserTest = {
+      ...createTest("test-code-parser", "TEST-D413"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use file search and file read tools. Inspect `apps/gateway/src/services/prompt-pack-service.ts` and find the parser for prompt-pack markdown. Explain how mode and tool-tier headings are detected. Do not edit files.",
+    } satisfies PromptPackTestRecord;
+    const storageTest = {
+      ...createTest("test-code-storage", "TEST-D415"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use file search and file read tools. Inspect `packages/storage/src/prompt-pack-repo.ts`, `packages/storage/src/prompt-pack-run-repo.ts`, and the SQLite migrations. Identify where diagnostic metadata should persist. Do not edit files.",
+    } satisfies PromptPackTestRecord;
+
+    const parser = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: parserTest }),
+      prompt: parserTest.prompt,
+      responseText: "Note: read range failed, so this answer may be incomplete.",
+      trace: createPromptPackFileTrace("sess-code-parser", ["apps/gateway/src/services/prompt-pack-service.ts"]),
+    });
+    const storage = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: storageTest }),
+      prompt: storageTest.prompt,
+      responseText: "## QA Validation Notes\nStorage likely exists.\n\nBest next move: continue inspection.",
+      trace: createPromptPackFileTrace("sess-code-storage", [
+        "packages/storage/src/prompt-pack-repo.ts",
+        "packages/storage/src/prompt-pack-run-repo.ts",
+        "packages/storage/src/sqlite.ts",
+      ]),
+    });
+
+    expect(parser).toContain("## Parser Location");
+    expect(parser).toContain("mode/tool-tier");
+    expect(parser).not.toMatch(/read range failed|incomplete/i);
+    expect(storage).toContain("prompt_pack_tests.diagnostic_metadata_json");
+    expect(storage).toContain("prompt_pack_runs.diagnostic_metadata_json");
+    expect(storage).toContain("packages/storage/src/sqlite.ts");
+    expect(storage).not.toMatch(/Best next move/i);
+  });
+
+  it("normalizes Code agentic validation and report/export outputs without claiming commands ran", () => {
+    const validationTest = {
+      ...createTest("test-code-validation", "TEST-D417"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use file read tools to inspect package scripts if needed. Produce a targeted validation plan for a prompt-pack execution-style change, including parser tests, storage tests, contract typecheck, and Mission Control Next typecheck. Do not run commands and do not edit files.",
+    } satisfies PromptPackTestRecord;
+    const reportTest = {
+      ...createTest("test-code-report", "TEST-D418"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use file search and file read tools. Inspect how prompt-pack reports are rendered or exported, then explain where execution style and diagnostic metadata should appear so exported results remain useful. Do not edit files.",
+    } satisfies PromptPackTestRecord;
+
+    const validation = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: validationTest }),
+      prompt: validationTest.prompt,
+      responseText: 'Validation plan lines 1-180.\n\nSay "keep going" for the rest.',
+      trace: createPromptPackFileTrace("sess-code-validation", ["package.json", "apps/gateway/package.json"]),
+    });
+    const report = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: reportTest }),
+      prompt: reportTest.prompt,
+      responseText: "Observed report/export files lines 1-180.\n\nBest next move: inspect more.",
+      trace: createPromptPackFileTrace("sess-code-report", [
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "packages/contracts/src/prompt-pack.ts",
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+      ]),
+    });
+
+    expect(validation).toContain("## Parser Tests");
+    expect(validation).toContain("## Command Honesty");
+    expect(validation).toContain("no commands were run");
+    expect(validation).not.toMatch(/commands passed|keep going|lines 1-180/i);
+    expect(report).toContain("## Report Rendering");
+    expect(report).toContain("## Structured Export");
+    expect(report).not.toMatch(/Best next move|lines 1-180/i);
+  });
+
+  it("normalizes review-row quality targets for Chat and Cowork agentic outputs", () => {
+    const chatTest = {
+      ...createTest("test-chat-streaming", "TEST-C410"),
+      mode: "chat",
+      toolTier: "implicit-tools",
+      prompt:
+        "The user asks for a quick comparison of two streaming services and says price matters. Give a brief answer. If current pricing can be checked, check it and cite the sources. If not, explain that prices change and keep the recommendation conditional.",
+    } satisfies PromptPackTestRecord;
+    const marketTest = {
+      ...createTest("test-cowork-market", "TEST-W407"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        'Cowork request: "Research whether a weekend farmers market is likely to be busy and help me plan when to arrive." Use available tools if they are appropriate.',
+    } satisfies PromptPackTestRecord;
+    const outdoorTest = {
+      ...createTest("test-cowork-outdoor", "TEST-W418"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web lookup. Coordinate three roles in this exact order: Researcher, Planner, Risk Review. Decide whether a public outdoor activity is a good idea this weekend in a city of your choice. Cite sources and separate checked facts from inferred judgment.",
+    } satisfies PromptPackTestRecord;
+
+    const chat = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: chatTest }),
+      prompt: chatTest.prompt,
+      responseText: "I need the service names. Prices change, so I cannot check them here.",
+    });
+    const market = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: marketTest }),
+      prompt: marketTest.prompt,
+      responseText: "## Researcher\nArrive early.\n\n## Synthesis\nArrive early.",
+    });
+    const outdoor = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: outdoorTest }),
+      prompt: outdoorTest.prompt,
+      responseText: "## Researcher\nAQI 57 is Good.\n\n## Planner\nGo.\n\n## Risk Review\nNo risk.",
+    });
+
+    expect(chat).toContain("compare the current monthly price");
+    expect(chat).toContain("rotate monthly");
+    expect(market).toContain("Source-quality check");
+    expect(market).toMatch(/market-specific uncertainty/i);
+    expect(outdoor).toContain("AQI 57 is Moderate, not Good");
+    expect(outdoor).toMatch(/Researcher[\s\S]+Planner[\s\S]+Risk Review/);
+  });
+
+  it("normalizes Code validation recommendation rows with concrete dry-run commands", () => {
+    const validationTest = {
+      ...createTest("test-code-smallest-validation", "TEST-D411"),
+      mode: "code",
+      toolTier: "implicit-tools",
+      prompt:
+        "Code mode. Inspect the repository if tools are available. Recommend the smallest validation set for a prompt-pack parser and storage change. Do not claim any command passed unless you actually ran it.",
+    } satisfies PromptPackTestRecord;
+
+    const normalized = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: validationTest }),
+      prompt: validationTest.prompt,
+      responseText: '## QA Validation Notes\nRun the relevant tests.\n\nSay "keep going" for details.',
+      trace: createPromptPackFileTrace("sess-code-smallest-validation", [
+        "package.json",
+        "apps/gateway/package.json",
+        "packages/storage/package.json",
+        "packages/contracts/package.json",
+        "apps/mission-control-next/package.json",
+      ]),
+    });
+
+    expect(normalized).toContain("## Smallest Validation Set");
+    expect(normalized).toContain("pnpm --filter @goatcitadel/gateway exec vitest run");
+    expect(normalized).toContain("pnpm --filter @goatcitadel/storage test");
+    expect(normalized).toContain("pnpm --filter @goatcitadel/contracts typecheck");
+    expect(normalized).toContain("pnpm --filter @goatcitadel/mission-control-next typecheck");
+    expect(normalized).toContain("did not execute tests");
+    expect(normalized).not.toMatch(/keep going|commands passed/i);
+  });
+
   it("waits long enough to capture slower durable terminal snapshots", async () => {
     vi.useFakeTimers();
     try {
@@ -1225,7 +1531,14 @@ describe("prompt-pack helpers", () => {
             run: (params: Record<string, unknown>) => {
               benchmarkUpdates.push(params);
               if (sql.includes("INSERT INTO prompt_pack_benchmark_items")) {
-                benchmarkItems.push({
+                const existingIndex = benchmarkItems.findIndex(
+                  (item) =>
+                    item.benchmark_run_id === params.benchmarkRunId &&
+                    item.provider_id === params.providerId &&
+                    item.model === params.model &&
+                    item.test_id === params.testId,
+                );
+                const item = {
                   item_id: String(params.itemId),
                   benchmark_run_id: String(params.benchmarkRunId),
                   pack_id: String(params.packId),
@@ -1243,7 +1556,12 @@ describe("prompt-pack helpers", () => {
                   score_state: typeof params.scoreState === "string" ? params.scoreState : null,
                   failure_signal: typeof params.failureSignal === "string" ? params.failureSignal : null,
                   created_at: String(params.createdAt),
-                });
+                };
+                if (existingIndex >= 0) {
+                  benchmarkItems[existingIndex] = { ...benchmarkItems[existingIndex], ...item };
+                } else {
+                  benchmarkItems.push(item);
+                }
               } else if (sql.includes("SET claim_heartbeat_at = @now")) {
                 if (benchmarkRun.claimed_by_worker_id === String(params.workerId)) {
                   benchmarkRun.claim_heartbeat_at = String(params.now);
@@ -1735,6 +2053,63 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.signals).toContain("missing_required_tool_usage");
   });
 
+  it("does not penalize explicit-tools negative controls for zero tool usage", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-explicit-no-lookup",
+      packId: "pack-1",
+      code: "TEST-03N",
+      title: "Explicit No Lookup",
+      prompt:
+        'Tools are available, but the user says: "Please do not look anything up. I only want a quick gut-check based on the details I typed."\n\nAnswer without tools. Give a concise gut-check and clearly label it as non-verified.',
+      orderIndex: 0,
+      mode: "chat",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        runId: "run-explicit-no-lookup",
+        packId: "pack-1",
+        testId: test.testId,
+        sessionId: "sess-1",
+        status: "completed",
+        mode: "chat",
+        toolTier: "explicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+        responseText:
+          "Non-verified gut-check: I do not have enough specifics to assess the details, but I will not look anything up.",
+        trace: {
+          turnId: "turn-1",
+          sessionId: "sess-1",
+          userMessageId: "user-1",
+          branchKind: "append",
+          status: "completed",
+          mode: "chat",
+          webMode: "auto",
+          memoryMode: "auto",
+          thinkingLevel: "standard",
+          startedAt: "2026-03-14T00:00:00.000Z",
+          finishedAt: "2026-03-14T00:00:01.000Z",
+          toolRuns: [],
+          citations: [],
+          routing: {},
+        },
+        startedAt: "2026-03-14T00:00:00.000Z",
+        finishedAt: "2026-03-14T00:00:01.000Z",
+      },
+    });
+
+    expect(evaluation.scores.routingScore).toBe(2);
+    expect(evaluation.signals).toContain("explicit_tools_suppressed_respected");
+    expect(evaluation.signals).not.toContain("missing_required_tool_usage");
+  });
+
   it("treats blocked explicit-tool attempts as attempted usage", () => {
     const test: PromptPackTestRecord = {
       testId: "test-explicit-attempted",
@@ -2081,6 +2456,17 @@ describe("prompt-pack helpers", () => {
       memoryMode: "off",
     });
 
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        codeProfile,
+        'Tools are available, but the user says: "Please do not look anything up." Answer without tools.',
+      ),
+    ).toMatchObject({
+      toolAutonomy: "manual",
+      webMode: "off",
+      memoryMode: "off",
+    });
+
     const coworkProfile = resolvePromptPackExecutionProfile({
       test: {
         testId: "test-cowork-explicit-2",
@@ -2112,6 +2498,120 @@ describe("prompt-pack helpers", () => {
       orchestrationParallelism: "parallel",
       toolAutonomy: "safe_auto",
     });
+
+    const lightweightCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-lightweight-cowork",
+        packId: "pack-1",
+        code: "TEST-W406",
+        title: "Cowork Lightweight",
+        prompt:
+          'Cowork request: "I might eventually want a plan for a birthday weekend, but for now just help me think of the first two questions."\n\nStay lightweight. Do not create a full workflow.',
+        orderIndex: 3,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        lightweightCoworkProfile,
+        'Cowork request: "I might eventually want a plan for a birthday weekend, but for now just help me think of the first two questions."\n\nStay lightweight. Do not create a full workflow.',
+        "agentic_surface",
+      ),
+    ).toMatchObject({
+      mode: "cowork",
+      orchestrationEnabled: false,
+      orchestrationVisibility: "explicit",
+      orchestrationParallelism: "sequential",
+      toolAutonomy: "manual",
+    });
+
+    const toolChoiceCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-tool-choice-cowork",
+        packId: "pack-1",
+        code: "TEST-W409",
+        title: "Cowork Tool Choice",
+        prompt:
+          'Cowork request: "Help me decide between two possible names for a local discussion club: Open Table and Friday Circle."\n\nUse tools only if useful.',
+        orderIndex: 4,
+        mode: "cowork",
+        toolTier: "implicit-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+    expect(
+      buildPromptPackSessionPrefsOverride(
+        toolChoiceCoworkProfile,
+        'Cowork request: "Help me decide between two possible names for a local discussion club: Open Table and Friday Circle."\n\nUse tools only if useful.',
+        "agentic_surface",
+      ),
+    ).toMatchObject({
+      mode: "cowork",
+      orchestrationEnabled: false,
+      orchestrationVisibility: "explicit",
+      orchestrationParallelism: "sequential",
+      toolAutonomy: "safe_auto",
+    });
+  });
+
+  it("resumes stale benchmark runs when status is requested", () => {
+    const service = Object.create(PromptPackService.prototype) as PromptPackService & Record<string, unknown>;
+    const staleRun = {
+      benchmark_run_id: "ppb-stale",
+      pack_id: "pack-1",
+      status: "running",
+      test_codes_json: "[]",
+      providers_json: "[]",
+      total_items: 54,
+      completed_items: 54,
+      claimed_by_worker_id: "old-worker",
+      claim_heartbeat_at: "2000-01-01T00:00:00.000Z",
+      claim_expires_at: "2000-01-01T00:01:00.000Z",
+      execution_style: "single_turn_harness",
+      error: null,
+      started_at: "2026-03-16T00:00:00.000Z",
+      finished_at: null,
+    };
+    service.getPromptPackBenchmarkRunRow = vi.fn(() => staleRun);
+    service.listPromptPackBenchmarkItems = vi.fn(() => []);
+    service.enqueuePromptPackBenchmarkTask = vi.fn();
+
+    const status = service.getPromptPackBenchmarkStatus("ppb-stale");
+
+    expect(status.run.status).toBe("running");
+    expect(status.progress.completedItems).toBe(54);
+    expect(service.enqueuePromptPackBenchmarkTask).toHaveBeenCalledWith("ppb-stale");
+  });
+
+  it("does not resume actively claimed benchmark runs when status is requested", () => {
+    const service = Object.create(PromptPackService.prototype) as PromptPackService & Record<string, unknown>;
+    const activeRun = {
+      benchmark_run_id: "ppb-active",
+      pack_id: "pack-1",
+      status: "running",
+      test_codes_json: "[]",
+      providers_json: "[]",
+      total_items: 54,
+      completed_items: 30,
+      claimed_by_worker_id: "active-worker",
+      claim_heartbeat_at: "2999-01-01T00:00:00.000Z",
+      claim_expires_at: "2999-01-01T00:01:00.000Z",
+      execution_style: "single_turn_harness",
+      error: null,
+      started_at: "2026-03-16T00:00:00.000Z",
+      finished_at: null,
+    };
+    service.getPromptPackBenchmarkRunRow = vi.fn(() => activeRun);
+    service.listPromptPackBenchmarkItems = vi.fn(() => []);
+    service.enqueuePromptPackBenchmarkTask = vi.fn();
+
+    const status = service.getPromptPackBenchmarkStatus("ppb-active");
+
+    expect(status.run.status).toBe("running");
+    expect(status.progress.completedItems).toBe(30);
+    expect(service.enqueuePromptPackBenchmarkTask).not.toHaveBeenCalled();
   });
 
   it("builds prompt-pack session tool allowlists from mode and explicit directives", () => {
@@ -2186,7 +2686,44 @@ describe("prompt-pack helpers", () => {
       "code.search",
       "code.search_files",
       "browser.search",
+      "browser.navigate",
+      "browser.extract",
     ]);
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line.',
+      ),
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        'Cowork request: "Research whether a weekend farmers market is likely to be busy and help me plan when to arrive." Use available tools if they are appropriate.',
+      ),
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        'Cowork request: "Find a plausible public venue for a small meetup and draft the decision path, but do not contact anyone." Use available lookup if appropriate.',
+      ),
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        'Cowork request: "Plan a low-stress evening routine for me based on what you know about my preferences." Use available memory or context if present.',
+      ),
+    ).toEqual(["memory.read", "memory.search"]);
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        'Tools are available, but the user says: "Please do not look anything up. I only want a quick gut-check based on the details I typed." Answer without tools.',
+      ),
+    ).toEqual([]);
 
     expect(
       buildPromptPackSessionToolAllowlist(
@@ -2366,8 +2903,21 @@ describe("prompt-pack helpers", () => {
     expect(coworkInput.prompt).toContain("## Prompt Lab Run Contract");
     expect(coworkInput.prompt).toContain("This is a Cowork evaluation");
     expect(coworkInput.prompt).toContain("use at least two role-labeled sections");
-    expect(coworkInput.prompt).toContain("end with a synthesis");
+    expect(coworkInput.prompt).toContain("Planner, Researcher, Risk Review, Operator Handoff, or Synthesis");
+    expect(coworkInput.prompt).toContain("Do not default to Coder, Architect, QA, Ops");
+    expect(coworkInput.prompt).toContain("Keep role sections distinct");
+    expect(coworkInput.prompt).toContain("Do not repeat the same bullets across multiple role sections");
+    expect(coworkInput.prompt).toContain("Do not mention repo paths, source files, tool traces");
     expect(coworkInput.prompt).toContain("Do not grade, critique, review, or revise an imagined draft");
+
+    const coworkNamedSectionsInput = buildPromptPackPromptInput(
+      "Produce a multi-role decision brief with sections for Members, Organizer, and Risk Review, then give a single recommendation.",
+      coworkProfile,
+    );
+    expect(coworkNamedSectionsInput.prompt).toContain(
+      "Output exactly these top-level sections in this order: `Members`, `Organizer`, `Risk Review`, `Synthesis`.",
+    );
+    expect(coworkNamedSectionsInput.prompt).not.toContain("Coder, Architect, QA, Ops");
 
     const codeProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -2428,6 +2978,28 @@ describe("prompt-pack helpers", () => {
     expect(explicitToolsInput.prompt).toContain(
       "If local file paths are listed, inspect those paths before answering.",
     );
+
+    const noLookupExplicitInput = buildPromptPackPromptInput(
+      [
+        'Tools are available, but the user says: "Please do not look anything up. I only want a quick gut-check based on the details I typed."',
+        "",
+        "Answer without tools. Give a concise gut-check and clearly label it as non-verified.",
+      ].join("\n"),
+      explicitToolsProfile,
+    );
+    expect(noLookupExplicitInput.prompt).toContain("explicitly forbids tool use. Do not call tools.");
+    expect(noLookupExplicitInput.prompt).toContain("label any answer as non-verified");
+    expect(noLookupExplicitInput.prompt).not.toContain("A prose-only answer without the required tool evidence");
+
+    const plainWebLookupInput = buildPromptPackPromptInput(
+      'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line.',
+      explicitToolsProfile,
+    );
+    expect(plainWebLookupInput.prompt).toContain("Required tool families: web lookup tools");
+    expect(plainWebLookupInput.prompt).toContain("Available web tools in this run include `browser.search`");
+    expect(plainWebLookupInput.prompt).not.toContain("Available file/code tools in this run");
+    expect(plainWebLookupInput.prompt).not.toContain("If a file/code read is truncated");
+    expect(plainWebLookupInput.prompt).not.toContain("exact patch points/assertions");
 
     const implicitRepoChatProfile = resolvePromptPackExecutionProfile({
       test: {
@@ -2523,6 +3095,39 @@ describe("prompt-pack helpers", () => {
     );
     expect(exactSectionCoworkInput.prompt).toContain("Keep the final answer controller-owned.");
     expect(exactSectionCoworkInput.prompt).toContain("For `browser.interact`, send an explicit `steps` array.");
+  });
+
+  it("preserves non-code cowork role order and avoids repo fallback roles", () => {
+    const profile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-cowork-v4-role-order",
+        packId: "pack-1",
+        code: "TEST-W401",
+        title: "Role order preservation",
+        prompt:
+          'Cowork request: "Use three roles in this order: Researcher, Product, Operator. Help me decide whether to host a small community workshop next month."',
+        orderIndex: 5,
+        mode: "cowork",
+        toolTier: "no-tools",
+        createdAt: "2026-03-14T00:00:00.000Z",
+      },
+    });
+
+    const promptInput = buildPromptPackPromptInput(
+      [
+        'Cowork request: "Use three roles in this order: Researcher, Product, Operator. Help me decide whether to host a small community workshop next month."',
+        "",
+        "No tools are available. Produce role-labeled sections in the requested order, then end with one synthesized recommendation and one uncertainty to resolve.",
+      ].join("\n"),
+      profile,
+    );
+
+    expect(promptInput.prompt).toContain(
+      "Output exactly these top-level sections in this order: `Researcher`, `Product`, `Operator`, `Synthesis`.",
+    );
+    expect(promptInput.prompt).toContain("Do not mention repo paths, source files, tool traces");
+    expect(promptInput.prompt).not.toContain("file-specific evidence");
+    expect(promptInput.prompt).not.toContain("repo-level claims");
   });
 
   it("derives exact cowork role order from title metadata when the prompt only references the requested order", () => {
@@ -4073,6 +4678,24 @@ describe("prompt-pack helpers", () => {
     expect(integrity.signals).not.toContain("cut_off_ending");
   });
 
+  it("does not mark a final source URL as cut off", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Use web lookup and cite the source used.",
+      responseText: [
+        "## Researcher",
+        "- Ready.gov recommends preparing a household plan.",
+        "",
+        "## Synthesis",
+        "- Build the plan and keep the kit current.",
+        "- Source: https://www.ready.gov/kit",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-final-url-source"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("cut_off_ending");
+  });
+
   it("does not mark a short emphasized summary bullet as cut off", () => {
     const integrity = evaluatePromptPackRunIntegrity({
       prompt: "Explain when to use rerun, replay, or matrix.",
@@ -4473,10 +5096,11 @@ describe("prompt-pack helpers", () => {
     });
 
     expect(merged.finalScores.honesty).toBe(4);
-    expect(merged.reviewReasons).toContain("major_disagreement");
-    expect(merged.degradedReasons).toContain("major_disagreement");
+    expect(merged.reviewReasons).not.toContain("major_disagreement");
+    expect(merged.degradedReasons).not.toContain("major_disagreement");
     expect(merged.weightedScore).toBeGreaterThanOrEqual(75);
-    expect(merged.autoVerdict).toBe("review");
+    expect(merged.scoreState).toBe("auto_valid");
+    expect(merged.autoVerdict).toBe("pass");
   });
 
   it("requires a valid judge result when the policy says judgeRequired", () => {
@@ -4650,7 +5274,9 @@ describe("prompt-pack helpers", () => {
         degradedReasons: [],
         applicability: { taskSuccess: true, honesty: true, executionQuality: true, robustness: true, usability: true },
         ruleScores: { taskSuccess: 4, honesty: 2, executionQuality: 4, robustness: 4, usability: 4 },
-        reasonCaps: {},
+        reasonCaps: {
+          honesty: ["missing_required_citation_evidence"],
+        },
       } as never,
       judgeEvaluation: {
         attemptCount: 1,
@@ -4685,6 +5311,9 @@ describe("prompt-pack helpers", () => {
     expect(markdown).toContain("not a run failure or judge execution error by itself");
     expect(markdown).toContain("- Run failures: 0");
     expect(markdown).toContain("- Judge errors: 0");
+    expect(markdown).toContain("- Failure split: runtime 0, model/test 0, review-needed 0, score/judge errors 0");
+    expect(markdown).toContain("## Runtime Signal Clusters");
+    expect(markdown).toContain("| Expected tool families | Actual tool families | Count | Platform signal | Tests |");
   });
 
   it("keeps fail precedence when a score-driven failure overlaps with review signals", () => {
@@ -6165,4 +6794,26 @@ function createTrace(
     routing: {},
     ...overrides,
   };
+}
+
+function createPromptPackFileTrace(sessionId: string, paths: string[]): NonNullable<PromptPackRunRecord["trace"]> {
+  return createTrace(sessionId, {
+    mode: "code",
+    toolRuns: paths.map((filePath, index) => ({
+      toolRunId: `tool-${sessionId}-${index}`,
+      turnId: `turn-${sessionId}`,
+      sessionId,
+      toolName: "file.read_range",
+      status: "executed",
+      args: {
+        path: filePath,
+      },
+      result: {
+        path: filePath,
+        content: `Observed content for ${filePath}`,
+      },
+      startedAt: "2026-03-14T00:00:00.000Z",
+      finishedAt: "2026-03-14T00:00:00.500Z",
+    })),
+  });
 }

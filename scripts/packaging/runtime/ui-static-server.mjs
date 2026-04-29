@@ -43,10 +43,13 @@ const server = http.createServer((request, response) => {
   }
 
   const finalPath = resolveStaticPath(requestedPath);
+  if (!finalPath) {
+    return sendJson(response, 404, { error: "Not found" });
+  }
   const extension = path.extname(finalPath).toLowerCase();
   response.writeHead(200, {
     "Content-Type": contentTypes[extension] || "application/octet-stream",
-    "Cache-Control": finalPath.endsWith(".html") ? "no-cache" : "public, max-age=31536000, immutable",
+    "Cache-Control": resolveCacheControl(finalPath, requestUrl),
   });
   fs.createReadStream(finalPath).pipe(response);
 });
@@ -59,13 +62,24 @@ function resolveStaticPath(candidatePath) {
   if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
     return candidatePath;
   }
+  if (path.extname(candidatePath)) {
+    return null;
+  }
   return path.join(distDir, "index.html");
+}
+
+function resolveCacheControl(finalPath, requestUrl) {
+  const pathname = requestUrl.pathname.toLowerCase();
+  if (finalPath.endsWith(".html") || pathname.endsWith("/sw.js") || pathname.endsWith("/manifest.webmanifest")) {
+    return "no-store, max-age=0, must-revalidate";
+  }
+  return "public, max-age=31536000, immutable";
 }
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-store, max-age=0, must-revalidate",
   });
   response.end(JSON.stringify(payload));
 }

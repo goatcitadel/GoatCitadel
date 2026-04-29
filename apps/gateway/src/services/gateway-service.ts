@@ -2706,6 +2706,15 @@ export class GatewayService {
       includeKeychainForActiveProvider: true,
       useCache: true,
     });
+    const openaiCodex = runtime.providers.find(
+      (provider) => provider.providerId === "openai-codex" && provider.hasApiKey,
+    );
+    if (openaiCodex) {
+      return {
+        providerId: openaiCodex.providerId,
+        model: "gpt-5.5",
+      };
+    }
     const openai = runtime.providers.find((provider) => provider.providerId === "openai" && provider.hasApiKey);
     if (openai) {
       return {
@@ -2952,6 +2961,7 @@ export class GatewayService {
             memoryMode: prefs.memoryMode,
             thinkingLevel: prefs.thinkingLevel,
             retrievalMode: prefs.retrievalMode ?? "standard",
+            toolAutonomy: prefs.toolAutonomy,
           }),
         );
         const traceStatus = response.trace?.status;

@@ -265,6 +265,66 @@ describe("chat-durable-run-service", () => {
       },
     ]);
   });
+
+  it("records completed checkpoints when older traces do not include completion metadata", () => {
+    const prepared = createPreparedTurn({ content: "Run the agentic smoke" });
+    const trace = createTrace({
+      status: "completed",
+      completion: undefined,
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")?.status).toBe("completed");
+    expect(state.checkpoints).toEqual([
+      expect.objectContaining({
+        runId: "run-complete",
+        checkpointKind: "run_completed",
+        state: expect.objectContaining({
+          currentStep: "completed",
+        }),
+      }),
+    ]);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: {
+            runId: "run-complete",
+            status: "completed",
+            checkpointKind: "run_completed",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("records failed checkpoints when completion metadata is explicitly incomplete", () => {
+    const prepared = createPreparedTurn({ content: "Run the agentic smoke" });
+    const trace = createTrace({
+      status: "completed",
+      completion: {
+        status: "incomplete",
+        finishReason: "length",
+        repaired: false,
+      },
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-complete", prepared, trace);
+
+    expect(state.runs.get("run-complete")?.status).toBe("failed");
+    expect(state.checkpoints).toEqual([
+      expect.objectContaining({
+        runId: "run-complete",
+        checkpointKind: "run_failed",
+        state: expect.objectContaining({
+          currentStep: "completed",
+        }),
+      }),
+    ]);
+  });
 });
 
 function createPreparedTurn(overrides: Partial<PreparedAgentChatTurn> = {}): PreparedAgentChatTurn {

@@ -51,6 +51,40 @@ describe("prompt-pack benchmark routes", () => {
     });
   });
 
+  it("can start a benchmark for every test in a pack", async () => {
+    const runPromptPackBenchmark = vi.fn(() => ({
+      benchmarkRunId: "ppb-all",
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      promptPacks: {
+        runPromptPackBenchmark,
+      },
+    } as never);
+    await app.register(promptPackRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/prompt-packs/pack-1/benchmark/run",
+      payload: {
+        allTests: true,
+        providers: [{ providerId: "openai", model: "gpt-5.5" }],
+        executionStyle: "single_turn_harness",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runPromptPackBenchmark).toHaveBeenCalledWith("pack-1", {
+      allTests: true,
+      providers: [{ providerId: "openai", model: "gpt-5.5" }],
+      executionStyle: "single_turn_harness",
+    });
+    expect(response.json()).toEqual({
+      benchmarkRunId: "ppb-all",
+    });
+  });
+
   it("returns benchmark status for a benchmark run id", async () => {
     const getPromptPackBenchmarkStatus = vi.fn(() => ({
       run: {

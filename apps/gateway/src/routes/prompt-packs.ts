@@ -77,7 +77,8 @@ const promptPackResetBodySchema = z.object({
 });
 
 const promptPackBenchmarkRunBodySchema = z.object({
-  testCodes: z.array(z.string().min(1)).min(1).max(200),
+  testCodes: z.array(z.string().min(1)).max(200).optional(),
+  allTests: z.boolean().optional(),
   providers: z
     .array(
       z.object({
@@ -328,13 +329,13 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      return reply.send(
-        promptPacks.runPromptPackBenchmark(params.data.packId, {
-          testCodes: body.data.testCodes,
-          providers: body.data.providers,
-          executionStyle: body.data.executionStyle,
-        }),
-      );
+      const benchmarkInput = {
+        ...(body.data.testCodes ? { testCodes: body.data.testCodes } : {}),
+        ...(body.data.allTests !== undefined ? { allTests: body.data.allTests } : {}),
+        providers: body.data.providers,
+        ...(body.data.executionStyle ? { executionStyle: body.data.executionStyle } : {}),
+      };
+      return reply.send(promptPacks.runPromptPackBenchmark(params.data.packId, benchmarkInput));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

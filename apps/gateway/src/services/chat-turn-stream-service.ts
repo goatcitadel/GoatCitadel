@@ -610,6 +610,10 @@ export async function executeDelegatedPlanStep(
       ].join(": "),
     )
     .join("\n");
+  const suggestedTools = filterDelegatedSuggestedToolsForPromptLab(input.step.suggestedTools ?? [], {
+    mode: input.task.mode,
+    normalizationProfile: prepared.normalized.normalizationProfile,
+  });
   const content = [
     `Delegated role: ${delegatedRole}`,
     `Parent objective: ${input.task.objective}`,
@@ -617,7 +621,7 @@ export async function executeDelegatedPlanStep(
     `Current step objective: ${input.step.objective}`,
     input.step.successCriteria ? `Success criteria: ${input.step.successCriteria}` : undefined,
     input.step.expectedOutput ? `Expected output: ${input.step.expectedOutput}` : undefined,
-    input.step.suggestedTools?.length ? `Suggested tools: ${input.step.suggestedTools.join(", ")}` : undefined,
+    suggestedTools.length ? `Suggested tools: ${suggestedTools.join(", ")}` : undefined,
     input.step.dependsOnStepIds?.length ? `Depends on: ${input.step.dependsOnStepIds.join(", ")}` : undefined,
     conversationContext ? `Conversation context:\n${conversationContext}` : undefined,
     priorStepContext ? `Prior handoffs:\n${priorStepContext}` : undefined,
@@ -644,7 +648,7 @@ export async function executeDelegatedPlanStep(
       role: input.step.role,
       delegatedRole,
       childSessionId: childSession.sessionId,
-      suggestedTools: input.step.suggestedTools ?? [],
+      suggestedTools,
     },
   });
 
@@ -666,6 +670,8 @@ export async function executeDelegatedPlanStep(
         memoryMode: prepared.prefs.memoryMode,
         thinkingLevel: prepared.prefs.thinkingLevel,
         retrievalMode: prepared.autonomy.retrievalMode,
+        toolAutonomy: prepared.effectiveToolAutonomy,
+        normalizationProfile: prepared.normalized.normalizationProfile,
       }),
     );
     delegatedResponseReceived = true;
@@ -765,6 +771,27 @@ export async function executeDelegatedPlanStep(
       childSessionId: childSession.sessionId,
     };
   }
+}
+
+const PROMPT_LAB_LOCAL_FILE_TOOL_NAMES = new Set([
+  "fs.read",
+  "file.read_range",
+  "file.find",
+  "code.search",
+  "code.search_files",
+]);
+
+function filterDelegatedSuggestedToolsForPromptLab(
+  suggestedTools: string[],
+  input: {
+    mode: ChatMode;
+    normalizationProfile?: ChatSendMessageRequest["normalizationProfile"];
+  },
+): string[] {
+  if (input.normalizationProfile !== "prompt_pack_harness" || input.mode === "code") {
+    return suggestedTools;
+  }
+  return suggestedTools.filter((toolName) => !PROMPT_LAB_LOCAL_FILE_TOOL_NAMES.has(toolName));
 }
 
 export async function* streamPreparedAgentChatTurn(

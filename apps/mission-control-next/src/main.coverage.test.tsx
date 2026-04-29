@@ -7,52 +7,47 @@ vi.mock("react-dom/client", () => ({
   createRoot: createRootMock,
 }));
 
-vi.mock("./App", () => ({
-  App: () => null,
+vi.mock("@next/app/MissionControlNextApp", () => ({
+  MissionControlNextApp: () => null,
 }));
 
-vi.mock("./state/ui-preferences", () => ({
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   UiPreferencesProvider: ({ children }: { children: unknown }) => children,
 }));
 
-describe("main entrypoint coverage", () => {
+describe("Mission Control Next main entrypoint", () => {
   beforeEach(() => {
     vi.resetModules();
     createRootMock.mockClear();
     renderMock.mockClear();
-    const addEventListener = vi.fn();
-    const serviceWorkerRegister = vi.fn();
-    const serviceWorkerGetRegistrations = vi.fn().mockResolvedValue([]);
     vi.stubGlobal("document", {
+      documentElement: {
+        dataset: {},
+      },
       getElementById: vi.fn(() => ({ id: "root" })),
     } as unknown as Document);
-    vi.stubGlobal("window", {
-      addEventListener,
-    } as unknown as Window & typeof globalThis);
     vi.stubGlobal("navigator", {
       serviceWorker: {
-        getRegistrations: serviceWorkerGetRegistrations,
-        register: serviceWorkerRegister,
+        getRegistrations: vi.fn().mockResolvedValue([]),
       },
     } as unknown as Navigator);
+    vi.stubGlobal("location", { origin: "http://127.0.0.1:5173" });
+    vi.stubGlobal("caches", {
+      keys: vi.fn().mockResolvedValue([]),
+      delete: vi.fn(),
+    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("mounts the app root", async () => {
+  it("mounts the app and retires stale service workers", async () => {
     await import("./main");
+
     expect(createRootMock).toHaveBeenCalledTimes(1);
     expect(renderMock).toHaveBeenCalledTimes(1);
-    expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
-  });
-
-  it("retires stale Mission Control service workers instead of registering a new one", async () => {
-    await import("./main");
-
-    expect(window.addEventListener).not.toHaveBeenCalledWith("load", expect.any(Function));
-    expect(navigator.serviceWorker.register).not.toHaveBeenCalled();
     expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
   });
 });

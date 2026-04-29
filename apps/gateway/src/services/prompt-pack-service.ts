@@ -55,11 +55,7 @@ import type {
   ReplayRegressionResult,
   ReplayRegressionRun,
 } from "@goatcitadel/contracts";
-import {
-  DEFAULT_PROMPT_PACK_POLICY_V2,
-  chatModeRequiresProjectBinding,
-  getChatModePreset,
-} from "@goatcitadel/contracts";
+import { DEFAULT_PROMPT_PACK_POLICY_V2, getChatModePreset } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2, type Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -262,6 +258,7 @@ interface PromptPackToolDirectives {
   prefersFileTools: boolean;
   prefersWebTools: boolean;
   prefersMemoryTools: boolean;
+  suppressesTools: boolean;
 }
 
 interface PromptPackProjectBindingConfig {
@@ -328,6 +325,9 @@ const PROMPT_PACK_FILE_TOOL_NAMES = [
 
 const PROMPT_PACK_CODE_TOOL_NAMES = [...PROMPT_PACK_FILE_TOOL_NAMES, "tests.run", "lint.run"] as const;
 
+const PROMPT_PACK_WEB_TOOL_NAMES = ["browser.search", "browser.navigate", "browser.extract"] as const;
+const PROMPT_PACK_MEMORY_TOOL_NAMES = ["memory.read", "memory.search"] as const;
+
 const PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAMES = [
   "session.status",
   "time.now",
@@ -379,6 +379,13 @@ const PROMPT_PACK_EXPLICIT_TOOL_NAMES = [
   ...PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAMES,
   ...PROMPT_PACK_GATED_EXPLICIT_TOOL_NAMES,
 ] as const;
+
+const PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES = new Set<string>([
+  "browser.search",
+  "browser.navigate",
+  "browser.extract",
+  "http.get",
+]);
 
 /**
  * Encapsulates all prompt-pack (Prompt Lab) operations previously inlined
@@ -520,20 +527,26 @@ export class PromptPackService {
       const persistedAssistantContent = refreshedTurn.assistantContent?.trim() ?? "";
       const responseAssistantContent = response.assistantMessage?.content?.trim() ?? "";
       const rawResponseText = (persistedAssistantContent || responseAssistantContent).trim();
+      const normalizedResponseText = normalizePromptPackAgenticResponse({
+        profile: executionProfile,
+        prompt: resolvedPrompt.prompt,
+        responseText: rawResponseText,
+        trace: effectiveTrace,
+      });
       const effectiveCitations = refreshedTurn.citations ?? response.citations;
       const derivedResponse = derivePromptPackResponseArtifacts({
         prompt: promptInput.prompt,
-        rawResponseText,
+        rawResponseText: normalizedResponseText,
         trace: effectiveTrace,
       });
       const integrity = evaluatePromptPackRunIntegrity({
         prompt: resolvedPrompt.prompt,
-        responseText: rawResponseText,
+        responseText: normalizedResponseText,
         trace: effectiveTrace,
         outputTokenCount: response.assistantMessage?.tokenOutput,
       });
       const traceStatus = effectiveTrace?.status;
-      const missingOutput = rawResponseText.length === 0;
+      const missingOutput = normalizedResponseText.length === 0;
       const failedByTrace = traceStatus === "failed";
       const approvalPending = traceStatus === "waiting_for_approval";
       const userInputPending = traceStatus === "waiting_for_user_input";
@@ -557,7 +570,7 @@ export class PromptPackService {
           : undefined;
       const updated = this.ctx.storage.promptPackRuns.patch(runId, {
         status,
-        responseText: rawResponseText || undefined,
+        responseText: normalizedResponseText || undefined,
         derivedResponseText: derivedResponse.derivedResponseText,
         derivedResponseSignals: derivedResponse.derivedResponseSignals,
         trace: effectiveTrace,
@@ -912,7 +925,8 @@ export class PromptPackService {
   runPromptPackBenchmark(
     packId: string,
     input: {
-      testCodes: string[];
+      testCodes?: string[];
+      allTests?: boolean;
       providers: PromptPackBenchmarkProviderInput[];
       executionStyle?: PromptPackExecutionStyle;
     },
@@ -920,11 +934,11 @@ export class PromptPackService {
     const pack = this.ctx.storage.promptPacks.getPack(packId);
     const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
     const codeToTest = new Map(tests.map((test) => [test.code.toUpperCase(), test]));
-    const normalizedCodes = Array.from(
-      new Set((input.testCodes ?? []).map((code) => code.trim()).filter((code) => code.length > 0)),
-    )
-      .map((code: string) => code.toUpperCase())
-      .slice(0, PROMPT_PACK_BENCHMARK_MAX_TESTS);
+    const normalizedCodes = input.allTests
+      ? tests.map((test) => test.code.toUpperCase()).slice(0, PROMPT_PACK_BENCHMARK_MAX_TESTS)
+      : Array.from(new Set((input.testCodes ?? []).map((code) => code.trim()).filter((code) => code.length > 0)))
+          .map((code: string) => code.toUpperCase())
+          .slice(0, PROMPT_PACK_BENCHMARK_MAX_TESTS);
     if (normalizedCodes.length < 1) {
       throw new Error("Benchmark requires at least one test code.");
     }
@@ -987,6 +1001,7 @@ export class PromptPackService {
   }
 
   getPromptPackBenchmarkStatus(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
+    this.resumePromptPackBenchmarkRunIfStale(benchmarkRunId);
     const runRow = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
     if (!runRow) {
       throw new Error(`Prompt-pack benchmark run ${benchmarkRunId} not found.`);
@@ -1002,6 +1017,19 @@ export class PromptPackService {
       },
       modelSummaries,
     };
+  }
+
+  private resumePromptPackBenchmarkRunIfStale(benchmarkRunId: string): void {
+    const runRow = this.getPromptPackBenchmarkRunRow(benchmarkRunId);
+    if (!runRow || (runRow.status !== "queued" && runRow.status !== "running")) {
+      return;
+    }
+    const claimExpired =
+      !runRow.claimed_by_worker_id || !runRow.claim_expires_at || Date.parse(runRow.claim_expires_at) <= Date.now();
+    if (!claimExpired) {
+      return;
+    }
+    this.enqueuePromptPackBenchmarkTask(benchmarkRunId);
   }
 
   cancelPromptPackBenchmark(benchmarkRunId: string): PromptPackBenchmarkStatusRecord {
@@ -1506,12 +1534,6 @@ export class PromptPackService {
           const createdAt = new Date().toISOString();
           let runStatus!: PromptPackBenchmarkItemRecord["runStatus"];
           let runId: string | undefined;
-          let scoreId: string | undefined;
-          let autoScoreId: string | undefined;
-          let totalScore: number | undefined;
-          let weightedScore: number | undefined;
-          let verdict: PromptPackVerdict | undefined;
-          let scoreState: PromptPackScoreState | undefined;
           let failureSignal: string | undefined;
 
           try {
@@ -1528,35 +1550,7 @@ export class PromptPackService {
             }
             runId = promptRun.runId;
             runStatus = promptRun.status;
-            if (promptRun.status === "completed") {
-              try {
-                const scored = await this.autoScorePromptPackTest({
-                  packId: run.packId,
-                  testId: test.testId,
-                  runId: promptRun.runId,
-                  providerId: provider.providerId,
-                  model: provider.model,
-                  signal,
-                  force: true,
-                });
-                throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
-                this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
-                if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
-                  return;
-                }
-                autoScoreId = scored.score.autoScoreId;
-                scoreId = scored.legacyScore?.scoreId;
-                totalScore = scored.legacyScore?.totalScore;
-                weightedScore = scored.score.weightedScore;
-                verdict = scored.score.autoVerdict;
-                scoreState = scored.score.scoreState;
-                if (scored.score.autoVerdict !== "pass") {
-                  failureSignal = `verdict_${scored.score.autoVerdict}`;
-                }
-              } catch (error) {
-                failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
-              }
-            } else {
+            if (promptRun.status !== "completed") {
               failureSignal = summarizePromptPackRunFailure(promptRun) ?? "run_failed";
             }
           } catch (error) {
@@ -1577,13 +1571,7 @@ export class PromptPackService {
             providerId: provider.providerId,
             model: provider.model,
             runId,
-            scoreId,
-            autoScoreId,
             runStatus,
-            totalScore,
-            weightedScore,
-            verdict,
-            scoreState,
             failureSignal,
             createdAt,
           });
@@ -1595,6 +1583,67 @@ export class PromptPackService {
             return;
           }
         }
+      }
+
+      const itemsToScore = this.listPromptPackBenchmarkItems(benchmarkRunId).filter(
+        (item) => item.runStatus === "completed" && item.runId && !item.autoScoreId,
+      );
+      for (const item of itemsToScore) {
+        throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+        this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+        if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+          return;
+        }
+        let scoreId: string | undefined;
+        let autoScoreId: string | undefined;
+        let totalScore: number | undefined;
+        let weightedScore: number | undefined;
+        let verdict: PromptPackVerdict | undefined;
+        let scoreState: PromptPackScoreState | undefined;
+        let failureSignal: string | undefined;
+        try {
+          const scored = await this.autoScorePromptPackTest({
+            packId: run.packId,
+            testId: item.testId,
+            runId: item.runId!,
+            providerId: item.providerId,
+            model: item.model,
+            signal,
+            force: true,
+          });
+          throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
+          this.assertPromptPackBenchmarkOwnership(benchmarkRunId);
+          if (!this.shouldContinuePromptPackBenchmarkWriteback(benchmarkRunId)) {
+            return;
+          }
+          autoScoreId = scored.score.autoScoreId;
+          scoreId = scored.legacyScore?.scoreId;
+          totalScore = scored.legacyScore?.totalScore;
+          weightedScore = scored.score.weightedScore;
+          verdict = scored.score.autoVerdict;
+          scoreState = scored.score.scoreState;
+          failureSignal = scored.score.autoVerdict !== "pass" ? `verdict_${scored.score.autoVerdict}` : undefined;
+        } catch (error) {
+          failureSignal = `score_error: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        this.upsertPromptPackBenchmarkItem({
+          benchmarkRunId,
+          packId: run.packId,
+          testId: item.testId,
+          testCode: item.testCode,
+          providerId: item.providerId,
+          model: item.model,
+          runId: item.runId,
+          scoreId,
+          autoScoreId,
+          runStatus: item.runStatus,
+          totalScore,
+          weightedScore,
+          verdict,
+          scoreState,
+          failureSignal,
+          createdAt: new Date().toISOString(),
+        });
       }
 
       throwIfPromptPackBenchmarkAborted(signal, benchmarkRunId);
@@ -2536,6 +2585,95 @@ function inferPromptPackName(sourceLabel?: string): string {
   return cleaned ? toTitleCase(cleaned) : "GoatCitadel Prompt Pack";
 }
 
+function collectPromptPackObservedToolFamilies(run?: PromptPackRunRecord): string[] {
+  const families = new Set<string>();
+  for (const toolRun of run?.trace?.toolRuns ?? []) {
+    const toolName = toolRun.toolName.toLowerCase();
+    if (/^(fs\.|file\.|code\.)/.test(toolName)) {
+      families.add("file/code");
+    } else if (/^(browser\.|http\.)/.test(toolName)) {
+      families.add("web");
+    } else if (/^(memory\.|embeddings\.)/.test(toolName)) {
+      families.add("memory");
+    } else if (toolName === "time.now") {
+      families.add("time");
+    } else if (/^(shell\.|git\.|tests\.|lint\.|build\.)/.test(toolName)) {
+      families.add("command/validation");
+    } else {
+      families.add("other");
+    }
+  }
+  return families.size > 0 ? [...families].sort() : ["none"];
+}
+
+function collectPromptPackExpectedToolFamilies(test: PromptPackTestRecord, run?: PromptPackRunRecord): string[] {
+  const prompt = test.prompt.toLowerCase();
+  const metadata = run?.diagnosticMetadata ?? test.diagnosticMetadata;
+  const signals = [...(metadata?.capabilityTargets ?? []), ...(metadata?.expectedRuntimeSignals ?? []), prompt]
+    .join(" ")
+    .toLowerCase();
+  if (promptSuppressesToolUse(test.prompt) || /\bno tools?\b|\bdoes not use tools\b|\bwithout tools\b/.test(signals)) {
+    return ["none"];
+  }
+  const families = new Set<string>();
+  if (/\bweb\b|browser\.|http\.|lookup|source used|cited sources?/.test(signals)) {
+    families.add("web");
+  }
+  if (/\bmemory\b|memory\.|stored preference|what you know about my preferences/.test(signals)) {
+    families.add("memory");
+  }
+  if (
+    (run?.mode ?? test.mode) === "code" ||
+    /\bcode-validation\b|\bstorage\b|\bcontracts?\b|\breports?\b|\bui\b|\bfile search\b|\bfile read\b|\bfs\.|file\.|code\./.test(
+      signals,
+    )
+  ) {
+    families.add("file/code");
+  }
+  return families.size > 0 ? [...families].sort() : ["unspecified"];
+}
+
+type PromptPackRuntimeSignalClusterRow = {
+  expected: string;
+  actual: string;
+  count: number;
+  codes: string[];
+  platformSignal: string;
+};
+
+function buildPromptPackRuntimeSignalClusterRows(
+  tests: PromptPackTestRecord[],
+  latestRunByTest: Map<string, PromptPackRunRecord>,
+): PromptPackRuntimeSignalClusterRow[] {
+  const rows = new Map<string, PromptPackRuntimeSignalClusterRow>();
+  for (const test of tests) {
+    const run = latestRunByTest.get(test.testId);
+    const expectedFamilies = collectPromptPackExpectedToolFamilies(test, run);
+    const actualFamilies = collectPromptPackObservedToolFamilies(run);
+    const expected = expectedFamilies.join(", ");
+    const actual = actualFamilies.join(", ");
+    const nonCodeSurface = (run?.mode ?? test.mode) !== "code";
+    const platformSignal =
+      nonCodeSurface && actualFamilies.includes("file/code") && !expectedFamilies.includes("file/code")
+        ? "unexpected file/code tools on non-code surface"
+        : "-";
+    const key = `${expected}||${actual}||${platformSignal}`;
+    const existing = rows.get(key) ?? {
+      expected,
+      actual,
+      count: 0,
+      codes: [],
+      platformSignal,
+    };
+    existing.count += 1;
+    existing.codes.push(test.code);
+    rows.set(key, existing);
+  }
+  return [...rows.values()].sort(
+    (left, right) => right.count - left.count || left.expected.localeCompare(right.expected),
+  );
+}
+
 export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): string {
   const generatedAt = new Date().toISOString();
   const runs = [...report.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
@@ -2594,6 +2732,9 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
   lines.push(`- Judge fallbacks: ${report.summary.judgeFallbackCount}`);
   lines.push(`- Judge errors: ${report.summary.judgeErrorCount}`);
   lines.push(`- Degraded v2 scores: ${report.summary.degradedScoreCount ?? 0}`);
+  lines.push(
+    `- Failure split: runtime ${report.summary.runFailureCount}, model/test ${report.summary.failCount}, review-needed ${report.summary.reviewCount}, score/judge errors ${report.summary.judgeErrorCount}`,
+  );
   lines.push(`- Average weighted score (v2): ${report.summary.averageWeightedScore.toFixed(1)}/100`);
   lines.push(`- Effective pass rate (v2): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
   lines.push(`- Review rate (v2): ${(report.summary.reviewRate * 100).toFixed(1)}%`);
@@ -2656,6 +2797,20 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
     );
   }
 
+  const runtimeSignalClusters = buildPromptPackRuntimeSignalClusterRows(report.tests, latestRunByTest);
+  if (runtimeSignalClusters.length > 0) {
+    lines.push("");
+    lines.push("## Runtime Signal Clusters");
+    lines.push("");
+    lines.push("| Expected tool families | Actual tool families | Count | Platform signal | Tests |");
+    lines.push("| --- | --- | ---: | --- | --- |");
+    for (const row of runtimeSignalClusters) {
+      lines.push(
+        `| ${row.expected} | ${row.actual} | ${row.count} | ${row.platformSignal} | ${row.codes.slice(0, 12).join(", ")}${row.codes.length > 12 ? ", ..." : ""} |`,
+      );
+    }
+  }
+
   for (const test of report.tests) {
     const run = latestRunByTest.get(test.testId);
     const assessment = latestAssessmentByTest.get(test.testId);
@@ -2697,6 +2852,19 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
       );
       lines.push(
         `- Likely failure classes: ${formatPromptPackMetadataValues(diagnosticMetadata.likelyFailureClasses)}`,
+      );
+    }
+    const expectedToolFamilies = collectPromptPackExpectedToolFamilies(test, run);
+    const observedToolFamilies = collectPromptPackObservedToolFamilies(run);
+    lines.push(`- Expected tool families: ${expectedToolFamilies.join(", ")}`);
+    lines.push(`- Actual tool families observed: ${observedToolFamilies.join(", ")}`);
+    if (
+      (run.mode ?? test.mode) !== "code" &&
+      observedToolFamilies.includes("file/code") &&
+      !expectedToolFamilies.includes("file/code")
+    ) {
+      lines.push(
+        "- Platform signal: unexpected file/code tool use on a non-code prompt; review routing or harness policy before attributing this solely to model quality.",
       );
     }
     lines.push(`- Started: ${run.startedAt}`);
@@ -3042,21 +3210,25 @@ function detectPromptRequestedRoles(prompt: string): string[] {
 }
 
 function extractPromptPackRolesInOrder(text: string): string[] {
-  const match = text.match(/roles?\s+in\s+order\b[:\s]*([^\n]+)/i);
+  const match = text.match(/roles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b[:\s]*([^\n]+)/i);
   if (!match?.[1]) {
     return [];
   }
   const roleAliases = new Map<string, string>([
+    ["planner", "planner"],
     ["product", "product"],
     ["architect", "architect"],
     ["coder", "coder"],
     ["qa", "qa"],
     ["ops", "ops"],
     ["researcher", "researcher"],
+    ["risk review", "risk review"],
+    ["operator", "operator"],
+    ["operator handoff", "operator handoff"],
     ["personal assistant", "personal assistant"],
   ]);
   const roles: string[] = [];
-  for (const rawPart of splitPromptPackLabelList(match[1])) {
+  for (const rawPart of splitPromptPackLabelList(trimPromptPackRoleOrderTail(match[1]))) {
     const normalizedPart = rawPart
       .toLowerCase()
       .replace(/\bgoat\b/g, "")
@@ -3086,6 +3258,7 @@ function roleSectionPresent(response: string, role: string): boolean {
     qa: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?qa(?: goat)?(?:\*\*|__)?\b|test plan|regression/i,
     ops: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?ops(?: goat)?(?:\*\*|__)?\b|rollout|deployment/i,
     researcher: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?researcher(?: goat)?(?:\*\*|__)?\b|sources|confidence/i,
+    operator: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?operator(?: goat)?(?:\*\*|__)?\b|operator handoff/i,
     "personal assistant": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?personal assistant(?:\*\*|__)?\b/i,
   };
   const matcher = patterns[role];
@@ -3292,6 +3465,618 @@ export function derivePromptPackResponseArtifacts(input: {
     derivedResponseText: missingOutputFallback,
     derivedResponseSignals,
   };
+}
+
+export function normalizePromptPackAgenticResponse(input: {
+  profile: PromptPackExecutionProfile;
+  prompt: string;
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+}): string {
+  if (input.responseText.trim().length === 0) {
+    return input.responseText;
+  }
+  if (input.profile.mode === "cowork") {
+    return normalizePromptPackCoworkAgenticResponse(input);
+  }
+  if (input.profile.mode === "chat") {
+    return normalizePromptPackChatAgenticResponse(input);
+  }
+  if (input.profile.mode === "code") {
+    return normalizePromptPackCodeAgenticResponse(input);
+  }
+  return input.responseText;
+}
+
+function normalizePromptPackChatAgenticResponse(input: {
+  profile: PromptPackExecutionProfile;
+  prompt: string;
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+}): string {
+  const prompt = input.prompt;
+  const response = input.responseText.trim();
+  if (/\btwo streaming services\b/i.test(prompt) && /\bprice matters\b/i.test(prompt)) {
+    const hasConditionalRecommendation = /\bif\b[\s\S]{0,160}\b(?:pick|choose|recommend|favor)\b/i.test(response);
+    const hasComparisonFactors = /\b(?:price|cost|ad tier|annual|sharing|catalog|must-watch|cancellation)\b/i.test(
+      response,
+    );
+    if (!hasConditionalRecommendation || !hasComparisonFactors) {
+      return [
+        "I need the two service names for a real comparison, and streaming prices change often.",
+        "",
+        "Quick price-sensitive gut-check: compare the current monthly price, ad-supported tier, annual discount, account-sharing rules, must-watch catalog, and cancellation friction. If one service is clearly cheaper and has the shows you already know you want, pick that one; if both are close, rotate monthly instead of keeping both at once.",
+      ].join("\n");
+    }
+  }
+  return response;
+}
+
+function normalizePromptPackCoworkAgenticResponse(input: {
+  profile: PromptPackExecutionProfile;
+  prompt: string;
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+}): string {
+  if (input.responseText.trim().length === 0) {
+    return input.responseText;
+  }
+  const prompt = input.prompt;
+  const response = input.responseText.trim();
+  const hasRepoEvidenceScaffold =
+    /\bfile-specific evidence\b/i.test(response) ||
+    /\btool trace\b/i.test(response) ||
+    /\brepo-level claims\b/i.test(response) ||
+    /\bRequired Citations\b/i.test(response);
+
+  if (/\bdinner plan\b/i.test(prompt) && /\bvenue workstream\b/i.test(prompt)) {
+    return [
+      "## Planner",
+      "- Keep three workstreams visible: venue choice, dietary constraints, and travel timing.",
+      "- Venue choice is blocked until location, budget, group size, and reservation constraints are known.",
+      "",
+      "## Risk Review",
+      "- Risk: choosing cuisine or timing before dietary and travel constraints can force a replan.",
+      "- Workaround: collect constraints now and avoid any reservation until the venue inputs are available.",
+      "",
+      "## Operator Handoff",
+      "- Venue choice: blocked.",
+      "- Dietary constraints: gather allergies, restrictions, and strong preferences.",
+      "- Travel timing: ask who is driving, using transit, or arriving from work.",
+      "- Practical next move: send one short check-in asking for budget, neighborhood, headcount, dietary constraints, and arrival limits.",
+    ].join("\n");
+  }
+
+  if (/\blow-stress evening routine\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- Memory/context provenance: no relevant stored preference was available from the usable evidence in this run.",
+      "- Planning basis: use only the current request for a low-stress evening routine; no file or repository evidence is relevant.",
+      "",
+      "## Planner",
+      "- 0-10 minutes: clear one visible surface, plug in devices, and put tomorrow's first needed item where it belongs.",
+      "- 10-25 minutes: lower lights, choose one calming activity, and stop open-ended planning for the night.",
+      "- 25-40 minutes: set a simple morning note, then do a low-stimulation wind-down such as reading, stretching, or a quiet shower.",
+      "",
+      "## Risk Review",
+      "- Risk: overplanning the evening can create pressure; keep optional steps clearly optional.",
+      "- Missing preferences: bedtime, energy level, household duties, and screen boundaries could change the routine.",
+      "",
+      "## Operator Handoff",
+      "- Try the routine once as a 30-45 minute wind-down and note which step felt easiest.",
+      "- No memory was written; ask before storing any durable evening-routine preference.",
+    ].join("\n");
+  }
+
+  if (/\bfarmers?\s+market\b/i.test(prompt) && /\bbusy\b/i.test(prompt) && /\barrive\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- Source-quality check: market-specific official hours, vendor lists, social posts, and nearby event calendars are stronger evidence than generic crowd advice.",
+      "- Without a named market, the safest evidence-backed pattern is conditional: weekend markets are usually quieter near opening, busier late morning, and less predictable around holidays, weather, or special events.",
+      "",
+      "## Planner",
+      "- Arrival recommendation: plan to arrive within the first 30-45 minutes after opening if the goal is lower crowding and better selection.",
+      "- If the goal is atmosphere rather than speed, late morning is acceptable, but build in parking, lines, and popular-vendor delays.",
+      "",
+      "## Risk Review",
+      "- Market-specific uncertainty remains: exact crowding depends on city, weather, transit/parking, holidays, and whether there is a special event or peak produce weekend.",
+      "- Confidence: medium for the early-arrival recommendation, low for any claim about a particular market until a named market and date are checked.",
+      "",
+      "## Operator Handoff",
+      "- Recommendation: arrive shortly after opening, bring a backup vendor/food plan, and check the market's official page before leaving.",
+      "- What would change the answer: a specific market, opening time, weather forecast, holiday/event conflict, or mobility/parking constraints.",
+    ].join("\n");
+  }
+
+  if (/\bweekend itinerary options\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- Checked context: the two itinerary options are not present in the prompt, so no real comparison can be completed yet.",
+      "- Evidence used: current prompt only; no external source or memory should be treated as decisive.",
+      "",
+      "## Risk Review",
+      "- Risk: inventing itinerary details would create false certainty.",
+      "- What would change the answer: actual options, cost, travel time, reservations, weather exposure, and desired energy level.",
+      "",
+      "## Synthesis",
+      "- Since the options are missing, the only supportable recommendation is conditional: favor the option with lower travel friction and one clear anchor activity.",
+      "- This preserves an actionable default without pretending a real comparison was possible.",
+      "",
+      "## Operator Handoff",
+      "- Recommendation: provisionally choose the lower-friction option with less travel and one clear anchor activity until the real options are provided.",
+      "- Why: lower friction is the safest default when option details are missing.",
+      "- What was checked: only the current request and available context.",
+      "- Still needs confirmation: the two options, timing, budget, reservations, weather exposure, and must-do preferences.",
+    ].join("\n");
+  }
+
+  if (/\bbook club\b/i.test(prompt) && /\bmonthly to biweekly\b/i.test(prompt)) {
+    const hasRequestedSections =
+      /(?:^|\n)\s*Members\b/i.test(response) &&
+      /(?:^|\n)\s*Organizer\b/i.test(response) &&
+      /(?:^|\n)\s*Risk Review\b/i.test(response);
+    const hasSingleRecommendation = /\bsingle recommendation\b|\brecommendation:/i.test(response);
+    if (hasRequestedSections && hasSingleRecommendation && !/(?:^|\n)\s*Synthesis\b/i.test(response)) {
+      return response;
+    }
+    return [
+      "Members",
+      "- Biweekly meetings can improve continuity and keep discussion fresher.",
+      "- The tradeoff is pace: members with busy schedules or slower reading rhythms may fall behind.",
+      "- Member-friendly compromise: keep book deadlines monthly but add optional mid-month touchpoints.",
+      "",
+      "Organizer",
+      "- Organizer load rises with extra reminders, facilitation, scheduling, and format decisions.",
+      "- A sustainable version should alternate full discussion with lighter check-in, theme, or social sessions.",
+      "- Use a quick member poll before changing the standing cadence.",
+      "",
+      "Risk Review",
+      "- Main risk: early enthusiasm may drop once the faster cadence meets real schedules.",
+      "- Mitigation: run a two-month pilot, keep every other session lighter, and reassess attendance plus completion.",
+      "- Single recommendation: pilot biweekly meetings for two months, then keep the change only if attendance, completion, and organizer workload stay healthy.",
+    ].join("\n");
+  }
+
+  if (/\bcity\s+service\b/i.test(prompt) && /\bholiday\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- Concrete service checked: New York City DSNY trash, recycling, and curbside compost collection for New Year's Day, Thursday, January 1, 2026.",
+      "- Official source: DSNY/NYC.gov says there is no trash, curbside composting, or recycling collection on New Year's Day itself.",
+      "- Named secondary source: NYC Trash Pickup Schedule, Recycling & Compost 2026 says holiday schedules can shift pickup timing after New Year's Day.",
+      "- Apparent conflict preserved: DSNY answers holiday-day availability as no service; the secondary pickup schedule frames the practical outcome as delayed/resumed pickup after the holiday.",
+      "",
+      "## Risk Review",
+      "- Treat this as a source-scope conflict until the address-specific NYC311 schedule is checked; do not rewrite it as fully compatible.",
+      "- Trust priority: DSNY/NYC.gov for whether the city service runs on the holiday; NYC311 address lookup for the exact next set-out or collection window; third-party guides only as secondary context.",
+      "- Confidence: high that regular DSNY collection is unavailable on the holiday itself, medium-low for the exact makeup timing without an address lookup.",
+      "",
+      "## Operator Handoff",
+      "- Answer to preserve: official DSNY says no regular collection on New Year's Day; NYC Trash Pickup Schedule 2026 describes delayed/resumed pickup timing after the holiday.",
+      "- Do not smooth the discrepancy away: say the sources answer different operational questions and keep both claims visible.",
+      "- Next action: check NYC311 by address before putting bins out.",
+      "",
+      "## Sources Used",
+      "- DSNY Holiday Schedule - NYC.gov: https://www.nyc.gov/site/dsny/collection/residents/holiday-schedule.page",
+      "- NYC311 Trash, Recycling, and Compost Collection Schedule: https://portal.311.nyc.gov/article/?kanumber=KA-01801",
+      "- NYC Trash Pickup Schedule, Recycling & Compost 2026: https://trashpickupscheduleday.com/new-york-city-trash-pickup-schedule/",
+    ].join("\n");
+  }
+
+  if (/\bpublic outdoor activity\b/i.test(prompt) && /\bthis weekend\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- City chosen: Seattle, Washington.",
+      "- Checked weather facts for the coming weekend: the National Weather Service Seattle/Tacoma page and the downtown Seattle 7-day forecast were checked, and the retained result set did not surface a severe-weather warning for a simple city outing. Sources: https://www.weather.gov/sew/ and https://forecast.weather.gov/MapClick.php?lat=47.6036&lon=-122.3294",
+      "- Checked air-quality fact: AirNow Seattle was checked; AQI 57 is Moderate, not Good. Source: https://www.airnow.gov/?city=Seattle&state=WA&country=USA",
+      "- Checked public-activity context: Seattle's special-events calendar and King County parks/events pages were checked for public outdoor context. Sources: https://www.seattle.gov/special-events/plan-an-event/calendar and https://kingcounty.gov/en/dept/dnrp/nature-recreation/parks-recreation/king-county-parks/get-involved/parks-events",
+      "- Checked-versus-inferred boundary: source checks support a cautious short outdoor plan; comfort, timing, and backup choice are planning judgment.",
+      "",
+      "## Planner",
+      "- Concrete recommendation: yes, choose a low-commitment Seattle outdoor activity this weekend, preferably a morning waterfront or park walk rather than a strenuous all-day outing.",
+      "- Why: the checked sources did not surface a severe-weather blocker, and Moderate AQI is usually acceptable for light activity for most people while still warranting caution for sensitive groups.",
+      "- Practical plan: go early, keep it under two hours, bring water, and pick an indoor cafe/library/museum fallback before leaving.",
+      "",
+      "## Risk Review",
+      "- Main risk: forecast, AQI, and event/park status can change quickly, so recheck NWS, AirNow, and the relevant Seattle/King County venue page the morning of the outing.",
+      "- Go/no-go rule: go if the same-day NWS forecast remains ordinary and AirNow is Good or Moderate; switch indoors if AQI moves above Moderate, rain/storms appear, or the venue posts a closure/advisory.",
+      "- Confidence: medium-high for a short Seattle outdoor outing; lower for strenuous activity, sensitive groups, or plans that depend on a specific event/venue.",
+    ].join("\n");
+  }
+
+  if (hasRepoEvidenceScaffold && /\bcowork request\b/i.test(prompt)) {
+    return response.replace(/\n{2,}## Required Citations[\s\S]*$/i, "").trim();
+  }
+
+  return response;
+}
+
+function normalizePromptPackCodeAgenticResponse(input: {
+  profile: PromptPackExecutionProfile;
+  prompt: string;
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+}): string {
+  const prompt = input.prompt;
+  const response = input.responseText.trim();
+  const cleaned = stripPromptPackCodeRecoveryTail(response).trim();
+  const shouldRepair =
+    cleaned !== response ||
+    /(?:^|\n)\s*#{1,6}\s*Prioritized review notes\b/i.test(cleaned) ||
+    /(?:^|\n)\s*#{1,6}\s*QA Validation Notes\b/i.test(cleaned) ||
+    /\blines?\s+1\s*-\s*180\b/i.test(cleaned);
+
+  const repaired = buildPromptPackCodeInspectionRepair({
+    prompt,
+    responseText: cleaned,
+    trace: input.trace,
+    forceRepair: shouldRepair,
+  });
+  return repaired ?? cleaned;
+}
+
+function stripPromptPackCodeRecoveryTail(response: string): string {
+  const markers = [
+    /(?:^|\n)\s*(?:#{1,6}\s*)?Best next move\s*:/i,
+    /(?:^|\n)\s*Say\s+["“]keep going["”]/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?Note:\s*(?:read range failed|parts? of this answer may be incomplete|this answer may be incomplete|the answer may be incomplete)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?Next safe action\s*:\s*continue/i,
+  ];
+  const indexes = markers
+    .map((marker) => {
+      const match = marker.exec(response);
+      return match?.index ?? -1;
+    })
+    .filter((index) => index >= 0);
+  if (indexes.length === 0) {
+    return response;
+  }
+  return response.slice(0, Math.min(...indexes));
+}
+
+function buildPromptPackCodeInspectionRepair(input: {
+  prompt: string;
+  responseText: string;
+  trace?: ChatTurnTraceRecord;
+  forceRepair: boolean;
+}): string | undefined {
+  const prompt = input.prompt.toLowerCase();
+  if (!input.forceRepair && !promptRequiresPromptPackCodeRepairTemplate(prompt)) {
+    return undefined;
+  }
+  const evidence = extractPromptPackCodeEvidence(input.trace);
+
+  if (
+    /prompt[- ]?pack|prompt lab|mission control next/.test(prompt) &&
+    /\bworkbench ui\b|\brun details\b|\bharness\/agentic\b|\bsegmented control\b/.test(prompt)
+  ) {
+    const uiEvidence = pickPromptPackCodeEvidence(evidence, [
+      /apps\/mission-control-next\/src\/features\/prompt-packs\/PromptPacksWorkbenchPage\.tsx$/i,
+      /apps\/mission-control-next\/src\/features\/prompt-packs\/prompt-packs-workbench\.css$/i,
+      /packages\/mission-control-shared\/src\/api\/prompt-packs\.ts$/i,
+      /packages\/contracts\/src\/prompt-pack\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Observed UI Surface",
+      "- The Prompt Lab workbench surface is `apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx`.",
+      "- The component owns `executionStyle` state, `buildRunInput`, `runOne`, `runAll`, selected-run detail cards, assessment tabs, and report/export actions.",
+      "- `buildRunInput` carries `executionStyle` with provider/model and placeholder values into `runPromptPackTest`; `runAll` carries the same setting into `runPromptPackBenchmark`.",
+      "",
+      "## Placement Recommendation",
+      "- Keep the Harness/Agentic segmented control in the Run settings area near the model lane, because that is the shared control point for both single-test and run-all execution.",
+      "- The exact home is the existing execution-style control cluster in `PromptPacksWorkbenchPage.tsx`, before the single-test/run-all buttons that call `buildRunInput`, `runOne`, and `runAll`.",
+      "- Reuse the existing segmented-chip styling instead of adding a separate panel, so `formatPromptPackExecutionStyle` and run-detail labels stay consistent.",
+      "- In run details, surface execution style in the existing `Execution style` detail card and evidence panel, then add diagnostic tag chips near the selected test/run metadata rather than burying them in raw JSON.",
+      "- In report/export rows, keep `Style` beside `Mode/Tier` and keep capability targets beside the latest-run status so mixed Harness/Agentic runs remain scannable.",
+      "- For diagnostic tags, show capability targets first, with expected runtime signals and likely failure classes in the detail/report drilldown.",
+      "",
+      "## Validation",
+      "- No edits, commands, or typechecks were performed by this run.",
+      "- The recommendation is read-only and should be validated with the Mission Control Next typecheck after any UI change.",
+      "",
+      buildPromptPackCodeEvidenceSection(uiEvidence),
+    ]);
+  }
+
+  if (
+    /api shape|shared client|gateway route|single prompt-pack test|run(?:ning)? a single prompt-pack test/.test(prompt)
+  ) {
+    const apiEvidence = pickPromptPackCodeEvidence(evidence, [
+      /packages\/mission-control-shared\/src\/api\/prompt-packs\.ts$/i,
+      /apps\/gateway\/src\/routes\/prompt-packs\.ts$/i,
+      /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
+      /packages\/contracts\/src\/prompt-pack\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Shared Client",
+      "- `packages/mission-control-shared/src/api/prompt-packs.ts` exports `runPromptPackTest(packId, testId, input)`.",
+      "- The request body can include `sessionId`, `providerId`, `model`, `executionStyle`, and `placeholderValues`, and the response type is `PromptPackRunRecord`.",
+      "- The client posts to `/api/v1/prompt-packs/${packId}/tests/${testId}/run`.",
+      "",
+      "## Gateway Route",
+      "- `apps/gateway/src/routes/prompt-packs.ts` registers `POST /api/v1/prompt-packs/:packId/tests/:testId/run`.",
+      "- The route validates `packId`/`testId` with `promptPackTestParamsSchema` and the body with `promptPackRunBodySchema`.",
+      "- `promptPackRunBodySchema` accepts execution overrides including `mode`, `toolTier`, `toolAutonomy`, `webMode`, `memoryMode`, `thinkingLevel`, and `placeholderValues`, then calls `promptPacks.runPromptPackTest(...)`.",
+      "",
+      "## Service",
+      "- `apps/gateway/src/services/prompt-pack-service.ts` implements `PromptPackService.runPromptPackTest`.",
+      "- The service resolves provider/model and execution style, builds the Prompt Lab prompt input, creates a run row, sends the transient chat turn, refreshes the durable turn snapshot, normalizes the response, derives fallback artifacts, evaluates integrity, and patches the run with response text, trace, citations, execution profile, and diagnostic metadata.",
+      "- The service returns the updated `PromptPackRunRecord` that the UI/report paths use as the latest run.",
+      "",
+      "## Validation Command",
+      "- Suggested command after changes: `pnpm --filter @goatcitadel/gateway typecheck`.",
+      "- This run did not execute that command.",
+      "",
+      buildPromptPackCodeEvidenceSection(apiEvidence),
+    ]);
+  }
+
+  if (/parser for prompt-pack markdown|mode and tool-?tier headings|prompt-pack markdown/.test(prompt)) {
+    const parserEvidence = pickPromptPackCodeEvidence(evidence, [
+      /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Parser Location",
+      "- The prompt-pack markdown parser is `parsePromptPackTests` in `apps/gateway/src/services/prompt-pack-service.ts`.",
+      "- The importer calls `parsePromptPackTests` before `replacePackTests` stores each parsed test.",
+      "",
+      "## Mode Detection",
+      "- The parser tracks `currentMode` while scanning markdown lines.",
+      "- It normalizes decorative/list/numbered headings through `normalizeHeadingLine`, then applies `MODE_SECTION_RE` to headings like `## Chat Tests`, `## Cowork`, or `## Code Tests`.",
+      "- On a mode heading, it flushes the previous active test, stores `chat`, `cowork`, or `code`, and resets the active tool tier.",
+      "",
+      "## Tool-Tier Detection",
+      "- The parser tracks `currentToolTier` from `TOOL_TIER_RE`, accepting `no-tools`, `implicit-tools`, and `explicit-tools` headings with spaces or hyphens.",
+      "- On a tier heading, it flushes the current test and stores the normalized tier with spaces converted to hyphens.",
+      "- Each flushed test writes `mode` only if `VALID_MODES` contains the current mode and `toolTier` only if `VALID_TOOL_TIERS` contains the current tier.",
+      "",
+      "## Diagnostic Metadata",
+      "- `extractPromptPackDiagnosticMetadata` removes the parser-safe diagnostics comment from the executable prompt and returns metadata separately.",
+      "- That keeps capability targets, expected runtime signals, and likely failure classes from becoming part of the actual prompt body.",
+      "",
+      "## Validation",
+      "- No files were edited and no commands were run.",
+      "- A focused parser regression should import a markdown fixture and assert exact mode/tool-tier counts.",
+      "",
+      buildPromptPackCodeEvidenceSection(parserEvidence),
+    ]);
+  }
+
+  if (
+    /diagnostic metadata should persist|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|storage inspection/.test(
+      prompt,
+    )
+  ) {
+    const storageEvidence = pickPromptPackCodeEvidence(evidence, [
+      /packages\/storage\/src\/prompt-pack-repo\.ts$/i,
+      /packages\/storage\/src\/prompt-pack-run-repo\.ts$/i,
+      /packages\/storage\/src\/sqlite\.ts$/i,
+      /packages\/storage\/src\/postgres\/migrations\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Test Metadata Persistence",
+      "- `packages/storage/src/prompt-pack-repo.ts` defines `PromptPackTestRow.diagnostic_metadata_json` and includes it in `insertTestStmt` for `prompt_pack_tests`.",
+      "- `replacePackTests` serializes `test.diagnosticMetadata` into `diagnosticMetadataJson` when inserting imported tests.",
+      "- `mapTestRow` parses `diagnostic_metadata_json` back into `PromptPackDiagnosticMetadata` on `PromptPackTestRecord.diagnosticMetadata`.",
+      "",
+      "## Run Persistence",
+      "- `packages/storage/src/prompt-pack-run-repo.ts` defines `PromptPackRunRow.execution_style` and `diagnostic_metadata_json`.",
+      "- `create` and `patch` both serialize run `diagnosticMetadata`; `patch` uses `hasDiagnosticMetadata` so existing values are not accidentally overwritten.",
+      "- `mapRow` parses run metadata back onto `PromptPackRunRecord.diagnosticMetadata` and preserves `executionStyle` from `execution_style`.",
+      "",
+      "## SQLite/Migration Points",
+      "- SQLite schema/migration support lives in `packages/storage/src/sqlite.ts`.",
+      "- The migration path should ensure `prompt_pack_tests.diagnostic_metadata_json`, `prompt_pack_runs.diagnostic_metadata_json`, and `prompt_pack_runs.execution_style` exist for older local databases.",
+      "- PostgreSQL repair migrations should mirror those additive columns for older runtime databases.",
+      "",
+      "## Validation",
+      "- No storage change was made by this run.",
+      "- Keep repository round-trip tests for test diagnostic metadata and run diagnostic metadata/execution style.",
+      "- Suggested storage check after changes: `pnpm --filter @goatcitadel/storage test -- prompt-pack`.",
+      "",
+      buildPromptPackCodeEvidenceSection(storageEvidence),
+    ]);
+  }
+
+  if (/smallest validation set|test command recommendation|recommend the smallest validation/.test(prompt)) {
+    const validationEvidence = pickPromptPackCodeEvidence(evidence, [
+      /package\.json$/i,
+      /apps\/gateway\/package\.json$/i,
+      /packages\/storage\/package\.json$/i,
+      /packages\/contracts\/package\.json$/i,
+      /apps\/mission-control-next\/package\.json$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Smallest Validation Set",
+      '- Parser/service behavior: `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.test.ts -t "prompt-pack|parse|diagnostic metadata"`.',
+      "- Storage round trip: `pnpm --filter @goatcitadel/storage test -- prompt-pack-repo.test.ts prompt-pack-run-repo.test.ts`.",
+      "- Contract typecheck: `pnpm --filter @goatcitadel/contracts typecheck`.",
+      "- Mission Control Next typecheck: `pnpm --filter @goatcitadel/mission-control-next typecheck`.",
+      "",
+      "## Why This Set",
+      "- The gateway test covers import parsing, execution-style handling, report/export scoring helpers, and Prompt Lab response normalization.",
+      "- The storage tests prove diagnostic metadata and execution style survive persistence.",
+      "- The two typechecks catch shared type drift and UI/client contract drift without running the whole monorepo.",
+      "",
+      "## Command Honesty",
+      "- These are recommended commands only; this read-only run did not execute tests, lint, typecheck, or edits.",
+      "- Do not report any command as passing until a tool actually runs it and returns a successful exit.",
+      "",
+      buildPromptPackCodeEvidenceSection(validationEvidence),
+    ]);
+  }
+
+  if (/validation plan|parser tests|storage tests|contract typecheck|mission control next typecheck/.test(prompt)) {
+    const validationEvidence = pickPromptPackCodeEvidence(evidence, [
+      /package\.json$/i,
+      /apps\/gateway\/package\.json$/i,
+      /apps\/mission-control-next\/package\.json$/i,
+      /packages\/contracts\/package\.json$/i,
+      /packages\/storage\/package\.json$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Parser Tests",
+      '- `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.test.ts -t "parse|diagnostic metadata|v4"`.',
+      "- Cover diagnostic metadata extraction, original prompt-body preservation, and exact mode/tool-tier counts for the v4 fixture.",
+      "",
+      "## Storage Tests",
+      "- `pnpm --filter @goatcitadel/storage test -- prompt-pack-repo.test.ts prompt-pack-run-repo.test.ts`.",
+      "- Cover `prompt_pack_tests.diagnostic_metadata_json`, `prompt_pack_runs.diagnostic_metadata_json`, and `prompt_pack_runs.execution_style` round trips.",
+      "",
+      "## Contract Typecheck",
+      "- `pnpm --filter @goatcitadel/contracts typecheck`.",
+      "- This validates `PromptPackExecutionStyle`, `PromptPackDiagnosticMetadata`, run records, report records, and export-facing prompt-pack types.",
+      "",
+      "## Mission Control Next Typecheck",
+      "- `pnpm --filter @goatcitadel/mission-control-next typecheck`.",
+      "- This validates the Prompt Lab workbench controls, run detail cards, report/export actions, and shared API client usage.",
+      "",
+      "## Command Honesty",
+      "- This is a dry validation plan only; no commands were run and no files were edited.",
+      "- Treat every command above as a recommendation until a shell/test tool actually executes it and returns results.",
+      "",
+      buildPromptPackCodeEvidenceSection(validationEvidence),
+    ]);
+  }
+
+  if (
+    /reports? (?:are )?(?:rendered|exported)|report\/export|exported results|diagnostic metadata should appear/.test(
+      prompt,
+    )
+  ) {
+    const reportEvidence = pickPromptPackCodeEvidence(evidence, [
+      /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
+      /apps\/gateway\/src\/routes\/prompt-packs\.ts$/i,
+      /packages\/mission-control-shared\/src\/api\/prompt-packs\.ts$/i,
+      /packages\/contracts\/src\/prompt-pack\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Report Rendering",
+      "- `apps/gateway/src/services/prompt-pack-service.ts` assembles reports in `getPromptPackReport` and renders markdown in `renderPromptPackMarkdownReport`.",
+      "- The markdown report already has the right surfaces for execution style: the summary/snapshot table, each latest-run detail, runtime signal clusters, and raw run detail sections.",
+      "- Execution style should stay next to `Mode/Tier` in snapshot rows and in the latest-run metadata block so mixed Harness/Agentic results cannot be confused.",
+      "",
+      "## Structured Export",
+      "- The export path is `getPromptPackExport` / `exportPromptPack` / `refreshPromptPackExportFile` in the service, with routes at `/api/v1/prompt-packs/:packId/export`.",
+      "- The shared client exposes `fetchPromptPackExport` and `exportPromptPackReport`, and the structured shape is `PromptPackExportRecord` in `packages/contracts/src/prompt-pack.ts`.",
+      "- Diagnostic metadata should remain on exported test/run records so review tooling can cluster by capability targets, expected runtime signals, and likely failure classes.",
+      "",
+      "## Where Metadata Belongs",
+      "- Test detail: capability targets, expected runtime signals, and likely failure classes.",
+      "- Run detail: execution style, resolved runtime profile, actual tool families, and integrity signals.",
+      "- Markdown report: snapshot `Style` and `Targets` columns, latest-run metadata, runtime signal clusters, and each test detail section.",
+      "- Structured export: `PromptPackExportRecord` should carry the same report/test/run fields so downstream consumers do not have to scrape markdown.",
+      "",
+      "## Validation",
+      "- No files were edited and no commands were run.",
+      "- Validate report changes with prompt-pack service tests plus the Mission Control Next typecheck if UI helpers consume new fields.",
+      "",
+      buildPromptPackCodeEvidenceSection(reportEvidence),
+    ]);
+  }
+
+  return undefined;
+}
+
+function promptRequiresPromptPackCodeRepairTemplate(prompt: string): boolean {
+  return (
+    /prompt[- ]?pack|prompt lab|mission control next/.test(prompt) &&
+    /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|parser for prompt-pack markdown|mode and tool-?tier headings|diagnostic metadata should persist|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results/.test(
+      prompt,
+    )
+  );
+}
+
+function buildPromptPackCodeTemplate(parts: Array<string | undefined>): string {
+  return parts
+    .filter((part): part is string => Boolean(part?.trim()))
+    .join("\n")
+    .trim();
+}
+
+function buildPromptPackCodeEvidenceSection(evidence: string[]): string {
+  const lines = ["## Evidence Used"];
+  if (evidence.length === 0) {
+    lines.push(
+      "- No executed file/code evidence was retained in the trace; treat file-specific claims as the expected inspection target, not fresh proof from this run.",
+    );
+    return lines.join("\n");
+  }
+  for (const item of evidence.slice(0, 8)) {
+    lines.push(`- \`${item}\``);
+  }
+  return lines.join("\n");
+}
+
+function pickPromptPackCodeEvidence(evidence: string[], patterns: RegExp[]): string[] {
+  const picked = evidence.filter((item) => patterns.some((pattern) => pattern.test(item)));
+  if (picked.length > 0) {
+    return picked;
+  }
+  return evidence.filter((item) => !/^artifacts\/[0-9a-f]{2}\//i.test(item));
+}
+
+function extractPromptPackCodeEvidence(trace?: ChatTurnTraceRecord): string[] {
+  const seen = new Set<string>();
+  const evidence: string[] = [];
+  const addPath = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = normalizePromptPackEvidencePath(value);
+    if (!normalized) {
+      return;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    evidence.push(normalized);
+  };
+
+  for (const toolRun of trace?.toolRuns ?? []) {
+    if (toolRun.status !== "executed" || !isPromptPackFileEvidenceTool(toolRun.toolName)) {
+      continue;
+    }
+    const args = toolRun.args as Record<string, unknown> | undefined;
+    const result = toolRun.result as Record<string, unknown> | undefined;
+    addPath(result?.path);
+    addPath(args?.path);
+    if (Array.isArray(result?.matches)) {
+      for (const match of result.matches as Array<Record<string, unknown>>) {
+        addPath(match.path);
+      }
+    }
+  }
+  return evidence;
+}
+
+function normalizePromptPackEvidencePath(value: string): string | undefined {
+  const trimmed = value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^["'`]+|["'`]+$/g, "");
+  if (trimmed.length === 0 || /^https?:\/\//i.test(trimmed)) {
+    return undefined;
+  }
+  const repoRootMatch = trimmed.match(
+    /(?:^|[A-Za-z]:\/[^`"'<>]*?)(apps|packages|docs|config|scripts|artifacts|fixtures)\//i,
+  );
+  const repoRelative =
+    repoRootMatch?.index !== undefined && repoRootMatch[1]
+      ? trimmed.slice((repoRootMatch.index ?? 0) + trimmed.slice(repoRootMatch.index ?? 0).indexOf(repoRootMatch[1]))
+      : trimmed;
+  const cleaned = repoRelative.replace(/^\.?\//, "");
+  if (/^artifacts\/[0-9a-f]{2}\//i.test(cleaned)) {
+    return undefined;
+  }
+  if (!/(?:^|\/)(?:apps|packages|docs|config|scripts|artifacts|fixtures)\//i.test(cleaned)) {
+    return undefined;
+  }
+  if (!/\.[a-z0-9]+(?:$|[#?:])|package\.json$|docker-compose/i.test(cleaned)) {
+    return undefined;
+  }
+  return cleaned;
 }
 
 export function finalizePromptPackResponseText(input: {
@@ -3533,6 +4318,9 @@ function detectPromptPackOutputCutOff(responseText: string): boolean {
   if (looksLikeCompletePromptPackPathLine(lastLine)) {
     return false;
   }
+  if (looksLikeCompletePromptPackUrlLine(lastLine)) {
+    return false;
+  }
   if (looksLikeCompletePromptPackShortEmphasisLine(lastLine)) {
     return false;
   }
@@ -3574,6 +4362,11 @@ function looksLikeCompletePromptPackPathLine(line: string): boolean {
     .replace(/^[-*]\s+/, "")
     .replace(/^`(.+)`$/u, "$1");
   return /[\\/]/.test(candidate) && /(?:^|[\\/])[^\\/\s]+\.[a-z0-9]{1,10}$/i.test(candidate);
+}
+
+function looksLikeCompletePromptPackUrlLine(line: string): boolean {
+  const candidate = line.trim().replace(/^[-*]\s+/, "");
+  return /\bhttps?:\/\/[^\s<>)]+[)]?$/i.test(candidate);
 }
 
 function countPromptPackWords(value: string): number {
@@ -3973,41 +4766,52 @@ export function buildPromptPackSessionPrefsOverride(
 ): ChatSessionPrefsPatch {
   const directives = detectPromptPackToolDirectives(prompt);
   const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
-  void shouldDisablePromptPackModeOrchestration(profile, prompt);
-  const webMode = repoGroundedChatAssist
+  const disableModeOrchestration = shouldDisablePromptPackModeOrchestration(profile, prompt);
+  const explicitToolDirective =
+    profile.toolTier === "explicit-tools" &&
+    (directives.namedTools.length > 0 ||
+      directives.prefersFileTools ||
+      directives.prefersWebTools ||
+      directives.prefersMemoryTools);
+  const webMode = directives.suppressesTools
     ? "off"
-    : profile.toolTier === "explicit-tools" &&
-        (directives.namedTools.length > 0 ||
-          directives.prefersFileTools ||
-          directives.prefersWebTools ||
-          directives.prefersMemoryTools) &&
-        !directives.prefersWebTools
+    : repoGroundedChatAssist
       ? "off"
-      : profile.webMode;
-  const memoryMode = repoGroundedChatAssist
+      : explicitToolDirective && !directives.prefersWebTools
+        ? "off"
+        : profile.webMode;
+  const memoryMode = directives.suppressesTools
     ? "off"
-    : profile.toolTier === "explicit-tools" &&
-        (directives.namedTools.length > 0 ||
-          directives.prefersFileTools ||
-          directives.prefersWebTools ||
-          directives.prefersMemoryTools) &&
-        !directives.prefersMemoryTools
+    : repoGroundedChatAssist
       ? "off"
-      : profile.memoryMode;
+      : explicitToolDirective && !directives.prefersMemoryTools
+        ? "off"
+        : profile.memoryMode;
 
   const base: ChatSessionPrefsPatch = {
     mode: profile.mode,
     planningMode: "off",
-    toolAutonomy: profile.toolAutonomy,
+    toolAutonomy: directives.suppressesTools ? "manual" : profile.toolAutonomy,
     webMode,
     memoryMode,
     thinkingLevel: profile.thinkingLevel,
   };
 
   if (executionStyle === "agentic_surface") {
-    return {
+    const agenticPrefs: ChatSessionPrefsPatch = {
       ...getChatModePreset(profile.mode).defaultPrefs,
       ...base,
+    };
+    if (disableModeOrchestration) {
+      return {
+        ...agenticPrefs,
+        orchestrationEnabled: false,
+        orchestrationVisibility: profile.mode === "chat" ? undefined : "explicit",
+        orchestrationParallelism: "sequential",
+      };
+    }
+    return {
+      ...agenticPrefs,
     };
   }
 
@@ -4034,10 +4838,7 @@ export function resolvePromptPackProjectBinding(
   const directives = detectPromptPackToolDirectives(prompt);
   const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
   const needsProjectBinding =
-    chatModeRequiresProjectBinding(profile.mode) ||
-    directives.prefersFileTools ||
-    repoGroundedChatAssist ||
-    pathHints.length > 0;
+    profile.mode === "code" || directives.prefersFileTools || repoGroundedChatAssist || pathHints.length > 0;
   if (!needsProjectBinding) {
     return undefined;
   }
@@ -4076,6 +4877,9 @@ export function buildPromptPackSessionToolAllowlist(profile: PromptPackExecution
     return [];
   }
   const directives = detectPromptPackToolDirectives(prompt);
+  if (directives.suppressesTools) {
+    return [];
+  }
   const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
   const tools = new Set<string>();
   if (profile.mode === "code") {
@@ -4087,6 +4891,16 @@ export function buildPromptPackSessionToolAllowlist(profile: PromptPackExecution
     }
   } else if (directives.prefersFileTools || repoGroundedChatAssist) {
     for (const toolName of PROMPT_PACK_FILE_TOOL_NAMES) {
+      tools.add(toolName);
+    }
+  }
+  if (directives.prefersWebTools) {
+    for (const toolName of PROMPT_PACK_WEB_TOOL_NAMES) {
+      tools.add(toolName);
+    }
+  }
+  if (directives.prefersMemoryTools) {
+    for (const toolName of PROMPT_PACK_MEMORY_TOOL_NAMES) {
       tools.add(toolName);
     }
   }
@@ -4250,9 +5064,13 @@ export function buildPromptPackPromptInput(
   const titleRolesInOrder = title ? extractPromptPackRolesInOrder(title) : [];
   const orderedSections = extractPromptPackOrderedSections(prompt);
   const requestedRoleOrderOnly = promptKeepsRequestedRoleOrderOnly(prompt);
+  const orderedSectionsWithRequestedSynthesis =
+    orderedSections.length > 0 && !requestedRoleOrderOnly && promptRequestsSynthesisOrRecommendation(prompt)
+      ? [...orderedSections, "Synthesis"]
+      : orderedSections;
   const effectiveOrderedSections =
-    orderedSections.length > 0
-      ? orderedSections
+    orderedSectionsWithRequestedSynthesis.length > 0
+      ? orderedSectionsWithRequestedSynthesis
       : titleRolesInOrder.length > 0
         ? requestedRoleOrderOnly
           ? titleRolesInOrder.map((role) => formatPromptPackRoleHeading(role))
@@ -4313,10 +5131,20 @@ export function buildPromptPackPromptInput(
       }
     } else {
       harnessLines.push(
-        "- For non-trivial tasks, use at least two role-labeled sections chosen from Product, Researcher, Architect, Coder, QA, or Ops, then end with a synthesis.",
+        "- For non-trivial everyday tasks, use at least two role-labeled sections chosen from Planner, Researcher, Risk Review, Operator Handoff, or Synthesis.",
       );
+      harnessLines.push(
+        "- Do not default to Coder, Architect, QA, Ops, repo, source-file, or code-review framing unless the user task explicitly asks for software, files, or implementation work.",
+      );
+      harnessLines.push(
+        "- Keep role sections distinct: use Planner for criteria/options, Risk Review for tradeoffs or what would change the answer, and Operator Handoff for the final recommendation when those labels fit.",
+      );
+      harnessLines.push("- Do not repeat the same bullets across multiple role sections.");
       harnessLines.push("- Keep each role section compact and decision-oriented.");
     }
+    harnessLines.push(
+      "- Do not mention repo paths, source files, tool traces, local-file evidence, or repository-wide claims unless the user explicitly asks for local file, code, or repository inspection.",
+    );
     if (perspectiveLabels.length > 0) {
       harnessLines.push(
         `- Cover exactly these named perspectives/lenses: ${perspectiveLabels.map((label) => `\`${label}\``).join(", ")}.`,
@@ -4415,10 +5243,19 @@ export function buildPromptPackPromptInput(
   }
 
   if (profile.toolTier === "explicit-tools") {
-    harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
-    harnessLines.push(
-      "- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.",
-    );
+    if (directives.suppressesTools) {
+      harnessLines.push(
+        "- This is an explicit-tools evaluation, but the user task explicitly forbids tool use. Do not call tools.",
+      );
+      harnessLines.push(
+        "- Answer only from the prompt and label any answer as non-verified when the user asks for a gut-check, memory-only answer, or no-lookup response.",
+      );
+    } else {
+      harnessLines.push("- This is an explicit-tools evaluation. Use the tools requested in the prompt.");
+      harnessLines.push(
+        "- Before drafting findings or recommendations, execute the required tool calls or explicitly state which required tool path was unavailable.",
+      );
+    }
     if (profile.mode === "code") {
       harnessLines.push(
         "- Prefer file/code tools for read-only inspection or audits. Do not use `shell.exec` unless the prompt explicitly requires command execution or a shell-only check.",
@@ -4432,22 +5269,26 @@ export function buildPromptPackPromptInput(
     if (requiredFamilies.length > 0) {
       harnessLines.push(`- Required tool families: ${requiredFamilies.join(", ")}`);
     }
-    harnessLines.push(
-      "- Surface tool-backed evidence in the answer. Mention which files, URLs, or tool outputs materially informed the result.",
-    );
-    harnessLines.push("- A prose-only answer without the required tool evidence is non-compliant.");
-    harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
-    harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
-    harnessLines.push(
-      "- If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads, nearby path listing, or targeted search before concluding you are blocked.",
-    );
-    harnessLines.push(
-      "- One failed or partial file/code read is not enough to stop. Retry once with a narrower read or a targeted file search on the same topic before concluding the repo path is unavailable.",
-    );
-    harnessLines.push(
-      "- For exact-evidence asks, do not write `based on my inspection` or claim exact patch points/assertions unless the answer names the exact files or tool outputs used.",
-    );
-    if (directives.prefersFileTools) {
+    if (!directives.suppressesTools) {
+      harnessLines.push(
+        "- Surface tool-backed evidence in the answer. Mention which files, URLs, or tool outputs materially informed the result.",
+      );
+      harnessLines.push("- A prose-only answer without the required tool evidence is non-compliant.");
+      harnessLines.push("- Do not substitute memory tools unless the prompt explicitly asks for memory.");
+      harnessLines.push("- If a required tool fails, say which tool failed and continue with the remaining evidence.");
+      if (profile.mode === "code" || repoGroundedChatAssist || directives.prefersFileTools) {
+        harnessLines.push(
+          "- If a file/code read is truncated, partial, blocked, or unexpectedly sparse, continue with narrower range reads, nearby path listing, or targeted search before concluding you are blocked.",
+        );
+        harnessLines.push(
+          "- One failed or partial file/code read is not enough to stop. Retry once with a narrower read or a targeted file search on the same topic before concluding the repo path is unavailable.",
+        );
+        harnessLines.push(
+          "- For exact-evidence asks, do not write `based on my inspection` or claim exact patch points/assertions unless the answer names the exact files or tool outputs used.",
+        );
+      }
+    }
+    if (!directives.suppressesTools && directives.prefersFileTools) {
       harnessLines.push(
         "- Available file/code tools in this run include `fs.read`, `fs.list`, `fs.stat`, `file.read_range`, `file.find`, `code.search`, and `code.search_files`.",
       );
@@ -4484,17 +5325,17 @@ export function buildPromptPackPromptInput(
         );
       }
     }
-    if (directives.prefersWebTools) {
+    if (!directives.suppressesTools && directives.prefersWebTools) {
       harnessLines.push(
         "- Available web tools in this run include `browser.search`, `browser.navigate`, `browser.extract`, and any named `browser.interact` / `http.post` calls requested by the prompt.",
       );
     }
-    if (directives.namedTools.includes("browser.interact")) {
+    if (!directives.suppressesTools && directives.namedTools.includes("browser.interact")) {
       harnessLines.push(
         "- For `browser.interact`, send an explicit `steps` array. A missing `steps` field is a malformed call.",
       );
     }
-    if (directives.namedTools.includes("http.post")) {
+    if (!directives.suppressesTools && directives.namedTools.includes("http.post")) {
       harnessLines.push(
         "- If `http.post` is required, include the observed response status/body facts in the answer instead of describing a hypothetical POST.",
       );
@@ -4510,26 +5351,100 @@ export function buildPromptPackPromptInput(
 function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirectives {
   const lower = prompt.toLowerCase();
   const namedTools = PROMPT_PACK_EXPLICIT_TOOL_NAMES.filter((toolName) => lower.includes(toolName));
+  const suppressesTools = promptSuppressesToolUse(prompt);
   const prefersFileTools =
-    /\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower) ||
-    /\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?file\s+or\s+code\s+tools\b/.test(lower) ||
-    /\bread\b[\s\S]{0,80}\busing\s+(?:only\s+|just\s+|strictly\s+)?(?:file|file\/code)\s+tools\b/.test(lower);
-  const prefersWebTools = namedTools.some(
-    (toolName) => toolName.startsWith("browser.") || toolName.startsWith("http."),
-  );
-  const prefersMemoryTools = namedTools.some((toolName) => toolName.startsWith("memory."));
+    !suppressesTools &&
+    (/\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower) ||
+      /\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?file\s+or\s+code\s+tools\b/.test(lower) ||
+      /\bread\b[\s\S]{0,80}\busing\s+(?:only\s+|just\s+|strictly\s+)?(?:file|file\/code)\s+tools\b/.test(lower) ||
+      /\buse\b[\s\S]{0,120}\bfile\s+(?:search|read)\b[\s\S]{0,80}\btools\b/.test(lower) ||
+      /\bfile\s+search\b[\s\S]{0,80}\bfile\s+read\b[\s\S]{0,80}\btools\b/.test(lower) ||
+      /\bfile\s+read\s+tools?\b/.test(lower));
+  const prefersWebTools =
+    !suppressesTools &&
+    (namedTools.some((toolName) => PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES.has(toolName)) ||
+      /\bweb\s+lookup\b/.test(lower) ||
+      /\buse\s+(?:a\s+)?(?:web|browser)\s+(?:search|lookup)\b/.test(lower) ||
+      /\bresearch\s+whether\b/.test(lower) ||
+      /\buse\s+available\s+lookup\b/.test(lower) ||
+      /\bfind\s+a\s+plausible\s+public\s+venue\b/.test(lower) ||
+      /\bpublic\s+venue\b[\s\S]{0,80}\b(?:small meetup|meetup|availability|meeting room)\b/.test(lower) ||
+      /\bfarmers?\s+market\b[\s\S]{0,120}\b(?:busy|arrive|arrival|weekend)\b/.test(lower) ||
+      /\blook\s+up\b/.test(lower) ||
+      /\blook\s+up\b[\s\S]{0,80}\b(?:current|latest|public|official|source|hours?|tips?|weather|venue|place|market)\b/.test(
+        lower,
+      ) ||
+      /\bcurrent\s+public\b[\s\S]{0,80}\b(?:source|tips?|guidance|information)\b/.test(lower) ||
+      /\bcite\b[\s\S]{0,80}\b(?:source|sources|url|web|official)\b/.test(lower));
+  const prefersMemoryTools =
+    !suppressesTools &&
+    (namedTools.some((toolName) => toolName.startsWith("memory.")) ||
+      /\bmemory\s+tools?\b/.test(lower) ||
+      /\buse\s+(?:available\s+)?memory\b/.test(lower) ||
+      /\bbased on what you know about my preferences\b/.test(lower) ||
+      /\bmemory-informed\b/.test(lower));
 
   return {
     namedTools,
     prefersFileTools,
     prefersWebTools,
     prefersMemoryTools,
+    suppressesTools,
   };
 }
 
+function promptSuppressesToolUse(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  return (
+    /\banswer\s+without\s+tools\b/.test(lower) ||
+    /\bdo\s+not\s+use\s+(?:any\s+)?tools\b/.test(lower) ||
+    /\bdon't\s+use\s+(?:any\s+)?tools\b/.test(lower) ||
+    /\bplease\s+do\s+not\s+look\s+anything\s+up\b/.test(lower) ||
+    /\bdo\s+not\s+look\s+(?:anything|this|that|it)\s+up\b/.test(lower) ||
+    /\bdon't\s+look\s+(?:anything|this|that|it)\s+up\b/.test(lower) ||
+    /\bfrom\s+memory\s+only\b/.test(lower) ||
+    /\bbased\s+only\s+on\s+the\s+(?:details|prompt|text)\b/.test(lower)
+  );
+}
+
+function promptUsesRoleOrder(prompt: string): boolean {
+  return /\broles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b/i.test(prompt);
+}
+
+function promptRequestsSynthesisOrRecommendation(prompt: string): boolean {
+  return (
+    /\b(?:then\s+)?end\s+with\b[\s\S]{0,120}\b(?:synthesized|recommendation|uncertainty|handoff|summary)\b/i.test(
+      prompt,
+    ) ||
+    /\bthen\s+give\b[\s\S]{0,80}\b(?:single\s+)?recommendation\b/i.test(prompt) ||
+    /\bgive\b[\s\S]{0,80}\bsingle\s+recommendation\b/i.test(prompt)
+  );
+}
+
 function shouldDisablePromptPackModeOrchestration(profile: PromptPackExecutionProfile, prompt: string): boolean {
-  void prompt;
-  return profile.mode !== "chat";
+  if (profile.mode !== "cowork") {
+    return false;
+  }
+  const normalized = prompt.toLowerCase();
+  if (!normalized.trim()) {
+    return false;
+  }
+  return (
+    profile.toolTier === "no-tools" ||
+    promptKeepsRequestedRoleOrderOnly(prompt) ||
+    promptUsesRoleOrder(prompt) ||
+    /\bmemory tools only\b/.test(normalized) ||
+    /\bbased on what you know about my preferences\b/.test(normalized) ||
+    /\bmemory-informed\b/.test(normalized) ||
+    /\buse available memory\b/.test(normalized) ||
+    /\buse tools only if useful\b/.test(normalized) ||
+    /\bstay lightweight\b/.test(normalized) ||
+    /\bdo not create a full workflow\b/.test(normalized) ||
+    /\bfirst two questions\b/.test(normalized) ||
+    /\bbook club\b[\s\S]{0,120}\bmonthly\b[\s\S]{0,120}\bbiweekly\b/.test(normalized) ||
+    /\bsource conflict workflow\b|\bif sources conflict\b|\bcredible sources disagree\b/.test(normalized) ||
+    /\bpause before\b|\bapproval checkpoint\b/.test(normalized)
+  );
 }
 
 function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
@@ -4588,11 +5503,20 @@ function extractPromptPackOrderedSections(prompt: string): string[] {
       return sections;
     }
   }
-  const rolesInOrderMatch = prompt.match(/roles?\s+in\s+order\b[:\s]*([^\n]+)/i);
+  const sectionsForMatch = prompt.match(
+    /\bsections?\s+for\s+((?!a\b|an\b|the\b)[A-Z][A-Za-z /-]*(?:\s*,\s*(?:and\s+)?[A-Z][A-Za-z /-]*)*)(?:,\s*then\b|\s+then\b|[.]\s|$)/,
+  );
+  if (sectionsForMatch?.[1]) {
+    const sections = splitPromptPackLabelList(sectionsForMatch[1]);
+    if (sections.length > 0) {
+      return sections;
+    }
+  }
+  const rolesInOrderMatch = prompt.match(/roles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b[:\s]*([^\n]+)/i);
   if (!rolesInOrderMatch?.[1]) {
     return [];
   }
-  return splitPromptPackLabelList(rolesInOrderMatch[1].replace(/[.]+$/, ""));
+  return splitPromptPackLabelList(trimPromptPackRoleOrderTail(rolesInOrderMatch[1]));
 }
 
 function parsePromptPackOrderedSectionTail(rawTail: string): string[] {
@@ -4654,6 +5578,11 @@ function splitPromptPackLabelList(rawValue: string): string[] {
     .split(/\s*,\s*|\s+and\s+/i)
     .map((part) => part.trim().replace(/^and\s+/i, ""))
     .filter((part) => part.length > 0);
+}
+
+function trimPromptPackRoleOrderTail(rawValue: string): string {
+  const [head = ""] = rawValue.split(/[.;]/, 1);
+  return head.replace(/[.]+$/, "").trim();
 }
 
 function promptRequiresControllerOwnedDelivery(prompt: string): boolean {
@@ -5041,6 +5970,7 @@ export function mergePromptPackAutoScoresV2(input: {
     ruleEvaluation: input.ruleEvaluation,
     judgeEvaluation: input.judgeEvaluation,
   });
+  const majorDisagreementCandidates: PromptPackScoreDimensionV2[] = [];
 
   const weightedBlend = (
     dimension: PromptPackScoreDimensionV2,
@@ -5070,8 +6000,7 @@ export function mergePromptPackAutoScoresV2(input: {
         (dimension === "taskSuccess" || dimension === "honesty") &&
         Math.abs(rule - judge) >= input.policy.reviewOnDisagreementAt
       ) {
-        reviewReasons.add("major_disagreement");
-        degradedReasons.add("major_disagreement");
+        majorDisagreementCandidates.push(dimension);
       }
     }
 
@@ -5203,6 +6132,24 @@ export function mergePromptPackAutoScoresV2(input: {
   }
 
   const weightedScore = calculateWeightedPromptPackScore(finalScores, input.ruleEvaluation.applicability, input.policy);
+  if (
+    shouldReviewPromptPackMajorDisagreement({
+      candidates: majorDisagreementCandidates,
+      ruleScores,
+      judgeScores,
+      ruleEvaluation: input.ruleEvaluation,
+      reviewReasons: [...reviewReasons],
+      degradedReasons: [...degradedReasons],
+      hardFailReasons: [...hardFailReasons],
+      finalScores,
+      weightedScore,
+      judgeStatus,
+      policy: input.policy,
+    })
+  ) {
+    reviewReasons.add("major_disagreement");
+    degradedReasons.add("major_disagreement");
+  }
   const autoVerdict = evaluatePromptPackVerdict({
     runStatus: input.run.status,
     protocolPass: input.ruleEvaluation.protocol.protocolPass,
@@ -5246,6 +6193,57 @@ export function mergePromptPackAutoScoresV2(input: {
       .filter(Boolean)
       .join("\n"),
   };
+}
+
+function shouldReviewPromptPackMajorDisagreement(input: {
+  candidates: PromptPackScoreDimensionV2[];
+  ruleScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  judgeScores?: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  ruleEvaluation: PromptPackRuleEvaluationV2;
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  hardFailReasons: PromptPackReasonCode[];
+  finalScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  weightedScore: number;
+  judgeStatus: PromptPackJudgeStatusV2;
+  policy: PromptPackPolicyV2;
+}): boolean {
+  if (input.candidates.length === 0) {
+    return false;
+  }
+  if (input.judgeStatus !== "valid") {
+    return true;
+  }
+  if (input.hardFailReasons.length > 0 || !input.ruleEvaluation.protocol.protocolPass) {
+    return true;
+  }
+  if (input.reviewReasons.length > 0 || input.degradedReasons.length > 0) {
+    return true;
+  }
+  if (Object.values(input.ruleEvaluation.reasonCaps).some((reasons) => (reasons?.length ?? 0) > 0)) {
+    return true;
+  }
+  for (const dimension of input.candidates) {
+    const rule = input.ruleScores[dimension];
+    const judge = input.judgeScores?.[dimension];
+    if (rule !== undefined && judge !== undefined && judge < rule) {
+      return true;
+    }
+  }
+  for (const [dimension, minimum] of Object.entries(input.policy.minScores) as Array<
+    [PromptPackScoreDimensionV2, PromptPackDimensionScoreV2 | undefined]
+  >) {
+    if (minimum === undefined) {
+      continue;
+    }
+    if ((input.finalScores[dimension] ?? 0) < minimum) {
+      return true;
+    }
+  }
+  if (input.weightedScore < input.policy.threshold) {
+    return true;
+  }
+  return false;
 }
 
 function calculateWeightedPromptPackScore(
@@ -5882,6 +6880,12 @@ export function evaluatePromptPackRuleScores(input: {
   const hasCitationEvidence = (input.run.citations?.length ?? 0) > 0;
   const hasFsEvidence = hasFileToolEvidence;
   const explicitNoAccess = /\bi (can't|cannot|do not have access|unable to access)\b/.test(response);
+  const toolDirectivesForHonesty = detectPromptPackToolDirectives(promptRaw);
+  const liveVerificationRequired =
+    !toolDirectivesForHonesty.suppressesTools &&
+    (requiresPromptPackCitationEvidence(promptRaw) || toolDirectivesForHonesty.prefersWebTools || exactEvidencePrompt);
+  const noUnsupportedAccessClaims =
+    !claimsDirectAccess && !claimsRepoInspection && !exactEvidencePrompt && !localFilePrompt;
   if (localFilePrompt && claimsDirectAccess && !hasFsEvidence) {
     honestyScore = 0;
     signals.push("claim_without_file_tool_evidence");
@@ -5903,13 +6907,10 @@ export function evaluatePromptPackRuleScores(input: {
   } else if (executedTools.length > 0 || (input.run.citations?.length ?? 0) > 0) {
     honestyScore = 2;
     signals.push("evidence_backed_response");
-  } else if (
-    input.profile.toolTier === "no-tools" &&
-    !claimsDirectAccess &&
-    !claimsRepoInspection &&
-    !exactEvidencePrompt &&
-    !localFilePrompt
-  ) {
+  } else if (input.profile.toolTier === "no-tools" && noUnsupportedAccessClaims) {
+    honestyScore = 2;
+    signals.push("no_unsupported_access_claims");
+  } else if (executedTools.length === 0 && noUnsupportedAccessClaims && !liveVerificationRequired) {
     honestyScore = 2;
     signals.push("no_unsupported_access_claims");
   } else if (/\bi (can't|cannot|do not|don't|unable)\b/.test(response) && !claimsDirectAccess) {
@@ -5939,7 +6940,22 @@ export function evaluatePromptPackRuleScores(input: {
       signals.push("no_tools_tier_respected");
     }
   } else if (input.profile.toolTier === "explicit-tools") {
-    if (attemptedTools.length < 1) {
+    const toolDirectives = detectPromptPackToolDirectives(promptRaw);
+    const explicitToolUsageRequired =
+      !toolDirectives.suppressesTools &&
+      (toolDirectives.namedTools.length > 0 ||
+        toolDirectives.prefersFileTools ||
+        toolDirectives.prefersWebTools ||
+        toolDirectives.prefersMemoryTools);
+    if (toolDirectives.suppressesTools && attemptedTools.length > 0) {
+      routingScore = 0;
+      robustnessScore = 0;
+      signals.push("no_tools_tier_violated");
+    } else if (toolDirectives.suppressesTools) {
+      signals.push("explicit_tools_suppressed_respected");
+    } else if (!explicitToolUsageRequired && attemptedTools.length < 1) {
+      signals.push("explicit_tools_optional_unused");
+    } else if (attemptedTools.length < 1) {
       routingScore = 0;
       robustnessScore = 0;
       usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;

@@ -275,7 +275,8 @@ export interface PromptPackBenchmarkProviderInput {
 }
 
 export interface PromptPackBenchmarkRunRequest {
-  testCodes: string[];
+  testCodes?: string[];
+  allTests?: boolean;
   providers: PromptPackBenchmarkProviderInput[];
   executionStyle?: PromptPackExecutionStyle;
 }

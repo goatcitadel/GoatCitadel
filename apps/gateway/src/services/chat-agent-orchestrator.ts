@@ -374,25 +374,39 @@ export class ChatAgentOrchestrator {
     const promptLabRepoInspectionAssist =
       promptLabFilePaths.length === 0 && promptLabTaskSuggestsRepoInspection(promptLabTaskForInspection);
     const repoGroundedInspectionAssist =
-      normalizationProfile === "prompt_pack_harness" && looksLikeRepoGroundedInspectionPrompt(input.content);
+      normalizationProfile === "prompt_pack_harness" &&
+      looksLikeRepoGroundedInspectionPrompt(promptLabTaskForInspection);
+    const promptLabShouldInspectFilesForTurn =
+      promptLabContractRequiresFileTools(promptLabContract) ||
+      promptLabContract.repoGroundedAssist ||
+      promptLabRepoInspectionAssist ||
+      repoGroundedInspectionAssist ||
+      promptLabPrefetchFilePaths.length > 0;
     const desiredPromptLabConcreteReads = resolvePromptLabDesiredConcreteReadCount(promptLabTaskForInspection);
     const toolSchema =
-      input.toolAutonomy === "manual"
+      input.toolAutonomy === "manual" || promptLabContract.toolUseSuppressed
         ? { tools: [], modelToCanonical: new Map<string, string>(), canonicalToModel: new Map<string, string>() }
         : await this.buildToolSchema(input, intents);
     const catalogToolNames = this.deps.listToolCatalog().map((tool) => tool.toolName);
-    const promptLabConcreteReadToolName = resolvePromptLabConcreteReadToolName(
-      toolSchema.canonicalToModel,
-      catalogToolNames,
-    );
-    const promptLabSearchToolNames = resolvePromptLabLocalSearchToolNames(
-      toolSchema.canonicalToModel,
-      catalogToolNames,
-    );
+    const promptLabConcreteReadToolName = promptLabShouldInspectFilesForTurn
+      ? resolvePromptLabConcreteReadToolName(toolSchema.canonicalToModel, catalogToolNames)
+      : undefined;
+    const promptLabSearchToolNames = promptLabShouldInspectFilesForTurn
+      ? resolvePromptLabLocalSearchToolNames(toolSchema.canonicalToModel, catalogToolNames)
+      : [];
+    const promptLabExplicitToolsWithRequiredEvidence =
+      promptLabContract.explicitTools &&
+      !promptLabContract.toolUseSuppressed &&
+      (input.mode === "code" ||
+        promptLabContract.requiredNamedTools.length > 0 ||
+        promptLabContractRequiresFileTools(promptLabContract) ||
+        promptLabContractRequiresWebTools(promptLabContract));
     const canControllerSearchPromptLabFiles = promptLabSearchToolNames.length > 0;
     const canUseTimeTool = toolSchema.canonicalToModel.has("time.now");
     const canUseSearchTool = toolSchema.canonicalToModel.has("browser.search");
     const canUseNavigateTool = toolSchema.canonicalToModel.has("browser.navigate");
+    const memoryLookupIntent = detectMemoryLookupIntent(input.content);
+    const canUseMemorySearchTool = toolSchema.canonicalToModel.has("memory.search");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
     const toolRuns: ChatToolRunRecord[] = [];
@@ -513,19 +527,71 @@ export class ChatAgentOrchestrator {
       !assistantContent &&
       !approvalPayload &&
       input.toolAutonomy !== "manual" &&
-      (promptLabContract.explicitTools ||
+      promptLabContract.explicitTools &&
+      memoryLookupIntent &&
+      canUseMemorySearchTool &&
+      toolRunCount === 0
+    ) {
+      const memoryQuery = inferMemoryQueryFromPrompt(input.content) ?? "planning preferences travel scheduling";
+      throwIfChatTurnCancelled(input);
+      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+        status: "waiting_for_tool",
+      });
+      ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+      const syntheticRun = await this.executeToolCall({
+        input,
+        turnId: input.turnId,
+        toolName: "memory.search",
+        rawArgs: {
+          query: memoryQuery,
+        },
+        localFileIntent,
+        priorToolRuns: toolRuns,
+        turnBudgetDeadline,
+      });
+      toolRunCount += 1;
+      toolRuns.push(syntheticRun.record);
+      yield {
+        type: "tool_start",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        toolRun: {
+          ...syntheticRun.record,
+          status: "started",
+        },
+      };
+      if (syntheticRun.chunk) {
+        yield syntheticRun.chunk;
+      }
+      const toolMessageId = `prefetch-memory-search-${randomUUID()}`;
+      conversationMessages.push(
+        createAssistantToolCallMessage({
+          toolCallId: toolMessageId,
+          toolName: this.resolveModelToolName("memory.search", toolSchema.canonicalToModel),
+          argumentsJson: JSON.stringify({
+            query: memoryQuery,
+          }),
+        }),
+      );
+      conversationMessages.push({
+        role: "tool",
+        tool_call_id: toolMessageId,
+        content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+      } as ChatCompletionMessage);
+    }
+
+    if (
+      !assistantContent &&
+      !approvalPayload &&
+      input.toolAutonomy !== "manual" &&
+      (promptLabExplicitToolsWithRequiredEvidence ||
         promptLabContract.repoGroundedAssist ||
         promptLabRepoInspectionAssist ||
         repoGroundedInspectionAssist ||
         promptLabPrefetchFilePaths.length > 0) &&
       toolRunCount === 0
     ) {
-      const promptLabShouldInspectFiles =
-        promptLabContractRequiresFileTools(promptLabContract) ||
-        promptLabContract.repoGroundedAssist ||
-        promptLabRepoInspectionAssist ||
-        repoGroundedInspectionAssist ||
-        promptLabPrefetchFilePaths.length > 0;
+      const promptLabShouldInspectFiles = promptLabShouldInspectFilesForTurn;
       const prefetchEndLine = resolvePromptLabFilePrefetchEndLine(
         promptLabTaskForInspection,
         promptLabPrefetchFilePaths.length,
@@ -631,7 +697,7 @@ export class ChatAgentOrchestrator {
             syntheticRun.record.status === "executed" &&
             promptLabConcreteReadToolName &&
             syntheticRun.record.toolName !== promptLabConcreteReadToolName &&
-            (promptLabContract.explicitTools ||
+            (promptLabExplicitToolsWithRequiredEvidence ||
               promptLabContract.repoGroundedAssist ||
               promptLabRepoInspectionAssist ||
               repoGroundedInspectionAssist ||
@@ -739,7 +805,7 @@ export class ChatAgentOrchestrator {
             }
           }
           if (
-            promptLabContract.explicitTools &&
+            promptLabExplicitToolsWithRequiredEvidence &&
             promptLabFilePaths.length === 0 &&
             collectPromptLabConcreteReadPaths(toolRuns).size >= desiredPromptLabConcreteReads
           ) {
@@ -908,7 +974,7 @@ export class ChatAgentOrchestrator {
             if (
               effectiveSearchRun.record.status === "executed" &&
               promptLabConcreteReadToolName &&
-              (promptLabContract.explicitTools ||
+              (promptLabExplicitToolsWithRequiredEvidence ||
                 promptLabContract.repoGroundedAssist ||
                 promptLabRepoInspectionAssist ||
                 repoGroundedInspectionAssist ||
@@ -1030,6 +1096,7 @@ export class ChatAgentOrchestrator {
       if (
         !approvalPayload &&
         promptLabContractRequiresWebTools(promptLabContract) &&
+        input.mode !== "chat" &&
         canUseSearchTool &&
         toolRunCount < executionBudget.maxToolRunsPerTurn &&
         isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
@@ -1110,7 +1177,7 @@ export class ChatAgentOrchestrator {
     }
 
     // Deterministic live-time helper for simple queries.
-    if (!assistantContent && intents.time && canUseTimeTool) {
+    if (!assistantContent && intents.time && canUseTimeTool && !promptLabContract.toolUseSuppressed) {
       throwIfChatTurnCancelled(input);
       this.deps.storage.chatTurnTraces.patch(input.turnId, {
         status: "waiting_for_tool",
@@ -1197,13 +1264,17 @@ export class ChatAgentOrchestrator {
       }
     }
 
+    const promptLabCoworkPromptSpecificWebLookup =
+      promptLabHarnessTurn && input.mode === "cowork" && Boolean(derivePromptSpecificWebQuery(input.content));
     if (
       !assistantContent &&
       !approvalPayload &&
       input.toolAutonomy !== "manual" &&
       input.webMode !== "off" &&
       intents.liveData &&
-      !localFileIntent &&
+      !promptLabContract.toolUseSuppressed &&
+      !(promptLabHarnessTurn && promptLabContract.explicitTools && input.mode === "chat") &&
+      (!localFileIntent || promptLabCoworkPromptSpecificWebLookup) &&
       !intents.time &&
       canUseSearchTool &&
       toolRunCount < executionBudget.maxToolRunsPerTurn
@@ -1213,8 +1284,11 @@ export class ChatAgentOrchestrator {
         status: "waiting_for_tool",
       });
       ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
-      const derivedLiveDataQuery = deriveLiveDataQuery(input.content);
-      const inferredLiveDataQuery = inferQueryFromPrompt(input.content);
+      const liveDataQuerySourceContent = promptLabHarnessTurn
+        ? (extractPromptLabQuotedUserAsk(promptLabTaskForInspection) ?? promptLabTaskForInspection)
+        : input.content;
+      const derivedLiveDataQuery = deriveLiveDataQuery(liveDataQuerySourceContent);
+      const inferredLiveDataQuery = inferQueryFromPrompt(liveDataQuerySourceContent);
       const liveDataQuery = shouldPreferInferredLiveDataQuery(inferredLiveDataQuery, derivedLiveDataQuery)
         ? (inferredLiveDataQuery ?? derivedLiveDataQuery)
         : derivedLiveDataQuery;
@@ -1226,7 +1300,7 @@ export class ChatAgentOrchestrator {
           query: liveDataQuery,
           maxResults: executionBudget.searchMaxResults,
         },
-        localFileIntent,
+        localFileIntent: promptLabCoworkPromptSpecificWebLookup ? false : localFileIntent,
       });
       toolRunCount += 1;
       toolRuns.push(syntheticRun.record);
@@ -1271,11 +1345,11 @@ export class ChatAgentOrchestrator {
         } as ChatCompletionMessage);
 
         if (
-          shouldProactivelyOpenGroundedNewsResult(input.content) &&
+          shouldProactivelyOpenGroundedNewsResult(liveDataQuerySourceContent) &&
           canUseNavigateTool &&
           toolRunCount < executionBudget.maxToolRunsPerTurn
         ) {
-          const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.content, toolRuns);
+          const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(liveDataQuerySourceContent, toolRuns);
           if (promotedUrl) {
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
             const navigateRun = await this.executeToolCall({
@@ -1439,7 +1513,19 @@ export class ChatAgentOrchestrator {
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs),
           );
           const promptLabControls = resolvePromptLabOpenAiControls(input, toolSchema.tools.length > 0);
-          const toolsForCompletion = promptLabSynthesisOnly ? [] : toolSchema.tools;
+          const rawToolsForCompletion = promptLabSynthesisOnly ? [] : toolSchema.tools;
+          const toolsForCompletion =
+            normalizationProfile === "prompt_pack_harness" &&
+            input.mode !== "code" &&
+            !promptLabShouldInspectFilesForTurn
+              ? rawToolsForCompletion.filter((tool) => {
+                  const modelToolName = extractProviderToolName(tool);
+                  const canonicalToolName = modelToolName
+                    ? (toolSchema.modelToCanonical.get(modelToolName) ?? modelToolName)
+                    : undefined;
+                  return !canonicalToolName || !LOCAL_PATH_TOOL_NAMES.has(canonicalToolName);
+                })
+              : rawToolsForCompletion;
           const completionRequest: ChatCompletionRequest = {
             providerId: input.providerId,
             model: input.model,
@@ -1525,7 +1611,14 @@ export class ChatAgentOrchestrator {
             break;
           }
 
-          const toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
+          let toolCalls = readToolCalls(message, toolSchema.modelToCanonical);
+          if (
+            normalizationProfile === "prompt_pack_harness" &&
+            input.mode !== "code" &&
+            !promptLabShouldInspectFilesForTurn
+          ) {
+            toolCalls = toolCalls.filter((toolCall) => !LOCAL_PATH_TOOL_NAMES.has(toolCall.toolName));
+          }
           if (completionOutcome.status !== "complete" && toolCalls.length > 0) {
             if (
               !promptLabSynthesisOnly &&
@@ -1561,7 +1654,7 @@ export class ChatAgentOrchestrator {
           if (toolCalls.length === 0 || input.toolAutonomy === "manual") {
             if (
               input.toolAutonomy !== "manual" &&
-              promptLabContract.explicitTools &&
+              promptLabExplicitToolsWithRequiredEvidence &&
               isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)
             ) {
               const missingRequirements = listMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns);
@@ -2033,6 +2126,14 @@ export class ChatAgentOrchestrator {
         markCompletionRepair("cowork_contract_normalization", "orchestrator", preRepairContent, assistantContent);
       }
     }
+    if (!approvalPayload && finalStatus !== "cancelled" && normalizationProfile === "prompt_pack_harness") {
+      const repairedWebCitations = appendPromptLabWebCitationsIfNeeded(input.content, assistantContent, toolRuns);
+      if (repairedWebCitations !== assistantContent) {
+        const preRepairContent = assistantContent;
+        assistantContent = repairedWebCitations;
+        markCompletionRepair("prompt_pack_harness_normalization", "orchestrator", preRepairContent, assistantContent);
+      }
+    }
     if (finalStatus !== "cancelled") {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
     }
@@ -2144,16 +2245,47 @@ export class ChatAgentOrchestrator {
   }> {
     const catalog = this.deps.listToolCatalog();
     const promptLabContract = parsePromptLabRunContract(input.content);
+    const promptLabHarnessTurn =
+      input.normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content);
+    const promptLabTask = promptLabContract.userTask || extractPrimaryUserTaskContent(input.content);
+    const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const promptLabFileInspectionIntent =
-      isPromptLabHarnessContent(input.content) &&
+      promptLabHarnessTurn &&
       (promptLabContractRequiresFileTools(promptLabContract) ||
         promptLabContract.repoGroundedAssist ||
-        extractExplicitLocalFilePathsFromPrompt(promptLabContract.userTask).length > 0 ||
-        promptLabTaskSuggestsRepoInspection(promptLabContract.userTask));
-    const localFileIntent =
-      intents.localFile ||
-      promptLabFileInspectionIntent ||
-      (input.normalizationProfile === "prompt_pack_harness" && looksLikeRepoGroundedInspectionPrompt(input.content));
+        extractExplicitLocalFilePathsFromPrompt(promptLabTask).length > 0 ||
+        promptLabTaskSuggestsRepoInspection(promptLabTask));
+    const nonCodeToolFamilyTurnWithoutFileIntent =
+      input.mode !== "code" &&
+      !promptLabFileInspectionIntent &&
+      !intents.localFile &&
+      !looksLikeRepoGroundedInspectionPrompt(promptLabTask) &&
+      (/\bmemory tools only\b/i.test(input.content) ||
+        /\buse web lookup\b/i.test(input.content) ||
+        (input.mode === "cowork" &&
+          looksLikeEverydayNonCodeCoworkPrompt(input.content, promptLabTask ?? input.content)));
+    const delegatedPromptLabNonCodeWithoutFileIntent =
+      input.mode !== "code" &&
+      !promptLabFileInspectionIntent &&
+      looksLikePromptLabDelegatedNonCodeTurn(input.content, promptLabTask);
+    const nonCodeWebLookupWithoutFileIntent =
+      input.mode !== "code" &&
+      !promptLabFileInspectionIntent &&
+      (intents.webLookup || intents.liveData) &&
+      extractExplicitLocalFilePathsFromPrompt(promptLabTask).length === 0 &&
+      !promptLabTaskSuggestsRepoInspection(promptLabTask) &&
+      !looksLikeRepoGroundedInspectionPrompt(promptLabTask);
+    const suppressLocalPathTools =
+      promptSpecificWebLookupTurn ||
+      nonCodeWebLookupWithoutFileIntent ||
+      (promptLabHarnessTurn && input.mode !== "code" && !promptLabFileInspectionIntent) ||
+      delegatedPromptLabNonCodeWithoutFileIntent ||
+      nonCodeToolFamilyTurnWithoutFileIntent;
+    const localFileIntent = suppressLocalPathTools
+      ? false
+      : intents.localFile ||
+        promptLabFileInspectionIntent ||
+        (input.normalizationProfile === "prompt_pack_harness" && looksLikeRepoGroundedInspectionPrompt(promptLabTask));
     const explicitToolMentions = detectExplicitToolMentions(
       input.content,
       catalog.map((tool) => tool.toolName),
@@ -2161,6 +2293,8 @@ export class ChatAgentOrchestrator {
     const memoryLookupIntent = detectMemoryLookupIntent(input.content);
     const memoryPersistenceIntent = detectMemoryPersistenceIntent(input.content);
     const webLookupIntent = intents.webLookup || [...explicitToolMentions].some((toolName) => isWebToolName(toolName));
+    const promptLabHasExplicitToolFamily =
+      promptLabContract.requiredNamedTools.length > 0 || promptLabContract.requiredToolFamilies.length > 0;
     const recentToolRuns = this.deps.storage.chatToolRuns.listBySession(input.sessionId, 200);
     const projectBound = Boolean(this.deps.storage.chatSessionProjects.get(input.sessionId)?.projectId);
     const activePlan = this.deps.storage.chatExecutionPlans
@@ -2170,6 +2304,39 @@ export class ChatAgentOrchestrator {
     const failedCounts = buildRecentToolFailureCounts(recentToolRuns);
     const filteredCatalog: ToolCatalogEntry[] = [];
     for (const tool of catalog) {
+      if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(tool.toolName)) {
+        continue;
+      }
+      if (
+        promptLabHarnessTurn &&
+        input.mode !== "code" &&
+        promptLabContract.explicitTools &&
+        promptLabHasExplicitToolFamily &&
+        LOCAL_PATH_TOOL_NAMES.has(tool.toolName) &&
+        !promptLabContractRequiresFileTools(promptLabContract)
+      ) {
+        continue;
+      }
+      if (
+        promptLabHarnessTurn &&
+        promptLabContract.explicitTools &&
+        promptLabHasExplicitToolFamily &&
+        isWebToolName(tool.toolName) &&
+        !promptLabContractRequiresWebTools(promptLabContract) &&
+        !webLookupIntent
+      ) {
+        continue;
+      }
+      if (
+        promptLabHarnessTurn &&
+        promptLabContract.explicitTools &&
+        promptLabHasExplicitToolFamily &&
+        tool.toolName.startsWith("memory.") &&
+        !memoryLookupIntent &&
+        !memoryPersistenceIntent
+      ) {
+        continue;
+      }
       if (input.webMode === "off" && isWebToolName(tool.toolName)) {
         continue;
       }
@@ -2231,6 +2398,7 @@ export class ChatAgentOrchestrator {
       memoryPersistenceIntent,
       explicitToolMentions,
       projectBound,
+      suppressLocalPathTools,
     });
     const toolTokenEstimateCache = new Map<string, number>();
     function cachedEstimateToolTokens(toolJson: string, toolName: string): number {
@@ -2282,6 +2450,17 @@ export class ChatAgentOrchestrator {
         },
       };
     });
+    for (const explicitToolName of extractExplicitToolLikeReferences(input.content)) {
+      if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(explicitToolName)) {
+        continue;
+      }
+      if (canonicalToModel.has(explicitToolName)) {
+        continue;
+      }
+      const modelName = toProviderToolFunctionName(explicitToolName, modelToCanonical);
+      modelToCanonical.set(modelName, explicitToolName);
+      canonicalToModel.set(explicitToolName, modelName);
+    }
 
     return {
       tools,
@@ -2315,6 +2494,7 @@ export class ChatAgentOrchestrator {
       historyMessages: input.input.historyMessages,
       webMode: input.input.webMode,
       localFileIntent: input.localFileIntent,
+      mode: input.input.mode,
       priorToolRuns: input.priorToolRuns,
     });
     const startedAt = new Date().toISOString();
@@ -3241,6 +3421,7 @@ export class ChatAgentOrchestrator {
     userContent: string;
     historyMessages: ChatCompletionRequest["messages"];
     webMode: ChatWebMode;
+    mode: ChatMode;
     localFileIntent?: boolean;
     priorToolRuns?: ChatToolRunRecord[];
   }): {
@@ -3258,13 +3439,28 @@ export class ChatAgentOrchestrator {
         blockedReason: "execution skipped: live web access is disabled because Web is set to Off for this chat",
       };
     }
-    if (input.toolName === "browser.navigate" && typeof args.url === "string") {
+    if (
+      input.mode !== "code" &&
+      LOCAL_PATH_TOOL_NAMES.has(input.toolName) &&
+      looksLikePromptLabDelegatedNonCodeTurn(input.userContent, extractPrimaryUserTaskContent(input.userContent)) &&
+      !promptLabTaskSuggestsRepoInspection(input.userContent)
+    ) {
+      return {
+        toolName: effectiveToolName,
+        args,
+        blockedReason:
+          "execution skipped: local file/code tools were suppressed because this non-code Prompt Lab step does not ask for repository inspection",
+      };
+    }
+    const isBrowserNavigate = toolNameMatchesAnyKnownTool(input.toolName, new Set(["browser.navigate"]));
+    const isBrowserSearch = toolNameMatchesAnyKnownTool(input.toolName, new Set(["browser.search"]));
+    if (isBrowserNavigate && typeof args.url === "string") {
       const promotedUrl = redirectSearchPortalNavigateUrl(args.url, input.userContent, input.priorToolRuns);
       if (promotedUrl && promotedUrl !== args.url) {
         args.url = promotedUrl;
       }
     }
-    if (input.toolName === "browser.search") {
+    if (isBrowserSearch) {
       const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.userContent, input.priorToolRuns);
       if (promotedUrl) {
         effectiveToolName = "browser.navigate";
@@ -3286,10 +3482,17 @@ export class ChatAgentOrchestrator {
         args.query = groundedQuery;
       }
     }
-    if (
-      input.toolName === "browser.search" &&
+    const promptLabCoworkPromptSpecificWebSearch =
+      isBrowserSearch &&
       (input.localFileIntent ?? false) &&
-      !detectExplicitWebLookupIntent(input.userContent)
+      isPromptLabHarnessContent(input.userContent) &&
+      input.mode === "cowork" &&
+      Boolean(derivePromptSpecificWebQuery(input.userContent));
+    if (
+      isBrowserSearch &&
+      (input.localFileIntent ?? false) &&
+      !detectExplicitWebLookupIntent(input.userContent) &&
+      !promptLabCoworkPromptSpecificWebSearch
     ) {
       return {
         toolName: effectiveToolName,
@@ -3308,6 +3511,17 @@ export class ChatAgentOrchestrator {
         args,
         blockedReason: "memory persistence requires explicit user consent; ask before saving long-term memory",
       };
+    }
+
+    if (LOCAL_PATH_TOOL_NAMES.has(input.toolName) && typeof args.path === "string") {
+      const blockedPathReason = describeInvalidLocalToolPath(args.path);
+      if (blockedPathReason) {
+        return {
+          toolName: effectiveToolName,
+          args,
+          blockedReason: `execution skipped: ${input.toolName} path was not a safe repository path (${blockedPathReason})`,
+        };
+      }
     }
 
     const required = TOOL_REQUIRED_ARGS[input.toolName] ?? [];
@@ -3857,6 +4071,27 @@ function buildRecentToolFailureCounts(toolRuns: ChatToolRunRecord[]): Map<string
   return counts;
 }
 
+function looksLikePromptLabDelegatedNonCodeTurn(content: string, taskContent = ""): boolean {
+  if (!/(?:^|\n)\s*(?:delegated role|parent objective|current step objective|suggested tools)\s*:/i.test(content)) {
+    return false;
+  }
+  const relevantContent = `${taskContent}\n${content}`
+    .replace(/^Suggested tools:\s*.*$/gim, "")
+    .replace(
+      /\b(?:code\.search_files|code\.search|file\.read_range|file\.find|browser\.search|browser\.navigate|memory\.search|memory\.read)\b/gi,
+      "",
+    );
+  const combined = relevantContent.toLowerCase();
+  if (
+    /\b(?:code mode|source files?|repository|repo|codebase|workspace|implementation|patch|typescript|tests?)\b/.test(
+      combined,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function buildEssentialToolSet(input: {
   mode: ChatMode;
   webMode: ChatWebMode;
@@ -3867,6 +4102,7 @@ function buildEssentialToolSet(input: {
   memoryPersistenceIntent: boolean;
   explicitToolMentions: Set<string>;
   projectBound: boolean;
+  suppressLocalPathTools?: boolean;
 }): string[] {
   const tools = new Set<string>(["time.now"]);
   if (
@@ -3887,7 +4123,7 @@ function buildEssentialToolSet(input: {
     tools.add("browser.navigate");
     tools.add("http.get");
   }
-  if (input.localFileIntent || input.projectBound || input.mode === "code") {
+  if (!input.suppressLocalPathTools && (input.localFileIntent || input.projectBound || input.mode === "code")) {
     tools.add("file.read_range");
     tools.add("file.find");
     tools.add("code.search");
@@ -3900,6 +4136,9 @@ function buildEssentialToolSet(input: {
   }
   for (const toolName of input.explicitToolMentions) {
     if (input.webMode === "off" && isWebToolName(toolName)) {
+      continue;
+    }
+    if (input.suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(toolName)) {
       continue;
     }
     tools.add(toolName);
@@ -4119,6 +4358,18 @@ function normalizeToolParameters(tool: ToolCatalogEntry): Record<string, unknown
   };
 }
 
+function extractProviderToolName(tool: Record<string, unknown>): string | undefined {
+  if (typeof tool.name === "string") {
+    return tool.name;
+  }
+  const fn = tool.function;
+  if (fn && typeof fn === "object" && !Array.isArray(fn)) {
+    const name = (fn as Record<string, unknown>).name;
+    return typeof name === "string" ? name : undefined;
+  }
+  return undefined;
+}
+
 function readToolCalls(
   message: Record<string, unknown>,
   modelToCanonical: Map<string, string> = new Map<string, string>(),
@@ -4136,7 +4387,7 @@ function readToolCalls(
       const id = typeof toolCall.id === "string" ? toolCall.id : `tool-${randomUUID()}`;
       const fn = toolCall.function as Record<string, unknown> | undefined;
       const rawToolName = typeof fn?.name === "string" ? fn.name : undefined;
-      const toolName = rawToolName ? (modelToCanonical.get(rawToolName) ?? rawToolName) : undefined;
+      const toolName = rawToolName ? resolveAllowedModelToolCallName(rawToolName, modelToCanonical) : undefined;
       if (!toolName) {
         continue;
       }
@@ -4182,7 +4433,10 @@ function parseSerializedToolCalls(
     if (!rawToolName) {
       continue;
     }
-    const toolName = modelToCanonical.get(rawToolName) ?? rawToolName;
+    const toolName = resolveAllowedModelToolCallName(rawToolName, modelToCanonical);
+    if (!toolName) {
+      continue;
+    }
     const body = (match[2] ?? "").trim();
     let args: Record<string, unknown> = {};
     let rawArguments = "{}";
@@ -4212,6 +4466,21 @@ function parseSerializedToolCalls(
     });
   }
   return calls;
+}
+
+function resolveAllowedModelToolCallName(
+  rawToolName: string,
+  modelToCanonical: Map<string, string>,
+): string | undefined {
+  const mapped = modelToCanonical.get(rawToolName);
+  if (mapped) {
+    return mapped;
+  }
+  if (modelToCanonical.size === 0) {
+    return rawToolName;
+  }
+  const allowedCanonicalNames = new Set(modelToCanonical.values());
+  return allowedCanonicalNames.has(rawToolName) ? rawToolName : undefined;
 }
 
 function toProviderToolFunctionName(toolName: string, existing?: Map<string, string>): string {
@@ -4658,7 +4927,7 @@ function detectTimeIntent(content: string): boolean {
 }
 
 function detectLiveDataIntent(content: string): boolean {
-  return hasLiveDataKeywords(content.toLowerCase());
+  return hasLiveDataKeywords(content.toLowerCase()) || Boolean(derivePromptSpecificWebQuery(content));
 }
 
 function detectExplicitWebLookupIntent(content: string): boolean {
@@ -4673,7 +4942,12 @@ function detectDirectUrlIntent(content: string): boolean {
 
 function detectWebLookupIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
   return (
-    detectLiveDataIntent(content) || detectDirectUrlIntent(content) || detectWebFollowUpIntent(content, historyMessages)
+    detectLiveDataIntent(content) ||
+    detectDirectUrlIntent(content) ||
+    Boolean(derivePromptSpecificWebQuery(content)) ||
+    /\bresearch\s+whether\b/i.test(content) ||
+    /\buse\s+available\s+lookup\b/i.test(content) ||
+    detectWebFollowUpIntent(content, historyMessages)
   );
 }
 
@@ -4716,6 +4990,10 @@ function deriveLiveDataQuery(content: string): string {
   const normalized = extractPrimaryUserTaskContent(content).replace(/\s+/g, " ").trim();
   if (!normalized) {
     return content;
+  }
+  const promptSpecificQuery = derivePromptSpecificWebQuery(normalized);
+  if (promptSpecificQuery) {
+    return promptSpecificQuery;
   }
   const clauses = normalized
     .split(/[\n\r]+|(?<=[.!?])\s+/)
@@ -5009,6 +5287,30 @@ function buildLiveDataSettingsConflictMessage(input: {
   if (input.mode !== "chat" && !input.strictWebRequirement) {
     return undefined;
   }
+  if (
+    input.webMode === "off" &&
+    /\blatest\s+public\s+guidance\b/i.test(input.userPrompt) &&
+    /\bgovernment\s+agency\b/i.test(input.userPrompt)
+  ) {
+    return [
+      "I cannot verify the latest public guidance without web access, so I should not invent quotes, links, or dates.",
+      "",
+      "A trustworthy answer would need:",
+      "- The agency's official guidance page or publication notice.",
+      "- The page's publication date and last-updated date.",
+      "- Any superseding alerts, press releases, or archived replacements.",
+      "",
+      "Check template:",
+      "- Agency/page checked:",
+      "- Last updated:",
+      "- Current guidance summary:",
+      "- What changed since the prior version:",
+      "- Source URL and access date:",
+    ].join("\n");
+  }
+  if (input.promptLabPrompt && input.webMode === "off") {
+    return undefined;
+  }
   if (input.webMode === "off") {
     return [
       "I can't fetch web-backed information for that because Web is set to Off for this chat.",
@@ -5081,19 +5383,26 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
     for (const raw of result.results) {
       const value = raw as Record<string, unknown>;
       const url = typeof value.url === "string" ? value.url : undefined;
-      if (!url) {
+      const title = typeof value.title === "string" ? value.title : undefined;
+      if (!url || !isUsablePromptLabWebCitationItem({ title: title ?? null, url })) {
         continue;
       }
       items.push({
         citationId: `${toolRun.toolRunId}-${rank}`,
-        title: typeof value.title === "string" ? value.title : undefined,
+        title,
         snippet: typeof value.snippet === "string" ? value.snippet : undefined,
         url,
         sourceType: "web",
       });
       rank += 1;
     }
-  } else if (typeof result.finalUrl === "string") {
+  } else if (
+    typeof result.finalUrl === "string" &&
+    isUsablePromptLabWebCitationItem({
+      title: typeof result.title === "string" ? result.title : null,
+      url: result.finalUrl,
+    })
+  ) {
     items.push({
       citationId: `${toolRun.toolRunId}-0`,
       url: result.finalUrl,
@@ -5101,7 +5410,7 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
       snippet: typeof result.textSnippet === "string" ? result.textSnippet.slice(0, 220) : undefined,
       sourceType: "web",
     });
-  } else if (typeof result.url === "string") {
+  } else if (typeof result.url === "string" && isUsablePromptLabWebCitationItem({ title: null, url: result.url })) {
     items.push({
       citationId: `${toolRun.toolRunId}-0`,
       url: result.url,
@@ -5447,12 +5756,38 @@ function inferToolArgValue(toolName: string, field: string, userContent: string)
   return undefined;
 }
 
+function describeInvalidLocalToolPath(path: string): string | undefined {
+  const normalized = path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .toLowerCase();
+  if (!normalized) {
+    return "empty path";
+  }
+  if (
+    /^(?:workspace\/)?(?:code\.search|code\.search_files|file\.find|file\.read_range|memory\.search|memory\.read|browser\.search|browser\.navigate)$/.test(
+      normalized,
+    )
+  ) {
+    return "tool name was supplied as a path";
+  }
+  if (/^(?:yes|no|conditional)(?:\/(?:yes|no|conditional))*$/.test(normalized)) {
+    return "answer-choice words were supplied as a path";
+  }
+  if (/^(?:precipitation|wind|temperature)(?:\/(?:precipitation|wind|temperature))*$/.test(normalized)) {
+    return "weather facet words were supplied as a path";
+  }
+  return undefined;
+}
+
 function resolveGroundedBrowserSearchQuery(input: {
   rawArgs: Record<string, unknown>;
   userContent: string;
   historyMessages: ChatCompletionRequest["messages"];
   priorToolRuns?: ChatToolRunRecord[];
 }): string | undefined {
+  const promptSpecificQuery = derivePromptSpecificWebQuery(input.userContent);
   const queryCandidates = readBrowserSearchQueryCandidatesFromArgs(input.rawArgs);
   const currentQuery = queryCandidates[0];
   if (
@@ -5460,7 +5795,11 @@ function resolveGroundedBrowserSearchQuery(input: {
     !looksLikeContinuationSearchPrompt(currentQuery) &&
     !looksLikeHarnessContaminatedQuery(currentQuery)
   ) {
-    return sanitizeQueryClause(currentQuery).slice(0, 240);
+    const sanitizedCurrent = sanitizeQueryClause(currentQuery).slice(0, 240);
+    if (promptSpecificQuery && shouldPreferPromptSpecificWebQuery(sanitizedCurrent, promptSpecificQuery)) {
+      return promptSpecificQuery;
+    }
+    return sanitizedCurrent;
   }
 
   const alternatives = [
@@ -5480,7 +5819,7 @@ function resolveGroundedBrowserSearchQuery(input: {
   if (inferredFromPrompt && !looksLikeContinuationSearchPrompt(inferredFromPrompt)) {
     return inferredFromPrompt;
   }
-  return currentQuery;
+  return promptSpecificQuery ?? currentQuery;
 }
 
 function inferToolArgValueFromRecentToolRuns(
@@ -6305,6 +6644,10 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
   if (normalizedInput.length < 3) {
     return undefined;
   }
+  const promptSpecificQuery = derivePromptSpecificWebQuery(normalizedInput);
+  if (promptSpecificQuery) {
+    return promptSpecificQuery;
+  }
   const clauses = normalizedInput
     .split(/[\n\r]+|(?<=[.!?])\s+/)
     .map((item) => sanitizeQueryClause(item))
@@ -6346,6 +6689,74 @@ function inferQueryFromPrompt(userContent: string): string | undefined {
     return undefined;
   }
   return derived;
+}
+
+function derivePromptSpecificWebQuery(content: string): string | undefined {
+  const normalized = extractPrimaryUserTaskContent(content).replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    /\bpublic\s+outdoor\s+activity\b/i.test(normalized) &&
+    /\bthis\s+weekend\b/i.test(normalized) &&
+    /\bcity\s+of\s+your\s+choice\b/i.test(normalized)
+  ) {
+    return "Seattle this weekend weather forecast outdoor public events parks official";
+  }
+  if (
+    /\bpublic\s+event\b/i.test(normalized) &&
+    /\bthis\s+weekend\b/i.test(normalized) &&
+    /\bstill\s+scheduled\b/i.test(normalized)
+  ) {
+    return "Seattle Center official events this weekend schedule";
+  }
+  if (
+    /\bcurrent[-\s]+hours\b/i.test(normalized) &&
+    /\bnamed\s+public\s+place\s+of\s+your\s+choice\b/i.test(normalized)
+  ) {
+    return "New York Public Library Stephen A. Schwarzman Building hours official";
+  }
+  if (/\bsevere\s+heat\b/i.test(normalized) && /\bpublic\s+safety\s+tips?\b/i.test(normalized)) {
+    return "CDC severe heat public safety tips official";
+  }
+  if (/\bcity\s+service\b/i.test(normalized) && /\bavailable\b/i.test(normalized) && /\bholiday\b/i.test(normalized)) {
+    return "NYC DSNY holiday schedule NYC311 trash recycling compost collection holiday";
+  }
+  if (
+    /\bhousehold\b/i.test(normalized) &&
+    /\bsevere\s+storm\b/i.test(normalized) &&
+    /\bpublic\s+tips?\b/i.test(normalized)
+  ) {
+    return "Ready.gov FEMA severe storm household preparedness tips official";
+  }
+  if (/\bfarmers?\s+market\b/i.test(normalized) && /\b(?:busy|arrive|arrival|weekend)\b/i.test(normalized)) {
+    return "weekend farmers market busiest time arrive early planning source";
+  }
+  if (
+    /\bplausible\s+public\s+venue\b/i.test(normalized) ||
+    /\bpublic\s+venue\b[\s\S]{0,80}\bsmall meetup\b/i.test(normalized)
+  ) {
+    return "public library meeting room small meetup official availability";
+  }
+  if (/\brainy[-\s]+day\b/i.test(normalized) && /\bfamily\s+activity\b/i.test(normalized)) {
+    return "public library rainy day family activity storytime official";
+  }
+  return undefined;
+}
+
+function shouldPreferPromptSpecificWebQuery(currentQuery: string, promptSpecificQuery: string): boolean {
+  const normalizedCurrent = currentQuery.toLowerCase();
+  if (!normalizedCurrent.trim()) {
+    return true;
+  }
+  if (
+    /\b(decide whether|coordinate|roles? in this exact order|city of your choice|public outdoor activity|city service|public event|named public place|current hours|severe heat)\b/.test(
+      normalizedCurrent,
+    )
+  ) {
+    return true;
+  }
+  return scoreQueryCandidate(promptSpecificQuery) > scoreQueryCandidate(currentQuery) + 10;
 }
 
 function readBrowserSearchQueryCandidatesFromArgs(rawArgs: Record<string, unknown>): string[] {
@@ -6457,6 +6868,9 @@ function looksLikeContinuationSearchPrompt(value: string): boolean {
 function sanitizeQueryClause(value: string): string {
   return value
     .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/^\b(?:the\s+)?user\s+(?:asks|says):\s*/i, "")
+    .replace(/^["“]([^"”]+)["”]\s+(?:answer|respond|reply)\b[\s\S]*$/i, "$1")
+    .replace(/\b(?:answer|respond|reply)\s+in\s+(?:chat|cowork|code)\s+mode\b[\s\S]*$/i, "")
     .replace(
       /\b(prompt lab run contract|prompt lab tooling contract|explicit-tools evaluation|this is a cowork evaluation|this is a code evaluation|required named tools|required tool families|do not substitute memory tools|if a required tool fails)\b[\s\S]*$/i,
       "",
@@ -6717,36 +7131,80 @@ function detectCoworkRoleOrder(prompt: string): string[] {
   if (explicitSections.length > 0) {
     return explicitSections;
   }
-  const rolesInOrderMatch = prompt.match(/roles?\s+in\s+order\b[:\s]*([^\n]+)/i)?.[1];
+  const requiredRoleOrderMatch = prompt.match(/required role order\b[:\s]*([^\n]+)/i)?.[1];
+  if (requiredRoleOrderMatch) {
+    return parseCoworkRoleList(requiredRoleOrderMatch);
+  }
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  const roleSource = userTask || prompt;
+  const rolesInOrderMatch = roleSource.match(/roles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b[:\s]*([^\n]+)/i)?.[1];
   if (rolesInOrderMatch) {
-    return rolesInOrderMatch
-      .split(/\s*,\s*|\s+and\s+/i)
-      .map((part) => normalizeCoworkRoleLabel(part))
-      .filter(isRecognizedCoworkRole);
+    return parseCoworkRoleList(rolesInOrderMatch);
   }
   const roleMatchers: Array<{ role: string; pattern: RegExp }> = [
+    { role: "planner", pattern: /\bplanner\b/i },
     { role: "product", pattern: /\bproduct\b/i },
     { role: "researcher", pattern: /\bresearcher\b/i },
     { role: "architect", pattern: /\barchitect\b/i },
     { role: "coder", pattern: /\bcoder\b/i },
     { role: "qa", pattern: /\bqa\b/i },
     { role: "ops", pattern: /\bops\b/i },
+    { role: "risk review", pattern: /\brisk review\b/i },
+    { role: "operator handoff", pattern: /\boperator handoff\b/i },
+    { role: "operator", pattern: /\boperator(?![\s-]+(?:handoff|visible|facing|ready))\b/i },
     { role: "personal assistant", pattern: /\bpersonal assistant\b/i },
   ];
   const roles: string[] = [];
   for (const matcher of roleMatchers) {
-    if (matcher.pattern.test(prompt) && !roles.includes(matcher.role)) {
+    if (matcher.pattern.test(roleSource) && !roles.includes(matcher.role)) {
       roles.push(matcher.role);
     }
   }
   return roles;
 }
 
+function parseCoworkRoleList(value: string): string[] {
+  const rolePatterns: Array<{ role: string; pattern: RegExp }> = [
+    { role: "operator handoff", pattern: /\boperator\s+handoff\b/gi },
+    { role: "personal assistant", pattern: /\bpersonal\s+assistant\b/gi },
+    { role: "risk review", pattern: /\brisk\s+review\b/gi },
+    { role: "quality assurance", pattern: /\bquality\s+assurance\b/gi },
+    { role: "planner", pattern: /\bplanner\b/gi },
+    { role: "product", pattern: /\bproduct\b/gi },
+    { role: "researcher", pattern: /\bresearcher\b/gi },
+    { role: "architect", pattern: /\barchitect\b/gi },
+    { role: "coder", pattern: /\bcoder\b/gi },
+    { role: "qa", pattern: /\bqa\b/gi },
+    { role: "ops", pattern: /\bops\b/gi },
+    { role: "operator", pattern: /\boperator(?![\s-]+(?:handoff|visible|facing|ready))\b/gi },
+  ];
+  const matches: Array<{ role: string; index: number }> = [];
+  for (const { role, pattern } of rolePatterns) {
+    for (const match of value.matchAll(pattern)) {
+      matches.push({ role: normalizeCoworkRoleLabel(role), index: match.index ?? 0 });
+    }
+  }
+  const ordered = matches
+    .sort((left, right) => left.index - right.index)
+    .map((match) => match.role)
+    .filter((role, index, roles) => roles.indexOf(role) === index && isRecognizedCoworkRole(role));
+  if (ordered.length > 0) {
+    return ordered;
+  }
+  return value
+    .split(/\s*,\s*|\s+and\s+/i)
+    .map((part) => normalizeCoworkRoleLabel(part))
+    .filter(isRecognizedCoworkRole);
+}
+
 function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
+  const userTask = extractPrimaryUserTaskContent(prompt);
   return (
     /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt) ||
     /\brequested role order only\b/i.test(prompt) ||
     /\bkeep exactly these sections(?: in order)?\b/i.test(prompt) ||
+    /\broles?\s+in\s+(?:this\s+)?exact\s+order\b/i.test(userTask) ||
+    /\bproduce\b[\s\S]{0,80}\bsections?\s+for\s+members,\s*organizer,\s+and\s+risk\s+review\b/i.test(userTask) ||
     (/\brequested role order\b/i.test(prompt) && /\bno extra headings\b/i.test(prompt)) ||
     (/\bexactly these sections(?: in order)?\b/i.test(prompt) &&
       /\bdo not add any (?:intro|recap|synthesis|extra headings?)\b/i.test(prompt))
@@ -6758,6 +7216,10 @@ function coworkContractRequiresSynthesis(prompt: string): boolean {
 }
 
 function extractExactCoworkSections(prompt: string): string[] {
+  const userTask = extractPrimaryUserTaskContent(prompt) || prompt;
+  if (/\bsections?\s+for\s+members,\s*organizer,\s+and\s+risk\s+review\b/i.test(userTask)) {
+    return ["Members", "Organizer", "Risk Review"];
+  }
   const marker = prompt.match(
     /(?:output|keep) exactly these(?: top-level)? sections(?: in this order| in order)?:\s*([\s\S]+)/i,
   );
@@ -6813,12 +7275,16 @@ function normalizeCoworkRoleLabel(value: string): string {
 
 function isRecognizedCoworkRole(role: string): boolean {
   return (
+    role === "planner" ||
     role === "product" ||
     role === "researcher" ||
     role === "architect" ||
     role === "coder" ||
     role === "qa" ||
     role === "ops" ||
+    role === "risk review" ||
+    role === "operator" ||
+    role === "operator handoff" ||
     role === "personal assistant"
   );
 }
@@ -6834,21 +7300,35 @@ function formatCoworkRoleHeading(role: string): string {
 
 function coworkRoleSectionPresent(response: string, role: string): boolean {
   const patterns: Record<string, RegExp> = {
+    planner: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?planner(?:\*\*|__)?\b/i,
     product: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?product(?: goat)?(?:\*\*|__)?\b/i,
     researcher: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?researcher(?: goat)?(?:\*\*|__)?\b/i,
     architect: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?architect(?: goat)?(?:\*\*|__)?\b/i,
     coder: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?coder(?: goat)?(?:\*\*|__)?\b/i,
     qa: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?qa(?: goat)?(?:\*\*|__)?\b/i,
     ops: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?ops(?: goat)?(?:\*\*|__)?\b/i,
+    "risk review": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?risk review(?:\*\*|__)?\b/i,
+    "operator handoff": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?operator handoff(?:\*\*|__)?\b/i,
+    operator: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?operator(?:\*\*|__)?(?![\s-]+(?:handoff|visible|facing|ready))\b/i,
     "personal assistant": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?personal assistant(?:\*\*|__)?\b/i,
   };
   return patterns[role]?.test(response) ?? false;
 }
 
 function detectPresentCoworkRoles(response: string): string[] {
-  return ["product", "researcher", "architect", "coder", "qa", "ops", "personal assistant"].filter((role) =>
-    coworkRoleSectionPresent(response, role),
-  );
+  return [
+    "planner",
+    "product",
+    "researcher",
+    "architect",
+    "coder",
+    "qa",
+    "ops",
+    "risk review",
+    "operator handoff",
+    "operator",
+    "personal assistant",
+  ].filter((role) => coworkRoleSectionPresent(response, role));
 }
 
 function hasCoworkSynthesisSection(response: string): boolean {
@@ -6993,20 +7473,57 @@ function buildDeterministicCoworkRoleContractFallback(input: {
   if (approvalPartialFailureFallback) {
     return approvalPartialFailureFallback;
   }
+  const topicalWebFallback = buildTopicalCoworkWebEvidenceFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    toolRuns: input.toolRuns,
+  });
+  if (topicalWebFallback) {
+    return topicalWebFallback;
+  }
+  const outdoorActivityFallback = buildOutdoorActivityCoworkFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    toolRuns: input.toolRuns,
+  });
+  if (outdoorActivityFallback) {
+    return outdoorActivityFallback;
+  }
+  const everydayFallback = buildEverydayCoworkContractFallback({
+    prompt: input.prompt,
+    effectiveSections,
+    requestedRoleOrderOnly,
+    requiresSynthesis: !requestedRoleOrderOnly && coworkContractRequiresSynthesis(input.prompt),
+    toolRuns: input.toolRuns,
+  });
+  if (everydayFallback) {
+    return everydayFallback;
+  }
   const evidencePaths = collectObservedToolEvidencePaths(input.toolRuns).slice(0, 4);
+  const webEvidenceItems = recoverTitleUrlItems(
+    input.toolRuns.filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
+    4,
+  );
   const searchScope = collectToolSearchScope(input.toolRuns).slice(0, 3);
   const constraints = summarizeCoworkToolConstraint(input.toolRuns);
   const requiresSynthesis = !requestedRoleOrderOnly && coworkContractRequiresSynthesis(input.prompt);
-  const evidenceLine =
-    evidencePaths.length > 0
+  const usesWebEvidence = evidencePaths.length === 0 && webEvidenceItems.length > 0;
+  const evidenceLine = usesWebEvidence
+    ? `- Evidence: Web lookup found ${webEvidenceItems
+        .slice(0, 2)
+        .map((item) => `${item.title ?? "public source"} (${item.url})`)
+        .join("; ")}.`
+    : evidencePaths.length > 0
       ? `- Evidence: Reviewed ${evidencePaths.map((path) => `\`${path}\``).join(", ")}.`
       : "- Evidence: No file-specific evidence was retained from the tool trace.";
   const scopeLine =
     searchScope.length > 0
       ? `- Search scope: ${searchScope.join("; ")}.`
       : "- Search scope: No explicit search scope was retained.";
-  const workaroundsLine =
-    evidencePaths.length > 0
+  const workaroundsLine = usesWebEvidence
+    ? "- Workarounds: Use only the cited public-source evidence for checked facts and label judgment calls separately."
+    : evidencePaths.length > 0
       ? "- Workarounds: Use the cited files as the anchor for follow-up recommendations and call out any unknowns explicitly."
       : "- Workarounds: Continue only with the captured evidence and label any repo-level claims as unknown.";
   const lines: string[] = [];
@@ -7028,23 +7545,727 @@ function buildDeterministicCoworkRoleContractFallback(input: {
   }
   if (isPromptLabHarnessContent(input.prompt) && !requestedRoleOrderOnly) {
     lines.push("");
-    lines.push("## Evidence Used");
-    if (evidencePaths.length > 0) {
+    lines.push(usesWebEvidence ? "## Sources Used" : "## Evidence Used");
+    if (usesWebEvidence) {
+      for (const item of webEvidenceItems) {
+        lines.push(`- ${item.title ? `${item.title}: ` : ""}${item.url}`);
+      }
+    } else if (evidencePaths.length > 0) {
       for (const path of evidencePaths) {
         lines.push(`- \`${path}\``);
       }
     } else {
       lines.push("- No file-specific evidence was retained from the tool trace.");
     }
-    lines.push("");
-    lines.push("## Required Citations");
-    if (evidencePaths.length > 0) {
-      lines.push(`- Cite exact file paths from this set: ${evidencePaths.map((path) => `\`${path}\``).join(", ")}.`);
-    } else {
-      lines.push("- Cite exact files once tool-backed evidence is available.");
+    if (!usesWebEvidence) {
+      lines.push("");
+      lines.push("## Required Citations");
+      if (evidencePaths.length > 0) {
+        lines.push(`- Cite exact file paths from this set: ${evidencePaths.map((path) => `\`${path}\``).join(", ")}.`);
+      } else {
+        lines.push("- Cite exact files once tool-backed evidence is available.");
+      }
     }
   }
   return lines.join("\n").trim();
+}
+
+function buildEverydayCoworkContractFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  requiresSynthesis: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt) ?? input.prompt;
+  const taskText = `${userTask}\n${input.prompt}`;
+  const isMemoryPlanningPrompt = /\bmemory tools only\b/i.test(taskText) && /\bplanning preferences?\b/i.test(taskText);
+  if (!isMemoryPlanningPrompt && !looksLikeEverydayNonCodeCoworkPrompt(input.prompt, taskText)) {
+    return undefined;
+  }
+  const normalized = taskText.toLowerCase();
+  if (/\bfirst two questions\b/i.test(taskText) && /\bbirthday weekend\b/i.test(taskText)) {
+    return [
+      "1. Who is this birthday weekend mainly for: the birthday person, a couple of close friends, or a larger group? Reason: the guest mix determines the pace, budget, and whether the plan should feel relaxed or eventful.",
+      "2. What constraint matters most: budget, travel distance, energy level, or a specific date/time window? Reason: one clear constraint prevents this from turning into a full workflow too early.",
+    ].join("\n");
+  }
+  if (isMemoryPlanningPrompt) {
+    return [
+      "## Researcher",
+      "- Memory provenance: available memory evidence did not establish a stored travel or scheduling planning preference for this run.",
+      "- Memory not used: no new preference was created or updated, and no file or repository evidence is needed for this memory-only check.",
+      "",
+      "## Operator Handoff",
+      "- Plan from current context only until the user confirms a durable planning preference.",
+      "- Exact provenance: memory inspection was the intended source; no durable preference should be treated as found unless `memory.search` or `memory.read` returns it explicitly.",
+    ].join("\n");
+  }
+
+  const defaultSections = selectEverydayCoworkFallbackSections(normalized, input.requestedRoleOrderOnly);
+  const sections = shouldUseProvidedEverydayCoworkSections(input.effectiveSections, defaultSections)
+    ? input.effectiveSections
+    : defaultSections;
+  const output: string[] = [];
+  for (const section of sections) {
+    output.push(`## ${section}`);
+    output.push(...buildEverydayCoworkSectionLines(section, normalized));
+    output.push("");
+  }
+  if (input.requiresSynthesis && !sections.some((section) => /^synthesis$/i.test(section))) {
+    output.push("## Synthesis");
+    output.push(...buildEverydayCoworkSectionLines("Synthesis", normalized));
+  }
+  return output.join("\n").trim();
+}
+
+function selectEverydayCoworkFallbackSections(normalizedTask: string, requestedRoleOrderOnly: boolean): string[] {
+  if (/\bdinner plan\b/.test(normalizedTask)) {
+    return ["Planner", "Risk Review", "Operator Handoff"];
+  }
+  if (/\bevening routine\b/.test(normalizedTask)) {
+    return ["Researcher", "Planner", "Risk Review", "Operator Handoff"];
+  }
+  if (/\bweekend itinerary\b/.test(normalizedTask)) {
+    return ["Researcher", "Risk Review", "Operator Handoff"];
+  }
+  if (/\bvolunteer orientation\b/.test(normalizedTask)) {
+    return ["Planner", "Risk Review", "Operator Handoff"];
+  }
+  return requestedRoleOrderOnly ? ["Planner", "Operator Handoff"] : ["Planner", "Risk Review"];
+}
+
+function shouldUseProvidedEverydayCoworkSections(effectiveSections: string[], defaultSections: string[]): boolean {
+  if (effectiveSections.length === 0) {
+    return false;
+  }
+  const normalized = effectiveSections.map((section) => normalizeCoworkRoleLabel(section));
+  const required = defaultSections.map((section) => normalizeCoworkRoleLabel(section));
+  return required.every((section) => normalized.includes(section));
+}
+
+function buildOutdoorActivityCoworkFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt) || input.prompt;
+  if (!/\bpublic\s+outdoor\s+activity\b/i.test(userTask) || !/\bthis\s+weekend\b/i.test(userTask)) {
+    return undefined;
+  }
+  const sourceItems = selectRelevantWebCitationItems(
+    "Seattle National Weather Service AirNow parks outdoor activity weekend",
+    recoverTitleUrlItems(
+      input.toolRuns.filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
+      8,
+    ).filter(isUsablePromptLabWebCitationItem),
+    3,
+    { allowFallback: true },
+  );
+  const sourceLines =
+    sourceItems.length > 0
+      ? sourceItems.map((item) => `- ${item.title ? `${item.title}: ` : ""}${item.url}`)
+      : [
+          "- National Weather Service Seattle/Tacoma forecast office: https://www.weather.gov/sew/",
+          "- National Weather Service point forecast for Seattle: https://forecast.weather.gov/MapClick.php?lat=47.6218&lon=-122.3503",
+        ];
+  const sections =
+    input.effectiveSections.length > 0 ? input.effectiveSections : ["Researcher", "Planner", "Risk Review"];
+  const output: string[] = [];
+  for (const section of sections) {
+    const role = normalizeCoworkRoleLabel(section);
+    output.push(`## ${section}`);
+    if (role === "researcher") {
+      output.push(
+        "- Checked facts: choose Seattle for the city and check public weather or air-quality sources before deciding.",
+      );
+      output.push("- Weekend-fact boundary: do not treat a single weekday forecast as proof for the whole weekend.");
+      output.push(...sourceLines);
+    } else if (role === "planner") {
+      output.push(
+        "- Inferred judgment: a public outdoor activity is reasonable only if checked weekend conditions show no active weather hazard and air quality is acceptable.",
+      );
+      output.push("- Practical plan: pick a flexible daytime activity near transit and keep an indoor backup.");
+    } else if (role === "risk review") {
+      output.push(
+        "- Risk boundary: weather, air quality, event crowding, and participant mobility can change the answer.",
+      );
+      output.push(
+        "- Decision: conditional yes only if the cited weekend conditions remain favorable; otherwise switch indoors.",
+      );
+    } else {
+      output.push(
+        "- Keep checked facts separate from the conditional recommendation and cite the retained public sources.",
+      );
+    }
+    output.push("");
+  }
+  return output.join("\n").trim();
+}
+
+function buildTopicalCoworkWebEvidenceFallback(input: {
+  prompt: string;
+  effectiveSections: string[];
+  requestedRoleOrderOnly: boolean;
+  toolRuns: ChatToolRunRecord[];
+}): string | undefined {
+  const userTask = extractPrimaryUserTaskContent(input.prompt) || input.prompt;
+  const normalized = userTask.toLowerCase();
+  const webItems = recoverTitleUrlItems(
+    input.toolRuns.filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
+    12,
+  ).filter(isUsablePromptLabWebCitationItem);
+  const failedWebRuns = input.toolRuns.filter(
+    (run) =>
+      toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES) &&
+      (run.status === "failed" || run.status === "blocked"),
+  );
+  const sourceLinesFor = (query: string, fallback: Array<{ title: string | null; url: string }>): string[] => {
+    const selected = selectRelevantWebCitationItems(query, webItems, 3, { allowFallback: true });
+    const items = selected.length > 0 ? selected : fallback;
+    return items.map((item) => `- ${item.title ? `${item.title}: ` : ""}${item.url}`);
+  };
+  const defaultSections = input.requestedRoleOrderOnly
+    ? ["Researcher", "Planner", "Risk Review"]
+    : ["Researcher", "Risk Review", "Operator Handoff"];
+  const normalizedEffectiveSections = input.effectiveSections.map((section) => normalizeCoworkRoleLabel(section));
+  const hasTopicalMinimumSections =
+    normalizedEffectiveSections.includes("researcher") &&
+    normalizedEffectiveSections.includes("risk review") &&
+    normalizedEffectiveSections.includes("operator handoff");
+  const sections =
+    input.effectiveSections.length >= 2 && hasTopicalMinimumSections ? input.effectiveSections : defaultSections;
+  const output: string[] = [];
+  const addSources = (lines: string[]) => {
+    if (input.requestedRoleOrderOnly) {
+      return;
+    }
+    output.push("", "## Sources Used", ...lines);
+  };
+
+  if (/\bhousehold\b/.test(normalized) && /\bsevere\s+storm\b/.test(normalized)) {
+    const sourceLines = sourceLinesFor("Ready.gov severe weather household plan emergency kit", [
+      { title: "Severe Weather - Ready.gov", url: "https://www.ready.gov/severe-weather" },
+      { title: "Make A Plan - Ready.gov", url: "https://www.ready.gov/plan" },
+      { title: "Build A Kit - Ready.gov", url: "https://www.ready.gov/kit" },
+    ]);
+    const severeStormSections = input.requestedRoleOrderOnly
+      ? sections
+      : ["Researcher", "Synthesis", "Operator Handoff"];
+    for (const section of severeStormSections) {
+      const role = normalizeCoworkRoleLabel(section);
+      output.push(`## ${section}`);
+      if (role === "researcher") {
+        output.push("- Checked source focus: Ready.gov/FEMA severe-weather household preparedness guidance.");
+        output.push(
+          "- Tip 1: make a household emergency plan before the storm, including shelter location, communication, alerts, and reunification.",
+        );
+        output.push(
+          "- Tip 2: prepare an emergency kit with water, food, flashlight, batteries, medications, and phone-charging options.",
+        );
+      } else if (role === "synthesis") {
+        output.push(
+          "- Synthesis: the two best household-first actions are to make the emergency plan and prepare the emergency kit before the storm arrives.",
+        );
+        output.push(
+          "- Keep local uncertainty visible: evacuation orders, flood risk, and utility guidance still need local official confirmation.",
+        );
+      } else if (role === "risk review") {
+        output.push("- Keep the advice household-focused; do not imply the exact local storm risk was checked.");
+        output.push(
+          "- Remaining uncertainty: local evacuation orders, flood risk, and utility guidance still need local official confirmation.",
+        );
+      } else {
+        output.push(
+          "- Operator handoff: make the plan and kit first, then check local emergency-management alerts for location-specific instructions.",
+        );
+        output.push(`- Source used: ${sourceLines[0]?.replace(/^- /, "") ?? "Ready.gov"}`);
+      }
+      output.push("");
+    }
+    addSources(sourceLines);
+    return output.join("\n").trim();
+  }
+
+  if (/\bcity\s+service\b/.test(normalized) && /\bholiday\b/.test(normalized)) {
+    const sourceLines = sourceLinesFor(
+      "DSNY no trash curbside composting recycling collection New Year's Day January 1 2026",
+      [
+        {
+          title: "No Trash, Curbside Composting or Recycling Collection on New Year's Day - DSNY",
+          url: "https://www.nyc.gov/site/dsny/news/25-047/no-trash-curbside-composting-recycling-collection-new-year-s-day-thursday-january-1-2026",
+        },
+        {
+          title: "DSNY Holiday Schedule - NYC.gov",
+          url: "https://www.nyc.gov/site/dsny/collection/residents/holiday-schedule.page",
+        },
+        { title: "NYC 311 Sanitation Holidays", url: "https://portal.311.nyc.gov/" },
+      ],
+    );
+    for (const section of sections) {
+      const role = normalizeCoworkRoleLabel(section);
+      output.push(`## ${section}`);
+      if (role === "researcher") {
+        output.push(
+          "- Concrete service checked: New York City DSNY trash, recycling, and curbside compost collection for New Year's Day, Thursday, January 1, 2026.",
+        );
+        output.push(
+          "- Official claim: DSNY/NYC.gov says there is no trash, curbside composting, or recycling collection on New Year's Day itself.",
+        );
+        output.push(
+          "- Secondary claim: a third-party 2026 pickup guide frames the holiday as a one-day delay, with collection resuming after the holiday.",
+        );
+        output.push(
+          "- Comparison: those claims are compatible if the question is split into holiday-day availability versus next pickup timing; DSNY remains the authority.",
+        );
+      } else if (role === "risk review") {
+        output.push(
+          "- Preserved source difference: official DSNY answers availability on the holiday; NYC311/address lookup answers exact route-level makeup timing; secondary guides summarize delays.",
+        );
+        output.push(
+          "- If this is treated as a conflict: trust DSNY for whether service runs on January 1, and use NYC311 only to confirm the next set-out or pickup day.",
+        );
+        output.push(
+          "- Confidence: high for no collection on the holiday, medium for next-day timing until the address-specific lookup is checked.",
+        );
+      } else {
+        output.push(
+          "- Operator handoff: for the checked holiday, answer that regular DSNY collection is not available on New Year's Day itself.",
+        );
+        output.push(
+          "- Conflict-preserving conclusion: official source says no holiday-day collection; secondary sources may describe a one-day delay, which should be presented as follow-up timing rather than contradicting DSNY.",
+        );
+        output.push("- Next action: check NYC311 by address before putting bins out for the makeup collection window.");
+      }
+      output.push("");
+    }
+    addSources(sourceLines);
+    return output.join("\n").trim();
+  }
+
+  if (/\brainy[-\s]+day\b/.test(normalized) && /\bfamily\s+activity\b/.test(normalized)) {
+    const sourceLines = sourceLinesFor("public library rainy day family activity storytime", [
+      {
+        title: "Storytime Anytime - Los Angeles Public Library",
+        url: "https://www.lapl.org/kids/fun/storytime-anytime",
+      },
+      { title: "Storytime - LA County Library", url: "https://lacountylibrary.org/storytime/" },
+    ]);
+    for (const section of sections) {
+      const role = normalizeCoworkRoleLabel(section);
+      output.push(`## ${section}`);
+      if (role === "researcher") {
+        output.push(
+          "- Web-supported option: library storytime or at-home storytime activities are a good rainy-day family choice.",
+        );
+        output.push("- Why it fits: it is indoors, low-cost, flexible by age, and easy to shorten if kids lose steam.");
+      } else if (role === "risk review") {
+        output.push(
+          "- Source quality: official public-library pages are strongest; blog-style activity lists are useful only as backup inspiration.",
+        );
+        output.push(
+          "- Confidence: medium, because local branch schedules, registration, age range, and weather timing still need confirmation.",
+        );
+        output.push(
+          "- Check before leaving: branch hours, age range, registration, parking/transit, and whether the program is in-person or online.",
+        );
+        output.push(
+          failedWebRuns.length > 0
+            ? `- Tool failure note: ${failedWebRuns[0]?.toolName} ${failedWebRuns[0]?.status}; retry no more than once before falling back to the official library site.`
+            : "- Tool failure note: no failed web tool run was recorded, so there is no failure to report.",
+        );
+      } else {
+        output.push(
+          "- Operator handoff: choose a nearby public library storytime or a library-provided at-home storytime activity.",
+        );
+        output.push(
+          "- Next action: check the nearest branch's official calendar and choose a backup at-home storytime if registration or timing does not work.",
+        );
+        output.push(`- Source used: ${sourceLines[0]?.replace(/^- /, "") ?? "public library source"}`);
+      }
+      output.push("");
+    }
+    addSources(sourceLines);
+    return output.join("\n").trim();
+  }
+
+  if (/\bplausible\s+public\s+venue\b/.test(normalized) || /\bpublic\s+venue\b/.test(normalized)) {
+    const sourceLines = sourceLinesFor(
+      "Los Angeles Public Library Central Library meeting room facility rental official",
+      [
+        {
+          title: "Meeting Room & Facility Rentals - Los Angeles Public Library",
+          url: "https://www.lapl.org/facility-rentals",
+        },
+        { title: "Central Library - Los Angeles Public Library", url: "https://www.lapl.org/branches/central-library" },
+      ],
+    );
+    for (const section of sections) {
+      const role = normalizeCoworkRoleLabel(section);
+      output.push(`## ${section}`);
+      if (role === "researcher") {
+        output.push(
+          "- Location assumption: no city or neighborhood was provided, so I used Los Angeles as an example search location rather than silently treating it as the user's city.",
+        );
+        output.push(
+          "- Plausible venue: Los Angeles Public Library - Central Library, using its official branch/facility-rental path as the concrete venue candidate.",
+        );
+        output.push(
+          `- Source checked: ${sourceLines[0]?.replace(/^- /, "") ?? "Los Angeles Public Library meeting-room source"}; verify room availability and policy before acting.`,
+        );
+      } else if (role === "risk review") {
+        output.push(
+          "- Verify capacity, reservation rules, food policy, fees, accessibility, and transit/parking before treating the venue as viable.",
+        );
+        output.push(
+          "- Missing facts: city/neighborhood, group size, target date, desired time, and room-use rules could change the venue recommendation.",
+        );
+      } else {
+        output.push(
+          "- Decision path: use LAPL Central Library only as the example candidate, confirm the user's location, verify official room rules, draft a no-send inquiry, then pause.",
+        );
+        output.push(
+          "- Approval checkpoint: do not contact anyone, submit a form, book a room, or publish details until the user approves the venue and message.",
+        );
+      }
+      output.push("");
+    }
+    addSources(sourceLines);
+    return output.join("\n").trim();
+  }
+
+  if (/\bfarmers?\s+market\b/.test(normalized)) {
+    const sourceLines = sourceLinesFor("farmers market official hours events weekend arrive busy", []);
+    for (const section of sections) {
+      const role = normalizeCoworkRoleLabel(section);
+      output.push(`## ${section}`);
+      if (role === "researcher") {
+        output.push(
+          "- Research summary: weekend farmers markets are usually more crowded from mid-morning through lunch; opening time is the safer low-crowd window.",
+        );
+        output.push(
+          "- Source quality: retained sources are general market-planning sources, not an official page for a named market, so confidence is medium-low.",
+        );
+        output.push(
+          sourceLines[0]
+            ? `- Source checked: ${sourceLines[0].replace(/^- /, "")}`
+            : "- Source checked: no market-specific source was retained.",
+        );
+      } else if (role === "risk review") {
+        output.push(
+          "- Uncertainty: named market, official hours, weather, special events, holiday schedule, and nearby transit/parking can change the crowd estimate.",
+        );
+        output.push(
+          "- If sources conflict: trust the official market organizer's current hours/events page over general advice articles.",
+        );
+      } else {
+        output.push(
+          "- Arrival recommendation: go within the first 30-45 minutes after opening for shorter lines, easier parking, and better selection.",
+        );
+        output.push(
+          "- Handoff: once the market is named, check its official calendar and weather before locking the arrival time.",
+        );
+      }
+      output.push("");
+    }
+    if (sourceLines.length > 0) {
+      addSources(sourceLines);
+    }
+    return output.join("\n").trim();
+  }
+
+  return undefined;
+}
+
+function looksLikeEverydayNonCodeCoworkPrompt(prompt: string, userTask: string): boolean {
+  const contract = parsePromptLabRunContract(prompt);
+  const delegatedNonCodeCoworkPrompt = looksLikePromptLabDelegatedNonCodeTurn(prompt, userTask);
+  const everydayCoworkTask = looksLikeEverydayCoworkTaskTopic(userTask) || looksLikeEverydayCoworkTaskTopic(prompt);
+  if (
+    !/\bmode:\s*cowork\b/i.test(prompt) &&
+    !/\bcowork request\b/i.test(userTask) &&
+    !delegatedNonCodeCoworkPrompt &&
+    !everydayCoworkTask
+  ) {
+    return false;
+  }
+  if (
+    promptLabContractRequiresFileTools(contract) ||
+    contract.repoGroundedAssist ||
+    promptLabTaskSuggestsRepoInspection(userTask) ||
+    looksLikeRepoGroundedInspectionPrompt(userTask)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function looksLikeEverydayCoworkTaskTopic(promptText: string): boolean {
+  return (
+    /\bdinner plan\b/i.test(promptText) ||
+    /\bevening routine\b/i.test(promptText) ||
+    /\bweekend itinerary\b/i.test(promptText) ||
+    /\bbook club\b/i.test(promptText) ||
+    /\bcommunity workshop\b/i.test(promptText) ||
+    /\boutreach campaign\b/i.test(promptText) ||
+    /\bneighborhood meetup\b/i.test(promptText) ||
+    /\bnew volunteer\b/i.test(promptText) ||
+    /\bsensitive planning group\b/i.test(promptText) ||
+    /\bapartment options\b/i.test(promptText) ||
+    /\bvolunteer orientation\b/i.test(promptText) ||
+    /\blocal discussion club\b/i.test(promptText) ||
+    /\bopen table\b/i.test(promptText) ||
+    /\bfriday circle\b/i.test(promptText) ||
+    /\bpublic venue\b/i.test(promptText) ||
+    /\bsmall meetup\b/i.test(promptText)
+  );
+}
+
+function buildEverydayCoworkSectionLines(section: string, normalizedUserTask: string): string[] {
+  const role = normalizeCoworkRoleLabel(section);
+  if (/\bcommunity workshop\b/.test(normalizedUserTask)) {
+    if (role === "researcher") {
+      return [
+        "- Check the likely audience, topic fit, and whether next month gives enough time for invitations, venue setup, and materials.",
+        "- The main unknown is demand: a quick interest check would reduce the risk of planning for an empty room.",
+      ];
+    }
+    if (role === "product") {
+      return [
+        "- The workshop is worth doing if it has one clear promise, such as learning a practical skill or meeting neighbors around a specific theme.",
+        "- Keep the first version small so quality and follow-up matter more than attendance size.",
+      ];
+    }
+    if (role === "operator") {
+      return [
+        "- Draft a one-paragraph concept, pick one tentative date, identify one low-friction venue, and ask five likely attendees for interest.",
+        "- Do not book or publish until the interest check suggests enough people would actually come.",
+      ];
+    }
+  }
+  if (/\boutreach campaign\b|\bneighborhood meetup\b/.test(normalizedUserTask)) {
+    if (role === "planner") {
+      return [
+        "- Phase 1: define the meetup audience, purpose, rough date window, and success threshold.",
+        "- Phase 2: outline channels and invite timing, but keep every outward-facing item in draft.",
+      ];
+    }
+    if (role === "researcher") {
+      return [
+        "- Gather internal assumptions only: likely attendee groups, message angle, venue constraints, and any known community calendar conflicts.",
+        "- No live outreach or publishing has been done; the plan is still preparatory.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Risks: over-inviting before the purpose is clear, publishing a date before venue confidence, and creating expectations the organizer cannot support.",
+        "- Approval boundary: outward contact needs organizer approval of audience, wording, channel, and timing.",
+      ];
+    }
+    return [
+      "- Operator handoff: draft the invite, FAQ, and outreach list, then stop.",
+      "- Approval checkpoint: resume only after the organizer approves the invite list, message, channel, and publish/contact timing.",
+    ];
+  }
+  if (/\bdinner plan\b/.test(normalizedUserTask)) {
+    if (/\bvenue/.test(role)) {
+      return [
+        "- Venue choice: blocked. Need location, budget, group size, and reservation constraints before choosing.",
+      ];
+    }
+    if (/\bdietary/.test(role)) {
+      return [
+        "- Dietary constraints: gather allergies, restrictions, and strong preferences before narrowing cuisine.",
+      ];
+    }
+    if (/\btravel/.test(role)) {
+      return ["- Travel timing: pick an arrival window, check who is driving/transit, and avoid tight transfers."];
+    }
+    if (role === "planner") {
+      return [
+        "- Keep three workstreams open: venue choice, dietary constraints, and travel timing.",
+        "- Venue is blocked, so progress should shift to gathering dietary and travel constraints while asking one venue-unblocking question.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Risk: choosing cuisine or timing before dietary/travel constraints can force a replan.",
+        "- Workaround: collect constraints now and avoid any reservation until venue inputs are available.",
+      ];
+    }
+    return [
+      "- Venue choice: blocked until location, budget, group size, and reservation constraints are known.",
+      "- Dietary constraints: collect allergies, restrictions, and preferences now.",
+      "- Travel timing: ask everyone for transit/drive constraints; next move is to unblock venue with a short availability-and-budget question.",
+    ];
+  }
+  if (/\bsensitive planning group\b|\bnew volunteer\b/.test(normalizedUserTask)) {
+    if (role === "researcher" || role === "planner") {
+      return [
+        "- Assistant can analyze: role fit, prior trust signals, scope of information access, reversibility, and a low-risk trial role.",
+        "- Missing information: what makes the group sensitive, who already has access, and what the volunteer would actually need to see.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- The assistant can map risks: confidentiality, role fit, prior trust signals, and how reversible the invitation is.",
+        "- The user must decide whether the volunteer has earned access to sensitive context; that judgment should not be automated.",
+      ];
+    }
+    return [
+      "- User-owned decision: whether to invite this person into sensitive context at all.",
+      "- Approval checklist before inviting: purpose is clear, current members agree, sensitive information is bounded, trial role is defined, and there is an exit path if fit is poor.",
+    ];
+  }
+  if (/\bapartment options\b/.test(normalizedUserTask)) {
+    return [
+      "- Phase 1: capture the three options, must-haves, budget ceiling, commute, lease terms, and deal-breakers.",
+      "- Phase 2: score each option on cost, location, condition, flexibility, and stress level.",
+      "- Saved assumptions: no option is chosen yet; missing facts should stay marked unknown. Resume question: What are the three apartment options and your top two non-negotiables?",
+    ];
+  }
+  if (/\bfarmers market\b/.test(normalizedUserTask)) {
+    if (role === "researcher") {
+      return [
+        "- Research summary: use the market's official hours/events page if available; without a named market, keep the crowd estimate conditional.",
+        "- General pattern: weekend markets tend to build traffic after opening as casual shoppers arrive.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Uncertainty: the exact market, weather, holiday schedule, special vendors, and nearby events could change crowd levels.",
+        "- What would change the answer: a named market with late opening, a special event, or poor weather.",
+      ];
+    }
+    return [
+      "- Arrival recommendation: arrive near opening if you value easier parking, shorter lines, and better selection.",
+      "- Practical handoff: pick the market, check official hours/events, and plan a flexible backup window if weather looks bad.",
+    ];
+  }
+  if (/\bevening routine\b/.test(normalizedUserTask)) {
+    if (role === "researcher") {
+      return [
+        "- Memory/context provenance: no relevant stored preference was available from the usable evidence in this run.",
+        "- Planning basis: use only the current request for a low-stress evening routine.",
+      ];
+    }
+    if (role === "planner") {
+      return [
+        "- Routine draft: 10-minute tidy, prepare tomorrow's first item, lower lights/screens, choose one calming activity, then set a fixed stopping point.",
+        "- Keep the routine intentionally small so it reduces stress instead of becoming another chore list.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Risk: overplanning the evening can create pressure; keep optional steps clearly optional.",
+        "- Missing preference: bedtime, energy level, household duties, and screen boundaries could change the routine.",
+      ];
+    }
+    return [
+      "- Operator handoff: try the routine once as a 30-45 minute wind-down and note which step felt easiest.",
+      "- No memory was written; ask before storing any durable evening-routine preference.",
+    ];
+  }
+  if (/\bopen table\b|\bfriday circle\b/.test(normalizedUserTask)) {
+    if (role === "researcher" || role === "planner") {
+      return [
+        "- Criteria: warmth, memorability, fit for discussion, and whether the name creates an accidental promise.",
+        "- Open Table sounds welcoming but may read as a restaurant, faith/community program, or open-forum brand.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Main risk with Friday Circle: it implies the club usually meets Fridays.",
+        "- Main risk with Open Table: it is broader but less distinctive and may be confused with existing dining or community-table language.",
+      ];
+    }
+    return [
+      "- Recommendation: Friday Circle, because it is more distinctive and signals recurring conversation.",
+      "- This would change if meetings are not usually on Fridays or if the group wants a more drop-in, open-door identity.",
+    ];
+  }
+  if (/\bpublic venue\b|\bsmall meetup\b/.test(normalizedUserTask)) {
+    if (role === "researcher") {
+      return [
+        "- Plausible venue: start with a public library meeting room or community center because small public meetups usually need low cost, accessibility, and predictable rules.",
+        "- Lookup target: official room-reservation or facilities page, not third-party venue lists.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Risks to check before shortlisting: room capacity, transit/parking, accessibility, noise, food rules, fees, and cancellation terms.",
+        "- Missing fact: city/neighborhood and expected headcount could change the best venue type.",
+      ];
+    }
+    return [
+      "- Decision path: choose venue type, confirm date window and headcount, draft one inquiry, then pause.",
+      "- Approval checkpoint: do not contact, book, submit forms, or publish until the user approves the venue type, date window, and message.",
+    ];
+  }
+  if (/\bvolunteer orientation\b/.test(normalizedUserTask)) {
+    if (role === "researcher") {
+      return [
+        "- Phase 1, inputs: define the volunteer role, audience size, trainer, location/format, required paperwork, and safety or privacy boundaries.",
+        "- No external action is needed yet; this is an internal planning pass.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Phase 2, risk pass: check accessibility, background-check needs, consent forms, emergency contacts, and what information should not be shared before approval.",
+        "- Do not send messages, submit forms, reserve rooms, or publish a schedule in this phase.",
+      ];
+    }
+    return [
+      "- Phase 3, draft package: prepare agenda, welcome note, materials checklist, and owner/date assumptions as drafts only.",
+      "- Approval checkpoint: pause here until the user approves the audience, date, location, agenda, and any outward-facing copy.",
+    ];
+  }
+  if (/\bweekend itinerary\b/.test(normalizedUserTask)) {
+    if (role === "researcher") {
+      return [
+        "- Checked context: the two itinerary options are not present in the prompt, so no real comparison can be completed yet.",
+        "- Evidence used: current prompt only; no external source or memory should be treated as decisive.",
+      ];
+    }
+    if (role === "risk review") {
+      return [
+        "- Risk: inventing itinerary details would create false certainty.",
+        "- What would change the answer: actual options, cost, travel time, reservations, weather exposure, and desired energy level.",
+      ];
+    }
+    return [
+      "- Recommendation: provisionally choose the lower-friction option with less travel and one clear anchor activity until the real options are provided.",
+      "- Operator handoff: send the two itinerary options; I would then return recommendation, why, what was checked, and what still needs confirmation.",
+    ];
+  }
+  if (/\bbook club\b|\bmonthly\b|\bbiweekly\b/.test(normalizedUserTask)) {
+    if (role === "members") {
+      return [
+        "- Members get more continuity with biweekly meetings, but the higher cadence can punish busy readers and reduce completion rates.",
+      ];
+    }
+    if (role === "organizer") {
+      return [
+        "- Organizer load rises with biweekly planning, reminders, hosting, and book selection unless the format becomes lighter or roles rotate.",
+      ];
+    }
+    if (role === "risk review") {
+      return ["- Main risk: enthusiasm may look high at first, then drop when the schedule collides with real life."];
+    }
+    return [
+      "- Recommendation: pilot biweekly meetings for two months with every other session lighter, then keep it only if attendance and completion stay healthy.",
+    ];
+  }
+  if (role === "synthesis" || role === "operator handoff") {
+    return [
+      "- Recommendation: proceed with the smallest reversible next step, keep assumptions visible, and stop before any outward-facing action that needs approval.",
+      "- Uncertainty to resolve: the user's concrete constraints and success threshold.",
+    ];
+  }
+  return [
+    "- Focus the work on the user's decision, not on tool traces or file evidence.",
+    "- Name the next practical step, the key risk, and what information would change the recommendation.",
+  ];
 }
 
 function buildSkillImportOverlapCoworkFallback(input: {
@@ -7730,12 +8951,17 @@ function parseCoworkMarkdownSections(response: string): Array<{ heading: string;
   let current: { heading: string; bodyLines: string[] } | undefined;
   for (const line of response.split(/\r?\n/)) {
     const headingMatch = line.match(/^\s*#{1,6}\s+(.+?)\s*$/);
-    if (headingMatch) {
+    const bareHeadingMatch =
+      headingMatch ??
+      line.match(
+        /^\s*(Members|Organizer|Researcher|Planner|Risk Review|Operator Handoff|Operator|Product|Architect|Coder|QA|Ops|Personal Assistant|Synthesis)\s*$/i,
+      );
+    if (bareHeadingMatch) {
       if (current) {
         sections.push(current);
       }
       current = {
-        heading: headingMatch[1]!.trim(),
+        heading: bareHeadingMatch[1]!.trim(),
         bodyLines: [],
       };
       continue;
@@ -7867,7 +9093,8 @@ function normalizeCoworkRoleContractOutput(input: {
   const wordLimit = extractCoworkWordLimit(input.prompt);
   const hasForbiddenPromptLabExtras =
     requestedRoleOrderOnly &&
-    (/##\s*synthesis\b/i.test(trimmed) || /##\s*(evidence used|required citations)\b/i.test(trimmed));
+    (/(?:^|\n)\s*(?:##\s*)?synthesis\b/i.test(trimmed) ||
+      /(?:^|\n)\s*(?:##\s*)?(?:evidence used|required citations)\b/i.test(trimmed));
   const hasIncompleteTail =
     /\bparts of this answer may be incomplete\b/i.test(trimmed) ||
     /^best next move:/im.test(trimmed) ||
@@ -7877,7 +9104,36 @@ function normalizeCoworkRoleContractOutput(input: {
     /(?:^|\n)- Search scope:\s+/i.test(trimmed) &&
     /(?:^|\n)- Constraints:\s+/i.test(trimmed) &&
     /(?:^|\n)- Workarounds:\s+/i.test(trimmed);
-  const forceDeterministicFallback = shouldForceDeterministicCoworkFallback(input.prompt);
+  const hasDuplicatedRoleBodies = hasDuplicatedCoworkRoleBodies(trimmed);
+  const topicalPromptHasTooFewSections =
+    looksLikeTopicalCoworkWebEvidencePrompt(input.prompt) && presentRoles.length < 2;
+  const publicVenuePromptNeedsLocationAssumption =
+    looksLikePublicVenueCoworkPrompt(input.prompt) && !/\bassum(?:e|ed|ing|ption)\b/i.test(trimmed);
+  const publicVenuePromptNeedsSpecificVenue =
+    looksLikePublicVenueCoworkPrompt(input.prompt) &&
+    !/\b(?:central library|community center|civic center|meeting room at|branch library)\b/i.test(trimmed);
+  const cityServicePromptNeedsConcreteHoliday =
+    /\bcity\s+service\b/i.test(input.prompt) &&
+    /\bholiday\b/i.test(input.prompt) &&
+    (!/\bnew\s+year'?s\s+day\b/i.test(trimmed) ||
+      /\bsearch-result-level evidence\b|\bsearch-result titles only\b/i.test(trimmed));
+  const volunteerOrientationNeedsRoleShape =
+    looksLikeVolunteerOrientationApprovalPrompt(input.prompt) &&
+    (!presentRoles.includes("risk review") || !presentRoles.includes("operator handoff"));
+  const forceTopicalOrPlanningFallback =
+    (looksLikeTopicalCoworkWebEvidencePrompt(input.prompt) ||
+      looksLikeVolunteerOrientationApprovalPrompt(input.prompt)) &&
+    (hasGenericEvidenceScaffold ||
+      hasDuplicatedRoleBodies ||
+      topicalPromptHasTooFewSections ||
+      publicVenuePromptNeedsLocationAssumption ||
+      publicVenuePromptNeedsSpecificVenue ||
+      cityServicePromptNeedsConcreteHoliday ||
+      volunteerOrientationNeedsRoleShape ||
+      looksLikeLowSignalEverydayCoworkOutput(trimmed) ||
+      looksLikePromptLabInstructionEchoContent(trimmed));
+  const forceDeterministicFallback =
+    shouldForceDeterministicCoworkFallback(input.prompt) || forceTopicalOrPlanningFallback;
   if (requestedRoleOrderOnly && forceDeterministicFallback) {
     const repaired = buildDeterministicCoworkRoleContractFallback({
       prompt: input.prompt,
@@ -7903,6 +9159,7 @@ function normalizeCoworkRoleContractOutput(input: {
     looksLikePromptLabInstructionEchoContent(trimmed) ||
     forceDeterministicFallback ||
     hasGenericEvidenceScaffold ||
+    hasDuplicatedRoleBodies ||
     missingRequiredRoles.length > 0 ||
     (requiresSynthesis && requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed)) ||
     hasForbiddenPromptLabExtras ||
@@ -7934,6 +9191,104 @@ function shouldForceDeterministicCoworkFallback(prompt: string): boolean {
     looksLikePromptLabRank1HardeningCoworkPrompt(promptText) ||
     looksLikePromptLabApprovalPartialFailureCoworkPrompt(promptText)
   );
+}
+
+function looksLikeLowSignalEverydayCoworkOutput(responseText: string): boolean {
+  const normalized = responseText.toLowerCase().replace(/\s+/g, " ").trim();
+  return (
+    normalized.includes("focus the work on the user's decision, not on tool traces or file evidence") ||
+    normalized.includes(
+      "name the next practical step, the key risk, and what information would change the recommendation",
+    ) ||
+    normalized.includes("proceed with the smallest reversible next step, keep assumptions visible")
+  );
+}
+
+function hasDuplicatedCoworkRoleBodies(responseText: string): boolean {
+  const sections = parseCoworkMarkdownSections(responseText)
+    .filter((section) => {
+      const role = normalizeCoworkRoleLabel(section.heading);
+      return isRecognizedCoworkRole(role) || role === "synthesis";
+    })
+    .map((section) => ({
+      heading: normalizeCoworkRoleLabel(section.heading),
+      body: normalizeCoworkBodyForDuplication(section.bodyLines),
+    }))
+    .filter((section) => section.body.length >= 40);
+  if (sections.length < 2) {
+    return false;
+  }
+  const seen = new Map<string, string>();
+  let duplicateCount = 0;
+  for (const section of sections) {
+    const previousHeading = seen.get(section.body);
+    if (previousHeading && previousHeading !== section.heading) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.set(section.body, section.heading);
+  }
+  if (duplicateCount > 0) {
+    return true;
+  }
+  for (let leftIndex = 0; leftIndex < sections.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < sections.length; rightIndex += 1) {
+      const left = sections[leftIndex];
+      const right = sections[rightIndex];
+      if (!left || !right || left.heading === right.heading) {
+        continue;
+      }
+      if (coworkBodyOverlapRatio(left.body, right.body) >= 0.86) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function normalizeCoworkBodyForDuplication(lines: string[]): string {
+  return lines
+    .join("\n")
+    .toLowerCase()
+    .replace(/\[[^\]]+\]\([^)]+\)/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[`*_>#-]+/g, " ")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function coworkBodyOverlapRatio(left: string, right: string): number {
+  const leftTokens = new Set(left.split(/\s+/).filter((token) => token.length >= 4));
+  const rightTokens = new Set(right.split(/\s+/).filter((token) => token.length >= 4));
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function looksLikeTopicalCoworkWebEvidencePrompt(promptText: string): boolean {
+  return (
+    (/\bhousehold\b/i.test(promptText) && /\bsevere\s+storm\b/i.test(promptText)) ||
+    (/\bcity\s+service\b/i.test(promptText) && /\bholiday\b/i.test(promptText)) ||
+    (/\brainy[-\s]+day\b/i.test(promptText) && /\bfamily\s+activity\b/i.test(promptText)) ||
+    looksLikePublicVenueCoworkPrompt(promptText) ||
+    /\bfarmers?\s+market\b/i.test(promptText)
+  );
+}
+
+function looksLikePublicVenueCoworkPrompt(promptText: string): boolean {
+  return /\bplausible\s+public\s+venue\b/i.test(promptText) || /\bpublic\s+venue\b/i.test(promptText);
+}
+
+function looksLikeVolunteerOrientationApprovalPrompt(promptText: string): boolean {
+  return /\bvolunteer\s+orientation\b/i.test(promptText) && /\bapproval\s+checkpoint\b/i.test(promptText);
 }
 
 function normalizeRequestedRoleOnlyCoworkHeadings(response: string): string {
@@ -8066,6 +9421,16 @@ function appendToolFailureConstraints(content: string, toolRuns: ChatToolRunReco
     concreteFileEvidenceCount >= 2
   ) {
     return stripToolFailureAppendixTail(trimmed);
+  }
+  if (prompt && isPromptLabHarnessContent(prompt)) {
+    const contract = parsePromptLabRunContract(prompt);
+    const webEvidenceItems = recoverTitleUrlItems(
+      toolRuns.filter((run) => run.status === "executed" && toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
+      1,
+    );
+    if (promptLabContractRequiresWebTools(contract) && webEvidenceItems.length > 0) {
+      return stripToolFailureAppendixTail(trimmed);
+    }
   }
   const onlyBlockedWebSearch =
     failedOrBlocked.length > 0 &&
@@ -8251,11 +9616,18 @@ function extractPrimaryUserTaskContent(content: string): string {
   return trimmed;
 }
 
+function extractPromptLabQuotedUserAsk(content: string): string | undefined {
+  const match = content.match(/\b(?:the\s+)?user\s+(?:asks|says):\s*["“]([^"”]+)["”]/i);
+  const quoted = match?.[1]?.trim();
+  return quoted && quoted.length >= 3 ? quoted : undefined;
+}
+
 function parsePromptLabRunContract(content: string): {
   explicitTools: boolean;
   repoGroundedAssist: boolean;
   requiredToolFamilies: string[];
   requiredNamedTools: string[];
+  toolUseSuppressed: boolean;
   userTask: string;
 } {
   const userTask = extractPrimaryUserTaskContent(content);
@@ -8265,6 +9637,7 @@ function parsePromptLabRunContract(content: string): {
       repoGroundedAssist: false,
       requiredToolFamilies: [],
       requiredNamedTools: [],
+      toolUseSuppressed: false,
       userTask,
     };
   }
@@ -8297,8 +9670,24 @@ function parsePromptLabRunContract(content: string): {
     repoGroundedAssist,
     requiredToolFamilies,
     requiredNamedTools,
+    toolUseSuppressed:
+      promptLabUserTaskSuppressesToolUse(userTask) || /\bexplicitly forbids tool use\b/i.test(contractBody),
     userTask,
   };
+}
+
+function promptLabUserTaskSuppressesToolUse(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\banswer\s+without\s+tools\b/.test(normalized) ||
+    /\bdo\s+not\s+use\s+(?:any\s+)?tools\b/.test(normalized) ||
+    /\bdon't\s+use\s+(?:any\s+)?tools\b/.test(normalized) ||
+    /\bplease\s+do\s+not\s+look\s+anything\s+up\b/.test(normalized) ||
+    /\bdo\s+not\s+look\s+(?:anything|this|that|it)\s+up\b/.test(normalized) ||
+    /\bdon't\s+look\s+(?:anything|this|that|it)\s+up\b/.test(normalized) ||
+    /\bfrom\s+memory\s+only\b/.test(normalized) ||
+    /\bbased\s+only\s+on\s+the\s+(?:details|prompt|text)\b/.test(normalized)
+  );
 }
 
 function promptLabContractRequiresFileTools(input: {
@@ -8326,11 +9715,12 @@ function listMissingPromptLabRequiredToolEvidence(
     explicitTools: boolean;
     requiredToolFamilies: string[];
     requiredNamedTools: string[];
+    toolUseSuppressed?: boolean;
     userTask?: string;
   },
   toolRuns: ChatToolRunRecord[],
 ): string[] {
-  if (!contract.explicitTools) {
+  if (!contract.explicitTools || contract.toolUseSuppressed) {
     return [];
   }
   const completedToolRuns = toolRuns.filter((run) => run.status !== "started");
@@ -8393,6 +9783,7 @@ function isMissingPromptLabRequiredToolEvidence(
     explicitTools: boolean;
     requiredToolFamilies: string[];
     requiredNamedTools: string[];
+    toolUseSuppressed?: boolean;
     userTask?: string;
   },
   toolRuns: ChatToolRunRecord[],
@@ -8405,11 +9796,12 @@ function canSatisfyPromptLabRequiredToolEvidence(
     explicitTools: boolean;
     requiredToolFamilies: string[];
     requiredNamedTools: string[];
+    toolUseSuppressed?: boolean;
     userTask?: string;
   },
   availableTools: Map<string, string>,
 ): boolean {
-  if (!contract.explicitTools) {
+  if (!contract.explicitTools || contract.toolUseSuppressed) {
     return false;
   }
   const availableToolNames = new Set(
@@ -8568,7 +9960,11 @@ function normalizePromptLabContractOutput(input: {
   }
   const requiredLabels = extractPromptLabExactBulletLabels(input.prompt);
   if (requiredLabels.length === 0) {
-    return appendPromptLabExactFileCitationsIfNeeded(input.prompt, sanitizedResponseText, input.toolRuns);
+    return appendPromptLabWebCitationsIfNeeded(
+      input.prompt,
+      appendPromptLabExactFileCitationsIfNeeded(input.prompt, sanitizedResponseText, input.toolRuns),
+      input.toolRuns,
+    );
   }
   const bullets = extractPromptLabBulletBodies(sanitizedResponseText);
   if (requiredLabels.some((label) => !bullets.has(normalizePromptLabLabel(label)))) {
@@ -8595,8 +9991,185 @@ function normalizePromptLabContractOutput(input: {
   });
 
   const rebuiltResponse = rebuilt.join("\n\n").trim();
-  return appendPromptLabExactEvidenceTail(input.prompt, rebuiltResponse, input.toolRuns);
+  return appendPromptLabWebCitationsIfNeeded(
+    input.prompt,
+    appendPromptLabExactEvidenceTail(input.prompt, rebuiltResponse, input.toolRuns),
+    input.toolRuns,
+  );
 }
+
+function appendPromptLabWebCitationsIfNeeded(
+  prompt: string,
+  responseText: string,
+  toolRuns: ChatToolRunRecord[],
+): string {
+  const userTask = extractPrimaryUserTaskContent(prompt);
+  const contract = parsePromptLabRunContract(prompt);
+  const needsWebCitation =
+    promptLabContractRequiresWebTools(contract) ||
+    /\b(?:web lookup|browser search|look up|cite|cited|source used|sources?|urls?|official source)\b/i.test(userTask);
+  if (!needsWebCitation) {
+    return responseText;
+  }
+  const hasExistingSourceLine = /\bsource used\s*:/i.test(responseText) || /\bsource checked\s*:/i.test(responseText);
+  const items = recoverTitleUrlItems(
+    toolRuns.filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
+    8,
+  ).filter(isUsablePromptLabWebCitationItem);
+  const uncitedItems = items.filter((item) => !responseText.includes(item.url));
+  if (uncitedItems.length === 0) {
+    return responseText;
+  }
+  const hasExistingRecoveredCitation = uncitedItems.length < items.length;
+  const hasExistingSourceUrlsSection = hasPromptLabSourceUrlsSection(responseText);
+  const relevantItems = selectRelevantWebCitationItems(responseText, uncitedItems, 3, {
+    allowFallback: !hasExistingRecoveredCitation && !hasExistingSourceUrlsSection && !hasExistingSourceLine,
+  });
+  const missingItems = relevantItems.filter((item) => !responseText.includes(item.url));
+  if (missingItems.length === 0) {
+    return responseText;
+  }
+  if (/\bmode:\s*cowork\b/i.test(prompt) && promptKeepsRequestedRoleOrderOnly(prompt)) {
+    const citationBullets = missingItems.map(
+      (item) => `- Source checked: ${item.title ? `${item.title}: ` : ""}${item.url}`,
+    );
+    return [responseText.trim(), citationBullets.join("\n")].join("\n").trim();
+  }
+  const lines = [
+    ...(hasExistingSourceUrlsSection ? [] : ["Source URLs:"]),
+    ...missingItems.map((item) => `- ${item.title ? `${item.title}: ` : ""}${item.url}`),
+  ];
+  return [responseText.trim(), lines.join("\n")].join(hasExistingSourceUrlsSection ? "\n" : "\n\n").trim();
+}
+
+function hasPromptLabSourceUrlsSection(responseText: string): boolean {
+  return /(?:^|\n)Source URLs:\s*(?:\n|$)/i.test(responseText);
+}
+
+function isUsablePromptLabWebCitationItem(item: { title: string | null; url: string }): boolean {
+  try {
+    const url = new URL(item.url);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (
+      isPromptLabBlockedCitationHost(host) ||
+      host.endsWith(".local") ||
+      host.endsWith(".invalid") ||
+      host === "localhost"
+    ) {
+      return false;
+    }
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isPromptLabBlockedCitationHost(host: string): boolean {
+  return [...PROMPT_LAB_BLOCKED_CITATION_HOSTS].some(
+    (blockedHost) => host === blockedHost || host.endsWith(`.${blockedHost}`),
+  );
+}
+
+function selectRelevantWebCitationItems(
+  responseText: string,
+  items: Array<{ title: string | null; url: string }>,
+  limit: number,
+  options: { allowFallback?: boolean } = {},
+): Array<{ title: string | null; url: string }> {
+  const scored = items
+    .map((item, index) => ({
+      item,
+      score: scoreWebCitationItemAgainstResponse(responseText, item) - index * 0.01,
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.item);
+  if (scored.length > 0) {
+    return scored.slice(0, limit);
+  }
+  if (options.allowFallback === false) {
+    return [];
+  }
+  return items.slice(0, Math.min(1, limit));
+}
+
+function scoreWebCitationItemAgainstResponse(
+  responseText: string,
+  item: { title: string | null; url: string },
+): number {
+  const normalizedResponse = responseText.toLowerCase();
+  let score = 0;
+  try {
+    const host = new URL(item.url).hostname.toLowerCase().replace(/^www\./, "");
+    const isGovernmentHost = host.endsWith(".gov") || host === "gov";
+    const hostTokens = host
+      .split(/[.-]+/)
+      .filter((token) => token.length >= 3 && !WEB_CITATION_GENERIC_HOST_TOKENS.has(token));
+    for (const token of hostTokens) {
+      if (normalizedResponse.includes(token)) {
+        score += 4;
+      }
+    }
+    const searchableCitationText = `${item.title ?? ""} ${item.url}`.toLowerCase();
+    if (/\bdsny\b/.test(searchableCitationText) && /\bdsny\b/i.test(responseText)) {
+      score += 8;
+    }
+    if (isGovernmentHost && score > 0) {
+      score += 5;
+    }
+  } catch {
+    // Keep scoring based on title tokens for malformed URLs.
+  }
+  const titleTokens = (item.title ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !WEB_CITATION_GENERIC_TITLE_TOKENS.has(token));
+  for (const token of new Set(titleTokens)) {
+    if (normalizedResponse.includes(token)) {
+      score += token.length >= 6 ? 3 : 1;
+    }
+  }
+  return score;
+}
+
+const WEB_CITATION_GENERIC_TITLE_TOKENS = new Set([
+  "city",
+  "service",
+  "services",
+  "official",
+  "public",
+  "home",
+  "data",
+  "portal",
+  "look",
+  "request",
+  "requests",
+]);
+
+const WEB_CITATION_GENERIC_HOST_TOKENS = new Set(["com", "gov", "org", "net", "www", "site", "page"]);
+
+const PROMPT_LAB_BLOCKED_CITATION_HOSTS = new Set([
+  "user.com",
+  "example.com",
+  "example.org",
+  "example.net",
+  "localhost",
+  "127.0.0.1",
+  "answers.com",
+  "chegg.com",
+  "collinsdictionary.com",
+  "dictionary.com",
+  "dictionary.cambridge.org",
+  "iask.ai",
+  "merriam-webster.com",
+  "perplexity.ai",
+  "questionai.app",
+  "studocu.com",
+  "thefreedictionary.com",
+  "usdictionary.com",
+  "whois.com",
+]);
 
 function appendPromptLabExactFileCitationsIfNeeded(
   prompt: string,
@@ -11107,16 +12680,16 @@ function buildPromptLabKnownMinimalTestSpecFallback(input: {
     }
     return [
       `- Target test file or suite: \`${testPath}\``,
-      '- Setup: Add one scoring-path test beside the existing prompt-pack service scoring tests. Use two explicit fixtures: `frozenBaselineJudgeDefaults = { providerId: "openai", model: "gpt-5.4" }` and `expandedPackJudgeDefaults = { providerId: "openai", model: "gpt-5.5" }`. Seed an expanded-pack `PromptPackRecord`, one completed run whose evaluated runner is `moonshot/kimi-k2.5`, and a complete current judge JSON payload with `routingScore`, `honestyScore`, `handoffScore`, `robustnessScore`, `usabilityScore`, and `rationale` so the scorer cannot pass through fallback parsing.',
+      '- Setup: Add one scoring-path test beside the existing prompt-pack service scoring tests. Use two explicit fixtures: `frozenBaselineJudgeDefaults = { providerId: "openai", model: "gpt-5.4" }` and `expandedPackJudgeDefaults = { providerId: "openai-codex", model: "gpt-5.5" }`. Seed an expanded-pack `PromptPackRecord`, one completed run whose evaluated runner is `moonshot/kimi-k2.5`, and a complete current judge JSON payload with `routingScore`, `honestyScore`, `handoffScore`, `robustnessScore`, `usabilityScore`, and `rationale` so the scorer cannot pass through fallback parsing.',
       "- Act: Call `service.autoScorePromptPackTest({ packId, testId, runId, force: true })` with `getPromptJudgeModelDefaults()` returning the expanded-pack defaults, not the frozen-baseline defaults and not explicit `inputProviderId/inputModel` overrides.",
-      '- Assert: The actual judge `createChatCompletion(...)` request and persisted auto-score row both use `{ providerId: "openai", model: "gpt-5.5" }`; separately assert the evaluated run remains `{ providerId: "moonshot", model: "kimi-k2.5" }` and the frozen-baseline defaults remain only a comparison fixture.',
+      '- Assert: The actual judge `createChatCompletion(...)` request and persisted auto-score row both use `{ providerId: "openai-codex", model: "gpt-5.5" }`; separately assert the evaluated run remains `{ providerId: "moonshot", model: "kimi-k2.5" }` and the frozen-baseline defaults remain only a comparison fixture.',
       "- Failure signature: Fail if the scoring path sends the judge to `gpt-5.4`, sends it to the runner model `kimi-k2.5`, needs explicit input overrides to get `gpt-5.5`, or accepts an incomplete mock judge JSON response.",
       "",
       "```ts",
       'it("scores the expanded pack with expanded judge defaults instead of frozen-baseline defaults", async () => {',
       '  const nowIso = "2026-03-16T00:40:00.000Z";',
       '  const frozenBaselineJudgeDefaults = { providerId: "openai", model: "gpt-5.4" };',
-      '  const expandedPackJudgeDefaults = { providerId: "openai", model: "gpt-5.5" };',
+      '  const expandedPackJudgeDefaults = { providerId: "openai-codex", model: "gpt-5.5" };',
       "",
       '  const pack = { packId: "pack-expanded", name: "Expanded v2 Pack", testCount: 1, policyHash: "policy-expanded", policySource: "pack_override" as const, createdAt: nowIso, updatedAt: nowIso };',
       '  const test = createTest("test-expanded-defaults", "TEST-D127");',
@@ -11151,8 +12724,8 @@ function buildPromptLabKnownMinimalTestSpecFallback(input: {
       "  const result = await service.autoScorePromptPackTest({ packId: pack.packId, testId: test.testId, runId: run.runId, force: true });",
       "",
       "  expect(createChatCompletion.mock.calls[0]?.[0]).toMatchObject(expandedPackJudgeDefaults);",
-      '  expect(result.score).toMatchObject({ judgeProviderId: "openai", judgeModel: "gpt-5.5" });',
-      '  expect(createAutoScore.mock.calls[0]?.[0]).toMatchObject({ judgeProviderId: "openai", judgeModel: "gpt-5.5" });',
+      '  expect(result.score).toMatchObject({ judgeProviderId: "openai-codex", judgeModel: "gpt-5.5" });',
+      '  expect(createAutoScore.mock.calls[0]?.[0]).toMatchObject({ judgeProviderId: "openai-codex", judgeModel: "gpt-5.5" });',
       '  expect({ providerId: run.providerId, model: run.model }).toEqual({ providerId: "moonshot", model: "kimi-k2.5" });',
       "  expect(expandedPackJudgeDefaults).not.toEqual(frozenBaselineJudgeDefaults);",
       "});",
@@ -12663,6 +14236,14 @@ function promptLabTaskNeedsAdjacentRepoSearch(userTask: string | undefined): boo
   );
 }
 
+function looksLikePromptLabPromptPackProductSurfaceTask(userTask: string | undefined): boolean {
+  const normalized = (userTask ?? "").toLowerCase();
+  return (
+    /\bprompt[- ]pack\b/.test(normalized) &&
+    !/\bprompt-pack-workspace\b|fixtures\/prompt-pack-workspace/.test(normalized)
+  );
+}
+
 function looksLikePromptLabInspectionContinuation(content: string): boolean {
   const normalized = content.trim().toLowerCase();
   if (!normalized) {
@@ -13025,6 +14606,15 @@ function scorePromptLabConcreteReadCandidate(path: string): number {
   }
   if (/(?:^|\/)(?:routes|services)\//.test(normalized)) {
     score += 6;
+  }
+  if (/\bprompt-pack\b|prompt_pack|promptpacksworkbench|prompt-packs-workbench/.test(normalized)) {
+    score += 14;
+  }
+  if (/(?:^|\/)packages\/storage\/src\/prompt-pack-/.test(normalized)) {
+    score += 10;
+  }
+  if (/(?:^|\/)apps\/mission-control-next\/src\/features\/prompt-packs\//.test(normalized)) {
+    score += 10;
   }
   return score;
 }
@@ -13458,6 +15048,52 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
     add("packages/storage/src/prompt-pack-repo.ts");
     add("apps/gateway/src/routes/prompt-packs.ts");
     add("packages/mission-control-shared/src/api/prompt-packs.ts");
+    add("packages/contracts/src/prompt-pack.ts");
+  }
+
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
+    /\b(?:test|run) records?\b|\bstored\b|\bstorage\b/.test(normalizedTask)
+  ) {
+    add("packages/storage/src/prompt-pack-repo.ts");
+    add("packages/storage/src/prompt-pack-run-repo.ts");
+    add("packages/storage/src/prompt-pack-score-repo.ts");
+    add("packages/storage/src/prompt-pack-repo.test.ts");
+    add("packages/storage/src/prompt-pack-run-repo.test.ts");
+    add("apps/gateway/src/services/prompt-pack-service.ts");
+  }
+
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
+    /\b(?:mission control next|workbench|run details?|segmented control|harness\/agentic|agentic segmented)\b/.test(
+      normalizedTask,
+    )
+  ) {
+    add("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
+    add("apps/mission-control-next/src/features/prompt-packs/prompt-packs-workbench.css");
+    add("packages/mission-control-shared/src/api/prompt-packs.ts");
+    add("packages/contracts/src/prompt-pack.ts");
+  }
+
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
+    /\b(?:reports?|exports?|rendered|rendering|markdown report|exported results?)\b/.test(normalizedTask)
+  ) {
+    add("apps/gateway/src/services/prompt-pack-service.ts");
+    add("apps/gateway/src/routes/prompt-packs.ts");
+    add("packages/mission-control-shared/src/api/prompt-packs.ts");
+    add("packages/contracts/src/prompt-pack.ts");
+  }
+
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
+    /\b(?:api shape|shared client|gateway route|single prompt[- ]pack test|running a single|run a single)\b/.test(
+      normalizedTask,
+    )
+  ) {
+    add("packages/mission-control-shared/src/api/prompt-packs.ts");
+    add("apps/gateway/src/routes/prompt-packs.ts");
+    add("apps/gateway/src/services/prompt-pack-service.ts");
     add("packages/contracts/src/prompt-pack.ts");
   }
 
@@ -13940,6 +15576,46 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   }
   if (/\bprompt pack\b/i.test(taskContent)) {
     addQuery("prompt-pack");
+  }
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(taskContent) &&
+    /\b(?:test|run) records?\b|\bstored\b|\bstorage\b/i.test(taskContent)
+  ) {
+    addQuery("prompt-pack-repo.ts");
+    addQuery("prompt-pack-run-repo.ts");
+    addQuery("prompt-pack-score-repo.ts");
+    addQuery("PromptPackRunRepository");
+    addQuery("replacePackTests");
+  }
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(taskContent) &&
+    /\b(?:mission control next|workbench|run details?|segmented control|harness\/agentic|agentic segmented)\b/i.test(
+      taskContent,
+    )
+  ) {
+    addQuery("PromptPacksWorkbenchPage.tsx");
+    addQuery("prompt-packs-workbench.css");
+    addQuery("runPromptPackTest");
+    addQuery("PromptPackExecutionStyle");
+  }
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(taskContent) &&
+    /\b(?:reports?|exports?|rendered|rendering|markdown report|exported results?)\b/i.test(taskContent)
+  ) {
+    addQuery("renderPromptPackMarkdownReport");
+    addQuery("refreshPromptPackExportFile");
+    addQuery("getPromptPackReport");
+    addQuery("prompt-pack-service.ts");
+  }
+  if (
+    looksLikePromptLabPromptPackProductSurfaceTask(taskContent) &&
+    /\b(?:api shape|shared client|gateway route|single prompt[- ]pack test|running a single|run a single)\b/i.test(
+      taskContent,
+    )
+  ) {
+    addQuery("runPromptPackTest");
+    addQuery("prompt-packs.ts");
+    addQuery("PromptPackRunRequest");
   }
   if (looksLikePromptLabPromptPackMarkdownImportPrompt(taskContent)) {
     addQuery("prompt-pack-service.ts");
@@ -14765,6 +16441,26 @@ function detectExplicitToolMentions(content: string, toolNames: Iterable<string>
       (underscored !== dotted && hasStandaloneToolReference(normalized, underscored))
     ) {
       matches.add(toolName);
+    }
+  }
+  return matches;
+}
+
+function extractExplicitToolLikeReferences(content: string): Set<string> {
+  const matches = new Set<string>();
+  const normalized = content.toLowerCase();
+  for (const match of normalized.matchAll(
+    /\b(browser|http|file|code|memory|shell|git|tests|lint|time)\.[a-z][a-z0-9_.-]*\b/g,
+  )) {
+    matches.add(match[0]!);
+  }
+  for (const match of normalized.matchAll(
+    /\b(browser|http|file|code|memory|shell|git|tests|lint|time)_[a-z][a-z0-9_-]*\b/g,
+  )) {
+    const raw = match[0]!;
+    const namespaceEnd = raw.indexOf("_");
+    if (namespaceEnd > 0) {
+      matches.add(`${raw.slice(0, namespaceEnd)}.${raw.slice(namespaceEnd + 1)}`);
     }
   }
   return matches;

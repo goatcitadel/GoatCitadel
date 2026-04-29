@@ -12,6 +12,10 @@ describe("Postgres runtime schema generation", () => {
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_message_id_unique ON chat_messages\(message_id\);/,
     );
     assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key_unique ON sessions\(session_key\);/);
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique ON prompt_pack_benchmark_items\(benchmark_run_id, provider_id, model, test_id\);/,
+    );
     assert.match(sql, /CREATE TABLE IF NOT EXISTS mutation_idempotency \(/);
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
   });
@@ -162,5 +166,17 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_runs/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS execution_style TEXT/);
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_benchmark_runs/);
+  });
+
+  it("repairs benchmark item uniqueness for older Postgres prompt-pack runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 22);
+
+    assert.equal(repairMigration?.name, "prompt_pack_benchmark_item_unique_repairs");
+    assert.match(repairMigration?.sql ?? "", /DELETE FROM prompt_pack_benchmark_items AS item/);
+    assert.match(
+      repairMigration?.sql ?? "",
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique/,
+    );
+    assert.match(repairMigration?.sql ?? "", /benchmark_run_id, provider_id, model, test_id/);
   });
 });

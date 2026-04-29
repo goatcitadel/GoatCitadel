@@ -695,4 +695,30 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS execution_style TEXT;
     `,
   },
+  {
+    version: 22,
+    name: "prompt_pack_benchmark_item_unique_repairs",
+    sql: `
+      WITH ranked_benchmark_items AS (
+        SELECT
+          ctid,
+          ROW_NUMBER() OVER (
+            PARTITION BY benchmark_run_id, provider_id, model, test_id
+            ORDER BY
+              CASE WHEN auto_score_id IS NOT NULL THEN 0 ELSE 1 END,
+              CASE WHEN run_id IS NOT NULL THEN 0 ELSE 1 END,
+              created_at DESC,
+              item_id DESC
+          ) AS row_rank
+        FROM prompt_pack_benchmark_items
+      )
+      DELETE FROM prompt_pack_benchmark_items AS item
+      USING ranked_benchmark_items AS ranked
+      WHERE item.ctid = ranked.ctid
+        AND ranked.row_rank > 1;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique
+        ON prompt_pack_benchmark_items(benchmark_run_id, provider_id, model, test_id);
+    `,
+  },
 ];

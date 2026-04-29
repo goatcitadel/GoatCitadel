@@ -24,6 +24,7 @@ async function main(): Promise<void> {
   const args = new Set(argv);
   const fullRun = !args.has("--target-only");
   const explicitTargetCodes = resolveExplicitTargetCodes(argv);
+  const executionStyle = resolveExecutionStyle(argv);
 
   const app = await buildApp();
   await app.ready();
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
           ...authHeaders,
           "Idempotency-Key": `gate-run-${test.testId}-${Date.now()}`,
         },
-        payload: {},
+        payload: executionStyle ? { executionStyle } : {},
       });
       if (runResp.statusCode !== 200) {
         const payload = safeJson<InjectErrorPayload>(runResp.body);
@@ -151,6 +152,7 @@ async function main(): Promise<void> {
         targetCodes,
         durationMs,
         fullRun,
+        executionStyle,
       }),
       "utf8",
     );
@@ -341,8 +343,9 @@ function renderReport(input: {
   targetCodes: string[];
   durationMs: number;
   fullRun: boolean;
+  executionStyle?: "single_turn_harness" | "agentic_surface";
 }): string {
-  const { pack, report, runResults, targetCodes, durationMs, fullRun } = input;
+  const { pack, report, runResults, targetCodes, durationMs, fullRun, executionStyle } = input;
   const latestRunByTestId = new Map<string, PromptPackRunRecord>();
   for (const run of report.runs) {
     if (!latestRunByTestId.has(run.testId)) {
@@ -356,12 +359,14 @@ function renderReport(input: {
     }
   }
   const testByCode = new Map(report.tests.map((test) => [normalizeCode(test.code), test]));
-  const targetedRows = targetCodes.map((code) => {
-    const test = testByCode.get(normalizeCode(code));
-    const run = test ? latestRunByTestId.get(test.testId) : undefined;
-    const assessment = test ? latestAssessmentByTestId.get(test.testId) : undefined;
-    return `| ${code} | ${run?.status ?? "missing"} | ${assessment?.autoScore ? `${assessment.autoScore.weightedScore.toFixed(1)}/100` : "none"} | ${assessment?.effectiveVerdict ?? "none"} | ${run?.runId ?? "-"} |`;
-  }).join("\n");
+  const targetedRows = targetCodes
+    .map((code) => {
+      const test = testByCode.get(normalizeCode(code));
+      const run = test ? latestRunByTestId.get(test.testId) : undefined;
+      const assessment = test ? latestAssessmentByTestId.get(test.testId) : undefined;
+      return `| ${code} | ${run?.status ?? "missing"} | ${assessment?.autoScore ? `${assessment.autoScore.weightedScore.toFixed(1)}/100` : "none"} | ${assessment?.effectiveVerdict ?? "none"} | ${run?.runId ?? "-"} |`;
+    })
+    .join("\n");
 
   const lines = [
     `# Prompt Gate Run (${new Date().toISOString()})`,
@@ -369,6 +374,7 @@ function renderReport(input: {
     `- Pack: ${pack.name} (\`${pack.packId}\`)`,
     `- Mode: ${fullRun ? `Targeted ${targetCodes.length} + full pack` : `Targeted ${targetCodes.length} only`}`,
     `- Target codes: ${targetCodes.join(", ")}`,
+    ...(executionStyle ? [`- Execution style override: ${executionStyle}`] : []),
     `- Duration: ${(durationMs / 1000).toFixed(1)}s`,
     "",
     "## Targeted Test Status",
@@ -456,6 +462,17 @@ function splitCodeList(raw: string): string[] {
     values.push(normalized);
   }
   return values;
+}
+
+function resolveExecutionStyle(argv: string[]): "single_turn_harness" | "agentic_surface" | undefined {
+  const raw = extractFlagValue(argv, "--execution-style") ?? extractFlagValue(argv, "--style");
+  if (!raw) {
+    return undefined;
+  }
+  if (raw === "single_turn_harness" || raw === "agentic_surface") {
+    return raw;
+  }
+  throw new Error(`Unsupported execution style: ${raw}`);
 }
 
 function selectPromptPackGateTargetCodes(tests: PromptPackTestRecord[]): string[] {

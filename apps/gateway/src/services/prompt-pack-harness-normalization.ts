@@ -43,7 +43,10 @@ export function applyPromptPackHarnessNormalization(
     }
   }
 
-  if (looksLikeRepoGroundedInspectionPrompt(input.prompt)) {
+  const repoInspectionContent = isPromptLabHarnessContent(input.prompt)
+    ? extractPromptLabUserTaskForNormalization(input.prompt)
+    : input.prompt;
+  if (looksLikeRepoGroundedInspectionPrompt(repoInspectionContent)) {
     const normalized = input.normalizeRepoGroundedInspectionOutput({
       ...normalizationArgs,
       responseText,
@@ -65,11 +68,16 @@ export function isPromptLabHarnessContent(content: string): boolean {
   return normalized.includes("## prompt lab run contract") || normalized.includes("## prompt lab tooling contract");
 }
 
+function extractPromptLabUserTaskForNormalization(content: string): string {
+  const match = content.match(/## User Task\s*\n([\s\S]*?)(?:\n## |\s*$)/i);
+  return match?.[1]?.trim() || content;
+}
+
 export function looksLikeRepoGroundedInspectionPrompt(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
   return (
     /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
-    /\buse (?:(?:file|code|file\/code|file or code)(?: tools?)?|tools?)\b/.test(normalized) ||
+    /\buse (?:(?:file|code|file\/code|file or code)(?: tools?)?)\b/.test(normalized) ||
     /\b(?:file|code) tools\b/.test(normalized) ||
     /\bexact files?\b/.test(normalized) ||
     /\bexact evidence\b/.test(normalized) ||

@@ -554,61 +554,59 @@ export function PromptPacksWorkbenchPage({
     [autoScoreOnRun, buildRunInput, loadPack, selectedPackId],
   );
 
+  const loadBenchmarkStatus = useCallback(
+    async (runId: string) => {
+      const status = await fetchPromptPackBenchmark(runId);
+      setBenchmarkStatus(status);
+      if (status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled") {
+        setBenchmarkPending(false);
+        await loadPack(status.run.packId);
+      } else {
+        setBenchmarkPending(true);
+      }
+    },
+    [loadPack],
+  );
+
   const runAll = useCallback(async () => {
     if (!selectedPackId || tests.length === 0) {
       return;
     }
-    setActiveRun({ mode: "all" });
+    const providerId = selectedRunModel?.providerId;
+    const model = selectedRunModel?.model ?? selectedModel;
+    if (!providerId || !model) {
+      setError("Run all needs a selected provider/model lane.");
+      return;
+    }
+    const runnableTests = tests.filter((test) => buildRunInput(test).missingPlaceholders.length === 0);
+    const skipped = tests.length - runnableTests.length;
+    if (runnableTests.length === 0) {
+      setError("Run all has no runnable tests because required placeholder values are missing.");
+      setDetailTab("prompt");
+      return;
+    }
+    setBenchmarkPending(true);
+    setActiveRun(null);
     setError(null);
     setSuccess(null);
     try {
-      let completed = 0;
-      let failed = 0;
-      let autoScored = 0;
-      let skipped = 0;
-      const issues: string[] = [];
-      for (const test of tests) {
-        setActiveRun({ mode: "all", testId: test.testId, testCode: test.code });
-        const { input, missingPlaceholders } = buildRunInput(test);
-        if (missingPlaceholders.length > 0) {
-          skipped += 1;
-          continue;
-        }
-        let run: PromptPackRunRecord;
-        try {
-          run = await runPromptPackTest(selectedPackId, test.testId, input);
-        } catch (err) {
-          failed += 1;
-          issues.push(`${test.code}: ${(err as Error).message}`);
-          continue;
-        }
-        if (run.status === "completed") {
-          completed += 1;
-          if (autoScoreOnRun) {
-            try {
-              await autoScorePromptPackTest(selectedPackId, test.testId, { runId: run.runId });
-              autoScored += 1;
-            } catch (err) {
-              issues.push(`${test.code} auto-score: ${(err as Error).message}`);
-            }
-          }
-        } else if (run.status === "failed") {
-          failed += 1;
-          issues.push(`${test.code}: ${run.error ?? "Run failed"}`);
-        }
-      }
-      await loadPack(selectedPackId);
-      const issueSuffix = issues.length > 0 ? ` ${issues.slice(0, 2).join(" | ")}` : "";
+      const benchmarkInput = {
+        ...(skipped === 0 ? { allTests: true } : { testCodes: runnableTests.map((test) => test.code) }),
+        providers: [{ providerId, model }],
+        executionStyle,
+      };
+      const started = await runPromptPackBenchmark(selectedPackId, benchmarkInput);
+      setBenchmarkRunId(started.benchmarkRunId);
+      await loadBenchmarkStatus(started.benchmarkRunId);
       setSuccess(
-        `Run all finished. Completed ${completed}, failed ${failed}, skipped ${skipped}, auto-scored ${autoScored}.${issueSuffix}`.trim(),
+        `Run all started in background: ${started.benchmarkRunId}.${skipped > 0 ? ` Skipped ${skipped} placeholder-bound test(s).` : ""}`,
       );
       setDetailTab("insights");
     } catch (err) {
+      setBenchmarkPending(false);
       setError((err as Error).message);
-    } finally {
-      setActiveRun(null);
     }
-  }, [autoScoreOnRun, buildRunInput, loadPack, selectedPackId, tests]);
+  }, [buildRunInput, executionStyle, loadBenchmarkStatus, selectedModel, selectedPackId, selectedRunModel, tests]);
 
   const runNext = useCallback(async () => {
     if (!selectedPackId || tests.length === 0) {
@@ -770,20 +768,6 @@ export function PromptPacksWorkbenchPage({
       setAutoScoring(false);
     }
   }, [loadPack, selectedPackId]);
-
-  const loadBenchmarkStatus = useCallback(
-    async (runId: string) => {
-      const status = await fetchPromptPackBenchmark(runId);
-      setBenchmarkStatus(status);
-      if (status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled") {
-        setBenchmarkPending(false);
-        await loadPack(status.run.packId);
-      } else {
-        setBenchmarkPending(true);
-      }
-    },
-    [loadPack],
-  );
 
   const runBenchmark = useCallback(async () => {
     if (!selectedPackId) {
@@ -1019,9 +1003,9 @@ export function PromptPacksWorkbenchPage({
             type="button"
             className="mc-next-button mc-next-button-secondary"
             onClick={() => void runAll()}
-            disabled={!selectedPackId || tests.length === 0 || running}
+            disabled={!selectedPackId || tests.length === 0 || running || benchmarkActive}
           >
-            {activeRun?.mode === "all" ? <LoaderCircle size={16} className="mc-spin" /> : <Sparkles size={16} />}
+            {benchmarkActive ? <LoaderCircle size={16} className="mc-spin" /> : <Sparkles size={16} />}
             Run all
           </button>
           <button

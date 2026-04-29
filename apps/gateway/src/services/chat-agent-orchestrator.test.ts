@@ -499,7 +499,7 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool,
     });
 
-    const result = await orchestrator.run({
+    await orchestrator.run({
       sessionId: "sess-missing-plan-storage-1",
       turnId: randomUUID(),
       userMessageId: "msg-missing-plan-storage-1",
@@ -549,7 +549,7 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool,
     });
 
-    const result = await orchestrator.run({
+    await orchestrator.run({
       sessionId: "sess-1",
       turnId: randomUUID(),
       userMessageId: "msg-user-1",
@@ -1762,6 +1762,84 @@ describe("ChatAgentOrchestrator", () => {
     });
     expect(String(firstInvokeCall?.args.query)).not.toMatch(/required tool families|memory tools/i);
     expect(result.assistantContent).toContain("Node.js 22");
+  });
+
+  it("uses the Prompt Lab user task, not the wrapper, for implicit recency searches", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: implicit-tools",
+      "- Finish with a complete answer in one turn.",
+      "",
+      "## User Task",
+      'The user asks: "What\'s the current public status of a major airport closure I heard about today?"',
+      "",
+      "Answer in Chat mode. If live lookup is available, check before answering and cite the source.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "I checked for current airport closure signals but need the airport name to verify a specific case.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-airport-status-1",
+      result: {
+        query: "current public status major airport closure today",
+        results: [
+          {
+            title: "National Airspace System - Federal Aviation Administration",
+            url: "https://nasstatus.faa.gov/list",
+            snippet: "FAA National Airspace System status.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-prompt-lab-airport-status-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-airport-status-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    const query = String(
+      (
+        invokeTool.mock.calls as unknown as Array<
+          [
+            {
+              args: Record<string, unknown>;
+            },
+          ]
+        >
+      )[0]?.[0].args.query ?? "",
+    );
+    expect(query).toMatch(/airport closure/i);
+    expect(query).not.toMatch(/prompt lab|run contract|answer in chat mode|finish with a complete answer/i);
   });
 
   it("redirects community browser.navigate urls to a better recent source when the prompt did not ask for community results", async () => {
@@ -5116,6 +5194,97 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("Auto, Quick, or Deep");
   });
 
+  it("lets Prompt Lab no-tools source-uncertainty prompts answer instead of short-circuiting on web-off", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: no-tools",
+      "",
+      "## User Task",
+      'The user asks for the "latest public guidance" from a government agency, but no web access is available.',
+      "",
+      "Respond helpfully without inventing quotes, links, or dates. Explain what a trustworthy answer would need and give a short template for what to check.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "I cannot verify the latest guidance without live access. A trustworthy answer would need the agency page, publication date, and any update notice.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-web-off-source-uncertainty-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-web-off-source-uncertainty-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("cannot verify");
+    expect(result.assistantContent).not.toContain("Web is set to Off");
+  });
+
+  it("returns a useful no-web guidance template for raw agentic source-uncertainty turns", async () => {
+    const prompt = [
+      'The user asks for the "latest public guidance" from a government agency, but no web access is available.',
+      "",
+      "Respond helpfully without inventing quotes, links, or dates. Explain what a trustworthy answer would need and give a short template for what to check.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-raw-agentic-web-off-source-uncertainty-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-raw-agentic-web-off-source-uncertainty-1",
+      content: prompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("A trustworthy answer would need");
+    expect(result.assistantContent).toContain("Check template");
+    expect(result.assistantContent).not.toContain("Switch Web to Auto");
+  });
+
   it("does not short-circuit cowork prompt-pack planning turns that mention recently added repo functionality", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -5303,6 +5472,1042 @@ describe("ChatAgentOrchestrator", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(1);
     expect(result.assistantContent).toContain("## Findings / Plan");
     expect(result.assistantContent).not.toContain("Web is set to Off");
+  });
+
+  it("routes Prompt Lab explicit web requirements to browser search without local code search", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line.',
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "current public safety tips severe heat",
+          maxResults: 5,
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Stay hydrated and check on vulnerable neighbors.\n\nSource used: public health search result.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-web-1",
+      result: {
+        query: "current public safety tips severe heat",
+        results: [{ title: "Heat safety", url: "https://example.test/heat", snippet: "Drink water." }],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate", "code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-explicit-web-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-explicit-web-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(["browser.search", "browser_search"]).toContain(String(invokeTool.mock.calls[0]?.[0].toolName ?? ""));
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("Source used");
+  });
+
+  it("grounds Prompt Lab current-hours prompts to a concrete public-place query", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      "Use a web lookup to answer a current-hours question for a named public place of your choice. If the lookup fails, do not retry more than once. Explain the failure and provide a practical next step.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "Use a web lookup to answer a current-hours question for a named public place of your choice",
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "The public place I checked was the NYPL Stephen A. Schwarzman Building. Verify today's hours on the official NYPL page.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-hours-query-1",
+      result: {
+        query: "New York Public Library Stephen A. Schwarzman Building hours official",
+        results: [
+          {
+            title: "Stephen A. Schwarzman Building | The New York Public Library",
+            url: "https://www.nypl.org/locations/schwarzman",
+            snippet: "Hours and location.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-prompt-lab-current-hours-query-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-current-hours-query-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(["browser.search", "browser_search"]).toContain(String(invokeTool.mock.calls[0]?.[0].toolName ?? ""));
+    expect(invokeTool.mock.calls[0]?.[0].args).toMatchObject({
+      query: "New York Public Library Stephen A. Schwarzman Building hours official",
+    });
+  });
+
+  it("does not append unrelated recovered URLs when a Prompt Lab answer already has a source-used URL", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line.',
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "use" }))
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "Two public safety tips for severe heat:",
+                "- Stay in an air-conditioned indoor location as much as possible.",
+                "- Drink plenty of fluids.",
+                "",
+                "Source used: CDC, Protect Yourself From the Dangers of Extreme Heat — https://www.cdc.gov/climate-health/php/resources/protect-yourself-from-the-dangers-of-extreme-heat.html",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-source-used-no-noise-1",
+      result: {
+        query: "CDC severe heat public safety tips official",
+        results: [
+          { title: "Use Definition", url: "https://www.merriam-webster.com/dictionary/use" },
+          {
+            title: "Protect Yourself From the Dangers of Extreme Heat",
+            url: "https://www.cdc.gov/climate-health/php/resources/protect-yourself-from-the-dangers-of-extreme-heat.html",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-source-used-no-noise-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-source-used-no-noise-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain(
+      "https://www.cdc.gov/climate-health/php/resources/protect-yourself-from-the-dangers-of-extreme-heat.html",
+    );
+    expect(result.assistantContent).not.toContain("merriam-webster.com");
+    expect(result.assistantContent).not.toContain("Source URLs:");
+  });
+
+  it("does not infer code roles from Cowork harness guardrails on web-only prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- For non-trivial everyday tasks, use at least two role-labeled sections chosen from Planner, Researcher, Risk Review, Operator Handoff, or Synthesis.",
+      "- Do not default to Coder, Architect, QA, Ops, repo, source-file, or code-review framing unless the user task explicitly asks for software, files, or implementation work.",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      "Use web lookup. Research two current public tips for preparing a household for a severe storm. Keep this focused on household planning. Return a short role-labeled synthesis and cite the source used.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "current public tips household severe storm preparedness official source",
+          maxResults: 5,
+        }),
+      )
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.navigate", {
+          url: "https://blocked.example/storm",
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Researcher",
+                "- Secure outdoor objects and prepare emergency supplies before conditions worsen.",
+                "- Use public alerts to decide when to shelter or evacuate.",
+                "",
+                "## Synthesis",
+                "- Best move: make a basic emergency kit, then monitor the local alert source you cited.",
+                "- Source used: Storm safety.",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-prompt-lab-cowork-web-1",
+        result: {
+          query: "current public tips household severe storm preparedness official source",
+          results: [
+            {
+              title: "Storm safety",
+              url: "https://example.test/storm",
+              snippet: "Prepare supplies and follow local alerts.",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "failed",
+        policyReason: "allowed",
+        auditEventId: "audit-prompt-lab-cowork-web-2",
+        error: "remote site blocked automation",
+        result: null,
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-web-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-web-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("## Researcher");
+    expect(result.assistantContent).toContain("## Synthesis");
+    expect(result.assistantContent).toContain("https://example.test/storm");
+    expect(result.assistantContent).not.toContain("## Coder");
+    expect(result.assistantContent).not.toContain("## Architect");
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+    expect(result.assistantContent).not.toContain("repo-level claims");
+    expect(result.assistantContent).not.toContain("parts of this answer may be incomplete");
+    expect(result.assistantContent).not.toContain('Say "keep going"');
+  });
+
+  it("sharpens vague Prompt Lab Cowork web queries and preserves exact role order only", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      "Use web lookup. Coordinate three roles in this exact order: Researcher, Planner, Risk Review. Decide whether a public outdoor activity is a good idea this weekend in a city of your choice. Cite sources and separate checked facts from inferred judgment.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("browser.search", {
+          query: "Decide whether a public outdoor activity is a good idea this weekend in a city of your choice.",
+          maxResults: 5,
+        }),
+      )
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "I found a few sources, but the result needs a structured handoff.",
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-cowork-web-exact-roles-1",
+      result: {
+        query: "Seattle this weekend weather forecast outdoor public events parks official",
+        results: [
+          {
+            title: "Seattle Forecast - National Weather Service",
+            url: "https://forecast.weather.gov/MapClick.php?lat=47.6&lon=-122.3",
+            snippet: "Seattle weekend forecast and conditions from the National Weather Service.",
+          },
+          {
+            title: "Seattle Parks and Recreation events",
+            url: "https://www.seattle.gov/parks",
+            snippet: "Official Seattle parks information for public outdoor activities.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-web-exact-roles-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-web-exact-roles-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "browser.search",
+      args: expect.objectContaining({
+        query: "Seattle this weekend weather forecast outdoor public events parks official",
+      }),
+    });
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("Researcher");
+    expect(result.assistantContent).toContain("Planner");
+    expect(result.assistantContent).toContain("Risk Review");
+    expect(result.assistantContent).toContain("https://forecast.weather.gov/MapClick.php?lat=47.6&lon=-122.3");
+    expect(result.assistantContent).not.toContain("## Synthesis");
+    expect(result.assistantContent).not.toContain("## Sources Used");
+    expect(result.assistantContent).not.toContain("\nSource URLs:");
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+    expect(result.assistantContent).not.toContain("repo-level claims");
+    expect(result.assistantContent).not.toContain("Cannot read properties");
+  });
+
+  it("does not expose local file tools to non-code Prompt Lab Cowork web prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      "Use web lookup. Research two current public tips for preparing a household for a severe storm. Return a short role-labeled synthesis and cite the source used.",
+    ].join("\n");
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      const tools = JSON.stringify(request.tools ?? []);
+      expect(tools).toContain("browser_search");
+      expect(tools).not.toContain("code_search_files");
+      expect(tools).not.toContain("file_read_range");
+      return {
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Researcher",
+                "- Source checked: Ready.gov says to make a household plan and prepare supplies.",
+                "",
+                "## Synthesis",
+                "- Make a household emergency plan and prepare basic supplies before the storm.",
+                "- Source used: https://www.ready.gov/plan",
+              ].join("\n"),
+            },
+          },
+        ],
+      };
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-cowork-web-no-local-tools-1",
+      result: {
+        query: "household severe storm preparedness tips official source",
+        results: [{ title: "Make A Plan", url: "https://www.ready.gov/plan", snippet: "Make a plan." }],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-web-no-local-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-web-no-local-tools-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("file.read_range");
+    expect(result.assistantContent).toContain("https://www.ready.gov/plan");
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+  });
+
+  it("does not expose local file tools to non-code Prompt Lab Cowork tool-choice prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- For non-trivial everyday tasks, use at least two role-labeled sections chosen from Planner, Researcher, Risk Review, Operator Handoff, or Synthesis.",
+      "- Do not mention repo paths, source files, tool traces, local-file evidence, or repository-wide claims unless the user explicitly asks for local file, code, or repository inspection.",
+      "",
+      "## User Task",
+      'Cowork request: "Help me decide between two possible names for a local discussion club: Open Table and Friday Circle."',
+      "",
+      "Use tools only if useful. Keep the response as a coordinated decision aid with criteria, a recommendation, and what would change the answer.",
+    ].join("\n");
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      const tools = JSON.stringify(request.tools ?? []);
+      expect(tools).not.toContain("code_search_files");
+      expect(tools).not.toContain("code_search");
+      expect(tools).not.toContain("file_read_range");
+      return {
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Planner",
+                "- Criteria: warmth, clarity, flexibility, memorability, and fit with the club's tone.",
+                "",
+                "## Operator Handoff",
+                "- Recommendation: Open Table, unless the Friday ritual is central to the group identity.",
+              ].join("\n"),
+            },
+          },
+        ],
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () =>
+        createToolCatalog(["memory.search", "code.search_files", "code.search", "file.read_range"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-tool-choice-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-tool-choice-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName) ?? []).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("## Planner");
+    expect(result.assistantContent).toContain("## Operator Handoff");
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+  });
+
+  it("keeps non-code Prompt Lab memory-only prompts from seeing local file tools", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: memory tools",
+      "",
+      "## User Task",
+      "Use memory tools only to inspect whether there are stored planning preferences relevant to travel or scheduling. Do not create or update memory. Then produce a Cowork-style planning handoff that says exactly what memory was or was not used.",
+    ].join("\n");
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      const tools = JSON.stringify(request.tools ?? []);
+      expect(tools).toContain("memory_search");
+      expect(tools).not.toContain("code_search_files");
+      expect(tools).not.toContain("file_read_range");
+      return {
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content:
+                "## Researcher\n- Memory inspected: no relevant travel or scheduling preference was found.\n\n## Operator Handoff\n- Planning should proceed from the current request only.",
+            },
+          },
+        ],
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () =>
+        createToolCatalog(["memory.search", "memory.read", "code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-memory-only-no-local-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-memory-only-no-local-tools-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName) ?? []).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("Memory inspected");
+    expect(result.assistantContent).not.toContain("read range failed");
+  });
+
+  it("keeps delegated Prompt Lab Cowork web turns from honoring suggested local code tools", async () => {
+    const delegatedPrompt = [
+      "Delegated role: Researcher",
+      "Parent objective: Use web lookup to decide whether a public outdoor activity is a good idea this weekend.",
+      "Current step objective: Check current public conditions and cite sources.",
+      "Suggested tools: code.search_files, browser.search",
+      "Produce only the delegated output for this step.",
+    ].join("\n\n");
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      const tools = JSON.stringify(request.tools ?? []);
+      expect(tools).toContain("browser_search");
+      expect(tools).not.toContain("code_search_files");
+      expect(tools).not.toContain("file_read_range");
+      return {
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Researcher\n- Checked source: National Weather Service.\n- Source: https://www.weather.gov/",
+              tool_calls: [
+                {
+                  id: "call-code-search-files-ignored-1",
+                  type: "function",
+                  function: {
+                    name: "code_search_files",
+                    arguments: JSON.stringify({ path: ".", query: "contracts" }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      };
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-delegated-web-no-local-tools-1",
+      result: {
+        query: "public outdoor activity this weekend weather official source",
+        results: [{ title: "National Weather Service", url: "https://www.weather.gov/", snippet: "Weather." }],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-delegated-cowork-web-no-local-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-delegated-cowork-web-no-local-tools-1",
+      content: delegatedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: delegatedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("code.search_files");
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName)).not.toContain("file.read_range");
+    expect(result.assistantContent).toContain("National Weather Service");
+  });
+
+  it("suppresses suggested local code tools on raw delegated non-code Cowork turns", async () => {
+    const delegatedPrompt = [
+      "Delegated role: Researcher",
+      "Parent objective: Use memory tools only to inspect planning preferences relevant to travel or scheduling.",
+      "Current step objective: Search memory and report provenance.",
+      "Suggested tools: code.search_files, memory.search",
+      "Produce only the delegated output for this step.",
+    ].join("\n\n");
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      const tools = JSON.stringify(request.tools ?? []);
+      expect(tools).toContain("memory_search");
+      expect(tools).not.toContain("code_search_files");
+      expect(tools).not.toContain("file_read_range");
+      return {
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Researcher\n- Memory provenance: no relevant travel or scheduling preference was found.",
+            },
+          },
+        ],
+      };
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search", "code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-raw-delegated-cowork-memory-no-local-tools-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-raw-delegated-cowork-memory-no-local-tools-1",
+      content: delegatedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: delegatedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns?.map((run) => run.toolName) ?? []).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("Memory provenance");
+  });
+
+  it("repairs non-code Prompt Lab Cowork scaffolds into everyday planning content", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      'Cowork request: "This may take longer than one turn. Structure a durable work plan for comparing three apartment options later."',
+      "",
+      "No tools are available. Produce a resumable plan with phases, saved assumptions, and the exact next question to ask when work resumes.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Researcher",
+              "- Evidence: No file-specific evidence was retained from the tool trace.",
+              "- Search scope: No explicit search scope was retained.",
+              "- Constraints: No blocking tool failures recorded.",
+              "- Workarounds: Continue only with the captured evidence and label any repo-level claims as unknown.",
+              "",
+              "## Synthesis",
+              "- Evidence: No file-specific evidence was retained from the tool trace.",
+              "- Constraints: No blocking tool failures recorded.",
+              "- Workarounds: Combine the cited evidence into the best current recommendation and flag remaining gaps explicitly.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["code.search_files"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-everyday-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-everyday-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "manual",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.turnTrace.toolRuns ?? []).toHaveLength(0);
+    expect(result.assistantContent).toContain("Phase 1");
+    expect(result.assistantContent).toContain("Saved assumptions");
+    expect(result.assistantContent).toContain("Resume question");
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+    expect(result.assistantContent).not.toContain("repo-level claims");
+  });
+
+  it("appends only response-relevant web citation URLs for Prompt Lab source conflicts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      "Use web lookup to compare public information about whether a city service is available on a holiday. If sources conflict, preserve the conflict in the handoff instead of smoothing it away.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "city service holiday availability" }))
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: [
+                "## Researcher",
+                "- NYC311 and DSNY appear to be the relevant public sources for NYC collection schedules.",
+                "",
+                "## Operator Handoff",
+                "- If NYC311 and DSNY differ for a date/address, preserve the conflict and verify with the agency.",
+                "",
+                "Source URLs:",
+                "- NYC Garbage Collection Schedule 2026: https://mygarbagecollection.com/nyc-garbage-collection-schedule/",
+              ].join("\n"),
+            },
+          },
+        ],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-cowork-web-citation-filter-1",
+      result: {
+        query: "NYC DSNY holiday schedule NYC311 trash recycling compost collection holiday",
+        results: [
+          { title: "Look Up Service Requests - NYC311", url: "https://portal.311.nyc.gov/check-status/" },
+          { title: "User account result", url: "https://user.com/not-a-source" },
+          { title: "User docs result", url: "https://docs.user.com/not-a-source" },
+          { title: "MyLA311 - City of Los Angeles", url: "https://lacity.gov/myla311" },
+          { title: "311 City Services - City of Chicago", url: "https://www.chicago.gov/city/en/depts/311.html" },
+          {
+            title: "Holiday Schedule - DSNY - NYC.gov",
+            url: "https://www.nyc.gov/site/dsny/collection/residents/holiday-schedule.page",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-web-citation-filter-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-web-citation-filter-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "browser.search",
+      args: expect.objectContaining({
+        query: "NYC DSNY holiday schedule NYC311 trash recycling compost collection holiday",
+      }),
+    });
+    expect(result.assistantContent).toContain("https://portal.311.nyc.gov/check-status/");
+    expect(result.assistantContent).toContain(
+      "https://www.nyc.gov/site/dsny/collection/residents/holiday-schedule.page",
+    );
+    expect(result.assistantContent).toContain("https://mygarbagecollection.com/nyc-garbage-collection-schedule/");
+    expect(result.assistantContent.match(/Source URLs:/g)).toHaveLength(1);
+    expect(result.assistantContent).not.toContain("https://user.com/not-a-source");
+    expect(result.assistantContent).not.toContain("https://docs.user.com/not-a-source");
+    expect(result.assistantContent).not.toContain("https://lacity.gov/myla311");
+    expect(result.assistantContent).not.toContain("https://www.chicago.gov/city/en/depts/311.html");
+    expect(result.turnTrace.citations.map((citation) => citation.url)).not.toContain(
+      "https://docs.user.com/not-a-source",
+    );
+  });
+
+  it("suppresses all tools for Prompt Lab explicit negative controls", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation, but the user task explicitly forbids tool use. Do not call tools.",
+      "",
+      "## User Task",
+      'Tools are available, but the user says: "Please do not look anything up. I only want a quick gut-check based on the details I typed."',
+      "",
+      "Answer without tools. Give a concise gut-check and clearly label it as non-verified.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockImplementationOnce(async (request) => {
+        expect(request.tools ?? []).toHaveLength(0);
+        return {
+          model: "gpt-5.4",
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content:
+                  "Non-verified gut-check: based only on what you typed, the plan sounds plausible but incomplete.",
+              },
+            },
+          ],
+        };
+      });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "code.search_files", "time.now"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-no-lookup-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-no-lookup-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("Non-verified gut-check");
+  });
+
+  it("prefetches the Mission Control Next prompt-pack workbench for explicit UI inspection prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: code",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Use file search and file read tools. Inspect the Mission Control Next prompt-pack workbench component and recommend where a Harness/Agentic segmented control belongs. Do not edit files.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "The workbench component is the right UI surface. Place the Harness/Agentic segmented control near the run controls and mirror it in run details.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prompt-lab-ui-prefetch-1",
+      result: {
+        path: "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+        startLine: 1,
+        endLine: 220,
+        content: "export function PromptPacksWorkbenchPage() { return null; }",
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range", "code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-prompt-lab-ui-prefetch-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-ui-prefetch-1",
+      content: wrappedPrompt,
+      mode: "code",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "file.read_range",
+      args: expect.objectContaining({
+        path: "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+      }),
+    });
   });
 
   it("strips web tools from normal turns when web mode is off", async () => {
@@ -14478,6 +15683,505 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("## Evidence Used");
     expect(result.assistantContent).not.toContain("No blocking tool failures recorded.");
     expect(result.assistantContent).not.toContain("Workarounds: Use the cited files as the anchor");
+  });
+
+  it("repairs duplicated everyday cowork role bodies into distinct handoff sections", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      'Cowork request: "Plan a multi-step outreach campaign for a neighborhood meetup, but pause before any outward-facing action."',
+      "",
+      "No tools are available. Return a short staged plan with an explicit checkpoint before contacting anyone or publishing anything.",
+    ].join("\n");
+    const duplicated = [
+      "## Planner",
+      "- Phase 1: define audience, message, date, and success threshold.",
+      "- Phase 2: prepare invite copy and a short FAQ, but keep everything in draft.",
+      "- Approval checkpoint: stop before contacting anyone or publishing.",
+      "",
+      "## Researcher",
+      "- Phase 1: define audience, message, date, and success threshold.",
+      "- Phase 2: prepare invite copy and a short FAQ, but keep everything in draft.",
+      "- Approval checkpoint: stop before contacting anyone or publishing.",
+      "",
+      "## Risk Review",
+      "- Phase 1: define audience, message, date, and success threshold.",
+      "- Phase 2: prepare invite copy and a short FAQ, but keep everything in draft.",
+      "- Approval checkpoint: stop before contacting anyone or publishing.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [{ index: 0, message: { role: "assistant", content: duplicated } }],
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-duplicate-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-duplicate-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("## Planner");
+    expect(result.assistantContent).toContain("## Risk Review");
+    expect(result.assistantContent).toContain("organizer approval");
+    expect(result.assistantContent).toContain("outward contact needs organizer approval");
+  });
+
+  it("repairs non-code cowork partial-failure prompts away from repo evidence scaffolding", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: no-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      'Cowork request: "Coordinate a dinner plan with three workstreams: venue choice, dietary constraints, and travel timing. Assume the venue workstream is blocked."',
+      "",
+      "No tools are available. Keep all three workstreams visible, mark the blocked one clearly, and give the operator a practical next move.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Operator",
+              "- Evidence: No file-specific evidence was retained from the tool trace.",
+              "- Search scope: No explicit search scope was retained.",
+              "- Constraints: No blocking tool failures recorded.",
+              "- Workarounds: Continue only with the captured evidence and label any repo-level claims as unknown.",
+              "",
+              "## Synthesis",
+              "- Evidence: No file-specific evidence was retained from the tool trace.",
+              "- Constraints: No blocking tool failures recorded.",
+              "- Workarounds: Combine the cited evidence into the best current recommendation and flag remaining gaps explicitly.",
+              "",
+              "## Required Citations",
+              "- Cite exact files once tool-backed evidence is available.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-dinner-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-dinner-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "manual",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Venue choice: blocked");
+    expect(result.assistantContent).toContain("Dietary constraints");
+    expect(result.assistantContent).toContain("Travel timing");
+    expect(result.assistantContent).toContain("next move");
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+    expect(result.assistantContent).not.toContain("Required Citations");
+  });
+
+  it("removes bare synthesis headings from exact-section everyday cowork prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      'Cowork request: "Coordinate a decision about whether our book club should switch from monthly to biweekly meetings."',
+      "",
+      "Use available context if useful. Produce a multi-role decision brief with sections for Members, Organizer, and Risk Review, then give a single recommendation.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "Members",
+              "- Biweekly meetings can keep momentum higher.",
+              "",
+              "Organizer",
+              "- Organizer load rises with more frequent planning.",
+              "",
+              "Risk Review",
+              "- Main risk: enthusiasm may drop after the novelty fades.",
+              "",
+              "Synthesis",
+              "Recommendation: pilot biweekly meetings for two months.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-book-club-section-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-book-club-section-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Members");
+    expect(result.assistantContent).toContain("Organizer");
+    expect(result.assistantContent).toContain("Risk Review");
+    expect(result.assistantContent).not.toMatch(/(?:^|\n)\s*Synthesis\b/);
+    expect(result.assistantContent).not.toContain("file-specific evidence");
+  });
+
+  it("uses web search for implicit everyday cowork research prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      'Cowork request: "Research whether a weekend farmers market is likely to be busy and help me plan when to arrive."',
+      "",
+      "Use available tools if they are appropriate. Return a brief research summary, an arrival recommendation, and any uncertainty that remains.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "## Researcher\n- I checked the market context.\n\n## Operator Handoff\n- Arrive near opening.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cowork-market-search",
+      result: {
+        results: [
+          {
+            title: "Farmers Market Hours",
+            url: "https://example.org/farmers-market",
+            snippet: "Weekend market hours and events.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-cowork-implicit-web-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-implicit-web-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: expect.objectContaining({
+          query: expect.stringMatching(/farmers market|weekend/i),
+        }),
+      }),
+    );
+  });
+
+  it("repairs one-section farmers market cowork output into an actionable handoff", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "",
+      "## User Task",
+      'Cowork request: "Research whether a weekend farmers market is likely to be busy and help me plan when to arrive."',
+      "",
+      "Use available tools if they are appropriate. Return a brief research summary, an arrival recommendation, and any uncertainty that remains.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Researcher",
+              "- Research summary: use official market hours/events where available; without a named market, source-backed specificity is limited.",
+              "- Source checked: no market-specific source was retained.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cowork-market-thin-search",
+      result: {
+        results: [
+          {
+            title: "Farmers Market Finder",
+            url: "https://example.org/farmers-market-finder",
+            snippet: "Weekend farmers market listings and hours.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-market-repair-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-market-repair-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("## Researcher");
+    expect(result.assistantContent).toContain("## Risk Review");
+    expect(result.assistantContent).toContain("## Operator Handoff");
+    expect(result.assistantContent).toContain("Arrival recommendation");
+    expect(result.assistantContent).toContain("Uncertainty");
+  });
+
+  it("does not let Prompt Lab Cowork wrapper text suppress prompt-specific web search", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: implicit-tools",
+      "- This is a Cowork evaluation. Make the workflow legible instead of answering as one opaque voice.",
+      "- Avoid repo-level claims and file-specific evidence unless the user's task asks for local files.",
+      "",
+      "## User Task",
+      'Cowork request: "Find a plausible public venue for a small meetup and draft the decision path, but do not contact anyone."',
+      "",
+      "Use available lookup if appropriate. End with an approval checkpoint before any outreach or booking step.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "## Planner\n- Consider a public library meeting room.\n\n## Operator Handoff\n- Pause before booking.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cowork-venue-search",
+      result: {
+        results: [
+          {
+            title: "Library Meeting Rooms",
+            url: "https://example.org/library-meeting-rooms",
+            snippet: "Public library meeting room availability.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "code.search_files"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-wrapper-web-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-wrapper-web-search-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: expect.objectContaining({
+          query: expect.stringMatching(/public library|meeting room|small meetup/i),
+        }),
+      }),
+    );
+    const invokedToolNames = invokeTool.mock.calls.map((call) => call[0].toolName);
+    expect(invokedToolNames).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("Location assumption");
+    expect(result.assistantContent).toContain("Central Library");
+    expect(result.assistantContent).toContain("Approval checkpoint");
+  });
+
+  it("synthesizes severe-storm cowork web evidence instead of returning evidence scaffolding", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: web lookup tools",
+      "",
+      "## User Task",
+      "Use web lookup. Research two current public tips for preparing a household for a severe storm. Keep this focused on household planning. Return a short role-labeled synthesis and cite the source used.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "## Researcher",
+              "- Evidence: Web lookup found Severe Weather - Ready.gov (https://www.ready.gov/severe-weather).",
+              "- Search scope: query: site:ready.gov severe weather prepare household.",
+              "- Constraints: No blocking tool failures recorded.",
+              "- Workarounds: Use only the cited evidence.",
+              "",
+              "## Synthesis",
+              "- Evidence: Web lookup found Severe Weather - Ready.gov (https://www.ready.gov/severe-weather).",
+              "- Constraints: No blocking tool failures recorded.",
+              "- Workarounds: Combine the cited evidence.",
+            ].join("\n"),
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-cowork-storm-search",
+      result: {
+        results: [
+          {
+            title: "Severe Weather - Ready.gov",
+            url: "https://www.ready.gov/severe-weather",
+            snippet: "Plan ahead for severe weather and build an emergency kit.",
+          },
+          {
+            title: "Build A Kit - Ready.gov",
+            url: "https://www.ready.gov/kit",
+            snippet: "Emergency kit supplies.",
+          },
+        ],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-storm-synthesis-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-storm-synthesis-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("Tip 1");
+    expect(result.assistantContent).toContain("Tip 2");
+    expect(result.assistantContent).toContain("https://www.ready.gov/severe-weather");
+    expect(result.assistantContent).not.toContain("- Search scope:");
   });
 
   it("repairs raw qwen tool-call markup into a final answer after tool execution", async () => {

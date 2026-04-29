@@ -6,6 +6,7 @@ import type {
   ChatSessionPrefsPatch,
   ChatThinkingLevel,
   ChatWebMode,
+  ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
 
 interface BuildDelegatedChatSendRequestInput {
@@ -17,17 +18,18 @@ interface BuildDelegatedChatSendRequestInput {
   memoryMode: ChatMemoryMode;
   thinkingLevel: ChatThinkingLevel;
   retrievalMode: ChatRetrievalMode;
+  toolAutonomy?: ChatSessionPrefsRecord["toolAutonomy"];
+  normalizationProfile?: ChatSendMessageRequest["normalizationProfile"];
 }
 
-export function buildDelegatedChatSendRequest(
-  input: BuildDelegatedChatSendRequestInput,
-): ChatSendMessageRequest {
+export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendRequestInput): ChatSendMessageRequest {
   const prefsOverride: ChatSessionPrefsPatch = {
     planningMode: "off",
     orchestrationEnabled: false,
     orchestrationIntensity: "minimal",
     orchestrationVisibility: "explicit",
     orchestrationParallelism: "sequential",
+    toolAutonomy: input.toolAutonomy,
     proactiveMode: "off",
     retrievalMode: input.retrievalMode,
     reflectionMode: "off",
@@ -41,6 +43,7 @@ export function buildDelegatedChatSendRequest(
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,
+    normalizationProfile: input.normalizationProfile,
     prefsOverride,
   };
 }

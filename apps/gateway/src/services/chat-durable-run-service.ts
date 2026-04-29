@@ -174,7 +174,8 @@ export function finalizeDurableChatRun(
     });
     return;
   }
-  const failed = trace.status === "failed" || trace.completion?.status !== "complete";
+  const completionFailed = trace.completion ? trace.completion.status !== "complete" : false;
+  const failed = trace.status === "failed" || completionFailed;
   const nextStatus: DurableRunStatus = failed ? "failed" : "completed";
   const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
   deps.durableRuns.updateRun({

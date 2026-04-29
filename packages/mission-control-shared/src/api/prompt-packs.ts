@@ -134,7 +134,8 @@ export async function fetchPromptPackReport(packId: string): Promise<PromptPackR
 export async function runPromptPackBenchmark(
   packId: string,
   input: {
-    testCodes: string[];
+    testCodes?: string[];
+    allTests?: boolean;
     providers: Array<{
       providerId: string;
       model: string;
