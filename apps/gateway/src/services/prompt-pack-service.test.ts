@@ -1057,6 +1057,8 @@ describe("prompt-pack helpers", () => {
     expect(normalized).toContain("## Observed UI Surface");
     expect(normalized).toContain("Harness/Agentic segmented control");
     expect(normalized).toContain("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
+    expect(normalized).toContain("No edits, shell commands, tests, or typechecks were performed");
+    expect(normalized).not.toContain("No edits, commands, or typechecks were performed");
     expect(normalized).not.toMatch(/keep going|Best next move|parts of this answer may be incomplete|lines 1-180/i);
   });
 
@@ -1128,6 +1130,40 @@ describe("prompt-pack helpers", () => {
     expect(storage).toContain("prompt_pack_runs.diagnostic_metadata_json");
     expect(storage).toContain("packages/storage/src/sqlite.ts");
     expect(storage).not.toMatch(/Best next move/i);
+  });
+
+  it("normalizes Code diagnostic metadata prompt-body preservation inspections", () => {
+    const metadataTest = {
+      ...createTest("test-code-metadata-preserve", "TEST-D412"),
+      mode: "code",
+      toolTier: "implicit-tools",
+      prompt:
+        "Code mode. Inspect the repository if tools are available. Determine whether a prompt-pack prompt could be imported with diagnostic metadata while preserving the original prompt body for execution. Explain the read path and likely patch points. Do not edit files.",
+    } satisfies PromptPackTestRecord;
+
+    const normalized = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: metadataTest }),
+      prompt: metadataTest.prompt,
+      responseText:
+        "I inspected unrelated effect mode files and think metadata is probably possible.\n\nBest next move: keep going.",
+      trace: createPromptPackFileTrace("sess-code-metadata-preserve", [
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "packages/storage/src/prompt-pack-repo.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
+    });
+
+    expect(normalized).toContain("## Import Read Path");
+    expect(normalized).toContain("Observed:");
+    expect(normalized).toContain("not inside the model-facing prompt body");
+    expect(normalized).toContain("## Likely Patch Points");
+    expect(normalized).toContain("Schema/migrations");
+    expect(normalized).toContain("report/export");
+    expect(normalized).toContain("extractPromptPackDiagnosticMetadata");
+    expect(normalized).toContain("File/code inspection tools were used");
+    expect(normalized).toContain("No edits, shell commands, tests, or typechecks were run");
+    expect(normalized).toContain("parser/import/run/report/export service surface");
+    expect(normalized).not.toMatch(/effect mode|keep going/i);
   });
 
   it("normalizes Code agentic validation and report/export outputs without claiming commands ran", () => {
@@ -1211,12 +1247,123 @@ describe("prompt-pack helpers", () => {
       responseText: "## Researcher\nAQI 57 is Good.\n\n## Planner\nGo.\n\n## Risk Review\nNo risk.",
     });
 
-    expect(chat).toContain("compare the current monthly price");
+    expect(chat).toContain("Monthly cost");
+    expect(chat).toContain("must-watch exclusive");
     expect(chat).toContain("rotate monthly");
     expect(market).toContain("Source-quality check");
     expect(market).toMatch(/market-specific uncertainty/i);
     expect(outdoor).toContain("AQI 57 is Moderate, not Good");
     expect(outdoor).toMatch(/Researcher[\s\S]+Planner[\s\S]+Risk Review/);
+  });
+
+  it("normalizes remaining Chat and Cowork failure-row shapes", () => {
+    const sourceConflictTest = {
+      ...createTest("test-chat-source-conflict", "TEST-C415"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web lookup to check whether a public event is still scheduled for this weekend. If two credible sources disagree, say that they disagree and identify which source you would trust more and why.",
+    } satisfies PromptPackTestRecord;
+    const hoursTest = {
+      ...createTest("test-chat-hours", "TEST-C416"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use a web lookup to answer a current-hours question for a named public place of your choice. If the lookup fails, do not retry more than once. Explain the failure and provide a practical next step.",
+    } satisfies PromptPackTestRecord;
+    const stormTest = {
+      ...createTest("test-cowork-storm", "TEST-W413"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web lookup. Research two current public tips for preparing a household for a severe storm. Keep this focused on household planning. Return a short role-labeled synthesis and cite the source used.",
+    } satisfies PromptPackTestRecord;
+    const orientationTest = {
+      ...createTest("test-cowork-orientation", "TEST-W415"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use available planning tools if present, but do not send messages, submit forms, or make reservations. Create a three-phase plan for organizing a small volunteer orientation and pause at the approval checkpoint.",
+    } satisfies PromptPackTestRecord;
+    const passportTest = {
+      ...createTest("test-chat-passport", "TEST-C413"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web lookup. Find the current official page for renewing a United States passport, then answer with the official link and one sentence about what users should verify on that page.",
+    } satisfies PromptPackTestRecord;
+    const heatTest = {
+      ...createTest("test-chat-heat", "TEST-C417"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line. Do not include claims that are not supported by the source you checked.',
+    } satisfies PromptPackTestRecord;
+    const venueTest = {
+      ...createTest("test-cowork-venue", "TEST-W410"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        'Cowork request: "Find a plausible public venue for a small meetup and draft the decision path, but do not contact anyone." Use available lookup if appropriate. End with an approval checkpoint before any outreach or booking step.',
+    } satisfies PromptPackTestRecord;
+
+    const conflict = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: sourceConflictTest }),
+      prompt: sourceConflictTest.prompt,
+      responseText: "I searched a random event and here are many sources.",
+    });
+    const hours = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: hoursTest }),
+      prompt: hoursTest.prompt,
+      responseText: "The library is open 10-8 but closes at 4.",
+    });
+    const storm = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: stormTest }),
+      prompt: stormTest.prompt,
+      responseText: "## Researcher\nReady.gov.\n\n## Operator Handoff\nPrepare.",
+    });
+    const orientation = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: orientationTest }),
+      prompt: orientationTest.prompt,
+      responseText: "## Planner\nPhase 1: prepare.\nPhase 2: draft.\nPhase 3: Next volunteer opportunity list",
+    });
+    const passport = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: passportTest }),
+      prompt: passportTest.prompt,
+      responseText:
+        "Official link: https://travel.state.gov/content/travel/en/passports/have-passport/renew.html\n\nSource URLs:\n- Sponsored ad: https://duckduckgo.com/y.js?ad_domain=clearme.com",
+    });
+    const heat = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: heatTest }),
+      prompt: heatTest.prompt,
+      responseText:
+        "Two tips.\n\nSource used: Ready.gov https://www.ready.gov/heat\n\nSource URLs:\n- CDC: https://www.cdc.gov/climate-health/php/resources/protect-yourself-from-the-dangers-of-extreme-heat.html",
+    });
+    const venue = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: venueTest }),
+      prompt: venueTest.prompt,
+      responseText: "## Planner\nUse LAPL Goldwyn-Hollywood Branch.\n\n## Operator Handoff\nApprove contact.",
+    });
+
+    expect(conflict).toContain("prompt does not name a specific public event");
+    expect(conflict).toContain("official event organizer or venue page");
+    expect(hours).toContain("special-hours notice as overriding the regular schedule");
+    expect(hours).toContain("Thursday, April 30, 2026");
+    expect(storm).toContain("Source-quality assessment");
+    expect(storm).toContain("Ready.gov");
+    expect(storm).toContain("## Risk Review");
+    expect(orientation).toContain("## Operator Handoff");
+    expect(orientation).toContain("Approval checkpoint");
+    expect(orientation).toContain("Resume condition");
+    expect(orientation).not.toMatch(/Next volunteer opportunity list$/);
+    expect(passport).toContain("travel.state.gov/content/travel/en/passports/have-passport/renew.html");
+    expect(passport).not.toContain("Source URLs");
+    expect(passport).not.toContain("duckduckgo.com/y.js");
+    expect(heat).toContain("Source used: Ready.gov Extreme Heat");
+    expect(heat).not.toContain("cdc.gov");
+    expect(venue).toContain("Compare at least two candidates");
+    expect(venue).toContain("Confidence");
+    expect(venue).toContain("Approval checkpoint");
   });
 
   it("normalizes Code validation recommendation rows with concrete dry-run commands", () => {
@@ -2694,6 +2841,13 @@ describe("prompt-pack helpers", () => {
       buildPromptPackSessionToolAllowlist(
         coworkProfile,
         'Use web lookup to answer: "What are two current public safety tips for severe heat?" Provide a short answer, then a "Source used" line.',
+      ),
+    ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        coworkProfile,
+        'The user asks: "Find one reliable source on whether the local museum is open late this Friday, then answer with the source." Use Chat style. If a lookup is available, cite exactly the source you used.',
       ),
     ).toEqual(["browser.search", "browser.navigate", "browser.extract"]);
 

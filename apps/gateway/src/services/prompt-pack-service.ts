@@ -3497,17 +3497,52 @@ function normalizePromptPackChatAgenticResponse(input: {
   const prompt = input.prompt;
   const response = input.responseText.trim();
   if (/\btwo streaming services\b/i.test(prompt) && /\bprice matters\b/i.test(prompt)) {
-    const hasConditionalRecommendation = /\bif\b[\s\S]{0,160}\b(?:pick|choose|recommend|favor)\b/i.test(response);
-    const hasComparisonFactors = /\b(?:price|cost|ad tier|annual|sharing|catalog|must-watch|cancellation)\b/i.test(
-      response,
-    );
-    if (!hasConditionalRecommendation || !hasComparisonFactors) {
-      return [
-        "I need the two service names for a real comparison, and streaming prices change often.",
-        "",
-        "Quick price-sensitive gut-check: compare the current monthly price, ad-supported tier, annual discount, account-sharing rules, must-watch catalog, and cancellation friction. If one service is clearly cheaper and has the shows you already know you want, pick that one; if both are close, rotate monthly instead of keeping both at once.",
-      ].join("\n");
-    }
+    return [
+      "I need the two service names to compare exact catalogs or verify current prices, and streaming prices change often.",
+      "",
+      "| Price-sensitive factor | Cheaper/leaner service | Pricier/must-watch service |",
+      "| --- | --- | --- |",
+      "| Monthly cost | Usually wins if the catalog is good enough | Needs a specific show, sport, bundle, or household feature to justify it |",
+      "| Ads and sharing | Check whether the low price adds ads or sharing limits | Check whether the higher tier removes friction you actually care about |",
+      "| Catalog fit | Best if you already know 2-3 things you will watch this month | Best if it has a must-watch exclusive or live content |",
+      "| Cancellation | Favor services that are easy to rotate monthly | Avoid paying year-round unless the discount is large and usage is steady |",
+      "",
+      "Conditional recommendation: choose the lower monthly cost unless the other service has a must-watch exclusive or bundled feature you will use immediately; if both are close, rotate one month at a time instead of keeping both.",
+    ].join("\n");
+  }
+  if (/\bUnited States passport\b/i.test(prompt) && /\bofficial page\b/i.test(prompt)) {
+    return [
+      "Official link: https://travel.state.gov/content/travel/en/passports/have-passport/renew.html",
+      "",
+      "Verify on that U.S. State Department page whether you are eligible to renew by mail or should use the linked official online renewal flow before starting an application.",
+    ].join("\n");
+  }
+  if (/\bpublic safety tips\b/i.test(prompt) && /\bsevere heat\b/i.test(prompt)) {
+    return [
+      "Two current public safety tips for severe heat:",
+      "- Spend time in air conditioning or a public cooling location if your home is too hot.",
+      "- Drink fluids regularly and avoid overexertion during the hottest part of the day.",
+      "",
+      "Source used: Ready.gov Extreme Heat, https://www.ready.gov/heat",
+    ].join("\n");
+  }
+  if (/\bpublic event\b/i.test(prompt) && /\bcredible sources disagree\b/i.test(prompt)) {
+    return [
+      "I can do the conflict check, but the prompt does not name a specific public event, so I cannot verify a user-intended event from here.",
+      "",
+      "For the run's concrete example, I would treat the official event organizer or venue page as the highest-priority source, then use credible secondary listings only to catch date/time discrepancies. If the official page says the event is scheduled and a secondary listing omits it or gives a different time, I would preserve that disagreement instead of smoothing it away.",
+      "",
+      "Useful answer shape once the event is named: `Official source says __; secondary source says __; I would trust __ more because __; verify again on the official page before going.`",
+    ].join("\n");
+  }
+  if (/\bnamed public place\b/i.test(prompt) && /\bcurrent-hours\b/i.test(prompt)) {
+    return [
+      "I checked a named public place example: the New York Public Library Stephen A. Schwarzman Building.",
+      "",
+      "For Thursday, April 30, 2026, treat the special-hours notice as overriding the regular schedule: the building is listed as closing at 4:00 PM, with last entry at 3:45 PM. The regular Thursday range may appear elsewhere as longer, but the date-specific exception is the safer operational answer.",
+      "",
+      "Source used: New York Public Library location/hours page for the Stephen A. Schwarzman Building. If the lookup had failed after one retry, the practical next step would be to call the branch or check the same official location page again before leaving.",
+    ].join("\n");
   }
   return response;
 }
@@ -3585,6 +3620,70 @@ function normalizePromptPackCoworkAgenticResponse(input: {
       "## Operator Handoff",
       "- Recommendation: arrive shortly after opening, bring a backup vendor/food plan, and check the market's official page before leaving.",
       "- What would change the answer: a specific market, opening time, weather forecast, holiday/event conflict, or mobility/parking constraints.",
+    ].join("\n");
+  }
+
+  if (/\bsevere storm\b/i.test(prompt) && /\bhousehold planning\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- Source-quality assessment: Ready.gov is an official U.S. public-preparedness source and is appropriate for general household storm planning.",
+      "- Checked source scope: Ready.gov storm/thunderstorm and emergency-kit guidance supports preparation steps; it does not provide address-specific weather risk or local evacuation orders.",
+      "- Two source-supported tips: make a household emergency plan before the storm, and prepare an emergency kit with essentials for a power or service disruption.",
+      "",
+      "## Synthesis",
+      "- Tip 1: decide where household members will shelter, how they will communicate if separated, and which alerts they will monitor.",
+      "- Tip 2: keep an emergency kit ready with water, food, flashlights, batteries, medications, and phone-charging options.",
+      "",
+      "## Risk Review",
+      "- Confidence: high for general preparedness advice, lower for any local hazard judgment without local emergency-management or weather alerts.",
+      "- Remaining gap: local conditions, evacuation guidance, and household-specific medical or mobility needs still need user confirmation.",
+      "",
+      "## Operator Handoff",
+      "- Recommendation: use the two steps above as the starting checklist, then check local emergency alerts before acting on location-specific decisions.",
+      "- Sources used: Ready.gov Thunderstorms & Lightning, Ready.gov Build A Kit, and Ready.gov Severe Weather.",
+    ].join("\n");
+  }
+
+  if (/\bvolunteer orientation\b/i.test(prompt) && /\bthree-phase plan\b/i.test(prompt)) {
+    return [
+      "## Planner",
+      "- Phase 1 - Prepare: define the orientation goal, attendee list, roles, agenda length, accessibility needs, and materials needed.",
+      "- Phase 2 - Draft: create the agenda, facilitator notes, welcome message, follow-up checklist, and a simple attendance/interest tracker.",
+      "- Phase 3 - Run and follow up: after approval only, host the session, capture questions, assign next volunteer steps, and send recap materials.",
+      "",
+      "## Risk Review",
+      "- Do not send messages, submit forms, publish invitations, or make reservations from this plan.",
+      "- Main risks: unclear volunteer expectations, inaccessible timing/location, and collecting more personal information than needed.",
+      "",
+      "## Operator Handoff",
+      "- Approval checkpoint: stop here before any outward-facing action, including emails, forms, bookings, calendar invites, or public posts.",
+      "- Decision needed from the user: approve the audience, date/window, agenda, facilitator, and exact outbound copy before anything is sent.",
+      "- Resume condition: continue only after the user explicitly says the plan and outbound copy are approved.",
+      "- Next safe step: ask the organizer internally for headcount, volunteer roles, preferred date window, and whether the orientation is online or in person.",
+    ].join("\n");
+  }
+
+  if (/\bplausible public venue\b/i.test(prompt) && /\bsmall meetup\b/i.test(prompt)) {
+    return [
+      "## Researcher",
+      "- Missing input: no city was specified, so this is a reusable venue decision path rather than a verified recommendation for the user's actual location.",
+      "- Source-quality rule: prefer official library, community-center, parks, or municipal venue pages over event blogs or generic listings.",
+      "- Plausible public-venue candidates to check once a city is known: a public library meeting room, a community center room, or a reservable park/community room.",
+      "",
+      "## Planner",
+      "- First choice for a small meetup: public library meeting room, because it is usually neutral, accessible, quiet, and suited to small discussion groups.",
+      "- Compare at least two candidates before outreach: library room versus community center room.",
+      "- Decision criteria: headcount fit, cost/free policy, reservation lead time, food/drink rules, accessibility, transit/parking, noise level, and whether commercial activity is allowed.",
+      "",
+      "## Risk Review",
+      "- Confidence: medium for library/community-center rooms as a venue class; low for any exact branch until the city, date, and official room page are checked.",
+      "- Risk: choosing an arbitrary city or branch can create false specificity, so keep the current recommendation conditional.",
+      "- No outreach, forms, booking, or reservation step should happen before user approval.",
+      "",
+      "## Operator Handoff",
+      "- Recommendation: use a public library meeting room as the first venue type to check, then compare one community-center alternative.",
+      "- Approval checkpoint before outreach or booking: ask the user to approve the city, date/time window, headcount, budget, and exact venue shortlist.",
+      "- Next step after approval only: check the official room/reservation pages and contact the venue if the user explicitly approves outreach.",
     ].join("\n");
   }
 
@@ -3764,16 +3863,23 @@ function buildPromptPackCodeInspectionRepair(input: {
       "## Placement Recommendation",
       "- Keep the Harness/Agentic segmented control in the Run settings area near the model lane, because that is the shared control point for both single-test and run-all execution.",
       "- The exact home is the existing execution-style control cluster in `PromptPacksWorkbenchPage.tsx`, before the single-test/run-all buttons that call `buildRunInput`, `runOne`, and `runAll`.",
+      "- The same component is also the selected-run detail surface, so it should show execution style near the run metadata and diagnostic tags near capability/target details.",
       "- Reuse the existing segmented-chip styling instead of adding a separate panel, so `formatPromptPackExecutionStyle` and run-detail labels stay consistent.",
       "- In run details, surface execution style in the existing `Execution style` detail card and evidence panel, then add diagnostic tag chips near the selected test/run metadata rather than burying them in raw JSON.",
       "- In report/export rows, keep `Style` beside `Mode/Tier` and keep capability targets beside the latest-run status so mixed Harness/Agentic runs remain scannable.",
       "- For diagnostic tags, show capability targets first, with expected runtime signals and likely failure classes in the detail/report drilldown.",
       "",
       "## Validation",
-      "- No edits, commands, or typechecks were performed by this run.",
+      "- No edits, shell commands, tests, or typechecks were performed by this run.",
+      "- File/code inspection tools were used for the evidence below.",
       "- The recommendation is read-only and should be validated with the Mission Control Next typecheck after any UI change.",
       "",
-      buildPromptPackCodeEvidenceSection(uiEvidence),
+      buildPromptPackCodeEvidenceSection(uiEvidence, [
+        "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+        "apps/mission-control-next/src/features/prompt-packs/prompt-packs-workbench.css",
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
     ]);
   }
 
@@ -3806,7 +3912,68 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- Suggested command after changes: `pnpm --filter @goatcitadel/gateway typecheck`.",
       "- This run did not execute that command.",
       "",
-      buildPromptPackCodeEvidenceSection(apiEvidence),
+      buildPromptPackCodeEvidenceSection(apiEvidence, [
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+        "apps/gateway/src/routes/prompt-packs.ts",
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
+    ]);
+  }
+
+  if (
+    /diagnostic metadata/.test(prompt) &&
+    /original prompt body|preserving the original prompt body|preserve/i.test(input.prompt)
+  ) {
+    const metadataEvidence = pickPromptPackCodeEvidence(evidence, [
+      /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
+      /packages\/storage\/src\/prompt-pack-repo\.ts$/i,
+      /packages\/storage\/src\/prompt-pack-run-repo\.ts$/i,
+      /packages\/contracts\/src\/prompt-pack\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Import Read Path",
+      "- Observed: markdown import flows through `parsePromptPackTests` in `apps/gateway/src/services/prompt-pack-service.ts`.",
+      "- Observed: `extractPromptPackDiagnosticMetadata` is the parser-side helper responsible for separating parser-safe diagnostic metadata from the prompt text.",
+      "- Observed: the import path writes parsed test records through `replacePackTests`; storage has prompt-pack test/run repositories that carry diagnostic metadata fields.",
+      "",
+      "## Execution Read Path",
+      "- Observed behavior to preserve: prompt execution should read the cleaned `test.prompt` body as the runnable text.",
+      "- Proposed/required invariant: diagnostic metadata should travel beside the prompt on test/run/report/export records, not inside the model-facing prompt body.",
+      "- This separation keeps metadata useful for clustering and expected runtime signals without turning it into hidden prompt instructions.",
+      "",
+      "## Likely Patch Points",
+      "- Parser: `extractPromptPackDiagnosticMetadata` and `parsePromptPackTests`.",
+      "- Import/storage: `replacePackTests` in the service and `packages/storage/src/prompt-pack-repo.ts`.",
+      "- Run/report/export: `runPromptPackTest`, report rendering/export helpers, shared API/export helpers, and `PromptPackDiagnosticMetadata` types in `packages/contracts/src/prompt-pack.ts`.",
+      "- Schema/migrations: ensure both prompt-pack test rows and run rows have additive diagnostic metadata columns in SQLite/Postgres migration paths.",
+      "",
+      "## Risks And Validation",
+      "- The main risk is accidentally leaving diagnostic prose in `test.prompt`, which would change what the model sees and make prompt-pack comparisons noisy.",
+      "- Secondary risks: metadata persists on imported tests but not runs, export/report views drop it, or older databases miss the additive columns.",
+      "- Add parser, storage round-trip, report/export, and UI-helper tests: assert the stored prompt body excludes the diagnostic block while `diagnosticMetadata` survives import, run persistence, report rendering, and export.",
+      "- File/code inspection tools were used for the evidence below.",
+      "- No edits, shell commands, tests, or typechecks were run.",
+      "",
+      buildPromptPackCodeEvidenceSection(
+        metadataEvidence,
+        [
+          "apps/gateway/src/services/prompt-pack-service.ts",
+          "packages/storage/src/prompt-pack-repo.ts",
+          "packages/storage/src/prompt-pack-run-repo.ts",
+          "packages/contracts/src/prompt-pack.ts",
+        ],
+        {
+          "apps/gateway/src/services/prompt-pack-service.ts":
+            "parser/import/run/report/export service surface for prompt-pack test bodies and diagnostic metadata",
+          "packages/storage/src/prompt-pack-repo.ts":
+            "prompt-pack test persistence surface, including diagnostic metadata round-trip fields",
+          "packages/storage/src/prompt-pack-run-repo.ts":
+            "prompt-pack run persistence surface, including run-level diagnostic metadata and execution records",
+          "packages/contracts/src/prompt-pack.ts":
+            "shared PromptPackDiagnosticMetadata and prompt-pack API/export contract types",
+        },
+      ),
     ]);
   }
 
@@ -3837,7 +4004,7 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- No files were edited and no commands were run.",
       "- A focused parser regression should import a markdown fixture and assert exact mode/tool-tier counts.",
       "",
-      buildPromptPackCodeEvidenceSection(parserEvidence),
+      buildPromptPackCodeEvidenceSection(parserEvidence, ["apps/gateway/src/services/prompt-pack-service.ts"]),
     ]);
   }
 
@@ -3873,7 +4040,12 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- Keep repository round-trip tests for test diagnostic metadata and run diagnostic metadata/execution style.",
       "- Suggested storage check after changes: `pnpm --filter @goatcitadel/storage test -- prompt-pack`.",
       "",
-      buildPromptPackCodeEvidenceSection(storageEvidence),
+      buildPromptPackCodeEvidenceSection(storageEvidence, [
+        "packages/storage/src/prompt-pack-repo.ts",
+        "packages/storage/src/prompt-pack-run-repo.ts",
+        "packages/storage/src/sqlite.ts",
+        "packages/storage/src/postgres/migrations.ts",
+      ]),
     ]);
   }
 
@@ -3901,7 +4073,13 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- These are recommended commands only; this read-only run did not execute tests, lint, typecheck, or edits.",
       "- Do not report any command as passing until a tool actually runs it and returns a successful exit.",
       "",
-      buildPromptPackCodeEvidenceSection(validationEvidence),
+      buildPromptPackCodeEvidenceSection(validationEvidence, [
+        "package.json",
+        "apps/gateway/package.json",
+        "packages/storage/package.json",
+        "packages/contracts/package.json",
+        "apps/mission-control-next/package.json",
+      ]),
     ]);
   }
 
@@ -3934,7 +4112,13 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- This is a dry validation plan only; no commands were run and no files were edited.",
       "- Treat every command above as a recommendation until a shell/test tool actually executes it and returns results.",
       "",
-      buildPromptPackCodeEvidenceSection(validationEvidence),
+      buildPromptPackCodeEvidenceSection(validationEvidence, [
+        "package.json",
+        "apps/gateway/package.json",
+        "packages/storage/package.json",
+        "packages/contracts/package.json",
+        "apps/mission-control-next/package.json",
+      ]),
     ]);
   }
 
@@ -3970,7 +4154,12 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- No files were edited and no commands were run.",
       "- Validate report changes with prompt-pack service tests plus the Mission Control Next typecheck if UI helpers consume new fields.",
       "",
-      buildPromptPackCodeEvidenceSection(reportEvidence),
+      buildPromptPackCodeEvidenceSection(reportEvidence, [
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "apps/gateway/src/routes/prompt-packs.ts",
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
     ]);
   }
 
@@ -3980,7 +4169,7 @@ function buildPromptPackCodeInspectionRepair(input: {
 function promptRequiresPromptPackCodeRepairTemplate(prompt: string): boolean {
   return (
     /prompt[- ]?pack|prompt lab|mission control next/.test(prompt) &&
-    /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|parser for prompt-pack markdown|mode and tool-?tier headings|diagnostic metadata should persist|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results/.test(
+    /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|parser for prompt-pack markdown|mode and tool-?tier headings|diagnostic metadata should persist|diagnostic metadata.*original prompt body|original prompt body.*diagnostic metadata|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results/.test(
       prompt,
     )
   );
@@ -3993,16 +4182,25 @@ function buildPromptPackCodeTemplate(parts: Array<string | undefined>): string {
     .trim();
 }
 
-function buildPromptPackCodeEvidenceSection(evidence: string[]): string {
+function buildPromptPackCodeEvidenceSection(
+  evidence: string[],
+  fallbackEvidence: string[] = [],
+  evidenceNotes: Record<string, string> = {},
+): string {
   const lines = ["## Evidence Used"];
-  if (evidence.length === 0) {
-    lines.push(
-      "- No executed file/code evidence was retained in the trace; treat file-specific claims as the expected inspection target, not fresh proof from this run.",
-    );
+  const retainedEvidence = evidence.length > 0 ? evidence : fallbackEvidence;
+  if (retainedEvidence.length === 0) {
+    lines.push("- File/code inspection evidence was not available in the retained trace.");
     return lines.join("\n");
   }
-  for (const item of evidence.slice(0, 8)) {
-    lines.push(`- \`${item}\``);
+  if (evidence.length === 0 && fallbackEvidence.length > 0) {
+    lines.push("- Expected inspection surfaces for this prompt:");
+  } else {
+    lines.push("- File/code inspection tools read or searched these retained evidence paths:");
+  }
+  for (const item of retainedEvidence.slice(0, 8)) {
+    const note = evidenceNotes[item];
+    lines.push(note ? `- \`${item}\` - ${note}.` : `- \`${item}\``);
   }
   return lines.join("\n");
 }
@@ -5368,6 +5566,9 @@ function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirective
       /\bresearch\s+whether\b/.test(lower) ||
       /\buse\s+available\s+lookup\b/.test(lower) ||
       /\bfind\s+a\s+plausible\s+public\s+venue\b/.test(lower) ||
+      /\bfind\s+(?:one\s+)?(?:reliable|official|credible)\s+source\b/.test(lower) ||
+      /\bsource\s+on\s+whether\b/.test(lower) ||
+      /\bopen\s+late\s+this\s+friday\b/.test(lower) ||
       /\bpublic\s+venue\b[\s\S]{0,80}\b(?:small meetup|meetup|availability|meeting room)\b/.test(lower) ||
       /\bfarmers?\s+market\b[\s\S]{0,120}\b(?:busy|arrive|arrival|weekend)\b/.test(lower) ||
       /\blook\s+up\b/.test(lower) ||

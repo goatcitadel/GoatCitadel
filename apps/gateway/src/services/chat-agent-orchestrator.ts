@@ -405,7 +405,10 @@ export class ChatAgentOrchestrator {
     const canUseTimeTool = toolSchema.canonicalToModel.has("time.now");
     const canUseSearchTool = toolSchema.canonicalToModel.has("browser.search");
     const canUseNavigateTool = toolSchema.canonicalToModel.has("browser.navigate");
+    const canUseSessionStatusTool = toolSchema.canonicalToModel.has("session.status");
     const memoryLookupIntent = detectMemoryLookupIntent(input.content);
+    const explicitMemoryOnlyPrompt = /\bmemory tools only\b/i.test(input.content);
+    const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const canUseMemorySearchTool = toolSchema.canonicalToModel.has("memory.search");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
@@ -527,8 +530,12 @@ export class ChatAgentOrchestrator {
       !assistantContent &&
       !approvalPayload &&
       input.toolAutonomy !== "manual" &&
-      promptLabContract.explicitTools &&
-      memoryLookupIntent &&
+      input.mode !== "code" &&
+      !promptLabShouldInspectFilesForTurn &&
+      !intents.webLookup &&
+      !promptSpecificWebLookupTurn &&
+      (promptLabContract.explicitTools || explicitMemoryOnlyPrompt) &&
+      (memoryLookupIntent || explicitMemoryOnlyPrompt) &&
       canUseMemorySearchTool &&
       toolRunCount === 0
     ) {
@@ -571,6 +578,66 @@ export class ChatAgentOrchestrator {
           argumentsJson: JSON.stringify({
             query: memoryQuery,
           }),
+        }),
+      );
+      conversationMessages.push({
+        role: "tool",
+        tool_call_id: toolMessageId,
+        content: JSON.stringify(syntheticRun.record.result ?? { error: syntheticRun.record.error ?? "Tool failed." }),
+      } as ChatCompletionMessage);
+    }
+
+    const promptLabCoworkPlanningStatusPrefetch =
+      input.mode === "cowork" &&
+      !promptLabContract.toolUseSuppressed &&
+      !promptLabShouldInspectFilesForTurn &&
+      (promptLabContract.explicitTools || /\buse\s+available\s+planning\s+tools\b/i.test(input.content)) &&
+      /\buse\s+available\s+planning\s+tools\b/i.test(input.content) &&
+      /\bvolunteer\s+orientation\b/i.test(input.content) &&
+      /\bapproval\s+checkpoint\b/i.test(input.content) &&
+      canUseSessionStatusTool;
+
+    if (
+      !assistantContent &&
+      !approvalPayload &&
+      input.toolAutonomy !== "manual" &&
+      promptLabCoworkPlanningStatusPrefetch &&
+      toolRunCount === 0
+    ) {
+      throwIfChatTurnCancelled(input);
+      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+        status: "waiting_for_tool",
+      });
+      ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+      const syntheticRun = await this.executeToolCall({
+        input,
+        turnId: input.turnId,
+        toolName: "session.status",
+        rawArgs: {},
+        localFileIntent,
+        priorToolRuns: toolRuns,
+        turnBudgetDeadline,
+      });
+      toolRunCount += 1;
+      toolRuns.push(syntheticRun.record);
+      yield {
+        type: "tool_start",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        toolRun: {
+          ...syntheticRun.record,
+          status: "started",
+        },
+      };
+      if (syntheticRun.chunk) {
+        yield syntheticRun.chunk;
+      }
+      const toolMessageId = `prefetch-session-status-${randomUUID()}`;
+      conversationMessages.push(
+        createAssistantToolCallMessage({
+          toolCallId: toolMessageId,
+          toolName: this.resolveModelToolName("session.status", toolSchema.canonicalToModel),
+          argumentsJson: JSON.stringify({}),
         }),
       );
       conversationMessages.push({
@@ -10012,6 +10079,9 @@ function appendPromptLabWebCitationsIfNeeded(
     return responseText;
   }
   const hasExistingSourceLine = /\bsource used\s*:/i.test(responseText) || /\bsource checked\s*:/i.test(responseText);
+  if (hasExistingSourceLine && /\bsource used\b/i.test(userTask)) {
+    return responseText;
+  }
   const items = recoverTitleUrlItems(
     toolRuns.filter((run) => toolNameMatchesAnyKnownTool(run.toolName, WEB_TOOL_NAMES)),
     8,
@@ -10054,7 +10124,11 @@ function isUsablePromptLabWebCitationItem(item: { title: string | null; url: str
       isPromptLabBlockedCitationHost(host) ||
       host.endsWith(".local") ||
       host.endsWith(".invalid") ||
-      host === "localhost"
+      host === "localhost" ||
+      (host === "duckduckgo.com" && url.pathname === "/y.js") ||
+      url.searchParams.has("ad_domain") ||
+      url.searchParams.has("ad_provider") ||
+      url.searchParams.has("ad_type")
     ) {
       return false;
     }

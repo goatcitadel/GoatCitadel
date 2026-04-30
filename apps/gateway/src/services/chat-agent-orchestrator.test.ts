@@ -254,6 +254,24 @@ function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalo
         pack: "core",
       };
     }
+    if (toolName === "session.status") {
+      return {
+        toolName: "session.status",
+        category: "session",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Read current session status",
+        argSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+        examples: [],
+        pack: "core",
+        recommendedContexts: ["chat", "cowork", "code"],
+        preferredForIntents: ["session_status", "planning"],
+      };
+    }
     return {
       toolName: "browser.search",
       category: "research",
@@ -499,7 +517,7 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool,
     });
 
-    await orchestrator.run({
+    const result = await orchestrator.run({
       sessionId: "sess-missing-plan-storage-1",
       turnId: randomUUID(),
       userMessageId: "msg-missing-plan-storage-1",
@@ -549,7 +567,7 @@ describe("ChatAgentOrchestrator", () => {
       invokeTool,
     });
 
-    await orchestrator.run({
+    const result = await orchestrator.run({
       sessionId: "sess-1",
       turnId: randomUUID(),
       userMessageId: "msg-user-1",
@@ -6096,6 +6114,119 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("read range failed");
   });
 
+  it("prefetches memory for raw agentic memory-tools-only Cowork prompts", async () => {
+    const prompt =
+      "Use memory tools only to inspect whether there are stored planning preferences relevant to travel or scheduling. Do not create or update memory. Then produce a Cowork-style planning handoff that says exactly what memory was or was not used.";
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "## Researcher\n- Memory inspected: no relevant travel or scheduling preference was found.\n\n## Operator Handoff\n- Memory used: none.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-memory-planning-prefetch-1",
+      result: {
+        memories: [],
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search", "memory.read"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-raw-cowork-memory-only-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-raw-cowork-memory-only-1",
+      content: prompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: prompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "memory.search" }));
+    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("memory.search");
+    expect(result.assistantContent).toContain("Memory inspected");
+  });
+
+  it("prefetches session status for Prompt Lab Cowork planning-tool approval prompts", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: cowork",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "",
+      "## User Task",
+      "Use available planning tools if present, but do not send messages, submit forms, or make reservations. Create a three-phase plan for organizing a small volunteer orientation and pause at the approval checkpoint.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "## Planner\n- Phase 1 - Prepare.\n- Phase 2 - Draft.\n- Phase 3 - Run after approval only.\n\n## Operator Handoff\n- Approval checkpoint: stop here.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-session-status-planning-prefetch-1",
+      result: {
+        status: "active",
+        approvals: [],
+        activePlan: null,
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["session.status", "code.search_files", "file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-cowork-planning-status-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-cowork-planning-status-1",
+      content: wrappedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "session.status" }));
+    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("session.status");
+    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).not.toContain("code.search_files");
+    expect(result.assistantContent).toContain("Approval checkpoint");
+  });
+
   it("keeps delegated Prompt Lab Cowork web turns from honoring suggested local code tools", async () => {
     const delegatedPrompt = [
       "Delegated role: Researcher",
@@ -6375,7 +6506,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain(
       "https://www.nyc.gov/site/dsny/collection/residents/holiday-schedule.page",
     );
-    expect(result.assistantContent).toContain("https://mygarbagecollection.com/nyc-garbage-collection-schedule/");
+    expect(result.assistantContent).not.toContain("https://mygarbagecollection.com/nyc-garbage-collection-schedule/");
     expect(result.assistantContent.match(/Source URLs:/g)).toHaveLength(1);
     expect(result.assistantContent).not.toContain("https://user.com/not-a-source");
     expect(result.assistantContent).not.toContain("https://docs.user.com/not-a-source");
