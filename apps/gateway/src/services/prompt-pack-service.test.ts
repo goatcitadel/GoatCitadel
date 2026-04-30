@@ -1090,6 +1090,40 @@ describe("prompt-pack helpers", () => {
     expect(normalized).not.toMatch(/Prioritized review notes|keep going/i);
   });
 
+  it("normalizes Code contract inspection outputs into needed and not-needed execution-style fields", () => {
+    const test = {
+      ...createTest("test-code-contract", "TEST-D414"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use file search and file read tools. Inspect `packages/contracts/src/prompt-pack.ts` and summarize which exported types would need a new optional execution-style field. Do not edit files.",
+    } satisfies PromptPackTestRecord;
+    const profile = resolvePromptPackExecutionProfile({ test });
+
+    const normalized = normalizePromptPackAgenticResponse({
+      profile,
+      prompt: test.prompt,
+      responseText:
+        "Found PromptPackRunRecord has executionStyle already, but I did not inspect the rest.\n\nBest next move: keep going.",
+      trace: createPromptPackFileTrace("sess-code-contract", [
+        "packages/contracts/src/prompt-pack.ts",
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+      ]),
+    });
+
+    expect(normalized).toContain("## Current Answer");
+    expect(normalized).toContain("No exported type in `packages/contracts/src/prompt-pack.ts` still needs");
+    expect(normalized).toContain("are already covered");
+    expect(normalized).toContain("PromptPackRunRecord");
+    expect(normalized).toContain("PromptPackBenchmarkRunRequest");
+    expect(normalized).toContain("PromptPackBenchmarkRunRecord");
+    expect(normalized).toContain("## Types That Do Not Need A Direct Field");
+    expect(normalized).toContain("PromptPackReportRecord");
+    expect(normalized).toContain("PromptPackExportRecord");
+    expect(normalized).not.toContain("apps/gateway/src/services/prompt-pack-service.ts");
+    expect(normalized).not.toMatch(/did not inspect|keep going/i);
+  });
+
   it("normalizes Code agentic parser and storage inspection outputs", () => {
     const parserTest = {
       ...createTest("test-code-parser", "TEST-D407"),
@@ -1208,7 +1242,10 @@ describe("prompt-pack helpers", () => {
 
     expect(validation).toContain("## Parser Tests");
     expect(validation).toContain("## Command Honesty");
+    expect(validation).toContain("## Script And Fallback Notes");
+    expect(validation).toContain("Package-name or script uncertainty");
     expect(validation).toContain("no commands were run");
+    expect(validation).not.toContain("packages/threaded-surface-core/package.json");
     expect(validation).not.toMatch(/commands passed|keep going|lines 1-180/i);
     expect(report).toContain("## Report Rendering");
     expect(report).toContain("## Structured Export");
@@ -4904,6 +4941,30 @@ describe("prompt-pack helpers", () => {
 
     expect(integrity.validationStatus).toBe("valid");
     expect(integrity.signals).not.toContain("cut_off_ending");
+  });
+
+  it("does not mark final emphasized sentences as cut off", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Give one final recommendation.",
+      responseText: [
+        "## Operator Handoff",
+        "- Use the clearer option for the first public version.",
+        "",
+        "**Final recommendation: Open Table.**",
+      ].join("\n"),
+      trace: createTrace("sess-integrity-final-bold-sentence"),
+    });
+
+    const noPatchIntegrity = evaluatePromptPackRunIntegrity({
+      prompt: "Inspect the repo and do not patch.",
+      responseText: ["## Validation", "- File/code tools were used.", "", "**No patch applied.**"].join("\n"),
+      trace: createTrace("sess-integrity-final-bold-no-patch"),
+    });
+
+    expect(integrity.validationStatus).toBe("valid");
+    expect(integrity.signals).not.toContain("cut_off_ending");
+    expect(noPatchIntegrity.validationStatus).toBe("valid");
+    expect(noPatchIntegrity.signals).not.toContain("cut_off_ending");
   });
 
   it("does not mark normal sentence openings as fragmentary starts", () => {

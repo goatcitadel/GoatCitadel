@@ -3954,6 +3954,42 @@ function buildPromptPackCodeInspectionRepair(input: {
   }
 
   if (
+    /packages\/contracts\/src\/prompt-pack\.ts|exported types|optional execution-style field|new optional execution-style field|execution-style field/.test(
+      prompt,
+    )
+  ) {
+    const contractEvidence = pickPromptPackCodeEvidence(evidence, [/packages\/contracts\/src\/prompt-pack\.ts$/i]);
+    return buildPromptPackCodeTemplate([
+      "## Contract Surface",
+      '- `packages/contracts/src/prompt-pack.ts` already exports `PromptPackExecutionStyle = "single_turn_harness" | "agentic_surface"`.',
+      "- The run-facing contract already carries the optional field on `PromptPackRunRecord.executionStyle`.",
+      "- The benchmark-facing contract already carries the optional field on `PromptPackBenchmarkRunRequest.executionStyle` and `PromptPackBenchmarkRunRecord.executionStyle`.",
+      "",
+      "## Current Answer",
+      "- No exported type in `packages/contracts/src/prompt-pack.ts` still needs a new optional execution-style field based on the inspected file.",
+      "- The exported types that would need that field for this feature are already covered:",
+      "- `PromptPackRunRecord`: carries `executionStyle?: PromptPackExecutionStyle` for single-test run details, reports, and exports.",
+      "- `PromptPackBenchmarkRunRequest`: carries `executionStyle?: PromptPackExecutionStyle` so run-all requests can opt into Harness or Agentic execution.",
+      "- `PromptPackBenchmarkRunRecord`: carries `executionStyle?: PromptPackExecutionStyle` so benchmark history preserves the requested execution style.",
+      "- If a future export-only wrapper stops embedding run or benchmark records, that future wrapper would need its own optional field; the current inspected export/report wrappers can read execution style from embedded run records.",
+      "",
+      "## Types That Do Not Need A Direct Field",
+      "- `PromptPackRecord`, `PromptPackTestRecord`, and `PromptPackDiagnosticMetadata` describe pack/test definitions, not a specific execution, so adding execution style there would blur prompt content with runtime state.",
+      "- `PromptPackReportRecord` and `PromptPackExportRecord` do not need a separate top-level execution-style field when they carry `runs`, `benchmarks`, or latest assessment rows that preserve per-run style.",
+      "- Score, judge, human-review, and policy records should not grow `executionStyle` unless they stop being keyed to a run; they should derive execution context through the associated run.",
+      "",
+      "## Validation",
+      "- No files were edited and no commands were run.",
+      "- Validate contract drift with `pnpm --filter @goatcitadel/contracts typecheck` after any contract change, plus gateway and Mission Control Next typechecks if shared API clients consume a new field.",
+      "",
+      buildPromptPackCodeEvidenceSection(contractEvidence, ["packages/contracts/src/prompt-pack.ts"], {
+        "packages/contracts/src/prompt-pack.ts":
+          "source of exported prompt-pack record, run, benchmark, report, export, score, judge, and policy types",
+      }),
+    ]);
+  }
+
+  if (
     /diagnostic metadata/.test(prompt) &&
     /original prompt body|preserving the original prompt body|preserve/i.test(input.prompt)
   ) {
@@ -4189,7 +4225,6 @@ function buildPromptPackCodeInspectionRepair(input: {
 
   if (/validation plan|parser tests|storage tests|contract typecheck|mission control next typecheck/.test(prompt)) {
     const validationEvidence = pickPromptPackCodeEvidence(evidence, [
-      /package\.json$/i,
       /apps\/gateway\/package\.json$/i,
       /apps\/mission-control-next\/package\.json$/i,
       /packages\/contracts\/package\.json$/i,
@@ -4216,13 +4251,28 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- This is a dry validation plan only; no commands were run and no files were edited.",
       "- Treat every command above as a recommendation until a shell/test tool actually executes it and returns results.",
       "",
-      buildPromptPackCodeEvidenceSection(validationEvidence, [
-        "package.json",
-        "apps/gateway/package.json",
-        "packages/storage/package.json",
-        "packages/contracts/package.json",
-        "apps/mission-control-next/package.json",
-      ]),
+      "## Script And Fallback Notes",
+      "- Evidence should come from the relevant package manifests when available: `apps/gateway/package.json`, `packages/storage/package.json`, `packages/contracts/package.json`, and `apps/mission-control-next/package.json`.",
+      "- If a package filter or script name is missing on the local checkout, fall back to the nearest declared package script instead of inventing a passing command.",
+      "- For gateway parser tests, the fallback is the gateway vitest file with a narrower `-t` pattern; for storage, run the prompt-pack repository tests through the storage package; for contracts and Mission Control Next, use each package's declared `typecheck` script.",
+      "- Package-name or script uncertainty should stay explicit until the manifest or command output confirms it.",
+      "",
+      buildPromptPackCodeEvidenceSection(
+        validationEvidence,
+        [
+          "apps/gateway/package.json",
+          "packages/storage/package.json",
+          "packages/contracts/package.json",
+          "apps/mission-control-next/package.json",
+        ],
+        {
+          "apps/gateway/package.json": "gateway package scripts for service/parser tests and gateway typecheck",
+          "packages/storage/package.json": "storage package scripts for prompt-pack repository round-trip tests",
+          "packages/contracts/package.json": "contracts package scripts for shared prompt-pack type validation",
+          "apps/mission-control-next/package.json":
+            "Mission Control Next package scripts for Prompt Lab UI and shared-client type validation",
+        },
+      ),
     ]);
   }
 
@@ -4273,7 +4323,7 @@ function buildPromptPackCodeInspectionRepair(input: {
 function promptRequiresPromptPackCodeRepairTemplate(prompt: string): boolean {
   return (
     /prompt[- ]?pack|prompt lab|mission control next/.test(prompt) &&
-    /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|parser for prompt-pack markdown|mode and tool-?tier headings|diagnostic metadata should persist|diagnostic metadata.*original prompt body|original prompt body.*diagnostic metadata|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results/.test(
+    /workbench ui|run details|harness\/agentic|segmented control|api shape|shared client|gateway route|single prompt-pack test|optional execution-style field|execution-style field|exported types|packages\/contracts\/src\/prompt-pack\.ts|parser for prompt-pack markdown|mode and tool-?tier headings|where prompt-pack test records are stored|where run records are stored|storage round-trip|round-trip points|diagnostic metadata should persist|diagnostic metadata.*original prompt body|original prompt body.*diagnostic metadata|prompt-pack-repo\.ts|prompt-pack-run-repo\.ts|sqlite migrations|validation plan|smallest validation set|test command recommendation|parser tests|storage tests|contract typecheck|mission control next typecheck|reports? (?:are )?(?:rendered|exported)|report\/export|exported results/.test(
       prompt,
     )
   );
@@ -4614,7 +4664,8 @@ function detectPromptPackOutputCutOff(responseText: string): boolean {
   if (!lastLine) {
     return false;
   }
-  if (/[.!?`)\]"'}]$/.test(lastLine)) {
+  const semanticLastLine = stripPromptPackTerminalMarkdown(lastLine);
+  if (/[.!?`)\]"'}]$/.test(semanticLastLine)) {
     return false;
   }
   if (looksLikeCompletePromptPackPathLine(lastLine)) {
@@ -4633,11 +4684,34 @@ function detectPromptPackOutputCutOff(responseText: string): boolean {
   ) {
     return true;
   }
-  const wordCount = countPromptPackWords(lastLine);
+  const wordCount = countPromptPackWords(semanticLastLine);
   if (/^[-*]\s*$/.test(lastLine) || /^#+\s*$/.test(lastLine)) {
     return true;
   }
   return wordCount <= 4 && responseText.length > 200;
+}
+
+function stripPromptPackTerminalMarkdown(line: string): string {
+  let normalized = line
+    .trim()
+    .replace(/^[-*]\s+/, "")
+    .trim();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const next = normalized
+      .replace(/^`([^`]+)`$/u, "$1")
+      .replace(/^\*\*([\s\S]+)\*\*$/u, "$1")
+      .replace(/^__([\s\S]+)__$/u, "$1")
+      .replace(/^\*([^*]+)\*$/u, "$1")
+      .replace(/^_([^_]+)_$/u, "$1")
+      .trim();
+    if (next !== normalized) {
+      normalized = next;
+      changed = true;
+    }
+  }
+  return normalized;
 }
 
 function looksLikeCompletePromptPackShortEmphasisLine(line: string): boolean {
