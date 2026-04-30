@@ -6162,8 +6162,80 @@ describe("ChatAgentOrchestrator", () => {
     });
 
     expect(invokeTool).toHaveBeenCalledWith(expect.objectContaining({ toolName: "memory.search" }));
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          query: "travel scheduling planning preferences dates availability itinerary constraints",
+        }),
+      }),
+    );
     expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("memory.search");
     expect(result.assistantContent).toContain("Memory inspected");
+  });
+
+  it("targets Prompt Lab memory preference searches to the requested preference domain", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: memory tools",
+      "",
+      "## User Task",
+      "Use available memory tools only to inspect whether there is already a stored preference about answer length. Do not create or update any memory. Then tell the user what you found and what you would need before storing a new preference.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.4",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content:
+              "I used memory.search with an answer-length preference query and found no stored preference. I did not create or update memory.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-memory-answer-length-prefetch-1",
+      result: { memories: [] },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["memory.search", "memory.read"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-prompt-lab-answer-length-memory-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-answer-length-memory-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "memory.search",
+        args: expect.objectContaining({
+          query: "answer length preference concise short detailed response length",
+        }),
+      }),
+    );
+    expect(result.turnTrace.toolRuns.map((run) => run.toolName)).toContain("memory.search");
+    expect(result.assistantContent).toContain("answer-length preference");
   });
 
   it("prefetches session status for Prompt Lab Cowork planning-tool approval prompts", async () => {

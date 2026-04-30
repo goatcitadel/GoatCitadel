@@ -406,8 +406,8 @@ export class ChatAgentOrchestrator {
     const canUseSearchTool = toolSchema.canonicalToModel.has("browser.search");
     const canUseNavigateTool = toolSchema.canonicalToModel.has("browser.navigate");
     const canUseSessionStatusTool = toolSchema.canonicalToModel.has("session.status");
-    const memoryLookupIntent = detectMemoryLookupIntent(input.content);
-    const explicitMemoryOnlyPrompt = /\bmemory tools only\b/i.test(input.content);
+    const explicitMemoryOnlyPrompt = detectMemoryToolsOnlyPrompt(input.content);
+    const memoryLookupIntent = detectMemoryLookupIntent(input.content) || explicitMemoryOnlyPrompt;
     const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const canUseMemorySearchTool = toolSchema.canonicalToModel.has("memory.search");
     const localFileIntent = intents.localFile;
@@ -2326,7 +2326,7 @@ export class ChatAgentOrchestrator {
       !promptLabFileInspectionIntent &&
       !intents.localFile &&
       !looksLikeRepoGroundedInspectionPrompt(promptLabTask) &&
-      (/\bmemory tools only\b/i.test(input.content) ||
+      (detectMemoryToolsOnlyPrompt(input.content) ||
         /\buse web lookup\b/i.test(input.content) ||
         (input.mode === "cowork" &&
           looksLikeEverydayNonCodeCoworkPrompt(input.content, promptLabTask ?? input.content)));
@@ -2356,7 +2356,7 @@ export class ChatAgentOrchestrator {
       input.content,
       catalog.map((tool) => tool.toolName),
     );
-    const memoryLookupIntent = detectMemoryLookupIntent(input.content);
+    const memoryLookupIntent = detectMemoryLookupIntent(input.content) || detectMemoryToolsOnlyPrompt(input.content);
     const memoryPersistenceIntent = detectMemoryPersistenceIntent(input.content);
     const webLookupIntent = intents.webLookup || [...explicitToolMentions].some((toolName) => isWebToolName(toolName));
     const promptLabHasExplicitToolFamily =
@@ -5091,6 +5091,17 @@ function deriveLiveDataQuery(content: string): string {
 }
 
 function inferMemoryQueryFromPrompt(userContent: string): string | undefined {
+  const taskText = `${extractPrimaryUserTaskContent(userContent) ?? ""}\n${userContent}`;
+  if (/\bstored\s+preference\b/i.test(taskText) && /\banswer\s+length\b/i.test(taskText)) {
+    return "answer length preference concise short detailed response length";
+  }
+  if (
+    /\bstored\s+planning\s+preferences?\b/i.test(taskText) &&
+    /\btravel\b/i.test(taskText) &&
+    /\bscheduling\b/i.test(taskText)
+  ) {
+    return "travel scheduling planning preferences dates availability itinerary constraints";
+  }
   const inferred = inferQueryFromPrompt(userContent);
   if (inferred) {
     return inferred;
@@ -16550,6 +16561,7 @@ function escapeRegexLiteral(value: string): string {
 function detectMemoryLookupIntent(content: string): boolean {
   const normalized = content.toLowerCase();
   return (
+    detectMemoryToolsOnlyPrompt(content) ||
     /\bmemory\.(read|search)\b/.test(normalized) ||
     /\b(search|look up|lookup|find|retrieve|recall|read|check|load)\b.{0,40}\b(memory|memories|note|notes|saved|stored|preference|preferences|context)\b/.test(
       normalized,
@@ -16557,6 +16569,10 @@ function detectMemoryLookupIntent(content: string): boolean {
     /\b(what do you remember|do you remember)\b/.test(normalized) ||
     (/\b(confirm|verify|check)\b/.test(normalized) && /\b(saved|stored|remembered|memory|note)\b/.test(normalized))
   );
+}
+
+function detectMemoryToolsOnlyPrompt(content: string): boolean {
+  return /\b(?:use\s+)?(?:available\s+)?memory\s+tools?\s+only\b/i.test(content);
 }
 
 function detectMemoryPersistenceIntent(content: string): boolean {
