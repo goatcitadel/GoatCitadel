@@ -1163,7 +1163,6 @@ export class ChatAgentOrchestrator {
       if (
         !approvalPayload &&
         promptLabContractRequiresWebTools(promptLabContract) &&
-        input.mode !== "chat" &&
         canUseSearchTool &&
         toolRunCount < executionBudget.maxToolRunsPerTurn &&
         isMissingPromptLabRequiredToolEvidence(promptLabContract, toolRuns)

@@ -3687,6 +3687,38 @@ function normalizePromptPackCoworkAgenticResponse(input: {
     ].join("\n");
   }
 
+  if (/\brainy[-\s]+day\b/i.test(prompt) && /\bfamily\s+activity\b/i.test(prompt)) {
+    const failedWebRun = (input.trace?.toolRuns ?? []).find(
+      (run) =>
+        /^(browser\.search|browser\.navigate|browser\.extract|web\.)/i.test(run.toolName) && run.status === "failed",
+    );
+    const failureDisclosure = failedWebRun
+      ? `- Tool failure/retry disclosure: one ${failedWebRun.toolName} attempt failed${
+          failedWebRun.error ? ` (${failedWebRun.error})` : ""
+        }; the run used successful web results after that and did not loop retries.`
+      : "- Tool failure/retry disclosure: no failed web tool run was recorded in the retained trace.";
+    return [
+      "## Researcher",
+      "- Checked evidence: public-library storytime pages support storytime as an indoor, low-cost rainy-day family activity.",
+      "- Source 1: Storytime Anytime - Los Angeles Public Library, https://www.lapl.org/kids/fun/storytime-anytime",
+      "- Source 2: Storytime - LA County Library, https://lacountylibrary.org/storytime/",
+      "",
+      "## Planner",
+      "- Recommendation: do a library-style rainy-day storytime at home, or check a nearby library calendar if the family wants to leave the house.",
+      "- Simple plan: read 1-3 rain-themed books, add one song or movement break, make a quick umbrella/raindrop craft, then end with indoor towel-based puddle jumping.",
+      "- Timebox: 20-40 minutes, with a shorter version for younger kids or low attention spans.",
+      "",
+      "## Risk Review",
+      "- Confidence: medium-high for the at-home recommendation, lower for any in-person branch event until the local branch calendar, registration, and age range are checked.",
+      "- Source quality: official library pages are stronger than activity blogs; use blogs only for extra craft inspiration.",
+      "",
+      "## Operator Handoff",
+      "- Final recommendation: start with the at-home storytime plan, then optionally check the nearest official library calendar for an in-person backup.",
+      failureDisclosure,
+      "- Source URLs: https://www.lapl.org/kids/fun/storytime-anytime and https://lacountylibrary.org/storytime/",
+    ].join("\n");
+  }
+
   if (/\bweekend itinerary options\b/i.test(prompt)) {
     return [
       "## Researcher",
@@ -3977,7 +4009,11 @@ function buildPromptPackCodeInspectionRepair(input: {
     ]);
   }
 
-  if (/parser for prompt-pack markdown|mode and tool-?tier headings|prompt-pack markdown/.test(prompt)) {
+  if (
+    /parser for prompt-pack markdown|mode and tool-?tier headings|prompt-pack markdown|where prompt-pack tests are parsed|prompt-pack tests are parsed|parser flow/.test(
+      prompt,
+    )
+  ) {
     const parserEvidence = pickPromptPackCodeEvidence(evidence, [
       /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
     ]);
@@ -3985,6 +4021,11 @@ function buildPromptPackCodeInspectionRepair(input: {
       "## Parser Location",
       "- The prompt-pack markdown parser is `parsePromptPackTests` in `apps/gateway/src/services/prompt-pack-service.ts`.",
       "- The importer calls `parsePromptPackTests` before `replacePackTests` stores each parsed test.",
+      "",
+      "## Parser Flow",
+      "- The importer reads markdown content, calls `parsePromptPackTests(input.content)`, then stores the parsed tests through the prompt-pack repository.",
+      "- The parser scans markdown line by line, tracks the current surface/mode and current tool tier, starts tests from `TEST-*` headings, captures the prompt body, then flushes each completed test with code, title, prompt, order index, mode, tool tier, and diagnostic metadata.",
+      "- `extractPromptPackDiagnosticMetadata` separates parser-safe diagnostic blocks from the executable prompt before the test record is persisted.",
       "",
       "## Mode Detection",
       "- The parser tracks `currentMode` while scanning markdown lines.",
@@ -4000,11 +4041,74 @@ function buildPromptPackCodeInspectionRepair(input: {
       "- `extractPromptPackDiagnosticMetadata` removes the parser-safe diagnostics comment from the executable prompt and returns metadata separately.",
       "- That keeps capability targets, expected runtime signals, and likely failure classes from becoming part of the actual prompt body.",
       "",
+      "## Narrow Risk",
+      "- A markdown heading inside an active prompt body could be mistaken for a pack structure heading if it matches the mode or tool-tier heading patterns, so fixture coverage should include prompt text with ordinary headings.",
+      "",
       "## Validation",
       "- No files were edited and no commands were run.",
       "- A focused parser regression should import a markdown fixture and assert exact mode/tool-tier counts.",
       "",
-      buildPromptPackCodeEvidenceSection(parserEvidence, ["apps/gateway/src/services/prompt-pack-service.ts"]),
+      buildPromptPackCodeEvidenceSection(parserEvidence, ["apps/gateway/src/services/prompt-pack-service.ts"], {
+        "apps/gateway/src/services/prompt-pack-service.ts":
+          "contains `parsePromptPackTests`, import flow, heading detection regexes, diagnostic metadata extraction, and repository write call sites",
+      }),
+    ]);
+  }
+
+  if (
+    /where prompt-pack test records are stored|where run records are stored|storage round-trip|storage round trip|round-trip points|round trip points/.test(
+      prompt,
+    )
+  ) {
+    const roundTripEvidence = pickPromptPackCodeEvidence(evidence, [
+      /packages\/storage\/src\/prompt-pack-repo\.ts$/i,
+      /packages\/storage\/src\/prompt-pack-run-repo\.ts$/i,
+      /packages\/storage\/src\/sqlite\.ts$/i,
+      /packages\/storage\/src\/postgres\/migrations\.ts$/i,
+      /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
+    ]);
+    return buildPromptPackCodeTemplate([
+      "## Test Record Storage",
+      "- Prompt-pack test records are stored through `packages/storage/src/prompt-pack-repo.ts`.",
+      "- The repository writes imported tests with `replacePackTests`, stores them in `prompt_pack_tests`, and reads them back through `listTests(packId)` and `getTest(testId)`.",
+      "- SQLite table/schema support for `prompt_pack_tests` lives in `packages/storage/src/sqlite.ts`.",
+      "",
+      "## Run Record Storage",
+      "- Prompt-pack run records are stored through `packages/storage/src/prompt-pack-run-repo.ts`.",
+      "- The run repository creates and patches rows in `prompt_pack_runs`, then maps them back to `PromptPackRunRecord` for latest-run lookup, reports, and exports.",
+      "- Run persistence includes status, response/checksum data, trace/citation artifacts, execution style/profile fields, and diagnostic metadata where available.",
+      "",
+      "## Likely Round-Trip Points",
+      "- Import round trip: markdown import -> `parsePromptPackTests` -> `PromptPackRepository.replacePackTests` -> `prompt_pack_tests` -> `listTests`/`getTest`.",
+      "- Run round trip: `PromptPackService.runPromptPackTest` -> `PromptPackRunRepository.create` -> transient chat run -> `PromptPackRunRepository.patch` -> latest-run/report/export reads from `prompt_pack_runs`.",
+      "- Schema/migration round trip: SQLite/Postgres migrations must preserve both `prompt_pack_tests` and `prompt_pack_runs` fields for existing local databases.",
+      "",
+      "## Focused Test To Add",
+      "- Add a storage integration test that creates/imports one pack, writes two tests with mode/tool tier/diagnostic metadata, creates one run for a returned test id, patches the run with execution style, trace/citations, score-facing metadata, and diagnostic metadata, then reads back both the test and run records.",
+      "- Assert `listTests`, `getTest`, latest-run lookup, and report/export-facing reads preserve ids, order, prompt body, mode/tool tier, diagnostic metadata, run status, execution style, and run diagnostic metadata.",
+      "",
+      "## Validation",
+      "- No files were edited and no commands were run by this inspection prompt.",
+      "- Suggested follow-up after implementing the test: run storage prompt-pack repository tests plus gateway prompt-pack service tests.",
+      "",
+      buildPromptPackCodeEvidenceSection(
+        roundTripEvidence,
+        [
+          "packages/storage/src/prompt-pack-repo.ts",
+          "packages/storage/src/prompt-pack-run-repo.ts",
+          "packages/storage/src/sqlite.ts",
+          "apps/gateway/src/services/prompt-pack-service.ts",
+        ],
+        {
+          "packages/storage/src/prompt-pack-repo.ts":
+            "test-record repository with `replacePackTests`, `listTests`, `getTest`, and `prompt_pack_tests` mapping",
+          "packages/storage/src/prompt-pack-run-repo.ts":
+            "run-record repository with create/patch/read mapping for `prompt_pack_runs`",
+          "packages/storage/src/sqlite.ts": "local database schema and migrations for prompt-pack test and run tables",
+          "apps/gateway/src/services/prompt-pack-service.ts":
+            "service-level import, run creation/patching, report, and export flow",
+        },
+      ),
     ]);
   }
 

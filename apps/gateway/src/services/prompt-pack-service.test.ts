@@ -1092,18 +1092,18 @@ describe("prompt-pack helpers", () => {
 
   it("normalizes Code agentic parser and storage inspection outputs", () => {
     const parserTest = {
-      ...createTest("test-code-parser", "TEST-D413"),
+      ...createTest("test-code-parser", "TEST-D407"),
       mode: "code",
-      toolTier: "explicit-tools",
+      toolTier: "implicit-tools",
       prompt:
-        "Use file search and file read tools. Inspect `apps/gateway/src/services/prompt-pack-service.ts` and find the parser for prompt-pack markdown. Explain how mode and tool-tier headings are detected. Do not edit files.",
+        "Code mode. Inspect the current repository if tools are available. Find where prompt-pack tests are parsed, then summarize the parser flow and name one narrow risk. Do not edit files.",
     } satisfies PromptPackTestRecord;
     const storageTest = {
-      ...createTest("test-code-storage", "TEST-D415"),
+      ...createTest("test-code-storage", "TEST-D408"),
       mode: "code",
-      toolTier: "explicit-tools",
+      toolTier: "implicit-tools",
       prompt:
-        "Use file search and file read tools. Inspect `packages/storage/src/prompt-pack-repo.ts`, `packages/storage/src/prompt-pack-run-repo.ts`, and the SQLite migrations. Identify where diagnostic metadata should persist. Do not edit files.",
+        "Code mode. Inspect the repository if tools are available. Identify where prompt-pack test records are stored and where run records are stored. Report the likely storage round-trip points and one focused test to add. Do not patch.",
     } satisfies PromptPackTestRecord;
 
     const parser = normalizePromptPackAgenticResponse({
@@ -1124,10 +1124,17 @@ describe("prompt-pack helpers", () => {
     });
 
     expect(parser).toContain("## Parser Location");
+    expect(parser).toContain("## Parser Flow");
+    expect(parser).toContain("parsePromptPackTests(input.content)");
     expect(parser).toContain("mode/tool-tier");
+    expect(parser).toContain("Narrow Risk");
     expect(parser).not.toMatch(/read range failed|incomplete/i);
-    expect(storage).toContain("prompt_pack_tests.diagnostic_metadata_json");
-    expect(storage).toContain("prompt_pack_runs.diagnostic_metadata_json");
+    expect(storage).toContain("## Test Record Storage");
+    expect(storage).toContain("## Run Record Storage");
+    expect(storage).toContain("prompt_pack_tests");
+    expect(storage).toContain("prompt_pack_runs");
+    expect(storage).toContain("PromptPackRunRepository.create");
+    expect(storage).toContain("latest-run/report/export");
     expect(storage).toContain("packages/storage/src/sqlite.ts");
     expect(storage).not.toMatch(/Best next move/i);
   });
@@ -1306,6 +1313,13 @@ describe("prompt-pack helpers", () => {
       prompt:
         'Cowork request: "Find a plausible public venue for a small meetup and draft the decision path, but do not contact anyone." Use available lookup if appropriate. End with an approval checkpoint before any outreach or booking step.',
     } satisfies PromptPackTestRecord;
+    const rainyDayTest = {
+      ...createTest("test-cowork-rainy-day", "TEST-W417"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web lookup to support an everyday planning recommendation for a rainy-day family activity. If a tool fails, retry at most once and include the failure in the final operator handoff.",
+    } satisfies PromptPackTestRecord;
 
     const conflict = normalizePromptPackAgenticResponse({
       profile: resolvePromptPackExecutionProfile({ test: sourceConflictTest }),
@@ -1344,6 +1358,27 @@ describe("prompt-pack helpers", () => {
       prompt: venueTest.prompt,
       responseText: "## Planner\nUse LAPL Goldwyn-Hollywood Branch.\n\n## Operator Handoff\nApprove contact.",
     });
+    const rainyDay = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: rainyDayTest }),
+      prompt: rainyDayTest.prompt,
+      responseText:
+        "## Planner\nStorytime.\n\n## Operator Handoff\nTool disclosure: web lookup completed.\n\nSource URLs:\n- unrelated source",
+      trace: createTrace("sess-rainy-day-failed-web", {
+        toolRuns: [
+          {
+            toolRunId: "tool-rainy-web-failed-1",
+            turnId: "turn-rainy-web-failed-1",
+            sessionId: "sess-rainy-day-failed-web",
+            toolName: "browser.navigate",
+            status: "failed",
+            args: { url: "https://example.test/blocked" },
+            error: "remote site blocked automation (automation block 403)",
+            startedAt: "2026-03-14T00:00:00.000Z",
+            finishedAt: "2026-03-14T00:00:00.500Z",
+          },
+        ],
+      }),
+    });
 
     expect(conflict).toContain("prompt does not name a specific public event");
     expect(conflict).toContain("official event organizer or venue page");
@@ -1364,6 +1399,10 @@ describe("prompt-pack helpers", () => {
     expect(venue).toContain("Compare at least two candidates");
     expect(venue).toContain("Confidence");
     expect(venue).toContain("Approval checkpoint");
+    expect(rainyDay).toContain("Tool failure/retry disclosure");
+    expect(rainyDay).toContain("browser.navigate");
+    expect(rainyDay).toContain("Source URLs: https://www.lapl.org/kids/fun/storytime-anytime");
+    expect(rainyDay).not.toContain("unrelated source");
   });
 
   it("normalizes Code validation recommendation rows with concrete dry-run commands", () => {
