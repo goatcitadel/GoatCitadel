@@ -2089,6 +2089,9 @@ export function MissionThreadedControllerHost({
         onCancelEdit: handleCancelEdit,
         onDismissError: handleDismissError,
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
+        onTurnOffPlanningMode: () => {
+          void handlePrefPatch({ planningMode: "off" });
+        },
         onSetDeepMode: () => handleSetDeepMode(),
         onReviewRunDetails: handleRevealSelectedTurnDetails,
         onDraftChange: setDraft,

@@ -74,6 +74,15 @@ export function ThreadedContextDrawer({
                   Reapply route
                 </button>
               ) : null}
+              {props.planningMode === "advisory" ? (
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  onClick={() => void props.onPrefPatch({ planningMode: "off" })}
+                >
+                  Turn off planning
+                </button>
+              ) : null}
             </div>
             {props.routePreflight?.degradedReason ? <p>{props.routePreflight.degradedReason}</p> : null}
             {props.routePreflight?.blockedReason ? <p>{props.routePreflight.blockedReason}</p> : null}

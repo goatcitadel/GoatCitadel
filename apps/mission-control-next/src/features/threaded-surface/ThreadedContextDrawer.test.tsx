@@ -25,6 +25,42 @@ function collectText(node: ReactTestInstance): string {
 }
 
 describe("ThreadedContextDrawer", () => {
+  it("lets users turn planning mode off from the context panel", async () => {
+    const onPrefPatch = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="cowork"
+          props={
+            {
+              selectedProviderId: "openai",
+              selectedModel: "gpt-5.4-mini",
+              streamEnabled: true,
+              planningMode: "advisory",
+              routePreflight: {
+                selectionSource: "session_prefs",
+              },
+              onStreamEnabledChange: vi.fn(),
+              onPrefPatch,
+              activeGeneratedArtifact: null,
+              onCloseGeneratedArtifact: vi.fn(),
+              selectedTurn: null,
+            } as any
+          }
+        />,
+      );
+    });
+
+    const button = findButton(renderer!.root, "Turn off planning");
+    await act(async () => {
+      button.props.onClick();
+    });
+
+    expect(onPrefPatch).toHaveBeenCalledWith({ planningMode: "off" });
+  });
+
   it("shows the export affordance on the trace tab when a run export handler exists", async () => {
     const onExportRunBundle = vi.fn();
     let renderer: ReactTestRenderer | null = null;

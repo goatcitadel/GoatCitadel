@@ -169,6 +169,9 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       {props.planningMode === "advisory" ? (
         <div className="mc-next-composer-banner planning">
           Planning mode is on. GoatCitadel will respond with a plan/spec instead of executing tool work automatically.
+          <button type="button" className="mc-next-composer-inline-button" onClick={props.onTurnOffPlanningMode}>
+            Turn off
+          </button>
         </div>
       ) : null}
 

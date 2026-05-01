@@ -38,6 +38,7 @@ function buildMarkup(overrides: Partial<any> = {}) {
     onRemoveQueuedItem: vi.fn(),
     onCancelEdit: vi.fn(),
     onDismissError: vi.fn(),
+    onTurnOffPlanningMode: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
     onRetryTurn: vi.fn(),
@@ -122,5 +123,14 @@ describe("ThreadedComposer", () => {
 
     expect(markup).toContain("Route blocked");
     expect(markup).toContain("No active provider configured.");
+  });
+
+  it("shows an explicit action to leave planning mode", () => {
+    const markup = buildMarkup({
+      planningMode: "advisory",
+    });
+
+    expect(markup).toContain("Planning mode is on");
+    expect(markup).toContain("Turn off");
   });
 });

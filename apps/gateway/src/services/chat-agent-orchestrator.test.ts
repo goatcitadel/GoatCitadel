@@ -6056,6 +6056,81 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).not.toContain("file-specific evidence");
   });
 
+  it("preserves substantive delegated Cowork reports instead of replacing them with role scaffolds", async () => {
+    const delegatedPrompt = [
+      "Delegated role: synthesizer",
+      "",
+      "Parent objective: I want you to research the best agentic harnesses out there and create a report that shows the pros and cons of each",
+      "",
+      "Plan summary: Research and synthesize a comparative report on leading agentic harnesses.",
+      "",
+      "Prior handoffs:",
+      "Researcher (completed): LangGraph, AutoGen, CrewAI, LlamaIndex, Semantic Kernel, Haystack, PydanticAI, and managed cloud agents were assessed.",
+      "Critic (completed): Caveat freshness and source coverage.",
+      "",
+      "Produce only the delegated output for this step. Be concrete, cite evidence when available, and name any blocking issue explicitly.",
+    ].join("\n");
+    const report = [
+      "# Report: Best Agentic Harnesses",
+      "",
+      "## Executive summary",
+      "- Best overall production harness: LangGraph.",
+      "- Best RAG-heavy option: LlamaIndex or Haystack.",
+      "- Best multi-agent experimentation option: AutoGen.",
+      "",
+      "## Comparison table",
+      "| Harness | Pros | Cons |",
+      "| --- | --- | --- |",
+      "| LangGraph | Stateful workflows and human-in-the-loop control | More engineering overhead |",
+      "| CrewAI | Fast role/task prototypes | Less control for production state |",
+      "| AutoGen | Strong multi-agent conversation model | Harder to make deterministic |",
+      "",
+      "## Bottom line",
+      "Start with LangGraph unless RAG, Microsoft enterprise fit, or managed cloud alignment is the main constraint.",
+    ].join("\n");
+    const createChatCompletion = vi.fn(
+      async (): Promise<ChatCompletionResponse> => ({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: report,
+            },
+          },
+        ],
+      }),
+    );
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-cowork-delegated-report",
+      turnId: randomUUID(),
+      userMessageId: "msg-cowork-delegated-report",
+      content: delegatedPrompt,
+      mode: "cowork",
+      providerId: "openai",
+      model: "gpt-5.4",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: delegatedPrompt }],
+    });
+
+    expect(result.assistantContent).toContain("# Report: Best Agentic Harnesses");
+    expect(result.assistantContent).toContain("LangGraph");
+    expect(result.assistantContent).not.toContain("No file-specific evidence was retained");
+    expect(result.assistantContent).not.toContain("repo-level claims as unknown");
+    expect(result.turnTrace.completion?.repair?.kind).not.toBe("cowork_contract_normalization");
+  });
+
   it("keeps non-code Prompt Lab memory-only prompts from seeing local file tools", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",
@@ -16370,6 +16445,213 @@ describe("ChatAgentOrchestrator", () => {
     expect(result.assistantContent).toContain("Location assumption");
     expect(result.assistantContent).toContain("Central Library");
     expect(result.assistantContent).toContain("Approval checkpoint");
+  });
+
+  it("uses the delegated Cowork objective instead of role wrapper text for web search", async () => {
+    const delegatedPrompt = [
+      "Delegated role: researcher",
+      "",
+      "Parent objective: I want you to research the best agentic harnesses out there and create a report that shows the pros and cons of each",
+      "",
+      "Plan summary: Plan to research leading agentic harnesses, compare their strengths and weaknesses, critique the evidence, and synthesize a practical report with recommendations.",
+      "",
+      "Current step objective: Identify and profile major open-source agentic harnesses/frameworks, including LangGraph, AutoGen, CrewAI, OpenAI Agents SDK, Semantic Kernel, LlamaIndex Workflows/Agents, Haystack Agents, and Pydantic AI.",
+      "",
+      "Success criteria: Find credible sources and summarize practical strengths and weaknesses.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "## Researcher\n- Found relevant official framework sources.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-delegated-agentic-harness-search",
+        result: {
+          results: [
+            {
+              title: "LangGraph documentation",
+              url: "https://langchain-ai.github.io/langgraph/",
+              snippet: "LangGraph is a framework for building stateful, multi-actor applications with LLMs.",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-delegated-agentic-harness-navigate",
+        result: {
+          url: "https://langchain-ai.github.io/langgraph/",
+          title: "LangGraph documentation",
+          content: "LangGraph is a framework for building stateful, multi-actor applications with LLMs.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-delegated-agentic-harness-search-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-delegated-agentic-harness-search-1",
+      content: delegatedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "live",
+      historyMessages: [{ role: "user", content: delegatedPrompt }],
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: expect.objectContaining({
+          query: expect.stringMatching(/LangGraph.*AutoGen.*CrewAI.*official docs/i),
+        }),
+      }),
+    );
+    expect(String(invokeTool.mock.calls[0]?.[0].args.query ?? "")).not.toMatch(/Delegated role|Parent objective/i);
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.navigate",
+        args: expect.objectContaining({
+          url: "https://langchain-ai.github.io/langgraph/",
+        }),
+      }),
+    );
+  });
+
+  it("clears stale partial-tool-call failures after repaired delegated Cowork research completes", async () => {
+    const delegatedPrompt = [
+      "Delegated role: researcher",
+      "",
+      "Parent objective: I want you to research the best agentic harnesses out there and create a report that shows the pros and cons of each",
+      "",
+      "Current step objective: Identify and profile major open-source agentic harnesses/frameworks, including LangGraph, AutoGen, CrewAI, OpenAI Agents SDK, Semantic Kernel, LlamaIndex Workflows/Agents, Haystack Agents, and Pydantic AI.",
+    ].join("\n");
+    const repairedAnswer = [
+      "## Researcher",
+      "- LangGraph: strong fit for stateful workflows and human-in-the-loop control.",
+      "- AutoGen: strong fit for multi-agent research and conversational collaboration.",
+      "- CrewAI: useful for role-based prototypes, with less control over complex state.",
+      "",
+      "## Evidence Used",
+      "- LangGraph docs and a current framework comparison were available from captured web evidence.",
+    ].join("\n");
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "gpt-5.5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call-incomplete-search",
+                  type: "function",
+                  function: {
+                    name: "browser.search",
+                    arguments: '{"query":"LangGraph AutoGen',
+                  },
+                },
+              ],
+            },
+            finish_reason: "stop",
+          },
+        ],
+      } as ChatCompletionResponse)
+      .mockResolvedValueOnce({
+        model: "gpt-5.5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: repairedAnswer,
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-delegated-agentic-harness-search-partial",
+        result: {
+          results: [
+            {
+              title: "Comparing Open-Source AI Agent Frameworks",
+              url: "https://langfuse.com/blog/2025-03-19-ai-agent-comparison",
+              snippet: "A comparison of LangGraph, AutoGen, CrewAI, and OpenAI agent frameworks.",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-delegated-agentic-harness-navigate-partial",
+        result: {
+          url: "https://langfuse.com/blog/2025-03-19-ai-agent-comparison",
+          title: "Comparing Open-Source AI Agent Frameworks",
+          textSnippet: "LangGraph, AutoGen, CrewAI, and OpenAI Agents SDK are compared.",
+        },
+      });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-delegated-cowork-partial-clear-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-delegated-cowork-partial-clear-1",
+      content: delegatedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "extended",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "live",
+      historyMessages: [{ role: "user", content: delegatedPrompt }],
+    });
+
+    expect(result.assistantContent).toBe(repairedAnswer);
+    expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.turnTrace.completion).toMatchObject({
+      status: "complete",
+      repaired: true,
+      repair: expect.objectContaining({
+        kind: "incomplete_truncated_completion",
+      }),
+    });
   });
 
   it("synthesizes severe-storm cowork web evidence instead of returning evidence scaffolding", async () => {

@@ -1411,7 +1411,12 @@ export class ChatAgentOrchestrator {
         } as ChatCompletionMessage);
 
         if (
-          shouldProactivelyOpenGroundedNewsResult(liveDataQuerySourceContent) &&
+          (shouldProactivelyOpenGroundedNewsResult(liveDataQuerySourceContent) ||
+            shouldProactivelyOpenCoworkResearchResult({
+              mode: input.mode,
+              webMode: input.webMode,
+              content: liveDataQuerySourceContent,
+            })) &&
           canUseNavigateTool &&
           toolRunCount < executionBudget.maxToolRunsPerTurn
         ) {
@@ -2204,16 +2209,15 @@ export class ChatAgentOrchestrator {
       assistantContent = appendToolFailureConstraints(assistantContent, toolRuns, input.content);
     }
     if (
-      normalizationProfile === "prompt_pack_harness" &&
-      finalStatus === "completed" &&
-      !approvalPayload &&
-      completionState.repaired &&
-      finalFailure?.recommendedAction === "continue_from_partial" &&
-      /provider stopped before the answer finished|repair pass is required/i.test(finalFailure.message) &&
-      assistantContent.trim().length > 0 &&
-      !looksLikeRecoverableAssistantFallbackContent(assistantContent) &&
-      !looksLikeDegradedAssistantFallbackContent(assistantContent) &&
-      !looksLikeSerializedToolCallMarkupContent(assistantContent)
+      shouldClearRecoverableCompletionFailure({
+        normalizationProfile,
+        mode: input.mode,
+        finalStatus,
+        approvalPending: Boolean(approvalPayload),
+        completion: completionState,
+        failure: finalFailure,
+        assistantContent,
+      })
     ) {
       finalFailure = undefined;
     }
@@ -3957,6 +3961,42 @@ function finalizeTurnCompletionState(input: {
     };
   }
   return input.completion;
+}
+
+function shouldClearRecoverableCompletionFailure(input: {
+  normalizationProfile: ChatNormalizationProfile;
+  mode: ChatMode;
+  finalStatus: ChatTurnTraceRecord["status"];
+  approvalPending: boolean;
+  completion: NonNullable<ChatTurnTraceRecord["completion"]>;
+  failure: ChatTurnFailureRecord | undefined;
+  assistantContent: string;
+}): boolean {
+  if (
+    input.finalStatus !== "completed" ||
+    input.approvalPending ||
+    !input.completion.repaired ||
+    input.failure?.recommendedAction !== "continue_from_partial"
+  ) {
+    return false;
+  }
+  const clearableSurface = input.normalizationProfile === "prompt_pack_harness" || input.mode === "cowork";
+  if (!clearableSurface) {
+    return false;
+  }
+  const clearableFailure =
+    /provider stopped before the answer finished|repair pass is required|tool calls were fully assembled/i.test(
+      input.failure.message,
+    );
+  if (!clearableFailure) {
+    return false;
+  }
+  return (
+    input.assistantContent.trim().length > 0 &&
+    !looksLikeRecoverableAssistantFallbackContent(input.assistantContent) &&
+    !looksLikeDegradedAssistantFallbackContent(input.assistantContent) &&
+    !looksLikeSerializedToolCallMarkupContent(input.assistantContent)
+  );
 }
 
 function extractPersistableToolArtifactContent(
@@ -6818,6 +6858,13 @@ function derivePromptSpecificWebQuery(content: string): string | undefined {
   if (/\brainy[-\s]+day\b/i.test(normalized) && /\bfamily\s+activity\b/i.test(normalized)) {
     return "public library rainy day family activity storytime official";
   }
+  if (
+    /\bagentic\s+(?:harnesses?|frameworks?)\b/i.test(normalized) ||
+    (/\bagent(?:ic)?\s+(?:frameworks?|orchestration)\b/i.test(normalized) &&
+      /\b(?:LangGraph|AutoGen|CrewAI|Semantic Kernel|LlamaIndex|Haystack|PydanticAI|OpenAI Agents)\b/i.test(normalized))
+  ) {
+    return "LangGraph AutoGen CrewAI OpenAI Agents SDK Semantic Kernel LlamaIndex Haystack PydanticAI official docs agent framework comparison";
+  }
   return undefined;
 }
 
@@ -6918,6 +6965,24 @@ function shouldProactivelyOpenGroundedNewsResult(userContent: string): boolean {
   const hasNewsIntent = /\b(news|headline|headlines)\b/.test(normalized);
   const hasRecencyIntent = /\b(latest|recent|today|yesterday|tonight|this week)\b/.test(normalized);
   return hasNewsIntent && hasRecencyIntent;
+}
+
+function shouldProactivelyOpenCoworkResearchResult(input: {
+  mode: ChatMode;
+  webMode: ChatWebMode;
+  content: string;
+}): boolean {
+  if (input.mode !== "cowork" || input.webMode !== "deep") {
+    return false;
+  }
+  const normalized = extractPrimaryUserTaskContent(input.content).toLowerCase();
+  const hasResearchReportIntent = /\b(research|compare|comparison|report|pros\s+and\s+cons|profile|best)\b/.test(
+    normalized,
+  );
+  const hasFrameworkIntent =
+    /\bagentic\s+(?:harnesses?|frameworks?)\b/.test(normalized) ||
+    /\bagent(?:ic)?\s+(?:frameworks?|orchestration|harnesses?)\b/.test(normalized);
+  return hasResearchReportIntent && hasFrameworkIntent;
 }
 
 function looksLikeContinuationSearchPrompt(value: string): boolean {
@@ -9166,6 +9231,9 @@ function normalizeCoworkRoleContractOutput(input: {
   const requiredRoles = detectCoworkRoleOrder(input.prompt);
   const presentRoles = detectPresentCoworkRoles(trimmed);
   const missingRequiredRoles = requiredRoles.filter((role) => !presentRoles.includes(role));
+  const promptLabHarness = isPromptLabHarnessContent(input.prompt);
+  const explicitRoleContract =
+    promptLabHarness || requestedRoleOrderOnly || promptHasExplicitCoworkRoleContract(input.prompt);
   const requiresSynthesis = coworkContractRequiresSynthesis(input.prompt);
   const wordLimit = extractCoworkWordLimit(input.prompt);
   const hasForbiddenPromptLabExtras =
@@ -9237,8 +9305,8 @@ function normalizeCoworkRoleContractOutput(input: {
     forceDeterministicFallback ||
     hasGenericEvidenceScaffold ||
     hasDuplicatedRoleBodies ||
-    missingRequiredRoles.length > 0 ||
-    (requiresSynthesis && requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed)) ||
+    (explicitRoleContract && missingRequiredRoles.length > 0) ||
+    (explicitRoleContract && requiresSynthesis && requiredRoles.length > 0 && !hasCoworkSynthesisSection(trimmed)) ||
     hasForbiddenPromptLabExtras ||
     hasIncompleteTail;
   if (!shouldRepair) {
@@ -9252,6 +9320,20 @@ function normalizeCoworkRoleContractOutput(input: {
   });
   const normalizedResponse = requestedRoleOrderOnly ? normalizeRequestedRoleOnlyCoworkHeadings(repaired) : repaired;
   return wordLimit ? compactCoworkOutputToWordLimit(normalizedResponse, wordLimit) : normalizedResponse;
+}
+
+function promptHasExplicitCoworkRoleContract(prompt: string): boolean {
+  const normalized = prompt.toLowerCase().replace(/\s+/g, " ");
+  if (/\bdelegated role:\s*(?:researcher|critic|synthesizer|planner|coder|reviewer|qa)\b/.test(normalized)) {
+    return false;
+  }
+  return (
+    /\b(?:use|coordinate|produce|include)\s+(?:\w+\s+){0,4}(?:roles?|role-labeled sections?|sections?)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:roles?|sections?)\s+in\s+(?:this\s+)?(?:exact\s+)?order\b/.test(normalized) ||
+    /\brequired role order\b/.test(normalized)
+  );
 }
 
 function shouldForceDeterministicCoworkFallback(prompt: string): boolean {
@@ -9690,7 +9772,29 @@ function extractPrimaryUserTaskContent(content: string): string {
   if (userTaskMatch?.[1]) {
     return userTaskMatch[1].trim();
   }
+  const delegatedTask = extractDelegatedCoworkTaskContent(trimmed);
+  if (delegatedTask) {
+    return delegatedTask;
+  }
   return trimmed;
+}
+
+function extractDelegatedCoworkTaskContent(content: string): string | undefined {
+  if (!/^\s*Delegated role:/i.test(content)) {
+    return undefined;
+  }
+  const readLabeledLine = (label: string): string | undefined => {
+    const match = content.match(new RegExp(`(?:^|\\n)${label}:\\s*([^\\n]+)`, "i"));
+    const value = match?.[1]?.trim();
+    return value && value.length >= 3 ? value : undefined;
+  };
+  const currentObjective = readLabeledLine("Current step objective");
+  const parentObjective = readLabeledLine("Parent objective");
+  const successCriteria = readLabeledLine("Success criteria");
+  const pieces = [currentObjective, parentObjective, successCriteria].filter((value): value is string =>
+    Boolean(value),
+  );
+  return pieces.length > 0 ? pieces.join(" ") : undefined;
 }
 
 function extractPromptLabQuotedUserAsk(content: string): string | undefined {
