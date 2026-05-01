@@ -22,6 +22,8 @@ interface StepExecutionContext {
 }
 
 const DEFAULT_ORCHESTRATION_CONCURRENCY = 4;
+const PRIOR_OUTPUT_EXCERPT_CHAR_LIMIT = 3_000;
+const PRIOR_OUTPUT_TOTAL_CHAR_LIMIT = 16_000;
 
 export async function executeOrchestrationPlan(input: {
   task: OrchestrationTaskInput;
@@ -60,15 +62,27 @@ export async function executeOrchestrationPlan(input: {
     }
   }
 
-  const finalStep = selectFinalStep(input.task.mode, input.plan.workflowTemplate, completedSteps);
-  const finalOutput = buildFinalOutput(input.task.mode, completedSteps, finalStep);
+  const selectedFinalStep = selectFinalStep(input.task.mode, input.plan.workflowTemplate, completedSteps);
+  const repairedFinal = await repairFinalOutputIfNeeded({
+    task: input.task,
+    plan: input.plan,
+    callbacks: input.callbacks,
+    steps: completedSteps,
+    finalStep: selectedFinalStep,
+    initialOutput: buildFinalOutput(input.task.mode, completedSteps, selectedFinalStep),
+  });
+  const finalOutput = repairedFinal.output;
   const finalSummary = summarizeOutput(finalOutput);
-  const citations = dedupeCitations(completedSteps.flatMap((step) => step.citations));
+  const citations = dedupeCitations([
+    ...completedSteps.flatMap((step) => step.citations),
+    ...(repairedFinal.finalStep?.citations ?? []),
+  ]);
 
   return {
     finalOutput,
     finalSummary,
-    finalStep,
+    finalStep: repairedFinal.finalStep,
+    integritySignals: repairedFinal.integritySignals,
     citations,
     routeDecision: input.plan.routeDecision,
     stepResults: completedSteps,
@@ -144,6 +158,7 @@ async function executeStep(input: {
     return {
       stepId: input.step.stepId,
       role: input.step.role,
+      label: input.step.label,
       index: input.stepIndex,
       specialistCandidateId: input.step.specialistCandidate?.candidateId,
       specialistTitle: input.step.specialistCandidate?.title,
@@ -193,6 +208,7 @@ async function executeStep(input: {
     return {
       stepId: input.step.stepId,
       role: input.step.role,
+      label: input.step.label,
       index: input.stepIndex,
       specialistCandidateId: input.step.specialistCandidate?.candidateId,
       specialistTitle: input.step.specialistCandidate?.title,
@@ -213,6 +229,7 @@ async function executeStep(input: {
     return {
       stepId: input.step.stepId,
       role: input.step.role,
+      label: input.step.label,
       index: input.stepIndex,
       specialistCandidateId: input.step.specialistCandidate?.candidateId,
       specialistTitle: input.step.specialistCandidate?.title,
@@ -243,11 +260,11 @@ function buildStepMessages(input: {
     .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
     .join("\n");
   const priorSummaries = input.priorSteps
-    .map((step) => [
-      `${toTitleCase(step.role)} (${step.status})`,
-      step.summary ?? step.output ?? step.error ?? "No summary available.",
-    ].join(": "))
+    .map((step) => [`${formatStepTitle(step)} (${step.status})`, step.summary ?? step.output ?? step.error ?? "No summary available."].join(": "))
     .join("\n");
+  const priorHandoffs = shouldUseExpandedPriorOutputs(input.step.role)
+    ? buildPriorOutputHandoffs(input.priorSteps)
+    : priorSummaries;
   const roleInstruction = buildRoleInstruction(input.task.mode, input.step.role, input.plan.workflowTemplate);
   const specialistOverlay = input.specialistCandidate
     ? [
@@ -270,7 +287,7 @@ function buildStepMessages(input: {
       ? `Depends on steps: ${input.step.dependsOnStepIds.join(", ")}`
       : undefined,
     conversationContext ? `Conversation context:\n${conversationContext}` : undefined,
-    priorSummaries ? `Prior handoffs:\n${priorSummaries}` : undefined,
+    priorHandoffs ? `Prior handoffs:\n${priorHandoffs}` : undefined,
     specialistOverlay,
     buildParallelHint(input.step.role, input.stepIndex, input.plan),
     "Return concise, high-signal output suitable for handoff to the next role.",
@@ -304,7 +321,15 @@ function buildRoleInstruction(mode: ChatMode, role: OrchestrationRole, workflowT
       case "worker":
         return "Act as a worker. Execute the assigned portion directly and return actionable output.";
       case "synthesizer":
-        return "Act as a synthesizer. Merge previous outputs into one cohesive response, preserving nuance and uncertainty. If upstream handoffs are missing, failed, or unsupported, explicitly say the workflow is blocked instead of inventing synthesis.";
+        return workflowTemplate === "cowork.workstreams.synthesize"
+          ? [
+              "Act as the final Cowork synthesizer. Merge every labeled workstream into one cohesive, user-facing response.",
+              "Include each requested label as a visible section, preserve blocked or missing workstreams, and end with the requested final deliverable.",
+              "For planning/advice tasks, use task-shaped titles such as Final Host Plan, Dinner Party Plan, or Ready-to-run Checklist.",
+              "Avoid internal workflow wording such as implemented, review-adjusted, workflow completed, or final implementation summary unless the user explicitly asked for implementation status.",
+              "For party or event planning, include practical quantities where reasonable, timing, fallback options, and a final checklist.",
+            ].join(" ")
+          : "Act as a synthesizer. Merge previous outputs into one cohesive response, preserving nuance and uncertainty. If upstream handoffs are missing, failed, or unsupported, explicitly say the workflow is blocked instead of inventing synthesis.";
       case "critic":
         return "Act as a critic. Identify weaknesses, gaps, contradictions, and missing evidence. If there is no substantive upstream output to critique, say the workflow is blocked instead of inventing missing context.";
       case "coder":
@@ -399,6 +424,191 @@ function buildFinalOutput(
     failureLines.length > 0 ? "Primary failures:" : undefined,
     ...failureLines,
   ].filter(Boolean).join("\n");
+}
+
+async function repairFinalOutputIfNeeded(input: {
+  task: OrchestrationTaskInput;
+  plan: OrchestrationPlan;
+  callbacks: OrchestrationExecutionCallbacks;
+  steps: OrchestrationStepExecutionResult[];
+  finalStep?: OrchestrationStepExecutionResult;
+  initialOutput: string;
+}): Promise<{
+  output: string;
+  finalStep?: OrchestrationStepExecutionResult;
+  integritySignals?: string[];
+}> {
+  const requiredLabels = getRequiredWorkstreamLabels(input.plan);
+  if (requiredLabels.length === 0 || hasRequiredLabels(input.initialOutput, requiredLabels)) {
+    return { output: input.initialOutput, finalStep: input.finalStep };
+  }
+
+  const integritySignals = ["orchestration_final_synthesis_missing_required_sections"];
+  const repaired = await tryRepairFinalSynthesis(input);
+  if (repaired && hasRequiredLabels(repaired.output, requiredLabels)) {
+    return {
+      output: repaired.output,
+      finalStep: repaired.finalStep,
+      integritySignals: [...integritySignals, "orchestration_final_synthesis_repaired"],
+    };
+  }
+
+  return {
+    output: buildIncompleteSynthesisFallback({
+      objective: input.task.objective,
+      requiredLabels,
+      steps: input.steps,
+      initialOutput: input.initialOutput,
+    }),
+    finalStep: input.finalStep,
+    integritySignals: [...integritySignals, "orchestration_final_synthesis_fallback"],
+  };
+}
+
+async function tryRepairFinalSynthesis(input: {
+  task: OrchestrationTaskInput;
+  plan: OrchestrationPlan;
+  callbacks: OrchestrationExecutionCallbacks;
+  steps: OrchestrationStepExecutionResult[];
+  finalStep?: OrchestrationStepExecutionResult;
+  initialOutput: string;
+}): Promise<{ output: string; finalStep: OrchestrationStepExecutionResult } | undefined> {
+  const finalStep = input.finalStep;
+  if (!finalStep) {
+    return undefined;
+  }
+  try {
+    const response = await input.callbacks.createChatCompletion({
+      providerId: finalStep.providerId,
+      model: finalStep.model,
+      stream: false,
+      memory: {
+        enabled: input.task.prefs.memoryMode !== "off",
+        mode: input.task.prefs.memoryMode === "off" ? "off" : "qmd",
+        sessionId: input.task.sessionId,
+      },
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Repair the final Cowork synthesis.",
+            "Use only the labeled prior handoffs below.",
+            "Include every required workstream label as a visible section.",
+            "End with the requested final deliverable.",
+            "Use polished user-facing wording; avoid internal implementation/status phrases unless the user explicitly asked for implementation status.",
+          ].join("\n"),
+        },
+        {
+          role: "user",
+          content: [
+            `Objective: ${input.task.objective}`,
+            `Required workstreams: ${getRequiredWorkstreamLabels(input.plan).join(", ")}`,
+            `Previous final output missed required sections:\n${input.initialOutput}`,
+            `Prior handoffs:\n${buildPriorOutputHandoffs(input.steps)}`,
+          ].join("\n\n"),
+        },
+      ],
+    });
+    const output = extractCompletionText(response).trim();
+    if (!output) {
+      return undefined;
+    }
+    return {
+      output,
+      finalStep: {
+        ...finalStep,
+        output,
+        summary: summarizeOutput(output),
+        model: response.model ?? finalStep.model,
+        citations: dedupeCitations([...finalStep.citations, ...readCompletionCitations(response)]),
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function getRequiredWorkstreamLabels(plan: OrchestrationPlan): string[] {
+  if (plan.workflowTemplate !== "cowork.workstreams.synthesize") {
+    return [];
+  }
+  return plan.steps
+    .filter((step) => step.role !== "synthesizer" && step.label?.trim())
+    .map((step) => step.label!.trim());
+}
+
+function hasRequiredLabels(output: string, requiredLabels: string[]): boolean {
+  return requiredLabels.every((label) => new RegExp(`(?:^|\\n)\\s*#{0,6}\\s*${escapeRegExp(label)}\\b`, "i").test(output));
+}
+
+function buildIncompleteSynthesisFallback(input: {
+  objective: string;
+  requiredLabels: string[];
+  steps: OrchestrationStepExecutionResult[];
+  initialOutput: string;
+}): string {
+  const lines = [
+    "## Synthesis Incomplete",
+    "",
+    "The orchestrated workstreams completed, but the final synthesis did not include every required section. I am preserving the completed work instead of pretending the merge succeeded.",
+    "",
+    `Objective: ${input.objective}`,
+    "",
+  ];
+  for (const label of input.requiredLabels) {
+    const step = input.steps.find((candidate) => candidate.label?.toLowerCase() === label.toLowerCase());
+    lines.push(`## ${label}`);
+    lines.push("");
+    if (step?.output?.trim()) {
+      lines.push(step.output.trim());
+    } else if (step?.error?.trim()) {
+      lines.push(`Blocked: ${step.error.trim()}`);
+    } else {
+      lines.push("Missing: this workstream did not produce a completed handoff.");
+    }
+    lines.push("");
+  }
+  lines.push("## Final Deliverable");
+  lines.push("");
+  lines.push("Use the sections above as the current handoff. Rerun synthesis after repairing any missing workstream if a polished single final answer is required.");
+  if (input.initialOutput.trim()) {
+    lines.push("");
+    lines.push("## Incomplete Final Draft");
+    lines.push("");
+    lines.push(input.initialOutput.trim());
+  }
+  return lines.join("\n");
+}
+
+function shouldUseExpandedPriorOutputs(role: OrchestrationRole): boolean {
+  return role === "synthesizer" || role === "reviewer" || role === "critic" || role === "qa-validator";
+}
+
+function buildPriorOutputHandoffs(steps: OrchestrationStepExecutionResult[]): string {
+  let remaining = PRIOR_OUTPUT_TOTAL_CHAR_LIMIT;
+  const sections: string[] = [];
+  for (const step of steps) {
+    if (remaining <= 0) {
+      break;
+    }
+    const raw = step.output?.trim() || step.error?.trim() || step.summary?.trim() || "No handoff provided.";
+    const excerpt = raw.slice(0, Math.min(PRIOR_OUTPUT_EXCERPT_CHAR_LIMIT, remaining));
+    remaining -= excerpt.length;
+    sections.push([
+      `### ${formatStepTitle(step)} (${step.status})`,
+      excerpt,
+      raw.length > excerpt.length ? "[truncated]" : undefined,
+    ].filter(Boolean).join("\n"));
+  }
+  return sections.join("\n\n");
+}
+
+function formatStepTitle(step: Pick<OrchestrationStepExecutionResult, "label" | "role">): string {
+  return step.label?.trim() || toTitleCase(step.role);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function summarizeOutput(content: string): string {

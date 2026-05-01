@@ -526,7 +526,8 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
       expectedOutput: planned.expectedOutput,
       parallelizable: planned.parallelizable,
       dependsOnStepIds: planned.dependsOnStepIds,
-      delegatedRole: planned.delegatedRole,
+      delegatedRole: planned.delegatedRole ?? step.delegatedRole,
+      label: step.label,
     };
   });
   return {
@@ -536,9 +537,9 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
     advisoryOnly: draft.advisoryOnly,
     routeDecision: {
       ...templatePlan.routeDecision,
-      selectedRoles: steps.map((step) => step.role),
+      selectedRoles: steps.map((step) => step.label ?? step.role),
       selectedProviders: steps.map((step) => ({
-        role: step.role,
+        role: step.label ?? step.role,
         providerId: step.providerId,
         model: step.model,
       })),

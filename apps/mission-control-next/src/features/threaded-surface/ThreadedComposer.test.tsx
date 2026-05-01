@@ -38,7 +38,7 @@ function buildMarkup(overrides: Partial<any> = {}) {
     onRemoveQueuedItem: vi.fn(),
     onCancelEdit: vi.fn(),
     onDismissError: vi.fn(),
-    onTurnOffPlanningMode: vi.fn(),
+    onTogglePlanningMode: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
     onRetryTurn: vi.fn(),
@@ -125,12 +125,25 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("No active provider configured.");
   });
 
+  it("shows a default planning toggle when planning mode is off", () => {
+    const markup = buildMarkup({
+      planningMode: "off",
+    });
+
+    expect(markup).toContain("Shift+Tab");
+    expect(markup).toContain("Plan");
+    expect(markup).toContain('aria-pressed="false"');
+    expect(markup).not.toContain("Planning mode is on");
+  });
+
   it("shows an explicit action to leave planning mode", () => {
     const markup = buildMarkup({
       planningMode: "advisory",
     });
 
     expect(markup).toContain("Planning mode is on");
-    expect(markup).toContain("Turn off");
+    expect(markup).toContain("Turn planning off");
+    expect(markup).toContain("Plan on");
+    expect(markup).toContain('aria-pressed="true"');
   });
 });

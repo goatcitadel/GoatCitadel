@@ -8,7 +8,7 @@ export const COWORK_MODE_POLICY: ModeOrchestrationPolicy = {
   maxVisibleVisibility: "explicit",
   defaultVisibility: preset.defaultPrefs.orchestrationVisibility ?? "expandable",
   defaultIntensity: preset.defaultPrefs.orchestrationIntensity ?? "balanced",
-  maxSteps: 5,
+  maxSteps: 7,
   maxParallelAgents: 3,
   allowHiddenOrchestration: false,
   allowParallelWorkers: true,

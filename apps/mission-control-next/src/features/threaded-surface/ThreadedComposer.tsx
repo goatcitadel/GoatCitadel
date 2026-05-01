@@ -147,6 +147,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       : props.mode === "cowork"
         ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
         : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
+  const planningEnabled = props.planningMode === "advisory";
 
   return (
     <div className="mc-next-composer">
@@ -169,8 +170,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       {props.planningMode === "advisory" ? (
         <div className="mc-next-composer-banner planning">
           Planning mode is on. GoatCitadel will respond with a plan/spec instead of executing tool work automatically.
-          <button type="button" className="mc-next-composer-inline-button" onClick={props.onTurnOffPlanningMode}>
-            Turn off
+          <button type="button" className="mc-next-composer-inline-button" onClick={props.onTogglePlanningMode}>
+            Turn planning off
           </button>
         </div>
       ) : null}
@@ -375,6 +376,15 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             </div>
           ) : null}
           <div className="mc-next-composer-multimodal-row">
+            <button
+              type="button"
+              className={`mc-next-composer-inline-button${planningEnabled ? " active" : ""}`}
+              aria-pressed={planningEnabled}
+              title="Shift+Tab"
+              onClick={props.onTogglePlanningMode}
+            >
+              {planningEnabled ? "Plan on" : "Plan"}
+            </button>
             <button
               type="button"
               className={`mc-next-composer-inline-button${props.voiceTalkActive ? " active" : ""}`}

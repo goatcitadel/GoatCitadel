@@ -826,6 +826,7 @@ export interface ChatOrchestrationRouteDecision {
 export interface ChatOrchestrationStepSummary {
   stepId: string;
   role: string;
+  label?: string;
   index: number;
   status: ChatDelegationStepStatus;
   specialistCandidateId?: string;
@@ -848,6 +849,7 @@ export interface ChatOrchestrationSummary {
   modePolicy: ChatMode;
   visibility: ChatOrchestrationVisibility;
   finalSummary?: string;
+  integritySignals?: string[];
   routeDecision: ChatOrchestrationRouteDecision;
   steps: ChatOrchestrationStepSummary[];
 }
@@ -1012,6 +1014,7 @@ export interface ChatDelegationStepRecord {
   stepId: string;
   runId: string;
   role: string;
+  label?: string;
   status: ChatDelegationStepStatus;
   index: number;
   providerId?: string;

@@ -108,6 +108,62 @@ describe("streamPreparedAgentChatTurn", () => {
       }),
     );
   });
+
+  it("streams orchestration progress and final synthesized deltas before message_done", async () => {
+    const host = createHost();
+    host.resolvePreparedTurnOrchestration = vi.fn(async () => createModeOrchestrationResolution()) as never;
+    host.createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [{ index: 0, message: { content: "Planner output" }, finish_reason: "stop" }],
+      })
+      .mockResolvedValueOnce({
+        model: "gpt-5.4",
+        choices: [
+          {
+            index: 0,
+            message: { content: "## Dinner Party Plan\n\nFinal host-ready checklist." },
+            finish_reason: "stop",
+          },
+        ],
+      }) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "plan dinner", mode: "cowork" } as never,
+      createPreparedTurn({ mode: "cowork" }),
+      "chat_thread_turn_appended",
+      createModeOrchestrationResolution(),
+    )) {
+      chunks.push(chunk);
+    }
+
+    const messageDoneIndex = chunks.findIndex((chunk) => chunk.type === "message_done");
+    const progressTraceIndex = chunks.findIndex(
+      (chunk) => chunk.type === "trace_update" && Boolean(chunk.trace.orchestration?.steps.length),
+    );
+    const deltaIndex = chunks.findIndex((chunk) => chunk.type === "delta");
+
+    expect(progressTraceIndex).toBeGreaterThan(0);
+    expect(progressTraceIndex).toBeLessThan(messageDoneIndex);
+    expect(deltaIndex).toBeGreaterThan(progressTraceIndex);
+    expect(deltaIndex).toBeLessThan(messageDoneIndex);
+    expect(chunks[deltaIndex]).toEqual(
+      expect.objectContaining({
+        type: "delta",
+        delta: "## Dinner Party Plan\n\nFinal host-ready checklist.",
+      }),
+    );
+    expect(chunks[messageDoneIndex]).toEqual(
+      expect.objectContaining({
+        type: "message_done",
+        content: "## Dinner Party Plan\n\nFinal host-ready checklist.",
+      }),
+    );
+  });
 });
 
 function createHost(): ChatTurnStreamHost & {
@@ -147,6 +203,19 @@ function createHost(): ChatTurnStreamHost & {
   return {
     storage: {
       chatDelegationSteps: {
+        create: vi.fn((input) => ({
+          ...input,
+          status: input.status ?? "pending",
+          startedAt: input.startedAt ?? "2026-04-18T00:00:00.000Z",
+        })),
+        patch: vi.fn((stepId, input) => ({
+          stepId,
+          runId: "run-1",
+          role: "synthesizer",
+          index: 1,
+          startedAt: "2026-04-18T00:00:00.000Z",
+          ...input,
+        })),
         listByRun: vi.fn(() => []),
       },
       chatToolRuns: {
@@ -154,9 +223,13 @@ function createHost(): ChatTurnStreamHost & {
         listByTurnIds: vi.fn(() => new Map()),
       },
       chatExecutionPlans: {
-        create: vi.fn(),
+        create: vi.fn((input) => ({
+          planId: "plan-1",
+          ...input,
+          steps: input.steps ?? [],
+        })),
         patch: vi.fn(),
-        get: vi.fn(),
+        get: vi.fn(() => ({ planId: "plan-1", steps: [] })),
       },
       chatDelegationRuns: {
         create: vi.fn(),
@@ -181,7 +254,31 @@ function createHost(): ChatTurnStreamHost & {
     resolvePreparedTurnOrchestration: vi.fn(async () => undefined),
     createChatCompletion: vi.fn(),
     recordDevDiagnostic: vi.fn(),
-    buildChatOrchestrationSummary: vi.fn(),
+    buildChatOrchestrationSummary: vi.fn((input) => ({
+      runId: input.runId,
+      objective: input.objective,
+      workflowTemplate: input.routeDecision.workflowTemplate,
+      status: input.finalized ? "completed" : "running",
+      modePolicy: input.modePolicy,
+      visibility: input.routeDecision.visibility,
+      finalSummary: input.finalSummary,
+      integritySignals: input.integritySignals,
+      routeDecision: input.routeDecision,
+      steps: input.stepResults.map((step: any) => ({
+        stepId: step.stepId,
+        role: step.role,
+        label: step.label,
+        index: step.index,
+        status: step.status,
+        providerId: step.providerId,
+        model: step.model,
+        startedAt: step.startedAt,
+        finishedAt: step.finishedAt,
+        durationMs: step.durationMs,
+        summary: step.summary,
+        error: step.error,
+      })),
+    })),
     createChatSession: vi.fn(),
     inheritDelegatedSessionToolGrants: vi.fn(),
     updateChatSessionPrefs: vi.fn(),
@@ -212,7 +309,8 @@ function createHost(): ChatTurnStreamHost & {
   };
 }
 
-function createPreparedTurn() {
+function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code" } = {}) {
+  const mode = overrides.mode ?? "chat";
   return {
     session: {
       sessionId: "session-1",
@@ -229,13 +327,13 @@ function createPreparedTurn() {
       model: "gpt-5.4",
     },
     normalized: {
-      mode: "chat",
+      mode,
       webMode: "off",
       memoryMode: "off",
       thinkingLevel: "standard",
     },
     prefs: {
-      mode: "chat",
+      mode,
       providerId: "openai",
       model: "gpt-5.4",
       webMode: "off",
@@ -254,6 +352,90 @@ function createPreparedTurn() {
       globalFilesUsed: [],
       workspaceFilesUsed: [],
       truncated: false,
+    },
+  } as never;
+}
+
+function createModeOrchestrationResolution() {
+  const routeDecision = {
+    modePolicy: "cowork",
+    workflowTemplate: "cowork.plan.work.synthesize",
+    hidden: false,
+    visibility: "explicit",
+    intensity: "balanced",
+    providerPreference: "balanced",
+    reviewDepth: "standard",
+    parallelism: "sequential",
+    selectedRoles: ["Planner", "Synthesis"],
+    selectedProviders: [],
+    triggerReason: "test",
+  };
+  const steps = [
+    {
+      stepId: "orch-step-1",
+      index: 0,
+      role: "planner",
+      stage: 0,
+      objective: "Plan the dinner party.",
+      parallelizable: false,
+      providerId: "openai",
+      model: "gpt-5.4",
+    },
+    {
+      stepId: "orch-step-2",
+      index: 1,
+      role: "synthesizer",
+      label: "Synthesis",
+      stage: 1,
+      objective: "Synthesize the final answer.",
+      parallelizable: false,
+      dependsOnStepIds: ["orch-step-1"],
+      providerId: "openai",
+      model: "gpt-5.4",
+    },
+  ];
+  return {
+    routerInput: {
+      task: {
+        sessionId: "session-1",
+        workspaceId: "default",
+        mode: "cowork",
+        objective: "plan dinner",
+        prefs: {
+          mode: "cowork",
+          providerId: "openai",
+          model: "gpt-5.4",
+          webMode: "off",
+          memoryMode: "off",
+          thinkingLevel: "standard",
+        },
+        conversation: [],
+        historyMessages: [],
+      },
+      runtime: {},
+      capabilities: [],
+      policy: {},
+    },
+    orchestrationPlan: {
+      workflowTemplate: "cowork.plan.work.synthesize",
+      routeDecision,
+      summary: "Dinner planning workflow.",
+      source: "workflow_template",
+      steps,
+    },
+    executionPlanDraft: {
+      source: "workflow_template",
+      advisoryOnly: false,
+      objective: "plan dinner",
+      summary: "Dinner planning workflow.",
+      steps: steps.map((step) => ({
+        stepId: step.stepId,
+        index: step.index,
+        objective: step.objective,
+        parallelizable: step.parallelizable,
+        dependsOnStepIds: step.dependsOnStepIds,
+        status: "pending",
+      })),
     },
   } as never;
 }

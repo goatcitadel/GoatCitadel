@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
@@ -300,10 +300,13 @@ function ThreadNotices({ notices }: { notices: MissionThreadedActiveSessionSurfa
 function ThreadDelegationSummary({
   delegationRun,
   mode,
+  onOpenRunDetails,
 }: {
   delegationRun: MissionThreadedActiveSessionSurfaceProps["delegationRun"];
   mode: ChatMode;
+  onOpenRunDetails: MissionThreadedActiveSessionSurfaceProps["onOpenRunDetails"];
 }) {
+  const [coworkExpanded, setCoworkExpanded] = useState(false);
   if (!delegationRun) {
     return null;
   }
@@ -311,6 +314,85 @@ function ThreadDelegationSummary({
   const failedCount = delegationRun.steps.filter((step) => step.status === "failed").length;
   const skippedCount = delegationRun.steps.filter((step) => step.status === "skipped").length;
   const runningCount = delegationRun.steps.filter((step) => step.status === "running").length;
+  const isCowork = mode === "cowork";
+  const currentStep =
+    delegationRun.steps.find((step) => step.status === "running") ??
+    [...delegationRun.steps].reverse().find((step) => step.status === "completed" || step.status === "failed") ??
+    delegationRun.steps[0];
+  const formatStepLabel = (step: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number]) =>
+    step.label?.trim() || toTitleCase(step.role);
+  const countsLine = `Completed ${completedCount} · Running ${runningCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
+
+  if (isCowork) {
+    return (
+      <section className="mc-next-thread-turn delegation compact">
+        <details open={coworkExpanded} onToggle={(event) => setCoworkExpanded(event.currentTarget.open)}>
+          <summary>
+            <div className="mc-next-thread-strip">
+              <StatusChip
+                tone={
+                  delegationRun.status === "failed"
+                    ? "critical"
+                    : delegationRun.status === "partial"
+                      ? "warning"
+                      : delegationRun.status === "completed"
+                        ? "success"
+                        : "warning"
+                }
+              >
+                {delegationRun.status}
+              </StatusChip>
+              <span>Cowork activity</span>
+              <span>{countsLine}</span>
+              {currentStep ? <span>Now: {formatStepLabel(currentStep)}</span> : null}
+              {delegationRun.attachedTurnId ? (
+                <button
+                  type="button"
+                  className="mc-next-thread-inline-button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenRunDetails(delegationRun.attachedTurnId!);
+                  }}
+                >
+                  Open details
+                </button>
+              ) : null}
+            </div>
+          </summary>
+          <div className="mc-next-thread-bubble assistant">
+            <p className="mc-next-thread-meta">
+              <strong>{delegationRun.label}</strong> · {delegationRun.mode}
+            </p>
+            <p>{delegationRun.objective}</p>
+            <ol className="mc-next-thread-step-list">
+              {delegationRun.steps.map((step) => (
+                <li key={step.stepId}>
+                  <div className="mc-next-thread-step-head">
+                    <strong>{formatStepLabel(step)}</strong>
+                    <span>{step.status}</span>
+                  </div>
+                  {step.summary ? <p>{step.summary}</p> : null}
+                  {step.error ? <p>{step.error}</p> : null}
+                  {step.output ? (
+                    <details className="mc-next-thread-step-output-details">
+                      <summary>Show subagent output</summary>
+                      <AssistantMessageRenderer
+                        role="assistant"
+                        content={step.output}
+                        className="mc-next-thread-step-output"
+                      />
+                    </details>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+            {delegationRun.stitchedOutput ? <p>Final synthesized answer is shown in the main assistant message.</p> : null}
+          </div>
+        </details>
+      </section>
+    );
+  }
 
   return (
     <section className="mc-next-thread-turn delegation">
@@ -329,7 +411,7 @@ function ThreadDelegationSummary({
           {delegationRun.status}
         </StatusChip>
         <span>Delegation run</span>
-        {mode !== "cowork" && delegationRun.runId ? <span>{delegationRun.runId}</span> : null}
+        {delegationRun.runId ? <span>{delegationRun.runId}</span> : null}
       </div>
       <div className="mc-next-thread-bubble assistant">
         <p className="mc-next-thread-meta">
@@ -343,7 +425,7 @@ function ThreadDelegationSummary({
           {delegationRun.steps.map((step) => (
             <li key={step.stepId}>
               <div className="mc-next-thread-step-head">
-                <strong>{toTitleCase(step.role)}</strong>
+                <strong>{step.label?.trim() || toTitleCase(step.role)}</strong>
                 <span>{step.status}</span>
               </div>
               {step.output ? (
@@ -417,7 +499,11 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
               error={props.streamError}
             />
             <div className="mc-next-thread-list">
-              <ThreadDelegationSummary delegationRun={props.delegationRun ?? null} mode={props.mode} />
+              <ThreadDelegationSummary
+                delegationRun={props.delegationRun ?? null}
+                mode={props.mode}
+                onOpenRunDetails={props.onOpenRunDetails}
+              />
               {props.thread.turns.map((turn) => (
                 <ThreadTurnCard
                   key={turn.turnId}

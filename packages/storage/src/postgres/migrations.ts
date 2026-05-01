@@ -513,6 +513,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS reuse_reason TEXT;
 
       ALTER TABLE chat_delegation_steps
+        ADD COLUMN IF NOT EXISTS label TEXT,
         ADD COLUMN IF NOT EXISTS durable_run_id TEXT;
     `,
   },

@@ -1376,6 +1376,7 @@ function createChatModeOrchestrationFoundationSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "final_summary", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "provider_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "model", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "label", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "summary", "TEXT");
 }
 
@@ -1459,6 +1460,7 @@ function createChatPlansAndSummariesSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_tool_runs", "reuse_reason", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_runs", "execution_plan_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "failure_guidance", "TEXT");
+  addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "label", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "durable_run_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "child_session_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_delegation_steps", "child_turn_id", "TEXT");
@@ -2184,6 +2186,7 @@ function createPromptPackReadinessSchema(db: DatabaseSync): void {
       step_id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL,
       role TEXT NOT NULL,
+      label TEXT,
       step_index INTEGER NOT NULL,
       status TEXT NOT NULL,
       provider_id TEXT,

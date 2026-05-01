@@ -508,6 +508,36 @@
   background: color-mix(in oklab, var(--mc-area-color) 8%, var(--card));
 }
 
+.mc-next-thread-turn.delegation.compact {
+  padding: 0.7rem;
+}
+
+.mc-next-thread-turn.delegation.compact > details {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-thread-step-output-details {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mc-next-thread-step-output-details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
 .mc-next-thread-turn-surface,
 .mc-next-thread-bubble,
 .mc-next-context-card,

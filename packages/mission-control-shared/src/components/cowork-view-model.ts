@@ -415,7 +415,7 @@ export function deriveCoworkRunViewModel(input: {
     [
       ...roleSteps.map((step) => ({
         id: `role-${step.stepId}`,
-        title: step.role,
+        title: step.label ?? step.role,
         status: humanizeStatus(step.status),
         meta: [step.providerId ?? "provider auto", step.model]
           .filter((value): value is string => Boolean(value))
@@ -424,7 +424,7 @@ export function deriveCoworkRunViewModel(input: {
       })),
       ...delegationSteps.map((step) => ({
         id: `delegation-${step.stepId}`,
-        title: `${step.role} delegation`,
+        title: `${step.label ?? step.role} delegation`,
         status: humanizeStatus(step.status),
         meta: step.output ? "Output ready in run details" : undefined,
         note: normalizeSummary(step.summary ?? step.output ?? step.error, 120),

@@ -1067,11 +1067,13 @@ export interface ChatDelegationStreamChunk {
     stepId: string;
     runId: string;
     role: string;
+    label?: string;
     status: string;
     index: number;
     startedAt: string;
     finishedAt?: string;
     durationMs?: number;
+    summary?: string;
     output?: string;
     error?: string;
   };

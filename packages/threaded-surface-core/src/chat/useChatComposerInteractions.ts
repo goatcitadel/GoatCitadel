@@ -3,6 +3,16 @@ import type { ChatAttachmentRecord, ChatMode, ChatSessionPrefsPatch, ChatSession
 import { uploadChatAttachment } from "@goatcitadel/mission-control-shared/api/client";
 import type { CommandSuggestionItem } from "../chat-command-suggestions";
 
+export function isPlanningModeToggleShortcut(input: {
+  key: string;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+}): boolean {
+  return input.key === "Tab" && Boolean(input.shiftKey) && !input.altKey && !input.ctrlKey && !input.metaKey;
+}
+
 export function useChatComposerInteractions(input: {
   draft: string;
   commandSuggestions: CommandSuggestionItem[];
@@ -16,6 +26,7 @@ export function useChatComposerInteractions(input: {
   handleArchiveWorkspaceMissionChats: () => Promise<void>;
   handleRunQuickResearch: () => Promise<void>;
   handlePrefPatch: (patch: ChatSessionPrefsPatch) => Promise<void>;
+  handleTogglePlanningMode: () => void;
   handleRevealSelectedTurnDetails: () => void;
   confirmCapabilitySuggestionAction: () => Promise<void>;
   confirmDeleteSession: () => Promise<void>;
@@ -41,6 +52,7 @@ export function useChatComposerInteractions(input: {
     handleArchiveWorkspaceMissionChats,
     handleRunQuickResearch: runQuickResearch,
     handlePrefPatch,
+    handleTogglePlanningMode,
     handleRevealSelectedTurnDetails,
     confirmCapabilitySuggestionAction,
     confirmDeleteSession,
@@ -85,6 +97,11 @@ export function useChatComposerInteractions(input: {
 
   const handleComposerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (isPlanningModeToggleShortcut(event)) {
+        event.preventDefault();
+        handleTogglePlanningMode();
+        return;
+      }
       if (commandSuggestions.length > 0) {
         if (event.key === "ArrowDown") {
           event.preventDefault();
@@ -108,7 +125,7 @@ export function useChatComposerInteractions(input: {
         void handleSend();
       }
     },
-    [commandIndex, commandSuggestions, handleSend, setCommandIndex, setDraft],
+    [commandIndex, commandSuggestions, handleSend, handleTogglePlanningMode, setCommandIndex, setDraft],
   );
 
   const handleComposerPaste = useCallback(

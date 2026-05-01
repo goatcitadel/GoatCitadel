@@ -72,6 +72,7 @@ export interface ActiveChatDelegationStep {
   stepId: string;
   runId?: string;
   role: string;
+  label?: string;
   status: ChatDelegationStepStatus;
   index: number;
   startedAt?: string;
@@ -103,6 +104,7 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
     stepId: step.stepId,
     runId: step.runId,
     role: step.role,
+    label: step.label,
     status: step.status,
     index: step.index,
     startedAt: step.startedAt,
@@ -459,11 +461,13 @@ export function useChatDelegationPolicyActions(input: {
               stepId: chunk.step.stepId,
               runId: chunk.step.runId,
               role: chunk.step.role,
+              label: chunk.step.label,
               status: chunk.step.status as ChatDelegationStepStatus,
               index: chunk.step.index,
               startedAt: chunk.step.startedAt,
               finishedAt: chunk.step.finishedAt,
               durationMs: chunk.step.durationMs,
+              summary: chunk.step.summary,
               output: chunk.step.output,
               error: chunk.step.error,
             };

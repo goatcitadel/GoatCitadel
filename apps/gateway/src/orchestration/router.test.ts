@@ -244,6 +244,61 @@ describe("orchestration router", () => {
     expect(plan.steps.filter((step) => step.role === "researcher").every((step) => step.stage === 1)).toBe(true);
   });
 
+  it("preserves explicit Cowork workstreams for final synthesis", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective:
+        "Use Cowork to plan a cozy cyberpunk-themed dinner party for six friends, with roles for Menu, Atmosphere, Logistics, and Risk Review, then give me a final host-ready checklist.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+        orchestrationParallelism: "parallel",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    expect(plan.workflowTemplate).toBe("cowork.workstreams.synthesize");
+    expect(plan.routeDecision.selectedRoles).toEqual(["Menu", "Atmosphere", "Logistics", "Risk Review", "Synthesis"]);
+    expect(plan.steps.map((step) => step.label)).toEqual([
+      "Menu",
+      "Atmosphere",
+      "Logistics",
+      "Risk Review",
+      "Synthesis",
+    ]);
+    expect(plan.steps.map((step) => step.role)).toEqual([
+      "worker",
+      "worker",
+      "worker",
+      "reviewer",
+      "synthesizer",
+    ]);
+    expect(plan.steps.find((step) => step.label === "Risk Review")?.stage).toBe(2);
+    expect(plan.steps.at(-1)).toMatchObject({
+      role: "synthesizer",
+      label: "Synthesis",
+      stage: 3,
+      dependsOnStepIds: ["orch-step-1", "orch-step-2", "orch-step-3", "orch-step-4"],
+    });
+  });
+
+  it("keeps generic Cowork planning on the existing plan-work-synthesize route", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective: "Plan a low-stress birthday weekend and give me a concise recommendation.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    expect(plan.workflowTemplate).toBe("cowork.plan.work.synthesize");
+    expect(plan.steps.map((step) => step.role)).toEqual(["planner", "worker", "reviewer", "synthesizer"]);
+  });
+
   it("pins the requested provider and code workflow when code mode is selected", () => {
     const input = createInput({
       mode: "code",

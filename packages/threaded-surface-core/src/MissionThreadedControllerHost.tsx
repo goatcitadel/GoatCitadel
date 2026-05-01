@@ -1599,6 +1599,9 @@ export function MissionThreadedControllerHost({
     },
     [applyPrefPatchToSession, selectedSession],
   );
+  const handleTogglePlanningMode = useCallback(() => {
+    void handlePrefPatch({ planningMode: planningMode === "advisory" ? "off" : "advisory" });
+  }, [handlePrefPatch, planningMode]);
   const applyThreadModelPatch = useCallback(
     async (patch: ChatSessionPrefsPatch) => {
       if (!selectedSession) {
@@ -1864,6 +1867,7 @@ export function MissionThreadedControllerHost({
     handleArchiveWorkspaceMissionChats,
     handleRunQuickResearch,
     handlePrefPatch,
+    handleTogglePlanningMode,
     handleRevealSelectedTurnDetails,
     confirmCapabilitySuggestionAction,
     confirmDeleteSession,
@@ -2047,7 +2051,7 @@ export function MissionThreadedControllerHost({
           paused: Boolean(item.paused),
         })),
         editingTurnId,
-        planningMode: planningMode ? "advisory" : "off",
+        planningMode: planningMode === "advisory" ? "advisory" : "off",
         effectiveToolAutonomy,
         draft,
         commandSuggestions,
@@ -2089,9 +2093,7 @@ export function MissionThreadedControllerHost({
         onCancelEdit: handleCancelEdit,
         onDismissError: handleDismissError,
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
-        onTurnOffPlanningMode: () => {
-          void handlePrefPatch({ planningMode: "off" });
-        },
+        onTogglePlanningMode: handleTogglePlanningMode,
         onSetDeepMode: () => handleSetDeepMode(),
         onReviewRunDetails: handleRevealSelectedTurnDetails,
         onDraftChange: setDraft,

@@ -508,6 +508,7 @@ export function buildChatOrchestrationSummary(input: {
   routeDecision: ReturnType<typeof buildOrchestrationPlan>["routeDecision"];
   stepResults: OrchestrationStepExecutionResult[];
   finalSummary?: string;
+  integritySignals?: string[];
   finalized?: boolean;
   advisoryOnly?: boolean;
 }): NonNullable<ChatTurnTraceRecord["orchestration"]> {
@@ -534,6 +535,7 @@ export function buildChatOrchestrationSummary(input: {
     steps: input.stepResults.map((step) => ({
       stepId: step.stepId,
       role: step.role,
+      label: step.label,
       index: step.index,
       status: step.status,
       specialistCandidateId: step.specialistCandidateId,
@@ -547,5 +549,6 @@ export function buildChatOrchestrationSummary(input: {
       summary: step.summary,
       error: step.error,
     })),
+    integritySignals: input.integritySignals,
   };
 }

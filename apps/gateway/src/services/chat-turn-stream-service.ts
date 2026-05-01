@@ -102,6 +102,7 @@ export interface ChatTurnStreamHost {
     routeDecision: ChatOrchestrationSummary["routeDecision"];
     stepResults: OrchestrationStepExecutionResult[];
     finalSummary?: string;
+    integritySignals?: string[];
     finalized?: boolean;
     advisoryOnly?: boolean;
   }): NonNullable<ChatTurnTraceRecord["orchestration"]>;
@@ -335,6 +336,7 @@ export async function executePreparedModeOrchestration(
       stepId: persistedStepId,
       runId,
       role: step.role,
+      label: step.label,
       index,
       status: "pending",
       providerId: step.providerId,
@@ -462,6 +464,7 @@ export async function executePreparedModeOrchestration(
           status: step.status,
           providerId: step.providerId,
           model: step.model,
+          label: step.label,
           summary: step.summary,
           output: step.output,
           error: step.error,
@@ -499,6 +502,7 @@ export async function executePreparedModeOrchestration(
     routeDecision: orchestration.orchestrationPlan.routeDecision,
     stepResults: result.stepResults,
     finalSummary: result.finalSummary,
+    integritySignals: result.integritySignals,
     finalized: true,
   });
   host.storage.chatDelegationRuns.patch(runId, {
@@ -601,15 +605,7 @@ export async function executeDelegatedPlanStep(
     .slice(-6)
     .map((message) => `${message.role.toUpperCase()}: ${truncateSummaryLine(message.content, 320)}`)
     .join("\n");
-  const priorStepContext = input.priorSteps
-    .slice(-4)
-    .map((step) =>
-      [
-        `${toTitleCase(step.role)} (${step.status})`,
-        truncateSummaryLine(step.summary ?? step.output ?? step.error ?? "No handoff provided.", 320),
-      ].join(": "),
-    )
-    .join("\n");
+  const priorStepContext = buildDelegatedPriorStepContext(input.priorSteps, input.step.role);
   const suggestedTools = filterDelegatedSuggestedToolsForPromptLab(input.step.suggestedTools ?? [], {
     mode: input.task.mode,
     normalizationProfile: prepared.normalized.normalizationProfile,
@@ -693,6 +689,7 @@ export async function executeDelegatedPlanStep(
     return {
       stepId: input.step.stepId,
       role: input.step.role,
+      label: input.step.label,
       index: input.stepIndex,
       specialistCandidateId: input.step.specialistCandidate?.candidateId,
       specialistTitle: input.step.specialistCandidate?.title,
@@ -752,6 +749,7 @@ export async function executeDelegatedPlanStep(
     return {
       stepId: input.step.stepId,
       role: input.step.role,
+      label: input.step.label,
       index: input.stepIndex,
       specialistCandidateId: input.step.specialistCandidate?.candidateId,
       specialistTitle: input.step.specialistCandidate?.title,
@@ -771,6 +769,81 @@ export async function executeDelegatedPlanStep(
       childSessionId: childSession.sessionId,
     };
   }
+}
+
+function createAsyncProgressQueue<T>() {
+  const values: T[] = [];
+  const waiters: Array<(value: T | undefined) => void> = [];
+  let closed = false;
+
+  return {
+    close() {
+      closed = true;
+      while (waiters.length > 0) {
+        waiters.shift()?.(undefined);
+      }
+    },
+    push(value: T) {
+      if (closed) {
+        return;
+      }
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter(value);
+        return;
+      }
+      values.push(value);
+    },
+    next(): Promise<T | undefined> {
+      if (values.length > 0) {
+        return Promise.resolve(values.shift());
+      }
+      if (closed) {
+        return Promise.resolve(undefined);
+      }
+      return new Promise((resolve) => {
+        waiters.push(resolve);
+      });
+    },
+  };
+}
+
+function buildDelegatedPriorStepContext(
+  priorSteps: OrchestrationStepExecutionResult[],
+  role: OrchestrationStepExecutionResult["role"],
+): string {
+  if (role !== "synthesizer" && role !== "reviewer" && role !== "critic" && role !== "qa-validator") {
+    return priorSteps
+      .slice(-4)
+      .map((step) =>
+        [
+          `${formatDelegatedStepTitle(step)} (${step.status})`,
+          truncateSummaryLine(step.summary ?? step.output ?? step.error ?? "No handoff provided.", 320),
+        ].join(": "),
+      )
+      .join("\n");
+  }
+
+  let remaining = 16_000;
+  const sections: string[] = [];
+  for (const step of priorSteps) {
+    if (remaining <= 0) {
+      break;
+    }
+    const raw = step.output?.trim() || step.error?.trim() || step.summary?.trim() || "No handoff provided.";
+    const excerpt = raw.slice(0, Math.min(3_000, remaining));
+    remaining -= excerpt.length;
+    sections.push([
+      `### ${formatDelegatedStepTitle(step)} (${step.status})`,
+      excerpt,
+      raw.length > excerpt.length ? "[truncated]" : undefined,
+    ].filter(Boolean).join("\n"));
+  }
+  return sections.join("\n\n");
+}
+
+function formatDelegatedStepTitle(step: Pick<OrchestrationStepExecutionResult, "label" | "role">): string {
+  return step.label?.trim() || toTitleCase(step.role);
 }
 
 const PROMPT_LAB_LOCAL_FILE_TOOL_NAMES = new Set([
@@ -858,13 +931,14 @@ export async function* streamPreparedAgentChatTurn(
 
       // eslint-disable-next-line prefer-const
       let executionPlanId: string | undefined;
-      const orchestrationResult = await executePreparedModeOrchestration(
+      const progressQueue = createAsyncProgressQueue<ChatTurnTraceRecord>();
+      const orchestrationResultPromise = executePreparedModeOrchestration(
         host,
         prepared,
         input,
         controller.signal,
         async (summary) => {
-          host.storage.chatTurnTraces.patch(turnId, {
+          const progressTrace = host.storage.chatTurnTraces.patch(turnId, {
             executionPlanId,
             orchestration: summary,
             model:
@@ -887,9 +961,25 @@ export async function* streamPreparedAgentChatTurn(
                 prepared.prefs.model,
             },
           });
+          progressQueue.push(progressTrace);
         },
         modeOrchestration,
-      );
+      ).finally(() => {
+        progressQueue.close();
+      });
+      while (true) {
+        const progressTrace = await progressQueue.next();
+        if (!progressTrace) {
+          break;
+        }
+        yield {
+          type: "trace_update",
+          sessionId,
+          turnId,
+          trace: progressTrace,
+        };
+      }
+      const orchestrationResult = await orchestrationResultPromise;
       executionPlanId = orchestrationResult.executionPlanId;
 
       let finalText = orchestrationResult.finalOutput.trim();
@@ -903,7 +993,7 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         messageId: assistantMessageId,
         content: finalText,
-        stream: false,
+        stream: true,
         runId: orchestrationResult.summary.runId,
         taskId: `chat-orchestration:${turnId}`,
         providerId:
@@ -994,6 +1084,15 @@ export async function* streamPreparedAgentChatTurn(
         toolRuns: orchestrationToolRuns,
       };
       host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
+      for (const slice of splitIntoChunks(finalText, 120)) {
+        yield {
+          type: "delta",
+          sessionId,
+          turnId,
+          messageId: assistantMessageId,
+          delta: slice,
+        };
+      }
       yield {
         type: "message_done",
         sessionId,
@@ -1073,7 +1172,7 @@ export async function* streamPreparedAgentChatTurn(
         turnId,
         status: hydratedTrace.status,
         toolRunCount: orchestrationToolRuns.length,
-        stream: false,
+        stream: true,
         repaired: Boolean(hydratedTrace.completion?.repaired),
         runId: orchestrationResult.summary.runId,
         taskId: `chat-orchestration:${turnId}`,

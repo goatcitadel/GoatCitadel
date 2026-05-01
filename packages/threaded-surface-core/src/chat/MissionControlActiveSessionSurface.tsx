@@ -112,7 +112,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onCancelEdit: () => void;
   onDismissError: () => void;
   onAcknowledgeRouteBoundary: () => void;
-  onTurnOffPlanningMode: () => void;
+  onTogglePlanningMode: () => void;
   onSetDeepMode: () => void;
   onReviewRunDetails: () => void;
   onDraftChange: (next: string) => void;

@@ -25,7 +25,7 @@ function collectText(node: ReactTestInstance): string {
 }
 
 describe("ThreadedContextDrawer", () => {
-  it("lets users turn planning mode off from the context panel", async () => {
+  it("lets users toggle planning mode from the context panel", async () => {
     const onPrefPatch = vi.fn();
     let renderer: ReactTestRenderer | null = null;
 
@@ -53,12 +53,43 @@ describe("ThreadedContextDrawer", () => {
       );
     });
 
-    const button = findButton(renderer!.root, "Turn off planning");
+    const button = findButton(renderer!.root, "Turn planning off");
     await act(async () => {
       button.props.onClick();
     });
 
     expect(onPrefPatch).toHaveBeenCalledWith({ planningMode: "off" });
+
+    await act(async () => {
+      renderer!.update(
+        <ThreadedContextDrawer
+          surface="cowork"
+          props={
+            {
+              selectedProviderId: "openai",
+              selectedModel: "gpt-5.4-mini",
+              streamEnabled: true,
+              planningMode: "off",
+              routePreflight: {
+                selectionSource: "session_prefs",
+              },
+              onStreamEnabledChange: vi.fn(),
+              onPrefPatch,
+              activeGeneratedArtifact: null,
+              onCloseGeneratedArtifact: vi.fn(),
+              selectedTurn: null,
+            } as any
+          }
+        />,
+      );
+    });
+
+    const turnOnButton = findButton(renderer!.root, "Turn planning on");
+    await act(async () => {
+      turnOnButton.props.onClick();
+    });
+
+    expect(onPrefPatch).toHaveBeenCalledWith({ planningMode: "advisory" });
   });
 
   it("shows the export affordance on the trace tab when a run export handler exists", async () => {
@@ -74,7 +105,7 @@ describe("ThreadedContextDrawer", () => {
               selectedProviderId: "openai",
               selectedModel: "gpt-5.4-mini",
               streamEnabled: true,
-              planningMode: "guided",
+              planningMode: "off",
               routePreflight: {
                 selectionSource: "session_prefs",
               },

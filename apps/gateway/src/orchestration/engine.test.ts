@@ -338,4 +338,160 @@ describe("orchestration engine", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(6);
     expect(maxActive).toBe(4);
   });
+
+  it("passes expanded labeled handoffs into workstream synthesis and repairs missing sections", async () => {
+    const longMenuOutput = `## Menu\n${"Menu detail ".repeat(80)}`;
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(createCompletion(longMenuOutput))
+      .mockResolvedValueOnce(createCompletion("## Atmosphere\nWarm neon hideout."))
+      .mockResolvedValueOnce(createCompletion("## Logistics\nPrep timeline."))
+      .mockResolvedValueOnce(createCompletion("## Risk Review\nConfirm allergies and keep LED cords safe."))
+      .mockResolvedValueOnce(createCompletion("## Logistics\nOnly the logistics survived."))
+      .mockResolvedValueOnce(createCompletion([
+        "## Menu",
+        "Night market ramen bar.",
+        "## Atmosphere",
+        "Warm neon hideout.",
+        "## Logistics",
+        "Prep timeline.",
+        "## Risk Review",
+        "Confirm allergies.",
+        "## Final Host-Ready Checklist",
+        "- Shop.",
+      ].join("\n")));
+
+    const result = await executeOrchestrationPlan({
+      task: {
+        ...createTask(),
+        objective:
+          "Plan a cozy cyberpunk dinner party with roles for Menu, Atmosphere, Logistics, and Risk Review, then give a final host-ready checklist.",
+      },
+      plan: createWorkstreamPlan(),
+      callbacks: { createChatCompletion },
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(6);
+    const synthesisPrompt = createChatCompletion.mock.calls[4]?.[0].messages.at(-1)?.content ?? "";
+    expect(synthesisPrompt).toContain("### Menu (completed)");
+    expect(synthesisPrompt).toContain("Menu detail Menu detail");
+    expect(synthesisPrompt.length).toBeGreaterThan(1_000);
+    expect(result.finalOutput).toContain("## Final Host-Ready Checklist");
+    expect(result.finalOutput).toContain("## Risk Review");
+    expect(result.integritySignals).toEqual([
+      "orchestration_final_synthesis_missing_required_sections",
+      "orchestration_final_synthesis_repaired",
+    ]);
+  });
+
+  it("falls back to preserving completed workstreams when synthesis repair still misses labels", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(createCompletion("## Menu\nRamen bar."))
+      .mockResolvedValueOnce(createCompletion("## Atmosphere\nWarm neon."))
+      .mockResolvedValueOnce(createCompletion("## Logistics\nPrep timeline."))
+      .mockResolvedValueOnce(createCompletion("## Risk Review\nAllergy check."))
+      .mockResolvedValueOnce(createCompletion("## Logistics\nOnly logistics."))
+      .mockResolvedValueOnce(createCompletion("Still only logistics."));
+
+    const result = await executeOrchestrationPlan({
+      task: {
+        ...createTask(),
+        objective:
+          "Plan a cozy cyberpunk dinner party with roles for Menu, Atmosphere, Logistics, and Risk Review, then give a final host-ready checklist.",
+      },
+      plan: createWorkstreamPlan(),
+      callbacks: { createChatCompletion },
+    });
+
+    expect(result.finalOutput).toContain("## Synthesis Incomplete");
+    expect(result.finalOutput).toContain("## Menu");
+    expect(result.finalOutput).toContain("Ramen bar.");
+    expect(result.finalOutput).toContain("## Atmosphere");
+    expect(result.finalOutput).toContain("## Logistics");
+    expect(result.finalOutput).toContain("## Risk Review");
+    expect(result.finalOutput).not.toBe("## Logistics\nOnly logistics.");
+    expect(result.integritySignals).toEqual([
+      "orchestration_final_synthesis_missing_required_sections",
+      "orchestration_final_synthesis_fallback",
+    ]);
+  });
 });
+
+function createWorkstreamPlan(): OrchestrationPlan {
+  return {
+    workflowTemplate: "cowork.workstreams.synthesize",
+    summary: "Explicit workstream plan.",
+    source: "workflow_template",
+    routeDecision: {
+      modePolicy: "cowork",
+      workflowTemplate: "cowork.workstreams.synthesize",
+      hidden: false,
+      visibility: "explicit",
+      intensity: "balanced",
+      providerPreference: "balanced",
+      reviewDepth: "standard",
+      parallelism: "parallel",
+      selectedRoles: ["Menu", "Atmosphere", "Logistics", "Risk Review", "Synthesis"],
+      selectedProviders: [],
+      triggerReason: "cowork_explicit_orchestration",
+    },
+    steps: [
+      {
+        stepId: "step-1",
+        index: 0,
+        role: "worker",
+        label: "Menu",
+        stage: 1,
+        objective: "Build the menu.",
+        parallelizable: true,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+      {
+        stepId: "step-2",
+        index: 1,
+        role: "worker",
+        label: "Atmosphere",
+        stage: 1,
+        objective: "Build the atmosphere plan.",
+        parallelizable: true,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+      {
+        stepId: "step-3",
+        index: 2,
+        role: "worker",
+        label: "Logistics",
+        stage: 1,
+        objective: "Build the logistics plan.",
+        parallelizable: true,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+      {
+        stepId: "step-4",
+        index: 3,
+        role: "reviewer",
+        label: "Risk Review",
+        stage: 2,
+        objective: "Review risks.",
+        parallelizable: false,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+      {
+        stepId: "step-5",
+        index: 4,
+        role: "synthesizer",
+        label: "Synthesis",
+        stage: 3,
+        objective: "Merge workstreams.",
+        parallelizable: false,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+    ],
+  };
+}

@@ -2900,6 +2900,7 @@ export class GatewayService {
         stepId: step.stepId,
         runId,
         role: step.role,
+        label: step.role,
         index: step.index,
         status: "running",
         startedAt,
@@ -2991,6 +2992,7 @@ export class GatewayService {
           status: failed ? "failed" : "completed",
           providerId: response.trace?.routing?.effectiveProviderId ?? providerId,
           model: response.trace?.model ?? model,
+          label: step.role,
           summary: truncateSummaryLine(output, 180),
           output,
           error: failed ? (response.trace?.failure?.message ?? output) : undefined,
@@ -3056,6 +3058,7 @@ export class GatewayService {
         const message = (error as Error).message;
         const failedStep = this.storage.chatDelegationSteps.patch(step.stepId, {
           status: "failed",
+          label: step.role,
           error: message,
           failureGuidance: buildDelegationFailureGuidance(message, step.role),
           childSessionId: childSession.sessionId,
@@ -3102,6 +3105,7 @@ export class GatewayService {
           stepId: step.stepId,
           runId,
           role: step.role,
+          label: step.role,
           index: step.index,
           status: "skipped",
           error: `Skipped because dependency failed: ${failedDependencyRoles.join(", ")}`,
@@ -3831,6 +3835,7 @@ export class GatewayService {
     routeDecision: ReturnType<typeof buildOrchestrationPlan>["routeDecision"];
     stepResults: OrchestrationStepExecutionResult[];
     finalSummary?: string;
+    integritySignals?: string[];
     finalized?: boolean;
     advisoryOnly?: boolean;
   }): NonNullable<ChatTurnTraceRecord["orchestration"]> {

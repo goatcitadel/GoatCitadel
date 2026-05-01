@@ -102,6 +102,7 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS reused_from_tool_run_id TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS reuse_reason TEXT/);
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS label TEXT/);
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS durable_run_id TEXT/);
   });
 

@@ -56,6 +56,7 @@ export interface OrchestrationStepPlan {
   stepId: string;
   index: number;
   role: OrchestrationRole;
+  label?: string;
   stage: number;
   objective: string;
   successCriteria?: string;
@@ -93,6 +94,7 @@ export interface OrchestrationPlan {
 export interface OrchestrationStepExecutionResult {
   stepId: string;
   role: OrchestrationRole;
+  label?: string;
   index: number;
   specialistCandidateId?: string;
   specialistTitle?: string;
@@ -119,6 +121,7 @@ export interface OrchestrationExecutionResult {
   finalOutput: string;
   finalSummary: string;
   finalStep?: OrchestrationStepExecutionResult;
+  integritySignals?: string[];
   citations: ChatCitationRecord[];
   routeDecision: ChatOrchestrationRouteDecision;
   stepResults: OrchestrationStepExecutionResult[];

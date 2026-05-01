@@ -7,6 +7,7 @@ interface ChatDelegationStepRow {
   step_id: string;
   run_id: string;
   role: string;
+  label: string | null;
   step_index: number;
   status: ChatDelegationStepStatus;
   provider_id: string | null;
@@ -34,10 +35,10 @@ export class ChatDelegationStepRepository {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_steps WHERE step_id = ?");
     this.insertStmt = db.prepare(`
       INSERT INTO chat_delegation_steps (
-        step_id, run_id, role, step_index, status, provider_id, model, summary, output, error, started_at, finished_at, duration_ms
+        step_id, run_id, role, label, step_index, status, provider_id, model, summary, output, error, started_at, finished_at, duration_ms
         , failure_guidance, durable_run_id, child_session_id, child_turn_id, citations_json
       ) VALUES (
-        @stepId, @runId, @role, @index, @status, @providerId, @model, @summary, @output, @error, @startedAt, @finishedAt, @durationMs,
+        @stepId, @runId, @role, @label, @index, @status, @providerId, @model, @summary, @output, @error, @startedAt, @finishedAt, @durationMs,
         @failureGuidance, @durableRunId, @childSessionId, @childTurnId, @citationsJson
       )
     `);
@@ -47,6 +48,7 @@ export class ChatDelegationStepRepository {
         status = @status,
         provider_id = @providerId,
         model = @model,
+        label = @label,
         summary = @summary,
         output = @output,
         error = @error,
@@ -78,6 +80,7 @@ export class ChatDelegationStepRepository {
     stepId: string;
     runId: string;
     role: string;
+    label?: string;
     index: number;
     status?: ChatDelegationStepStatus;
     providerId?: string;
@@ -98,6 +101,7 @@ export class ChatDelegationStepRepository {
       stepId: input.stepId,
       runId: input.runId,
       role: input.role,
+      label: input.label ?? null,
       index: input.index,
       status: input.status ?? "pending",
       providerId: input.providerId ?? null,
@@ -121,6 +125,7 @@ export class ChatDelegationStepRepository {
     status?: ChatDelegationStepStatus;
     providerId?: string;
     model?: string;
+    label?: string;
     summary?: string;
     output?: string;
     error?: string;
@@ -138,6 +143,7 @@ export class ChatDelegationStepRepository {
       status: input.status ?? current.status,
       providerId: input.providerId !== undefined ? input.providerId : (current.providerId ?? null),
       model: input.model !== undefined ? input.model : (current.model ?? null),
+      label: input.label !== undefined ? input.label : (current.label ?? null),
       summary: input.summary !== undefined ? input.summary : (current.summary ?? null),
       output: input.output !== undefined ? input.output : (current.output ?? null),
       error: input.error !== undefined ? input.error : (current.error ?? null),
@@ -171,6 +177,7 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
   return typeof value.step_id === "string"
     && typeof value.run_id === "string"
     && typeof value.role === "string"
+    && (typeof value.label === "string" || value.label === null)
     && typeof value.step_index === "number"
     && typeof value.status === "string"
     && (typeof value.provider_id === "string" || value.provider_id === null)
@@ -201,6 +208,7 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     stepId: row.step_id,
     runId: row.run_id,
     role: row.role,
+    label: row.label ?? undefined,
     status: row.status,
     index: row.step_index,
     providerId: row.provider_id ?? undefined,

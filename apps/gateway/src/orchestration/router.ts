@@ -71,9 +71,17 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
   const policy = input.policy;
   const requestedVisibility = clampVisibility(task.prefs.orchestrationVisibility, policy.maxVisibleVisibility);
   const requestedParallelism = normalizeParallelism(task.prefs.orchestrationParallelism, policy.allowParallelWorkers);
-  const workflowTemplate = selectWorkflowTemplate(task.mode, task.objective);
-  const roles = selectRolesForWorkflow(workflowTemplate);
-  const steps = buildStepPlans(roles, capabilities, {
+  const requestedWorkstreams = task.mode === "cowork" ? extractRequestedWorkstreams(task.objective) : [];
+  const workflowTemplate = requestedWorkstreams.length > 0
+    ? "cowork.workstreams.synthesize"
+    : selectWorkflowTemplate(task.mode, task.objective);
+  const steps = workflowTemplate === "cowork.workstreams.synthesize"
+    ? buildWorkstreamStepPlans(requestedWorkstreams, capabilities, {
+      objective: task.objective,
+      prefs: task.prefs,
+      parallelism: requestedParallelism,
+    })
+    : buildStepPlans(selectRolesForWorkflow(workflowTemplate), capabilities, {
     objective: task.objective,
     prefs: task.prefs,
     parallelism: requestedParallelism,
@@ -88,9 +96,9 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
     providerPreference: task.prefs.orchestrationProviderPreference,
     reviewDepth: task.prefs.orchestrationReviewDepth,
     parallelism: requestedParallelism,
-    selectedRoles: steps.map((step) => step.role),
+    selectedRoles: steps.map((step) => step.label ?? step.role),
     selectedProviders: steps.map((step) => ({
-      role: step.role,
+      role: step.label ?? step.role,
       providerId: step.providerId,
       model: step.model,
     })),
@@ -121,6 +129,8 @@ function selectWorkflowTemplate(mode: ChatMode, objective: string): string {
 
 function selectRolesForWorkflow(workflowTemplate: string): OrchestrationRole[] {
   switch (workflowTemplate) {
+    case "cowork.workstreams.synthesize":
+      return ["worker", "synthesizer"];
     case "cowork.research.synthesize.critic":
       return ["researcher", "researcher", "critic", "synthesizer"];
     case "cowork.plan.work.synthesize":
@@ -130,6 +140,137 @@ function selectRolesForWorkflow(workflowTemplate: string): OrchestrationRole[] {
     default:
       return ["answerer", "reviewer", "synthesizer"];
   }
+}
+
+function extractRequestedWorkstreams(objective: string): string[] {
+  const candidates: string[] = [];
+  const patterns = [
+    /\b(?:roles?|workstreams?|sections?)\s+for\s+([^.!?\n]+?)(?=,\s*(?:then|and then|before|after)\b|[.!?]|\n|$)/gi,
+    /\b(?:roles?|workstreams?|sections?)\s*:\s*([^.!?\n]+?)(?=,\s*(?:then|and then|before|after)\b|[.!?]|\n|$)/gi,
+    /\b(?:include|including)\s+(?:roles?|workstreams?|sections?)\s+(?:for\s+)?([^.!?\n]+?)(?=,\s*(?:then|and then|before|after)\b|[.!?]|\n|$)/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of objective.matchAll(pattern)) {
+      if (match[1]) {
+        candidates.push(...splitWorkstreamList(match[1]));
+      }
+    }
+  }
+  return dedupeWorkstreamLabels(candidates).slice(0, 6);
+}
+
+function splitWorkstreamList(raw: string): string[] {
+  return raw
+    .replace(/\s+(?:and|&)\s+/gi, ",")
+    .split(",")
+    .map((item) => normalizeWorkstreamLabel(item))
+    .filter((item): item is string => Boolean(item));
+}
+
+function normalizeWorkstreamLabel(raw: string): string | undefined {
+  const trimmed = raw
+    .replace(/["'`]/g, "")
+    .replace(/\b(?:roles?|workstreams?|sections?)\b/gi, "")
+    .replace(/\b(?:for|with|and|then|give|provide|return)\b.*$/i, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!trimmed || trimmed.length < 2 || trimmed.length > 40) {
+    return undefined;
+  }
+  if (/^(a|an|the|final|host-ready|checklist|recommendation)$/i.test(trimmed)) {
+    return undefined;
+  }
+  return toTitleCase(trimmed);
+}
+
+function dedupeWorkstreamLabels(labels: string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const label of labels) {
+    const key = label.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(label);
+  }
+  return deduped.length >= 2 ? deduped : [];
+}
+
+function buildWorkstreamStepPlans(
+  labels: string[],
+  capabilities: ProviderCapabilityRecord[],
+  input: {
+    objective: string;
+    prefs: ChatSessionPrefsRecord;
+    parallelism: ChatOrchestrationParallelism;
+  },
+): OrchestrationStepPlan[] {
+  const usedProviders = new Set<string>();
+  const parallelProduction = input.parallelism === "parallel" || input.parallelism === "auto";
+  const productionCount = labels.filter((label) => !isReviewWorkstream(label)).length;
+  const workstreamSteps = labels.map((label, index) => {
+    const role: OrchestrationRole = isReviewWorkstream(label) ? "reviewer" : "worker";
+    const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
+    if (!input.prefs.providerId && provider?.providerId) {
+      usedProviders.add(provider.providerId);
+    }
+    const stepId = `orch-step-${index + 1}`;
+    return {
+      stepId,
+      index,
+      role,
+      label,
+      stage: role === "reviewer"
+        ? (parallelProduction ? 2 : productionCount + 1)
+        : parallelProduction
+          ? 1
+          : index + 1,
+      objective: buildWorkstreamStepObjective(input.objective, label, role),
+      successCriteria: `Return a complete ${label} workstream that can be merged into the final Cowork answer.`,
+      suggestedTools: buildFallbackSuggestedTools(role, "cowork.workstreams.synthesize"),
+      expectedOutput: `${label} section for the final answer.`,
+      parallelizable: role !== "reviewer" && parallelProduction,
+      dependsOnStepIds: role === "reviewer"
+        ? labels.slice(0, index).map((_, priorIndex) => `orch-step-${priorIndex + 1}`)
+        : undefined,
+      delegatedRole: label,
+      providerId: provider?.providerId ?? input.prefs.providerId,
+      model: provider?.model ?? input.prefs.model,
+    } satisfies OrchestrationStepPlan;
+  });
+
+  const finalProvider = selectProviderForRole("synthesizer", capabilities, input.prefs, usedProviders);
+  return [
+    ...workstreamSteps,
+    {
+      stepId: `orch-step-${workstreamSteps.length + 1}`,
+      index: workstreamSteps.length,
+      role: "synthesizer",
+      label: "Synthesis",
+      stage: parallelProduction ? 3 : productionCount + 2,
+      objective: `Merge ${labels.join(", ")} into one final response for "${input.objective.trim().replace(/\s+/g, " ")}".`,
+      successCriteria: `Include every required section (${labels.join(", ")}) and end with the requested final deliverable.`,
+      expectedOutput: "One complete Cowork answer that integrates all requested workstreams.",
+      parallelizable: false,
+      dependsOnStepIds: workstreamSteps.map((step) => step.stepId),
+      delegatedRole: "Synthesis",
+      providerId: finalProvider?.providerId ?? input.prefs.providerId,
+      model: finalProvider?.model ?? input.prefs.model,
+    },
+  ];
+}
+
+function isReviewWorkstream(label: string): boolean {
+  return /\b(risk|review|critic|critique|qa|quality|safety)\b/i.test(label);
+}
+
+function buildWorkstreamStepObjective(objective: string, label: string, role: OrchestrationRole): string {
+  const base = objective.trim().replace(/\s+/g, " ");
+  if (role === "reviewer") {
+    return `Produce the ${label} workstream for "${base}", using prior workstreams when available and focusing on risks, gaps, and fallback plans.`;
+  }
+  return `Produce the ${label} workstream for "${base}" as a complete, concrete section ready for final synthesis.`;
 }
 
 function buildStepPlans(
@@ -398,4 +539,12 @@ function deriveTriggerReason(mode: ChatMode, objective: string): string {
     return "chat_hidden_review";
   }
   return "chat_hidden_synthesis";
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/\s+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
 }
