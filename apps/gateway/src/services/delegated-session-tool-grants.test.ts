@@ -92,4 +92,45 @@ describe("buildDelegatedSessionToolGrantCopies", () => {
       },
     ]);
   });
+
+  it("does not inherit allows that overlap an active deny", () => {
+    const copies = buildDelegatedSessionToolGrantCopies({
+      parentSessionId: "parent-session",
+      childSessionId: "child-session",
+      parentGrants: [
+        createGrant({
+          grantId: "allow-browser",
+          toolPattern: "browser.*",
+          decision: "allow",
+        }),
+        createGrant({
+          grantId: "deny-browser-search",
+          toolPattern: "browser.search",
+          decision: "deny",
+        }),
+      ],
+      childGrants: [
+        createGrant({
+          grantId: "deny-shell",
+          toolPattern: "shell.*",
+          decision: "deny",
+          scopeRef: "child-session",
+        }),
+      ],
+    });
+
+    expect(copies).toEqual([
+      {
+        toolPattern: "browser.search",
+        decision: "deny",
+        scope: "session",
+        scopeRef: "child-session",
+        grantType: "persistent",
+        constraints: undefined,
+        createdBy: "system-delegated-session-inherit",
+        expiresAt: undefined,
+        usesRemaining: undefined,
+      },
+    ]);
+  });
 });

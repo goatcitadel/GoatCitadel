@@ -224,7 +224,7 @@ describe("OnboardingPage refresh discipline", () => {
     });
     providerCatalogMocks.previewProviderModels.mockResolvedValue({
       items: ["gpt-5.4"],
-      source: "remote",
+      source: "live",
       warning: undefined,
     });
   });
@@ -312,7 +312,7 @@ describe("OnboardingPage refresh discipline", () => {
     apiMocks.fetchOnboardingState.mockResolvedValue(runtimeState);
     providerCatalogMocks.previewProviderModels.mockResolvedValue({
       items: ["gpt-5.4"],
-      source: "remote",
+      source: "live",
       warning: undefined,
     });
 

@@ -122,9 +122,12 @@ export interface LlmRuntimeConfig {
 
 export interface LlmModelRecord {
   id: string;
+  label?: string;
   ownedBy?: string;
   created?: number;
 }
+
+export type LlmModelDiscoverySource = "live" | "template_fallback" | "error_fallback";
 
 export interface LlmModelPreviewRequest {
   providerId: string;
@@ -175,7 +178,7 @@ export interface ImageGenerationResponse {
 
 export interface LlmModelPreviewResponse {
   items: LlmModelRecord[];
-  source: "remote" | "fallback";
+  source: LlmModelDiscoverySource;
   warning?: string;
 }
 

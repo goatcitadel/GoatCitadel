@@ -41,7 +41,7 @@ export class MemoryContextService {
     const startedAt = Date.now();
     const memoryConfig = this.config.assistant.memory;
     const qmd = memoryConfig.qmd;
-    const maxContextTokens = input.maxContextTokens ?? qmd.maxContextTokens;
+    const maxContextTokens = reserveMemoryContextBudget(input.maxContextTokens ?? qmd.maxContextTokens);
     const prompt = input.prompt.trim();
     const relationScope = resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled
@@ -630,6 +630,14 @@ function calculateSavings(originalTokens: number, distilledTokens: number): numb
     return 0;
   }
   return Number((((originalTokens - distilledTokens) / originalTokens) * 100).toFixed(2));
+}
+
+function reserveMemoryContextBudget(maxContextTokens: number): number {
+  if (maxContextTokens <= 160) {
+    return maxContextTokens;
+  }
+  const reserved = Math.max(96, Math.ceil(maxContextTokens * 0.12));
+  return Math.max(128, maxContextTokens - reserved);
 }
 
 function truncate(value: string, maxLength: number): string {

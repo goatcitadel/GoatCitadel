@@ -65,6 +65,57 @@ describe("AuditLog", () => {
     assert.equal(record.nested.apiKey, "[REDACTED]");
   });
 
+  it("redacts argv, headers, query tokens, and nested config payloads", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    const log = new AuditLog(root);
+
+    await log.append("tool_invocations", {
+      action: "tool.invoke",
+      argv: [
+        "node",
+        "tool.js",
+        "--api-key",
+        "sk-abcdefghijklmnopqrstuvwxyz0123456789",
+        "--token=opaque-token-value",
+        "--url",
+        "https://example.test/hook?token=secret-token&ok=1",
+      ],
+      request: {
+        headers: {
+          Authorization: "Bearer short-token",
+          "X-Trace": "trace-123",
+        },
+        config: {
+          clientSecret: "client-secret-value",
+          secretEnv: "CLIENT_SECRET",
+        },
+      },
+    });
+
+    const filePath = path.join(root, "tool_invocations.jsonl");
+    const raw = fs.readFileSync(filePath, "utf8").trim();
+    const record = JSON.parse(raw) as {
+      argv: string[];
+      request: {
+        headers: { Authorization: string; "X-Trace": string };
+        config: { clientSecret: string; secretEnv: string };
+      };
+    };
+
+    assert.deepEqual(record.argv.slice(2), [
+      "--api-key",
+      "[REDACTED]",
+      "--token=[REDACTED]",
+      "--url",
+      "https://example.test/hook?token=[REDACTED]&ok=1",
+    ]);
+    assert.equal(record.request.headers.Authorization, "[REDACTED]");
+    assert.equal(record.request.headers["X-Trace"], "trace-123");
+    assert.equal(record.request.config.clientSecret, "[REDACTED]");
+    assert.equal(record.request.config.secretEnv, "CLIENT_SECRET");
+  });
+
   it("prunes aged audit lines when retention is configured", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);

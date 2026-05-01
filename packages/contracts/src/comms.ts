@@ -71,6 +71,8 @@ export interface ChannelTypingResult {
   expiresAt?: string;
 }
 
+export type ChannelDeliveryStatus = "sent" | "retrying" | "degraded" | "blocked" | "not_available";
+
 export interface GmailSendInput {
   connectionId: string;
   to: string[];
@@ -121,10 +123,12 @@ export interface CalendarListQuery {
 export interface CommsSendResult {
   deliveryId: string;
   status: "queued" | "sent" | "failed";
+  deliveryStatus?: ChannelDeliveryStatus;
   providerMessageId?: string;
   channelKey: string;
   target: string;
   error?: string;
+  fallbackReason?: string;
   createdAt: string;
   updatedAt: string;
 }

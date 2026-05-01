@@ -36,6 +36,10 @@ function deriveSuggestedDefault(providerId, currentDefault, modelIds) {
   return suffixMatch;
 }
 
+function markdownCell(value) {
+  return String(value ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 function buildMarkdown(report) {
   const lines = [
     "# LLM Model Sync Report",
@@ -43,13 +47,13 @@ function buildMarkdown(report) {
     `Gateway: ${report.gatewayUrl}`,
     `Generated: ${report.generatedAt}`,
     "",
-    "| Provider | Secret | Current Default | Status | Suggested Default | Models |",
-    "| --- | --- | --- | --- | --- | ---: |",
+    "| Provider | Secret | Current Default | Status | Source | Suggested Default | Models | Warning |",
+    "| --- | --- | --- | --- | --- | --- | ---: | --- |",
   ];
 
   for (const item of report.providers) {
     lines.push(
-      `| ${item.providerId} | ${item.hasSecret ? item.secretSource : "none"} | ${item.currentDefault ?? ""} | ${item.status} | ${item.suggestedDefault ?? ""} | ${item.modelCount ?? 0} |`,
+      `| ${markdownCell(item.providerId)} | ${markdownCell(item.hasSecret ? item.secretSource : "none")} | ${markdownCell(item.currentDefault)} | ${markdownCell(item.status)} | ${markdownCell(item.source)} | ${markdownCell(item.suggestedDefault)} | ${item.modelCount ?? 0} | ${markdownCell(item.warning)} |`,
     );
   }
 
@@ -97,6 +101,8 @@ async function main() {
       suggestedDefault: undefined,
       modelCount: 0,
       models: [],
+      source: undefined,
+      warning: undefined,
       error: undefined,
     };
 
@@ -110,6 +116,8 @@ async function main() {
       const modelIds = (response.items ?? []).map((item) => item.id).filter(Boolean);
       record.models = modelIds;
       record.modelCount = modelIds.length;
+      record.source = response.source;
+      record.warning = response.warning;
       record.suggestedDefault = deriveSuggestedDefault(provider.providerId, current?.defaultModel, modelIds);
       if (record.suggestedDefault && record.suggestedDefault === current?.defaultModel) {
         record.status = "ok";

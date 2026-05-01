@@ -10,6 +10,14 @@ export function buildDelegatedSessionToolGrantCopies(input: {
   parentGrants: ToolGrantRecord[];
   childGrants?: ToolGrantRecord[];
 }): ToolGrantCreateInput[] {
+  const activeDenies = [...input.parentGrants, ...(input.childGrants ?? [])]
+    .filter(isActiveToolGrant)
+    .filter((grant) => grant.decision === "deny")
+    .filter(
+      (grant) =>
+        (grant.scope === "session" && grant.scopeRef === input.parentSessionId) ||
+        (grant.scope === "session" && grant.scopeRef === input.childSessionId),
+    );
   const childKeys = new Set(
     (input.childGrants ?? [])
       .filter((grant) => grant.scope === "session" && grant.scopeRef === input.childSessionId)
@@ -23,6 +31,11 @@ export function buildDelegatedSessionToolGrantCopies(input: {
     .filter(isActiveToolGrant)
     // One-time approvals should stay bound to the original session.
     .filter((grant) => grant.grantType !== "one_time")
+    .filter(
+      (grant) =>
+        grant.decision !== "allow" ||
+        !activeDenies.some((deny) => toolPatternsOverlap(deny.toolPattern, grant.toolPattern)),
+    )
     .filter((grant) => !childKeys.has(buildGrantSignature(grant)))
     .map((grant) => ({
       toolPattern: grant.toolPattern,
@@ -35,6 +48,24 @@ export function buildDelegatedSessionToolGrantCopies(input: {
       expiresAt: grant.expiresAt,
       usesRemaining: grant.usesRemaining,
     }));
+}
+
+function toolPatternsOverlap(denyPattern: string, allowPattern: string): boolean {
+  if (denyPattern === allowPattern) {
+    return true;
+  }
+  if (denyPattern.includes("*")) {
+    return patternPrefix(allowPattern).startsWith(patternPrefix(denyPattern));
+  }
+  if (allowPattern.includes("*")) {
+    return patternPrefix(denyPattern).startsWith(patternPrefix(allowPattern));
+  }
+  return false;
+}
+
+function patternPrefix(pattern: string): string {
+  const wildcardIndex = pattern.indexOf("*");
+  return wildcardIndex >= 0 ? pattern.slice(0, wildcardIndex) : pattern;
 }
 
 function cloneToolGrantConstraints(constraints?: ToolGrantConstraints): ToolGrantConstraints | undefined {

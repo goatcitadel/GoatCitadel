@@ -4,7 +4,7 @@ import path from "node:path";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import type { ToolGrantRecord, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { ChannelDeliveryStatus, ToolGrantRecord, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
@@ -25,6 +25,9 @@ import {
 
 const execFileAsync = promisify(execFile);
 const MAX_HTTP_REDIRECTS = 5;
+const MAX_HTTP_RETRIES = 2;
+const MAX_HTTP_RETRY_DELAY_MS = 50;
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 const MAX_SHELL_OUTPUT_BYTES = 4096;
 
 const SENSITIVE_PATTERNS: readonly RegExp[] = [
@@ -1127,12 +1130,12 @@ async function commsInvoke(
     if (toolName === "gmail.read") {
       const records = await gmailRead(connection.config, args, config.sandbox.networkAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
-      return { ...queued, status: "sent", providerMessageId: "gmail-read", records };
+      return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", records };
     }
     if (toolName === "calendar.list") {
       const records = await calendarList(connection.config, args, config.sandbox.networkAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
-      return { ...queued, status: "sent", providerMessageId: "calendar-list", records };
+      return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
     const providerMessageId = await executeCommsTool(
       toolName,
@@ -1144,12 +1147,33 @@ async function commsInvoke(
       message,
     );
     storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
-    return { ...queued, status: "sent", providerMessageId, updatedAt: new Date().toISOString() };
+    return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId, updatedAt: new Date().toISOString() };
   } catch (error) {
     const errorMessage = (error as Error).message;
+    const deliveryStatus = classifyChannelDeliveryFailure(errorMessage);
     storage.commsDeliveries.markFailed(queued.deliveryId, errorMessage);
-    return { ...queued, status: "failed", error: errorMessage, updatedAt: new Date().toISOString() };
+    return {
+      ...queued,
+      status: "failed",
+      deliveryStatus,
+      error: errorMessage,
+      fallbackReason: errorMessage,
+      updatedAt: new Date().toISOString(),
+    };
   }
+}
+
+function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {
+  if (/\b(408|429|502|503|504)\b/.test(message)) {
+    return "degraded";
+  }
+  if (/allowlist|blocked|unsafe|forbidden|unauthorized|http or https/i.test(message)) {
+    return "blocked";
+  }
+  if (/missing .*url|not supported|does not support|unavailable|not configured/i.test(message)) {
+    return "not_available";
+  }
+  return "degraded";
 }
 
 async function executeCommsTool(
@@ -4594,11 +4618,21 @@ async function fetchAllowlisted(
   let current = url;
   for (let hop = 0; hop <= MAX_HTTP_REDIRECTS; hop += 1) {
     assertHostAllowed(current, allowlist);
-    const response = await fetch(current, {
-      ...init,
-      redirect: "manual",
-      signal: composeAbortSignal(20000, signal),
-    });
+    let response: Response | undefined;
+    for (let attempt = 0; ; attempt += 1) {
+      response = await fetch(current, {
+        ...init,
+        redirect: "manual",
+        signal: composeAbortSignal(20000, signal),
+      });
+      if (!RETRYABLE_HTTP_STATUSES.has(response.status) || attempt >= MAX_HTTP_RETRIES) {
+        break;
+      }
+      await waitForHttpRetry(response, attempt, signal);
+    }
+    if (!response) {
+      throw new Error(`No response received for ${current}`);
+    }
     if (!(response.status >= 300 && response.status < 400)) {
       return { response, finalUrl: current };
     }
@@ -4609,6 +4643,40 @@ async function fetchAllowlisted(
     current = new URL(location, current).toString();
   }
   throw new Error(`Too many redirects for ${url}`);
+}
+
+async function waitForHttpRetry(response: Response, attempt: number, signal?: AbortSignal): Promise<void> {
+  const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+  const delayMs = Math.min(retryAfterMs ?? 25 * (attempt + 1), MAX_HTTP_RETRY_DELAY_MS);
+  if (delayMs <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason instanceof Error ? signal.reason : new Error("request aborted"));
+      },
+      { once: true },
+    );
+  });
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return Math.max(0, numeric * 1000);
+  }
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) {
+    return Math.max(0, parsed - Date.now());
+  }
+  return undefined;
 }
 
 function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {

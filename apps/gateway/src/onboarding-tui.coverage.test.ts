@@ -140,7 +140,7 @@ describe("onboarding tui entrypoint coverage", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(initialState), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: "gpt-4.1-mini" }], source: "remote" }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: "gpt-4.1-mini" }], source: "live" }), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify(bootstrap), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify(llmConfig), { status: 200, headers: { "content-type": "application/json" } }));
 
@@ -204,7 +204,7 @@ describe("onboarding tui entrypoint coverage", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(new Response("ok", { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(initialState), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: "glm-5" }], source: "remote" }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: "glm-5" }], source: "live" }), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ appliedAt: new Date().toISOString(), state: { completed: true, checklist: [] } }), { status: 200, headers: { "content-type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ activeProviderId: "glm", activeModel: "glm-5", providers: [] }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

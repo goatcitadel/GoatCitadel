@@ -464,7 +464,7 @@ export class MemoryLifecycleService {
       query?: string;
       actorId?: string;
     } = {},
-  ): { forgottenCount: number; itemIds: string[] } {
+  ): { forgottenCount: number; itemIds: string[]; items: MemoryItemRecord[] } {
     this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     const criteria = normalizeMemoryForgetCriteria(input);
     if (!criteria.hasCriteria) {
@@ -479,12 +479,11 @@ export class MemoryLifecycleService {
           query: criteria.query,
           limit: 2_000,
         }).map((item) => item.itemId);
-    for (const itemId of targets) {
-      this.forgetMemoryItem(itemId, actorId);
-    }
+    const forgottenItems = targets.map((itemId) => this.forgetMemoryItem(itemId, actorId));
     return {
-      forgottenCount: targets.length,
-      itemIds: targets,
+      forgottenCount: forgottenItems.length,
+      itemIds: forgottenItems.map((item) => item.itemId),
+      items: forgottenItems,
     };
   }
 

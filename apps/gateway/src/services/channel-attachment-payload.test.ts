@@ -74,4 +74,32 @@ describe("resolveChannelSendAttachments", () => {
       },
     ]);
   });
+
+  it("rejects unsafe external attachment URLs", async () => {
+    await expect(
+      resolveChannelSendAttachments(
+        {
+          attachments: [{ url: "file:///etc/passwd", title: "local file" }],
+        },
+        {
+          readChatAttachmentContent: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("http or https");
+  });
+
+  it("rejects oversized inline attachment payloads", async () => {
+    const large = Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64");
+
+    await expect(
+      resolveChannelSendAttachments(
+        {
+          attachments: [{ dataBase64: large, title: "too-large.bin" }],
+        },
+        {
+          readChatAttachmentContent: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("exceeds");
+  });
 });

@@ -314,7 +314,8 @@ describe("llm routes", () => {
   it("returns model discovery source with model lists", async () => {
     const listLlmModels = vi.fn(async () => ({
       items: [{ id: "gpt-5.5" }],
-      source: "fallback" as const,
+      source: "template_fallback" as const,
+      warning: "template catalog",
     }));
 
     app = Fastify();
@@ -339,7 +340,8 @@ describe("llm routes", () => {
     expect(listLlmModels).toHaveBeenCalledWith("openai-codex");
     expect(response.json()).toEqual({
       items: [{ id: "gpt-5.5" }],
-      source: "fallback",
+      source: "template_fallback",
+      warning: "template catalog",
     });
   });
 

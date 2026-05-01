@@ -17,7 +17,7 @@ export interface ChatModelProviderOption {
   availabilityHint?: string;
   isLocalRuntime?: boolean;
   modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
-  modelProbeSource?: "remote" | "fallback";
+  modelProbeSource?: "live" | "template_fallback" | "error_fallback";
   modelProbeCheckedAt?: string;
 }
 

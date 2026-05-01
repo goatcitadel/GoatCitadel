@@ -693,7 +693,8 @@ describe("LlmService", () => {
         providerId: "minimax",
         baseUrl: "https://api.minimax.io/v1",
       });
-      expect(result.source).toBe("fallback");
+      expect(result.source).toBe("error_fallback");
+      expect(result.warning).toContain("preview failed");
       expect(result.items.some((item) => item.id === "MiniMax-M2.7")).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
@@ -824,9 +825,9 @@ describe("LlmService", () => {
       upsertProvider: {
         providerId: "openai-codex",
         label: "OpenAI Codex (ChatGPT OAuth)",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        apiStyle: "openai-codex-responses",
-        authMode: "codex-oauth",
+        baseUrl: "https://api.openai.com/v1",
+        apiStyle: "openai-chat-completions",
+        authMode: "api-key",
         defaultModel: "gpt-5.5",
         apiKey: "sk-ignored",
         apiKeyEnv: "OPENAI_API_KEY",
@@ -838,6 +839,9 @@ describe("LlmService", () => {
       .providers.find((provider) => provider.providerId === "openai-codex");
     expect(exportedProvider?.apiKey).toBeUndefined();
     expect(exportedProvider?.apiKeyEnv).toBeUndefined();
+    expect(exportedProvider?.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
+    expect(exportedProvider?.apiStyle).toBe("openai-codex-responses");
+    expect(exportedProvider?.authMode).toBe("codex-oauth");
     expect(service.getProviderSecretStatus("openai-codex").hasApiKey).toBe(false);
     expect(() => service.setProviderApiKey("openai-codex", "sk-test")).toThrow(/ChatGPT OAuth/);
     expect(() => service.deleteProviderApiKey("openai-codex")).toThrow(/ChatGPT OAuth/);
@@ -2127,7 +2131,7 @@ describe("LlmService", () => {
         providerId: "openai",
         baseUrl: "https://api.openai.com/v1",
       });
-      expect(result.source).toBe("remote");
+      expect(result.source).toBe("live");
       expect(result.items.map((item) => item.id)).toEqual([
         "gpt-5.4-mini",
         "gpt-4.1-mini",
@@ -2294,6 +2298,10 @@ describe("LlmService", () => {
         "gpt-4.1-mini",
         "gpt-4o-mini",
       ]);
+
+      const discovery = await service.listModelsWithSource("openai");
+      expect(discovery.source).toBe("template_fallback");
+      expect(discovery.warning).toContain("returned no models");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2356,7 +2364,8 @@ describe("LlmService", () => {
 
     const result = await service.listModelsWithSource("openai-codex");
 
-    expect(result.source).toBe("fallback");
+    expect(result.source).toBe("template_fallback");
+    expect(result.warning).toContain("template");
     expect(result.items.map((model) => model.id)).toContain("gpt-5.5");
   });
 

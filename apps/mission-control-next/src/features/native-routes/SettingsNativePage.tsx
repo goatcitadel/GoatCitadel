@@ -627,6 +627,26 @@ function formatProviderProbeStateLabel(value?: "not_checked" | "ready" | "fallba
   }
 }
 
+function formatProviderProbeSourceMeta(provider?: {
+  modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
+  modelProbeSource?: "live" | "template_fallback" | "error_fallback";
+  modelProbeCheckedAt?: string;
+  modelProbeWarning?: string;
+}): string {
+  if (!provider) {
+    return "Not checked yet";
+  }
+  if (provider.modelProbeSource === "error_fallback") {
+    return provider.modelProbeWarning
+      ? `Fallback after probe error: ${provider.modelProbeWarning}`
+      : "Fallback after probe error";
+  }
+  if (provider.modelProbeSource === "template_fallback" || provider.modelProbeState === "fallback") {
+    return "Template suggestions; not account-verified";
+  }
+  return formatCheckedAtLabel(provider.modelProbeCheckedAt);
+}
+
 function formatCheckedAtLabel(value?: string): string {
   if (!value) {
     return "Not checked yet";
@@ -1211,10 +1231,13 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       const items = await loadModelsForProvider(normalized, { force: true });
       const probe = getCachedModelProbe(normalized);
       const fallbackOnly = probe?.state === "fallback";
+      const failedFallback = probe?.source === "error_fallback";
       setNotice({
         tone: items.length > 0 && !fallbackOnly ? "success" : "warning",
         message: fallbackOnly
-          ? `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
+          ? failedFallback
+            ? `Loaded ${items.length} fallback models for ${normalized}; live discovery failed${probe?.warning ? `: ${probe.warning}` : "."}`
+            : `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
           : items.length > 0
             ? `Refreshed ${items.length} models for ${normalized}.`
             : `Probe completed for ${normalized}, but no models were returned.`,
@@ -1508,10 +1531,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     {
                       label: "Probe",
                       value: formatProviderProbeStateLabel(selectedProvider.modelProbeState),
-                      meta:
-                        selectedProvider.modelProbeState === "fallback"
-                          ? "Template suggestions; not account-verified"
-                          : formatCheckedAtLabel(selectedProvider.modelProbeCheckedAt),
+                      meta: formatProviderProbeSourceMeta(selectedProvider),
                     },
                     {
                       label: "Models",

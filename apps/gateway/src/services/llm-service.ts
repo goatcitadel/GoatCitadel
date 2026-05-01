@@ -16,6 +16,7 @@ import type {
   LlmProviderRequestTlsConfig,
   LlmApiStyle,
   LlmConfigFile,
+  LlmModelDiscoverySource,
   LlmModelRecord,
   LlmModelPreviewRequest,
   LlmModelPreviewResponse,
@@ -67,7 +68,8 @@ interface ProviderRequestTarget {
 
 interface ModelDiscoveryResult {
   items: LlmModelRecord[];
-  source: "remote" | "fallback";
+  source: LlmModelDiscoverySource;
+  warning?: string;
 }
 
 export interface LlmServiceOptions {
@@ -481,14 +483,14 @@ export class LlmService {
         return {
           items: mergeModelCatalogs(result.items, fallbackCatalog),
           source: result.source,
+          warning: result.warning,
         };
       }
     } catch (error) {
-      const fallbackItems = provider.defaultModel ? [{ id: provider.defaultModel }] : [];
-      if (fallbackItems.length > 0) {
+      if (fallbackCatalog.length > 0) {
         return {
-          items: fallbackItems,
-          source: "fallback",
+          items: fallbackCatalog,
+          source: "error_fallback",
           warning: (error as Error).message,
         };
       }
@@ -496,8 +498,8 @@ export class LlmService {
     }
 
     return {
-      items: provider.defaultModel ? [{ id: provider.defaultModel }] : [],
-      source: "fallback",
+      items: fallbackCatalog,
+      source: "template_fallback",
       warning: "Provider returned no models. Falling back to the recommended default model.",
     };
   }
@@ -1364,7 +1366,11 @@ export class LlmService {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     if (isOpenAICodexProvider(resolved.provider)) {
-      return { items: fallback, source: "fallback" };
+      return {
+        items: fallback,
+        source: "template_fallback",
+        warning: "OpenAI Codex model catalog is sourced from GoatCitadel's template because ChatGPT OAuth does not expose a stable /models endpoint.",
+      };
     }
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
 
@@ -1384,7 +1390,11 @@ export class LlmService {
 
       if (!response.ok) {
         if (fallback.length > 0) {
-          return { items: fallback, source: "fallback" };
+          return {
+            items: fallback,
+            source: "error_fallback",
+            warning: await buildHttpError("model listing", response),
+          };
         }
         throw new Error(await buildHttpError("model listing", response));
       }
@@ -1392,12 +1402,16 @@ export class LlmService {
       const json = (await response.json()) as unknown;
       const items = normalizeModelRecords(json);
       if (items.length > 0) {
-        return { items, source: "remote" };
+        return { items, source: "live" };
       }
-      return { items: fallback, source: "fallback" };
+      return {
+        items: fallback,
+        source: "template_fallback",
+        warning: "Provider returned no models. Falling back to GoatCitadel's provider template.",
+      };
     } catch (error) {
       if (fallback.length > 0) {
-        return { items: fallback, source: "fallback" };
+        return { items: fallback, source: "error_fallback", warning: (error as Error).message };
       }
       throw error;
     }
@@ -1413,7 +1427,10 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
     ...provider,
     baseUrl: withV1,
     apiStyle: normalizeProviderApiStyle(provider.providerId, provider.apiStyle),
-    authMode: provider.authMode ?? defaultAuthModeForProvider(provider.providerId),
+    authMode:
+      provider.providerId === "openai-codex"
+        ? "codex-oauth"
+        : (provider.authMode ?? defaultAuthModeForProvider(provider.providerId)),
     request: normalizeProviderRequestConfig(provider.request, provider.headers),
     headers: undefined,
   };
@@ -1443,6 +1460,9 @@ function normalizeProviderRequestConfig(
 }
 
 function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
+  if (providerId === "openai-codex") {
+    return "openai-codex-responses";
+  }
   if (
     apiStyle === "openai-chat-completions" ||
     apiStyle === "openai-responses" ||
@@ -1450,9 +1470,6 @@ function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | u
     apiStyle === "anthropic-messages"
   ) {
     return apiStyle;
-  }
-  if (providerId === "openai-codex") {
-    return "openai-codex-responses";
   }
   if (providerId === "openai") {
     return "openai-responses";
@@ -1557,6 +1574,9 @@ const PROVIDER_URL_CANONICALIZATION: Record<string, { match: RegExp; replace: st
 };
 
 function canonicalizeProviderUrl(providerId: string, baseUrl: string): string {
+  if (providerId === "openai-codex") {
+    return "https://chatgpt.com/backend-api/codex";
+  }
   const rules = PROVIDER_URL_CANONICALIZATION[providerId];
   if (rules) {
     let result = baseUrl;

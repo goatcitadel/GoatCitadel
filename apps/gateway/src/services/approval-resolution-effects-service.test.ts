@@ -231,7 +231,17 @@ describe("approval-resolution-effects-service", () => {
       true,
     );
 
-    expect(failEffect).toHaveBeenCalledOnce();
+    expect(failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          outcome: "failed",
+          operatorStatus: "failed",
+        }),
+      }),
+    );
     expect(skipEffect).not.toHaveBeenCalled();
     expect(completeEffect).not.toHaveBeenCalled();
   });
@@ -298,6 +308,7 @@ describe("approval-resolution-effects-service", () => {
       expect.objectContaining({
         result: expect.objectContaining({
           outcome: "woke",
+          operatorStatus: "woke",
           reconciled: true,
           reconciledFrom: "skipped_not_waiting",
           observedRunStatus: "queued",
@@ -370,6 +381,7 @@ describe("approval-resolution-effects-service", () => {
       expect.objectContaining({
         result: expect.objectContaining({
           outcome: "already_running_unverified",
+          operatorStatus: "already_running",
           reconciled: false,
           observedRunStatus: "running",
         }),

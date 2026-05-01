@@ -1,5 +1,7 @@
 import type { ChannelAttachmentInput, ChatAttachmentRecord } from "@goatcitadel/contracts";
 
+const MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
 export async function resolveChannelSendAttachments(
   input: {
     attachments?: ChannelAttachmentInput[];
@@ -51,7 +53,9 @@ export async function resolveChannelSendAttachments(
         ...attachments[existingIndex],
         ...hydratedAttachment,
       };
+      validateChannelAttachment(attachments[existingIndex]);
     } else {
+      validateChannelAttachment(hydratedAttachment);
       attachments.push(hydratedAttachment);
     }
     hydratedAttachmentIds.add(attachmentId);
@@ -80,9 +84,39 @@ function normalizeExplicitAttachments(input: ChannelAttachmentInput[] | undefine
         || attachment.dataBase64
         || attachment.attachmentId,
       ))
-    .map((attachment) => ({ ...attachment }));
+    .map((attachment) => {
+      const normalized = { ...attachment };
+      validateChannelAttachment(normalized);
+      return normalized;
+    });
 }
 
 function trimOptionalString(value: string | undefined): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function validateChannelAttachment(attachment: ChannelAttachmentInput): void {
+  if (attachment.url) {
+    let parsed: URL;
+    try {
+      parsed = new URL(attachment.url);
+    } catch {
+      throw new Error("Channel attachment URL is invalid.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Channel attachment URLs must use http or https.");
+    }
+  }
+  if (attachment.dataBase64) {
+    const estimatedBytes = estimateBase64Bytes(attachment.dataBase64);
+    if (estimatedBytes > MAX_INLINE_ATTACHMENT_BYTES) {
+      throw new Error(`Channel inline attachment exceeds the ${MAX_INLINE_ATTACHMENT_BYTES} byte limit.`);
+    }
+  }
+}
+
+function estimateBase64Bytes(value: string): number {
+  const normalized = value.replace(/\s+/g, "");
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }

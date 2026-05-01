@@ -33,6 +33,9 @@ export interface SkillStateRecord {
   note?: string;
   updatedAt: string;
   firstAutoApprovedAt?: string;
+  pinned?: boolean;
+  usageCount?: number;
+  lastUsedAt?: string;
 }
 
 export interface SkillActivationPolicy {
@@ -44,6 +47,9 @@ export interface SkillListItem extends LoadedSkill {
   state: SkillRuntimeState;
   note?: string;
   stateUpdatedAt?: string;
+  pinned?: boolean;
+  usageCount?: number;
+  lastUsedAt?: string;
   capabilityCategory?: CapabilityCategory;
   lifecycleState?: SkillLifecycleState;
   lifecycle?: SkillLifecycleRecord;

@@ -117,6 +117,10 @@ export class ApprovalEffectsService {
           this.workerRequested = false;
           await this.drainPendingEffects();
         } while (this.workerRequested && !this.workerStopped);
+      } catch (error) {
+        this.ctx.publishRealtime("approval_effect_worker_failed", "approvals", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       } finally {
         this.workerActive = false;
         backgroundTasks.delete(task);
@@ -837,9 +841,36 @@ function buildWakeResultRecord(
     eventKey: result.eventKey,
     correlationId: result.correlationId,
     outcome: result.outcome,
+    operatorStatus: classifyWakeOperatorStatus(result),
     detail: result.detail,
     ...extra,
   };
+}
+
+function classifyWakeOperatorStatus(
+  result: DurableWakeResult,
+): "woke" | "skipped" | "already_running" | "missing_run" | "terminal_run" | "failed" {
+  if (result.outcome === "woke") {
+    return "woke";
+  }
+  if (result.outcome === "failed") {
+    return "failed";
+  }
+  if (result.run?.status === "running") {
+    return "already_running";
+  }
+  if (
+    result.run?.status === "completed" ||
+    result.run?.status === "failed" ||
+    result.run?.status === "cancelled" ||
+    result.run?.status === "dead_lettered"
+  ) {
+    return "terminal_run";
+  }
+  if (!result.run && result.outcome === "skipped_not_waiting") {
+    return "missing_run";
+  }
+  return "skipped";
 }
 
 function buildRecoveredWakeResult(
@@ -855,6 +886,7 @@ function buildRecoveredWakeResult(
   return {
     ...resultRecord,
     outcome: "woke",
+    operatorStatus: "woke",
     reconciled: true,
     reconciledFrom: "skipped_not_waiting",
     observedRunStatus: result.run.status,
@@ -872,6 +904,7 @@ function buildExplicitNonWakeResult(
   return {
     ...resultRecord,
     outcome: "already_running_unverified",
+    operatorStatus: "already_running",
     reconciled: false,
     observedRunStatus: result.run.status,
     ...(proof ? { proof } : {}),

@@ -994,14 +994,14 @@ describe("SettingsNativePage providers", () => {
   it("labels fallback-only Codex model catalogs as suggested and unverified", async () => {
     setCodexProviderCatalogState({
       modelProbeState: "fallback" as const,
-      modelProbeSource: "fallback" as const,
+      modelProbeSource: "template_fallback" as const,
       models: ["gpt-5.5"],
     });
     mocks.getCachedModelProbe.mockReturnValue({
       items: ["gpt-5.5"],
       expiresAt: Date.now() + 60_000,
       state: "fallback",
-      source: "fallback",
+      source: "template_fallback",
       checkedAt: "2026-04-22T10:00:00.000Z",
     });
 

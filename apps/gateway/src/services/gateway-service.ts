@@ -600,6 +600,7 @@ const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
 };
 const BANKR_OPTIONAL_MIGRATION_MESSAGE =
   "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
+const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 const PROACTIVE_SCHEDULER_INTERVAL_MS = 120_000;
 const PROACTIVE_SCHEDULER_CONCURRENCY = 8;
 const PROACTIVE_MIN_IDLE_SECONDS = 90;
@@ -611,6 +612,7 @@ const PROACTIVE_SAFE_TOOL_ALLOWLIST = new Set([
   "http.get",
 ]);
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = ["browser.search", "browser.navigate", "browser.extract", "http.get"] as const;
+const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
 const PRIVATE_BETA_BACKUP_TIME_ZONE = "America/Los_Angeles";
 export const PRIVATE_BETA_BACKUP_SCHEDULE_LABEL = "30 2 * * * America/Los_Angeles";
@@ -4962,6 +4964,10 @@ export class GatewayService {
     if (!knownSkill) {
       throw new Error(`Unknown skill: ${skillId}`);
     }
+    const currentState = this.readSkillStates().get(skillId);
+    if (currentState?.pinned && currentState.state !== state) {
+      throw new Error(`Pinned skill ${skillId} cannot be changed directly; create a skill mutation proposal first.`);
+    }
     const now = new Date().toISOString();
     this.gatewaySql
       .prepare(
@@ -5070,6 +5076,8 @@ export class GatewayService {
         requiresConfirmation,
       });
     }
+
+    this.recordSkillUsage(selected.map((skill) => skill.skillId));
 
     return {
       ...base,
@@ -6036,8 +6044,58 @@ export class GatewayService {
         )
         .all(),
     );
+    const metadata = this.readSkillStateMetadata();
 
-    return new Map(rows.map((row) => [row.skillId, row]));
+    return new Map(
+      rows.map((row) => [
+        row.skillId,
+        {
+          ...row,
+          pinned: metadata[row.skillId]?.pinned,
+          usageCount: metadata[row.skillId]?.usageCount,
+          lastUsedAt: metadata[row.skillId]?.lastUsedAt,
+        },
+      ]),
+    );
+  }
+
+  private readSkillStateMetadata(): Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> {
+    const value = this.storage.systemSettings.get<
+      Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>
+    >(SKILL_STATE_METADATA_SETTING_KEY)?.value;
+    if (!value || typeof value !== "object") {
+      return {};
+    }
+    const output: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> = {};
+    for (const [skillId, metadata] of Object.entries(value)) {
+      if (!isRecord(metadata)) {
+        continue;
+      }
+      output[skillId] = {
+        pinned: metadata.pinned === true ? true : undefined,
+        usageCount: typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
+        lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : undefined,
+      };
+    }
+    return output;
+  }
+
+  private recordSkillUsage(skillIds: string[]): void {
+    const uniqueSkillIds = [...new Set(skillIds.filter((skillId) => skillId.trim().length > 0))];
+    if (uniqueSkillIds.length === 0) {
+      return;
+    }
+    const metadata = this.readSkillStateMetadata();
+    const now = new Date().toISOString();
+    for (const skillId of uniqueSkillIds) {
+      const current = metadata[skillId] ?? {};
+      metadata[skillId] = {
+        ...current,
+        usageCount: (current.usageCount ?? 0) + 1,
+        lastUsedAt: now,
+      };
+    }
+    this.storage.systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, metadata);
   }
 
   private ensureSkillStates(skillIds: string[]): void {
@@ -6137,13 +6195,33 @@ export class GatewayService {
   }
 
   /** @internal */ public ensureSessionInternalToolGrant(sessionId: string, toolName: string, createdBy: string): void {
-    const hasActiveAllow = this.listToolGrants("session", sessionId, 1000).some(
+    const sessionGrants = this.listToolGrants("session", sessionId, 1000);
+    const inheritedGrants = [
+      ...this.listToolGrants("global", "global", 1000),
+      ...this.listToolGrants("agent", "assistant", 1000),
+    ];
+    const activeGrants = [...sessionGrants, ...inheritedGrants].filter(isActiveToolGrant);
+    const hasActiveDeny = activeGrants.some(
+      (grant) => grant.decision === "deny" && grantPatternMatches(grant.toolPattern, toolName),
+    );
+    if (hasActiveDeny) {
+      this.publishRealtime("system", "tools", {
+        type: "internal_tool_grant_blocked",
+        sessionId,
+        toolName,
+        createdBy,
+        reason: "deny-wins",
+      });
+      throw new Error(`Internal tool grant for ${toolName} is blocked by an active deny policy.`);
+    }
+    const hasActiveAllow = sessionGrants.some(
       (grant) =>
         isActiveToolGrant(grant) && grant.decision === "allow" && grantPatternMatches(grant.toolPattern, toolName),
     );
     if (hasActiveAllow) {
       return;
     }
+    const expiresAt = new Date(Date.now() + INTERNAL_TOOL_GRANT_TTL_MS).toISOString();
     this.policyEngine.createGrant({
       toolPattern: toolName,
       decision: "allow",
@@ -6151,6 +6229,16 @@ export class GatewayService {
       scopeRef: sessionId,
       grantType: "one_time",
       createdBy,
+      expiresAt,
+      usesRemaining: 1,
+    });
+    this.publishRealtime("system", "tools", {
+      type: "internal_tool_grant_created",
+      sessionId,
+      toolName,
+      createdBy,
+      expiresAt,
+      usesRemaining: 1,
     });
   }
 
@@ -6166,7 +6254,8 @@ export class GatewayService {
     if (deliveryStatus === "failed") {
       const detail =
         typeof result.error === "string" && result.error.trim().length > 0 ? result.error.trim() : "delivery failed";
-      throw new Error(`${toolName} failed: ${detail}`);
+      const channelStatus = typeof result.deliveryStatus === "string" ? result.deliveryStatus : "degraded";
+      throw new Error(`${toolName} ${channelStatus}: ${detail}`);
     }
     return result;
   }

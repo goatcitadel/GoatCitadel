@@ -9,6 +9,7 @@ import type {
   AssemblyRunRecord,
   ChangeRiskEvaluationResponse,
   CreateAssemblyRunInput,
+  LlmModelDiscoverySource,
   LlmProviderConfig,
   LlmProviderRequestConfig,
   LlamaCppAdvisorRecommendation,
@@ -187,7 +188,11 @@ export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
 
 export async function fetchLlmModels(
   providerId?: string,
-): Promise<{ items: Array<{ id: string; ownedBy?: string; created?: number }>; source: "remote" | "fallback" }> {
+): Promise<{
+  items: Array<{ id: string; ownedBy?: string; created?: number }>;
+  source: LlmModelDiscoverySource;
+  warning?: string;
+}> {
   const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
   return request(`/api/v1/llm/models${query}`);
 }
@@ -224,7 +229,7 @@ export async function previewLlmModels(
   options?: { signal?: AbortSignal },
 ): Promise<{
   items: Array<{ id: string; ownedBy?: string; created?: number }>;
-  source: "remote" | "fallback";
+  source: LlmModelDiscoverySource;
   warning?: string;
 }> {
   return request("/api/v1/llm/models/preview", {

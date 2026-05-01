@@ -113,7 +113,7 @@ export function useChatProviderRoutingController(input: {
     };
     models: string[];
     modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
-    modelProbeSource?: "remote" | "fallback";
+    modelProbeSource?: "live" | "template_fallback" | "error_fallback";
     modelProbeCheckedAt?: string;
   }>;
   getCachedModels: (providerId: string) => string[];

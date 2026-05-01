@@ -113,7 +113,7 @@ describe("useProviderModelCatalog", () => {
     apiMocks.fetchLlmModels.mockImplementation(async (providerId?: string) => ({
       items:
         providerId === "glm" ? [{ id: "glm-5" }, { id: "glm-5-air" }] : [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
-      source: "remote",
+      source: "live",
     }));
     latest = null;
   });
@@ -224,7 +224,7 @@ describe("useProviderModelCatalog", () => {
   it("merges known Google fallback models into preview results", async () => {
     apiMocks.previewLlmModels.mockResolvedValue({
       items: [{ id: "models/gemini-2.5-flash" }],
-      source: "fallback",
+      source: "error_fallback",
       warning: "preview unavailable",
     });
 
@@ -252,7 +252,7 @@ describe("useProviderModelCatalog", () => {
   it("merges known MiniMax fallback models into preview results", async () => {
     apiMocks.previewLlmModels.mockResolvedValue({
       items: [{ id: "MiniMax-M2.7" }],
-      source: "fallback",
+      source: "error_fallback",
       warning: "preview unavailable",
     });
 

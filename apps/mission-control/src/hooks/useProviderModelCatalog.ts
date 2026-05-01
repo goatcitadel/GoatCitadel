@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { findProviderTemplate, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
+import { findProviderTemplate, type LlmModelDiscoverySource, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
 import type { LlmRuntimeConfigResponse, RuntimeSettingsResponse } from "../api/client";
 import { fetchLlmConfig, fetchLlmModels, previewLlmModels } from "../api/client";
 import { useRefreshSubscription } from "./useRefreshSubscription";
@@ -11,7 +11,7 @@ const sharedProviderModelCache = new Map<string, ProviderModelCacheEntry>();
 const sharedProviderModelRequests = new Map<string, Promise<ProviderModelLoadResult>>();
 
 export type ProviderModelProbeState = "not_checked" | "ready" | "fallback" | "empty" | "error";
-export type ProviderModelProbeSource = "remote" | "fallback";
+export type ProviderModelProbeSource = LlmModelDiscoverySource;
 
 export interface ProviderModelCatalogOption {
   providerId: string;
@@ -28,6 +28,7 @@ export interface ProviderModelCatalogOption {
   modelProbeState?: ProviderModelProbeState;
   modelProbeSource?: ProviderModelProbeSource;
   modelProbeCheckedAt?: string;
+  modelProbeWarning?: string;
 }
 
 export interface ProviderModelPreviewResult {
@@ -42,6 +43,7 @@ interface ProviderModelCacheEntry {
   state: ProviderModelProbeState;
   source?: ProviderModelProbeSource;
   checkedAt?: string;
+  warning?: string;
 }
 
 interface ProviderModelLoadResult {
@@ -107,6 +109,7 @@ function buildProviderCatalog(
       modelProbeState: cached?.state ?? "not_checked",
       modelProbeSource: cached?.source,
       modelProbeCheckedAt: cached?.checkedAt,
+      modelProbeWarning: cached?.warning,
     } satisfies ProviderModelCatalogOption;
   });
 }
@@ -145,7 +148,7 @@ export async function previewProviderModels(
       ...(template?.knownModels ?? []),
       ...response.items.map((item) => item.id),
     ]),
-    source: response.source,
+    source: response.source === "live" ? "remote" : "fallback",
     warning: response.warning,
   };
 }
@@ -206,13 +209,14 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
           const response = await fetchLlmModels(normalized);
           const items = dedupeProviderModels(response.items.map((item) => item.id));
           const state: ProviderModelProbeState =
-            items.length === 0 ? "empty" : response.source === "fallback" ? "fallback" : "ready";
+            items.length === 0 ? "empty" : response.source === "live" ? "ready" : "fallback";
           sharedProviderModelCache.set(normalized, {
             items,
             expiresAt: Date.now() + PROVIDER_MODELS_POSITIVE_TTL_MS,
             state,
             source: response.source,
             checkedAt: new Date().toISOString(),
+            warning: response.warning,
           });
           return { items, source: response.source };
         } catch {

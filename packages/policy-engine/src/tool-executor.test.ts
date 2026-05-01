@@ -786,6 +786,73 @@ describe("executeTool", () => {
     });
   });
 
+  it("retries retryable channel delivery failures before reporting success", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false }), { status: 429, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, ts: "1712345678.000200" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: {
+            botTokenEnv: "SLACK_BOT_TOKEN",
+            defaultChannel: "#build-alerts",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-retry",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-slack",
+          message: "Retry this.",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack",
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "sent",
+      deliveryStatus: "sent",
+      providerMessageId: "1712345678.000200",
+    });
+  });
+
   it("sends Discord webhook messages with inline uploads and URL embeds", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(

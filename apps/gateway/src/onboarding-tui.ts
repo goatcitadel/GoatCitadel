@@ -5,7 +5,7 @@ import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { confirm, input, password, select } from "@inquirer/prompts";
-import type { LlmRuntimeConfig, OnboardingBootstrapResult, OnboardingState } from "@goatcitadel/contracts";
+import type { LlmModelPreviewResponse, LlmRuntimeConfig, OnboardingBootstrapResult, OnboardingState } from "@goatcitadel/contracts";
 import { providerTemplates } from "@goatcitadel/contracts";
 import { resolveGoatCitadelAppDir } from "./onboarding-tui-paths.js";
 import { renderBox, renderBulletList, renderKeyValueSummary, renderSection } from "./tui/render.js";
@@ -540,11 +540,7 @@ async function promptProviderAndModel(
     providerApiKeyEnv = "";
   }
 
-  let preview = await requestJson<{
-    items: Array<{ id: string; label?: string }>;
-    source: "remote" | "fallback";
-    warning?: string;
-  }>(
+  let preview = await requestJson<LlmModelPreviewResponse>(
     gatewayBaseUrl,
     "/api/v1/llm/models/preview",
     {
@@ -571,7 +567,7 @@ async function promptProviderAndModel(
           "Model discovery warning",
           [
             preview.warning,
-            preview.source === "fallback"
+            preview.source !== "live"
               ? "GoatCitadel fell back to the template/default model because the provider did not return a live catalog."
               : "GoatCitadel still returned live model results, but the provider sent a warning.",
           ],
@@ -584,11 +580,11 @@ async function promptProviderAndModel(
         renderBox(
           "Model discovery",
           [
-            preview.source === "remote"
+            preview.source === "live"
               ? "GoatCitadel successfully loaded a live model list from the provider API."
               : "GoatCitadel did not get a live model list, so it is offering the built-in default as a safe fallback.",
           ],
-          preview.source === "remote" ? "success" : "warning",
+          preview.source === "live" ? "success" : "warning",
         ),
       );
     }
@@ -601,7 +597,7 @@ async function promptProviderAndModel(
         ...preview.items.map((item) => ({
           name: item.label ? `${item.label} (${item.id})` : item.id,
           value: item.id,
-          description: preview.source === "remote" ? "Live provider-reported model" : "Fallback model entry",
+          description: preview.source === "live" ? "Live provider-reported model" : "Fallback model entry",
         })),
         {
           name: `Use provider default (${fallbackDefaultModel})`,

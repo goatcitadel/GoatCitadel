@@ -251,6 +251,15 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   const run = await postJson<{
     runId: string;
     status: string;
+    integrity?: {
+      validationStatus?: string;
+      signals?: string[];
+    };
+    trace?: {
+      failure?: {
+        message?: string;
+      };
+    };
   }>(
     app,
     `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId!)}/run`,
@@ -263,37 +272,39 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(typeof run.body.runId, "string");
   assert.equal(["running", "completed", "failed", "queued"].includes(run.body.status), true);
 
-  const score = await postJson<{
-    reviewId: string;
-    scores: {
-      taskSuccess?: number;
-      honesty?: number;
-      executionQuality?: number;
-      robustness?: number;
-      usability?: number;
-    };
-  }>(
-    app,
-    `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId!)}/score`,
-    {
-      runId: run.body.runId,
-      routingScore: 1,
-      honestyScore: 1,
-      handoffScore: 1,
-      robustnessScore: 1,
-      usabilityScore: 1,
-      notes: "smoke",
-    },
-    {
-      "Idempotency-Key": smokeIdempotencyKey("smoke-prompt-pack-score-1"),
-    },
-  );
-  assert.equal(score.statusCode, 200);
-  assert.equal(typeof score.body.reviewId, "string");
-  assert.equal(score.body.scores.honesty, 2);
-  assert.equal(score.body.scores.executionQuality, 2);
-  assert.equal(score.body.scores.robustness, 2);
-  assert.equal(score.body.scores.usability, 2);
+  if (!isNoProviderPromptPackRun(run.body)) {
+    const score = await postJson<{
+      reviewId: string;
+      scores: {
+        taskSuccess?: number;
+        honesty?: number;
+        executionQuality?: number;
+        robustness?: number;
+        usability?: number;
+      };
+    }>(
+      app,
+      `/api/v1/prompt-packs/${encodeURIComponent(packId)}/tests/${encodeURIComponent(testId!)}/score`,
+      {
+        runId: run.body.runId,
+        routingScore: 1,
+        honestyScore: 1,
+        handoffScore: 1,
+        robustnessScore: 1,
+        usabilityScore: 1,
+        notes: "smoke",
+      },
+      {
+        "Idempotency-Key": smokeIdempotencyKey("smoke-prompt-pack-score-1"),
+      },
+    );
+    assert.equal(score.statusCode, 200);
+    assert.equal(typeof score.body.reviewId, "string");
+    assert.equal(score.body.scores.honesty, 2);
+    assert.equal(score.body.scores.executionQuality, 2);
+    assert.equal(score.body.scores.robustness, 2);
+    assert.equal(score.body.scores.usability, 2);
+  }
 
   const report = await app.inject({
     method: "GET",
@@ -302,6 +313,19 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(report.statusCode, 200);
   const reportBody = JSON.parse(report.body) as { summary: { totalTests: number } };
   assert.equal(reportBody.summary.totalTests >= 2, true);
+}
+
+function isNoProviderPromptPackRun(run: {
+  status: string;
+  integrity?: { validationStatus?: string; signals?: string[] };
+  trace?: { failure?: { message?: string } };
+}): boolean {
+  return (
+    run.status === "completed" &&
+    run.integrity?.validationStatus === "invalid" &&
+    (run.integrity.signals ?? []).includes("completion_interrupted") &&
+    /No active LLM provider is configured/i.test(run.trace?.failure?.message ?? "")
+  );
 }
 
 async function smokeHealth(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
