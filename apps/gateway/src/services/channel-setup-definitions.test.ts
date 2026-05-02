@@ -174,10 +174,20 @@ describe("channel setup definitions", () => {
 
     expect(hydrated.hydration.status).toBe("opaque-secret");
     expect(hydrated.hydration.fieldState.botToken).toBe("configured");
-    expect(hydrated.draft).toEqual({
-      defaultChatId: "123456789",
-      parseMode: "MarkdownV2",
-    });
+    expect(hydrated.draft).toEqual(
+      expect.objectContaining({
+        defaultChatId: "123456789",
+        parseMode: "MarkdownV2",
+        targets: [
+          expect.objectContaining({
+            id: "default",
+            label: "Telegram default",
+            chatId: "123456789",
+            default: true,
+          }),
+        ],
+      }),
+    );
     expect(hydrated.draft).not.toHaveProperty("botToken");
   });
 
@@ -275,7 +285,7 @@ describe("channel setup definitions", () => {
           failureCategory: "missing_input",
         }),
         expect.objectContaining({
-          fieldKey: "defaultChannel",
+          fieldKey: "targets",
           failureCategory: "missing_input",
         }),
       ]),

@@ -21,6 +21,7 @@ import {
   buildInstalledIntegrationPluginRecord,
   resolveIntegrationPluginInstallMetadata,
 } from "./integration-plugin-author-contract.js";
+import { resolveChannelConfigTarget } from "./channel-config.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 
 export interface IntegrationChannelPort {
@@ -451,7 +452,7 @@ export async function emitTelegramTypingImpl(
   const token =
     deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv") ??
     deps.resolveConnectionSecret(connection.config, "token", "tokenEnv");
-  const chatId = input.target.trim() || deps.readConnectionConfigValue(connection.config, "defaultChatId");
+  const chatId = input.target.trim() || resolveChannelConfigTarget("telegram", connection.config);
   if (!token) {
     return {
       channelKey: "telegram",

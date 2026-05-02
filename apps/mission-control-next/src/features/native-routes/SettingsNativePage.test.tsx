@@ -38,6 +38,21 @@ const mocks = vi.hoisted(() => ({
     ],
   })),
   fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
+  fetchSlackOAuthStatus: vi.fn(async () => ({
+    configured: true,
+    mode: "self_owned",
+    scopes: ["chat:write"],
+    missing: [],
+    connections: [],
+  })),
+  startSlackOAuth: vi.fn(async () => ({
+    authorizationUrl: "https://slack.com/oauth/v2/authorize?state=test",
+    state: "state",
+    configured: true,
+    mode: "self_owned",
+    scopes: ["chat:write"],
+  })),
+  discoverTelegramTargets: vi.fn(async () => ({ items: [] })),
   fetchIntegrationPlugins: vi.fn(async () => ({
     items: [
       {
@@ -153,6 +168,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
+    fetchSlackOAuthStatus: mocks.fetchSlackOAuthStatus,
+    startSlackOAuth: mocks.startSlackOAuth,
+    discoverTelegramTargets: mocks.discoverTelegramTargets,
     fetchIntegrationPlugins: mocks.fetchIntegrationPlugins,
     fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,

@@ -19,7 +19,7 @@ import {
 } from "./channel-bot-live-probes.js";
 import { buildChannelCapabilityDiagnosticChecks } from "./channel-capability-diagnostic-checks.js";
 import { describeChannelFeatureMetadata } from "./channel-diagnostics.js";
-import { resolveChannelConfigTarget } from "./channel-config.js";
+import { resolveChannelConfigTarget, resolveDefaultNamedTarget } from "./channel-config.js";
 import { runWebhookDestinationLiveChecks } from "./channel-webhook-probes.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 
@@ -435,8 +435,10 @@ export async function runIntegrationConnectionLiveChecks(
       }
       return runSlackBotLiveChecks({
         token,
-        channel: deps.readConnectionConfigValue(config, "defaultChannel"),
-        threadTs: deps.readConnectionConfigValue(config, "defaultThreadTs"),
+        channel: resolveChannelConfigTarget(connection.key, config),
+        threadTs:
+          readTargetString(resolveDefaultNamedTarget(config), "threadTs") ??
+          deps.readConnectionConfigValue(config, "defaultThreadTs"),
         includeSandboxSend: options.includeSandboxSend,
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
       });
@@ -452,7 +454,7 @@ export async function runIntegrationConnectionLiveChecks(
       }
       return runTelegramBotLiveChecks({
         token,
-        chatId: deps.readConnectionConfigValue(config, "defaultChatId"),
+        chatId: resolveChannelConfigTarget(connection.key, config),
         parseMode: deps.readConnectionConfigValue(config, "parseMode"),
         includeSandboxSend: options.includeSandboxSend,
         fetcher: (url, init) => deps.fetchWithDiagnosticsTimeout(url, init),
@@ -596,6 +598,11 @@ export async function runIntegrationConnectionLiveChecks(
     default:
       return { checks: [] };
   }
+}
+
+function readTargetString(target: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = target?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function hasConnectionEnvValue(

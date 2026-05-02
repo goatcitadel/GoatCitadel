@@ -1,5 +1,15 @@
 import type { FastifyPluginAsync } from "fastify";
+import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { z } from "zod";
+import {
+  buildSlackOAuthConnectionInput,
+  buildSlackOAuthStart,
+  exchangeSlackOAuthCode,
+  redactSlackOAuthConnection,
+  summarizeSlackOAuthInstall,
+  verifySlackOAuthState,
+} from "../services/slack-oauth-service.js";
+import { discoverTelegramTargets } from "../services/telegram-target-discovery.js";
 
 const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
 
@@ -131,7 +141,144 @@ const obsidianInboxCaptureSchema = z.object({
   notes: z.string().optional(),
 });
 
+const slackOAuthCallbackQuerySchema = z.object({
+  code: z.string().min(1),
+  state: z.string().min(1),
+});
+
+const slackOAuthDisconnectSchema = z.object({
+  connectionId: z.string().uuid(),
+});
+
+const telegramDiscoverTargetsSchema = z.object({
+  connectionId: z.string().uuid().optional(),
+  botToken: z.string().min(1).optional(),
+  botTokenEnv: z.string().min(1).optional(),
+  setupCode: z.string().min(1).optional(),
+});
+
 export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/integrations/slack/oauth/status", async (_request, reply) => {
+    const start = buildSlackOAuthStart(readSlackOAuthConfig());
+    const allConnections: IntegrationConnection[] = fastify.services.integrations.listIntegrationConnections(
+      "channel",
+      300,
+    );
+    const connections = allConnections
+      .filter((connection) => connection.catalogId === "channel.slack" && connection.config.authMode === "oauth")
+      .map((connection) => ({
+        connection: redactSlackOAuthConnection(connection),
+        install: summarizeSlackOAuthInstall(connection),
+      }));
+    return reply.send({
+      configured: start.configured,
+      mode: start.mode,
+      scopes: start.scopes,
+      missing: start.missing,
+      connections,
+    });
+  });
+
+  fastify.post("/api/v1/integrations/slack/oauth/start", async (_request, reply) => {
+    const start = buildSlackOAuthStart(readSlackOAuthConfig());
+    if (!start.configured) {
+      return reply.code(400).send({
+        error: "Slack OAuth is not configured.",
+        missing: start.missing,
+      });
+    }
+    return reply.send(start);
+  });
+
+  fastify.get("/api/v1/integrations/slack/oauth/callback", async (request, reply) => {
+    const parsed = slackOAuthCallbackQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const config = readSlackOAuthConfig();
+    if (!config.clientId || !config.clientSecret || !config.redirectUri || !config.stateSecret) {
+      return reply.code(400).send({ error: "Slack OAuth is not configured." });
+    }
+    if (!verifySlackOAuthState(parsed.data.state, config.stateSecret)) {
+      return reply.code(400).send({ error: "Invalid or expired Slack OAuth state." });
+    }
+    try {
+      const payload = await exchangeSlackOAuthCode({
+        code: parsed.data.code,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+        redirectUri: config.redirectUri,
+        fetcher: (url, init) => fetch(url, init),
+      });
+      const connectionInput = buildSlackOAuthConnectionInput(payload);
+      const existingConnection = findExistingSlackOAuthConnection(
+        fastify.services.integrations.listIntegrationConnections("channel", 300),
+        connectionInput.config,
+      );
+      const connection = existingConnection
+        ? fastify.services.integrations.updateIntegrationConnection(existingConnection.connectionId, {
+            label: connectionInput.label,
+            enabled: true,
+            status: "connected",
+            lastError: undefined,
+            config: mergeSlackOAuthConfig(existingConnection.config, connectionInput.config),
+          })
+        : fastify.services.integrations.createIntegrationConnection(connectionInput);
+      const result = {
+        connection: redactSlackOAuthConnection(connection),
+        install: summarizeSlackOAuthInstall(connection),
+      };
+      if (request.headers.accept?.includes("text/html")) {
+        return reply.type("text/html").send(renderSlackOAuthSuccessPage(result));
+      }
+      return reply.send(result);
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/integrations/slack/oauth/disconnect", async (request, reply) => {
+    const parsed = slackOAuthDisconnectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const current = fastify.services.integrations.getIntegrationConnection(parsed.data.connectionId);
+      if (current.catalogId !== "channel.slack" || current.config.authMode !== "oauth") {
+        return reply.code(400).send({ error: "Connection is not a Slack OAuth install." });
+      }
+      const connection = fastify.services.integrations.updateIntegrationConnection(parsed.data.connectionId, {
+        enabled: false,
+        status: "disconnected",
+        lastError: undefined,
+      });
+      return reply.send({ connection: redactSlackOAuthConnection(connection) });
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/integrations/telegram/discover-targets", async (request, reply) => {
+    const parsed = telegramDiscoverTargetsSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      const token = resolveTelegramDiscoveryToken(fastify, parsed.data);
+      if (!token) {
+        return reply.code(400).send({ error: "Provide a Telegram bot token, token env var, or connection id." });
+      }
+      const items = await discoverTelegramTargets({
+        token,
+        setupCode: parsed.data.setupCode,
+        fetcher: (url, init) => fetch(url, init),
+      });
+      return reply.send({ items });
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.get("/api/v1/channels/drafts", async (request, reply) => {
     const parsed = channelDraftListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -561,3 +708,121 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function readSlackOAuthConfig() {
+  return {
+    clientId: process.env.GOATCITADEL_SLACK_OAUTH_CLIENT_ID,
+    clientSecret: process.env.GOATCITADEL_SLACK_OAUTH_CLIENT_SECRET,
+    redirectUri: process.env.GOATCITADEL_SLACK_OAUTH_REDIRECT_URI,
+    stateSecret: process.env.GOATCITADEL_SLACK_OAUTH_STATE_SECRET,
+    scopes: process.env.GOATCITADEL_SLACK_OAUTH_SCOPES,
+    brokerAuthorizeUrl: process.env.GOATCITADEL_SLACK_OAUTH_BROKER_AUTHORIZE_URL,
+  };
+}
+
+function resolveTelegramDiscoveryToken(
+  fastify: Parameters<FastifyPluginAsync>[0],
+  input: z.infer<typeof telegramDiscoverTargetsSchema>,
+): string | undefined {
+  if (input.botToken?.trim()) {
+    return input.botToken.trim();
+  }
+  if (input.botTokenEnv?.trim()) {
+    return process.env[input.botTokenEnv.trim()];
+  }
+  if (!input.connectionId) {
+    return undefined;
+  }
+  const connection = fastify.services.integrations.getIntegrationConnection(input.connectionId);
+  const config = connection.config;
+  return readConfigString(config, "botToken") ?? readEnvConfigString(config, "botTokenEnv");
+}
+
+function readConfigString(config: Record<string, unknown>, key: string): string | undefined {
+  const value = config[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readEnvConfigString(config: Record<string, unknown>, key: string): string | undefined {
+  const envName = readConfigString(config, key);
+  return envName ? process.env[envName] : undefined;
+}
+
+function findExistingSlackOAuthConnection(
+  connections: IntegrationConnection[],
+  nextConfig: Record<string, unknown>,
+): IntegrationConnection | undefined {
+  const nextTeamId = readConfigString(nextConfig, "slackTeamId");
+  const nextInstallId = readConfigString(nextConfig, "slackInstallId");
+  return connections.find((connection) => {
+    if (connection.catalogId !== "channel.slack" || connection.config.authMode !== "oauth") {
+      return false;
+    }
+    return Boolean(
+      (nextTeamId && readConfigString(connection.config, "slackTeamId") === nextTeamId) ||
+      (nextInstallId && readConfigString(connection.config, "slackInstallId") === nextInstallId),
+    );
+  });
+}
+
+function mergeSlackOAuthConfig(
+  existingConfig: Record<string, unknown>,
+  nextConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  const nextTargets = Array.isArray(nextConfig.targets) ? nextConfig.targets : [];
+  return {
+    ...existingConfig,
+    ...nextConfig,
+    targets: nextTargets.length > 0 ? nextTargets : existingConfig.targets,
+    defaultChannel:
+      readConfigString(nextConfig, "defaultChannel") ?? readConfigString(existingConfig, "defaultChannel"),
+    defaultThreadTs: readConfigString(existingConfig, "defaultThreadTs"),
+  };
+}
+
+function renderSlackOAuthSuccessPage(result: {
+  connection: IntegrationConnection;
+  install: ReturnType<typeof summarizeSlackOAuthInstall>;
+}): string {
+  const payload = JSON.stringify({
+    type: "goatcitadel.slackOAuth.connected",
+    connectionId: result.connection.connectionId,
+    teamName: result.install.teamName,
+    teamId: result.install.teamId,
+  }).replaceAll("<", "\\u003c");
+  const teamName = escapeHtml(result.install.teamName ?? "Slack workspace");
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Slack connected</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, sans-serif; color: #dff7f4; background: #071112; }
+      main { max-width: 560px; padding: 32px; text-align: center; }
+      h1 { font-size: 24px; margin: 0 0 12px; }
+      p { color: #9ac7c2; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Slack connected</h1>
+      <p>${teamName} is connected. You can return to GoatCitadel and choose channel targets.</p>
+    </main>
+    <script>
+      if (window.opener) {
+        window.opener.postMessage(${payload}, "*");
+        window.setTimeout(() => window.close(), 700);
+      }
+    </script>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}

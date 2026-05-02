@@ -169,6 +169,7 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
       integrationChannel.approveDiscordPairing(connectionId, pairingId),
     createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),
     deleteIntegrationConnection: (connectionId) => integrationChannel.deleteIntegrationConnection(connectionId),
+    getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     getIntegrationFormSchema: (catalogId) => {
       const schema = getIntegrationFormSchema(catalogId);
       if (!schema) {

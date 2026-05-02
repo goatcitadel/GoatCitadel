@@ -664,6 +664,13 @@ describe("privileged auth boundary", () => {
         error: "Operator authentication is required for this control-plane route.",
       });
     }
+    expect(built.spies.getRetentionPolicy).not.toHaveBeenCalled();
+    expect(built.spies.getDurableDiagnostics).not.toHaveBeenCalled();
+    expect(built.spies.getMemoryMaintenanceStatus).not.toHaveBeenCalled();
+    expect(built.spies.getRun).not.toHaveBeenCalled();
+    expect(built.spies.listDeviceAccessGrants).not.toHaveBeenCalled();
+    expect(built.spies.listApprovals).not.toHaveBeenCalled();
+    expect(built.spies.getApprovalReplay).not.toHaveBeenCalled();
   });
 
   it("rejects signed companion mutations on privileged POST routes after signature verification passes", async () => {

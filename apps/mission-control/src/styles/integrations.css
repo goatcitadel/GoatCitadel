@@ -417,6 +417,25 @@
   gap: 6px;
 }
 
+.channel-setup-target-list {
+  display: grid;
+  gap: 8px;
+}
+
+.channel-setup-target-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.4fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.channel-setup-target-default {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+
 .channel-setup-inline-list {
   margin: 0;
   padding-left: 18px;
@@ -453,6 +472,10 @@
 
 @media (max-width: 900px) {
   .channel-setup-shell-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .channel-setup-target-row {
     grid-template-columns: 1fr;
   }
 }

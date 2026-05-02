@@ -131,6 +131,41 @@ export async function retestChannelConnection(connectionId: string): Promise<Cha
   });
 }
 
+export async function fetchSlackOAuthStatus(): Promise<{
+  configured: boolean;
+  mode: "hosted" | "self_owned" | "missing";
+  scopes: string[];
+  missing: string[];
+  connections: Array<{ connection: IntegrationConnection; install: Record<string, unknown> }>;
+}> {
+  return request("/api/v1/integrations/slack/oauth/status");
+}
+
+export async function startSlackOAuth(): Promise<{
+  authorizationUrl: string;
+  state: string;
+  configured: boolean;
+  mode: "hosted" | "self_owned";
+  scopes: string[];
+}> {
+  return request("/api/v1/integrations/slack/oauth/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function discoverTelegramTargets(input: {
+  connectionId?: string;
+  botToken?: string;
+  botTokenEnv?: string;
+  setupCode?: string;
+}): Promise<{ items: Array<{ id: string; label: string; chatId: string; kind: string; setupCodeMatched?: boolean }> }> {
+  return request("/api/v1/integrations/telegram/discover-targets", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function fetchIntegrationFormSchema(catalogId: string): Promise<IntegrationFormSchema> {
   return request<IntegrationFormSchema>(`/api/v1/integrations/catalog/${encodeURIComponent(catalogId)}/form-schema`);
 }

@@ -2455,6 +2455,9 @@ describe("LlmService", () => {
           { role: "developer", content: "Be concise." },
           { role: "user", content: "hello" },
         ],
+        temperature: 0.2,
+        top_p: 0.9,
+        response_format: { type: "json_object" },
         tools: [
           {
             type: "function",
@@ -2499,6 +2502,9 @@ describe("LlmService", () => {
       description: "Look up runtime status.",
     });
     expect(payloadBody?.max_output_tokens).toBeUndefined();
+    expect(payloadBody?.temperature).toBeUndefined();
+    expect(payloadBody?.top_p).toBeUndefined();
+    expect(payloadBody?.text).toEqual({ verbosity: "low" });
   });
 
   it("adapts non-stream OpenAI Codex chat calls from the stream-only Responses bridge", async () => {

@@ -358,7 +358,10 @@ function ApprovalInspectorCard(props: {
       {approval.explanationError ? (
         <div className="mc-next-directory-alert">
           <AlertTriangle className="h-4 w-4" />
-          <span>{approval.explanationError}</span>
+          <div className="mc-next-approvals-explainer-error">
+            <strong>Approval summary unavailable</strong>
+            <span>{formatApprovalExplanationError(approval.explanationError)}</span>
+          </div>
         </div>
       ) : null}
 
@@ -598,4 +601,18 @@ function formatDateTime(value?: string): string {
     return value;
   }
   return new Date(parsed).toLocaleString();
+}
+
+function formatApprovalExplanationError(error: string): string {
+  const message = error.trim();
+  if (!message) {
+    return "The approval is still usable. GoatCitadel could not generate the optional plain-English summary.";
+  }
+  if (/authentication parameter not received|401 unauthorized|unable to authenticate/i.test(message)) {
+    return "The approval is still usable, but the optional explainer could not authenticate with the configured model provider.";
+  }
+  if (/unsupported parameter:\s*temperature/i.test(message)) {
+    return "The approval is still usable, but the optional explainer sent a parameter this model provider does not accept.";
+  }
+  return `The approval is still usable. Explainer detail: ${message}`;
 }

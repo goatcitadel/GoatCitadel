@@ -59,6 +59,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/dev/diagnostics/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/dev", accessClass: "operator" },
   { prefix: "/api/v1/channels/:channel/inbound", accessClass: "webhook" },
+  { prefix: "/api/v1/integrations/slack/oauth/callback", accessClass: "public" },
   { prefix: "/api/v1/integrations/connections/:connectionId/telegram/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/whatsapp/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/slack/webhook", accessClass: "webhook" },
@@ -125,7 +126,7 @@ async function enforceRouteAccessClass(
       if (!authMode || authMode === "none") {
         return;
       }
-      const allowedSources = new Set(["sse", "token", "basic", "loopback"]);
+      const allowedSources = new Set(["sse", "token", "basic", "loopback", "companion"]);
       if (allowedSources.has(request.authActorSource)) {
         return;
       }

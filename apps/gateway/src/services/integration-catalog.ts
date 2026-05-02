@@ -97,10 +97,14 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       text("label", "Connection Label", { defaultValue: "Slack" }),
       text("botTokenEnv", "Bot Token ENV Var", {
         placeholder: "SLACK_BOT_TOKEN",
-        required: true,
+        required: false,
         secretRef: true,
       }),
-      text("defaultChannel", "Default Channel", { placeholder: "#general" }),
+      json("targets", "Channel Targets", {
+        defaultValue: "[]",
+        description: 'Named Slack targets. Example: [{"label":"Ops","channel":"#ops","default":true}]',
+      }),
+      text("defaultChannel", "Legacy Default Channel", { placeholder: "#general", advanced: true }),
       text("defaultThreadTs", "Default Thread TS", { advanced: true }),
       url("webhookUrl", "Incoming Webhook URL", {
         placeholder: "https://hooks.slack.com/services/...",
@@ -126,9 +130,16 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         required: true,
         secretRef: true,
       }),
-      text("defaultChatId", "Default Chat ID", {
+      text("botUsername", "Bot Username", {
+        placeholder: "@goatcitadel_bot",
+      }),
+      json("targets", "Chat Targets", {
+        defaultValue: "[]",
+        description: 'Named Telegram targets. Example: [{"label":"Ops","chatId":"-1001234567890","default":true}]',
+      }),
+      text("defaultChatId", "Legacy Default Chat ID", {
         placeholder: "123456789 or @channel_name",
-        required: true,
+        required: false,
       }),
       text("allowedGroupIds", "Allowed Groups", {
         placeholder: "-1001234567890,@ops_group",

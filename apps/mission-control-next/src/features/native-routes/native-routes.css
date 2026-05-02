@@ -95,13 +95,31 @@
 
 .mc-next-directory-alert {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.65rem;
   padding: 0.85rem 0.95rem;
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
   border-radius: 1rem;
   background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--card));
   color: var(--foreground);
+}
+
+.mc-next-approvals-explainer-error {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.mc-next-approvals-explainer-error strong {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mc-next-approvals-explainer-error span {
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+  line-height: 1.45;
 }
 
 .mc-next-directory-grid-native {

@@ -82,7 +82,21 @@ export function requireChannelSetupDefinition(catalogId: string): ChannelSetupRu
 }
 
 export function listChannelSetupDefinitions(): ChannelSetupDefinition[] {
-  return Object.values(RUNTIME_DEFINITIONS).map((item) => item.definition);
+  return Object.values(RUNTIME_DEFINITIONS)
+    .map((item) => item.definition)
+    .sort(
+      (left, right) => channelSetupSortRank(left.catalog.catalogId) - channelSetupSortRank(right.catalog.catalogId),
+    );
+}
+
+function channelSetupSortRank(catalogId: string): number {
+  if (catalogId === "channel.slack") {
+    return 0;
+  }
+  if (catalogId === "channel.telegram") {
+    return 1;
+  }
+  return 10;
 }
 
 function createDiscordDefinition(): ChannelSetupRuntimeDefinition {
@@ -480,11 +494,11 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect Slack using a bot token for full workspace actions, with an optional incoming webhook fallback and a signing secret for inbound event parity.",
+        "Connect Slack with OAuth first, then choose one or more workspace channel targets for GoatCitadel to use.",
       prerequisites: [
-        "A Slack workspace where you can install apps.",
-        "Permission to add scopes and install the app into the workspace.",
-        "A sandbox channel for the first test post.",
+        "A Slack workspace where you can approve the GoatCitadel Slack app.",
+        "Permission to install apps or ask an admin to approve the install.",
+        "At least one sandbox channel for the first test post.",
       ],
       steps: [
         {
@@ -493,11 +507,11 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph(
-              "GoatCitadel can send messages into Slack and, with a bot token, can use richer workspace-aware behavior than a plain webhook.",
+              "GoatCitadel can install into Slack through OAuth, store the workspace install, and route messages to multiple named Slack channels.",
             ),
             note(
-              "warning",
-              "Use bot token mode for the best experience. Keep webhook mode only for simpler send-only routing.",
+              "info",
+              "OAuth is the easiest path. Manual bot-token and webhook fields stay available below for advanced local-first fallback setups.",
             ),
           ],
         },
@@ -507,39 +521,71 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
           title: "Before you start",
           checklist: [
             check("workspace", "Choose the Slack workspace"),
-            check("sandbox", "Pick a sandbox channel for the first test"),
-            check("permissions", "Confirm you can install or update the Slack app"),
+            check("sandbox", "Pick at least one sandbox channel for the first target"),
+            check("permissions", "Confirm you can approve or request the GoatCitadel Slack app"),
           ],
         },
         {
-          id: "create-app",
+          id: "oauth-install",
           kind: "instruction",
-          title: "Create and install the Slack app",
+          title: "Connect Slack with OAuth",
           body: [
             paragraph(
-              "Create a Slack app from scratch, add bot scopes such as chat:write, then install or reinstall it into the workspace.",
+              "Use Connect Slack from Mission Control to approve the hosted GoatCitadel Slack app. After approval, return here and choose the channels GoatCitadel should use.",
             ),
             linkBlock("Slack OAuth v2", "https://api.slack.com/authentication/oauth-v2"),
-            linkBlock("Slack first app tutorial", "https://api.slack.com/tutorials/first-bolt-app"),
           ],
           checklist: [
-            check("app", "Create the Slack app"),
-            check("scope", "Add chat:write or the required bot scopes"),
-            check("install", "Install or reinstall the app to the workspace"),
-            check("token", "Copy the Bot User OAuth token"),
+            check("connect", "Click Connect Slack"),
+            check("approve", "Approve the GoatCitadel Slack app"),
+            check("workspace", "Confirm Mission Control shows the connected workspace"),
           ],
         },
         {
           id: "collect-values",
           kind: "field-collection",
-          title: "Paste your connection values",
+          title: "Choose Slack targets",
           fields: [
             {
+              key: "slackInstallId",
+              label: "Connected Slack install",
+              type: "text",
+              required: false,
+              explanation: "OAuth install identifier returned by the Slack connection flow.",
+              whyNeeded: "Used to connect this setup draft to the approved workspace install.",
+              whereToFind: [
+                paragraph(
+                  "Use the Connect Slack action in Mission Control. This field is filled automatically when possible.",
+                ),
+              ],
+              looksLike: "slack:T0123456789",
+              canChangeLater: true,
+            },
+            {
+              key: "targets",
+              label: "Slack channel targets",
+              type: "textarea",
+              required: true,
+              explanation: "Named Slack channels this one workspace install can use.",
+              whyNeeded: "Lets one Slack connection serve multiple channels without repeating setup.",
+              whereToFind: [
+                paragraph(
+                  "Add a target for each Slack channel. Use #channel-name for public channels or C/G ids for private channels.",
+                ),
+              ],
+              looksLike: "Default: #ops-sandbox",
+              commonMistakes: [
+                "Adding a private channel before inviting the app into that channel.",
+                "Creating separate full connections instead of adding targets here.",
+              ],
+              canChangeLater: true,
+            },
+            {
               key: "botToken",
-              label: "Bot User OAuth token",
+              label: "Advanced fallback: Bot User OAuth token",
               type: "secret",
               required: false,
-              explanation: "The Slack bot token used for workspace-aware API calls and live auth checks.",
+              explanation: "Manual token fallback for self-owned Slack app setups.",
               whyNeeded: "Used to validate the app installation and post as the bot.",
               whereToFind: [
                 paragraph("Open your Slack app, then OAuth & Permissions, then copy the Bot User OAuth Token."),
@@ -554,11 +600,11 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
             },
             {
               key: "defaultChannel",
-              label: "Default channel",
+              label: "Legacy default channel",
               type: "text",
-              required: true,
-              explanation: "The default Slack channel or id GoatCitadel should use.",
-              whyNeeded: "Used for tests and default outbound sends.",
+              required: false,
+              explanation: "Compatibility fallback for older single-channel Slack connections.",
+              whyNeeded: "Used only when no target rows are configured.",
               whereToFind: [
                 paragraph(
                   "Use the channel name like #ops-sandbox or copy the channel id for private channels if needed.",
@@ -579,10 +625,10 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
             },
             {
               key: "webhookUrl",
-              label: "Optional incoming webhook URL",
+              label: "Advanced fallback: incoming webhook URL",
               type: "url",
               required: false,
-              explanation: "Optional webhook fallback for simpler outbound posting.",
+              explanation: "Optional send-only webhook fallback. Webhooks are tied to one selected Slack channel.",
               whyNeeded: "Useful when you need a lightweight send-only path or a fallback route.",
               whereToFind: [
                 paragraph("Enable Incoming Webhooks in your Slack app, then copy the generated webhook URL."),
@@ -650,7 +696,7 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
-      testVersion: "2026.03.slack.v1",
+      testVersion: "2026.05.slack.targets.v1",
       levels: ["live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
@@ -672,11 +718,11 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
     },
     volatility: {
       officialDocsUrl: "https://api.slack.com/authentication/oauth-v2",
-      lastReviewedAt: "2026-03-29",
+      lastReviewedAt: "2026-05-02",
       volatility: "medium",
       deprecationRisk: "low",
-      preferredPathLabel: "Bot User OAuth token",
-      legacyPathLabel: "Incoming webhook fallback + optional inbound signing secret",
+      preferredPathLabel: "Hosted Slack OAuth install",
+      legacyPathLabel: "Manual bot token or incoming webhook fallback",
     },
   };
 
@@ -691,6 +737,8 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       ]);
       return {
         draft: {
+          slackInstallId: readString(config, "slackInstallId"),
+          targets: normalizeSlackTargets(config),
           defaultChannel: readString(config, "defaultChannel"),
           defaultThreadTs: readString(config, "defaultThreadTs"),
         },
@@ -704,7 +752,9 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
               readString(config, "tokenEnv")
                 ? "configured"
                 : "missing",
-            defaultChannel: readString(config, "defaultChannel") ? "configured" : "missing",
+            slackInstallId: readString(config, "slackInstallId") ? "configured" : "unknown",
+            targets: normalizeSlackTargets(config).length > 0 ? "configured" : "missing",
+            defaultChannel: readString(config, "defaultChannel") ? "configured" : "unknown",
             defaultThreadTs: readString(config, "defaultThreadTs") ? "configured" : "unknown",
             webhookUrl: readString(config, "webhookUrl") ? "configured" : "unknown",
             signingSecret:
@@ -725,11 +775,19 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       const preservedWebhookUrl = readLegacyString(draft, "webhookUrl");
       const preservedSigningSecret = readLegacyString(draft, "signingSecret");
       const preservedSigningSecretEnv = readLegacyString(draft, "signingSecretEnv");
+      const targets = normalizeSlackTargets(draft.draft);
+      const defaultTarget = targets.find((target) => target.default) ?? targets[0];
       return compactRecord({
+        slackInstallId: readString(draft.draft, "slackInstallId") ?? readLegacyString(draft, "slackInstallId"),
+        slackTeamId: readString(draft.draft, "slackTeamId") ?? readLegacyString(draft, "slackTeamId"),
+        slackTeamName: readString(draft.draft, "slackTeamName") ?? readLegacyString(draft, "slackTeamName"),
+        slackBotUserId: readString(draft.draft, "slackBotUserId") ?? readLegacyString(draft, "slackBotUserId"),
+        slackScopes: readString(draft.draft, "slackScopes") ?? readLegacyString(draft, "slackScopes"),
+        targets,
         botToken: readString(draft.draft, "botToken") ?? preservedBotToken,
         botTokenEnv: readString(draft.draft, "botTokenEnv") ?? preservedBotTokenEnv,
-        defaultChannel: readString(draft.draft, "defaultChannel"),
-        defaultThreadTs: readString(draft.draft, "defaultThreadTs"),
+        defaultChannel: defaultTarget?.channel ?? readString(draft.draft, "defaultChannel"),
+        defaultThreadTs: defaultTarget?.threadTs ?? readString(draft.draft, "defaultThreadTs"),
         webhookUrl: readString(draft.draft, "webhookUrl") ?? preservedWebhookUrl,
         signingSecret: readString(draft.draft, "signingSecret") ?? preservedSigningSecret,
         signingSecretEnv: readString(draft.draft, "signingSecretEnv") ?? preservedSigningSecretEnv,
@@ -740,7 +798,8 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
       const token = readString(draft.draft, "botToken");
       const webhookUrl = readString(draft.draft, "webhookUrl");
       const signingSecret = readString(draft.draft, "signingSecret");
-      const defaultChannel = readString(draft.draft, "defaultChannel");
+      const targets = normalizeSlackTargets(draft.draft);
+      const defaultChannel = targets[0]?.channel ?? readString(draft.draft, "defaultChannel");
       const hasConfiguredToken = Boolean(
         token || readString(draft.draft, "botTokenEnv") || draft.hydration?.fieldState.botToken === "configured",
       );
@@ -749,9 +808,9 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         issues.push({
           key: "slack_auth_missing",
           level: "error",
-          message: "Provide either a Slack bot token or an incoming webhook URL.",
+          message: "Connect Slack with OAuth first, or use the advanced manual bot-token/webhook fallback.",
           failureCategory: "missing_input",
-          nextSteps: ["Copy the Bot User OAuth token or the webhook URL, then rerun validation."],
+          nextSteps: ["Click Connect Slack, approve the workspace, then add channel targets and rerun validation."],
         });
       }
       if (token && !/^xox[baprs]-/i.test(token)) {
@@ -764,7 +823,12 @@ function createSlackDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(malformedFieldIssue("signingSecret", "Signing secret should not look like a Slack OAuth token."));
       }
       if (!defaultChannel) {
-        issues.push(requiredFieldIssue("defaultChannel", "Default channel is required."));
+        issues.push(requiredFieldIssue("targets", "Add at least one Slack channel target."));
+      }
+      for (const target of targets) {
+        if (!target.channel) {
+          issues.push(malformedFieldIssue("targets", "Every Slack target needs a channel name or id."));
+        }
       }
       return issues;
     },
@@ -782,7 +846,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect Telegram by creating a bot with BotFather, choosing a default chat, and optionally configuring a webhook secret for inbound routing parity.",
+        "Connect Telegram with the easiest bot-native flow: create a BotFather bot, send a setup message, then choose detected chats or groups as targets.",
       prerequisites: [
         "A Telegram account.",
         "Access to the target chat, group, or channel.",
@@ -801,10 +865,14 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "create-bot",
           kind: "instruction",
-          title: "Create the Telegram bot",
+          title: "Create the Telegram bot in BotFather",
           body: [
             paragraph("Open @BotFather in Telegram, run /newbot, then follow the prompts to create your bot."),
+            paragraph(
+              "After creation, open the bot and send /start. For groups, add the bot to the group and send a setup message there.",
+            ),
             linkBlock("Telegram bot tutorial", "https://core.telegram.org/bots/tutorial"),
+            linkBlock("Open BotFather", "https://t.me/BotFather"),
           ],
           checklist: [
             check("botfather", "Open @BotFather"),
@@ -815,17 +883,22 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         {
           id: "destination",
           kind: "instruction",
-          title: "Prepare the destination chat",
-          body: [paragraph("Add the bot to the target group or channel and grant it permission to send messages.")],
+          title: "Prepare destination chats",
+          body: [
+            paragraph(
+              "Add the bot to each chat, group, supergroup, or channel you want GoatCitadel to use. If group privacy blocks regular messages, send a command or make the bot an admin.",
+            ),
+          ],
           checklist: [
-            check("bot-added", "Add the bot to the target chat or channel"),
-            check("permissions", "Confirm the bot can post"),
+            check("bot-added", "Add the bot to every target chat or channel"),
+            check("setup-message", "Send /start or a setup code in each target"),
+            check("permissions", "Confirm the bot can post in each target"),
           ],
         },
         {
           id: "collect-values",
           kind: "field-collection",
-          title: "Paste your connection values",
+          title: "Choose Telegram targets",
           fields: [
             {
               key: "botToken",
@@ -841,12 +914,53 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               canChangeLater: true,
             },
             {
-              key: "defaultChatId",
-              label: "Default chat ID or @channel handle",
-              type: "id",
+              key: "botUsername",
+              label: "Bot username",
+              type: "text",
+              required: false,
+              explanation: "The @username BotFather assigned to your bot.",
+              whyNeeded: "Used for open/add helper links and operator-visible setup clarity.",
+              whereToFind: [paragraph("BotFather shows the bot username after /newbot completes.")],
+              looksLike: "@goatcitadel_bot",
+              canChangeLater: true,
+            },
+            {
+              key: "setupCode",
+              label: "Setup code",
+              type: "text",
+              required: false,
+              explanation: "Optional code to send in Telegram so GoatCitadel can identify setup messages.",
+              whyNeeded: "Helps auto-detected chats become obvious during setup.",
+              whereToFind: [paragraph("Use any short memorable code, such as goat-setup-home or goat-setup-ops.")],
+              looksLike: "goat-setup-ops",
+              canChangeLater: true,
+            },
+            {
+              key: "targets",
+              label: "Telegram chat targets",
+              type: "textarea",
               required: true,
-              explanation: "The default destination GoatCitadel should use in Telegram.",
-              whyNeeded: "Used for tests and default outbound sends.",
+              explanation: "Named Telegram chats, groups, or channels this bot can use.",
+              whyNeeded: "Lets one Telegram bot serve multiple chats without repeating setup.",
+              whereToFind: [
+                paragraph(
+                  "Use auto-detected chats from recent bot updates, or add chat ids / @channel handles manually.",
+                ),
+              ],
+              looksLike: "Default: -1001234567890 or @ops_channel",
+              commonMistakes: [
+                "Copying a message id instead of the chat id.",
+                "Adding a group before the bot has been added to that group.",
+              ],
+              canChangeLater: true,
+            },
+            {
+              key: "defaultChatId",
+              label: "Legacy default chat ID or @channel handle",
+              type: "id",
+              required: false,
+              explanation: "Compatibility fallback for older single-chat Telegram connections.",
+              whyNeeded: "Used only when no target rows are configured.",
               whereToFind: [paragraph("Use a chat id lookup workflow or the @channel_name for public channels.")],
               looksLike: "123456789 or @channel_name",
               commonMistakes: [
@@ -939,7 +1053,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
-      testVersion: "2026.03.telegram.v1",
+      testVersion: "2026.05.telegram.targets.v1",
       levels: ["live-auth", "live-send", "manual-confirm"],
       safePreFinalize: true,
       supportsManualConfirmation: true,
@@ -961,7 +1075,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
     },
     volatility: {
       officialDocsUrl: "https://core.telegram.org/bots/tutorial",
-      lastReviewedAt: "2026-03-29",
+      lastReviewedAt: "2026-05-02",
       volatility: "low",
       deprecationRisk: "low",
       preferredPathLabel: "BotFather token",
@@ -976,6 +1090,9 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       return {
         draft: {
           botTokenEnv: readString(config, "botTokenEnv") ?? readString(config, "tokenEnv"),
+          botUsername: readString(config, "botUsername"),
+          setupCode: readString(config, "setupCode"),
+          targets: normalizeTelegramTargets(config),
           defaultChatId: readString(config, "defaultChatId"),
           parseMode: readString(config, "parseMode") ?? "Markdown",
           webhookSecretEnv: readString(config, "webhookSecretEnv") ?? readString(config, "secretTokenEnv"),
@@ -991,7 +1108,10 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
                 ? "configured"
                 : "missing",
             botTokenEnv: readString(config, "botTokenEnv") || readString(config, "tokenEnv") ? "configured" : "unknown",
-            defaultChatId: readString(config, "defaultChatId") ? "configured" : "missing",
+            botUsername: readString(config, "botUsername") ? "configured" : "unknown",
+            setupCode: readString(config, "setupCode") ? "configured" : "unknown",
+            targets: normalizeTelegramTargets(config).length > 0 ? "configured" : "missing",
+            defaultChatId: readString(config, "defaultChatId") ? "configured" : "unknown",
             parseMode: "configured",
             webhookSecret:
               readString(config, "webhookSecret") || readString(config, "secretToken") ? "configured" : "unknown",
@@ -1012,10 +1132,15 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
       const preservedBotTokenEnv = readLegacyString(draft, "botTokenEnv", "tokenEnv");
       const preservedWebhookSecret = readLegacyString(draft, "webhookSecret", "secretToken");
       const preservedWebhookSecretEnv = readLegacyString(draft, "webhookSecretEnv", "secretTokenEnv");
+      const targets = normalizeTelegramTargets(draft.draft);
+      const defaultTarget = targets.find((target) => target.default) ?? targets[0];
       return compactRecord({
         botTokenEnv: readString(draft.draft, "botTokenEnv") ?? preservedBotTokenEnv,
         botToken: readString(draft.draft, "botToken") ?? preservedBotToken,
-        defaultChatId: readString(draft.draft, "defaultChatId"),
+        botUsername: normalizeTelegramUsername(readString(draft.draft, "botUsername")),
+        setupCode: readString(draft.draft, "setupCode"),
+        targets,
+        defaultChatId: defaultTarget?.chatId ?? readString(draft.draft, "defaultChatId"),
         parseMode: readString(draft.draft, "parseMode") ?? "Markdown",
         webhookSecretEnv: readString(draft.draft, "webhookSecretEnv") ?? preservedWebhookSecretEnv,
         webhookSecret: readString(draft.draft, "webhookSecret") ?? preservedWebhookSecret,
@@ -1024,7 +1149,8 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
     validate(draft) {
       const issues: ChannelSetupIssue[] = [];
       const token = readString(draft.draft, "botToken");
-      const chatId = readString(draft.draft, "defaultChatId");
+      const targets = normalizeTelegramTargets(draft.draft);
+      const chatId = targets[0]?.chatId ?? readString(draft.draft, "defaultChatId");
       const hasConfiguredToken = Boolean(
         token ||
         readString(draft.draft, "botTokenEnv") ||
@@ -1037,7 +1163,12 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         issues.push(malformedFieldIssue("botToken", "Bot token should look like a Telegram bot token."));
       }
       if (!chatId) {
-        issues.push(requiredFieldIssue("defaultChatId", "Default chat ID or @channel handle is required."));
+        issues.push(requiredFieldIssue("targets", "Add at least one Telegram chat target."));
+      }
+      for (const target of targets) {
+        if (!target.chatId) {
+          issues.push(malformedFieldIssue("targets", "Every Telegram target needs a chat id or @channel handle."));
+        }
       }
       return issues;
     },
@@ -3227,6 +3358,132 @@ function troubleshoot(id: string, title: string, body: string) {
 function readString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+interface SlackSetupTarget {
+  id: string;
+  label: string;
+  channel: string;
+  threadTs?: string;
+  kind?: string;
+  default?: boolean;
+}
+
+interface TelegramSetupTarget {
+  id: string;
+  label: string;
+  chatId: string;
+  threadId?: string;
+  kind?: string;
+  default?: boolean;
+}
+
+interface NormalizedTargetRecord {
+  id: string;
+  label: string;
+  channel?: string;
+  chatId?: string;
+  threadTs?: string;
+  threadId?: string;
+  kind?: string;
+  default?: boolean;
+}
+
+function normalizeSlackTargets(config: Record<string, unknown>): SlackSetupTarget[] {
+  const explicit = normalizeTargetArray(config.targets, "channel", "slack");
+  const targets =
+    explicit.length > 0 ? explicit : legacyTarget(readString(config, "defaultChannel"), "Slack default", "channel");
+  return targets
+    .filter((target): target is NormalizedTargetRecord & { channel: string } => Boolean(target.channel))
+    .map((target, index) => ({
+      id: target.id || `slack-target-${index + 1}`,
+      label: target.label || target.channel || `Slack target ${index + 1}`,
+      channel: target.channel,
+      threadTs: target.threadTs,
+      kind: target.kind,
+      default: index === 0 || target.default === true,
+    }));
+}
+
+function normalizeTelegramTargets(config: Record<string, unknown>): TelegramSetupTarget[] {
+  const explicit = normalizeTargetArray(config.targets, "chatId", "telegram");
+  const targets =
+    explicit.length > 0 ? explicit : legacyTarget(readString(config, "defaultChatId"), "Telegram default", "chatId");
+  return targets
+    .filter((target): target is NormalizedTargetRecord & { chatId: string } => Boolean(target.chatId))
+    .map((target, index) => ({
+      id: target.id || `telegram-target-${index + 1}`,
+      label: target.label || target.chatId || `Telegram target ${index + 1}`,
+      chatId: target.chatId,
+      threadId: target.threadId,
+      kind: target.kind,
+      default: index === 0 || target.default === true,
+    }));
+}
+
+function normalizeTargetArray(
+  value: unknown,
+  addressKey: "channel" | "chatId",
+  provider: "slack" | "telegram",
+): NormalizedTargetRecord[] {
+  const raw = typeof value === "string" ? parseTargetsJson(value) : value;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter(
+      (item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item),
+    )
+    .map((item, index) => {
+      const address =
+        readString(item, addressKey) ??
+        readString(item, "target") ??
+        readString(item, provider === "slack" ? "defaultChannel" : "defaultChatId");
+      const normalized: NormalizedTargetRecord = {
+        id: readString(item, "id") ?? `${provider}-target-${index + 1}`,
+        label: readString(item, "label") ?? address ?? `${provider} target ${index + 1}`,
+        threadTs: readString(item, "threadTs"),
+        threadId: readString(item, "threadId") ?? readString(item, "messageThreadId"),
+        kind: readString(item, "kind"),
+        default: item.default === true || item.default === "true" || index === 0,
+      };
+      if (addressKey === "channel") {
+        normalized.channel = address;
+      } else {
+        normalized.chatId = address;
+      }
+      return normalized;
+    })
+    .filter((item) => Boolean(item[addressKey]));
+}
+
+function legacyTarget(
+  address: string | undefined,
+  label: string,
+  addressKey: "channel" | "chatId",
+): NormalizedTargetRecord[] {
+  if (!address) {
+    return [];
+  }
+  return addressKey === "channel"
+    ? [{ id: "default", label, channel: address, default: true }]
+    : [{ id: "default", label, chatId: address, default: true }];
+}
+
+function parseTargetsJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeTelegramUsername(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
 }
 
 function looksLikeHttpUrl(value: string): boolean {

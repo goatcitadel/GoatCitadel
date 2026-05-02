@@ -19,6 +19,9 @@ export function FieldCard({
   hydrationState?: "configured" | "missing" | "needs_replacement" | "unknown";
   onChange: (value: unknown) => void;
 }) {
+  if (field.key === "targets") {
+    return <TargetListFieldCard field={field} value={value} hydrationState={hydrationState} onChange={onChange} />;
+  }
   const stringValue = typeof value === "string" ? value : value === undefined || value === null ? "" : String(value);
   return (
     <div className="channel-setup-field-card">
@@ -68,6 +71,149 @@ export function FieldCard({
       ) : null}
     </div>
   );
+}
+
+function TargetListFieldCard({
+  field,
+  value,
+  hydrationState,
+  onChange,
+}: {
+  field: ChannelSetupFieldDefinition;
+  value: unknown;
+  hydrationState?: "configured" | "missing" | "needs_replacement" | "unknown";
+  onChange: (value: unknown) => void;
+}) {
+  const targets = normalizeTargetRows(value);
+  const addressKey = field.label.toLowerCase().includes("telegram") ? "chatId" : "channel";
+  const addressLabel = addressKey === "chatId" ? "Chat ID or @channel" : "Channel name or ID";
+  const defaultIndex = Math.max(
+    0,
+    targets.findIndex((target) => target.default === true),
+  );
+  const updateTarget = (index: number, patch: Record<string, unknown>) => {
+    onChange(targets.map((target, targetIndex) => (targetIndex === index ? { ...target, ...patch } : target)));
+  };
+  const removeTarget = (index: number) => {
+    const next = targets.filter((_, targetIndex) => targetIndex !== index);
+    onChange(next.map((target, targetIndex) => ({ ...target, default: targetIndex === 0 })));
+  };
+  const addTarget = () => {
+    onChange([
+      ...targets,
+      {
+        id: `target-${targets.length + 1}`,
+        label: "",
+        [addressKey]: "",
+        default: targets.length === 0,
+      },
+    ]);
+  };
+  return (
+    <div className="channel-setup-field-card">
+      <div className="channel-setup-field-head">
+        <label>
+          <strong>{field.label}</strong>
+          {field.required ? " *" : ""}
+        </label>
+      </div>
+      <FieldHelp>{field.explanation}</FieldHelp>
+      {field.whyNeeded ? (
+        <FieldHelp>
+          <strong>Why we need it:</strong> {field.whyNeeded}
+        </FieldHelp>
+      ) : null}
+      <div className="channel-setup-target-list">
+        {targets.map((target, index) => (
+          <div key={`${target.id}-${index}`} className="channel-setup-target-row">
+            <input
+              aria-label="Target label"
+              value={target.label}
+              placeholder="Label"
+              onChange={(event) => updateTarget(index, { label: event.target.value })}
+            />
+            <input
+              aria-label={addressLabel}
+              value={target[addressKey] ?? ""}
+              placeholder={addressLabel}
+              onChange={(event) => updateTarget(index, { [addressKey]: event.target.value })}
+            />
+            <label className="channel-setup-target-default">
+              <input
+                type="radio"
+                name={`channel-setup-${field.key}-default`}
+                checked={index === defaultIndex}
+                onChange={() => onChange(targets.map((item, itemIndex) => ({ ...item, default: itemIndex === index })))}
+              />
+              Default
+            </label>
+            <button type="button" className="gc-button" onClick={() => removeTarget(index)}>
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="gc-button" onClick={addTarget}>
+        Add target
+      </button>
+      {hydrationState === "configured" && targets.length === 0 ? (
+        <FieldHelp className="channel-setup-configured-note">
+          Targets are configured already. Add a row only if you need to replace or expand them.
+        </FieldHelp>
+      ) : null}
+      {field.whereToFind && field.whereToFind.length > 0 ? (
+        <div className="channel-setup-field-meta">
+          <strong>Where to find it</strong>
+          {renderRichBlocks(field.whereToFind)}
+        </div>
+      ) : null}
+      {field.looksLike ? (
+        <div className="channel-setup-field-meta">
+          <strong>What it should look like</strong>
+          <code>{field.looksLike}</code>
+        </div>
+      ) : null}
+      {field.commonMistakes && field.commonMistakes.length > 0 ? (
+        <div className="channel-setup-field-meta">
+          <strong>Common mistakes</strong>
+          <ul className="channel-setup-inline-list">
+            {field.commonMistakes.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function normalizeTargetRows(value: unknown) {
+  const parsed = typeof value === "string" ? parseTargetRows(value) : value;
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item, index) => ({
+      id: readString(item.id) || `target-${index + 1}`,
+      label: readString(item.label),
+      channel: readString(item.channel),
+      chatId: readString(item.chatId),
+      default: item.default === true || item.default === "true" || index === 0,
+      kind: readString(item.kind),
+    }));
+}
+
+function parseTargetRows(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return [];
+  }
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function FieldInput({

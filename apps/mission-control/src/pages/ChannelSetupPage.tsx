@@ -14,13 +14,16 @@ import {
   createChannelRepairDraft,
   createChannelRotateSecretDraft,
   createChannelSetupDraft,
+  discoverTelegramTargets,
   fetchChannelSetupDefinition,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
+  fetchSlackOAuthStatus,
   fetchIntegrationCatalog,
   fetchIntegrationConnections,
   finalizeChannelSetupDraft,
   retestChannelConnection,
+  startSlackOAuth,
   testChannelSetupDraft,
   updateChannelSetupDraft,
   validateChannelSetupDraft,
@@ -125,7 +128,11 @@ export function ChannelSetupPage() {
     if (guidedCatalogIds.has(selectedCatalogId)) {
       return;
     }
-    const preferred = guidedCatalog.find((item) => item.catalogId === "channel.discord") ?? guidedCatalog[0] ?? null;
+    const preferred =
+      guidedCatalog.find((item) => item.catalogId === "channel.slack") ??
+      guidedCatalog.find((item) => item.catalogId === "channel.telegram") ??
+      guidedCatalog[0] ??
+      null;
     if (!preferred) {
       return;
     }
@@ -210,7 +217,10 @@ export function ChannelSetupPage() {
       if (!selectedCatalogId) {
         const guidedIds = new Set(setupDefinitionResponse.items.map((item) => item.catalog.catalogId));
         const preferred =
-          catalogResponse.items.find((item) => item.catalogId === "channel.discord" && guidedIds.has(item.catalogId)) ??
+          catalogResponse.items.find((item) => item.catalogId === "channel.slack" && guidedIds.has(item.catalogId)) ??
+          catalogResponse.items.find(
+            (item) => item.catalogId === "channel.telegram" && guidedIds.has(item.catalogId),
+          ) ??
           catalogResponse.items.find((item) => guidedIds.has(item.catalogId)) ??
           catalogResponse.items[0];
         setSelectedCatalogId(preferred?.catalogId ?? "");
@@ -596,6 +606,104 @@ export function ChannelSetupPage() {
     setCurrentStepId(target);
   }
 
+  async function handleStartSlackOAuth() {
+    setBusyAction("start");
+    setPageNotice(null);
+    setPageError(null);
+    try {
+      const before = await fetchSlackOAuthStatus().catch(() => null);
+      const previousConnections = new Map(
+        before?.connections.map((item) => [
+          item.connection.connectionId,
+          readConnectionString(item.connection.config, "oauthConnectedAt") ?? "",
+        ]) ?? [],
+      );
+      const result = await startSlackOAuth();
+      window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
+      setPageNotice("Slack authorization opened. Approve the workspace, then GoatCitadel will open target setup here.");
+      void waitForSlackOAuthInstall(previousConnections);
+    } catch (error) {
+      setPageError((error as Error).message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function waitForSlackOAuthInstall(previousConnections: Map<string, string>) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await delay(2000);
+      try {
+        const status = await fetchSlackOAuthStatus();
+        const installed = status.connections.find((item) => {
+          const previousConnectedAt = previousConnections.get(item.connection.connectionId);
+          const nextConnectedAt = readConnectionString(item.connection.config, "oauthConnectedAt") ?? "";
+          return previousConnectedAt === undefined || previousConnectedAt !== nextConnectedAt;
+        });
+        if (!installed) {
+          continue;
+        }
+        setConnections((current) => {
+          const others = current.filter((item) => item.connectionId !== installed.connection.connectionId);
+          return [installed.connection, ...others];
+        });
+        setSelectedCatalogId("channel.slack");
+        setPageNotice("Slack workspace connected. Add one or more channel targets, then run a test.");
+        await startDraft("edit", installed.connection, "collect-values");
+        return;
+      } catch {
+        // Keep polling; transient gateway restarts or callback timing should not strand the setup flow.
+      }
+    }
+    setPageNotice(
+      "Slack authorization opened. If approval finished, refresh connections or start an edit draft for Slack.",
+    );
+  }
+
+  async function handleDiscoverTelegramTargets() {
+    if (!draft) {
+      return;
+    }
+    setBusyAction("test");
+    setPageNotice(null);
+    setPageError(null);
+    try {
+      const result = await discoverTelegramTargets({
+        botToken: typeof draft.draft.botToken === "string" ? draft.draft.botToken : undefined,
+        botTokenEnv:
+          typeof draft.draft.botTokenEnv === "string"
+            ? draft.draft.botTokenEnv
+            : typeof draft.draft.tokenEnv === "string"
+              ? draft.draft.tokenEnv
+              : undefined,
+        setupCode: typeof draft.draft.setupCode === "string" ? draft.draft.setupCode : undefined,
+      });
+      const targets = result.items.map((item, index) => ({
+        id: item.id,
+        label: item.label,
+        chatId: item.chatId,
+        kind: item.kind,
+        default: index === 0,
+      }));
+      updateDraft((current) => ({
+        ...current,
+        draft: {
+          ...current.draft,
+          targets,
+          defaultChatId: targets[0]?.chatId ?? current.draft.defaultChatId,
+        },
+      }));
+      setPageNotice(
+        result.items.length > 0
+          ? `Found ${result.items.length} Telegram target${result.items.length === 1 ? "" : "s"}.`
+          : "No Telegram chats were found yet. Send /start or your setup code in Telegram, then try again.",
+      );
+    } catch (error) {
+      setPageError((error as Error).message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
     <div className="stack-lg">
       {pageError ? <div className="channel-setup-banner channel-setup-banner-error">{pageError}</div> : null}
@@ -643,6 +751,8 @@ export function ChannelSetupPage() {
           onFieldChange={handleFieldChange}
           onApplyManualJson={applyManualJson}
           onJumpToFieldCollection={jumpToFieldCollection}
+          onStartSlackOAuth={handleStartSlackOAuth}
+          onDiscoverTelegramTargets={handleDiscoverTelegramTargets}
         />
       )}
     </div>
@@ -696,6 +806,8 @@ function ChannelSetupContent(props: {
   onFieldChange: (fieldKey: string, value: unknown) => void;
   onApplyManualJson: () => void;
   onJumpToFieldCollection: () => void;
+  onStartSlackOAuth: () => Promise<void>;
+  onDiscoverTelegramTargets: () => Promise<void>;
 }) {
   return (
     <div className="split-grid channel-setup-shell">
@@ -738,6 +850,15 @@ function ChannelSetupContent(props: {
               </div>
               {props.selectedCatalog ? (
                 <div className="channel-setup-start-bar">
+                  {props.selectedCatalogId === "channel.slack" ? (
+                    <ActionButton
+                      label="Connect Slack"
+                      disabled={props.busyAction !== null}
+                      pending={props.busyAction === "start"}
+                      onClick={() => void props.onStartSlackOAuth()}
+                      variant="primary"
+                    />
+                  ) : null}
                   <ActionButton
                     label={`Set up ${props.selectedCatalog.label}`}
                     disabled={!props.definition || props.busyAction !== null}
@@ -796,7 +917,7 @@ function ChannelSetupContent(props: {
                   <div className="channel-setup-connection-head">
                     <div className="stack-sm">
                       <strong>{connection.label}</strong>
-                      <FieldHelp>{connection.catalogId}</FieldHelp>
+                      <FieldHelp>{formatConnectionTargetSummary(connection)}</FieldHelp>
                     </div>
                     <StatusChip
                       tone={
@@ -866,6 +987,21 @@ function ChannelSetupContent(props: {
             actions={
               props.draft ? (
                 <div className="channel-setup-header-actions">
+                  <ActionButton
+                    label="Connect Slack"
+                    disabled={props.selectedCatalogId !== "channel.slack" || props.busyAction !== null}
+                    pending={props.selectedCatalogId === "channel.slack" && props.busyAction === "start"}
+                    onClick={() => void props.onStartSlackOAuth()}
+                    variant="primary"
+                  />
+                  <ActionButton
+                    label="Detect Telegram Chats"
+                    disabled={
+                      props.selectedCatalogId !== "channel.telegram" || !props.draft || props.busyAction !== null
+                    }
+                    pending={props.selectedCatalogId === "channel.telegram" && props.busyAction === "test"}
+                    onClick={() => void props.onDiscoverTelegramTargets()}
+                  />
                   <ActionButton
                     label="I already have the values"
                     disabled={props.busyAction !== null}
@@ -1185,4 +1321,32 @@ function WizardStepPanel(props: Parameters<typeof ChannelSetupContent>[0]) {
       </footer>
     </div>
   );
+}
+
+function formatConnectionTargetSummary(connection: IntegrationConnection): string {
+  const config = connection.config ?? {};
+  const targets = Array.isArray(config.targets) ? config.targets : [];
+  const targetRecords = targets.filter((target): target is Record<string, unknown> => {
+    return typeof target === "object" && target !== null && !Array.isArray(target);
+  });
+  const defaultTarget = targetRecords.find((target) => target.default === true) ?? targetRecords[0];
+  const defaultLabel =
+    readConnectionString(defaultTarget, "label") ??
+    readConnectionString(defaultTarget, "channel") ??
+    readConnectionString(defaultTarget, "chatId") ??
+    readConnectionString(config, "defaultChannel") ??
+    readConnectionString(config, "defaultChatId");
+  if (targetRecords.length > 0) {
+    return `${connection.catalogId} · ${targetRecords.length} target${targetRecords.length === 1 ? "" : "s"}${defaultLabel ? ` · default ${defaultLabel}` : ""}`;
+  }
+  return `${connection.catalogId}${defaultLabel ? ` · default ${defaultLabel}` : ""}`;
+}
+
+function readConnectionString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

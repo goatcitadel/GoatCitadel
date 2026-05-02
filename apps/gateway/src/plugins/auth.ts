@@ -96,6 +96,9 @@ export const authPlugin = fp(async (fastify) => {
     if (request.url.split("?", 1)[0] === "/api/v1/auth/companion/session/refresh") {
       return;
     }
+    if (request.url.split("?", 1)[0] === "/api/v1/integrations/slack/oauth/callback") {
+      return;
+    }
     if (
       isLineWebhookPath(request.url) ||
       isNextcloudTalkWebhookPath(request.url) ||

@@ -19,18 +19,19 @@ function createService(options?: {
   markPendingResult?: boolean;
   response?: ChatCompletionResponse;
   throwError?: Error;
+  apiStyle?: ReturnType<LlmService["resolveExecutionApiStyle"]>;
 }) {
   const markExplanationPending = vi.fn(() => options?.markPendingResult ?? true);
   const setExplanation = vi.fn();
   const setExplanationFailed = vi.fn();
   const appendEvent = vi.fn();
   const publishRealtime = vi.fn();
-  const chatCompletions = vi.fn(
-    async (_request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
-      if (options?.throwError) {
-        throw options.throwError;
-      }
-      return options?.response ?? {
+  const chatCompletions = vi.fn(async (_request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+    if (options?.throwError) {
+      throw options.throwError;
+    }
+    return (
+      options?.response ?? {
         choices: [
           {
             index: 0,
@@ -43,9 +44,9 @@ function createService(options?: {
             },
           },
         ],
-      };
-    },
-  );
+      }
+    );
+  });
 
   const storage = {
     approvals: {
@@ -64,6 +65,7 @@ function createService(options?: {
       activeModel: "gpt-4o-mini",
       providers: [],
     }),
+    resolveExecutionApiStyle: () => options?.apiStyle ?? "openai-responses",
     chatCompletions,
   } as unknown as LlmService;
 
@@ -104,6 +106,16 @@ describe("ApprovalExplainerService", () => {
     expect(ctx.publishRealtime).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "ap-1", status: "completed" }),
     );
+  });
+
+  it("omits sampling and response format controls for OpenAI Codex approval explanations", async () => {
+    const ctx = createService({ apiStyle: "openai-codex-responses" });
+    await ctx.service.explainApproval(defaultApproval);
+
+    const request = ctx.chatCompletions.mock.calls[0]?.[0] as ChatCompletionRequest;
+    expect(request.temperature).toBeUndefined();
+    expect(request.response_format).toBeUndefined();
+    expect(request.max_tokens).toBe(350);
   });
 
   it("marks explanation as failed when generation fails", async () => {
@@ -174,4 +186,3 @@ describe("ApprovalExplainerService", () => {
     expect(ctx.chatCompletions).not.toHaveBeenCalled();
   });
 });
-

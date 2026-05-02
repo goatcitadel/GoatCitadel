@@ -9,10 +9,13 @@ const apiMocks = vi.hoisted(() => ({
   fetchChannelSetupDefinition: vi.fn(),
   fetchChannelSetupDefinitions: vi.fn(),
   fetchChannelSetupDrafts: vi.fn(),
+  fetchSlackOAuthStatus: vi.fn(),
   fetchIntegrationCatalog: vi.fn(),
   fetchIntegrationConnections: vi.fn(),
   finalizeChannelSetupDraft: vi.fn(),
+  discoverTelegramTargets: vi.fn(),
   retestChannelConnection: vi.fn(),
+  startSlackOAuth: vi.fn(),
   testChannelSetupDraft: vi.fn(),
   updateChannelSetupDraft: vi.fn(),
   validateChannelSetupDraft: vi.fn(),
@@ -236,6 +239,13 @@ describe("ChannelSetupPage", () => {
       ),
     );
     apiMocks.fetchIntegrationConnections.mockResolvedValue({ items: [] });
+    apiMocks.fetchSlackOAuthStatus.mockResolvedValue({
+      configured: true,
+      mode: "self_owned",
+      scopes: ["chat:write"],
+      missing: [],
+      connections: [],
+    });
     apiMocks.fetchChannelSetupDrafts.mockResolvedValue({
       items: [
         {
@@ -282,7 +292,8 @@ describe("ChannelSetupPage", () => {
       expect(text).toContain("Google Chat");
       expect(text).toContain("Teams");
       expect(text).toContain("Guided Setup");
-      expect(text).toContain("Start guided setup for Discord");
+      expect(text).toContain("Connect Slack");
+      expect(text).toContain("Set up Slack");
       expect(text).toContain("Guided flows are available for Discord, Google Chat, Slack, Teams.");
       expect(text).not.toContain("TUI");
       expect(text).not.toContain("Manual for now");
@@ -290,7 +301,7 @@ describe("ChannelSetupPage", () => {
       expect(text).toContain("Resume Draft");
       expect(apiMocks.fetchChannelSetupDefinitions).toHaveBeenCalledOnce();
       expect(apiMocks.fetchChannelSetupDrafts).toHaveBeenCalledWith({
-        catalogId: "channel.discord",
+        catalogId: "channel.slack",
         limit: 12,
       });
     } finally {

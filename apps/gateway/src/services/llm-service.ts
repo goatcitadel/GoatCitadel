@@ -1369,7 +1369,8 @@ export class LlmService {
       return {
         items: fallback,
         source: "template_fallback",
-        warning: "OpenAI Codex model catalog is sourced from GoatCitadel's template because ChatGPT OAuth does not expose a stable /models endpoint.",
+        warning:
+          "OpenAI Codex model catalog is sourced from GoatCitadel's template because ChatGPT OAuth does not expose a stable /models endpoint.",
       };
     }
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
@@ -2165,15 +2166,17 @@ function buildOpenAiResponsesPayload(
   if (instructions) {
     payload.instructions = instructions;
   }
-  if (request.temperature !== undefined) payload.temperature = request.temperature;
-  if (request.top_p !== undefined) payload.top_p = request.top_p;
+  if (!isOpenAICodexResponsesProvider(provider)) {
+    if (request.temperature !== undefined) payload.temperature = request.temperature;
+    if (request.top_p !== undefined) payload.top_p = request.top_p;
+  }
   if (request.max_tokens !== undefined && !isOpenAICodexResponsesProvider(provider)) {
     payload.max_output_tokens = request.max_tokens;
   }
   if (request.reasoning?.effort) payload.reasoning = { effort: request.reasoning.effort };
   if (request.verbosity)
     payload.text = { ...(isRecord(payload.text) ? payload.text : {}), verbosity: request.verbosity };
-  if (request.response_format !== undefined) {
+  if (request.response_format !== undefined && !isOpenAICodexResponsesProvider(provider)) {
     payload.text = {
       ...(isRecord(payload.text) ? payload.text : {}),
       format: request.response_format,

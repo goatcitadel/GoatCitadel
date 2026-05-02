@@ -18,6 +18,8 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useApprovalQueue", () => ({
         preview: {},
         createdAt: "2026-04-22T00:00:00.000Z",
         explanation: { summary: "Review the tool request." },
+        explanationError:
+          'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
         linkage: { durableRunId: "durable-run-42", sessionId: "session-1" },
       },
     ],
@@ -33,6 +35,8 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useApprovalQueue", () => ({
         preview: {},
         createdAt: "2026-04-22T00:00:00.000Z",
         explanation: { summary: "Review the tool request." },
+        explanationError:
+          'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
         linkage: { durableRunId: "durable-run-42", sessionId: "session-1" },
       },
     ],
@@ -45,6 +49,8 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useApprovalQueue", () => ({
       preview: {},
       createdAt: "2026-04-22T00:00:00.000Z",
       explanation: { summary: "Review the tool request." },
+      explanationError:
+        'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
       linkage: { durableRunId: "durable-run-42", sessionId: "session-1" },
     },
     setSelectedApprovalId: vi.fn(),
@@ -97,6 +103,8 @@ describe("ApprovalsRoutePage", () => {
     expect(markup).toContain("Approval queue");
     expect(markup).toContain("Replay trail, durable recovery, and runtime linkage");
     expect(markup).toContain("Review the tool request.");
+    expect(markup).toContain("Approval summary unavailable");
+    expect(markup).toContain("optional explainer could not authenticate");
     expect(markup).toContain("Approvals stay in the canonical next shell now.");
   });
 });

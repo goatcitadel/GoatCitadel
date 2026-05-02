@@ -1,4 +1,9 @@
-import type { ApprovalExplanation, ApprovalRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
+import type {
+  ApprovalExplanation,
+  ApprovalRequest,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+} from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { ApprovalExplainerConfig } from "../config.js";
 import { LlmService } from "./llm-service.js";
@@ -55,31 +60,37 @@ export class ApprovalExplainerService {
       const runtime = this.llmService.getRuntimeConfig();
       const providerId = this.config.providerId ?? runtime.activeProviderId;
       const model = this.config.model ?? runtime.activeModel;
+      const apiStyle = this.llmService.resolveExecutionApiStyle(providerId, model);
 
       const promptPayload = buildPromptPayload(approval, this.config.maxPayloadChars);
+      const request: ChatCompletionRequest = {
+        providerId,
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You explain technical approval requests for non-technical operators. " +
+              "Use plain English and avoid jargon. Return strict JSON only.",
+          },
+          {
+            role: "user",
+            content:
+              "Summarize this approval request for a layperson. " +
+              "Return JSON with keys: summary, riskExplanation, saferAlternative.\n\n" +
+              promptPayload,
+          },
+        ],
+        max_tokens: 350,
+      };
+
+      if (apiStyle !== "openai-codex-responses") {
+        request.temperature = 0.2;
+        request.response_format = { type: "json_object" };
+      }
+
       const response = await withTimeout(
-        this.llmService.chatCompletions({
-          providerId,
-          model,
-          messages: [
-            {
-              role: "system",
-              content:
-                "You explain technical approval requests for non-technical operators. " +
-                "Use plain English and avoid jargon. Return strict JSON only.",
-            },
-            {
-              role: "user",
-              content:
-                "Summarize this approval request for a layperson. " +
-                "Return JSON with keys: summary, riskExplanation, saferAlternative.\n\n" +
-                promptPayload,
-            },
-          ],
-          temperature: 0.2,
-          max_tokens: 350,
-          response_format: { type: "json_object" },
-        }),
+        this.llmService.chatCompletions(request),
         this.config.timeoutMs,
         "approval explainer timed out",
       );

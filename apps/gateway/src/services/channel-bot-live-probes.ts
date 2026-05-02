@@ -138,7 +138,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
         key: "slack_token_auth",
         label: "Token auth",
         status: auth.status >= 500 ? "warn" : "fail",
-        message: auth.detail ?? `Slack returned HTTP ${auth.status}.`,
+        message: formatSlackProbeDetail(auth.detail) ?? `Slack returned HTTP ${auth.status}.`,
         failureCategory: inferFailureCategory(auth.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -194,7 +194,7 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
         key: "slack_sandbox_send",
         label: "Sandbox send",
         status: send.status >= 500 ? "warn" : "fail",
-        message: send.detail ?? `Slack returned HTTP ${send.status}.`,
+        message: formatSlackProbeDetail(send.detail) ?? `Slack returned HTTP ${send.status}.`,
         failureCategory: inferFailureCategory(send.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -236,7 +236,9 @@ export async function runSlackBotLiveChecks(input: SlackProbeInput): Promise<Bot
         key: "slack_sandbox_cleanup",
         label: "Sandbox cleanup",
         status: cleanup.status === 403 ? "warn" : cleanup.status >= 500 ? "warn" : "fail",
-        message: cleanup.detail ?? `Slack returned HTTP ${cleanup.status} while deleting the sandbox message.`,
+        message:
+          formatSlackProbeDetail(cleanup.detail) ??
+          `Slack returned HTTP ${cleanup.status} while deleting the sandbox message.`,
         failureCategory: inferFailureCategory(cleanup.status),
       });
       return { checks: mapProbeStepsToChecks(probe.steps), probe };
@@ -1445,6 +1447,27 @@ function readProbeDetail(payload: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+function formatSlackProbeDetail(detail: string | undefined): string | undefined {
+  switch (detail) {
+    case "not_in_channel":
+      return "The Slack app is not in that channel yet. Invite the app to the channel or choose a public channel it can post to.";
+    case "channel_not_found":
+      return "Slack could not find that channel. Use a channel name like #ops or paste the channel ID.";
+    case "missing_scope":
+      return "The Slack app is missing a required permission scope. Reconnect Slack so GoatCitadel can request the current scopes.";
+    case "invalid_auth":
+    case "token_revoked":
+      return "Slack rejected the stored bot token. Reconnect Slack to refresh the workspace install.";
+    case "is_archived":
+      return "That Slack channel is archived. Choose an active channel target.";
+    case "no_permission":
+    case "restricted_action":
+      return "Slack blocked this action for the app. Check workspace app permissions or ask a Slack admin to approve the app.";
+    default:
+      return detail;
+  }
 }
 
 function parseJsonRecord(text: string): Record<string, unknown> {

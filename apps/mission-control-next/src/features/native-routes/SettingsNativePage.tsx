@@ -50,6 +50,7 @@ import {
   fetchAddonsCatalog,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
+  discoverTelegramTargets,
   fetchDaemonStatus,
   fetchDeviceAccessGrants,
   fetchInstalledAddons,
@@ -59,6 +60,7 @@ import {
   fetchIntegrationPlugins,
   fetchGoogleMeetPrerequisiteStatus,
   fetchGoogleMeetSessions,
+  fetchSlackOAuthStatus,
   fetchLlamaCppModels,
   fetchMcpServers,
   fetchMcpTemplates,
@@ -89,6 +91,7 @@ import {
   saveProviderSecret,
   selectVoiceRuntimeModel,
   startDaemon,
+  startSlackOAuth,
   startOpenAICodexOAuthDeviceFlow,
   startLlamaCppRuntime,
   startNpuRuntime,
@@ -3225,7 +3228,12 @@ function ChannelsSection(_props: SettingsSectionProps) {
       setCreateCatalogId("");
       return;
     }
-    setCreateCatalogId((current) => current || data.definitions[0]?.catalog.catalogId || "");
+    setCreateCatalogId((current) => {
+      if (current && data.definitions.some((item) => item.catalog.catalogId === current)) {
+        return current;
+      }
+      return preferredChannelDefinition(data.definitions)?.catalog.catalogId || "";
+    });
   }, [data?.definitions]);
 
   useEffect(() => {
@@ -3262,6 +3270,112 @@ function ChannelsSection(_props: SettingsSectionProps) {
       setSelectedDraftId(created.draftId);
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
+    }
+  };
+
+  const handleStartSlackOAuth = async () => {
+    try {
+      const status = await fetchSlackOAuthStatus();
+      if (!status.configured) {
+        setNotice({
+          tone: "warning",
+          message: `Slack OAuth needs configuration first: ${status.missing.join(", ") || "missing OAuth settings"}.`,
+        });
+        return;
+      }
+      const previousConnections = new Map(
+        status.connections.map((item) => [
+          item.connection.connectionId,
+          readConnectionConfigString(item.connection.config, "oauthConnectedAt") ?? "",
+        ]),
+      );
+      const result = await startSlackOAuth();
+      window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
+      setNotice({
+        tone: "success",
+        message: "Slack authorization opened. Approve the workspace, then target setup will open here.",
+      });
+      void waitForSlackOAuthInstall(previousConnections);
+    } catch (oauthError) {
+      setNotice({ tone: "error", message: getErrorMessage(oauthError) });
+    }
+  };
+
+  const waitForSlackOAuthInstall = async (previousConnections: Map<string, string>) => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await delay(2000);
+      try {
+        const status = await fetchSlackOAuthStatus();
+        const installed = status.connections.find((item) => {
+          const previousConnectedAt = previousConnections.get(item.connection.connectionId);
+          const nextConnectedAt = readConnectionConfigString(item.connection.config, "oauthConnectedAt") ?? "";
+          return previousConnectedAt === undefined || previousConnectedAt !== nextConnectedAt;
+        });
+        if (!installed) {
+          continue;
+        }
+        const created = await createChannelSetupDraft({
+          catalogId: "channel.slack",
+          connectionId: installed.connection.connectionId,
+          lifecycleMode: "edit",
+        });
+        setCreateCatalogId("channel.slack");
+        setNotice({
+          tone: "success",
+          message: "Slack workspace connected. Add channel targets, then validate and test.",
+        });
+        await reload();
+        setSelectedDraftId(created.draftId);
+        return;
+      } catch {
+        // Keep polling so callback timing or a short gateway blip does not interrupt setup.
+      }
+    }
+    setNotice({
+      tone: "warning",
+      message: "Slack authorization may still be finishing. Refresh channel connections if the workspace was approved.",
+    });
+  };
+
+  const handleDiscoverTelegramTargets = async () => {
+    if (!selectedDraft) {
+      return;
+    }
+    try {
+      const draftObject = parseJsonObject(draftJson, selectedDraft.draft);
+      const result = await discoverTelegramTargets({
+        botToken: readDraftString(draftObject, "botToken"),
+        botTokenEnv: readDraftString(draftObject, "botTokenEnv") ?? readDraftString(draftObject, "tokenEnv"),
+        setupCode: readDraftString(draftObject, "setupCode"),
+      });
+      if (result.items.length === 0) {
+        setNotice({
+          tone: "warning",
+          message:
+            "Telegram did not return recent chats yet. Send /start or the setup code in the target chat and try again.",
+        });
+        return;
+      }
+      const targets = result.items.map((item, index) => ({
+        id: item.id,
+        label: item.label,
+        chatId: item.chatId,
+        kind: item.kind,
+        default: index === 0,
+      }));
+      setDraftJson(
+        formatJson({
+          ...draftObject,
+          targets,
+          defaultChatId: targets[0]?.chatId ?? readDraftString(draftObject, "defaultChatId"),
+        }),
+      );
+      setNotice({
+        tone: "success",
+        message: `Detected ${targets.length} Telegram target${targets.length === 1 ? "" : "s"}.`,
+      });
+    } catch (discoverError) {
+      setNotice({ tone: "error", message: getErrorMessage(discoverError) });
     }
   };
 
@@ -3364,6 +3478,12 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 </select>
               </SettingsField>
               <SettingsButtonRow>
+                {createCatalogId === "channel.slack" ? (
+                  <button type="button" className="mc-next-button" onClick={() => void handleStartSlackOAuth()}>
+                    <ExternalLink size={16} />
+                    Connect Slack
+                  </button>
+                ) : null}
                 <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create setup draft
@@ -3446,6 +3566,22 @@ function ChannelsSection(_props: SettingsSectionProps) {
                   />
                 ) : null}
                 <SettingsButtonRow>
+                  {selectedDraft.catalogId === "channel.slack" ? (
+                    <button type="button" className="mc-next-button" onClick={() => void handleStartSlackOAuth()}>
+                      <ExternalLink size={16} />
+                      Connect Slack
+                    </button>
+                  ) : null}
+                  {selectedDraft.catalogId === "channel.telegram" ? (
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      onClick={() => void handleDiscoverTelegramTargets()}
+                    >
+                      <RefreshCw size={16} />
+                      Detect Telegram Chats
+                    </button>
+                  ) : null}
                   <button type="button" className="mc-next-button" onClick={() => void handleSave()}>
                     <Save size={16} />
                     Save draft
@@ -4708,6 +4844,28 @@ function parseJsonObject(value: string, fallback: Record<string, unknown> = {}) 
     throw new Error("Value must be a JSON object.");
   }
   return parsed as Record<string, unknown>;
+}
+
+function readDraftString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readConnectionConfigString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function preferredChannelDefinition(definitions: ChannelSetupDefinition[]): ChannelSetupDefinition | undefined {
+  return (
+    definitions.find((item) => item.catalog.catalogId === "channel.slack") ??
+    definitions.find((item) => item.catalog.catalogId === "channel.telegram") ??
+    definitions[0]
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function formatJson(value: Record<string, unknown>) {
