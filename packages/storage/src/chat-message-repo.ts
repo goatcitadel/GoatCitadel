@@ -47,8 +47,7 @@ export class ChatMessageRepository {
         timestamp = excluded.timestamp,
         token_input = excluded.token_input,
         token_output = excluded.token_output,
-        cost_usd = excluded.cost_usd,
-        created_at = excluded.created_at
+        cost_usd = excluded.cost_usd
     `);
     this.countStmt = db.prepare(`
       SELECT COUNT(1) AS count
@@ -141,8 +140,7 @@ export class ChatMessageRepository {
             timestamp = excluded.timestamp,
             token_input = excluded.token_input,
             token_output = excluded.token_output,
-            cost_usd = excluded.cost_usd,
-            created_at = excluded.created_at
+            cost_usd = excluded.cost_usd
         `;
         const params: (string | number | null)[] = [];
         for (const message of chunk) {

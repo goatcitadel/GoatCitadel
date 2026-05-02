@@ -8,6 +8,7 @@ interface PendingActionRow {
   action_type: PendingApprovalAction["actionType"];
   request_json: string;
   created_at: string;
+  expires_at: string | null;
   resolved_at: string | null;
   resolution_status: NonNullable<PendingApprovalAction["resolutionStatus"]>;
   result_json: string | null;
@@ -21,12 +22,13 @@ export class PendingApprovalActionRepository {
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO pending_approval_actions (
-        approval_id, action_type, request_json, created_at, resolution_status
-      ) VALUES (@approvalId, @actionType, @requestJson, @createdAt, 'pending')
+        approval_id, action_type, request_json, created_at, expires_at, resolution_status
+      ) VALUES (@approvalId, @actionType, @requestJson, @createdAt, @expiresAt, 'pending')
       ON CONFLICT(approval_id) DO UPDATE SET
         action_type = excluded.action_type,
         request_json = excluded.request_json,
         created_at = excluded.created_at,
+        expires_at = excluded.expires_at,
         resolved_at = NULL,
         resolution_status = 'pending',
         result_json = NULL
@@ -47,6 +49,7 @@ export class PendingApprovalActionRepository {
     actionType: PendingApprovalAction["actionType"];
     request: Record<string, unknown>;
     createdAt?: string;
+    expiresAt?: string;
   }): PendingApprovalAction {
     const createdAt = input.createdAt ?? new Date().toISOString();
     this.upsertStmt.run({
@@ -54,6 +57,7 @@ export class PendingApprovalActionRepository {
       actionType: input.actionType,
       requestJson: JSON.stringify(input.request),
       createdAt,
+      expiresAt: input.expiresAt ?? null,
     });
     return this.get(input.approvalId);
   }
@@ -104,10 +108,9 @@ function mapPendingRow(row: PendingActionRow): PendingApprovalAction {
     actionType: row.action_type,
     request: safeJsonParse<Record<string, unknown>>(row.request_json, {}),
     createdAt: row.created_at,
+    expiresAt: row.expires_at ?? undefined,
     resolvedAt: row.resolved_at ?? undefined,
     resolutionStatus: row.resolution_status,
     result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,
   };
 }
-
-

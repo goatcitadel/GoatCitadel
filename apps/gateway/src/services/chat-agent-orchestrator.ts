@@ -27,6 +27,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { BudgetExceededError, getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
 import { hasLiveDataKeywords, EXPLICIT_WEB_PHRASES } from "../orchestration/live-data-detect.js";
@@ -152,6 +153,7 @@ const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "memory.upsert": ["namespace", "title", "content"],
   "embeddings.query": ["query"],
 };
+const log = logger.child("chat-agent-orchestrator");
 const MAX_EXPOSED_TOOLS_PER_TURN = {
   chat: 8,
   cowork: 12,
@@ -449,6 +451,7 @@ export class ChatAgentOrchestrator {
     let usageObserved = false;
     let circuitBreakerReason: string | undefined;
     let circuitBreakerFailureClass: ChatTurnFailureClass | undefined;
+    let suppressIncompleteCompletionRepair = false;
     const toolFailureSignatureCounts = new Map<string, number>();
     let promptLabToolComplianceRetryIssued = false;
     let promptLabSynthesisOnly = false;
@@ -1619,6 +1622,7 @@ export class ChatAgentOrchestrator {
 
           let completion: ChatCompletionResponse;
           if (this.deps.createChatCompletionStream) {
+            let streamYieldedVisibleChunk = false;
             try {
               const aggregate = createCompletionStreamAggregate();
               for await (const rawChunk of this.deps.createChatCompletionStream({
@@ -1626,6 +1630,8 @@ export class ChatAgentOrchestrator {
                 stream: true,
               })) {
                 const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
+                streamYieldedVisibleChunk =
+                  streamYieldedVisibleChunk || Boolean(streamed.delta || streamed.sawToolCall);
                 if (streamed.delta && !streamed.sawToolCall) {
                   yield {
                     type: "delta",
@@ -1637,7 +1643,24 @@ export class ChatAgentOrchestrator {
                 }
               }
               completion = buildCompletionFromAggregate(aggregate);
-            } catch {
+            } catch (error) {
+              log.warn("completion stream failed", {
+                providerId: input.providerId,
+                model: input.model,
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                fallback: streamYieldedVisibleChunk ? "suppressed_after_partial_output" : "non_streaming_completion",
+                error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+              });
+              if (streamYieldedVisibleChunk) {
+                suppressIncompleteCompletionRepair = true;
+                throw new Error(
+                  "Streaming completion failed after partial output; non-streaming fallback suppressed.",
+                  {
+                    cause: error,
+                  },
+                );
+              }
               completion = await this.deps.createChatCompletion(completionRequest);
             }
           } else {
@@ -2105,7 +2128,12 @@ export class ChatAgentOrchestrator {
       }
     }
 
-    if (!approvalPayload && finalStatus !== "cancelled" && completionState.status !== "complete") {
+    if (
+      !approvalPayload &&
+      finalStatus !== "cancelled" &&
+      completionState.status !== "complete" &&
+      !suppressIncompleteCompletionRepair
+    ) {
       const repairedCompletion = await this.repairIncompleteAssistantCompletion({
         input,
         partialAssistantContent: assistantContent,

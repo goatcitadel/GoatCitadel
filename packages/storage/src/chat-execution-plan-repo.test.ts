@@ -112,6 +112,42 @@ describe("ChatExecutionPlanRepository", () => {
     assert.equal(bySession[0]?.steps[1]?.childRunId, "delegation-run-1");
   });
 
+  it("lists session plans with their steps through the batched loader", () => {
+    const repo = createRepo();
+    for (let index = 1; index <= 3; index += 1) {
+      repo.create({
+        sessionId: "sess-batch",
+        turnId: `turn-${index}`,
+        mode: "cowork",
+        planningMode: "off",
+        source: "planner",
+        objective: `Plan ${index}`,
+        summary: `Summary ${index}`,
+        steps: [
+          {
+            stepId: `step-${index}-1`,
+            index: 0,
+            objective: `Step ${index}`,
+            parallelizable: false,
+            status: "pending",
+          },
+        ],
+        createdAt: `2026-03-12T10:0${index}:00.000Z`,
+        updatedAt: `2026-03-12T10:0${index}:00.000Z`,
+      });
+    }
+
+    const bySession = repo.listBySession("sess-batch");
+    assert.deepEqual(
+      bySession.map((plan) => plan.turnId),
+      ["turn-3", "turn-2", "turn-1"],
+    );
+    assert.deepEqual(
+      bySession.map((plan) => plan.steps[0]?.stepId),
+      ["step-3-1", "step-2-1", "step-1-1"],
+    );
+  });
+
   it("allows repeated logical step ids across different plans", () => {
     const repo = createRepo();
 

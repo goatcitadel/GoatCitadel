@@ -494,6 +494,111 @@ function createMockStorage(): unknown {
 }
 
 describe("ChatAgentOrchestrator", () => {
+  it("falls back to non-streaming completion when the stream fails before visible output", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Recovered answer.",
+          },
+        },
+      ],
+    });
+    async function* createChatCompletionStream() {
+      const unreachableChunks: Record<string, unknown>[] = [];
+      yield* unreachableChunks;
+      throw new Error("stream unavailable");
+    }
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      createChatCompletionStream,
+      invokeTool: vi.fn(),
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-stream-fallback-before-output",
+      turnId: randomUUID(),
+      userMessageId: "msg-stream-fallback-before-output",
+      content: "Answer directly.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Answer directly." }],
+    });
+
+    expect(result.assistantContent).toBe("Recovered answer.");
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not silently replace partial streamed output when the stream fails", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Replacement answer.",
+          },
+        },
+      ],
+    });
+    async function* createChatCompletionStream() {
+      yield {
+        id: "stream-1",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Partial visible answer." },
+          },
+        ],
+      };
+      throw new Error("stream interrupted");
+    }
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      createChatCompletionStream,
+      invokeTool: vi.fn(),
+    });
+
+    const chunks = [];
+    for await (const chunk of orchestrator.runStream({
+      sessionId: "sess-stream-fallback-after-output",
+      turnId: randomUUID(),
+      userMessageId: "msg-stream-fallback-after-output",
+      content: "Answer directly.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Answer directly." }],
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.some((chunk) => chunk.type === "delta" && chunk.delta === "Partial visible answer.")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "error")).toBe(true);
+    expect(chunks.some((chunk) => chunk.type === "message_done" && chunk.content === "Replacement answer.")).toBe(
+      false,
+    );
+    expect(chunks.some((chunk) => chunk.type === "trace_update" && chunk.trace.status === "failed")).toBe(true);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
   it("tolerates missing execution-plan storage while building the tool schema", async () => {
     const storage = createMockStorage() as Record<string, unknown>;
     delete storage.chatExecutionPlans;

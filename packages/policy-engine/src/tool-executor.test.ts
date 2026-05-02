@@ -218,6 +218,7 @@ describe("executeTool", () => {
         sessionId: "sess-approved-read",
       },
       createdAt: "2026-03-21T00:00:00.000Z",
+      expiresAt: "2099-03-21T00:15:00.000Z",
       resolutionStatus: "pending",
     });
 
@@ -566,6 +567,7 @@ describe("executeTool", () => {
         sessionId: "sess-6",
       },
       createdAt: "2026-03-21T00:00:00.000Z",
+      expiresAt: "2099-03-21T00:15:00.000Z",
       resolutionStatus: "pending",
     });
     const request: ToolInvokeRequest = {
@@ -673,6 +675,7 @@ describe("executeTool", () => {
         sessionId: "sess-bg-approved",
       },
       createdAt: "2026-03-21T00:00:00.000Z",
+      expiresAt: "2099-03-21T00:15:00.000Z",
       resolutionStatus: "pending",
     });
 
@@ -791,7 +794,9 @@ describe("executeTool", () => {
     process.env.SLACK_BOT_TOKEN = "xoxb-test";
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false }), { status: 429, headers: { "retry-after": "0" } }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false }), { status: 429, headers: { "retry-after": "0" } }),
+      )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ ok: true, ts: "1712345678.000200" }), {
           status: 200,

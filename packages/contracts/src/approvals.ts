@@ -141,6 +141,7 @@ export interface PendingApprovalAction {
   request: Record<string, unknown>;
   linkage?: ApprovalLinkage;
   createdAt: string;
+  expiresAt?: string;
   resolvedAt?: string;
   resolutionStatus?: "pending" | "executed" | "rejected" | "failed";
   result?: Record<string, unknown>;

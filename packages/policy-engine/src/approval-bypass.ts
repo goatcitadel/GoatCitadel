@@ -1,6 +1,7 @@
 import type { ToolAccessEvaluateRequest, ToolInvokeRequest } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
+const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 const APPROVAL_REASON_RE = /^approval:([A-Za-z0-9_-]+)$/;
 
 export function hasVerifiedApprovalBypass(
@@ -13,6 +14,9 @@ export function hasVerifiedApprovalBypass(
   }
   const pending = storage.pendingApprovalActions.find(approvalId);
   if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
+    return false;
+  }
+  if (!isPendingApprovalStillFresh(pending.createdAt, pending.expiresAt)) {
     return false;
   }
   const storedRequest = pending.request as Partial<ToolInvokeRequest>;
@@ -33,12 +37,28 @@ function requestMatchesPendingApproval(
   storedRequest: Partial<ToolInvokeRequest>,
 ): boolean {
   return (
-    storedRequest.toolName === request.toolName
-    && storedRequest.agentId === request.agentId
-    && storedRequest.sessionId === request.sessionId
-    && (storedRequest.taskId ?? undefined) === (request.taskId ?? undefined)
-    && stableStringify(storedRequest.args ?? {}) === stableStringify(request.args ?? {})
+    storedRequest.toolName === request.toolName &&
+    storedRequest.agentId === request.agentId &&
+    storedRequest.sessionId === request.sessionId &&
+    (storedRequest.taskId ?? undefined) === (request.taskId ?? undefined) &&
+    stableStringify(storedRequest.args ?? {}) === stableStringify(request.args ?? {})
   );
+}
+
+function isPendingApprovalStillFresh(createdAt: string, expiresAt?: string): boolean {
+  if (expiresAt) {
+    const explicitExpiry = Date.parse(expiresAt);
+    if (!Number.isFinite(explicitExpiry)) {
+      return false;
+    }
+    return explicitExpiry > Date.now();
+  }
+
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+  return createdAtMs + DEFAULT_APPROVAL_TTL_MS > Date.now();
 }
 
 function stableStringify(value: unknown): string {

@@ -35,6 +35,7 @@ function createStorageStub(): Storage {
     pendingApprovalActions: {
       upsertPending: vi.fn(),
       find: vi.fn(() => undefined),
+      markResolved: vi.fn(),
     },
     db: {
       prepare: vi.fn(() => ({
@@ -104,13 +105,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
         createdAt: new Date().toISOString(),
       },
     ]);
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      tools: {
-        ...policyConfig.tools,
-        allow: [],
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          allow: [],
+        },
       },
-    }, storage);
+      storage,
+    );
 
     const evaluation = engine.evaluateAccess({
       toolName: "browser.navigate",
@@ -125,13 +129,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
   it("still blocks metadata hosts under the danger profile", () => {
     const storage = createStorageStub();
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      tools: {
-        ...policyConfig.tools,
-        allow: [],
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          allow: [],
+        },
       },
-    }, storage);
+      storage,
+    );
 
     const evaluation = engine.evaluateAccess({
       toolName: "browser.navigate",
@@ -146,24 +153,29 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
   it("audits public-host bypasses under the danger profile", async () => {
     const storage = createStorageStub();
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      tools: {
-        ...policyConfig.tools,
-        allow: [],
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          allow: [],
+        },
       },
-    }, storage);
+      storage,
+    );
 
-    vi.mocked(storage.toolGrants.list).mockReturnValue([{
-      grantId: "grant-browser-navigate",
-      toolPattern: "browser.navigate",
-      decision: "allow",
-      scope: "session",
-      scopeRef: "session",
-      grantType: "persistent",
-      createdBy: "test",
-      createdAt: new Date().toISOString(),
-    }]);
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-browser-navigate",
+        toolPattern: "browser.navigate",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
 
     const result = await engine.invoke({
       toolName: "browser.navigate",
@@ -193,13 +205,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
     vi.setSystemTime(new Date("2026-03-22T12:00:00.000Z"));
     try {
       const storage = createStorageStub();
-      const engine = new ToolPolicyEngine({
-        ...policyConfig,
-        sandbox: {
-          ...policyConfig.sandbox,
-          readAccessMode: "approval_required",
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
         },
-      }, storage);
+        storage,
+      );
 
       const result = await engine.invoke({
         toolName: "file.read_range",
@@ -210,9 +225,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
       expect(result.outcome).toBe("approval_required");
       expect(result.expiresAt).toBe("2026-03-22T12:15:00.000Z");
-      expect(vi.mocked(storage.approvals.create)).toHaveBeenCalledWith(expect.objectContaining({
-        expiresAt: "2026-03-22T12:15:00.000Z",
-      }));
+      expect(vi.mocked(storage.approvals.create)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresAt: "2026-03-22T12:15:00.000Z",
+        }),
+      );
+      expect(vi.mocked(storage.pendingApprovalActions.upsertPending)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expiresAt: "2026-03-22T12:15:00.000Z",
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -220,13 +242,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
   it("requires approval when readAccessMode is approval_required and a file is outside trusted roots", () => {
     const storage = createStorageStub();
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        readAccessMode: "approval_required",
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
       },
-    }, storage);
+      storage,
+    );
     const evaluation = engine.evaluateAccess({
       toolName: "file.read_range",
       args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
@@ -255,13 +280,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
         createdAt: new Date().toISOString(),
       },
     ]);
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        readAccessMode: "approval_required",
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
       },
-    }, storage);
+      storage,
+    );
     const evaluation = engine.evaluateAccess({
       toolName: "file.read_range",
       args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
@@ -295,13 +323,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
         createdAt: new Date().toISOString(),
       },
     ]);
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        readAccessMode: "approval_required",
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
       },
-    }, storage);
+      storage,
+    );
     const evaluation = engine.evaluateAccess({
       toolName: "file.read_range",
       args: { path: "F:/code/claude-code/src/index.ts", startLine: 1, endLine: 5 },
@@ -314,13 +345,16 @@ describe("ToolPolicyEngine outside-root read access", () => {
 
   it("does not bypass outside-root read approval with a forged approval id", () => {
     const storage = createStorageStub();
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        readAccessMode: "approval_required",
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
       },
-    }, storage);
+      storage,
+    );
     const evaluation = engine.evaluateAccess({
       toolName: "file.read_range",
       args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
@@ -335,42 +369,279 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(evaluation.requiresApproval).toBe(true);
   });
 
-  it("allows outside-root reads only when the approval id matches the pending approved action request", () => {
+  it("allows outside-root reads only when the approval id matches a fresh pending approved action request", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
     const storage = createStorageStub();
-    vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
-      createPendingApprovalAction({
-        approvalId: "apr-123",
-        request: {
-          toolName: "file.read_range",
-          args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
-          agentId: "agent",
-          sessionId: "session",
-          consentContext: {
-            source: "ui",
-            reason: "approval:apr-123",
+    try {
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-123",
+          expiresAt: "2026-03-21T00:10:00.000Z",
+          request: {
+            toolName: "file.read_range",
+            args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+            agentId: "agent",
+            sessionId: "session",
+            consentContext: {
+              source: "ui",
+              reason: "approval:apr-123",
+            },
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
           },
         },
-      }),
-    );
-    const engine = new ToolPolicyEngine({
-      ...policyConfig,
-      sandbox: {
-        ...policyConfig.sandbox,
-        readAccessMode: "approval_required",
-      },
-    }, storage);
-    const evaluation = engine.evaluateAccess({
-      toolName: "file.read_range",
-      args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
-      agentId: "agent",
-      sessionId: "session",
-      consentContext: {
-        source: "ui",
-        reason: "approval:apr-123",
-      },
-    } as never);
-    expect(evaluation.allowed).toBe(true);
-    expect(evaluation.requiresApproval).toBe(false);
+        storage,
+      );
+      const evaluation = engine.evaluateAccess({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr-123",
+        },
+      } as never);
+      expect(evaluation.allowed).toBe(true);
+      expect(evaluation.requiresApproval).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects outside-root approval bypasses after expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:20:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-expired",
+          expiresAt: "2026-03-21T00:10:00.000Z",
+          request: {
+            toolName: "file.read_range",
+            args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+            agentId: "agent",
+            sessionId: "session",
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
+        storage,
+      );
+      const evaluation = engine.evaluateAccess({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr-expired",
+        },
+      } as never);
+      expect(evaluation.allowed).toBe(true);
+      expect(evaluation.requiresApproval).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects outside-root approval bypasses after the pending action is resolved", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue({
+        ...createPendingApprovalAction({
+          approvalId: "apr-executed",
+          expiresAt: "2026-03-21T00:10:00.000Z",
+          request: {
+            toolName: "file.read_range",
+            args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+            agentId: "agent",
+            sessionId: "session",
+          },
+        }),
+        resolutionStatus: "executed",
+      });
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
+        storage,
+      );
+      const evaluation = engine.evaluateAccess({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr-executed",
+        },
+      } as never);
+      expect(evaluation.allowed).toBe(true);
+      expect(evaluation.requiresApproval).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows legacy pending approval bypasses only inside the default ttl from createdAt", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:14:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-legacy",
+          createdAt: "2026-03-21T00:00:00.000Z",
+          request: {
+            toolName: "file.read_range",
+            args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+            agentId: "agent",
+            sessionId: "session",
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
+        storage,
+      );
+      const evaluation = engine.evaluateAccess({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr-legacy",
+        },
+      } as never);
+      expect(evaluation.requiresApproval).toBe(false);
+
+      vi.setSystemTime(new Date("2026-03-21T00:16:00.000Z"));
+      const expiredEvaluation = engine.evaluateAccess({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr-legacy",
+        },
+      } as never);
+      expect(expiredEvaluation.requiresApproval).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects pending approval bypasses with invalid explicit expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-invalid-expiry",
+          createdAt: "2026-03-21T00:00:00.000Z",
+          expiresAt: "not-a-date",
+          request: {
+            toolName: "file.read_range",
+            args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+            agentId: "agent",
+            sessionId: "session",
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
+        storage,
+      );
+      const evaluation = engine.evaluateAccess({
+        toolName: "file.read_range",
+        args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+        agentId: "agent",
+        sessionId: "session",
+        consentContext: {
+          source: "ui",
+          reason: "approval:apr-invalid-expiry",
+        },
+      } as never);
+      expect(evaluation.requiresApproval).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not execute approved pending actions after expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:20:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-expired-direct",
+          expiresAt: "2026-03-21T00:10:00.000Z",
+          request: {
+            toolName: "file.read_range",
+            args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+            agentId: "agent",
+            sessionId: "session",
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
+        storage,
+      );
+      const result = await engine.executeApprovedAction("apr-expired-direct");
+      expect(result).toBeUndefined();
+      expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith("apr-expired-direct", "failed", {
+        reason: "pending approval action is expired, resolved, or no longer matches the stored request",
+      });
+      expect(storage.audit.append).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -379,16 +650,18 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {
       if (scope === "task" && scopeRef === "task-2") {
-        return [{
-          grantId: "grant-task-2",
-          toolPattern: "fs.write",
-          decision: "allow",
-          scope: "task",
-          scopeRef: "task-2",
-          grantType: "persistent",
-          createdBy: "test",
-          createdAt: new Date().toISOString(),
-        }];
+        return [
+          {
+            grantId: "grant-task-2",
+            toolPattern: "fs.write",
+            decision: "allow",
+            scope: "task",
+            scopeRef: "task-2",
+            grantType: "persistent",
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ];
       }
       return [];
     });
@@ -413,28 +686,32 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {
       if (scope === "workspace" && scopeRef === "workspace-1") {
-        return [{
-          grantId: "grant-workspace-1",
-          toolPattern: "fs.write",
-          decision: "allow",
-          scope: "workspace",
-          scopeRef: "workspace-1",
-          grantType: "persistent",
-          createdBy: "test",
-          createdAt: new Date().toISOString(),
-        }];
+        return [
+          {
+            grantId: "grant-workspace-1",
+            toolPattern: "fs.write",
+            decision: "allow",
+            scope: "workspace",
+            scopeRef: "workspace-1",
+            grantType: "persistent",
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ];
       }
       if (scope === "global" && scopeRef === "global") {
-        return [{
-          grantId: "grant-global",
-          toolPattern: "fs.write",
-          decision: "allow",
-          scope: "global",
-          scopeRef: "global",
-          grantType: "persistent",
-          createdBy: "test",
-          createdAt: new Date().toISOString(),
-        }];
+        return [
+          {
+            grantId: "grant-global",
+            toolPattern: "fs.write",
+            decision: "allow",
+            scope: "global",
+            scopeRef: "global",
+            grantType: "persistent",
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ];
       }
       return [];
     });
@@ -461,28 +738,32 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {
       if (scope === "session" && scopeRef === "session-1") {
-        return [{
-          grantId: "grant-session-allow",
-          toolPattern: "shell.exec",
-          decision: "allow",
-          scope,
-          scopeRef,
-          grantType: "persistent",
-          createdBy: "test",
-          createdAt: new Date().toISOString(),
-        }];
+        return [
+          {
+            grantId: "grant-session-allow",
+            toolPattern: "shell.exec",
+            decision: "allow",
+            scope,
+            scopeRef,
+            grantType: "persistent",
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ];
       }
       if (scope === "task" && scopeRef === "task-1") {
-        return [{
-          grantId: "grant-task-deny",
-          toolPattern: "shell.exec",
-          decision: "deny",
-          scope,
-          scopeRef,
-          grantType: "persistent",
-          createdBy: "test",
-          createdAt: new Date().toISOString(),
-        }];
+        return [
+          {
+            grantId: "grant-task-deny",
+            toolPattern: "shell.exec",
+            decision: "deny",
+            scope,
+            scopeRef,
+            grantType: "persistent",
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ];
       }
       return [];
     });
@@ -586,27 +867,35 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage);
 
-    await (engine as unknown as {
-      recordInvocation: (
-        auditEventId: string,
-        request: {
-          toolName: string;
-          args: Record<string, unknown>;
-          agentId: string;
-          sessionId: string;
-          taskId?: string;
+    await (
+      engine as unknown as {
+        recordInvocation: (
+          auditEventId: string,
+          request: {
+            toolName: string;
+            args: Record<string, unknown>;
+            agentId: string;
+            sessionId: string;
+            taskId?: string;
+          },
+          outcome: "executed" | "approval_required" | "blocked",
+          policyReason: string,
+        ) => Promise<void>;
+      }
+    ).recordInvocation(
+      "audit-1",
+      {
+        toolName: "session.status",
+        args: {
+          command:
+            "DATABASE_URL=mongodb://example.com:27017/myapp API_KEY=sk_test_1234567890abcdefghijklmnop NODE_ENV=production",
         },
-        outcome: "executed" | "approval_required" | "blocked",
-        policyReason: string,
-      ) => Promise<void>;
-    }).recordInvocation("audit-1", {
-      toolName: "session.status",
-      args: {
-        command: "DATABASE_URL=mongodb://example.com:27017/myapp API_KEY=sk_test_1234567890abcdefghijklmnop NODE_ENV=production",
+        agentId: "agent",
+        sessionId: "session-1",
       },
-      agentId: "agent",
-      sessionId: "session-1",
-    }, "executed", "allowed");
+      "executed",
+      "allowed",
+    );
 
     expect(vi.mocked(storage.audit.append)).toHaveBeenCalledWith(
       "tool_invocations",
@@ -616,19 +905,24 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
         },
       }),
     );
-    expect(JSON.stringify(vi.mocked(storage.audit.append).mock.calls)).not.toContain("sk_test_1234567890abcdefghijklmnop");
+    expect(JSON.stringify(vi.mocked(storage.audit.append).mock.calls)).not.toContain(
+      "sk_test_1234567890abcdefghijklmnop",
+    );
   });
 });
 
 function createPendingApprovalAction(input: {
   approvalId: string;
   request: Record<string, unknown>;
+  createdAt?: string;
+  expiresAt?: string;
 }): PendingApprovalAction {
   return {
     approvalId: input.approvalId,
     actionType: "tool.invoke",
     request: input.request,
-    createdAt: "2026-03-21T00:00:00.000Z",
+    createdAt: input.createdAt ?? "2026-03-21T00:00:00.000Z",
+    expiresAt: input.expiresAt,
     resolutionStatus: "pending",
   };
 }

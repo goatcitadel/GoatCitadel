@@ -719,6 +719,17 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "prompt_pack_benchmark_runs", "execution_style", "TEXT");
     },
   },
+  {
+    version: 73,
+    name: "pending_approval_action_expiry_and_trace_index_parity",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "pending_approval_actions", "expires_at", "TEXT");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_session_status
+          ON chat_turn_traces(session_id, status, started_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -920,6 +931,7 @@ function createBaseSchema(db: DatabaseSync): void {
       action_type TEXT NOT NULL,
       request_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      expires_at TEXT,
       resolved_at TEXT,
       resolution_status TEXT NOT NULL DEFAULT 'pending',
       result_json TEXT

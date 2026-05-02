@@ -722,4 +722,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON prompt_pack_benchmark_items(benchmark_run_id, provider_id, model, test_id);
     `,
   },
+  {
+    version: 23,
+    name: "pending_approval_action_expiry_and_trace_index_parity",
+    sql: `
+      ALTER TABLE pending_approval_actions
+        ADD COLUMN IF NOT EXISTS expires_at TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_chat_turn_traces_session_status
+        ON chat_turn_traces(session_id, status, started_at DESC);
+    `,
+  },
 ];

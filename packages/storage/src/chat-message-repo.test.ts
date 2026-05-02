@@ -64,7 +64,10 @@ describe("ChatMessageRepository", () => {
     });
 
     const items = repo.list("sess-1", 2);
-    assert.deepEqual(items.map((item) => item.messageId), ["m2", "m3"]);
+    assert.deepEqual(
+      items.map((item) => item.messageId),
+      ["m2", "m3"],
+    );
   });
 
   it("pages older items by cursor message id", () => {
@@ -81,7 +84,10 @@ describe("ChatMessageRepository", () => {
       });
     }
     const page = repo.list("sess-1", 2, "m4");
-    assert.deepEqual(page.map((item) => item.messageId), ["m2", "m3"]);
+    assert.deepEqual(
+      page.map((item) => item.messageId),
+      ["m2", "m3"],
+    );
   });
 
   it("upsertMany works inside an outer transaction", () => {
@@ -118,6 +124,73 @@ describe("ChatMessageRepository", () => {
 
     const items = repo.list("sess-nested");
     assert.equal(items.length, 2);
-    assert.deepEqual(items.map((item) => item.messageId), ["m1", "m2"]);
+    assert.deepEqual(
+      items.map((item) => item.messageId),
+      ["m1", "m2"],
+    );
+  });
+
+  it("preserves original createdAt when a message is upserted again", () => {
+    const { repo, db } = createRepoWithDb();
+    repo.upsert({
+      messageId: "m1",
+      sessionId: "sess-created-at",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "first",
+      timestamp: "2026-03-05T01:00:00.000Z",
+    });
+
+    repo.upsert({
+      messageId: "m1",
+      sessionId: "sess-created-at",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "updated",
+      timestamp: "2026-03-05T01:01:00.000Z",
+    });
+
+    const [item] = repo.list("sess-created-at");
+    const row = db.prepare("SELECT created_at FROM chat_messages WHERE message_id = ?").get("m1") as
+      | { created_at: string }
+      | undefined;
+    assert.equal(item?.content, "updated");
+    assert.equal(row?.created_at, "2026-03-05T01:00:00.000Z");
+  });
+
+  it("preserves original createdAt when messages are batch upserted again", () => {
+    const { repo, db } = createRepoWithDb();
+    repo.upsertMany([
+      {
+        messageId: "m1",
+        sessionId: "sess-created-at-batch",
+        role: "user",
+        actorType: "user",
+        actorId: "operator",
+        content: "first",
+        timestamp: "2026-03-05T01:00:00.000Z",
+      },
+    ]);
+
+    repo.upsertMany([
+      {
+        messageId: "m1",
+        sessionId: "sess-created-at-batch",
+        role: "user",
+        actorType: "user",
+        actorId: "operator",
+        content: "updated",
+        timestamp: "2026-03-05T01:01:00.000Z",
+      },
+    ]);
+
+    const [item] = repo.list("sess-created-at-batch");
+    const row = db.prepare("SELECT created_at FROM chat_messages WHERE message_id = ?").get("m1") as
+      | { created_at: string }
+      | undefined;
+    assert.equal(item?.content, "updated");
+    assert.equal(row?.created_at, "2026-03-05T01:00:00.000Z");
   });
 });

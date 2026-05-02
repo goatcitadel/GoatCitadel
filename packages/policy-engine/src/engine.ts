@@ -246,6 +246,7 @@ export class ToolPolicyEngine {
         approvalId: approval.approvalId,
         actionType: "tool.invoke",
         request: toPlainRecord(request),
+        expiresAt,
       });
 
       this.storage.approvalEvents.append({
@@ -311,10 +312,7 @@ export class ToolPolicyEngine {
     );
   }
 
-  public async executeApprovedAction(
-    approvalId: string,
-    signal?: AbortSignal,
-  ): Promise<ToolInvokeResult | undefined> {
+  public async executeApprovedAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined> {
     const pending = this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending") {
       return undefined;
@@ -337,6 +335,17 @@ export class ToolPolicyEngine {
         reason: `approval:${approvalId}`,
       },
     };
+    if (!hasVerifiedApprovalBypass(approvedRequest, this.storage)) {
+      const reason = "pending approval action is expired, resolved, or no longer matches the stored request";
+      this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+      this.storage.approvalEvents.append({
+        approvalId,
+        eventType: "approved_action_executed",
+        actorId: "system",
+        payload: { outcome: "blocked", reason },
+      });
+      return undefined;
+    }
     const auditEventId = randomUUID();
     const startedAt = new Date().toISOString();
     const approvedToolDef = this.registry.get(approvedRequest.toolName);

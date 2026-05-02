@@ -198,7 +198,8 @@ export class ChatExecutionPlanRepository {
         limit: Math.max(1, Math.min(limit, 500)),
       }),
     );
-    return rows.map((row) => this.mapPlan(row));
+    const stepsByPlanId = this.listStepsByPlanIds(rows.map((row) => row.plan_id));
+    return rows.map((row) => this.mapPlanWithSteps(row, stepsByPlanId.get(row.plan_id) ?? []));
   }
 
   public listByTurn(turnId: string, limit = 10): ChatExecutionPlanRecord[] {
@@ -258,7 +259,13 @@ export class ChatExecutionPlanRepository {
   }
 
   private mapPlan(row: ChatExecutionPlanRow): ChatExecutionPlanRecord {
-    const steps = toChatExecutionPlanStepRows(this.listStepsByPlanStmt.all({ planId: row.plan_id }));
+    return this.mapPlanWithSteps(
+      row,
+      toChatExecutionPlanStepRows(this.listStepsByPlanStmt.all({ planId: row.plan_id })),
+    );
+  }
+
+  private mapPlanWithSteps(row: ChatExecutionPlanRow, steps: ChatExecutionPlanStepRow[]): ChatExecutionPlanRecord {
     return {
       planId: row.plan_id,
       sessionId: row.session_id,
@@ -276,6 +283,31 @@ export class ChatExecutionPlanRepository {
       startedAt: row.started_at ?? undefined,
       finishedAt: row.finished_at ?? undefined,
     };
+  }
+
+  private listStepsByPlanIds(planIds: string[]): Map<string, ChatExecutionPlanStepRow[]> {
+    if (planIds.length === 0) {
+      return new Map();
+    }
+    const placeholders = planIds.map(() => "?").join(", ");
+    const rows = toChatExecutionPlanStepRows(
+      this.db
+        .prepare(
+          `
+        SELECT * FROM chat_execution_plan_steps
+        WHERE plan_id IN (${placeholders})
+        ORDER BY plan_id ASC, step_index ASC
+      `,
+        )
+        .all(...planIds),
+    );
+    const grouped = new Map<string, ChatExecutionPlanStepRow[]>();
+    for (const row of rows) {
+      const bucket = grouped.get(row.plan_id) ?? [];
+      bucket.push(row);
+      grouped.set(row.plan_id, bucket);
+    }
+    return grouped;
   }
 }
 
