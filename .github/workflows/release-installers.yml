@@ -54,6 +54,15 @@ jobs:
       - name: Build Windows installer
         run: pnpm package:windows --target ${{ matrix.target }}
 
+      - name: Sign Windows installer
+        if: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 != '' && secrets.WINDOWS_SIGN_CERT_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "goatcitadel-signing-cert.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String("${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}"))
+          $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
+          & $signtool sign /fd SHA256 /f $certPath /p "${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}" /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
+
       - name: Write SHA-256 checksum
         shell: pwsh
         run: |
