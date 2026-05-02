@@ -152,6 +152,7 @@ export async function prepareAgentChatTurn(
     parentTurnId?: string;
     existingUserMessage?: ChatMessageRecord;
     ingestUserMessage?: boolean;
+    extraSystemInstruction?: string;
     turnId?: string;
     assistantMessageId?: string;
   },
@@ -256,6 +257,7 @@ export async function prepareAgentChatTurn(
     missingRequiredProjectBinding
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
       : undefined,
+    options?.extraSystemInstruction,
   );
 
   const sessionState = await host.loadChatTurnSessionState(sessionId);

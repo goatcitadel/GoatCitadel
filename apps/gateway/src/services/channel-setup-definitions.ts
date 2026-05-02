@@ -841,12 +841,12 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
     catalog: baseCatalogMeta(catalog, ["guided", "manual"]),
     wizard: {
       archetype: "bot_token_target",
-      contentVersion: "2026.03.telegram.v1",
+      contentVersion: "2026.05.telegram.channel-ux.v1",
       estimatedMinutes: 8,
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary:
-        "Connect Telegram with the easiest bot-native flow: create a BotFather bot, send a setup message, then choose detected chats or groups as targets.",
+        "Connect Telegram with a bot-native flow: create a BotFather bot, send a setup message, choose detected chats, then set a home channel for background delivery.",
       prerequisites: [
         "A Telegram account.",
         "Access to the target chat, group, or channel.",
@@ -860,6 +860,9 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           title: "What this connection does",
           body: [
             paragraph("GoatCitadel can send messages into Telegram chats and channels using a Telegram bot token."),
+            paragraph(
+              "Telegram v1 also supports channel-native commands such as /status, /sethome, /personality, /skills, and /tools. Terminal-capable work can be requested remotely, but it still runs through GoatCitadel approvals and policy.",
+            ),
           ],
         },
         {
@@ -888,11 +891,15 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "Add the bot to each chat, group, supergroup, or channel you want GoatCitadel to use. If group privacy blocks regular messages, send a command or make the bot an admin.",
             ),
+            paragraph(
+              "After setup, use /sethome in the chat where background results, scheduled work, and cross-platform delivery should land by default.",
+            ),
           ],
           checklist: [
             check("bot-added", "Add the bot to every target chat or channel"),
             check("setup-message", "Send /start or a setup code in each target"),
             check("permissions", "Confirm the bot can post in each target"),
+            check("home-channel", "Plan which chat should become the home channel"),
           ],
         },
         {
@@ -951,6 +958,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
               commonMistakes: [
                 "Copying a message id instead of the chat id.",
                 "Adding a group before the bot has been added to that group.",
+                "Forgetting to send /start or the setup code before using target discovery.",
               ],
               canChangeLater: true,
             },
@@ -1032,6 +1040,9 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
             paragraph(
               "GoatCitadel verifies the token with Telegram and sends a sandbox message plus cleanup probe before you finalize.",
             ),
+            paragraph(
+              "The strongest setup proof is: token validates, the intended chat appears in target discovery, a sandbox message can be sent, and /sethome confirms the delivery target.",
+            ),
           ],
           troubleshooting: definitionFailures("token"),
         },
@@ -1039,17 +1050,26 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           id: "finish",
           kind: "confirm",
           title: "Finish setup",
-          body: [paragraph("After finalizing, send a sandbox message to confirm the bot can reach the selected chat.")],
-          successCriteria: ["The token validates successfully.", "A default chat target is configured."],
+          body: [
+            paragraph(
+              "After finalizing, send /status in Telegram, then /sethome in the chat that should receive background results.",
+            ),
+          ],
+          successCriteria: [
+            "The token validates successfully.",
+            "A default chat target is configured.",
+            "The intended Telegram chat is detected or manually configured.",
+            "The operator has chosen or intentionally skipped the home channel.",
+          ],
         },
       ],
     },
     adapter: {
-      adapterVersion: "2026.03.telegram.v1",
+      adapterVersion: "2026.05.telegram.channel-ux.v1",
       secretFieldKeys: ["botToken", "webhookSecret"],
     },
     validation: {
-      validationVersion: "2026.03.telegram.v1",
+      validationVersion: "2026.05.telegram.channel-ux.v1",
       levels: ["structural", "semantic", "live-auth"],
     },
     testing: {
@@ -1093,7 +1113,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
           botUsername: readString(config, "botUsername"),
           setupCode: readString(config, "setupCode"),
           targets: normalizeTelegramTargets(config),
-          defaultChatId: readString(config, "defaultChatId"),
+          defaultChatId: readString(config, "defaultChatId") ?? readString(config, "defaultChannelId"),
           parseMode: readString(config, "parseMode") ?? "Markdown",
           webhookSecretEnv: readString(config, "webhookSecretEnv") ?? readString(config, "secretTokenEnv"),
         },
@@ -1111,7 +1131,8 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
             botUsername: readString(config, "botUsername") ? "configured" : "unknown",
             setupCode: readString(config, "setupCode") ? "configured" : "unknown",
             targets: normalizeTelegramTargets(config).length > 0 ? "configured" : "missing",
-            defaultChatId: readString(config, "defaultChatId") ? "configured" : "unknown",
+            defaultChatId:
+              readString(config, "defaultChatId") || readString(config, "defaultChannelId") ? "configured" : "unknown",
             parseMode: "configured",
             webhookSecret:
               readString(config, "webhookSecret") || readString(config, "secretToken") ? "configured" : "unknown",
@@ -1140,6 +1161,7 @@ function createTelegramDefinition(): ChannelSetupRuntimeDefinition {
         botUsername: normalizeTelegramUsername(readString(draft.draft, "botUsername")),
         setupCode: readString(draft.draft, "setupCode"),
         targets,
+        defaultChannelId: defaultTarget?.chatId ?? readString(draft.draft, "defaultChatId"),
         defaultChatId: defaultTarget?.chatId ?? readString(draft.draft, "defaultChatId"),
         parseMode: readString(draft.draft, "parseMode") ?? "Markdown",
         webhookSecretEnv: readString(draft.draft, "webhookSecretEnv") ?? preservedWebhookSecretEnv,

@@ -1703,7 +1703,10 @@ export class GatewayService {
   public async respondToExistingChatMessage(
     sessionId: string,
     userMessageId: string,
-    input: Partial<ChatSendMessageRequest> & { deliveryReplyToMessageId?: string } = {},
+    input: Partial<ChatSendMessageRequest> & {
+      deliveryReplyToMessageId?: string;
+      channelSystemInstruction?: string;
+    } = {},
   ): Promise<ChatSendMessageResponse> {
     return this.withChatTurnWriteLease(sessionId, "integration-reply", async () => {
       await this.ensureChatMessageProjection(sessionId);
@@ -1719,14 +1722,16 @@ export class GatewayService {
         throw new Error("session binding is not writable");
       }
 
+      const { deliveryReplyToMessageId, channelSystemInstruction, ...chatInput } = input;
       const request: ChatSendMessageRequest = {
         content: userMessage.content,
-        ...input,
+        ...chatInput,
       };
       const prepared = await this.prepareAgentChatTurn(sessionId, request, {
         branchKind: "append",
         existingUserMessage: userMessage,
         ingestUserMessage: false,
+        extraSystemInstruction: channelSystemInstruction,
       });
       const response = await this.consumePreparedAgentChatTurn(
         sessionId,
@@ -1743,7 +1748,7 @@ export class GatewayService {
             connectionId: binding.connectionId,
             target: binding.target,
             message: assistantContent,
-            replyToMessageId: input.deliveryReplyToMessageId?.trim() || prepared.userEventId,
+            replyToMessageId: deliveryReplyToMessageId?.trim() || prepared.userEventId,
             sessionId,
             agentId: "assistant",
           }),
@@ -3789,6 +3794,7 @@ export class GatewayService {
       parentTurnId?: string;
       existingUserMessage?: ChatMessageRecord;
       ingestUserMessage?: boolean;
+      extraSystemInstruction?: string;
       turnId?: string;
       assistantMessageId?: string;
     },
@@ -4619,6 +4625,7 @@ export class GatewayService {
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   }): Promise<ApprovalResolveResult> {
     return this.approvalRuntime.resolveApprovalWithRemoteToken(input);
   }
@@ -4628,6 +4635,7 @@ export class GatewayService {
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   }): Promise<ApprovalResolveResult> {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
@@ -6078,7 +6086,8 @@ export class GatewayService {
       }
       output[skillId] = {
         pinned: metadata.pinned === true ? true : undefined,
-        usageCount: typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
+        usageCount:
+          typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
         lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : undefined,
       };
     }

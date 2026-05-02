@@ -148,3 +148,158 @@ export interface ChannelRuntimeStatus {
   lastError?: string;
   metadata?: Record<string, unknown>;
 }
+
+export type ChannelTargetKind = "private" | "group" | "supergroup" | "channel" | "thread" | "unknown";
+export type ChannelTargetDirectorySource = "platform_api" | "recent_update" | "connection_config" | "session_fallback";
+
+export interface ChannelTargetDirectoryEntry {
+  targetId: string;
+  platform: string;
+  kind: ChannelTargetKind;
+  displayLabel: string;
+  canonicalName: string;
+  source: ChannelTargetDirectorySource;
+  lastSeenAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ChannelTargetDirectory {
+  connectionId: string;
+  platform: string;
+  refreshedAt: string;
+  entries: ChannelTargetDirectoryEntry[];
+}
+
+export type ChannelTargetResolution =
+  | {
+      status: "resolved";
+      entry: ChannelTargetDirectoryEntry;
+    }
+  | {
+      status: "ambiguous";
+      query: string;
+      matches: ChannelTargetDirectoryEntry[];
+      message: string;
+    }
+  | {
+      status: "not_found";
+      query: string;
+      message: string;
+    };
+
+export type PersonalityPresetVisibility = "builtin" | "workspace" | "channel" | "custom";
+export type PersonalityPresetCategory = "core" | "critical" | "execution" | "social" | "thinking" | "flavor" | "chaos";
+
+export interface PersonalityPreset {
+  id: string;
+  label: string;
+  category: PersonalityPresetCategory;
+  description: string;
+  tone: string;
+  style: string;
+  systemOverlay: string;
+  soulFile: string;
+  safetyNotes: string[];
+  visibility: PersonalityPresetVisibility;
+  builtin: boolean;
+}
+
+export interface ChannelPersonalitySelection {
+  scope: "connection" | "target" | "session";
+  connectionId: string;
+  targetId?: string;
+  personalityId: string;
+  label: string;
+  updatedAt: string;
+}
+
+export interface ChannelSkillBinding {
+  bindingId: string;
+  connectionId: string;
+  targetId?: string;
+  skillId: string;
+  alias: string;
+  enabled: boolean;
+  visibility: "operator_visible";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChannelCommandDefinition {
+  name: string;
+  aliases: string[];
+  description: string;
+  argsHint?: string;
+  platforms: string[];
+  requiresAuthorization: boolean;
+  bypassesActiveRunGuard: boolean;
+}
+
+export interface ChannelCommandRenderHint {
+  format: "plain_text" | "telegram_send_message" | "discord_reply" | "slack_ephemeral";
+  compact: boolean;
+}
+
+export type ChannelToolsetFamily =
+  | "conversation"
+  | "skills"
+  | "web"
+  | "terminal"
+  | "filesystem"
+  | "browser"
+  | "cron"
+  | "messaging";
+
+export interface ChannelToolsetPosture {
+  family: ChannelToolsetFamily;
+  label: string;
+  enabled: boolean;
+  approval: "not_required" | "policy_gated" | "always_required" | "unavailable";
+  riskSummary: string;
+}
+
+export interface ChannelApprovalRenderEnvelope {
+  approvalId: string;
+  remoteTokenId?: string;
+  platform: string;
+  targetId: string;
+  requestedBy: string;
+  kind: string;
+  riskLevel: string;
+  toolName?: string;
+  workspaceId?: string;
+  riskSummary?: string;
+  rollbackNotes?: string;
+  expiresAt?: string;
+}
+
+export type CurationTargetKind = "skill" | "memory" | "prompt" | "hook";
+export type CurationProposalAction = "prune" | "merge" | "rewrite" | "promote" | "memory_update" | "no_action";
+export type CurationTrustState = "bundled" | "user_installed" | "workspace_local" | "generated" | "untrusted";
+
+export interface CurationReviewProposal {
+  proposalId: string;
+  targetKind: CurationTargetKind;
+  targetRef: string;
+  action: CurationProposalAction;
+  summary: string;
+  reason: string;
+  confidence: number;
+  trustState: CurationTrustState;
+  provenance: string[];
+  affectedSurfaces: string[];
+  rollback: {
+    available: boolean;
+    summary: string;
+    restoreRef?: string;
+  };
+  requiresApproval: boolean;
+}
+
+export interface CurationReviewReport {
+  reportId: string;
+  createdAt: string;
+  summary: string;
+  proposals: CurationReviewProposal[];
+  mutated: false;
+}

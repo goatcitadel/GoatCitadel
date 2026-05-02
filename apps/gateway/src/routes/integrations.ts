@@ -10,6 +10,9 @@ import {
   verifySlackOAuthState,
 } from "../services/slack-oauth-service.js";
 import { discoverTelegramTargets } from "../services/telegram-target-discovery.js";
+import { buildTelegramTargetDirectory, resolveChannelTarget } from "../services/channel-target-directory.js";
+import { listPersonalityPresets } from "../services/channel-personalities.js";
+import { approveTelegramPairingCode } from "../services/telegram-channel-pairing.js";
 
 const kindEnum = z.enum(["channel", "model_provider", "productivity", "automation", "platform"]);
 
@@ -157,6 +160,31 @@ const telegramDiscoverTargetsSchema = z.object({
   setupCode: z.string().min(1).optional(),
 });
 
+const telegramPairingApproveSchema = z.object({
+  code: z.string().min(1).max(64),
+});
+
+const queryBooleanSchema = z.preprocess((value) => {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "off", ""].includes(normalized)) {
+      return false;
+    }
+  }
+  return value;
+}, z.boolean().optional());
+
+const channelTargetDirectoryQuerySchema = z.object({
+  refresh: queryBooleanSchema,
+  query: z.string().min(1).optional(),
+});
+
 export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/integrations/slack/oauth/status", async (_request, reply) => {
     const start = buildSlackOAuthStart(readSlackOAuthConfig());
@@ -276,6 +304,88 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ items });
     } catch (error) {
       return reply.code(502).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/channels/connections/:connectionId/target-directory", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    const query = channelTargetDirectoryQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+      if (connection.key !== "telegram") {
+        return reply.code(400).send({ error: "Target directory v1 is available for Telegram connections." });
+      }
+      const token = resolveTelegramDiscoveryToken(fastify, { connectionId: params.data.connectionId });
+      const discoveredTargets =
+        token && query.data.refresh
+          ? await discoverTelegramTargets({
+              token,
+              setupCode: readConfigString(connection.config, "setupCode"),
+              fetcher: (url, init) => fetch(url, init),
+            })
+          : [];
+      const directory = buildTelegramTargetDirectory({
+        connectionId: params.data.connectionId,
+        connectionConfig: connection.config,
+        discoveredTargets,
+      });
+      return reply.send({
+        directory,
+        ...(query.data.query ? { resolution: resolveChannelTarget(directory, query.data.query) } : {}),
+      });
+    } catch (error) {
+      return reply.code(502).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/channels/personalities", async (_request, reply) => {
+    return reply.send({ items: listPersonalityPresets() });
+  });
+
+  fastify.post("/api/v1/channels/connections/:connectionId/telegram/pairing/approve", async (request, reply) => {
+    const params = connectionParamsSchema.safeParse(request.params);
+    const parsed = telegramPairingApproveSchema.safeParse(request.body);
+    if (!params.success || !parsed.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: parsed.success ? undefined : parsed.error.flatten(),
+        },
+      });
+    }
+    try {
+      const connection = fastify.services.integrations.getIntegrationConnection(params.data.connectionId);
+      if (connection.key !== "telegram") {
+        return reply.code(400).send({ error: "Telegram pairing approval is only available for Telegram connections." });
+      }
+      const approval = approveTelegramPairingCode(connection.config, parsed.data.code);
+      if (!approval.approved || !approval.configPatch) {
+        return reply.code(404).send({ error: "Pairing code was not found or has expired." });
+      }
+      const updated = fastify.services.integrations.updateIntegrationConnection(params.data.connectionId, {
+        config: {
+          ...connection.config,
+          ...approval.configPatch,
+        },
+        lastSyncAt: new Date().toISOString(),
+        lastError: undefined,
+      });
+      return reply.send({
+        approved: true,
+        actorId: approval.actorId,
+        displayName: approval.displayName,
+        connectionId: updated.connectionId,
+      });
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
     }
   });
 

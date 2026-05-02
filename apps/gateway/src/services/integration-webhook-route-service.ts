@@ -5,7 +5,10 @@ export const integrationWebhookRouteMethods = [
   "ingestChannelMessage",
   "recordDevDiagnostic",
   "respondToExistingChatMessage",
+  "resolveApprovalWithRemoteToken",
+  "resolveApprovalWithRemoteTokenId",
   "setChatSessionBinding",
+  "updateIntegrationConnection",
 ] as const;
 
 export type IntegrationWebhookRouteMethod = (typeof integrationWebhookRouteMethods)[number];
@@ -19,7 +22,10 @@ export function createIntegrationWebhookRoutePort(port: IntegrationWebhookPort):
     ingestChannelMessage: (...args) => port.ingestChannelMessage(...args),
     recordDevDiagnostic: (...args) => port.recordDevDiagnostic(...args),
     respondToExistingChatMessage: (...args) => port.respondToExistingChatMessage(...args),
+    resolveApprovalWithRemoteToken: (...args) => port.resolveApprovalWithRemoteToken(...args),
+    resolveApprovalWithRemoteTokenId: (...args) => port.resolveApprovalWithRemoteTokenId(...args),
     setChatSessionBinding: (...args) => port.setChatSessionBinding(...args),
+    updateIntegrationConnection: (...args) => port.updateIntegrationConnection(...args),
   };
 }
 

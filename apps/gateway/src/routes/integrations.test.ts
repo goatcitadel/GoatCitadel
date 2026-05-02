@@ -859,6 +859,10 @@ describe("integrations inbound route guards", () => {
         botToken: "telegram-bot-token",
         webhookSecret: "telegram-webhook-secret",
         defaultChatId: "-1001234567890",
+        telegramPairing: {
+          approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada Lovelace" }],
+          pending: [],
+        },
       },
     }));
     const ingestChannelMessage = vi.fn(async () => ({
@@ -959,6 +963,391 @@ describe("integrations inbound route guards", () => {
         sessionId: "sess-telegram",
         turnId: "turn-telegram-1",
         eventType: "message",
+      }),
+    );
+  });
+
+  it("handles Telegram /sethome before normal chat dispatch", async () => {
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      config: {
+        botToken: "telegram-bot-token",
+        webhookSecret: "telegram-webhook-secret",
+        telegramPairing: {
+          approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
+          pending: [],
+        },
+      },
+      createdAt: "2026-05-02T12:00:00.000Z",
+      updatedAt: "2026-05-02T12:00:00.000Z",
+    }));
+    const updateIntegrationConnection = vi.fn((connectionId, patch) => ({
+      ...getIntegrationConnection(),
+      connectionId,
+      ...patch,
+    }));
+    const ingestChannelMessage = vi.fn();
+    const respondToExistingChatMessage = vi.fn();
+    const payload = JSON.stringify({
+      update_id: 9002,
+      message: {
+        message_id: 457,
+        from: { id: 777, is_bot: false, first_name: "Ada" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+        text: "/sethome",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      updateIntegrationConnection,
+      ingestChannelMessage,
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage,
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(updateIntegrationConnection).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          defaultChannelId: "-1001234567890",
+          defaultChatId: "-1001234567890",
+        }),
+      }),
+    );
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        method: "sendMessage",
+        chat_id: "-1001234567890",
+        text: expect.stringContaining("Home channel set"),
+      }),
+    );
+  });
+
+  it("blocks unpaired Telegram users before command or normal chat dispatch", async () => {
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      config: {
+        botToken: "telegram-bot-token",
+        webhookSecret: "telegram-webhook-secret",
+      },
+      createdAt: "2026-05-02T12:00:00.000Z",
+      updatedAt: "2026-05-02T12:00:00.000Z",
+    }));
+    const updateIntegrationConnection = vi.fn((connectionId, patch) => ({
+      ...getIntegrationConnection(),
+      connectionId,
+      ...patch,
+    }));
+    const ingestChannelMessage = vi.fn();
+    const payload = JSON.stringify({
+      update_id: 9003,
+      message: {
+        message_id: 458,
+        from: { id: 888, is_bot: false, first_name: "Grace" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+        text: "/status",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      updateIntegrationConnection,
+      ingestChannelMessage,
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(updateIntegrationConnection).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          telegramPairing: expect.objectContaining({
+            pending: expect.arrayContaining([expect.objectContaining({ actorId: "888", chatId: "-1001234567890" })]),
+          }),
+        }),
+      }),
+    );
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        method: "sendMessage",
+        text: expect.stringContaining("Pairing code:"),
+      }),
+    );
+  });
+
+  it("resolves Telegram approval callback buttons for paired users", async () => {
+    const resolveApprovalWithRemoteToken = vi.fn(async () => ({
+      approval: {
+        approvalId: "approval-1",
+        status: "approved",
+      },
+    }));
+    const payload = JSON.stringify({
+      update_id: 9004,
+      callback_query: {
+        id: "callback-1",
+        from: { id: 777, is_bot: false, first_name: "Ada" },
+        message: {
+          message_id: 459,
+          chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+          text: "Approval requested",
+        },
+        data: "gca:grat_secret:a",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: {
+          botToken: "telegram-bot-token",
+          webhookSecret: "telegram-webhook-secret",
+          telegramPairing: {
+            approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
+            pending: [],
+          },
+        },
+        createdAt: "2026-05-02T12:00:00.000Z",
+        updatedAt: "2026-05-02T12:00:00.000Z",
+      })),
+      updateIntegrationConnection: vi.fn(),
+      ingestChannelMessage: vi.fn(),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+      resolveApprovalWithRemoteToken,
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
+      token: "grat_secret",
+      decision: "approve",
+      resolvedBy: "telegram:777",
+    });
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        method: "answerCallbackQuery",
+        callback_query_id: "callback-1",
+        text: "Approved approval-1.",
+      }),
+    );
+  });
+
+  it("approves Telegram pairing codes through the channel pairing API", async () => {
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      config: {
+        telegramPairing: {
+          approved: [],
+          pending: [
+            {
+              code: "ABCDEFGH",
+              actorId: "777",
+              chatId: "-1001234567890",
+              displayName: "Ada",
+              createdAt: "2026-05-02T12:00:00.000Z",
+              expiresAt: "2099-01-01T00:00:00.000Z",
+            },
+          ],
+        },
+      },
+      createdAt: "2026-05-02T12:00:00.000Z",
+      updatedAt: "2026-05-02T12:00:00.000Z",
+    }));
+    const updateIntegrationConnection = vi.fn((connectionId, patch) => ({
+      ...getIntegrationConnection(),
+      connectionId,
+      ...patch,
+    }));
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      updateIntegrationConnection,
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/channels/connections/11111111-1111-1111-1111-111111111111/telegram/pairing/approve",
+      headers: {
+        authorization: "Bearer gateway-token",
+      },
+      payload: {
+        code: "ABCDEFGH",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateIntegrationConnection).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          telegramPairing: expect.objectContaining({
+            approved: expect.arrayContaining([expect.objectContaining({ actorId: "777" })]),
+            pending: [],
+          }),
+        }),
+      }),
+    );
+    expect(response.json()).toEqual(expect.objectContaining({ approved: true, actorId: "777" }));
+  });
+
+  it("does not refresh the Telegram target directory when refresh=false", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        key: "telegram",
+        config: {
+          botToken: "telegram-bot-token",
+          targets: [{ label: "Ops Room", chatId: "-100123" }],
+        },
+      })),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/channels/connections/11111111-1111-1111-1111-111111111111/target-directory?refresh=false&query=ops",
+      headers: { authorization: "Bearer gateway-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        resolution: expect.objectContaining({ status: "resolved" }),
       }),
     );
   });

@@ -212,7 +212,11 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
     respondToExistingChatMessage: (sessionId, messageId, input) =>
       gateway.respondToExistingChatMessage(sessionId, messageId, input),
+    resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
+    resolveApprovalWithRemoteTokenId: (input) => gateway.resolveApprovalWithRemoteTokenId(input),
     setChatSessionBinding: (input) => gateway.setChatSessionBinding(input),
+    updateIntegrationConnection: (connectionId, patch) =>
+      integrationChannel.updateIntegrationConnection(connectionId, patch),
   });
   const knowledgeFacade = new KnowledgeFacadeService({
     invokeAndUnwrap: (request, realtimeType) => gateway.invokeAndUnwrap(request, realtimeType),

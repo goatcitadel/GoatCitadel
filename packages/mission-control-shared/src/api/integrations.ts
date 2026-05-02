@@ -2,6 +2,8 @@ import type {
   CalendarCreateEventInput,
   CalendarListQuery,
   ChannelCapabilities,
+  ChannelTargetDirectory,
+  ChannelTargetResolution,
   ChannelReactInput,
   ChannelReplyInput,
   ChannelRuntimeStatus,
@@ -29,6 +31,7 @@ import type {
   ObsidianIntegrationConfig,
   ObsidianIntegrationStatus,
   ToolInvokeResult,
+  PersonalityPreset,
 } from "@goatcitadel/contracts";
 
 import type { IntegrationCatalogEntry, IntegrationConnection } from "./types.js";
@@ -164,6 +167,25 @@ export async function discoverTelegramTargets(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function fetchChannelTargetDirectory(
+  connectionId: string,
+  query?: { refresh?: boolean; query?: string },
+): Promise<{ directory: ChannelTargetDirectory; resolution?: ChannelTargetResolution }> {
+  const params = new URLSearchParams();
+  if (query?.refresh) {
+    params.set("refresh", "true");
+  }
+  if (query?.query) {
+    params.set("query", query.query);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request(`/api/v1/channels/connections/${encodeURIComponent(connectionId)}/target-directory${suffix}`);
+}
+
+export async function fetchChannelPersonalities(): Promise<{ items: PersonalityPreset[] }> {
+  return request("/api/v1/channels/personalities");
 }
 
 export async function fetchIntegrationFormSchema(catalogId: string): Promise<IntegrationFormSchema> {

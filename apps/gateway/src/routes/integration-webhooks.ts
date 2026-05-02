@@ -21,6 +21,11 @@ import {
   verifyTelegramWebhookSecretToken,
 } from "../services/telegram-webhook.js";
 import {
+  buildChannelPersonalitySystemOverlay,
+  handleTelegramChannelCommand,
+} from "../services/telegram-channel-commands.js";
+import { authorizeTelegramChannelActor } from "../services/telegram-channel-pairing.js";
+import {
   deriveWhatsAppWebhookIdempotencyKey,
   normalizeWhatsAppWebhookPayload,
   verifyWhatsAppWebhookSignature,
@@ -103,6 +108,22 @@ function createWebhookReadRouteOptions() {
   };
 }
 
+function readTelegramMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function parseTelegramApprovalCallback(data: string): { token: string; decision: "approve" | "reject" } | undefined {
+  const match = /^gca:([^:]+):(a|r)$/i.exec(data.trim());
+  if (!match) {
+    return undefined;
+  }
+  return {
+    token: match[1] ?? "",
+    decision: (match[2]?.toLowerCase() === "a" ? "approve" : "reject") as "approve" | "reject",
+  };
+}
+
 export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/api/v1/channels/:channel/inbound", createWebhookRouteOptions(), async (request, reply) => {
     const contentLength = parseContentLength(request.headers["content-length"]);
@@ -171,13 +192,132 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, request, rawBody, parsed }) =>
-        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) => {
+        const target = parsed.room ?? parsed.peer;
+        if (parsed.kind === "callback") {
+          const approval = parseTelegramApprovalCallback(parsed.content);
+          if (!approval) {
+            return {
+              method: "answerCallbackQuery",
+              callback_query_id: parsed.callbackQueryId,
+              text: "GoatCitadel did not recognize that channel action.",
+            };
+          }
+          const auth = target
+            ? authorizeTelegramChannelActor({
+                config: connection.config,
+                chatId: target,
+                actorId: parsed.actorId,
+                actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              })
+            : { authorized: false };
+          if (!auth.authorized) {
+            if (auth.configPatch) {
+              fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+                config: {
+                  ...connection.config,
+                  ...auth.configPatch,
+                },
+                lastSyncAt: new Date().toISOString(),
+                lastError: null,
+              });
+            }
+            return {
+              method: "answerCallbackQuery",
+              callback_query_id: parsed.callbackQueryId,
+              text: "Approve this Telegram user in GoatCitadel before resolving channel approvals.",
+              show_alert: true,
+            };
+          }
+          const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
+            token: approval.token,
+            decision: approval.decision,
+            resolvedBy: `telegram:${parsed.actorId}`,
+          });
+          return {
+            method: "answerCallbackQuery",
+            callback_query_id: parsed.callbackQueryId,
+            text:
+              approval.decision === "approve"
+                ? `Approved ${result.approval.approvalId}.`
+                : `Rejected ${result.approval.approvalId}.`,
+          };
+        }
+
+        if (target) {
+          const auth = authorizeTelegramChannelActor({
+            config: connection.config,
+            chatId: target,
+            actorId: parsed.actorId,
+            actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+          });
+          if (!auth.authorized) {
+            if (auth.configPatch) {
+              fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+                config: {
+                  ...connection.config,
+                  ...auth.configPatch,
+                },
+                lastSyncAt: new Date().toISOString(),
+                lastError: null,
+              });
+            }
+            return auth.response ?? createIgnoredWebhookReply(parsed.eventType, "Telegram actor is not paired");
+          }
+        }
+
+        const command = target
+          ? await handleTelegramChannelCommand({
+              connection: {
+                connectionId,
+                label: connection.label ?? "Telegram",
+                enabled: connection.enabled !== false,
+                status: connection.status ?? "connected",
+                config: connection.config,
+              },
+              chatId: target,
+              actorId: parsed.actorId,
+              actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
+              content: parsed.content,
+              resolveApprovalToken: async (token, decision) => {
+                const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
+                  token,
+                  decision,
+                  resolvedBy: `telegram:${parsed.actorId}`,
+                });
+                return {
+                  approvalId: result.approval.approvalId,
+                  status: result.approval.status,
+                };
+              },
+            })
+          : { handled: false };
+        if (command.handled) {
+          if (command.configPatch) {
+            fastify.services.integrationWebhooks.updateIntegrationConnection(connectionId, {
+              config: {
+                ...connection.config,
+                ...command.configPatch,
+              },
+              lastSyncAt: new Date().toISOString(),
+              lastError: null,
+            });
+          }
+          return (
+            command.response ?? {
+              accepted: true,
+              replied: false,
+              eventType: parsed.eventType,
+              command: command.command,
+            }
+          );
+        }
+        return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "telegram",
           connectionId,
           idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
-          bindingTarget: parsed.room ?? parsed.peer,
+          bindingTarget: target,
           message: {
             eventId: parsed.eventId,
             account: parsed.account,
@@ -191,8 +331,12 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           },
           responseOptions: {
             deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
+            channelSystemInstruction: target
+              ? buildChannelPersonalitySystemOverlay(connection.config, target)
+              : undefined,
           },
-        }),
+        });
+      },
     }),
   );
 

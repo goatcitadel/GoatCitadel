@@ -37,12 +37,14 @@ export interface ApprovalRuntime {
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
   resolveApprovalWithRemoteTokenId(input: {
     tokenId: string;
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
   listApprovals(status?: ApprovalRequest["status"], limit?: number): ApprovalRequest[];
   resolveApprovalsBulk(input: ApprovalBulkResolveInput): Promise<ApprovalBulkResolveResult>;
@@ -103,6 +105,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   }): Promise<ApprovalResolveResult> {
     return approvalLifecycleService.resolveApprovalWithRemoteToken(this.host, input);
   }
@@ -112,6 +115,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   }): Promise<ApprovalResolveResult> {
     return approvalLifecycleService.resolveApprovalWithRemoteTokenId(this.host, input);
   }

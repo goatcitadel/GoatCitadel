@@ -132,6 +132,8 @@ function buildIntegrationApprovalDeliveryMessage(input: {
     `Action token ID: ${input.tokenId}`,
     `Action token: ${input.token}`,
     `Expires at: ${input.expiresAt}`,
+    `Telegram fallback: /approve ${input.token} or /deny ${input.token}`,
+    "Telegram inline button payloads should carry the action token, not the token ID.",
     "Resolve from an authenticated GoatCitadel session via POST /api/v1/approvals/remote-resolve with { token, decision }.",
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");

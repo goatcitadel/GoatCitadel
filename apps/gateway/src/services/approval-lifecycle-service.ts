@@ -262,6 +262,7 @@ export async function resolveApprovalWithConsumedRemoteToken(
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   },
 ): Promise<ApprovalResolveResult> {
   const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation?.approvalId ?? "").trim();
@@ -270,7 +271,7 @@ export async function resolveApprovalWithConsumedRemoteToken(
       message: "Remote action token is missing an approval binding.",
     });
   }
-  const resolvedBy = `connector:${tokenRecord.connectorId}`;
+  const resolvedBy = input.resolvedBy?.trim() || `connector:${tokenRecord.connectorId}`;
   void host.storage.audit.append("approvals", {
     event: "approval.remote_token.consume",
     approvalId,
@@ -298,6 +299,7 @@ export async function resolveApprovalWithRemoteToken(
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   },
 ): Promise<ApprovalResolveResult> {
   const tokenRecord = host.consumeRemoteActionToken(input.token, "approval.resolve");
@@ -311,6 +313,7 @@ export async function resolveApprovalWithRemoteTokenId(
     decision: ApprovalResolveInput["decision"];
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
+    resolvedBy?: string;
   },
 ): Promise<ApprovalResolveResult> {
   const tokenRecord = host.consumeRemoteActionTokenById(input.tokenId, "approval.resolve");

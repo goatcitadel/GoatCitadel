@@ -19,7 +19,11 @@ export type WebhookRawBodyRequest = {
 type RawBodyKey = keyof WebhookRawBodyRequest;
 
 type IntegrationConnectionRecord = {
+  connectionId?: string;
   key: string;
+  label?: string;
+  enabled?: boolean;
+  status?: "connected" | "disconnected" | "error" | "paused";
   config: Record<string, unknown>;
 };
 
@@ -60,10 +64,39 @@ export type IntegrationWebhookRouteLike = {
     eventId: string,
     options?: {
       deliveryReplyToMessageId?: string;
+      channelSystemInstruction?: string;
     },
   ) => Promise<{
     turnId?: string;
   }>;
+  resolveApprovalWithRemoteTokenId: (input: {
+    tokenId: string;
+    decision: "approve" | "reject";
+    resolvedBy?: string;
+  }) => Promise<{
+    approval: {
+      approvalId: string;
+      status: string;
+    };
+  }>;
+  resolveApprovalWithRemoteToken: (input: {
+    token: string;
+    decision: "approve" | "reject";
+    resolvedBy?: string;
+  }) => Promise<{
+    approval: {
+      approvalId: string;
+      status: string;
+    };
+  }>;
+  updateIntegrationConnection: (
+    connectionId: string,
+    patch: {
+      config?: Record<string, unknown>;
+      lastSyncAt?: string;
+      lastError?: string | null;
+    },
+  ) => IntegrationConnectionRecord;
 };
 
 type FastifyWithGateway = {
@@ -189,6 +222,7 @@ export async function dispatchInboundWebhookMessage(
     message: IngestChannelMessageInput;
     responseOptions?: {
       deliveryReplyToMessageId?: string;
+      channelSystemInstruction?: string;
     };
   },
 ) {
