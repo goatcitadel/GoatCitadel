@@ -1,8 +1,38 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeviceAccessGrantListResponse } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 
 const mocks = vi.hoisted(() => ({
+  fetchSettings: vi.fn(async () => ({
+    auth: {
+      mode: "none",
+      allowLoopbackBypass: true,
+      tokenConfigured: false,
+      basicConfigured: false,
+    },
+    llm: {
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4-mini",
+      providers: [],
+      providerConfigs: [],
+    },
+  })),
+  fetchDeviceAccessGrants: vi.fn(async (): Promise<DeviceAccessGrantListResponse> => ({ items: [] })),
+  revokeDeviceAccessGrant: vi.fn(async (grantId: string) => ({
+    grant: {
+      grantId,
+      requestId: "request-1",
+      actorId: "operator",
+      deviceLabel: "Android phone",
+      deviceType: "mobile",
+      platform: "Android",
+      grantedBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      metadata: {},
+      revokedAt: "2026-05-02T19:00:00.000Z",
+    },
+  })),
   patchSettings: vi.fn(async () => ({})),
   saveProviderSecret: vi.fn(async () => ({
     providerId: "openai",
@@ -166,6 +196,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     deleteProviderSecret: mocks.deleteProviderSecret,
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
     fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
+    fetchSettings: mocks.fetchSettings,
+    fetchDeviceAccessGrants: mocks.fetchDeviceAccessGrants,
+    revokeDeviceAccessGrant: mocks.revokeDeviceAccessGrant,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
     fetchSlackOAuthStatus: mocks.fetchSlackOAuthStatus,
@@ -322,6 +355,35 @@ function installBrowserStorageMock(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.fetchSettings.mockResolvedValue({
+    auth: {
+      mode: "none",
+      allowLoopbackBypass: true,
+      tokenConfigured: false,
+      basicConfigured: false,
+    },
+    llm: {
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4-mini",
+      providers: [],
+      providerConfigs: [],
+    },
+  });
+  mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
+  mocks.revokeDeviceAccessGrant.mockResolvedValue({
+    grant: {
+      grantId: "grant-1",
+      requestId: "request-1",
+      actorId: "operator",
+      deviceLabel: "Android phone",
+      deviceType: "mobile",
+      platform: "Android",
+      grantedBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      metadata: {},
+      revokedAt: "2026-05-02T19:00:00.000Z",
+    },
+  });
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
   mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
@@ -410,6 +472,54 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Unknown settings section");
     expect(text).toContain("Open General");
     expect(text).not.toContain("Mission Control posture");
+  });
+
+  it("renders repeated device access grants without duplicate row keys", async () => {
+    mocks.fetchDeviceAccessGrants.mockResolvedValue({
+      items: [
+        {
+          grantId: "grant-android-1",
+          requestId: "request-1",
+          actorId: "operator",
+          deviceLabel: "Android phone",
+          deviceType: "mobile",
+          platform: "Android",
+          grantedBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          metadata: {},
+        },
+        {
+          grantId: "grant-android-2",
+          requestId: "request-2",
+          actorId: "operator",
+          deviceLabel: "Android phone",
+          deviceType: "mobile",
+          platform: "Android",
+          grantedBy: "operator",
+          createdAt: "2026-05-02T18:05:00.000Z",
+          metadata: {},
+        },
+      ],
+    });
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let renderer: ReactTestRenderer | null = null;
+
+    try {
+      await act(async () => {
+        renderer = renderPage("access");
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("Approved devices");
+      expect(text).toContain("Android phone");
+      expect(
+        consoleErrorSpy.mock.calls.filter((call) =>
+          call.some((argument) => String(argument).includes("Encountered two children with the same key")),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it("saves provider upserts through patchSettings", async () => {

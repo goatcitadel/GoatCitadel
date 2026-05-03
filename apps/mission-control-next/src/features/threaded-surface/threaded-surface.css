@@ -99,13 +99,27 @@
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
+  min-width: 0;
+  max-width: 100%;
   min-height: 2.35rem;
-  padding: 0 0.85rem;
+  padding: 0.45rem 0.85rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
   color: var(--foreground);
+  line-height: 1.18;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
   cursor: pointer;
+}
+
+.mc-next-threaded-menu-button svg,
+.mc-next-threaded-secondary svg,
+.mc-next-threaded-primary svg,
+.mc-next-threaded-filter svg,
+.mc-next-threaded-archive svg {
+  flex: 0 0 auto;
 }
 
 .mc-next-threaded-primary {
@@ -204,6 +218,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.45rem;
   align-items: stretch;
+  min-width: 0;
 }
 
 .mc-next-threaded-session-row-shell.nested {
@@ -227,6 +242,7 @@
   gap: 0.35rem;
   width: 100%;
   min-width: 0;
+  min-height: 5.15rem;
   padding: 0.75rem 0.82rem;
   border-radius: 1rem;
   border: 1px solid var(--border-subtle);
@@ -245,7 +261,7 @@
   gap: 0.35rem;
   align-self: center;
   min-height: 2.45rem;
-  padding: 0 0.6rem;
+  padding: 0.35rem 0.6rem;
   border-radius: 0.9rem;
   border: 1px solid var(--border-subtle);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
@@ -253,6 +269,8 @@
   cursor: pointer;
   font-size: 0.76rem;
   font-weight: 650;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .mc-next-threaded-session-toggle svg {
@@ -274,15 +292,17 @@
 }
 
 .mc-next-threaded-session-row-main {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 0.6rem;
+  min-width: 0;
 }
 
 .mc-next-threaded-session-row-copy {
   display: grid;
   gap: 0.18rem;
+  min-width: 0;
 }
 
 .mc-next-threaded-session-row strong {
@@ -291,6 +311,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: normal;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   font-size: 0.9rem;
@@ -302,8 +323,10 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-size: 0.8rem;
+  line-height: 1.24;
   color: var(--text-secondary);
 }
 
@@ -564,6 +587,71 @@
   background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
 }
 
+.mc-assistant-renderer-shell,
+.mc-assistant-renderer-body,
+.mc-assistant-markdown {
+  min-width: 0;
+}
+
+.mc-assistant-renderer-shell {
+  display: grid;
+  gap: 0.55rem;
+  justify-items: start;
+}
+
+.mc-assistant-renderer-body {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.mc-assistant-markdown > :first-child {
+  margin-top: 0;
+}
+
+.mc-assistant-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.mc-assistant-markdown p,
+.mc-assistant-markdown li {
+  line-height: 1.52;
+}
+
+.mc-assistant-markdown pre {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.mc-assistant-copy-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  min-height: 2.05rem;
+  padding: 0.34rem 0.62rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.mc-assistant-copy-button svg {
+  flex: 0 0 auto;
+}
+
+.mc-assistant-copy-button.copied {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-safe) 72%, var(--foreground));
+}
+
 .chat-v11-attachment-preview-stack {
   display: grid;
   gap: 0.55rem;
@@ -680,6 +768,21 @@
   gap: 0.55rem;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
+}
+
+.mc-next-thread-strip {
+  align-items: flex-start;
+}
+
+.mc-next-thread-strip > span,
+.mc-next-thread-actions > span,
+.mc-next-context-chip-row > span,
+.mc-next-composer-chip-row > span {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-thread-inline-button,
@@ -689,12 +792,21 @@
 .mc-next-composer-inline-button,
 .mc-next-composer-primary {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
   color: var(--foreground);
   border-radius: 0.9rem;
   min-height: 2.2rem;
-  padding: 0 0.8rem;
+  padding: 0.42rem 0.8rem;
+  line-height: 1.18;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
@@ -704,6 +816,10 @@
 .mc-next-command-item.active {
   background: color-mix(in oklab, var(--mc-area-color) 14%, var(--card));
   border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border));
+}
+
+.mc-next-composer-inline-button {
+  min-height: 2.65rem;
 }
 
 .mc-next-panel-button.danger {

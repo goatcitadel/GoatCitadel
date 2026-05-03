@@ -1979,6 +1979,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
           >
             <SettingsActionList
               items={data.grants.map((grant) => ({
+                id: grant.grantId,
                 label: grant.deviceLabel || grant.grantId,
                 description: `${grant.deviceType || "device"} · ${grant.revokedAt ? "revoked" : "active"} · ${formatDateTime(grant.createdAt)}`,
                 meta:

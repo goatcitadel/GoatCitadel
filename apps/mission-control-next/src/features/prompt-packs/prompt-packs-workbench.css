@@ -941,6 +941,11 @@
     padding-bottom: 0.2rem;
   }
 
+  .mc-pp-tab-list {
+    overflow-x: visible;
+    flex-wrap: wrap;
+  }
+
   .mc-pp-review-row {
     flex-direction: column;
     align-items: stretch;

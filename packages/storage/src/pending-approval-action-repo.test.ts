@@ -65,11 +65,14 @@ describe("PendingApprovalActionRepository", () => {
 
   it("keeps Postgres runtime schema and migrations aligned for expiry and trace index", () => {
     const runtimeSql = buildPostgresRuntimeSchemaSql();
-    const latestMigrationSql = POSTGRES_MIGRATIONS.at(-1)?.sql ?? "";
+    const migrationSql =
+      POSTGRES_MIGRATIONS.find(
+        (migration) => migration.name === "pending_approval_action_expiry_and_trace_index_parity",
+      )?.sql ?? "";
 
     assert.match(runtimeSql, /expires_at TEXT/);
     assert.match(runtimeSql, /idx_chat_turn_traces_session_status/);
-    assert.match(latestMigrationSql, /ADD COLUMN IF NOT EXISTS expires_at TEXT/);
-    assert.match(latestMigrationSql, /idx_chat_turn_traces_session_status/);
+    assert.match(migrationSql, /ADD COLUMN IF NOT EXISTS expires_at TEXT/);
+    assert.match(migrationSql, /idx_chat_turn_traces_session_status/);
   });
 });

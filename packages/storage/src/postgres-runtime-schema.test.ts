@@ -106,6 +106,24 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS durable_run_id TEXT/);
   });
 
+  it("reasserts current chat delegation step columns for already-migrated Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 24);
+
+    assert.equal(repairMigration?.name, "chat_delegation_step_current_shape_repairs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS label TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS provider_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS model TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS summary TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS output TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS error TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS failure_guidance TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS durable_run_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS child_session_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS child_turn_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS citations_json TEXT/);
+  });
+
   it("repairs execution plan step durable run columns for older Postgres runtimes", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 15);
 

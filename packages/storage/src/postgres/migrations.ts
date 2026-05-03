@@ -733,4 +733,22 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON chat_turn_traces(session_id, status, started_at DESC);
     `,
   },
+  {
+    version: 24,
+    name: "chat_delegation_step_current_shape_repairs",
+    sql: `
+      ALTER TABLE chat_delegation_steps
+        ADD COLUMN IF NOT EXISTS label TEXT,
+        ADD COLUMN IF NOT EXISTS provider_id TEXT,
+        ADD COLUMN IF NOT EXISTS model TEXT,
+        ADD COLUMN IF NOT EXISTS summary TEXT,
+        ADD COLUMN IF NOT EXISTS output TEXT,
+        ADD COLUMN IF NOT EXISTS error TEXT,
+        ADD COLUMN IF NOT EXISTS failure_guidance TEXT,
+        ADD COLUMN IF NOT EXISTS durable_run_id TEXT,
+        ADD COLUMN IF NOT EXISTS child_session_id TEXT,
+        ADD COLUMN IF NOT EXISTS child_turn_id TEXT,
+        ADD COLUMN IF NOT EXISTS citations_json TEXT;
+    `,
+  },
 ];

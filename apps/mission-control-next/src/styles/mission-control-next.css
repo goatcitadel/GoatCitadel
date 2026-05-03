@@ -433,12 +433,18 @@
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
+  min-width: 0;
+  max-width: 100%;
   min-height: 2.4rem;
-  padding: 0 0.9rem;
+  padding: 0.46rem 0.9rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
   color: var(--foreground);
+  line-height: 1.18;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
   cursor: pointer;
   box-shadow: var(--mc-shadow-soft);
 }
@@ -546,6 +552,9 @@
 
 .mc-next-icon-button {
   min-width: 2.4rem;
+  flex: 0 0 auto;
+  padding-inline: 0.55rem;
+  white-space: nowrap;
 }
 
 .mc-next-nav-toggle {
@@ -904,6 +913,8 @@
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
+  min-width: 0;
+  max-width: 100%;
   min-height: 2.5rem;
   padding: 0.55rem 0.8rem;
   border-radius: 1rem;
@@ -926,7 +937,9 @@
   display: block;
   color: var(--foreground);
   font-size: 0.86rem;
-  white-space: nowrap;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-status-icon {
@@ -1451,10 +1464,20 @@
 }
 
 .mc-next-shell .status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 1.5rem;
+  padding: 0.14rem 0.48rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.16;
+  white-space: normal;
+  overflow-wrap: anywhere;
   box-shadow: none;
 }
 
