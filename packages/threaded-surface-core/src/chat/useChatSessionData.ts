@@ -64,6 +64,11 @@ type SidebarBootstrapResult = {
   sessions: ChatSessionsResponse;
 };
 
+export type ChatSidebarLoadOptions = {
+  bypassCache?: boolean;
+  preferredSessionId?: string | null;
+};
+
 type RuntimeCatalogBootstrapResult = {
   runtimeSettings: RuntimeSettingsResponse;
   commands: { items: CommandCatalogItem[] };
@@ -86,8 +91,12 @@ function getDevBootstrapPromise<T>(
   cache: Map<string, BootstrapCacheEntry<T>>,
   key: string,
   factory: () => Promise<T>,
+  options: { bypassCache?: boolean } = {},
 ): Promise<T> {
-  if (!SHOULD_REUSE_DEV_BOOTSTRAP_FETCHES) {
+  if (!SHOULD_REUSE_DEV_BOOTSTRAP_FETCHES || options.bypassCache) {
+    if (options.bypassCache) {
+      cache.delete(key);
+    }
     return factory();
   }
 
@@ -167,7 +176,7 @@ export function useChatSessionData(input: {
   const refreshSubscriptionStartedAtRef = useRef<number>(0);
 
   const loadSidebar = useCallback(
-    async (nextHistoryView: ChatHistoryView = historyView) => {
+    async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
       recordClientDiagnostic({
@@ -194,10 +203,15 @@ export function useChatSessionData(input: {
           ]);
           return { projects, sessions };
         },
+        { bypassCache: options.bypassCache },
       );
       setProjects(nextProjects);
       setSessions(nextSessions);
       setSelectedSessionId((current) => {
+        const preferredSessionId = options.preferredSessionId?.trim();
+        if (preferredSessionId && nextSessions.items.some((item) => item.sessionId === preferredSessionId)) {
+          return preferredSessionId;
+        }
         if (!current) {
           return nextSessions.items[0]?.sessionId ?? null;
         }

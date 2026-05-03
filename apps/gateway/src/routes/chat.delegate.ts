@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { isGoatError } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
 
@@ -148,7 +149,12 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(fastify.services.chatDelegate.getChatDelegationRun(params.data.sessionId, params.data.runId));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      if (isGoatError(error)) {
+        return reply.code(error.httpStatus).send(error.toJSON());
+      }
+      const message = (error as Error).message;
+      const statusCode = message.toLowerCase().includes("not found") ? 404 : 400;
+      return reply.code(statusCode).send({ error: message });
     }
   });
 

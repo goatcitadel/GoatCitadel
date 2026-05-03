@@ -47,6 +47,7 @@ import {
   type PendingUserInputRecord,
 } from "./chat-pending-user-input";
 import type { ChatErrorSource } from "./chat-error-copy";
+import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
 export type PendingApprovalState = PendingApprovalRecord;
@@ -97,7 +98,7 @@ export function useChatOutboundExecution(input: {
       | ChatSpecialistCandidateSuggestionRecord[]
       | ((current: ChatSpecialistCandidateSuggestionRecord[]) => ChatSpecialistCandidateSuggestionRecord[]),
   ) => void;
-  loadSidebar: () => Promise<void>;
+  loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
   loadSessionCoreState: (
     sessionId: string,
     options?: { background?: boolean; includeThread?: boolean },
@@ -573,7 +574,7 @@ export function useChatOutboundExecution(input: {
             message: "Handing outbound request to the local command executor",
           });
           await handleCommandExecution(session.sessionId, trimmedContent);
-          await loadSidebar();
+          await loadSidebar(undefined, { bypassCache: true, preferredSessionId: session.sessionId });
           return;
         }
         const routePreflight = await ensureFreshRoutePreflight({
@@ -920,7 +921,7 @@ export function useChatOutboundExecution(input: {
           });
         }
         setEditingTurnId(null);
-        await loadSidebar();
+        await loadSidebar(undefined, { bypassCache: true, preferredSessionId: session.sessionId });
         recordChatOutboundPhase({
           phase: "complete",
           action: item.action,

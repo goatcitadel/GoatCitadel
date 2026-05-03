@@ -269,7 +269,7 @@ export function useChatDelegationPolicyActions(input: {
     const runId = activeWorkflowTurn?.trace.orchestration?.runId;
     const turnId = activeWorkflowTurn?.turnId ?? null;
     const sessionId = selectedSession?.sessionId;
-    if (!runId || !turnId || !sessionId) {
+    if (!runId || !turnId || !sessionId || input.thread?.sessionId !== sessionId) {
       return;
     }
     let cancelled = false;
@@ -291,7 +291,14 @@ export function useChatDelegationPolicyActions(input: {
           stitchedOutput: run.stitchedOutput,
         });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setActiveDelegationRun((current) =>
+          current?.runId === runId && current.attachedTurnId === turnId ? null : current,
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -301,6 +308,7 @@ export function useChatDelegationPolicyActions(input: {
     activeDelegationRun?.status,
     activeWorkflowTurn?.trace.orchestration?.runId,
     activeWorkflowTurn?.turnId,
+    input.thread?.sessionId,
     selectedSession?.sessionId,
   ]);
 

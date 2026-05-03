@@ -63,9 +63,6 @@ export function useChatThreadController(input: {
     if (appliedRouteSelectionKeyRef.current === routeSelectionKey) {
       return;
     }
-    if (!(input.sessions ?? []).some((item) => item.sessionId === routeSessionId)) {
-      return;
-    }
     appliedRouteSelectionKeyRef.current = routeSelectionKey;
     pendingRouteTurnSelectionRef.current = routeTurnId || null;
     input.setSelectedSessionId(routeSessionId);

@@ -737,8 +737,8 @@ function renderRouteContent(input: {
         approvalsCount={input.pendingApprovals}
         surface="chat"
         lockSurface
-        onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme })}
-        onOpenCode={() => input.navigate({ area: "code", theme: route.theme })}
+        onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
+        onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
         onOpenApprovals={() => input.navigate({ area: "ops", section: "approvals", theme: route.theme })}
         onNavigateSurface={(surface, options) =>
@@ -765,7 +765,7 @@ function renderRouteContent(input: {
         approvalsCount={input.pendingApprovals}
         surface="cowork"
         lockSurface
-        onOpenCode={() => input.navigate({ area: "code", theme: route.theme })}
+        onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
         onOpenApprovals={() => input.navigate({ area: "ops", section: "approvals", theme: route.theme })}
         onNavigateSurface={(surface, options) =>
@@ -789,7 +789,7 @@ function renderRouteContent(input: {
         approvalsCount={input.pendingApprovals}
         surface="code"
         lockSurface
-        onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme })}
+        onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
         onOpenApprovals={() => input.navigate({ area: "ops", section: "approvals", theme: route.theme })}
         onNavigateSurface={(surface, options) =>

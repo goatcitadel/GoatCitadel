@@ -589,6 +589,7 @@ export function MissionThreadedControllerHost({
     historyView,
     sessionMode: currentSessionMode,
     selectedProjectId,
+    selectedSessionId,
     selectedSession,
     renameTitle,
     folderName,

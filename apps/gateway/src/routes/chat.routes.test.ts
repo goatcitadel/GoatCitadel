@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { chatRoutes } from "./chat.js";
 
 function testRouteDecision(overrides: Partial<Record<string, unknown>> = {}) {
@@ -902,6 +903,90 @@ describe("chat routes additional coverage", () => {
           status: "skipped",
         },
       ],
+    });
+  });
+
+  it("returns delegation run details for a matching session", async () => {
+    const getChatDelegationRun = vi.fn(() => ({
+      run: {
+        runId: "run-1",
+        sessionId: "sess-1",
+        taskId: "task-1",
+        objective: "Check route details",
+        roles: ["QA"],
+        mode: "sequential",
+        status: "completed",
+        startedAt: "2026-03-11T20:20:00.000Z",
+        finishedAt: "2026-03-11T20:20:01.000Z",
+        citations: [],
+      },
+      steps: [
+        {
+          stepId: "step-1",
+          runId: "run-1",
+          role: "QA",
+          status: "completed",
+          index: 0,
+          startedAt: "2026-03-11T20:20:00.000Z",
+          finishedAt: "2026-03-11T20:20:01.000Z",
+          output: "Looks good.",
+        },
+      ],
+    }));
+    app = Fastify();
+    app.decorate("services", { chatDelegate: { getChatDelegationRun } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/delegations/run-1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getChatDelegationRun).toHaveBeenCalledWith("sess-1", "run-1");
+    expect(response.json()).toMatchObject({
+      run: { runId: "run-1", sessionId: "sess-1" },
+      steps: [{ stepId: "step-1", runId: "run-1" }],
+    });
+  });
+
+  it("returns 404 for missing delegation run details", async () => {
+    const getChatDelegationRun = vi.fn(() => {
+      throw new NotFoundError({ entity: "Delegation run", id: "run-missing" });
+    });
+    app = Fastify();
+    app.decorate("services", { chatDelegate: { getChatDelegationRun } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/delegations/run-missing",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      code: "ENTITY_NOT_FOUND",
+      error: "Delegation run run-missing not found",
+    });
+  });
+
+  it("does not expose cross-session delegation run details", async () => {
+    const getChatDelegationRun = vi.fn(() => {
+      throw new NotFoundError("Delegation run run-1 not found for session sess-2");
+    });
+    app = Fastify();
+    app.decorate("services", { chatDelegate: { getChatDelegationRun } } as never);
+    await app.register(chatRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-2/delegations/run-1",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({
+      code: "ENTITY_NOT_FOUND",
+      error: "Delegation run run-1 not found for session sess-2",
     });
   });
 

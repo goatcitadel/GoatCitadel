@@ -14,8 +14,34 @@ import {
   unpinChatSession,
   updateChatSession,
 } from "@goatcitadel/mission-control-shared/api/client";
-import type { ChatHistoryView } from "./useChatSessionData";
+import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
+
+function createSessionPlaceholder(input: {
+  sessionId: string;
+  workspaceId: string;
+  mode: ChatMode;
+  projectId?: string;
+}): ChatSessionRecord {
+  const now = new Date().toISOString();
+  return {
+    sessionId: input.sessionId,
+    sessionKey: input.sessionId,
+    workspaceId: input.workspaceId,
+    scope: "mission",
+    mode: input.mode,
+    includeInHistory: true,
+    pinned: false,
+    lifecycleStatus: "active",
+    projectId: input.projectId,
+    channel: "mission",
+    account: "local",
+    updatedAt: now,
+    lastActivityAt: now,
+    tokenTotal: 0,
+    costUsdTotal: 0,
+  };
+}
 
 export type SessionControlPending =
   | null
@@ -33,6 +59,7 @@ export function useChatSessionControls(input: {
   historyView: ChatHistoryView;
   sessionMode: ChatMode;
   selectedProjectId: string;
+  selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   renameTitle: string;
   folderName: string;
@@ -44,7 +71,7 @@ export function useChatSessionControls(input: {
   setSending: (value: boolean) => void;
   setQueuedOutbound: React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>;
   setThread: React.Dispatch<React.SetStateAction<ChatThreadResponse | null>>;
-  loadSidebar: (nextHistoryView?: ChatHistoryView) => Promise<void>;
+  loadSidebar: (nextHistoryView?: ChatHistoryView, options?: ChatSidebarLoadOptions) => Promise<void>;
   setBinding: React.Dispatch<React.SetStateAction<ChatSessionBindingRecord | null>>;
 }) {
   const {
@@ -52,6 +79,7 @@ export function useChatSessionControls(input: {
     historyView,
     sessionMode,
     selectedProjectId,
+    selectedSessionId,
     selectedSession,
     renameTitle,
     folderName,
@@ -92,8 +120,8 @@ export function useChatSessionControls(input: {
         if (nextHistoryView !== historyView) {
           setHistoryView(nextHistoryView);
         }
-        await loadSidebar(nextHistoryView);
         setSelectedSessionId(created.sessionId);
+        await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
       } catch (err) {
         setError((err as Error).message);
       } finally {
@@ -105,6 +133,14 @@ export function useChatSessionControls(input: {
 
   const ensureSession = useCallback(async (): Promise<ChatSessionRecord> => {
     if (selectedSession) return selectedSession;
+    if (selectedSessionId) {
+      return createSessionPlaceholder({
+        sessionId: selectedSessionId,
+        workspaceId,
+        mode: sessionMode,
+        projectId: selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined,
+      });
+    }
     const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
     const created = await createChatSession(
       selectedProjectId !== "all" && selectedProjectId !== "none"
@@ -114,14 +150,15 @@ export function useChatSessionControls(input: {
     if (nextHistoryView !== historyView) {
       setHistoryView(nextHistoryView);
     }
-    await loadSidebar(nextHistoryView);
     setSelectedSessionId(created.sessionId);
+    await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
     return created;
   }, [
     historyView,
     loadSidebar,
     selectedProjectId,
     selectedSession,
+    selectedSessionId,
     sessionMode,
     setHistoryView,
     setSelectedSessionId,

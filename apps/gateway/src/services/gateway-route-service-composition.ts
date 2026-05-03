@@ -9,6 +9,7 @@ import type {
   McpServerPolicy,
   McpServerUpdateInput,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import { createAddonsRoutePort } from "./addons-route-service.js";
@@ -396,7 +397,7 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     getChatDelegationRun: (sessionId, runId) => {
       const run = gateway.storage.chatDelegationRuns.get(runId);
       if (run.sessionId !== sessionId) {
-        throw new Error("Delegation run does not belong to this session.");
+        throw new NotFoundError(`Delegation run ${runId} not found for session ${sessionId}`);
       }
       return {
         run,
