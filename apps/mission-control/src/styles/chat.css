@@ -564,6 +564,30 @@
   color: var(--text-muted);
 }
 
+.chat-v11-attachment-preview-actions,
+.chat-v11-pending-attachment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.chat-v11-attachment-preview-action {
+  appearance: none;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 84%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-elevated) 86%, transparent);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.chat-v11-attachment-action-status {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
 .chat-v11-markdown {
   display: grid;
   gap: 12px;
@@ -889,6 +913,10 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: start;
+}
+
+.chat-v11-pending-attachment-actions {
+  justify-content: flex-end;
 }
 
 .chat-v11-pending-attachment-head strong,
@@ -2813,5 +2841,13 @@
   .chat-v11-left,
   .chat-v11-main {
     gap: 12px;
+  }
+
+  .chat-v11-pending-attachment-head {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-v11-pending-attachment-actions {
+    justify-content: flex-start;
   }
 }

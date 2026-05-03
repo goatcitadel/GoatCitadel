@@ -564,6 +564,78 @@
   background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
 }
 
+.chat-v11-attachment-preview-stack {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.chat-v11-attachment-preview-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.72rem 0.8rem;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.chat-v11-attachment-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.chat-v11-attachment-preview-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-v11-attachment-preview-head span,
+.chat-v11-attachment-preview-meta,
+.chat-v11-attachment-preview-label,
+.chat-v11-attachment-preview-copy.muted,
+.chat-v11-attachment-action-status,
+.mc-next-composer-attachment-action-status {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.chat-v11-attachment-preview-meta,
+.chat-v11-attachment-preview-label,
+.chat-v11-attachment-preview-copy {
+  margin: 0;
+}
+
+.chat-v11-attachment-preview-label {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-v11-attachment-preview-copy {
+  line-height: 1.55;
+}
+
+.chat-v11-attachment-preview-actions,
+.mc-next-composer-attachment-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chat-v11-attachment-preview-action {
+  appearance: none;
+  min-height: 2rem;
+  padding: 0 0.72rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
 .mc-next-thread-meta,
 .mc-next-thread-note,
 .mc-next-thread-notices p,
@@ -599,6 +671,7 @@
 .mc-next-cowork-toolbar,
 .mc-next-composer-chip-row,
 .mc-next-composer-action-row,
+.mc-next-composer-attachment-actions,
 .mc-next-composer-controls,
 .mc-next-composer-controls-start,
 .mc-next-composer-controls-end,
@@ -757,6 +830,10 @@
   border-radius: 0.95rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-composer-attachment-actions {
+  justify-content: flex-end;
 }
 
 .mc-next-composer-attachment-body {
@@ -1008,5 +1085,13 @@
   .mc-next-composer-knowledge-url-row,
   .mc-next-composer-preset-row {
     grid-template-columns: 1fr;
+  }
+
+  .mc-next-composer-attachment {
+    flex-direction: column;
+  }
+
+  .mc-next-composer-attachment-actions {
+    justify-content: flex-start;
   }
 }

@@ -9,6 +9,7 @@ import type {
 import type { ChatErrorSource } from "@goatcitadel/threaded-surface-core";
 import { useEffect, useState } from "react";
 import type { ClipboardEvent, DragEvent, KeyboardEvent, RefObject } from "react";
+import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { buildGatewayUrl, readGatewayAuthHeaders } from "../../api/client-core";
 import { ChatModelPicker, type ChatModelProviderOption } from "../../components/ChatModelPicker";
 import { ChatComposerPlusMenu } from "../../components/ChatComposerPlusMenu";
@@ -583,14 +584,22 @@ export function ChatComposerShell(props: {
                     {item.mimeType} · {Math.max(1, Math.round(item.sizeBytes / 1024))} KB
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="gc-button chat-attachment-chip"
-                  onClick={() => onRemoveAttachment(item.attachmentId)}
-                  aria-label={`Remove attachment ${item.fileName}`}
+                <ChatAttachmentActions
+                  attachmentId={item.attachmentId}
+                  fileName={item.fileName}
+                  className="chat-v11-pending-attachment-actions"
+                  buttonClassName="gc-button chat-attachment-chip"
+                  statusClassName="chat-v11-attachment-action-status"
                 >
-                  Remove
-                </button>
+                  <button
+                    type="button"
+                    className="gc-button chat-attachment-chip"
+                    onClick={() => onRemoveAttachment(item.attachmentId)}
+                    aria-label={`Remove attachment ${item.fileName}`}
+                  >
+                    Remove
+                  </button>
+                </ChatAttachmentActions>
               </div>
               {isImageAttachment(item) ? <PendingImageAttachmentPreview attachment={item} /> : null}
               {isDocumentAttachment(item) ? (

@@ -1,5 +1,6 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
+import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
@@ -307,13 +308,21 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                 </div>
                 {isImageAttachment(item) ? <PendingImagePreview attachment={item} /> : null}
               </div>
-              <button
-                type="button"
-                className="mc-next-composer-inline-button"
-                onClick={() => props.onRemoveAttachment(item.attachmentId)}
+              <ChatAttachmentActions
+                attachmentId={item.attachmentId}
+                fileName={item.fileName}
+                className="mc-next-composer-attachment-actions"
+                buttonClassName="mc-next-composer-inline-button"
+                statusClassName="mc-next-composer-attachment-action-status"
               >
-                Remove
-              </button>
+                <button
+                  type="button"
+                  className="mc-next-composer-inline-button"
+                  onClick={() => props.onRemoveAttachment(item.attachmentId)}
+                >
+                  Remove
+                </button>
+              </ChatAttachmentActions>
             </div>
           ))}
         </div>

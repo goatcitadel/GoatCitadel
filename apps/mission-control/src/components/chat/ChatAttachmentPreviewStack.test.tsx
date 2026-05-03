@@ -105,5 +105,7 @@ describe("ChatAttachmentPreviewStack", () => {
 
     expect(fetchChatAttachmentPreviewMock).toHaveBeenCalledTimes(1);
     expect(container?.textContent).toContain("Stable preview text");
+    expect(container?.textContent).toContain("Open");
+    expect(container?.textContent).toContain("Download");
   });
 });

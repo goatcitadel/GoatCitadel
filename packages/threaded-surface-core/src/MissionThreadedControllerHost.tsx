@@ -95,6 +95,7 @@ import {
   type OutboundQueueItem,
 } from "./chat/useChatSurfaceOrchestration";
 import { useChatThreadController } from "./chat/useChatThreadController";
+import { detectImageGenerationIntent } from "./chat/chat-image-intent";
 import { useChatMultimodalControls } from "./chat/useChatMultimodalControls";
 import { useRouteGeneratedArtifactReveal } from "./chat/useRouteGeneratedArtifactReveal";
 import {
@@ -664,6 +665,10 @@ export function MissionThreadedControllerHost({
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
+  const composerSendHandlerRef = useRef<() => Promise<void>>(async () => {
+    await handleSend();
+  });
+  const handleComposerSend = useCallback(() => composerSendHandlerRef.current(), []);
 
   useEffect(() => {
     queuedOutboundSetterRef.current = setQueuedOutbound;
@@ -1725,14 +1730,6 @@ export function MissionThreadedControllerHost({
     setThreadKnowledgeAttachments,
     threadKnowledgeAttachments?.items,
   ]);
-  const handleSendWithKnowledge = useCallback(async () => {
-    try {
-      await attachPendingKnowledgeSources();
-      await handleSend();
-    } catch (cause) {
-      setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
-    }
-  }, [attachPendingKnowledgeSources, handleSend, setUiError]);
   const handleAttachKnowledgeUrl = useCallback(async () => {
     const normalizedKnowledgeUrl = knowledgeUrlDraft.trim();
     if (!normalizedKnowledgeUrl) {
@@ -1862,7 +1859,7 @@ export function MissionThreadedControllerHost({
     selectedSession,
     messageMode,
     ensureSession,
-    handleSend,
+    handleSend: handleComposerSend,
     handleCreateSession,
     handleArchiveWorkspaceMissionChats,
     handleRunQuickResearch,
@@ -1928,6 +1925,51 @@ export function MissionThreadedControllerHost({
     pushLocalNotice,
     uploadAttachments,
   });
+
+  const handleSendWithKnowledge = useCallback(async () => {
+    const shouldAutoGenerateImage =
+      messageMode === "chat" && !editingTurnId && pendingAttachments.length === 0 && detectImageGenerationIntent(draft);
+    if (shouldAutoGenerateImage) {
+      if (imageBusy) {
+        setUiError("Image generation is already running.");
+        return;
+      }
+      if (!imageGenerationAvailable) {
+        setUiError("This looks like an image request, but no image generation route is available.");
+        return;
+      }
+      const generated = await handleGenerateImage({
+        clearDraftOnSuccess: true,
+        trigger: "auto_send",
+      });
+      if (generated) {
+        return;
+      }
+      return;
+    }
+
+    try {
+      await attachPendingKnowledgeSources();
+      await handleSend();
+    } catch (cause) {
+      setUiError(cause instanceof Error ? cause.message : "Unable to prepare thread knowledge.");
+    }
+  }, [
+    attachPendingKnowledgeSources,
+    draft,
+    editingTurnId,
+    handleGenerateImage,
+    handleSend,
+    imageBusy,
+    imageGenerationAvailable,
+    messageMode,
+    pendingAttachments.length,
+    setUiError,
+  ]);
+
+  useEffect(() => {
+    composerSendHandlerRef.current = handleSendWithKnowledge;
+  }, [handleSendWithKnowledge]);
 
   const workspaceSummaryText = selectedSession
     ? `${lockSurface ? "Current session" : isCodeSurface ? "Current code session" : `Active ${activeModePreset.label.toLowerCase()} session`}: ${selectedSession.title || visibleSessionLabelById.get(selectedSession.sessionId) || `Chat ${selectedSession.sessionId.slice(-6)}`}.`

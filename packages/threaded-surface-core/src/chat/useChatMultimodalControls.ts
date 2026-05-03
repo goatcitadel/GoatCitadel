@@ -39,6 +39,11 @@ interface ChatImageRoute {
   supportsEdit: boolean;
 }
 
+interface ImageGenerationOptions {
+  clearDraftOnSuccess?: boolean;
+  trigger?: "button" | "auto_send";
+}
+
 function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
   return attachment.mediaType === "image" || attachment.mimeType.startsWith("image/");
 }
@@ -410,11 +415,11 @@ export function useChatMultimodalControls(input: {
   );
 
   const runImageGeneration = useCallback(
-    async (mode: "generate" | "edit") => {
+    async (mode: "generate" | "edit", options?: ImageGenerationOptions): Promise<boolean> => {
       const prompt = draft.trim();
       if (!prompt) {
         setError("Add an image prompt first.");
-        return;
+        return false;
       }
       setImageBusy(true);
       setError(null);
@@ -478,16 +483,23 @@ export function useChatMultimodalControls(input: {
           "image/png",
         );
         await uploadAttachments([file]);
+        if (options?.clearDraftOnSuccess) {
+          setDraft("");
+        }
         pushLocalNotice(
           response.operation === "edit"
             ? "Edited image added to the draft attachments."
-            : routeUsed.providerId === "google"
-              ? `Generated image added to the draft attachments via ${routeUsed.label}.`
-              : "Generated image added to the draft attachments.",
+            : options?.trigger === "auto_send"
+              ? `Detected image request and generated it via ${routeUsed.label}.`
+              : routeUsed.providerId === "google"
+                ? `Generated image added to the draft attachments via ${routeUsed.label}.`
+                : "Generated image added to the draft attachments.",
           "success",
         );
+        return true;
       } catch (error) {
         setError((error as Error).message, mode === "edit" ? "image_edit" : "image_generate");
+        return false;
       } finally {
         setImageBusy(false);
       }
@@ -498,6 +510,7 @@ export function useChatMultimodalControls(input: {
       latestImageAttachment,
       primaryImageRoute,
       pushLocalNotice,
+      setDraft,
       setError,
       uploadAttachments,
     ],
@@ -523,7 +536,7 @@ export function useChatMultimodalControls(input: {
     handleToggleVoiceTalk,
     handleOpenAudioTranscribe,
     handleAudioFileSelected,
-    handleGenerateImage: () => runImageGeneration("generate"),
-    handleEditImage: () => runImageGeneration("edit"),
+    handleGenerateImage: (options?: ImageGenerationOptions) => runImageGeneration("generate", options),
+    handleEditImage: (options?: ImageGenerationOptions) => runImageGeneration("edit", options),
   };
 }

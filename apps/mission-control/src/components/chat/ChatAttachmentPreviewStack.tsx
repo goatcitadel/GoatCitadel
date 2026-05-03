@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
+import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentActions";
 import { fetchChatAttachmentPreview } from "../../api/client";
 
 const ATTACHMENT_PREVIEW_CACHE_TTL_MS = 30_000;
@@ -80,6 +81,7 @@ function ChatAttachmentPreviewCard({
         {Math.max(1, Math.round(attachment.sizeBytes / 1024))} KB
         {preview ? ` · ${preview.analysisStatus}` : ""}
       </p>
+      <ChatAttachmentActions attachmentId={attachment.attachmentId} fileName={attachment.fileName} />
       {extractionSummary ? (
         <>
           <p className="chat-v11-attachment-preview-label">{extractionLabel}</p>

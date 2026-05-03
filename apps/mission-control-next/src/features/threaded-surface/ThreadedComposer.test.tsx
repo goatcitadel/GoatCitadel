@@ -102,6 +102,8 @@ describe("ThreadedComposer", () => {
 
     expect(markup).toContain("mc-next-composer-image-shell");
     expect(markup).toContain("/api/v1/chat/attachments/attachment-image-1/content?disposition=inline");
+    expect(markup).toContain("Open");
+    expect(markup).toContain("Download");
   });
 
   it("surfaces provider detail from the shared error mapper", () => {
