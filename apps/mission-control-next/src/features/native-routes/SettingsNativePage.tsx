@@ -30,11 +30,16 @@ import type {
   GoogleMeetPrerequisiteStatusResponse,
   GoogleMeetSessionRecord,
   IntegrationPluginRecord,
+  IntegrationFormSchema,
   McpServerRecord,
+  OnboardingState,
+  ToolProfile,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
 import {
   archiveWorkspace,
+  bootstrapOnboarding,
+  completeOnboarding,
   connectMcpServer,
   createChannelSetupDraft,
   createIntegrationConnection,
@@ -57,6 +62,7 @@ import {
   fetchIntegrationCatalog,
   fetchIntegrationConnectionDiagnostics,
   fetchIntegrationConnections,
+  fetchIntegrationFormSchema,
   fetchIntegrationPlugins,
   fetchGoogleMeetPrerequisiteStatus,
   fetchGoogleMeetSessions,
@@ -67,6 +73,7 @@ import {
   fetchMcpTools,
   fetchNpuModels,
   fetchOpenAICodexOAuthStatus,
+  fetchOnboardingState,
   fetchProviderSecretStatus,
   fetchSettings,
   fetchToolCatalog,
@@ -112,6 +119,7 @@ import {
   type OpenAICodexDevicePollResponse,
   type OpenAICodexOAuthStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfigFormBuilder } from "@goatcitadel/mission-control-shared/components/ConfigFormBuilder";
 import {
   LlmTransportFields,
   createEmptyLlmTransportDraft,
@@ -150,6 +158,18 @@ type NativeLoadResult<T> = {
   data: T;
   issue: NativeLoadIssue | null;
 };
+
+const TOOL_PROFILE_OPTIONS: ToolProfile[] = [
+  "minimal",
+  "standard",
+  "coding",
+  "ops",
+  "research",
+  "chat-agent",
+  "danger",
+];
+const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
+const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 
 type SettingsSectionProps = SettingsNativePageProps & {
   section: string;
@@ -316,63 +336,177 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
 }
 
 function OnboardingSection({ route, navigate }: SettingsSectionProps) {
+  const load = useCallback(async () => fetchOnboardingState(), []);
+  const { loading, error, data, reload } = useAsyncLoad(load);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [defaultsDraft, setDefaultsDraft] = useState<{
+    defaultToolProfile: ToolProfile;
+    budgetMode: OnboardingState["settings"]["budgetMode"];
+    networkAllowlist: string;
+  }>({
+    defaultToolProfile: "standard",
+    budgetMode: "balanced",
+    networkAllowlist: "",
+  });
+
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    setDefaultsDraft({
+      defaultToolProfile: normalizeToolProfile(data.settings.defaultToolProfile),
+      budgetMode: normalizeBudgetMode(data.settings.budgetMode),
+      networkAllowlist: data.settings.networkAllowlist.join(", "),
+    });
+  }, [data]);
+
+  const applyDefaults = async () => {
+    try {
+      await bootstrapOnboarding({
+        defaultToolProfile: defaultsDraft.defaultToolProfile,
+        budgetMode: defaultsDraft.budgetMode,
+        networkAllowlist: splitCommaList(defaultsDraft.networkAllowlist),
+      });
+      setNotice({ tone: "success", message: "First-run defaults applied." });
+      await reload();
+    } catch (defaultsError) {
+      setNotice({ tone: "error", message: getErrorMessage(defaultsError) });
+    }
+  };
+
+  const markComplete = async () => {
+    try {
+      await completeOnboarding("operator");
+      setNotice({ tone: "success", message: "Onboarding marked complete." });
+      await reload();
+    } catch (completeError) {
+      setNotice({ tone: "error", message: getErrorMessage(completeError) });
+    }
+  };
+
   return (
-    <SettingsGrid>
-      <SettingsPanel
-        title="First-run setup"
-        subtitle="Complete the routes that make the first real send trustworthy."
-        stats={[
-          { label: "Primary", value: "Providers" },
-          { label: "Local", value: "Runtime" },
-          { label: "Access", value: "Gateway" },
-        ]}
-      >
-        <SettingsActionList
-          items={[
-            {
-              label: "Configure providers",
-              description: "Select the active provider/model and choose where provider secrets are stored.",
-              onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
-            },
-            {
-              label: "Check local runtimes",
-              description: "Inspect daemon, llama.cpp, NPU, and voice runtime readiness before sending work.",
-              onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
-            },
-            {
-              label: "Review access",
-              description: "Confirm gateway auth posture, install tokens, and device access before exposing the app.",
-              onClick: () => navigate({ area: "settings", section: "access", theme: route.theme }),
-            },
-          ]}
-        />
-        <SettingsCodeBlock label="Terminal onboarding">pnpm onboarding:tui</SettingsCodeBlock>
-      </SettingsPanel>
-      <SettingsPanel
-        title="Route truth checklist"
-        subtitle="These checks prevent the setup screen from pretending the app is ready before it is."
-      >
-        <SettingsActionList
-          items={[
-            {
-              label: "Provider selected",
-              description: "Chat, Cowork, and Code should show a concrete provider and model before send.",
-              actionLabel: "Required",
-            },
-            {
-              label: "Secret persistence chosen",
-              description: "Use the OS keychain when available, or explicitly choose env/local file fallback.",
-              actionLabel: "Required",
-            },
-            {
-              label: "Runtime reachable",
-              description: "Local-first sends need a reachable local endpoint such as Ollama, LM Studio, or llama.cpp.",
-              actionLabel: "Required",
-            },
-          ]}
-        />
-      </SettingsPanel>
-    </SettingsGrid>
+    <SettingsSectionShell loading={loading} error={error}>
+      {notice ? <SettingsNotice notice={notice} /> : null}
+      {data ? (
+        <SettingsGrid>
+          <SettingsPanel
+            title="First-run setup"
+            subtitle="Live readiness for the first trustworthy send."
+            stats={[
+              { label: "Status", value: data.completed ? "Complete" : "Open" },
+              { label: "Provider", value: data.settings.llm.activeProviderId || "Unset" },
+              { label: "Model", value: data.settings.llm.activeModel || "Unset" },
+            ]}
+          >
+            <SettingsWizardSteps
+              steps={data.checklist.map((item) => ({
+                label: item.label,
+                description: item.detail ?? item.status,
+                state: item.status === "complete" ? "complete" : item.status === "optional" ? "pending" : "active",
+              }))}
+            />
+            <SettingsActionList
+              items={[
+                {
+                  label: "Configure providers",
+                  description: "Select the active provider/model and choose where provider secrets are stored.",
+                  onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+                },
+                {
+                  label: "Check local runtimes",
+                  description: "Inspect daemon, llama.cpp, NPU, and voice runtime readiness before sending work.",
+                  onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
+                },
+                {
+                  label: "Review access",
+                  description:
+                    "Confirm gateway auth posture, install tokens, and device access before exposing the app.",
+                  onClick: () => navigate({ area: "settings", section: "access", theme: route.theme }),
+                },
+              ]}
+            />
+          </SettingsPanel>
+          <SettingsPanel
+            title="Apply first-run defaults"
+            subtitle="Set the minimum runtime defaults without duplicating advanced setup."
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="Tool profile">
+                <select
+                  className="mc-next-settings-input"
+                  value={defaultsDraft.defaultToolProfile}
+                  onChange={(event) =>
+                    setDefaultsDraft((current) => ({
+                      ...current,
+                      defaultToolProfile: normalizeToolProfile(event.target.value),
+                    }))
+                  }
+                >
+                  {TOOL_PROFILE_OPTIONS.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {profile}
+                    </option>
+                  ))}
+                </select>
+              </SettingsField>
+              <SettingsField label="Budget mode">
+                <select
+                  className="mc-next-settings-input"
+                  value={defaultsDraft.budgetMode}
+                  onChange={(event) =>
+                    setDefaultsDraft((current) => ({ ...current, budgetMode: normalizeBudgetMode(event.target.value) }))
+                  }
+                >
+                  {BUDGET_MODE_OPTIONS.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </SettingsField>
+              <SettingsField label="Network allowlist" span={2}>
+                <input
+                  className="mc-next-settings-input"
+                  value={defaultsDraft.networkAllowlist}
+                  onChange={(event) =>
+                    setDefaultsDraft((current) => ({ ...current, networkAllowlist: event.target.value }))
+                  }
+                  placeholder="example.com, api.example.com"
+                />
+              </SettingsField>
+            </SettingsFieldGrid>
+            <SettingsMetricGrid
+              items={[
+                {
+                  label: "Auth",
+                  value: data.settings.auth.mode,
+                  meta: data.settings.auth.tokenConfigured ? "token configured" : "no token configured",
+                },
+                {
+                  label: "Mesh",
+                  value: data.settings.mesh.enabled ? data.settings.mesh.mode : "off",
+                  meta: data.settings.mesh.nodeId || "no node id",
+                },
+              ]}
+            />
+            <SettingsButtonRow>
+              <button type="button" className="mc-next-button" onClick={() => void applyDefaults()}>
+                <Save size={16} />
+                Apply defaults
+              </button>
+              <button type="button" className="mc-next-button-secondary" onClick={() => void markComplete()}>
+                <CheckCircle2 size={16} />
+                Mark complete
+              </button>
+              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
+        </SettingsGrid>
+      ) : null}
+    </SettingsSectionShell>
   );
 }
 
@@ -2775,12 +2909,18 @@ function IntegrationsSection(_props: SettingsSectionProps) {
   const [createCatalogId, setCreateCatalogId] = useState("");
   const [createLabel, setCreateLabel] = useState("");
   const [createConfig, setCreateConfig] = useState("{}");
+  const [createGuidedConfig, setCreateGuidedConfig] = useState<Record<string, unknown>>({});
+  const [createSchema, setCreateSchema] = useState<IntegrationFormSchema | undefined>();
+  const [showCreateJson, setShowCreateJson] = useState(false);
   const [detailForm, setDetailForm] = useState({
     label: "",
     enabled: true,
     status: "connected",
     configText: "{}",
   });
+  const [detailGuidedConfig, setDetailGuidedConfig] = useState<Record<string, unknown>>({});
+  const [detailSchema, setDetailSchema] = useState<IntegrationFormSchema | undefined>();
+  const [showDetailJson, setShowDetailJson] = useState(false);
   const [diagnostics, setDiagnostics] = useState<ConnectorDiagnosticReport | null>(null);
   const selectedConnection =
     data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? data?.connections[0] ?? null;
@@ -2819,7 +2959,56 @@ function IntegrationsSection(_props: SettingsSectionProps) {
       status: selectedConnection.status,
       configText: formatJson(selectedConnection.config),
     });
+    setDetailGuidedConfig(selectedConnection.config);
   }, [selectedConnection]);
+
+  useEffect(() => {
+    if (!createCatalogId) {
+      setCreateSchema(undefined);
+      setCreateGuidedConfig({});
+      return;
+    }
+    let cancelled = false;
+    void fetchIntegrationFormSchema(createCatalogId)
+      .then((schema) => {
+        if (!cancelled) {
+          setCreateSchema(schema);
+          setCreateGuidedConfig(applyIntegrationDefaults(schema, {}));
+          setCreateConfig("{}");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCreateSchema(undefined);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createCatalogId]);
+
+  useEffect(() => {
+    if (!selectedConnection?.catalogId) {
+      setDetailSchema(undefined);
+      return;
+    }
+    let cancelled = false;
+    void fetchIntegrationFormSchema(selectedConnection.catalogId)
+      .then((schema) => {
+        if (!cancelled) {
+          setDetailSchema(schema);
+          setDetailGuidedConfig((current) => applyIntegrationDefaults(schema, current));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetailSchema(undefined);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedConnection?.catalogId]);
 
   const handleCreate = async () => {
     if (!createCatalogId) {
@@ -2831,13 +3020,14 @@ function IntegrationsSection(_props: SettingsSectionProps) {
         catalogId: createCatalogId,
         label: createLabel.trim() || undefined,
         enabled: true,
-        config: parseJsonObject(createConfig),
+        config: showCreateJson ? parseJsonObject(createConfig) : createGuidedConfig,
       });
       setNotice({ tone: "success", message: `Connection ${created.label} created.` });
       await reload();
       setSelectedConnectionId(created.connectionId);
       setCreateLabel("");
       setCreateConfig("{}");
+      setCreateGuidedConfig(createSchema ? applyIntegrationDefaults(createSchema, {}) : {});
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
     }
@@ -2852,7 +3042,7 @@ function IntegrationsSection(_props: SettingsSectionProps) {
         label: detailForm.label.trim() || undefined,
         enabled: detailForm.enabled,
         status: detailForm.status as IntegrationConnection["status"],
-        config: parseJsonObject(detailForm.configText, selectedConnection.config),
+        config: showDetailJson ? parseJsonObject(detailForm.configText, selectedConnection.config) : detailGuidedConfig,
       });
       setNotice({ tone: "success", message: "Connection updated." });
       await reload();
@@ -2962,14 +3152,18 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                     placeholder="Optional connection label"
                   />
                 </SettingsField>
-                <SettingsField label="Config JSON" span={2}>
+              </SettingsFieldGrid>
+              {showCreateJson ? (
+                <SettingsField label="Advanced Config JSON" span={2}>
                   <textarea
                     className="mc-next-settings-textarea mc-next-settings-code"
                     value={createConfig}
                     onChange={(event) => setCreateConfig(event.target.value)}
                   />
                 </SettingsField>
-              </SettingsFieldGrid>
+              ) : (
+                <ConfigFormBuilder schema={createSchema} value={createGuidedConfig} onChange={setCreateGuidedConfig} />
+              )}
               {selectedCatalog ? (
                 <SettingsMetricGrid
                   items={[
@@ -2986,6 +3180,14 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                 <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
                   <Plus size={16} />
                   Create connection
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => setShowCreateJson((current) => !current)}
+                >
+                  <SlidersHorizontal size={16} />
+                  {showCreateJson ? "Use guided fields" : "Advanced JSON"}
                 </button>
               </SettingsButtonRow>
             </SettingsPanel>
@@ -3028,14 +3230,22 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                       <span>Connection can be used by the operator.</span>
                     </label>
                   </SettingsField>
-                  <SettingsField label="Config JSON" span={2}>
+                </SettingsFieldGrid>
+                {showDetailJson ? (
+                  <SettingsField label="Advanced Config JSON" span={2}>
                     <textarea
                       className="mc-next-settings-textarea mc-next-settings-code"
                       value={detailForm.configText}
                       onChange={(event) => setDetailForm((current) => ({ ...current, configText: event.target.value }))}
                     />
                   </SettingsField>
-                </SettingsFieldGrid>
+                ) : (
+                  <ConfigFormBuilder
+                    schema={detailSchema}
+                    value={detailGuidedConfig}
+                    onChange={setDetailGuidedConfig}
+                  />
+                )}
                 <SettingsMetricGrid
                   items={[
                     { label: "Catalog key", value: selectedConnection.key, meta: selectedConnection.kind },
@@ -3054,6 +3264,14 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                   <button type="button" className="mc-next-button-secondary" onClick={() => void handleDiagnostics()}>
                     <RefreshCw size={16} />
                     Run diagnostics
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() => setShowDetailJson((current) => !current)}
+                  >
+                    <SlidersHorizontal size={16} />
+                    {showDetailJson ? "Use guided fields" : "Advanced JSON"}
                   </button>
                   <button type="button" className="mc-next-button-danger" onClick={() => void handleDelete()}>
                     <Trash2 size={16} />
@@ -3660,6 +3878,7 @@ function McpSection(_props: SettingsSectionProps) {
   const [tools, setTools] = useState<Array<{ toolName: string; description?: string }>>([]);
   const [healthReport, setHealthReport] = useState<ConnectorDiagnosticReport | null>(null);
   const selectedServer = data?.servers.find((item) => item.serverId === selectedServerId) ?? data?.servers[0] ?? null;
+  const selectedServerRuntimeReady = selectedServer ? isRuntimeInvokableMcpServer(selectedServer) : false;
 
   useEffect(() => {
     if (!data?.servers.length) {
@@ -3702,7 +3921,7 @@ function McpSection(_props: SettingsSectionProps) {
         transport: createForm.transport as McpServerRecord["transport"],
         command: createForm.transport === "stdio" ? createForm.command.trim() || undefined : undefined,
         url: createForm.transport !== "stdio" ? createForm.url.trim() || undefined : undefined,
-        enabled: createForm.enabled,
+        enabled: isRuntimeInvokableMcpServer(createForm) ? createForm.enabled : false,
       });
       setNotice({ tone: "success", message: `MCP server ${created.label} created.` });
       setCreateForm({ label: "", transport: "stdio", command: "", url: "", enabled: true });
@@ -3722,7 +3941,7 @@ function McpSection(_props: SettingsSectionProps) {
         label: editForm.label.trim() || undefined,
         command: selectedServer.transport === "stdio" ? editForm.command.trim() || undefined : undefined,
         url: selectedServer.transport !== "stdio" ? editForm.url.trim() || undefined : undefined,
-        enabled: editForm.enabled,
+        enabled: selectedServerRuntimeReady ? editForm.enabled : false,
         category: editForm.category as McpServerRecord["category"],
       });
       setNotice({ tone: "success", message: "MCP server updated." });
@@ -3772,7 +3991,10 @@ function McpSection(_props: SettingsSectionProps) {
                 emptyLabel="No MCP servers configured."
               />
             </SettingsPanel>
-            <SettingsPanel title="Create MCP server" subtitle="Set up a new stdio or URL-based MCP server.">
+            <SettingsPanel
+              title="Create MCP server"
+              subtitle="Set up a local stdio MCP server or use a runtime-supported template."
+            >
               <SettingsFieldGrid>
                 <SettingsField label="Label">
                   <input
@@ -3782,15 +4004,7 @@ function McpSection(_props: SettingsSectionProps) {
                   />
                 </SettingsField>
                 <SettingsField label="Transport">
-                  <select
-                    className="mc-next-settings-input"
-                    value={createForm.transport}
-                    onChange={(event) => setCreateForm((current) => ({ ...current, transport: event.target.value }))}
-                  >
-                    <option value="stdio">stdio</option>
-                    <option value="http">http</option>
-                    <option value="sse">sse</option>
-                  </select>
+                  <input className="mc-next-settings-input" value={createForm.transport} readOnly />
                 </SettingsField>
                 {createForm.transport === "stdio" ? (
                   <SettingsField label="Command" span={2}>
@@ -3814,9 +4028,14 @@ function McpSection(_props: SettingsSectionProps) {
                     <input
                       type="checkbox"
                       checked={createForm.enabled}
+                      disabled={!isRuntimeInvokableMcpServer(createForm)}
                       onChange={(event) => setCreateForm((current) => ({ ...current, enabled: event.target.checked }))}
                     />
-                    <span>Enable immediately after create</span>
+                    <span>
+                      {isRuntimeInvokableMcpServer(createForm)
+                        ? "Enable immediately after create"
+                        : "Configured only; runtime invocation is not supported"}
+                    </span>
                   </label>
                 </SettingsField>
               </SettingsFieldGrid>
@@ -3831,7 +4050,11 @@ function McpSection(_props: SettingsSectionProps) {
                   items={data.templates.slice(0, 6).map((item) => ({
                     label: item.label,
                     description: item.description,
-                    meta: item.installed ? "installed" : item.transport,
+                    meta: item.installed
+                      ? "installed"
+                      : isRuntimeInvokableMcpServer(item)
+                        ? item.transport
+                        : "configured only",
                     onClick: () =>
                       setCreateForm({
                         label: item.label,
@@ -3898,12 +4121,26 @@ function McpSection(_props: SettingsSectionProps) {
                       <input
                         type="checkbox"
                         checked={editForm.enabled}
+                        disabled={!selectedServerRuntimeReady}
                         onChange={(event) => setEditForm((current) => ({ ...current, enabled: event.target.checked }))}
                       />
-                      <span>Server can be used by the operator.</span>
+                      <span>
+                        {selectedServerRuntimeReady
+                          ? "Server can be used by the operator."
+                          : "Configured only; runtime actions are disabled."}
+                      </span>
                     </label>
                   </SettingsField>
                 </SettingsFieldGrid>
+                {!selectedServerRuntimeReady ? (
+                  <SettingsNotice
+                    notice={{
+                      tone: "warning",
+                      message:
+                        "This MCP server is configured for visibility only. Generic http/sse runtime invocation is not supported in this shell.",
+                    }}
+                  />
+                ) : null}
                 <SettingsMetricGrid
                   items={[
                     { label: "Transport", value: selectedServer.transport, meta: selectedServer.authType },
@@ -3928,6 +4165,7 @@ function McpSection(_props: SettingsSectionProps) {
                         "MCP server connect requested.",
                       )
                     }
+                    disabled={!selectedServerRuntimeReady}
                   >
                     <Plug2 size={16} />
                     Connect
@@ -3954,6 +4192,7 @@ function McpSection(_props: SettingsSectionProps) {
                         "MCP health check complete.",
                       )
                     }
+                    disabled={!selectedServerRuntimeReady}
                   >
                     <RefreshCw size={16} />
                     Health check
@@ -4845,6 +5084,42 @@ function parseJsonObject(value: string, fallback: Record<string, unknown> = {}) 
     throw new Error("Value must be a JSON object.");
   }
   return parsed as Record<string, unknown>;
+}
+
+function splitCommaList(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeToolProfile(value: string | undefined): ToolProfile {
+  return TOOL_PROFILE_OPTIONS.includes(value as ToolProfile) ? (value as ToolProfile) : "standard";
+}
+
+function normalizeBudgetMode(value: string | undefined): OnboardingState["settings"]["budgetMode"] {
+  return BUDGET_MODE_OPTIONS.includes(value as OnboardingState["settings"]["budgetMode"])
+    ? (value as OnboardingState["settings"]["budgetMode"])
+    : "balanced";
+}
+
+function applyIntegrationDefaults(
+  schema: IntegrationFormSchema,
+  current: Record<string, unknown>,
+): Record<string, unknown> {
+  return schema.fields.reduce<Record<string, unknown>>(
+    (next, field) => {
+      if (next[field.key] === undefined && field.defaultValue !== undefined) {
+        next[field.key] = field.defaultValue;
+      }
+      return next;
+    },
+    { ...current },
+  );
+}
+
+function isRuntimeInvokableMcpServer(server: { transport: string; url?: string }) {
+  return server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
 }
 
 function readDraftString(record: Record<string, unknown>, key: string): string | undefined {

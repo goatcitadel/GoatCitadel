@@ -68,6 +68,30 @@ const mocks = vi.hoisted(() => ({
     ],
   })),
   fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
+  fetchIntegrationFormSchema: vi.fn(async () => ({
+    catalogId: "github",
+    title: "GitHub setup",
+    fields: [
+      {
+        key: "tokenEnv",
+        label: "Token environment variable",
+        type: "text",
+        defaultValue: "GITHUB_TOKEN",
+      },
+    ],
+  })),
+  createIntegrationConnection: vi.fn(async () => ({
+    connectionId: "conn-1",
+    catalogId: "github",
+    key: "github",
+    label: "GitHub",
+    kind: "service",
+    enabled: true,
+    status: "connected",
+    config: { tokenEnv: "GITHUB_TOKEN" },
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:00:00.000Z",
+  })),
   fetchSlackOAuthStatus: vi.fn(async () => ({
     configured: true,
     mode: "self_owned",
@@ -148,6 +172,129 @@ const mocks = vi.hoisted(() => ({
     connected: false,
     requiresReauth: false,
   })),
+  fetchOnboardingState: vi.fn(async () => ({
+    completed: false,
+    checklist: [
+      {
+        id: "llm",
+        label: "Provider configured",
+        status: "needs_input",
+        detail: "Select an active provider and model.",
+      },
+      {
+        id: "runtime",
+        label: "Runtime ready",
+        status: "complete",
+        detail: "Gateway is reachable.",
+      },
+    ],
+    settings: {
+      defaultToolProfile: "standard",
+      budgetMode: "balanced",
+      networkAllowlist: ["api.openai.com"],
+      auth: {
+        mode: "none",
+        allowLoopbackBypass: true,
+        tokenConfigured: false,
+        basicConfigured: false,
+      },
+      llm: {
+        activeProviderId: "openai",
+        activeModel: "gpt-5.4-mini",
+        providers: [],
+      },
+      mesh: {
+        enabled: false,
+        mode: "lan",
+        nodeId: "",
+        mdns: true,
+        staticPeers: [],
+        requireMtls: false,
+        tailnetEnabled: false,
+      },
+    },
+  })),
+  bootstrapOnboarding: vi.fn(async () => ({
+    state: await mocks.fetchOnboardingState(),
+    appliedAt: "2026-05-02T19:00:00.000Z",
+  })),
+  completeOnboarding: vi.fn(async () => ({ completed: true, completedAt: "2026-05-02T19:00:00.000Z" })),
+  fetchMcpServers: vi.fn(async () => ({
+    items: [
+      {
+        serverId: "srv-http",
+        label: "Remote HTTP",
+        transport: "http",
+        url: "https://mcp.example.test",
+        authType: "none",
+        enabled: true,
+        status: "disconnected",
+        category: "development",
+        trustTier: "restricted",
+        costTier: "unknown",
+        policy: {
+          requireFirstToolApproval: true,
+          redactionMode: "basic",
+          allowedToolPatterns: [],
+          blockedToolPatterns: [],
+        },
+        createdAt: "2026-04-24T12:00:00.000Z",
+        updatedAt: "2026-04-24T12:00:00.000Z",
+      },
+    ],
+  })),
+  fetchMcpTemplates: vi.fn(async () => ({
+    items: [
+      {
+        templateId: "stdio-template",
+        label: "Local Files",
+        description: "Local stdio template",
+        transport: "stdio",
+        command: "npx",
+        authType: "none",
+        category: "development",
+        trustTier: "trusted",
+        costTier: "free",
+        policy: {
+          requireFirstToolApproval: true,
+          redactionMode: "basic",
+          allowedToolPatterns: [],
+          blockedToolPatterns: [],
+        },
+        enabledByDefault: true,
+      },
+    ],
+  })),
+  fetchMcpTools: vi.fn(async () => ({ items: [] })),
+  createMcpServer: vi.fn(async () => ({
+    serverId: "srv-stdio",
+    label: "Local Files",
+    transport: "stdio",
+    command: "npx",
+    authType: "none",
+    enabled: true,
+    status: "disconnected",
+    category: "development",
+    trustTier: "trusted",
+    costTier: "free",
+    policy: {
+      requireFirstToolApproval: true,
+      redactionMode: "basic",
+      allowedToolPatterns: [],
+      blockedToolPatterns: [],
+    },
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:00:00.000Z",
+  })),
+  updateMcpServer: vi.fn(async () => ({})),
+  connectMcpServer: vi.fn(async () => ({})),
+  disconnectMcpServer: vi.fn(async () => ({})),
+  runMcpServerHealthCheck: vi.fn(async () => ({
+    status: "ok",
+    checkedAt: "2026-04-24T12:00:00.000Z",
+    checks: [],
+  })),
+  deleteMcpServer: vi.fn(async () => ({})),
   loadModelsForProvider: vi.fn(async () => ["gpt-5.4-mini"]),
   getCachedModelProbe: vi.fn((): any => undefined),
   reload: vi.fn(async () => undefined),
@@ -199,14 +346,28 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchSettings: mocks.fetchSettings,
     fetchDeviceAccessGrants: mocks.fetchDeviceAccessGrants,
     revokeDeviceAccessGrant: mocks.revokeDeviceAccessGrant,
+    bootstrapOnboarding: mocks.bootstrapOnboarding,
+    completeOnboarding: mocks.completeOnboarding,
+    fetchOnboardingState: mocks.fetchOnboardingState,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
+    fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
+    createIntegrationConnection: mocks.createIntegrationConnection,
     fetchSlackOAuthStatus: mocks.fetchSlackOAuthStatus,
     startSlackOAuth: mocks.startSlackOAuth,
     discoverTelegramTargets: mocks.discoverTelegramTargets,
     fetchIntegrationPlugins: mocks.fetchIntegrationPlugins,
     fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
+    fetchMcpServers: mocks.fetchMcpServers,
+    fetchMcpTemplates: mocks.fetchMcpTemplates,
+    fetchMcpTools: mocks.fetchMcpTools,
+    createMcpServer: mocks.createMcpServer,
+    updateMcpServer: mocks.updateMcpServer,
+    connectMcpServer: mocks.connectMcpServer,
+    disconnectMcpServer: mocks.disconnectMcpServer,
+    runMcpServerHealthCheck: mocks.runMcpServerHealthCheck,
+    deleteMcpServer: mocks.deleteMcpServer,
     startOpenAICodexOAuthDeviceFlow: mocks.startOpenAICodexOAuthDeviceFlow,
     pollOpenAICodexOAuthDeviceFlow: mocks.pollOpenAICodexOAuthDeviceFlow,
     deleteOpenAICodexOAuthCredential: mocks.deleteOpenAICodexOAuthCredential,
@@ -353,7 +514,7 @@ function installBrowserStorageMock(
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   mocks.fetchSettings.mockResolvedValue({
     auth: {
@@ -370,6 +531,77 @@ beforeEach(() => {
     },
   });
   mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
+  mocks.fetchOnboardingState.mockResolvedValue({
+    completed: false,
+    checklist: [
+      {
+        id: "llm",
+        label: "Provider configured",
+        status: "needs_input",
+        detail: "Select an active provider and model.",
+      },
+      {
+        id: "runtime",
+        label: "Runtime ready",
+        status: "complete",
+        detail: "Gateway is reachable.",
+      },
+    ],
+    settings: {
+      defaultToolProfile: "standard",
+      budgetMode: "balanced",
+      networkAllowlist: ["api.openai.com"],
+      auth: {
+        mode: "none",
+        allowLoopbackBypass: true,
+        tokenConfigured: false,
+        basicConfigured: false,
+      },
+      llm: {
+        activeProviderId: "openai",
+        activeModel: "gpt-5.4-mini",
+        providers: [],
+      },
+      mesh: {
+        enabled: false,
+        mode: "lan",
+        nodeId: "",
+        mdns: true,
+        staticPeers: [],
+        requireMtls: false,
+        tailnetEnabled: false,
+      },
+    },
+  });
+  mocks.bootstrapOnboarding.mockResolvedValue({
+    state: await mocks.fetchOnboardingState(),
+    appliedAt: "2026-05-02T19:00:00.000Z",
+  });
+  mocks.completeOnboarding.mockResolvedValue({ completed: true, completedAt: "2026-05-02T19:00:00.000Z" });
+  mocks.fetchIntegrationFormSchema.mockResolvedValue({
+    catalogId: "github",
+    title: "GitHub setup",
+    fields: [
+      {
+        key: "tokenEnv",
+        label: "Token environment variable",
+        type: "text",
+        defaultValue: "GITHUB_TOKEN",
+      },
+    ],
+  });
+  mocks.createIntegrationConnection.mockResolvedValue({
+    connectionId: "conn-1",
+    catalogId: "github",
+    key: "github",
+    label: "GitHub",
+    kind: "service",
+    enabled: true,
+    status: "connected",
+    config: { tokenEnv: "GITHUB_TOKEN" },
+    createdAt: "2026-04-24T12:00:00.000Z",
+    updatedAt: "2026-04-24T12:00:00.000Z",
+  });
   mocks.revokeDeviceAccessGrant.mockResolvedValue({
     grant: {
       grantId: "grant-1",
@@ -452,8 +684,24 @@ describe("SettingsNativePage providers", () => {
     });
     let text = collectText(renderer!.root);
     expect(text).toContain("First-run setup");
-    expect(text).toContain("Terminal onboarding");
+    expect(text).toContain("Provider configured");
+    expect(text).toContain("Apply first-run defaults");
+    expect(text).not.toContain("Terminal onboarding");
     expect(text).not.toContain("Mission Control posture");
+
+    await act(async () => {
+      findButton(renderer!.root, "Apply defaults").props.onClick();
+    });
+    expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
+      defaultToolProfile: "standard",
+      budgetMode: "balanced",
+      networkAllowlist: ["api.openai.com"],
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Mark complete").props.onClick();
+    });
+    expect(mocks.completeOnboarding).toHaveBeenCalledWith("operator");
 
     await act(async () => {
       renderer = renderPage("budget");
@@ -1162,11 +1410,16 @@ describe("SettingsNativePage integrations", () => {
     await act(async () => {
       renderer = renderPage("integrations");
     });
+    await act(async () => undefined);
 
     const text = collectText(renderer!.root);
 
     expect(mocks.fetchIntegrationPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchIntegrationFormSchema).toHaveBeenCalledWith("github");
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).toHaveBeenCalledTimes(1);
+    expect(text).toContain("GitHub setup");
+    expect(text).toContain("Token environment variable");
+    expect(text).toContain("Advanced JSON");
     expect(text).toContain("Plugin trust");
     expect(text).toContain("Dashboard Plugin");
     expect(text).toContain("Integrity: verified");
@@ -1174,5 +1427,53 @@ describe("SettingsNativePage integrations", () => {
     expect(text).toContain("Google Meet voice");
     expect(text).toContain("OAuth profile");
     expect(text).toContain("Blocked");
+  });
+
+  it("creates integration connections from guided schema fields by default", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+    await act(async () => undefined);
+
+    const schemaInput = renderer!.root.findAll(
+      (node) => node.type === "input" && node.props?.id === "integration-field-tokenEnv",
+    )[0];
+    expect(schemaInput).toBeDefined();
+
+    await act(async () => {
+      schemaInput!.props.onChange({ target: { value: "GH_TOKEN" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create connection").props.onClick();
+    });
+
+    expect(mocks.createIntegrationConnection).toHaveBeenCalledWith({
+      catalogId: "github",
+      label: undefined,
+      enabled: true,
+      config: { tokenEnv: "GH_TOKEN" },
+    });
+  });
+});
+
+describe("SettingsNativePage MCP", () => {
+  it("keeps generic MCP creation on stdio and disables runtime actions for unsupported URL servers", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("mcp");
+    });
+
+    const optionValues = renderer!.root.findAllByType("option").map((option) => option.props.value);
+    expect(optionValues).not.toContain("http");
+    expect(optionValues).not.toContain("sse");
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Configured only; runtime actions are disabled.");
+    expect(text).toContain("Generic http/sse runtime invocation is not supported");
+    expect(findButton(renderer!.root, "Connect").props.disabled).toBe(true);
+    expect(findButton(renderer!.root, "Health check").props.disabled).toBe(true);
   });
 });

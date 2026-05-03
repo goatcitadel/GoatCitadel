@@ -113,23 +113,6 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
 }));
 
 describe("RuntimeRoutePage", () => {
-  it("renders explicit quality signal instead of falling back to generic activity", () => {
-    const markup = renderToStaticMarkup(
-      <RuntimeRoutePage
-        route={{ area: "ops", section: "quality", theme: "ops" } as any}
-        activeWorkspaceId="default"
-        activeWorkspaceName="Default"
-        pendingApprovals={2}
-        navigate={vi.fn()}
-        setActiveWorkspaceId={vi.fn()}
-      />,
-    );
-
-    expect(markup).toContain("Quality signal");
-    expect(markup).toContain("Replay runs");
-    expect(markup).toContain("Quality review");
-  });
-
   it("renders runtime posture and daemon controls in the canonical next shell", () => {
     const markup = renderToStaticMarkup(
       <RuntimeRoutePage
@@ -166,21 +149,21 @@ describe("RuntimeRoutePage", () => {
     });
 
     const buttons = renderer!.root.findAllByType("button");
-    const qualityButton = buttons.find(
+    const promptPacksButton = buttons.find(
       (button: ReactTestInstance) =>
-        button.findAll((node) => typeof node.props?.children === "string" && node.props.children === "Quality").length >
-        0,
+        button.findAll((node) => typeof node.props?.children === "string" && node.props.children === "Prompt packs")
+          .length > 0,
     );
 
-    expect(qualityButton).toBeDefined();
+    expect(promptPacksButton).toBeDefined();
 
     act(() => {
-      qualityButton!.props.onClick();
+      promptPacksButton!.props.onClick();
     });
 
     expect(navigate).toHaveBeenCalledWith({
-      area: "ops",
-      section: "quality",
+      area: "library",
+      section: "prompt-packs",
       theme: "ops",
     });
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("space");

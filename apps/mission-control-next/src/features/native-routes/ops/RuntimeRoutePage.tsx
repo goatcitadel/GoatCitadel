@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Activity, RefreshCw, Server, ShieldCheck, Wallet } from "lucide-react";
+import { Activity, RefreshCw, Server, Wallet } from "lucide-react";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
@@ -300,60 +300,6 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             </NativeCard>
           </NativeGrid>
         );
-      case "quality":
-        return (
-          <NativeGrid>
-            <NativeCard
-              title="Quality signal"
-              subtitle="Replay, improvement, and context efficiency should be explicit instead of hidden under activity."
-              stats={[
-                { label: "Reports", value: String(data.timeline?.improvement.reports.length ?? 0) },
-                { label: "Replay runs", value: String(data.timeline?.improvement.replayRuns.length ?? 0) },
-              ]}
-            >
-              <MetricGrid
-                items={[
-                  {
-                    label: "QMD posture",
-                    value: describeQmdImpact(data.health?.costs.qmd.efficiencyLabel),
-                    meta: formatTokenDelta(data.health?.costs.qmd.netTokenDelta ?? 0),
-                  },
-                  {
-                    label: "Daemon logs",
-                    value: String(data.health?.daemonLogs.items.length ?? 0),
-                    meta: "Recent operational feedback",
-                  },
-                  {
-                    label: "Recent events",
-                    value: String(data.timeline?.events.items.length ?? 0),
-                    meta: "Operator-visible signal",
-                  },
-                ]}
-              />
-              <NativeList
-                items={(data.timeline?.improvement.reports ?? []).slice(0, 8).map((item) => ({
-                  title: item.title || item.reportId,
-                  meta: item.runId ?? "report",
-                  body: item.createdAt ? formatDateTime(item.createdAt) : "No timestamp",
-                }))}
-                emptyLabel="No explicit quality reports yet."
-              />
-            </NativeCard>
-            <NativeCard
-              title="Improvement evidence"
-              subtitle="Recent replay activity and operator-visible diagnostics that support quality decisions."
-            >
-              <NativeList
-                items={(data.timeline?.improvement.replayRuns ?? []).slice(0, 8).map((item) => ({
-                  title: item.runId,
-                  meta: item.status ?? "unknown",
-                  body: item.updatedAt ? formatDateTime(item.updatedAt) : formatDateTime(item.createdAt),
-                }))}
-                emptyLabel="No replay-linked evidence yet."
-              />
-            </NativeCard>
-          </NativeGrid>
-        );
       case "diagnostics":
         return (
           <NativeGrid>
@@ -398,7 +344,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
               subtitle="Keep operator movement inside canonical next routes."
               actions={[
                 { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
-                { label: "Quality", route: { area: "ops", section: "quality", theme: route.theme } },
+                { label: "Prompt packs", route: { area: "library", section: "prompt-packs", theme: route.theme } },
                 { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
               ]}
               navigate={navigate}
@@ -457,9 +403,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
 
   return (
     <NativePageFrame
-      icon={
-        section === "costs" ? Wallet : section === "runtime" ? Server : section === "quality" ? ShieldCheck : Activity
-      }
+      icon={section === "costs" ? Wallet : section === "runtime" ? Server : Activity}
       kicker="Ops"
       title={labelForOpsSection(section)}
       description={descriptionForOpsSection(section)}
@@ -497,8 +441,6 @@ function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
       return "Costs";
     case "runtime":
       return "Runtime";
-    case "quality":
-      return "Quality";
     case "diagnostics":
       return "Diagnostics";
     default:
@@ -518,8 +460,6 @@ function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
       return "Spend coverage, QMD efficiency, and current usage posture.";
     case "runtime":
       return "Daemon controls, backup posture, and runtime truth in one route.";
-    case "quality":
-      return "Explicit quality signal instead of silently falling back to generic activity.";
     case "diagnostics":
       return "System vitals, daemon logs, and integration posture in a calmer diagnostics route.";
     default:

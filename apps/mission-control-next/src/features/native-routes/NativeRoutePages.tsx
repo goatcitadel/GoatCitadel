@@ -18,9 +18,12 @@ import {
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { ChatGeneratedArtifactRecord, SkillListItem } from "@goatcitadel/contracts";
 import {
+  addTaskDeliverable,
   archiveAgentProfile,
+  createTask,
   createAgentProfile,
   createFileFromTemplate,
+  deleteTask,
   fetchAgents,
   fetchChatGeneratedArtifacts,
   fetchFileTemplates,
@@ -34,13 +37,17 @@ import {
   fetchSkillSources,
   fetchSkills,
   fetchTasksByView,
+  fetchTaskDeliverables,
   downloadFile,
   reloadSkills,
+  restoreTask,
   restoreAgentProfile,
+  updateTask,
   updateAgentProfile,
   updateSkillState,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
+import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "./NativeRoutePageLayout";
 import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
@@ -55,15 +62,7 @@ type LoadState<T> = {
   data: T | null;
 };
 
-type TaskCardRecord = {
-  taskId: string;
-  title: string;
-  status: string;
-  priority: string;
-  description?: string;
-  updatedAt: string;
-  assignedAgentId?: string;
-};
+type TaskCardRecord = TaskRecord;
 
 type Notice = {
   tone: "success" | "warning" | "error" | "info";
@@ -79,6 +78,19 @@ type NativeLoadResult<T> = {
   data: T;
   issue: NativeLoadIssue | null;
 };
+
+const TASK_STATUS_OPTIONS: TaskRecord["status"][] = [
+  "planning",
+  "inbox",
+  "assigned",
+  "in_progress",
+  "testing",
+  "review",
+  "blocked",
+  "done",
+];
+const TASK_PRIORITY_OPTIONS: TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
+const TASK_DELIVERABLE_TYPE_OPTIONS: TaskDeliverableRecord["deliverableType"][] = ["artifact", "file", "url"];
 
 export function NativeRoutePages(props: NativeRoutePagesProps) {
   const { route } = props;
@@ -104,6 +116,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     LoadState<{
       issues: NativeLoadIssue[];
       tasks: TaskCardRecord[];
+      deletedTasks: TaskCardRecord[];
       operators: Array<{ operatorId: string; sessionCount: number; activeSessions: number; lastActivityAt?: string }>;
     }>
   >({
@@ -111,56 +124,76 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     error: null,
     data: null,
   });
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [createDraft, setCreateDraft] = useState({
+    title: "",
+    description: "",
+    priority: "normal" as TaskRecord["priority"],
+  });
+  const [detailDraft, setDetailDraft] = useState({
+    title: "",
+    description: "",
+    status: "planning" as TaskRecord["status"],
+    priority: "normal" as TaskRecord["priority"],
+  });
+  const [deliverableDraft, setDeliverableDraft] = useState({
+    title: "",
+    deliverableType: "artifact" as TaskDeliverableRecord["deliverableType"],
+    path: "",
+    description: "",
+  });
+  const [deliverables, setDeliverables] = useState<LoadState<TaskDeliverableRecord[]>>({
+    loading: false,
+    error: null,
+    data: [],
+  });
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadCowork = useCallback(async () => {
     setState((current) => ({ ...current, loading: true, error: null }));
-    void Promise.all([
+    const [tasks, deletedTasks, operators] = await Promise.all([
       nativeLoad("Cowork tasks", fetchTasksByView("active", undefined, activeWorkspaceId), {
         items: [],
         view: "active",
       }),
+      nativeLoad("Deleted tasks", fetchTasksByView("trash", undefined, activeWorkspaceId), {
+        items: [],
+        view: "trash",
+      }),
       nativeLoad("Operators", fetchOperators(), { items: [] }),
-    ])
-      .then(([tasks, operators]) => {
-        if (cancelled) {
-          return;
-        }
-        setState({
-          loading: false,
-          error: null,
-          data: {
-            issues: nativeLoadIssues([tasks, operators]),
-            tasks: tasks.data.items.map((item) => ({
-              taskId: item.taskId,
-              title: item.title,
-              status: item.status,
-              priority: item.priority,
-              description: item.description,
-              updatedAt: item.updatedAt,
-              assignedAgentId: item.assignedAgentId,
-            })),
-            operators: operators.data.items,
-          },
-        });
-      })
-      .catch((error: Error) => {
-        if (cancelled) {
-          return;
-        }
+    ]);
+    setState({
+      loading: false,
+      error: null,
+      data: {
+        issues: nativeLoadIssues([tasks, deletedTasks, operators]),
+        tasks: tasks.data.items,
+        deletedTasks: deletedTasks.data.items,
+        operators: operators.data.items,
+      },
+    });
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadCowork().catch((error: Error) => {
+      if (!cancelled) {
         setState({
           loading: false,
           error: error.message,
           data: null,
         });
-      });
+      }
+    });
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [loadCowork]);
 
   const tasks = state.data?.tasks ?? [];
+  const deletedTasks = state.data?.deletedTasks ?? [];
   const operators = state.data?.operators ?? [];
+  const allSelectableTasks = useMemo(() => [...tasks, ...deletedTasks], [deletedTasks, tasks]);
   const groupedTasks = useMemo(
     () => ({
       planning: tasks.filter(
@@ -172,6 +205,150 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     }),
     [tasks],
   );
+  const selectedTask =
+    allSelectableTasks.find((item) => item.taskId === selectedTaskId) ?? allSelectableTasks[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedTask) {
+      setSelectedTaskId("");
+      return;
+    }
+    setSelectedTaskId((current) =>
+      current && allSelectableTasks.some((item) => item.taskId === current) ? current : selectedTask.taskId,
+    );
+  }, [allSelectableTasks, selectedTask]);
+
+  useEffect(() => {
+    if (!selectedTask) {
+      return;
+    }
+    setDetailDraft({
+      title: selectedTask.title,
+      description: selectedTask.description ?? "",
+      status: selectedTask.status,
+      priority: selectedTask.priority,
+    });
+  }, [selectedTask]);
+
+  useEffect(() => {
+    if (!selectedTask) {
+      setDeliverables({ loading: false, error: null, data: [] });
+      return;
+    }
+    let cancelled = false;
+    setDeliverables((current) => ({ ...current, loading: true, error: null }));
+    void fetchTaskDeliverables(selectedTask.taskId)
+      .then((result) => {
+        if (!cancelled) {
+          setDeliverables({ loading: false, error: null, data: result.items });
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setDeliverables({ loading: false, error: error.message, data: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTask]);
+
+  const refreshCowork = async () => {
+    try {
+      await loadCowork();
+    } catch (error) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  };
+
+  const handleCreateTask = async () => {
+    if (!createDraft.title.trim()) {
+      setNotice({ tone: "warning", message: "Task title is required." });
+      return;
+    }
+    try {
+      const created = await createTask({
+        workspaceId: activeWorkspaceId,
+        title: createDraft.title.trim(),
+        description: createDraft.description.trim() || undefined,
+        priority: createDraft.priority,
+      });
+      setNotice({ tone: "success", message: `Task ${created.title} created.` });
+      setCreateDraft({ title: "", description: "", priority: "normal" });
+      await refreshCowork();
+      setSelectedTaskId(created.taskId);
+    } catch (error) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  };
+
+  const handleSaveTask = async () => {
+    if (!selectedTask) {
+      return;
+    }
+    try {
+      await updateTask(selectedTask.taskId, {
+        title: detailDraft.title.trim() || selectedTask.title,
+        description: detailDraft.description.trim() || undefined,
+        status: detailDraft.status,
+        priority: detailDraft.priority,
+      });
+      setNotice({ tone: "success", message: "Task updated." });
+      await refreshCowork();
+    } catch (error) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  };
+
+  const handleAddDeliverable = async () => {
+    if (!selectedTask) {
+      return;
+    }
+    if (!deliverableDraft.title.trim()) {
+      setNotice({ tone: "warning", message: "Deliverable title is required." });
+      return;
+    }
+    try {
+      await addTaskDeliverable(selectedTask.taskId, {
+        title: deliverableDraft.title.trim(),
+        deliverableType: deliverableDraft.deliverableType,
+        path: deliverableDraft.path.trim() || undefined,
+        description: deliverableDraft.description.trim() || undefined,
+      });
+      setNotice({ tone: "success", message: "Deliverable added." });
+      setDeliverableDraft({ title: "", deliverableType: "artifact", path: "", description: "" });
+      const result = await fetchTaskDeliverables(selectedTask.taskId);
+      setDeliverables({ loading: false, error: null, data: result.items });
+    } catch (error) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    if (!selectedTask) {
+      return;
+    }
+    try {
+      await deleteTask(selectedTask.taskId, { mode: "soft", deletedBy: "operator" });
+      setNotice({ tone: "success", message: "Task moved to trash." });
+      await refreshCowork();
+    } catch (error) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  };
+
+  const handleRestoreTask = async () => {
+    if (!selectedTask) {
+      return;
+    }
+    try {
+      await restoreTask(selectedTask.taskId);
+      setNotice({ tone: "success", message: "Task restored." });
+      await refreshCowork();
+    } catch (error) {
+      setNotice({ tone: "error", message: getErrorMessage(error) });
+    }
+  };
 
   const content =
     section === "board" ? (
@@ -199,10 +376,30 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
               title="Planning"
               count={groupedTasks.planning.length}
               items={groupedTasks.planning.slice(0, 4)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
             />
-            <NativeLane title="Active" count={groupedTasks.active.length} items={groupedTasks.active.slice(0, 4)} />
-            <NativeLane title="Review" count={groupedTasks.review.length} items={groupedTasks.review.slice(0, 4)} />
-            <NativeLane title="Done" count={groupedTasks.done.length} items={groupedTasks.done.slice(0, 4)} />
+            <NativeLane
+              title="Active"
+              count={groupedTasks.active.length}
+              items={groupedTasks.active.slice(0, 4)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
+            <NativeLane
+              title="Review"
+              count={groupedTasks.review.length}
+              items={groupedTasks.review.slice(0, 4)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
+            <NativeLane
+              title="Done"
+              count={groupedTasks.done.length}
+              items={groupedTasks.done.slice(0, 4)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
           </div>
         </NativeCard>
       </NativeGrid>
@@ -220,21 +417,233 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
         />
         <NativeCard
           title="Task board"
-          subtitle="Current multi-step work grouped for quick scanning instead of a legacy kanban wrapper."
+          subtitle="Create, move, restore, and attach deliverables without leaving Cowork."
           stats={[
             { label: "Open", value: String(tasks.filter((item) => item.status !== "done").length) },
             { label: "Workspace", value: activeWorkspaceName },
           ]}
         >
+          <LibraryFieldGrid>
+            <LibraryField label="New task title">
+              <input
+                className="mc-next-settings-input"
+                value={createDraft.title}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Write release notes"
+              />
+            </LibraryField>
+            <LibraryField label="Priority">
+              <select
+                className="mc-next-settings-input"
+                value={createDraft.priority}
+                onChange={(event) =>
+                  setCreateDraft((current) => ({ ...current, priority: event.target.value as TaskRecord["priority"] }))
+                }
+              >
+                {TASK_PRIORITY_OPTIONS.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {priority}
+                  </option>
+                ))}
+              </select>
+            </LibraryField>
+            <LibraryField label="Description" span={2}>
+              <textarea
+                className="mc-next-settings-textarea"
+                value={createDraft.description}
+                onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}
+              />
+            </LibraryField>
+          </LibraryFieldGrid>
+          <LibraryButtonRow>
+            <button type="button" className="mc-next-button" onClick={() => void handleCreateTask()}>
+              <Plus className="h-4 w-4" />
+              Create task
+            </button>
+            <button type="button" className="mc-next-button-secondary" onClick={() => void refreshCowork()}>
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+          </LibraryButtonRow>
           <div className="mc-next-task-lanes">
             <NativeLane
               title="Planning"
               count={groupedTasks.planning.length}
               items={groupedTasks.planning.slice(0, 5)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
             />
-            <NativeLane title="Active" count={groupedTasks.active.length} items={groupedTasks.active.slice(0, 5)} />
-            <NativeLane title="Review" count={groupedTasks.review.length} items={groupedTasks.review.slice(0, 5)} />
+            <NativeLane
+              title="Active"
+              count={groupedTasks.active.length}
+              items={groupedTasks.active.slice(0, 5)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
+            <NativeLane
+              title="Review"
+              count={groupedTasks.review.length}
+              items={groupedTasks.review.slice(0, 5)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
+            <NativeLane
+              title="Done"
+              count={groupedTasks.done.length}
+              items={groupedTasks.done.slice(0, 5)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
+            <NativeLane
+              title="Deleted"
+              count={deletedTasks.length}
+              items={deletedTasks.slice(0, 5)}
+              selectedTaskId={selectedTaskId}
+              onSelect={setSelectedTaskId}
+            />
           </div>
+        </NativeCard>
+        <NativeCard
+          title={selectedTask?.title ?? "Task detail"}
+          subtitle={selectedTask ? `${selectedTask.status} · ${selectedTask.priority}` : "Select a task to edit it."}
+        >
+          {selectedTask ? (
+            <>
+              <LibraryFieldGrid>
+                <LibraryField label="Title">
+                  <input
+                    className="mc-next-settings-input"
+                    value={detailDraft.title}
+                    onChange={(event) => setDetailDraft((current) => ({ ...current, title: event.target.value }))}
+                  />
+                </LibraryField>
+                <LibraryField label="Status">
+                  <select
+                    className="mc-next-settings-input"
+                    value={detailDraft.status}
+                    onChange={(event) =>
+                      setDetailDraft((current) => ({ ...current, status: event.target.value as TaskRecord["status"] }))
+                    }
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  >
+                    {TASK_STATUS_OPTIONS.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </LibraryField>
+                <LibraryField label="Priority">
+                  <select
+                    className="mc-next-settings-input"
+                    value={detailDraft.priority}
+                    onChange={(event) =>
+                      setDetailDraft((current) => ({
+                        ...current,
+                        priority: event.target.value as TaskRecord["priority"],
+                      }))
+                    }
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  >
+                    {TASK_PRIORITY_OPTIONS.map((priority) => (
+                      <option key={priority} value={priority}>
+                        {priority}
+                      </option>
+                    ))}
+                  </select>
+                </LibraryField>
+                <LibraryField label="Description" span={2}>
+                  <textarea
+                    className="mc-next-settings-textarea"
+                    value={detailDraft.description}
+                    onChange={(event) => setDetailDraft((current) => ({ ...current, description: event.target.value }))}
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  />
+                </LibraryField>
+              </LibraryFieldGrid>
+              <LibraryButtonRow>
+                <button
+                  type="button"
+                  className="mc-next-button"
+                  onClick={() => void handleSaveTask()}
+                  disabled={Boolean(selectedTask.deletedAt)}
+                >
+                  <Save className="h-4 w-4" />
+                  Save task
+                </button>
+                {selectedTask.deletedAt ? (
+                  <button type="button" className="mc-next-button-secondary" onClick={() => void handleRestoreTask()}>
+                    <Undo2 className="h-4 w-4" />
+                    Restore
+                  </button>
+                ) : (
+                  <button type="button" className="mc-next-button-danger" onClick={() => void handleDeleteTask()}>
+                    <Undo2 className="h-4 w-4" />
+                    Move to trash
+                  </button>
+                )}
+              </LibraryButtonRow>
+              {deliverables.error ? <LibraryNotice notice={{ tone: "warning", message: deliverables.error }} /> : null}
+              <LibraryFieldGrid>
+                <LibraryField label="Deliverable title">
+                  <input
+                    className="mc-next-settings-input"
+                    value={deliverableDraft.title}
+                    onChange={(event) => setDeliverableDraft((current) => ({ ...current, title: event.target.value }))}
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  />
+                </LibraryField>
+                <LibraryField label="Type">
+                  <select
+                    className="mc-next-settings-input"
+                    value={deliverableDraft.deliverableType}
+                    onChange={(event) =>
+                      setDeliverableDraft((current) => ({
+                        ...current,
+                        deliverableType: event.target.value as TaskDeliverableRecord["deliverableType"],
+                      }))
+                    }
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  >
+                    {TASK_DELIVERABLE_TYPE_OPTIONS.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </LibraryField>
+                <LibraryField label="Path or link" span={2}>
+                  <input
+                    className="mc-next-settings-input"
+                    value={deliverableDraft.path}
+                    onChange={(event) => setDeliverableDraft((current) => ({ ...current, path: event.target.value }))}
+                    disabled={Boolean(selectedTask.deletedAt)}
+                  />
+                </LibraryField>
+              </LibraryFieldGrid>
+              <LibraryButtonRow>
+                <button
+                  type="button"
+                  className="mc-next-button-secondary"
+                  onClick={() => void handleAddDeliverable()}
+                  disabled={Boolean(selectedTask.deletedAt)}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add deliverable
+                </button>
+              </LibraryButtonRow>
+              <NativeList
+                items={(deliverables.data ?? []).map((item) => ({
+                  title: item.title,
+                  meta: item.deliverableType,
+                  body: item.path ?? item.description ?? "No path or description.",
+                }))}
+                emptyLabel={deliverables.loading ? "Loading deliverables..." : "No deliverables attached yet."}
+              />
+            </>
+          ) : (
+            <LibraryEmptyState label="Create or select a task to edit it." />
+          )}
         </NativeCard>
       </NativeGrid>
     );
@@ -252,6 +661,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       loading={state.loading}
       error={state.error}
     >
+      {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={state.data?.issues ?? []} />
       {content}
     </NativePageFrame>
@@ -1277,7 +1687,19 @@ function SettingsNativePage({
   );
 }
 
-function NativeLane({ title, count, items }: { title: string; count: number; items: TaskCardRecord[] }) {
+function NativeLane({
+  title,
+  count,
+  items,
+  selectedTaskId,
+  onSelect,
+}: {
+  title: string;
+  count: number;
+  items: TaskCardRecord[];
+  selectedTaskId?: string;
+  onSelect?: (taskId: string) => void;
+}) {
   return (
     <section className="mc-next-directory-lane">
       <div className="mc-next-directory-lane-head">
@@ -1289,7 +1711,12 @@ function NativeLane({ title, count, items }: { title: string; count: number; ite
       ) : (
         <div className="mc-next-directory-lane-list">
           {items.map((item) => (
-            <article key={item.taskId} className="mc-next-directory-lane-item">
+            <button
+              key={item.taskId}
+              type="button"
+              className={`mc-next-directory-lane-item${selectedTaskId === item.taskId ? " is-selected" : ""}`}
+              onClick={() => onSelect?.(item.taskId)}
+            >
               <div className="mc-next-directory-lane-meta">
                 <span>{item.priority}</span>
                 <span>{formatDateTime(item.updatedAt)}</span>
@@ -1301,7 +1728,7 @@ function NativeLane({ title, count, items }: { title: string; count: number; ite
                 <span>{formatTaskStatus(item.status)}</span>
                 {item.assignedAgentId ? <span>Agent {item.assignedAgentId}</span> : null}
               </div>
-            </article>
+            </button>
           ))}
         </div>
       )}

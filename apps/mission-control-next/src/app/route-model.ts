@@ -1,13 +1,6 @@
 export type PrimaryArea = "chat" | "cowork" | "code" | "library" | "ops" | "settings";
 export type CoworkSection = "workspace" | "tasks" | "board";
-export type LibrarySection =
-  | "agents"
-  | "skills"
-  | "memory"
-  | "knowledge"
-  | "files"
-  | "artifacts"
-  | "prompt-packs";
+export type LibrarySection = "agents" | "skills" | "memory" | "knowledge" | "files" | "artifacts" | "prompt-packs";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -309,6 +302,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "general",
     },
     {
+      id: "settings-onboarding",
+      label: "Onboarding",
+      description: "First-run readiness, defaults, and setup checkpoints.",
+      area: "settings",
+      section: "onboarding",
+    },
+    {
       id: "settings-providers",
       label: "Providers",
       description: "Model and provider defaults.",
@@ -489,7 +489,8 @@ export function getRouteDescription(route: AppRoute): string {
     return AREA_META.cowork.description;
   }
   return (
-    RAIL_ITEMS[next.area].find((entry) => entry.section === next.section)?.description ?? AREA_META[next.area].description
+    RAIL_ITEMS[next.area].find((entry) => entry.section === next.section)?.description ??
+    AREA_META[next.area].description
   );
 }
 
@@ -522,7 +523,14 @@ export function isRailItemActive(route: AppRoute, item: RailItem): boolean {
 }
 
 function isPrimaryArea(value: string | undefined): value is PrimaryArea {
-  return value === "chat" || value === "cowork" || value === "code" || value === "library" || value === "ops" || value === "settings";
+  return (
+    value === "chat" ||
+    value === "cowork" ||
+    value === "code" ||
+    value === "library" ||
+    value === "ops" ||
+    value === "settings"
+  );
 }
 
 function readParam(params: URLSearchParams, key: string): string | undefined {
