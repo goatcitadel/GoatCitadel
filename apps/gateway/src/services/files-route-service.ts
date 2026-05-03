@@ -1,8 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { NotFoundError, PayloadTooLargeError, ValidationError } from "@goatcitadel/contracts";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
+
+export const MAX_FILE_UPLOAD_BYTES = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_UPLOAD_BYTES", 50_000_000);
+export const MAX_INLINE_FILE_DOWNLOAD_BYTES = resolvePositiveIntEnv(
+  "GOATCITADEL_MAX_INLINE_FILE_DOWNLOAD_BYTES",
+  25_000_000,
+);
+export const MAX_HTML_PREVIEW_BYTES = resolvePositiveIntEnv("GOATCITADEL_MAX_HTML_PREVIEW_BYTES", 1_000_000);
+export const MAX_WORKSPACE_FILE_LIST_DEPTH = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_LIST_DEPTH", 8);
+export const MAX_WORKSPACE_FILE_STAT_CALLS = resolvePositiveIntEnv("GOATCITADEL_MAX_FILE_LIST_STAT_CALLS", 10_000);
+export const DEFAULT_WORKSPACE_FILE_LIST_IGNORES = new Set([
+  ".git",
+  ".next",
+  ".playwright-cli",
+  ".turbo",
+  "artifacts",
+  "coverage",
+  "dist",
+  "node_modules",
+  "playwright-report",
+  "test-results",
+]);
 
 export interface FileUploadResult {
   relativePath: string;
@@ -18,6 +39,10 @@ export interface FileDownloadResult {
   contentType: string;
   isText: boolean;
   content: string | Buffer;
+}
+
+export interface FileDownloadOptions {
+  maxBytes?: number;
 }
 
 export interface FileTemplateRecord {
@@ -59,6 +84,15 @@ export interface FilesRoutePortDependencies {
 export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRoutePort {
   const uploadWorkspaceFile = async (relativePath: string, content: string): Promise<FileUploadResult> => {
     const normalized = normalizeRelativePath(relativePath);
+    const bytes = Buffer.byteLength(content, "utf8");
+    if (bytes > MAX_FILE_UPLOAD_BYTES) {
+      throw new PayloadTooLargeError("File upload exceeds the configured workspace upload limit", {
+        limitBytes: MAX_FILE_UPLOAD_BYTES,
+        receivedBytes: bytes,
+        relativePath: normalized,
+      });
+    }
+
     const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
     assertWritePathInJail(fullPath, deps.writeJailRoots);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
@@ -67,7 +101,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     const result = {
       relativePath: normalized,
       fullPath: deps.serializeRootPath(fullPath),
-      bytes: Buffer.byteLength(content, "utf8"),
+      bytes,
     };
 
     deps.publishRealtime("system", "files", {
@@ -88,7 +122,16 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
     assertWritePathInJail(baseDir, deps.writeJailRoots);
 
     const out: MemoryFileEntry[] = [];
-    await walkFiles(baseDir, baseDir, out, maxItems);
+    await walkFiles(
+      baseDir,
+      baseDir,
+      out,
+      maxItems,
+      {
+        statCalls: 0,
+      },
+      0,
+    );
     out.sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
     return out;
   };
@@ -104,7 +147,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       const content = template.body.replaceAll("{date}", today);
       return uploadWorkspaceFile(resolvedPath, content);
     },
-    downloadWorkspaceFile: async (relativePath: string): Promise<FileDownloadResult> => {
+    downloadWorkspaceFile: async (relativePath: string, options?: FileDownloadOptions): Promise<FileDownloadResult> => {
       const normalized = normalizeRelativePath(relativePath);
       const fullPath = path.resolve(deps.rootDir, deps.workspaceDir, normalized);
       try {
@@ -120,6 +163,14 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
       const stat = await fs.stat(fullPath);
       if (stat.isDirectory()) {
         throw new ValidationError({ message: `Path is a directory: ${normalized}` });
+      }
+      const maxBytes = options?.maxBytes ?? MAX_INLINE_FILE_DOWNLOAD_BYTES;
+      if (stat.size > maxBytes) {
+        throw new PayloadTooLargeError("File is too large to read inline", {
+          limitBytes: maxBytes,
+          receivedBytes: stat.size,
+          relativePath: normalized,
+        });
       }
 
       const contentType = detectMimeType(fullPath);
@@ -353,8 +404,22 @@ const FILE_TEMPLATES: FileTemplateRecord[] = [
   },
 ];
 
-async function walkFiles(rootDir: string, currentDir: string, out: MemoryFileEntry[], maxItems: number): Promise<void> {
+interface WorkspaceFileWalkState {
+  statCalls: number;
+}
+
+async function walkFiles(
+  rootDir: string,
+  currentDir: string,
+  out: MemoryFileEntry[],
+  maxItems: number,
+  state: WorkspaceFileWalkState,
+  depth: number,
+): Promise<void> {
   if (out.length >= maxItems) {
+    return;
+  }
+  if (depth > MAX_WORKSPACE_FILE_LIST_DEPTH) {
     return;
   }
 
@@ -372,18 +437,42 @@ async function walkFiles(rootDir: string, currentDir: string, out: MemoryFileEnt
 
     const fullPath = path.join(currentDir, entry.name);
     if (entry.isDirectory()) {
-      await walkFiles(rootDir, fullPath, out, maxItems);
+      if (DEFAULT_WORKSPACE_FILE_LIST_IGNORES.has(entry.name.toLowerCase())) {
+        continue;
+      }
+      await walkFiles(rootDir, fullPath, out, maxItems, state, depth + 1);
       continue;
     }
     if (!entry.isFile()) {
       continue;
     }
 
-    const stat = await fs.stat(fullPath);
+    if (state.statCalls >= MAX_WORKSPACE_FILE_STAT_CALLS) {
+      return;
+    }
+    state.statCalls += 1;
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stat = await fs.stat(fullPath);
+    } catch {
+      continue;
+    }
     out.push({
       relativePath: path.relative(rootDir, fullPath).replaceAll("\\", "/"),
       size: stat.size,
       modifiedAt: stat.mtime.toISOString(),
     });
   }
+}
+
+function resolvePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
 }

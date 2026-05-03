@@ -42,6 +42,17 @@ type IngestChannelMessageInput = {
 
 export type IntegrationWebhookRouteLike = {
   getIntegrationConnection(connectionId: string): IntegrationConnectionRecord;
+  cancelLatestActiveChatTurnForSession: (
+    sessionId: string,
+    cancelledBy?: string,
+  ) => Promise<{
+    status: "cancelled" | "no_active_run" | "failed";
+    sessionId?: string;
+    turnId?: string;
+    durableRunId?: string;
+    durableCancelled?: boolean;
+    error?: string;
+  }>;
   ingestChannelMessage: (
     channel: string,
     idempotencyKey: string,

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin, type ResolvedConfig, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { resolveMonacoAssetPath } from "./config/monaco-assets.js";
 
 const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", ".ts.net"];
 const MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
@@ -55,14 +56,6 @@ function resolveMonacoVsDirectory(packageRoot: string): string {
   throw new Error(`Unable to resolve Monaco AMD assets for ${packageRoot}.`);
 }
 
-function sanitizeRelativeAssetPath(requestPath: string): string {
-  return requestPath
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .join("/");
-}
-
 function monacoAmdAssetsPlugin(packageRoot: string): Plugin {
   const sourceDir = resolveMonacoVsDirectory(packageRoot);
   let viteConfig: ResolvedConfig | null = null;
@@ -80,9 +73,8 @@ function monacoAmdAssetsPlugin(packageRoot: string): Plugin {
           return;
         }
 
-        const relativeAssetPath = sanitizeRelativeAssetPath(requestUrl.slice(MONACO_PUBLIC_BASE.length));
-        const resolvedAssetPath = path.resolve(sourceDir, `.${path.sep}${relativeAssetPath}`);
-        if (!resolvedAssetPath.startsWith(sourceDir) || !fs.existsSync(resolvedAssetPath) || !fs.statSync(resolvedAssetPath).isFile()) {
+        const resolvedAssetPath = resolveMonacoAssetPath(sourceDir, requestUrl.slice(MONACO_PUBLIC_BASE.length));
+        if (!resolvedAssetPath || !fs.existsSync(resolvedAssetPath) || !fs.statSync(resolvedAssetPath).isFile()) {
           res.statusCode = 404;
           res.end();
           return;

@@ -73,6 +73,16 @@ const VISUAL_DIFF_RATIO_THRESHOLD = 0.005;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
 
+export const FAST_LANE_COMMANDS = Object.freeze([
+  { id: "fast.repo-hygiene", title: "Repo hygiene", args: ["verify:repo:hygiene"] },
+  { id: "fast.storage-migration-parity", title: "Storage migration parity", args: ["verify:storage:migration-parity"] },
+  { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
+  { id: "fast.test", title: "Root tests", args: ["test"] },
+  { id: "fast.smoke", title: "Gateway smoke", args: ["smoke"] },
+  { id: "fast.build", title: "Root build", args: ["build"] },
+  { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
+]);
+
 function resolveVerificationTargetContext() {
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const packageName = uiTarget.packageName || DEFAULT_UI_PACKAGE;
@@ -100,15 +110,7 @@ function buildVerificationUiUrl(uiUrl, href) {
 }
 
 export async function runFastLane(context) {
-  const commands = [
-    { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
-    { id: "fast.test", title: "Root tests", args: ["test"] },
-    { id: "fast.smoke", title: "Gateway smoke", args: ["smoke"] },
-    { id: "fast.build", title: "Root build", args: ["build"] },
-    { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
-  ];
-
-  for (const command of commands) {
+  for (const command of FAST_LANE_COMMANDS) {
     await runScenario(
       context,
       {
@@ -142,6 +144,61 @@ export async function runFastLane(context) {
       },
     );
   }
+}
+
+export async function runCodeModeSandboxRequiredLane(context) {
+  await runScenario(
+    context,
+    {
+      id: "code-mode.sandbox.required",
+      lane: "code-mode-sandbox",
+      title: "Code Mode sandbox-required host proof",
+      subsystem: "gateway",
+    },
+    async () => {
+      const proofPath = path.join(context.artifactRoot, "diagnostics", "code-mode-sandbox-required.json");
+      const result = await runCommand(
+        pnpmCommand(),
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "tsx",
+          "src/code-mode-sandbox-proof.ts",
+          "--output",
+          proofPath,
+        ],
+        {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: "code-mode-sandbox.required",
+          env: {
+            GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
+            GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "true",
+            GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED: "true",
+            GOATCITADEL_ROOT_DIR: repoRoot,
+          },
+        },
+      );
+      const proof = await readJson(proofPath).catch(() => undefined);
+      return {
+        status: result.code === 0 ? "passed" : "failed",
+        error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+        metrics: {
+          exitCode: result.code,
+          durationMs: result.durationMs,
+          sandboxRequired: proof?.sandboxRequired,
+          sandboxAvailable: proof?.sandboxAvailable,
+          checksPassed: proof?.metadata?.checksPassed?.length,
+          checksFailed: proof?.metadata?.checksFailed?.length,
+        },
+        artifacts: emptyArtifacts({
+          diagnostics: proof ? [relativeToRun(context, proofPath)] : [],
+          logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+        }),
+      };
+    },
+  );
 }
 
 export async function runDeepCoreLane(context, options = {}) {

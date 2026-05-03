@@ -2300,6 +2300,59 @@ export class GatewayService {
     return this.chatTurnExecutionRegistry.getActiveExecution(turnId);
   }
 
+  public async cancelLatestActiveChatTurnForSession(
+    sessionId: string,
+    cancelledBy = "operator",
+  ): Promise<{
+    status: "cancelled" | "no_active_run" | "failed";
+    sessionId: string;
+    turnId?: string;
+    durableRunId?: string;
+    durableCancelled?: boolean;
+    error?: string;
+    trace?: ChatTurnTraceRecord;
+  }> {
+    const trace = this.storage.chatTurnTraces
+      .listBySession(sessionId, 25)
+      .find((candidate) => isChatTurnActiveStatus(candidate.status));
+    if (!trace) {
+      return {
+        status: "no_active_run",
+        sessionId,
+      };
+    }
+
+    try {
+      const result = await this.chatTurnRuntime.cancelChatTurn(sessionId, trace.turnId, cancelledBy);
+      const durableRunId = result.trace.durable?.runId ?? trace.durable?.runId;
+      let durableCancelled: boolean | undefined;
+      if (durableRunId) {
+        try {
+          this.cancelDurableRun(durableRunId, cancelledBy);
+          durableCancelled = true;
+        } catch {
+          durableCancelled = false;
+        }
+      }
+      return {
+        status: "cancelled",
+        sessionId,
+        turnId: trace.turnId,
+        durableRunId,
+        durableCancelled,
+        trace: result.trace,
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        sessionId,
+        turnId: trace.turnId,
+        durableRunId: trace.durable?.runId,
+        error: (error as Error).message,
+      };
+    }
+  }
+
   public registerActiveChatTurnStream(
     sessionId: string,
     turnId: string,

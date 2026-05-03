@@ -16,8 +16,12 @@ const streamQuerySchema = z.object({
 });
 
 const STREAM_REPLAY_LIMIT = 500;
+const DEFAULT_MAX_SSE_CONNECTIONS_PER_IP = 5;
 
 export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
+  const activeSseConnectionsByIp = new Map<string, number>();
+  const maxSseConnectionsPerIp = resolveMaxSseConnectionsPerIp();
+
   fastify.get("/api/v1/events", withRouteAccess(fastify, "authenticated-read"), async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -50,6 +54,30 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+
+    const connectionKey = normalizeSseConnectionKey(request.ip);
+    const activeConnections = activeSseConnectionsByIp.get(connectionKey) ?? 0;
+    if (activeConnections >= maxSseConnectionsPerIp) {
+      return reply.code(429).send({
+        error: "Too many active realtime streams for this client.",
+        code: "SSE_CONNECTION_LIMIT",
+        limit: maxSseConnectionsPerIp,
+      });
+    }
+    activeSseConnectionsByIp.set(connectionKey, activeConnections + 1);
+    let connectionReleased = false;
+    const releaseConnection = () => {
+      if (connectionReleased) {
+        return;
+      }
+      connectionReleased = true;
+      const current = activeSseConnectionsByIp.get(connectionKey) ?? 0;
+      if (current <= 1) {
+        activeSseConnectionsByIp.delete(connectionKey);
+        return;
+      }
+      activeSseConnectionsByIp.set(connectionKey, current - 1);
+    };
 
     const raw = reply.raw;
     const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
@@ -106,6 +134,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         leaseId: lease.leaseId,
         closeReason: "replay_gap",
       });
+      releaseConnection();
       raw.end();
       reply.hijack();
       return;
@@ -170,6 +199,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         leaseId: lease.leaseId,
         closeReason,
       });
+      releaseConnection();
       try {
         raw.end();
       } catch {
@@ -197,3 +227,21 @@ function readLastEventId(value: string | string[] | undefined): string | undefin
   }
   return value;
 }
+
+function normalizeSseConnectionKey(ip: string): string {
+  return ip.trim().toLowerCase().replace(/%.+$/, "");
+}
+
+function resolveMaxSseConnectionsPerIp(): number {
+  const raw = process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP?.trim();
+  if (!raw) {
+    return DEFAULT_MAX_SSE_CONNECTIONS_PER_IP;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_SSE_CONNECTIONS_PER_IP;
+}
+
+export const __internal = {
+  normalizeSseConnectionKey,
+  resolveMaxSseConnectionsPerIp,
+};

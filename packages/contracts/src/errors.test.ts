@@ -10,6 +10,7 @@ import {
   ConfigValidationError,
   GoatError,
   isGoatError,
+  PayloadTooLargeError,
 } from "./errors.js";
 
 describe("GoatError hierarchy", () => {
@@ -103,6 +104,17 @@ describe("GoatError hierarchy", () => {
     const err = new BudgetExceededError("Turn budget exceeded", { budgetMs: 40000 });
     expect(err.code).toBe("BUDGET_EXCEEDED");
     expect(err.httpStatus).toBe(429);
+  });
+
+  it("PayloadTooLargeError", () => {
+    const err = new PayloadTooLargeError("Upload is too large", { limitBytes: 10 });
+    expect(err.code).toBe("PAYLOAD_TOO_LARGE");
+    expect(err.httpStatus).toBe(413);
+    expect(err.toJSON()).toEqual({
+      error: "Upload is too large",
+      code: "PAYLOAD_TOO_LARGE",
+      details: { limitBytes: 10 },
+    });
   });
 
   it("ConfigValidationError formats issues", () => {

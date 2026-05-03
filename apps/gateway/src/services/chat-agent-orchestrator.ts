@@ -12922,7 +12922,7 @@ function buildPromptLabKnownMinimalTestSpecFallback(input: {
       "      promptPackHumanReviewsV2: { listByPack: () => [] },",
       "    },",
       "    gatewaySql: {} as never,",
-      '    config: { rootDir: "F:/code/personal-ai", assistant: { workspaceDir: ".", durable: { enabled: true, executionEnabled: true, chatAutoPromoteEnabled: true } } } as never,',
+      '    config: { rootDir: "F:/workspace/project", assistant: { workspaceDir: ".", durable: { enabled: true, executionEnabled: true, chatAutoPromoteEnabled: true } } } as never,',
       '    normalizeWorkspaceId: () => "default",',
       "    isFeatureEnabled: () => true,",
       "    requireFeatureEnabled: () => undefined,",

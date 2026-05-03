@@ -2,6 +2,7 @@ import { createRouteService, type RoutePort, type RouteService } from "./route-s
 
 export const integrationWebhookRouteMethods = [
   "getIntegrationConnection",
+  "cancelLatestActiveChatTurnForSession",
   "ingestChannelMessage",
   "recordDevDiagnostic",
   "respondToExistingChatMessage",
@@ -19,6 +20,7 @@ export type IntegrationWebhookPort = IntegrationWebhookRoutePort;
 export function createIntegrationWebhookRoutePort(port: IntegrationWebhookPort): IntegrationWebhookRoutePort {
   return {
     getIntegrationConnection: (...args) => port.getIntegrationConnection(...args),
+    cancelLatestActiveChatTurnForSession: (...args) => port.cancelLatestActiveChatTurnForSession(...args),
     ingestChannelMessage: (...args) => port.ingestChannelMessage(...args),
     recordDevDiagnostic: (...args) => port.recordDevDiagnostic(...args),
     respondToExistingChatMessage: (...args) => port.respondToExistingChatMessage(...args),

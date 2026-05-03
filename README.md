@@ -159,7 +159,7 @@ Not safe to over-claim yet:
 
 - hostile-code sandboxing for Code Mode
 - autonomous tool activation without governance
-- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still ships smoke-only coverage via `--passWithNoTests`
+- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still has targeted service coverage rather than full release evidence
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal
 
 ## Screenshots

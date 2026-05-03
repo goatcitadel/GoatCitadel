@@ -33,7 +33,8 @@ describe("telegram channel pairing", () => {
     expect(first.authorized).toBe(false);
     expect(first.response?.text).toContain("Pairing code:");
     expect(pending[0]?.code).toHaveLength(8);
-    expect(second.configPatch).toEqual(first.configPatch);
+    expect(second.configPatch).toBeUndefined();
+    expect(second.response?.text).toContain(pending[0]?.code);
   });
 
   it("promotes valid pending pairing codes to approved users", () => {

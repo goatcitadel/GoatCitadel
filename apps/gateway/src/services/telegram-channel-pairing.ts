@@ -50,15 +50,19 @@ export function authorizeTelegramChannelActor(input: {
   const existing = notExpired.find((item) => item.actorId === input.actorId && item.chatId === input.chatId);
   const pending = existing ?? createPendingPairing(input, now);
   const nextPending = existing ? notExpired : [pending, ...notExpired].slice(0, MAX_PENDING_CODES);
+  const droppedExpired = notExpired.length !== pairing.pending.length;
 
   return {
     authorized: false,
-    configPatch: {
-      telegramPairing: {
-        approved: pairing.approved,
-        pending: nextPending,
-      },
-    },
+    configPatch:
+      existing && !droppedExpired
+        ? undefined
+        : {
+            telegramPairing: {
+              approved: pairing.approved,
+              pending: nextPending,
+            },
+          },
     response: {
       method: "sendMessage",
       chat_id: input.chatId,

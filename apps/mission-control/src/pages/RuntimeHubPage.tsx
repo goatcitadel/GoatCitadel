@@ -152,7 +152,7 @@ export function RuntimeHubPage() {
                     <input
                       value={backupPath}
                       onChange={(event) => setBackupPath(event.target.value)}
-                      placeholder="F:\\code\\personal-ai\\data\\backups\\..."
+                      placeholder="%USERPROFILE%\\GoatCitadel\\backups\\..."
                     />
                   </label>
                   <FieldHelp>

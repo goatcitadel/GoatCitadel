@@ -9,8 +9,14 @@ function decorateRealtimeEvents(app: FastifyInstance, methods: Record<string, un
 
 describe("events stream route", () => {
   let app: FastifyInstance | null = null;
+  const originalSseConnectionLimit = process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP;
 
   afterEach(async () => {
+    if (originalSseConnectionLimit === undefined) {
+      delete process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP;
+    } else {
+      process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP = originalSseConnectionLimit;
+    }
     if (!app) {
       return;
     }
@@ -135,5 +141,45 @@ describe("events stream route", () => {
     expect(text.includes("event: replay-gap")).toBe(true);
     expect(text.includes('"oldestCursor":100')).toBe(true);
     await reader!.cancel();
+  });
+
+  it("rejects concurrent SSE streams beyond the per-client cap and frees slots on disconnect", async () => {
+    process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP = "1";
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => [],
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-limit",
+        clientId: "client-limit",
+        gatewayNodeId: "node-limit",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const first = await fetch(`${address}/api/v1/events/stream?replay=1`);
+    expect(first.status).toBe(200);
+    const firstReader = first.body?.getReader();
+    expect(firstReader).toBeDefined();
+    await firstReader!.read();
+
+    const blocked = await fetch(`${address}/api/v1/events/stream?replay=1`);
+    expect(blocked.status).toBe(429);
+    await expect(blocked.json()).resolves.toMatchObject({
+      code: "SSE_CONNECTION_LIMIT",
+      limit: 1,
+    });
+
+    await firstReader!.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const afterDisconnect = await fetch(`${address}/api/v1/events/stream?replay=1`);
+    expect(afterDisconnect.status).toBe(200);
+    await afterDisconnect.body?.cancel();
   });
 });

@@ -278,7 +278,7 @@ export async function buildApp() {
       global: false,
       timeWindow: "1 minute",
       keyGenerator: (request) => request.ip,
-      allowList: ["127.0.0.1", "::1", "::ffff:127.0.0.1"],
+      allowList: (_request, key) => isLoopbackRateLimitAllowlisted(String(key)),
       max: rateLimitConfig.maxGeneral,
       skipOnError: true,
       addHeaders: {
@@ -403,8 +403,44 @@ function resolveAllowedOrigins(): Set<string> {
   const fromEnv = envRaw
     .split(",")
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((origin) => normalizeConfiguredOrigin(origin, "GOATCITADEL_ALLOWED_ORIGINS"));
   return new Set(fromEnv.length > 0 ? fromEnv : defaults);
+}
+
+function normalizeConfiguredOrigin(rawOrigin: string, envName: string): string {
+  try {
+    const origin = new URL(rawOrigin);
+    if (origin.protocol !== "http:" && origin.protocol !== "https:") {
+      throw new Error("origin must use http or https");
+    }
+    if (
+      origin.username ||
+      origin.password ||
+      (origin.pathname && origin.pathname !== "/") ||
+      origin.search ||
+      origin.hash
+    ) {
+      throw new Error("origin must not include credentials, paths, query strings, or fragments");
+    }
+    return origin.origin;
+  } catch (error) {
+    throw new Error(
+      `Invalid origin in ${envName}: "${rawOrigin}". Use a full http(s) origin such as https://example.com.`,
+      { cause: error },
+    );
+  }
+}
+
+function isLoopbackRateLimitAllowlisted(ip: string): boolean {
+  const normalized = ip.trim().toLowerCase().replace(/%.+$/, "");
+  return (
+    normalized === "::1" ||
+    normalized === "::ffff:7f00:1" ||
+    normalized === "::ffff:127.0.0.1" ||
+    normalized.startsWith("127.") ||
+    normalized.startsWith("::ffff:127.")
+  );
 }
 
 function resolveRateLimitConfig(): {
@@ -458,3 +494,9 @@ function resolveAllowTailnetDevOrigins(): boolean {
   }
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
+
+export const __internal = {
+  isLoopbackRateLimitAllowlisted,
+  normalizeConfiguredOrigin,
+  resolveAllowedOrigins,
+};

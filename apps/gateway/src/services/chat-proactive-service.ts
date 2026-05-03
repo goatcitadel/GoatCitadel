@@ -35,13 +35,16 @@ import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 const PROACTIVE_SCHEDULER_INTERVAL_MS = 120_000;
 const PROACTIVE_SCHEDULER_CONCURRENCY = 8;
 const PROACTIVE_MIN_IDLE_SECONDS = 90;
-const PROACTIVE_REFERENCE_ROOTS: ProactiveReferenceRootRecord[] = [
-  {
-    label: "claude-code-reference",
-    rootPath: "F:\\code\\claude-code",
-    access: "read_only",
-  },
-];
+const configuredProactiveReferenceRoot = process.env.GOATCITADEL_PROACTIVE_REFERENCE_ROOT?.trim();
+const PROACTIVE_REFERENCE_ROOTS: ProactiveReferenceRootRecord[] = configuredProactiveReferenceRoot
+  ? [
+      {
+        label: "configured-reference",
+        rootPath: configuredProactiveReferenceRoot,
+        access: "read_only",
+      },
+    ]
+  : [];
 const PROACTIVE_SAFE_TOOL_ALLOWLIST = new Set([
   "time.now",
   "browser.search",

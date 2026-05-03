@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, PayloadTooLargeError } from "@goatcitadel/contracts";
+import { MAX_HTML_PREVIEW_BYTES, MAX_INLINE_FILE_DOWNLOAD_BYTES } from "../services/files-route-service.js";
 import { filesRoutes } from "./files.js";
 
 describe("files routes", () => {
@@ -31,18 +32,19 @@ describe("files routes", () => {
   });
 
   it("returns download metadata provided by gateway service", async () => {
+    const downloadWorkspaceFile = vi.fn(async () => ({
+      relativePath: "workspace/test.md",
+      fullPath: "./workspace/test.md",
+      size: 12,
+      modifiedAt: "2026-03-04T18:00:00.000Z",
+      contentType: "text/markdown",
+      isText: true,
+      content: "hello world!",
+    }));
     app = Fastify();
     app.decorate("services", {
       files: {
-        downloadWorkspaceFile: vi.fn(async () => ({
-          relativePath: "workspace/test.md",
-          fullPath: "./workspace/test.md",
-          size: 12,
-          modifiedAt: "2026-03-04T18:00:00.000Z",
-          contentType: "text/markdown",
-          isText: true,
-          content: "hello world!",
-        })),
+        downloadWorkspaceFile,
       },
     } as never);
     await app.register(filesRoutes);
@@ -58,6 +60,9 @@ describe("files routes", () => {
       fullPath: "./workspace/test.md",
       encoding: "utf8",
       content: "hello world!",
+    });
+    expect(downloadWorkspaceFile).toHaveBeenCalledWith("workspace/test.md", {
+      maxBytes: MAX_INLINE_FILE_DOWNLOAD_BYTES,
     });
   });
 
@@ -82,5 +87,61 @@ describe("files routes", () => {
       error: "File workspace/missing.md not found",
       code: "ENTITY_NOT_FOUND",
     });
+  });
+
+  it("maps oversized download errors to 413", async () => {
+    app = Fastify();
+    app.decorate("services", {
+      files: {
+        downloadWorkspaceFile: vi.fn(async () => {
+          throw new PayloadTooLargeError("File is too large to read inline", {
+            limitBytes: 4,
+            receivedBytes: 10,
+          });
+        }),
+      },
+    } as never);
+    await app.register(filesRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/files/download?relativePath=workspace/large.bin",
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json()).toMatchObject({
+      error: "File is too large to read inline",
+      code: "PAYLOAD_TOO_LARGE",
+    });
+  });
+
+  it("uses the HTML preview cap and tight preview CSP", async () => {
+    const downloadWorkspaceFile = vi.fn(async () => ({
+      relativePath: "workspace/report.html",
+      fullPath: "./workspace/report.html",
+      size: 32,
+      modifiedAt: "2026-03-04T18:00:00.000Z",
+      contentType: "text/html",
+      isText: true,
+      content: "<h1>Report</h1>",
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      files: {
+        downloadWorkspaceFile,
+      },
+    } as never);
+    await app.register(filesRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/files/preview?relativePath=workspace/report.html",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-security-policy"]).toContain("script-src 'none'");
+    expect(response.headers["content-security-policy"]).not.toContain("unsafe-inline");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(downloadWorkspaceFile).toHaveBeenCalledWith("workspace/report.html", { maxBytes: MAX_HTML_PREVIEW_BYTES });
   });
 });

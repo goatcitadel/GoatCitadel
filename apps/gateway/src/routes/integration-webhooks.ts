@@ -26,6 +26,10 @@ import {
 } from "../services/telegram-channel-commands.js";
 import { authorizeTelegramChannelActor } from "../services/telegram-channel-pairing.js";
 import {
+  applyTelegramChannelSessionRotation,
+  resolveTelegramChannelSessionId,
+} from "../services/telegram-channel-sessions.js";
+import {
   deriveWhatsAppWebhookIdempotencyKey,
   normalizeWhatsAppWebhookPayload,
   verifyWhatsAppWebhookSignature,
@@ -276,9 +280,25 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
                 config: connection.config,
               },
               chatId: target,
+              threadId: parsed.threadId,
               actorId: parsed.actorId,
               actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
               content: parsed.content,
+              cancelActiveSession: async () => {
+                const sessionId = resolveTelegramChannelSessionId(connection.config, {
+                  account: parsed.account,
+                  peer: parsed.peer,
+                  room: parsed.room,
+                  threadId: parsed.threadId,
+                });
+                if (!sessionId) {
+                  return { status: "no_active_run" as const };
+                }
+                return fastify.services.integrationWebhooks.cancelLatestActiveChatTurnForSession(
+                  sessionId,
+                  `telegram:${parsed.actorId}`,
+                );
+              },
               resolveApprovalToken: async (token, decision) => {
                 const result = await fastify.services.integrationWebhooks.resolveApprovalWithRemoteToken({
                   token,
@@ -312,6 +332,11 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
             }
           );
         }
+        const routedTelegramMessage = applyTelegramChannelSessionRotation(connection.config, {
+          peer: parsed.peer,
+          room: parsed.room,
+          threadId: parsed.threadId,
+        });
         return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "telegram",
           connectionId,
@@ -321,9 +346,9 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           message: {
             eventId: parsed.eventId,
             account: parsed.account,
-            peer: parsed.peer,
-            room: parsed.room,
-            threadId: parsed.threadId,
+            peer: routedTelegramMessage.peer,
+            room: routedTelegramMessage.room,
+            threadId: routedTelegramMessage.threadId,
             actorId: parsed.actorId,
             actorType: parsed.actorType,
             content: parsed.content,

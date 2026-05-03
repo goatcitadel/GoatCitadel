@@ -25,6 +25,7 @@ export type GoatErrorCode =
   | "TOOL_MISSING_CREDENTIAL"
   | "EXTERNAL_SERVICE_FAILED"
   | "BUDGET_EXCEEDED"
+  | "PAYLOAD_TOO_LARGE"
   | "CONFIG_INVALID"
   | "SECRET_STORE_UNAVAILABLE"
   | "TURN_CANCELLED";
@@ -62,11 +63,8 @@ export class NotFoundError extends GoatError {
   readonly httpStatus = 404;
 
   constructor(opts: { entity: string; id?: string } | string) {
-    const msg = typeof opts === "string"
-      ? opts
-      : opts.id
-        ? `${opts.entity} ${opts.id} not found`
-        : `${opts.entity} not found`;
+    const msg =
+      typeof opts === "string" ? opts : opts.id ? `${opts.entity} ${opts.id} not found` : `${opts.entity} not found`;
     const details = typeof opts === "string" ? undefined : opts;
     super(msg, details);
   }
@@ -78,7 +76,9 @@ export class ValidationError extends GoatError {
 
   constructor(opts: { code?: "FIELD_REQUIRED" | "FIELD_INVALID"; field?: string; message?: string }) {
     const code = opts.code ?? "FIELD_INVALID";
-    const msg = opts.message ?? (opts.field ? `${opts.field} is ${code === "FIELD_REQUIRED" ? "required" : "invalid"}` : "Validation failed");
+    const msg =
+      opts.message ??
+      (opts.field ? `${opts.field} is ${code === "FIELD_REQUIRED" ? "required" : "invalid"}` : "Validation failed");
     super(msg, opts.field ? { field: opts.field } : undefined);
     this.code = code;
   }
@@ -88,7 +88,11 @@ export class ConflictError extends GoatError {
   readonly code: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT";
   readonly httpStatus = 409;
 
-  constructor(opts: { code?: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT"; message: string; details?: Record<string, unknown> }) {
+  constructor(opts: {
+    code?: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT";
+    message: string;
+    details?: Record<string, unknown>;
+  }) {
     super(opts.message, opts.details);
     this.code = opts.code ?? "STATE_CONFLICT";
   }
@@ -98,7 +102,11 @@ export class PolicyViolationError extends GoatError {
   readonly code: "POLICY_BLOCKED" | "PATH_OUTSIDE_JAIL" | "HOST_NOT_ALLOWED";
   readonly httpStatus = 403;
 
-  constructor(opts: { code?: "POLICY_BLOCKED" | "PATH_OUTSIDE_JAIL" | "HOST_NOT_ALLOWED"; message: string; details?: Record<string, unknown> }) {
+  constructor(opts: {
+    code?: "POLICY_BLOCKED" | "PATH_OUTSIDE_JAIL" | "HOST_NOT_ALLOWED";
+    message: string;
+    details?: Record<string, unknown>;
+  }) {
     super(opts.message, opts.details);
     this.code = opts.code ?? "POLICY_BLOCKED";
   }
@@ -108,7 +116,11 @@ export class ToolExecutionError extends GoatError {
   readonly code: "TOOL_EXEC_FAILED" | "TOOL_UNSUPPORTED" | "TOOL_MISSING_CREDENTIAL";
   readonly httpStatus = 500;
 
-  constructor(opts: { code?: "TOOL_EXEC_FAILED" | "TOOL_UNSUPPORTED" | "TOOL_MISSING_CREDENTIAL"; message: string; details?: Record<string, unknown> }) {
+  constructor(opts: {
+    code?: "TOOL_EXEC_FAILED" | "TOOL_UNSUPPORTED" | "TOOL_MISSING_CREDENTIAL";
+    message: string;
+    details?: Record<string, unknown>;
+  }) {
     super(opts.message, opts.details);
     this.code = opts.code ?? "TOOL_EXEC_FAILED";
   }
@@ -126,6 +138,15 @@ export class ExternalServiceError extends GoatError {
 export class BudgetExceededError extends GoatError {
   readonly code = "BUDGET_EXCEEDED" as const;
   readonly httpStatus = 429;
+
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(message, details);
+  }
+}
+
+export class PayloadTooLargeError extends GoatError {
+  readonly code = "PAYLOAD_TOO_LARGE" as const;
+  readonly httpStatus = 413;
 
   constructor(message: string, details?: Record<string, unknown>) {
     super(message, details);

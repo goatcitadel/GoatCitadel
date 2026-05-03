@@ -9,13 +9,14 @@ export function isSuspiciousEncodedPath(rawUrl: string): boolean {
   if (!decoded) {
     return true;
   }
+  if (decoded.includes("\0")) {
+    return true;
+  }
   if (startsWithSuspiciousWindowsPrefix(decoded)) {
     return true;
   }
   const normalized = decoded.replaceAll("\\", "/");
-  if (normalized.includes("/../")
-    || normalized.startsWith("../")
-    || normalized.endsWith("/..")) {
+  if (normalized.includes("/../") || normalized.startsWith("../") || normalized.endsWith("/..")) {
     return true;
   }
 
@@ -41,12 +42,12 @@ function decodePathSafely(value: string): string | undefined {
 
 function startsWithSuspiciousWindowsPrefix(value: string): boolean {
   return (
-    value.startsWith("\\\\")
-    || value.startsWith("//")
-    || value.startsWith("\\\\?\\")
-    || value.startsWith("\\\\.\\")
-    || /^[a-z]:[\\/]/i.test(value)
-    || /^\/[a-z]:[\\/]/i.test(value)
+    value.startsWith("\\\\") ||
+    value.startsWith("//") ||
+    value.startsWith("\\\\?\\") ||
+    value.startsWith("\\\\.\\") ||
+    /^[a-z]:[\\/]/i.test(value) ||
+    /^\/[a-z]:[\\/]/i.test(value)
   );
 }
 

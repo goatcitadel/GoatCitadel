@@ -58,7 +58,7 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 
 - hostile-code sandboxing
 - silent or autonomous high-risk tool activation
-- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it remains smoke-only
+- `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it only has targeted service coverage rather than full release evidence
 - `apps/npu-sidecar` as a maturity signal for local inference completeness while it remains optional experimental infrastructure
 
 ## Upgrade and Backup Guarantees

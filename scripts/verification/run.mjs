@@ -7,6 +7,7 @@ import {
   runApiCompatibilityLane,
   runBackupRoundtripLane,
   runCatalogParityLane,
+  runCodeModeSandboxRequiredLane,
   runDeepCoreLane,
   runDeepEcosystemLane,
   runDurableRecoveryLane,
@@ -50,6 +51,7 @@ const VALID_LANES = new Set([
   "memory-truth",
   "realtime-truth",
   "architecture-metrics",
+  "code-mode-sandbox",
   "review",
   "all",
 ]);
@@ -128,8 +130,11 @@ async function main() {
       await runRealtimeTruthLane(context, { profile });
     } else if (lane === "architecture-metrics") {
       await runArchitectureMetricsLane(context, { profile });
+    } else if (lane === "code-mode-sandbox") {
+      await runCodeModeSandboxRequiredLane(context, { profile });
     } else if (lane === "all") {
       await runFastLane(context);
+      await runCodeModeSandboxRequiredLane(context, { profile });
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });
@@ -198,6 +203,7 @@ function shouldGenerateReview(lane) {
     lane === "memory-truth" ||
     lane === "realtime-truth" ||
     lane === "architecture-metrics" ||
+    lane === "code-mode-sandbox" ||
     lane === "all" ||
     lane === "soak"
   );

@@ -67,6 +67,44 @@ describe("AddonsService", () => {
     ).toThrow("escapes add-ons root");
   });
 
+  it("builds add-on child environments without inherited provider keys or auth secrets", () => {
+    const originalOpenAi = process.env.OPENAI_API_KEY;
+    const originalAuthToken = process.env.GOATCITADEL_AUTH_TOKEN;
+    const originalPostgresPassword = process.env.GOATCITADEL_POSTGRES_PASSWORD;
+    try {
+      process.env.OPENAI_API_KEY = "sk-secret";
+      process.env.GOATCITADEL_AUTH_TOKEN = "operator-token";
+      process.env.GOATCITADEL_POSTGRES_PASSWORD = "postgres-secret";
+
+      const env = __internal.buildAddonChildEnv({
+        ARENA_PORT: "3099",
+        GOATCITADEL_BASE_URL: "http://127.0.0.1:8787",
+      });
+
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.GOATCITADEL_AUTH_TOKEN).toBeUndefined();
+      expect(env.GOATCITADEL_POSTGRES_PASSWORD).toBeUndefined();
+      expect(env.ARENA_PORT).toBe("3099");
+      expect(env.GOATCITADEL_BASE_URL).toBe("http://127.0.0.1:8787");
+    } finally {
+      if (originalOpenAi === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAi;
+      }
+      if (originalAuthToken === undefined) {
+        delete process.env.GOATCITADEL_AUTH_TOKEN;
+      } else {
+        process.env.GOATCITADEL_AUTH_TOKEN = originalAuthToken;
+      }
+      if (originalPostgresPassword === undefined) {
+        delete process.env.GOATCITADEL_POSTGRES_PASSWORD;
+      } else {
+        process.env.GOATCITADEL_POSTGRES_PASSWORD = originalPostgresPassword;
+      }
+    }
+  });
+
   it("rejects a tampered manifest before uninstalling", async () => {
     const addonsRoot = path.join(goatHome, "addons");
     await fs.mkdir(addonsRoot, { recursive: true });

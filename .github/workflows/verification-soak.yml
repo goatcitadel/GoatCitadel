@@ -1,6 +1,8 @@
 name: Verification Soak
 
 on:
+  schedule:
+    - cron: "23 10 * * 1"
   workflow_dispatch:
     inputs:
       duration_ms:
@@ -38,7 +40,7 @@ jobs:
 
       - name: Run soak verification
         env:
-          GOATCITADEL_VERIFY_SOAK_DURATION_MS: ${{ github.event.inputs.duration_ms }}
+          GOATCITADEL_VERIFY_SOAK_DURATION_MS: ${{ github.event.inputs.duration_ms || '7200000' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -53,8 +55,13 @@ jobs:
         if: always()
         run: pnpm verify:review
 
-      - name: Upload verification artifacts
+      - name: Verify artifact redaction
+        id: artifact-redaction
         if: always()
+        run: pnpm verify:artifacts:redaction
+
+      - name: Upload verification artifacts
+        if: always() && steps.artifact-redaction.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: verification-soak-artifacts

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { __internal } from "./app.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
 
@@ -116,5 +117,42 @@ describe("assertDeploymentProfileStartupSafety", () => {
         bindHost: "0.0.0.0",
       }),
     ).not.toThrow();
+  });
+});
+
+describe("gateway app config helpers", () => {
+  const originalAllowedOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS;
+
+  afterEach(() => {
+    if (originalAllowedOrigins === undefined) {
+      delete process.env.GOATCITADEL_ALLOWED_ORIGINS;
+    } else {
+      process.env.GOATCITADEL_ALLOWED_ORIGINS = originalAllowedOrigins;
+    }
+  });
+
+  it("rejects invalid CORS origin environment entries", () => {
+    process.env.GOATCITADEL_ALLOWED_ORIGINS = "example.com,ftp://bad.example";
+
+    expect(() => __internal.resolveAllowedOrigins()).toThrow(/Invalid origin in GOATCITADEL_ALLOWED_ORIGINS/);
+  });
+
+  it("normalizes valid CORS origins without accepting paths or credentials", () => {
+    expect(__internal.normalizeConfiguredOrigin("https://example.com/", "TEST_ORIGIN")).toBe("https://example.com");
+    expect(() => __internal.normalizeConfiguredOrigin("https://example.com/app", "TEST_ORIGIN")).toThrow(
+      /Invalid origin/,
+    );
+    expect(() => __internal.normalizeConfiguredOrigin("https://user@example.com", "TEST_ORIGIN")).toThrow(
+      /Invalid origin/,
+    );
+  });
+
+  it("allowlists common loopback IP representations for rate limiting", () => {
+    expect(__internal.isLoopbackRateLimitAllowlisted("127.0.0.1")).toBe(true);
+    expect(__internal.isLoopbackRateLimitAllowlisted("127.12.34.56")).toBe(true);
+    expect(__internal.isLoopbackRateLimitAllowlisted("::1%lo0")).toBe(true);
+    expect(__internal.isLoopbackRateLimitAllowlisted("::FFFF:127.0.0.1")).toBe(true);
+    expect(__internal.isLoopbackRateLimitAllowlisted("::ffff:7f00:1")).toBe(true);
+    expect(__internal.isLoopbackRateLimitAllowlisted("192.168.1.5")).toBe(false);
   });
 });

@@ -1,10 +1,17 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  MAX_FILE_UPLOAD_BYTES,
+  MAX_HTML_PREVIEW_BYTES,
+  MAX_INLINE_FILE_DOWNLOAD_BYTES,
+} from "../services/files-route-service.js";
 import { sendRouteError } from "./_error-handler.js";
 
+const MAX_UPLOAD_BODY_BYTES = Math.ceil(MAX_FILE_UPLOAD_BYTES * 1.05) + 4096;
+
 const uploadSchema = z.object({
-  relativePath: z.string().min(1),
-  content: z.string(),
+  relativePath: z.string().min(1).max(2048),
+  content: z.string().max(MAX_FILE_UPLOAD_BYTES),
 });
 
 const downloadQuerySchema = z.object({
@@ -89,7 +96,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/files/upload", async (request, reply) => {
+  fastify.post("/api/v1/files/upload", { bodyLimit: MAX_UPLOAD_BODY_BYTES }, async (request, reply) => {
     const parsed = uploadSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -99,7 +106,7 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
       const uploaded = await fastify.services.files.uploadWorkspaceFile(parsed.data.relativePath, parsed.data.content);
       return reply.code(201).send(uploaded);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 
@@ -110,7 +117,9 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const file = await fastify.services.files.downloadWorkspaceFile(parsed.data.relativePath);
+      const file = await fastify.services.files.downloadWorkspaceFile(parsed.data.relativePath, {
+        maxBytes: MAX_INLINE_FILE_DOWNLOAD_BYTES,
+      });
 
       if (parsed.data.raw) {
         reply.header("Content-Type", file.contentType);
@@ -138,20 +147,27 @@ export const filesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
 
-    if (!parsed.data.relativePath.endsWith(".html") && !parsed.data.relativePath.endsWith(".htm")) {
+    const previewPath = parsed.data.relativePath.toLowerCase();
+    if (!previewPath.endsWith(".html") && !previewPath.endsWith(".htm")) {
       return reply.code(400).send({ error: "Only HTML files can be previewed" });
     }
 
     try {
-      const file = await fastify.services.files.downloadWorkspaceFile(parsed.data.relativePath);
+      const file = await fastify.services.files.downloadWorkspaceFile(parsed.data.relativePath, {
+        maxBytes: MAX_HTML_PREVIEW_BYTES,
+      });
       if (!file.isText) {
         return reply.code(400).send({ error: "Preview supports text HTML files only" });
       }
       reply.header("Content-Type", "text/html; charset=utf-8");
-      reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:");
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header(
+        "Content-Security-Policy",
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'none'; style-src 'self'; img-src data: blob:; font-src 'none'; connect-src 'none'",
+      );
       return reply.send(file.content);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return sendRouteError(reply, error, request.log);
     }
   });
 };

@@ -44,6 +44,14 @@ const requiredHeadings = {
 };
 
 const errors = [];
+const currentShellEvidencePatterns = [
+  /apps\/mission-control-next\/src/i,
+  /packages\/mission-control-shared\/src/i,
+  /packages\/threaded-surface-core\/src/i,
+  /pending current-shell proof/i,
+  /compatibility-only/i,
+  /compatibility evidence/i,
+];
 
 const workspacePackageFiles = [
   "package.json",
@@ -82,10 +90,11 @@ for (const relPath of requiredFiles) {
 
 const handbookPath = path.join(root, "docs", "ENGINEERING_HANDBOOK.md");
 const handbook = await readFile(handbookPath, "utf8");
+const machineSpecificRepoPathPattern = new RegExp(["F:", "\\\\", "code", "\\\\", "personal-ai"].join(""), "i");
 if (/as of February 2026/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md contains a stale date claim.");
 }
-if (/F:\\code\\personal-ai/i.test(handbook)) {
+if (machineSpecificRepoPathPattern.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md contains a machine-specific repo path claim.");
 }
 if (/system truth/i.test(handbook)) {
@@ -94,8 +103,8 @@ if (/system truth/i.test(handbook)) {
 if (!/MemoryLifecycleService/.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must name MemoryLifecycleService as the memory lifecycle owner.");
 }
-if (!/mesh-core/i.test(handbook) || !/smoke-only/i.test(handbook)) {
-  errors.push("docs/ENGINEERING_HANDBOOK.md must de-scope mesh-core from the current 1.0 bar.");
+if (!/mesh-core/i.test(handbook) || !/targeted service coverage/i.test(handbook) || !/full release evidence/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must de-scope mesh-core until it has full release evidence.");
 }
 if (!/npu-sidecar/i.test(handbook) || !/not part of the current `1\.0` bar/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must de-scope the NPU sidecar from the current 1.0 bar.");
@@ -158,8 +167,8 @@ if (/default:\s*`false`/i.test(durableFoundation) || /Next Step \(Activation Pla
 }
 
 const readme = await readFile(path.join(root, "README.md"), "utf8");
-if (!/mesh-core/i.test(readme) || !/smoke-only/i.test(readme)) {
-  errors.push("README.md must describe mesh-core as smoke-only while it uses --passWithNoTests.");
+if (!/mesh-core/i.test(readme) || !/targeted service coverage/i.test(readme) || !/full release evidence/i.test(readme)) {
+  errors.push("README.md must describe mesh-core as de-scoped until full release evidence exists.");
 }
 if (!/NPU sidecar maturity or local-inference completeness as a `1\.0` signal/i.test(readme)) {
   errors.push("README.md must keep the NPU sidecar de-scoped from the 1.0 readiness bar.");
@@ -265,8 +274,8 @@ if (!/verify:catalog:parity` is green and executes real runtime-backed operator 
 if (!/verify:api:compat` is green and fails on breaking REST route\/schema or realtime event-envelope diffs/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must require the REST/SSE additive-compatibility gate.");
 }
-if (!/mesh-core/i.test(contract) || !/smoke-only/i.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must keep mesh-core outside the readiness-bearing 1.0 story while it remains smoke-only.");
+if (!/mesh-core/i.test(contract) || !/targeted service coverage/i.test(contract) || !/full release evidence/i.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must keep mesh-core outside the readiness-bearing 1.0 story until full release evidence exists.");
 }
 if (!/npu-sidecar/i.test(contract) || !/optional experimental infrastructure/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the NPU sidecar outside the readiness-bearing 1.0 story while it remains experimental.");
@@ -286,6 +295,14 @@ for (const [index, line] of releaseEvidence.split(/\r?\n/).entries()) {
   ) {
     errors.push(
       `docs/1_0_RELEASE_EVIDENCE.md:${index + 1} cites apps/mission-control without labeling it compatibility-only evidence.`,
+    );
+  }
+  if (
+    /apps\/mission-control\/src/i.test(line) &&
+    !currentShellEvidencePatterns.some((pattern) => pattern.test(line))
+  ) {
+    errors.push(
+      `docs/1_0_RELEASE_EVIDENCE.md:${index + 1} cites legacy Mission Control evidence without current-shell/shared-package proof or an explicit compatibility/pending-current-shell label.`,
     );
   }
 }
@@ -345,6 +362,9 @@ for (const relPath of workspacePackageFiles) {
   const parsed = JSON.parse(await readFile(path.join(root, relPath), "utf8"));
   if (parsed.version !== "1.0.0") {
     errors.push(`${relPath} must declare version 1.0.0 for the GoatCitadel 1.0 release branch.`);
+  }
+  if (/--passWithNoTests/.test(JSON.stringify(parsed.scripts ?? {}))) {
+    errors.push(`${relPath} must not use --passWithNoTests in release-bearing package test scripts.`);
   }
 }
 

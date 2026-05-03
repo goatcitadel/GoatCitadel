@@ -6,13 +6,25 @@ import {
   listPersonalityPresets,
   normalizePersonalityId,
 } from "./channel-personalities.js";
+import { createTelegramChannelSessionPatch } from "./telegram-channel-sessions.js";
+
+export interface TelegramStopCommandOutcome {
+  status: "cancelled" | "no_active_run" | "failed";
+  sessionId?: string;
+  turnId?: string;
+  durableRunId?: string;
+  durableCancelled?: boolean;
+  error?: string;
+}
 
 export interface TelegramCommandContext {
   connection: Pick<IntegrationConnection, "connectionId" | "label" | "config" | "enabled" | "status">;
   chatId: string;
+  threadId?: string;
   actorId: string;
   actorDisplayName?: string;
   content: string;
+  cancelActiveSession?: () => Promise<TelegramStopCommandOutcome>;
   resolveApprovalToken?: (
     token: string,
     decision: "approve" | "reject",
@@ -80,11 +92,20 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
         ),
       };
     case "/new":
-      return respond(
+      return {
+        handled: true,
         command,
-        context,
-        "New session requested. The next normal message in this Telegram chat will continue through GoatCitadel's channel session routing.",
-      );
+        configPatch: createTelegramChannelSessionPatch({
+          config: context.connection.config,
+          chatId: context.chatId,
+          threadId: context.threadId,
+          actorId: context.actorId,
+        }),
+        response: sendMessage(
+          context.chatId,
+          "New Telegram channel session started. The next normal message in this chat will route to a fresh GoatCitadel session.",
+        ),
+      };
     case "/skills":
       return respond(command, context, renderSkills(context));
     case "/skill":
@@ -94,17 +115,40 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
     case "/personality":
       return handlePersonalityCommand(args.join(" "), context);
     case "/stop":
-      return respond(
-        command,
-        context,
-        "Stop requested. If a channel run is active, GoatCitadel will cancel it where the underlying runtime supports cancellation.",
-      );
+      return handleStopCommand(command, context);
     case "/approve":
       return handleApprovalFallbackCommand(command, args.join(" "), context, "approve");
     case "/deny":
       return handleApprovalFallbackCommand(command, args.join(" "), context, "reject");
     default:
       return { handled: false };
+  }
+}
+
+async function handleStopCommand(command: string, context: TelegramCommandContext): Promise<TelegramCommandResult> {
+  if (!context.cancelActiveSession) {
+    return respond(command, context, "Stop is not available on this Telegram route yet.");
+  }
+  try {
+    const outcome = await context.cancelActiveSession();
+    if (outcome.status === "no_active_run") {
+      return respond(command, context, "No active Telegram channel run is currently running for this chat.");
+    }
+    if (outcome.status === "failed") {
+      return respond(
+        command,
+        context,
+        `Could not stop the active Telegram channel run: ${outcome.error ?? "unknown error"}`,
+      );
+    }
+    const suffix = outcome.durableRunId
+      ? outcome.durableCancelled === false
+        ? ` Turn ${outcome.turnId ?? "unknown"} was cancelled, but linked durable run ${outcome.durableRunId} was already terminal or could not be cancelled.`
+        : ` Linked durable run ${outcome.durableRunId} was cancelled too.`
+      : "";
+    return respond(command, context, `Stopped the active Telegram channel run.${suffix}`);
+  } catch (error) {
+    return respond(command, context, `Could not stop the active Telegram channel run: ${(error as Error).message}`);
   }
 }
 

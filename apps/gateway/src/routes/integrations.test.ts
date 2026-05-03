@@ -8,6 +8,7 @@ import { buildLineWebhookSignature } from "../services/line-webhook.js";
 import { buildNextcloudTalkSignature } from "../services/nextcloud-talk-webhook.js";
 import { buildSlackSignature } from "../services/slack-webhook.js";
 import { verifyTelegramWebhookSecretToken } from "../services/telegram-webhook.js";
+import { createTelegramChannelSessionPatch } from "../services/telegram-channel-sessions.js";
 import { buildWhatsAppWebhookSignature } from "../services/whatsapp-webhook.js";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
 import { buildSlackOAuthStart } from "../services/slack-oauth-service.js";
@@ -1058,6 +1059,268 @@ describe("integrations inbound route guards", () => {
     );
   });
 
+  it("handles Telegram /new by rotating the channel session before normal chat dispatch", async () => {
+    const getIntegrationConnection = vi.fn(() => ({
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Telegram",
+      enabled: true,
+      status: "connected",
+      config: {
+        botToken: "telegram-bot-token",
+        webhookSecret: "telegram-webhook-secret",
+        telegramPairing: {
+          approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
+          pending: [],
+        },
+      },
+      createdAt: "2026-05-02T12:00:00.000Z",
+      updatedAt: "2026-05-02T12:00:00.000Z",
+    }));
+    const updateIntegrationConnection = vi.fn((connectionId, patch) => ({
+      ...getIntegrationConnection(),
+      connectionId,
+      ...patch,
+    }));
+    const ingestChannelMessage = vi.fn();
+    const payload = JSON.stringify({
+      update_id: 9008,
+      message: {
+        message_id: 462,
+        from: { id: 777, is_bot: false, first_name: "Ada" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+        text: "/new",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection,
+      updateIntegrationConnection,
+      ingestChannelMessage,
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(updateIntegrationConnection).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      expect.objectContaining({
+        config: expect.objectContaining({
+          telegramChannelSessions: expect.any(Object),
+        }),
+      }),
+    );
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        method: "sendMessage",
+        chat_id: "-1001234567890",
+        text: expect.stringContaining("fresh GoatCitadel session"),
+      }),
+    );
+  });
+
+  it("routes normal Telegram messages through a rotated channel session while preserving delivery target binding", async () => {
+    const rotatedConfig = {
+      botToken: "telegram-bot-token",
+      webhookSecret: "telegram-webhook-secret",
+      telegramPairing: {
+        approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
+        pending: [],
+      },
+      ...createTelegramChannelSessionPatch({
+        config: {},
+        chatId: "-1001234567890",
+        actorId: "777",
+        now: new Date("2026-05-02T12:30:00.000Z"),
+      }),
+    };
+    const ingestChannelMessage = vi.fn(async () => ({
+      deduped: false,
+      session: { sessionId: "sess-telegram-rotated" },
+    }));
+    const setChatSessionBinding = vi.fn();
+    const respondToExistingChatMessage = vi.fn(async () => ({ turnId: "turn-rotated" }));
+    const payload = JSON.stringify({
+      update_id: 9009,
+      message: {
+        message_id: 463,
+        from: { id: 777, is_bot: false, first_name: "Ada" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+        text: "start fresh",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: rotatedConfig,
+        createdAt: "2026-05-02T12:00:00.000Z",
+        updatedAt: "2026-05-02T12:00:00.000Z",
+      })),
+      updateIntegrationConnection: vi.fn(),
+      ingestChannelMessage,
+      setChatSessionBinding,
+      respondToExistingChatMessage,
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).toHaveBeenCalledWith(
+      "telegram",
+      expect.any(String),
+      expect.objectContaining({
+        room: expect.stringMatching(/^-1001234567890~tg_/),
+        content: "start fresh",
+      }),
+    );
+    expect(setChatSessionBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-telegram-rotated",
+        target: "-1001234567890",
+      }),
+    );
+  });
+
+  it("handles Telegram /stop by cancelling the latest active channel session", async () => {
+    const cancelLatestActiveChatTurnForSession = vi.fn(async () => ({
+      status: "cancelled" as const,
+      sessionId: "sess-telegram",
+      turnId: "turn-1",
+      durableRunId: "run-1",
+      durableCancelled: true,
+    }));
+    const ingestChannelMessage = vi.fn();
+    const payload = JSON.stringify({
+      update_id: 9010,
+      message: {
+        message_id: 464,
+        from: { id: 777, is_bot: false, first_name: "Ada" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+        text: "/stop",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: {
+          botToken: "telegram-bot-token",
+          webhookSecret: "telegram-webhook-secret",
+          telegramPairing: {
+            approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
+            pending: [],
+          },
+        },
+        createdAt: "2026-05-02T12:00:00.000Z",
+        updatedAt: "2026-05-02T12:00:00.000Z",
+      })),
+      cancelLatestActiveChatTurnForSession,
+      updateIntegrationConnection: vi.fn(),
+      ingestChannelMessage,
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(cancelLatestActiveChatTurnForSession).toHaveBeenCalledWith(expect.stringMatching(/^sess_/), "telegram:777");
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        method: "sendMessage",
+        text: expect.stringContaining("Stopped the active Telegram channel run"),
+      }),
+    );
+  });
+
   it("blocks unpaired Telegram users before command or normal chat dispatch", async () => {
     const getIntegrationConnection = vi.fn(() => ({
       connectionId: "11111111-1111-1111-1111-111111111111",
@@ -1139,6 +1402,90 @@ describe("integrations inbound route guards", () => {
       expect.objectContaining({
         method: "sendMessage",
         text: expect.stringContaining("Pairing code:"),
+      }),
+    );
+  });
+
+  it("reuses an existing Telegram pairing code without rewriting the connection config", async () => {
+    const updateIntegrationConnection = vi.fn();
+    const ingestChannelMessage = vi.fn();
+    const payload = JSON.stringify({
+      update_id: 9011,
+      message: {
+        message_id: 465,
+        from: { id: 888, is_bot: false, first_name: "Grace" },
+        chat: { id: -1001234567890, type: "supergroup", title: "Ops Room" },
+        text: "/status",
+      },
+    });
+
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      validateDeviceAccessToken: vi.fn(() => undefined),
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Telegram",
+        enabled: true,
+        status: "connected",
+        config: {
+          botToken: "telegram-bot-token",
+          webhookSecret: "telegram-webhook-secret",
+          telegramPairing: {
+            approved: [],
+            pending: [
+              {
+                code: "ABCDEFGH",
+                actorId: "888",
+                chatId: "-1001234567890",
+                displayName: "Grace",
+                createdAt: "2026-05-02T12:00:00.000Z",
+                expiresAt: "2099-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+        createdAt: "2026-05-02T12:00:00.000Z",
+        updatedAt: "2026-05-02T12:00:00.000Z",
+      })),
+      updateIntegrationConnection,
+      ingestChannelMessage,
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+    });
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: { value: "gateway-token", queryParam: "access_token" },
+          basic: { username: "operator", password: "password123" },
+        },
+      },
+    } as never);
+    await app.register(authPlugin);
+    await app.register(idempotencyHeaderPlugin);
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "telegram-webhook-secret",
+      },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(ingestChannelMessage).not.toHaveBeenCalled();
+    expect(updateIntegrationConnection).not.toHaveBeenCalled();
+    expect(response.json()).toEqual(
+      expect.objectContaining({
+        method: "sendMessage",
+        text: expect.stringContaining("ABCDEFGH"),
       }),
     );
   });

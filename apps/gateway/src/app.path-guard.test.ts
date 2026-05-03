@@ -10,6 +10,7 @@ describe("gateway encoded-path guard", () => {
   it("rejects encoded traversal-like sequences", () => {
     expect(isSuspiciousEncodedPath("/api/v1/%2e%2e/secrets")).toBe(true);
     expect(isSuspiciousEncodedPath("/api/v1/%252e%252e/secrets")).toBe(true);
+    expect(isSuspiciousEncodedPath("/api/v1/%25252e%25252e/secrets")).toBe(true);
   });
 
   it("rejects encoded slash/backslash segments", () => {
@@ -19,6 +20,12 @@ describe("gateway encoded-path guard", () => {
 
   it("rejects malformed encoded paths", () => {
     expect(isSuspiciousEncodedPath("/api/v1/%zz/inbound")).toBe(true);
+  });
+
+  it("rejects literal or decoded null bytes", () => {
+    expect(isSuspiciousEncodedPath("/api/v1/file\u0000.txt")).toBe(true);
+    expect(isSuspiciousEncodedPath("/api/v1/file%00.txt")).toBe(true);
+    expect(isSuspiciousEncodedPath("/api/v1/file%2500.txt")).toBe(true);
   });
 
   it("rejects Windows UNC, ADS, and reserved-device path segments", () => {

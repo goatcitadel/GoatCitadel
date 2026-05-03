@@ -207,6 +207,8 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
   });
   const integrationWebhooks = createIntegrationWebhookRoutePort({
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
+    cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
+      gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
     ingestChannelMessage: (channel, idempotencyKey, input) =>
       gateway.ingestChannelMessage(channel, idempotencyKey, input),
     recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),

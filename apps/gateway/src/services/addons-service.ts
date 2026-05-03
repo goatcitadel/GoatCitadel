@@ -47,6 +47,32 @@ const ARENA_SERVER_PORT = 3099;
 const ARENA_SERVER_HEALTH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/health`;
 const ARENA_LAUNCH_URL = `http://127.0.0.1:${ARENA_SERVER_PORT}/`;
 const COREPACK_ENTRYPOINT_RELATIVE_PATH = ["node_modules", "corepack", "dist", "corepack.js"] as const;
+const ADDON_CHILD_ENV_ALLOWLIST = new Set([
+  "APPDATA",
+  "COMSPEC",
+  "COREPACK_HOME",
+  "HOME",
+  "LOCALAPPDATA",
+  "NODE_NO_WARNINGS",
+  "NUMBER_OF_PROCESSORS",
+  "OS",
+  "PATH",
+  "PATHEXT",
+  "PNPM_HOME",
+  "PROCESSOR_ARCHITECTURE",
+  "PROGRAMDATA",
+  "PROGRAMFILES",
+  "PROGRAMFILES(X86)",
+  "SYSTEMDRIVE",
+  "SYSTEMROOT",
+  "TEMP",
+  "TMP",
+  "USERPROFILE",
+  "WINDIR",
+]);
+const ADDON_CHILD_ENV_PREFIX_ALLOWLIST = ["COREPACK_", "NPM_CONFIG_"];
+const ADDON_SECRET_ENV_PATTERN =
+  /(?:API[_-]?KEY|AUTH|COOKIE|CREDENTIAL|DATABASE_URL|OPENAI|ANTHROPIC|GOOGLE|GEMINI|MOONSHOT|PERPLEXITY|MISTRAL|OPENROUTER|DEEPSEEK|GLM|GROQ|XAI|POSTGRES|PASSWORD|SECRET|TOKEN)/i;
 const MANIFEST_VERSION: AddonManifestFile = {
   items: {},
 };
@@ -491,6 +517,7 @@ function runCommand(command: string, args: string[], cwd: string): void {
     cwd,
     stdio: "pipe",
     encoding: "utf8",
+    env: buildAddonChildEnv(),
   });
 }
 
@@ -527,10 +554,7 @@ function spawnDetachedCommand(
     cwd,
     detached: true,
     stdio: "ignore",
-    env: {
-      ...process.env,
-      ...extraEnv,
-    },
+    env: buildAddonChildEnv(extraEnv),
   });
   child.unref();
   if (typeof child.pid !== "number") {
@@ -544,6 +568,7 @@ function readGitRef(targetDir: string): string | undefined {
     const result = execFileSync("git", ["-C", targetDir, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: "pipe",
+      env: buildAddonChildEnv(),
     });
     return result.trim() || undefined;
   } catch {
@@ -634,5 +659,31 @@ function rollbackAddonRepo(targetDir: string, previousRef: string | undefined): 
 export const __internal = {
   AddonManifestFileSchema,
   assertAddonPathWithinRoot,
+  buildAddonChildEnv,
   resolveCommandInvocation,
 };
+
+function buildAddonChildEnv(extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined || !isAllowedAddonChildEnvKey(key)) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return {
+    ...env,
+    ...extraEnv,
+  };
+}
+
+function isAllowedAddonChildEnvKey(key: string): boolean {
+  const normalized = key.toUpperCase();
+  if (ADDON_SECRET_ENV_PATTERN.test(normalized)) {
+    return false;
+  }
+  return (
+    ADDON_CHILD_ENV_ALLOWLIST.has(normalized) ||
+    ADDON_CHILD_ENV_PREFIX_ALLOWLIST.some((prefix) => normalized.startsWith(prefix))
+  );
+}

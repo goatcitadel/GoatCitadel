@@ -113,12 +113,16 @@ function CodeSourceChooser({
             <input
               value={localPath}
               onChange={(event) => setLocalPath(event.target.value)}
-              placeholder="F:\\code\\my-project or .\\workspace\\demo"
+              placeholder="%USERPROFILE%\\code\\my-project or .\\workspace\\demo"
             />
           </label>
           <label className="mc-next-code-source-field">
             <span>Project name (optional)</span>
-            <input value={localName} onChange={(event) => setLocalName(event.target.value)} placeholder="Use folder name by default" />
+            <input
+              value={localName}
+              onChange={(event) => setLocalName(event.target.value)}
+              placeholder="Use folder name by default"
+            />
           </label>
           <button
             type="button"
@@ -138,8 +142,8 @@ function CodeSourceChooser({
             {sourceBindingBusy ? "Importing…" : "Import folder"}
           </button>
           <p className="mc-next-workbench-empty">
-            Local folders outside the managed workspace are copied in. If the folder is not already a git repo, GoatCitadel
-            initializes one so the workbench can diff and branch safely.
+            Local folders outside the managed workspace are copied in. If the folder is not already a git repo,
+            GoatCitadel initializes one so the workbench can diff and branch safely.
           </p>
         </div>
       ) : null}
@@ -160,7 +164,11 @@ function CodeSourceChooser({
           </label>
           <label className="mc-next-code-source-field">
             <span>Project name (optional)</span>
-            <input value={repoName} onChange={(event) => setRepoName(event.target.value)} placeholder="Use repo name by default" />
+            <input
+              value={repoName}
+              onChange={(event) => setRepoName(event.target.value)}
+              placeholder="Use repo name by default"
+            />
           </label>
           <button
             type="button"
@@ -200,8 +208,16 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
           <p>{viewModel.headerSummary}</p>
         </div>
         <div className="mc-next-cowork-toolbar">
-          {onOpenDetails ? <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>Run details</button> : null}
-          {onStopTurn ? <button type="button" className="mc-next-panel-button" onClick={onStopTurn}>Stop run</button> : null}
+          {onOpenDetails ? (
+            <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
+              Run details
+            </button>
+          ) : null}
+          {onStopTurn ? (
+            <button type="button" className="mc-next-panel-button" onClick={onStopTurn}>
+              Stop run
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -256,7 +272,8 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
                 {viewModel.nextAction.label}
               </button>
             ) : null}
-            {!["retry_turn", "refresh_run_state", "open_tasks", "focus_composer"].includes(viewModel.nextAction.kind) && onOpenDetails ? (
+            {!["retry_turn", "refresh_run_state", "open_tasks", "focus_composer"].includes(viewModel.nextAction.kind) &&
+            onOpenDetails ? (
               <button type="button" className="mc-next-panel-button primary" onClick={onOpenDetails}>
                 {viewModel.nextAction.label}
               </button>
@@ -280,18 +297,38 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
 
       {activeTab === "plan" ? (
         <div className="mc-next-cowork-grid">
-          <PanelList title="Plan" items={viewModel.planItems.items} emptyCopy="Cowork has not attached a visible plan yet." />
-          <PanelList title="Roles / steps" items={viewModel.roleItems.items} emptyCopy="Role activity will land here when the run fans out." />
-          <PanelList title="Outputs / tasks" items={viewModel.outputItems.items} emptyCopy="Outputs and attached tasks will appear here as the run produces them." />
+          <PanelList
+            title="Plan"
+            items={viewModel.planItems.items}
+            emptyCopy="Cowork has not attached a visible plan yet."
+          />
+          <PanelList
+            title="Roles / steps"
+            items={viewModel.roleItems.items}
+            emptyCopy="Role activity will land here when the run fans out."
+          />
+          <PanelList
+            title="Outputs / tasks"
+            items={viewModel.outputItems.items}
+            emptyCopy="Outputs and attached tasks will appear here as the run produces them."
+          />
         </div>
       ) : null}
 
       {activeTab === "timeline" ? (
-        <PanelList title="Recent timeline" items={viewModel.timelineItems.items} emptyCopy="Recent checkpoints will appear here once the run starts moving." />
+        <PanelList
+          title="Recent timeline"
+          items={viewModel.timelineItems.items}
+          emptyCopy="Recent checkpoints will appear here once the run starts moving."
+        />
       ) : null}
 
       {activeTab === "actions" ? (
-        <PanelList title="Operator actions" items={viewModel.operatorActionItems.items} emptyCopy="Operator actions will collect here when Cowork needs follow-up work." />
+        <PanelList
+          title="Operator actions"
+          items={viewModel.operatorActionItems.items}
+          emptyCopy="Operator actions will collect here when Cowork needs follow-up work."
+        />
       ) : null}
 
       {viewModel.blockers.length > 0 ? (
@@ -301,7 +338,11 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
             <article key={blocker.id} className="mc-next-cowork-blocker">
               <div className="mc-next-cowork-blocker-head">
                 <strong>{blocker.title}</strong>
-                {onOpenDetails ? <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>Details</button> : null}
+                {onOpenDetails ? (
+                  <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
+                    Details
+                  </button>
+                ) : null}
               </div>
               <p>{blocker.summary}</p>
             </article>
@@ -388,7 +429,10 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     onDiscardDraft,
     onRunHelperSnippet,
   } = panel.props;
-  const codeBlocks = useMemo(() => extractCodeBlocks(selectedTurn?.assistantMessage?.content ?? ""), [selectedTurn?.assistantMessage?.content]);
+  const codeBlocks = useMemo(
+    () => extractCodeBlocks(selectedTurn?.assistantMessage?.content ?? ""),
+    [selectedTurn?.assistantMessage?.content],
+  );
   const readyForRepoOps = workbenchState?.worktreeStatus === "ready";
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
   const [activePane, setActivePane] = useState<WorkbenchPaneId>("files");
@@ -422,7 +466,16 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     if (codeBlocks.length > 0) {
       setActivePane("snippets");
     }
-  }, [codeBlocks.length, diff?.changedFiles.length, generatedArtifact, hasDirtyDraft, output?.helperRuns.length, output?.output, selectedFile, selectedFileDiff]);
+  }, [
+    codeBlocks.length,
+    diff?.changedFiles.length,
+    generatedArtifact,
+    hasDirtyDraft,
+    output?.helperRuns.length,
+    output?.output,
+    selectedFile,
+    selectedFileDiff,
+  ]);
 
   const activeDraft = draftContent ?? selectedFile?.content ?? "";
   const currentLanguage = selectedFile?.language ?? selectedFileDiff?.language ?? "plaintext";
@@ -457,13 +510,23 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
         <button type="button" className="mc-next-panel-button" onClick={onRefresh} disabled={loading || busy}>
           Refresh
         </button>
-        <button type="button" className="mc-next-panel-button" onClick={onSaveFile} disabled={!selectedFile || !hasDirtyDraft || busy || saving}>
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={onSaveFile}
+          disabled={!selectedFile || !hasDirtyDraft || busy || saving}
+        >
           {saving ? "Saving…" : "Save file"}
         </button>
         <button type="button" className="mc-next-panel-button" onClick={onDiscardDraft} disabled={!hasDirtyDraft}>
           Discard draft
         </button>
-        <button type="button" className="mc-next-panel-button" onClick={onCreateWorktree} disabled={needsProjectBinding || readyForRepoOps || busy}>
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={onCreateWorktree}
+          disabled={needsProjectBinding || readyForRepoOps || busy}
+        >
           Create worktree
         </button>
       </div>
@@ -528,7 +591,12 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                   <strong>{selectedFile.path}</strong>
                   <span>{selectedFile.language}</span>
                 </div>
-                <WorkbenchMonacoEditor value={activeDraft} language={selectedFile.language} height={520} onChange={onDraftChange} />
+                <WorkbenchMonacoEditor
+                  value={activeDraft}
+                  language={selectedFile.language}
+                  height={520}
+                  onChange={onDraftChange}
+                />
               </div>
             ) : (
               <div className="mc-next-workbench-empty">Pick a file in the tree to start editing it.</div>
@@ -545,12 +613,16 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                 <MonacoDiffEditor
                   language={currentLanguage}
                   original={selectedFileDiff.originalContent ?? selectedFile.content ?? ""}
-                  modified={hasDirtyDraft ? activeDraft : (selectedFileDiff.modifiedContent ?? selectedFile.content ?? "")}
+                  modified={
+                    hasDirtyDraft ? activeDraft : (selectedFileDiff.modifiedContent ?? selectedFile.content ?? "")
+                  }
                   height={520}
                 />
               </div>
             ) : (
-              <div className="mc-next-workbench-empty">Choose a repo file to compare the editor against the current git base.</div>
+              <div className="mc-next-workbench-empty">
+                Choose a repo file to compare the editor against the current git base.
+              </div>
             )
           ) : null}
 
@@ -566,7 +638,9 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                 <WorkbenchMonacoEditor value={diff.diff || "No diff yet."} language="diff" readOnly height={520} />
               </div>
             ) : (
-              <div className="mc-next-workbench-empty">Create a worktree or refresh the session to populate repo changes.</div>
+              <div className="mc-next-workbench-empty">
+                Create a worktree or refresh the session to populate repo changes.
+              </div>
             )
           ) : null}
 
@@ -576,7 +650,11 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                 <strong>Output</strong>
                 <span>{output?.helperRuns.length ?? 0} helper runs</span>
               </div>
-              {output?.output ? <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} /> : <p>No stdout or helper output yet.</p>}
+              {output?.output ? (
+                <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} />
+              ) : (
+                <p>No stdout or helper output yet.</p>
+              )}
               {output?.helperRuns.length ? (
                 <ul className="mc-next-workbench-helper-list">
                   {output.helperRuns.map((run) => (
@@ -601,10 +679,20 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                   <strong>Snippet helper</strong>
                   <span>{activeBlock.language}</span>
                 </div>
-                <WorkbenchMonacoEditor value={activeBlock.content} language={activeBlock.language} readOnly height={320} />
+                <WorkbenchMonacoEditor
+                  value={activeBlock.content}
+                  language={activeBlock.language}
+                  readOnly
+                  height={320}
+                />
                 <div className="mc-next-workbench-action-row">
                   {codeBlocks.map((block, index) => (
-                    <button key={block.id} type="button" className={`mc-next-panel-button${activeBlockIndex === index ? " active" : ""}`} onClick={() => setActiveBlockIndex(index)}>
+                    <button
+                      key={block.id}
+                      type="button"
+                      className={`mc-next-panel-button${activeBlockIndex === index ? " active" : ""}`}
+                      onClick={() => setActiveBlockIndex(index)}
+                    >
                       Snippet {index + 1}
                     </button>
                   ))}
@@ -618,7 +706,9 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                 </div>
               </div>
             ) : (
-              <div className="mc-next-workbench-empty">Code snippets from the latest assistant turn will appear here.</div>
+              <div className="mc-next-workbench-empty">
+                Code snippets from the latest assistant turn will appear here.
+              </div>
             )
           ) : null}
 

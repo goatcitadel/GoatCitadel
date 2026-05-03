@@ -14,6 +14,72 @@ const baseConnection = {
 };
 
 describe("telegram channel commands", () => {
+  it("rotates the Telegram channel session for /new", async () => {
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      threadId: "42",
+      actorId: "777",
+      content: "/new",
+    });
+
+    const sessions = result.configPatch?.telegramChannelSessions as Record<string, unknown> | undefined;
+    expect(result.handled).toBe(true);
+    expect(result.response?.text).toContain("fresh GoatCitadel session");
+    expect(sessions).toBeDefined();
+    expect(Object.keys(sessions ?? {})).toHaveLength(1);
+  });
+
+  it("stops the active Telegram channel session when a cancel callback is available", async () => {
+    const cancelActiveSession = vi.fn(async () => ({
+      status: "cancelled" as const,
+      sessionId: "sess-telegram",
+      turnId: "turn-1",
+      durableRunId: "run-1",
+      durableCancelled: true,
+    }));
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/stop",
+      cancelActiveSession,
+    });
+
+    expect(cancelActiveSession).toHaveBeenCalledTimes(1);
+    expect(result.response?.text).toContain("Stopped the active Telegram channel run");
+    expect(result.response?.text).toContain("Linked durable run run-1");
+  });
+
+  it("reports no active Telegram run truthfully", async () => {
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/stop",
+      cancelActiveSession: vi.fn(async () => ({ status: "no_active_run" as const, sessionId: "sess-telegram" })),
+    });
+
+    expect(result.response?.text).toContain("No active Telegram channel run");
+  });
+
+  it("surfaces Telegram stop failures without claiming success", async () => {
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/stop",
+      cancelActiveSession: vi.fn(async () => ({
+        status: "failed" as const,
+        sessionId: "sess-telegram",
+        error: "trace unavailable",
+      })),
+    });
+
+    expect(result.response?.text).toContain("Could not stop");
+    expect(result.response?.text).toContain("trace unavailable");
+  });
+
   it("sets the current chat as the home channel", async () => {
     const result = await handleTelegramChannelCommand({
       connection: baseConnection,
