@@ -1,6 +1,8 @@
 node_modules
 dist
 dist-node
+target/
+apps/*/src-tauri/gen/schemas/
 .env
 *.tsbuildinfo
 config/*.json

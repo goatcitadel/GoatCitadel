@@ -2,7 +2,6 @@ import type {
   ChatCitationRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
-  ChatDelegationRunStatus,
   ChatMode,
 } from "@goatcitadel/contracts";
 import type {
@@ -13,13 +12,6 @@ import type {
   OrchestrationStepExecutionResult,
   OrchestrationTaskInput,
 } from "./types.js";
-
-interface StepExecutionContext {
-  task: OrchestrationTaskInput;
-  plan: OrchestrationPlan;
-  stepIndex: number;
-  priorSteps: OrchestrationStepExecutionResult[];
-}
 
 const DEFAULT_ORCHESTRATION_CONCURRENCY = 4;
 const PRIOR_OUTPUT_EXCERPT_CHAR_LIMIT = 3_000;
@@ -44,14 +36,16 @@ export async function executeOrchestrationPlan(input: {
 
   for (const stage of stageNumbers) {
     const steps = groupedStages.get(stage) ?? [];
-    const executions = await mapWithConcurrency(steps, concurrency, (step, index) => executeStep({
-      task: input.task,
-      plan: input.plan,
-      stepIndex: completedSteps.length + index,
-      priorSteps: completedSteps,
-      step,
-      callbacks: input.callbacks,
-    }));
+    const executions = await mapWithConcurrency(steps, concurrency, (step, index) =>
+      executeStep({
+        task: input.task,
+        plan: input.plan,
+        stepIndex: completedSteps.length + index,
+        priorSteps: completedSteps,
+        step,
+        callbacks: input.callbacks,
+      }),
+    );
     for (const execution of executions) {
       completedSteps.push(execution);
       await input.callbacks.onStepResult?.(execution, [...completedSteps]);
@@ -124,10 +118,8 @@ function getMissingHandoffFailure(
   role: OrchestrationRole,
   priorSteps: OrchestrationStepExecutionResult[],
 ): { summary: string; error: string; failureGuidance: string } | undefined {
-  const requiresCompletedHandoff = role === "synthesizer"
-    || role === "critic"
-    || role === "reviewer"
-    || role === "qa-validator";
+  const requiresCompletedHandoff =
+    role === "synthesizer" || role === "critic" || role === "reviewer" || role === "qa-validator";
   if (!requiresCompletedHandoff) {
     return undefined;
   }
@@ -197,11 +189,11 @@ async function executeStep(input: {
       messages: buildStepMessages({
         task: input.task,
         plan: input.plan,
-      stepIndex: input.stepIndex,
-      priorSteps: input.priorSteps,
-      step: input.step,
-      specialistCandidate: input.step.specialistCandidate,
-    }),
+        stepIndex: input.stepIndex,
+        priorSteps: input.priorSteps,
+        step: input.step,
+        specialistCandidate: input.step.specialistCandidate,
+      }),
     });
     const finishedAt = new Date().toISOString();
     const output = extractCompletionText(response).trim() || "(no output returned)";
@@ -260,7 +252,12 @@ function buildStepMessages(input: {
     .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
     .join("\n");
   const priorSummaries = input.priorSteps
-    .map((step) => [`${formatStepTitle(step)} (${step.status})`, step.summary ?? step.output ?? step.error ?? "No summary available."].join(": "))
+    .map((step) =>
+      [
+        `${formatStepTitle(step)} (${step.status})`,
+        step.summary ?? step.output ?? step.error ?? "No summary available.",
+      ].join(": "),
+    )
     .join("\n");
   const priorHandoffs = shouldUseExpandedPriorOutputs(input.step.role)
     ? buildPriorOutputHandoffs(input.priorSteps)
@@ -268,10 +265,10 @@ function buildStepMessages(input: {
   const roleInstruction = buildRoleInstruction(input.task.mode, input.step.role, input.plan.workflowTemplate);
   const specialistOverlay = input.specialistCandidate
     ? [
-      `Specialist overlay: route this step through "${input.specialistCandidate.title}" (${input.specialistCandidate.role}).`,
-      `Why selected: ${input.specialistCandidate.matchReason}`,
-      `Specialist focus: ${input.specialistCandidate.summary}`,
-    ].join("\n")
+        `Specialist overlay: route this step through "${input.specialistCandidate.title}" (${input.specialistCandidate.role}).`,
+        `Why selected: ${input.specialistCandidate.matchReason}`,
+        `Specialist focus: ${input.specialistCandidate.summary}`,
+      ].join("\n")
     : undefined;
   const userPrompt = [
     `Objective: ${input.task.objective}`,
@@ -291,7 +288,9 @@ function buildStepMessages(input: {
     specialistOverlay,
     buildParallelHint(input.step.role, input.stepIndex, input.plan),
     "Return concise, high-signal output suitable for handoff to the next role.",
-  ].filter(Boolean).join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return [
     {
       role: "system",
@@ -305,11 +304,12 @@ function buildStepMessages(input: {
 }
 
 function buildRoleInstruction(mode: ChatMode, role: OrchestrationRole, workflowTemplate: string): string {
-  const modeFrame = mode === "code"
-    ? "You are operating inside GoatCitadel Code mode. Prioritize implementation fidelity, validation, and explicit risk callouts."
-    : mode === "cowork"
-      ? "You are operating inside GoatCitadel Cowork mode. Prioritize collaboration, delegation quality, and structured handoffs."
-      : "You are operating inside GoatCitadel Chat mode. Keep outputs concise, clear, and easy to merge into one assistant answer.";
+  const modeFrame =
+    mode === "code"
+      ? "You are operating inside GoatCitadel Code mode. Prioritize implementation fidelity, validation, and explicit risk callouts."
+      : mode === "cowork"
+        ? "You are operating inside GoatCitadel Cowork mode. Prioritize collaboration, delegation quality, and structured handoffs."
+        : "You are operating inside GoatCitadel Chat mode. Keep outputs concise, clear, and easy to merge into one assistant answer.";
   const roleFrame = (() => {
     switch (role) {
       case "answerer":
@@ -321,15 +321,30 @@ function buildRoleInstruction(mode: ChatMode, role: OrchestrationRole, workflowT
       case "worker":
         return "Act as a worker. Execute the assigned portion directly and return actionable output.";
       case "synthesizer":
-        return workflowTemplate === "cowork.workstreams.synthesize"
-          ? [
-              "Act as the final Cowork synthesizer. Merge every labeled workstream into one cohesive, user-facing response.",
-              "Include each requested label as a visible section, preserve blocked or missing workstreams, and end with the requested final deliverable.",
-              "For planning/advice tasks, use task-shaped titles such as Final Host Plan, Dinner Party Plan, or Ready-to-run Checklist.",
-              "Avoid internal workflow wording such as implemented, review-adjusted, workflow completed, or final implementation summary unless the user explicitly asked for implementation status.",
-              "For party or event planning, include practical quantities where reasonable, timing, fallback options, and a final checklist.",
-            ].join(" ")
-          : "Act as a synthesizer. Merge previous outputs into one cohesive response, preserving nuance and uncertainty. If upstream handoffs are missing, failed, or unsupported, explicitly say the workflow is blocked instead of inventing synthesis.";
+        if (mode === "cowork") {
+          return [
+            "Act as the final Cowork synthesizer. Answer the user's original objective, not just the current step.",
+            "Merge every prior handoff into one cohesive, user-facing response with priorities, tradeoffs, and concrete next actions.",
+            workflowTemplate === "cowork.workstreams.synthesize"
+              ? "Include each requested label as a visible section, preserve blocked or missing workstreams, and end with the requested final deliverable."
+              : "Preserve the useful planner, worker, reviewer, researcher, or critic outputs, but do not collapse into a single delegated work product.",
+            "For planning/advice tasks, use task-shaped titles such as Final Host Plan, Dinner Party Plan, or Ready-to-run Checklist.",
+            "Avoid internal workflow wording such as implemented, review-adjusted, workflow completed, or final implementation summary unless the user explicitly asked for implementation status.",
+            "If upstream handoffs are missing, failed, or unsupported, explicitly say the workflow is blocked instead of inventing synthesis.",
+          ].join(" ");
+        }
+        if (mode === "code") {
+          return [
+            "Act as the final Code synthesizer. Merge the plan, implementation notes, review findings, and QA validation into one technical final answer.",
+            "Keep implementation, review, and validation outcomes distinct enough that the operator can tell what was done, what was checked, and what risk remains.",
+            "If upstream code, review, or QA handoffs are missing, say which part is blocked instead of presenting it as complete.",
+          ].join(" ");
+        }
+        return [
+          "Act as the final Chat synthesizer. Merge previous outputs into one direct, conversational answer.",
+          "Preserve nuance and uncertainty without exposing unnecessary orchestration mechanics.",
+          "If upstream handoffs are missing, failed, or unsupported, explicitly say the workflow is blocked instead of inventing synthesis.",
+        ].join(" ");
       case "critic":
         return "Act as a critic. Identify weaknesses, gaps, contradictions, and missing evidence. If there is no substantive upstream output to critique, say the workflow is blocked instead of inventing missing context.";
       case "coder":
@@ -348,11 +363,7 @@ function buildRoleInstruction(mode: ChatMode, role: OrchestrationRole, workflowT
   ].join("\n");
 }
 
-function buildParallelHint(
-  role: OrchestrationRole,
-  stepIndex: number,
-  plan: OrchestrationPlan,
-): string | undefined {
+function buildParallelHint(role: OrchestrationRole, stepIndex: number, plan: OrchestrationPlan): string | undefined {
   if (role !== "researcher") {
     return undefined;
   }
@@ -364,7 +375,9 @@ function buildParallelHint(
   if (angleIndex < 0) {
     return undefined;
   }
-  const angle = ["market/external signals", "implementation/detail view", "risks/tradeoffs"][angleIndex] ?? `angle ${angleIndex + 1}`;
+  const angle =
+    ["market/external signals", "implementation/detail view", "risks/tradeoffs"][angleIndex] ??
+    `angle ${angleIndex + 1}`;
   return `Parallel diversity hint: cover the ${angle} angle instead of repeating another researcher.`;
 }
 
@@ -401,8 +414,28 @@ function getPreferredFinalRoles(mode: ChatMode, workflowTemplate: string): Orche
       return mode === "code"
         ? ["synthesizer", "qa-validator", "reviewer", "coder", "planner", "worker", "answerer", "critic", "researcher"]
         : mode === "cowork"
-          ? ["synthesizer", "worker", "planner", "answerer", "critic", "reviewer", "researcher", "qa-validator", "coder"]
-          : ["synthesizer", "answerer", "reviewer", "researcher", "critic", "planner", "worker", "coder", "qa-validator"];
+          ? [
+              "synthesizer",
+              "worker",
+              "planner",
+              "answerer",
+              "critic",
+              "reviewer",
+              "researcher",
+              "qa-validator",
+              "coder",
+            ]
+          : [
+              "synthesizer",
+              "answerer",
+              "reviewer",
+              "researcher",
+              "critic",
+              "planner",
+              "worker",
+              "coder",
+              "qa-validator",
+            ];
   }
 }
 
@@ -423,7 +456,9 @@ function buildFinalOutput(
       : "I could not complete the orchestrated workflow.",
     failureLines.length > 0 ? "Primary failures:" : undefined,
     ...failureLines,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function repairFinalOutputIfNeeded(input: {
@@ -439,13 +474,20 @@ async function repairFinalOutputIfNeeded(input: {
   integritySignals?: string[];
 }> {
   const requiredLabels = getRequiredWorkstreamLabels(input.plan);
-  if (requiredLabels.length === 0 || hasRequiredLabels(input.initialOutput, requiredLabels)) {
+  const missingRequiredLabels = requiredLabels.length > 0 && !hasRequiredLabels(input.initialOutput, requiredLabels);
+  const synthesisExpected = input.plan.steps.some((step) => step.role === "synthesizer");
+  const missingFinalSynthesis = synthesisExpected && input.finalStep?.role !== "synthesizer";
+  if (!missingRequiredLabels && !missingFinalSynthesis) {
     return { output: input.initialOutput, finalStep: input.finalStep };
   }
 
-  const integritySignals = ["orchestration_final_synthesis_missing_required_sections"];
+  const integritySignals = [
+    missingRequiredLabels ? "orchestration_final_synthesis_missing_required_sections" : undefined,
+    missingFinalSynthesis ? "orchestration_final_synthesis_missing" : undefined,
+    missingFinalSynthesis && input.finalStep ? "orchestration_final_synthesis_role_drift" : undefined,
+  ].filter((signal): signal is string => Boolean(signal));
   const repaired = await tryRepairFinalSynthesis(input);
-  if (repaired && hasRequiredLabels(repaired.output, requiredLabels)) {
+  if (repaired && (requiredLabels.length === 0 || hasRequiredLabels(repaired.output, requiredLabels))) {
     return {
       output: repaired.output,
       finalStep: repaired.finalStep,
@@ -454,12 +496,20 @@ async function repairFinalOutputIfNeeded(input: {
   }
 
   return {
-    output: buildIncompleteSynthesisFallback({
-      objective: input.task.objective,
-      requiredLabels,
-      steps: input.steps,
-      initialOutput: input.initialOutput,
-    }),
+    output:
+      requiredLabels.length > 0
+        ? buildIncompleteSynthesisFallback({
+            objective: input.task.objective,
+            requiredLabels,
+            steps: input.steps,
+            initialOutput: input.initialOutput,
+          })
+        : buildGenericIncompleteSynthesisFallback({
+            mode: input.task.mode,
+            objective: input.task.objective,
+            steps: input.steps,
+            initialOutput: input.initialOutput,
+          }),
     finalStep: input.finalStep,
     integritySignals: [...integritySignals, "orchestration_final_synthesis_fallback"],
   };
@@ -473,14 +523,16 @@ async function tryRepairFinalSynthesis(input: {
   finalStep?: OrchestrationStepExecutionResult;
   initialOutput: string;
 }): Promise<{ output: string; finalStep: OrchestrationStepExecutionResult } | undefined> {
-  const finalStep = input.finalStep;
-  if (!finalStep) {
+  const repairSourceStep =
+    input.finalStep ?? [...input.steps].reverse().find((step) => step.status === "completed" && step.output?.trim());
+  if (!repairSourceStep) {
     return undefined;
   }
+  const requiredLabels = getRequiredWorkstreamLabels(input.plan);
   try {
     const response = await input.callbacks.createChatCompletion({
-      providerId: finalStep.providerId,
-      model: finalStep.model,
+      providerId: repairSourceStep.providerId,
+      model: repairSourceStep.model,
       stream: false,
       memory: {
         enabled: input.task.prefs.memoryMode !== "off",
@@ -491,21 +543,25 @@ async function tryRepairFinalSynthesis(input: {
         {
           role: "system",
           content: [
-            "Repair the final Cowork synthesis.",
-            "Use only the labeled prior handoffs below.",
-            "Include every required workstream label as a visible section.",
-            "End with the requested final deliverable.",
+            `Repair the final ${input.task.mode === "code" ? "Code" : input.task.mode === "cowork" ? "Cowork" : "Chat"} synthesis.`,
+            "Use only the prior handoffs below.",
+            requiredLabels.length > 0 ? "Include every required workstream label as a visible section." : undefined,
+            "Answer the user's original objective and end with the requested final deliverable.",
             "Use polished user-facing wording; avoid internal implementation/status phrases unless the user explicitly asked for implementation status.",
-          ].join("\n"),
+          ]
+            .filter(Boolean)
+            .join("\n"),
         },
         {
           role: "user",
           content: [
             `Objective: ${input.task.objective}`,
-            `Required workstreams: ${getRequiredWorkstreamLabels(input.plan).join(", ")}`,
-            `Previous final output missed required sections:\n${input.initialOutput}`,
+            requiredLabels.length > 0 ? `Required workstreams: ${requiredLabels.join(", ")}` : undefined,
+            `Previous final output was incomplete:\n${input.initialOutput}`,
             `Prior handoffs:\n${buildPriorOutputHandoffs(input.steps)}`,
-          ].join("\n\n"),
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
         },
       ],
     });
@@ -516,11 +572,13 @@ async function tryRepairFinalSynthesis(input: {
     return {
       output,
       finalStep: {
-        ...finalStep,
+        ...repairSourceStep,
+        role: "synthesizer",
+        label: repairSourceStep.label ?? "Synthesis",
         output,
         summary: summarizeOutput(output),
-        model: response.model ?? finalStep.model,
-        citations: dedupeCitations([...finalStep.citations, ...readCompletionCitations(response)]),
+        model: response.model ?? repairSourceStep.model,
+        citations: dedupeCitations([...repairSourceStep.citations, ...readCompletionCitations(response)]),
       },
     };
   } catch {
@@ -538,7 +596,9 @@ function getRequiredWorkstreamLabels(plan: OrchestrationPlan): string[] {
 }
 
 function hasRequiredLabels(output: string, requiredLabels: string[]): boolean {
-  return requiredLabels.every((label) => new RegExp(`(?:^|\\n)\\s*#{0,6}\\s*${escapeRegExp(label)}\\b`, "i").test(output));
+  return requiredLabels.every((label) =>
+    new RegExp(`(?:^|\\n)\\s*#{0,6}\\s*${escapeRegExp(label)}\\b`, "i").test(output),
+  );
 }
 
 function buildIncompleteSynthesisFallback(input: {
@@ -570,9 +630,48 @@ function buildIncompleteSynthesisFallback(input: {
   }
   lines.push("## Final Deliverable");
   lines.push("");
-  lines.push("Use the sections above as the current handoff. Rerun synthesis after repairing any missing workstream if a polished single final answer is required.");
+  lines.push(
+    "Use the sections above as the current handoff. Rerun synthesis after repairing any missing workstream if a polished single final answer is required.",
+  );
   if (input.initialOutput.trim()) {
     lines.push("");
+    lines.push("## Incomplete Final Draft");
+    lines.push("");
+    lines.push(input.initialOutput.trim());
+  }
+  return lines.join("\n");
+}
+
+function buildGenericIncompleteSynthesisFallback(input: {
+  mode: ChatMode;
+  objective: string;
+  steps: OrchestrationStepExecutionResult[];
+  initialOutput: string;
+}): string {
+  const modeLabel = input.mode === "code" ? "code" : input.mode === "cowork" ? "Cowork" : "chat";
+  const lines = [
+    "## Synthesis Incomplete",
+    "",
+    `The ${modeLabel} workflow did not produce a completed final synthesis. I am preserving the completed handoffs instead of pretending the merge succeeded.`,
+    "",
+    `Objective: ${input.objective}`,
+    "",
+    "## Completed Handoffs",
+    "",
+  ];
+  for (const step of input.steps) {
+    lines.push(`### ${formatStepTitle(step)} (${step.status})`);
+    lines.push("");
+    if (step.output?.trim()) {
+      lines.push(step.output.trim());
+    } else if (step.error?.trim()) {
+      lines.push(`Blocked: ${step.error.trim()}`);
+    } else {
+      lines.push("No completed handoff was produced.");
+    }
+    lines.push("");
+  }
+  if (input.initialOutput.trim()) {
     lines.push("## Incomplete Final Draft");
     lines.push("");
     lines.push(input.initialOutput.trim());
@@ -594,11 +693,15 @@ function buildPriorOutputHandoffs(steps: OrchestrationStepExecutionResult[]): st
     const raw = step.output?.trim() || step.error?.trim() || step.summary?.trim() || "No handoff provided.";
     const excerpt = raw.slice(0, Math.min(PRIOR_OUTPUT_EXCERPT_CHAR_LIMIT, remaining));
     remaining -= excerpt.length;
-    sections.push([
-      `### ${formatStepTitle(step)} (${step.status})`,
-      excerpt,
-      raw.length > excerpt.length ? "[truncated]" : undefined,
-    ].filter(Boolean).join("\n"));
+    sections.push(
+      [
+        `### ${formatStepTitle(step)} (${step.status})`,
+        excerpt,
+        raw.length > excerpt.length ? "[truncated]" : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
   return sections.join("\n\n");
 }
@@ -663,15 +766,15 @@ function readCompletionCitations(response: ChatCompletionResponse): ChatCitation
   if (!Array.isArray(raw)) {
     return [];
   }
-  return raw
-    .filter((item): item is ChatCitationRecord => (
-      typeof item === "object"
-      && item !== null
-      && typeof (item as ChatCitationRecord).url === "string"
-    ));
+  return raw.filter(
+    (item): item is ChatCitationRecord =>
+      typeof item === "object" && item !== null && typeof (item as ChatCitationRecord).url === "string",
+  );
 }
 
-function readCompletionRouting(response: ChatCompletionResponse): OrchestrationStepExecutionResult["routing"] | undefined {
+function readCompletionRouting(
+  response: ChatCompletionResponse,
+): OrchestrationStepExecutionResult["routing"] | undefined {
   const raw = response.routing as Record<string, unknown> | undefined;
   if (!raw || typeof raw !== "object") {
     return undefined;

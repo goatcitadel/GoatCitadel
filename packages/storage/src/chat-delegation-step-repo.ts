@@ -1,5 +1,10 @@
 import type { DatabaseClient } from "./db.js";
-import type { ChatCitationRecord, ChatDelegationStepRecord, ChatDelegationStepStatus } from "@goatcitadel/contracts";
+import type {
+  ChatCitationRecord,
+  ChatDelegationStepRecord,
+  ChatDelegationStepStatus,
+  ChatSessionDelegationParentRecord,
+} from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
@@ -23,6 +28,10 @@ interface ChatDelegationStepRow {
   started_at: string;
   finished_at: string | null;
   duration_ms: number | null;
+}
+
+interface ChatDelegationParentRow extends ChatDelegationStepRow {
+  parent_session_id: string;
 }
 
 export class ChatDelegationStepRepository {
@@ -121,22 +130,25 @@ export class ChatDelegationStepRepository {
     return this.get(input.stepId);
   }
 
-  public patch(stepId: string, input: {
-    status?: ChatDelegationStepStatus;
-    providerId?: string;
-    model?: string;
-    label?: string;
-    summary?: string;
-    output?: string;
-    error?: string;
-    failureGuidance?: string;
-    durableRunId?: string;
-    childSessionId?: string;
-    childTurnId?: string;
-    citations?: ChatCitationRecord[];
-    finishedAt?: string;
-    durationMs?: number;
-  }): ChatDelegationStepRecord {
+  public patch(
+    stepId: string,
+    input: {
+      status?: ChatDelegationStepStatus;
+      providerId?: string;
+      model?: string;
+      label?: string;
+      summary?: string;
+      output?: string;
+      error?: string;
+      failureGuidance?: string;
+      durableRunId?: string;
+      childSessionId?: string;
+      childTurnId?: string;
+      citations?: ChatCitationRecord[];
+      finishedAt?: string;
+      durationMs?: number;
+    },
+  ): ChatDelegationStepRecord {
     const current = this.get(stepId);
     this.patchStmt.run({
       stepId,
@@ -151,9 +163,12 @@ export class ChatDelegationStepRepository {
       durableRunId: input.durableRunId !== undefined ? input.durableRunId : (current.durableRunId ?? null),
       childSessionId: input.childSessionId !== undefined ? input.childSessionId : (current.childSessionId ?? null),
       childTurnId: input.childTurnId !== undefined ? input.childTurnId : (current.childTurnId ?? null),
-      citationsJson: input.citations !== undefined
-        ? JSON.stringify(input.citations)
-        : (current.citations ? JSON.stringify(current.citations) : null),
+      citationsJson:
+        input.citations !== undefined
+          ? JSON.stringify(input.citations)
+          : current.citations
+            ? JSON.stringify(current.citations)
+            : null,
       finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
       durationMs: input.durationMs !== undefined ? input.durationMs : (current.durationMs ?? null),
     });
@@ -163,6 +178,43 @@ export class ChatDelegationStepRepository {
   public listByRun(runId: string): ChatDelegationStepRecord[] {
     const rows = toChatDelegationStepRows(this.listByRunStmt.all({ runId }));
     return rows.map(mapRow);
+  }
+
+  public listParentsByChildSessionIds(sessionIds: string[]): Map<string, ChatSessionDelegationParentRecord> {
+    const childSessionIds = [...new Set(sessionIds.map((item) => item.trim()).filter(Boolean))];
+    if (childSessionIds.length === 0) {
+      return new Map();
+    }
+    const placeholders = childSessionIds.map(() => "?").join(", ");
+    const rows = toChatDelegationParentRows(
+      this.db
+        .prepare(
+          `
+            SELECT steps.*, runs.session_id AS parent_session_id
+            FROM chat_delegation_steps steps
+            INNER JOIN chat_delegation_runs runs ON runs.run_id = steps.run_id
+            WHERE steps.child_session_id IN (${placeholders})
+            ORDER BY steps.started_at DESC, steps.step_index DESC, steps.step_id DESC
+          `,
+        )
+        .all(...childSessionIds),
+    );
+    const byChildSessionId = new Map<string, ChatSessionDelegationParentRecord>();
+    for (const row of rows) {
+      const childSessionId = row.child_session_id;
+      if (!childSessionId || byChildSessionId.has(childSessionId)) {
+        continue;
+      }
+      byChildSessionId.set(childSessionId, {
+        parentSessionId: row.parent_session_id,
+        runId: row.run_id,
+        stepId: row.step_id,
+        role: row.role,
+        label: row.label ?? undefined,
+        index: row.step_index,
+      });
+    }
+    return byChildSessionId;
   }
 }
 
@@ -174,25 +226,27 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.step_id === "string"
-    && typeof value.run_id === "string"
-    && typeof value.role === "string"
-    && (typeof value.label === "string" || value.label === null)
-    && typeof value.step_index === "number"
-    && typeof value.status === "string"
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && (typeof value.summary === "string" || value.summary === null)
-    && (typeof value.output === "string" || value.output === null)
-    && (typeof value.error === "string" || value.error === null)
-    && (typeof value.failure_guidance === "string" || value.failure_guidance === null)
-    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
-    && (typeof value.child_session_id === "string" || value.child_session_id === null)
-    && (typeof value.child_turn_id === "string" || value.child_turn_id === null)
-    && (typeof value.citations_json === "string" || value.citations_json === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null)
-    && (typeof value.duration_ms === "number" || value.duration_ms === null);
+  return (
+    typeof value.step_id === "string" &&
+    typeof value.run_id === "string" &&
+    typeof value.role === "string" &&
+    (typeof value.label === "string" || value.label === null) &&
+    typeof value.step_index === "number" &&
+    typeof value.status === "string" &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    (typeof value.summary === "string" || value.summary === null) &&
+    (typeof value.output === "string" || value.output === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    (typeof value.failure_guidance === "string" || value.failure_guidance === null) &&
+    (typeof value.durable_run_id === "string" || value.durable_run_id === null) &&
+    (typeof value.child_session_id === "string" || value.child_session_id === null) &&
+    (typeof value.child_turn_id === "string" || value.child_turn_id === null) &&
+    (typeof value.citations_json === "string" || value.citations_json === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null) &&
+    (typeof value.duration_ms === "number" || value.duration_ms === null)
+  );
 }
 
 function toChatDelegationStepRow(value: unknown): ChatDelegationStepRow | undefined {
@@ -201,6 +255,17 @@ function toChatDelegationStepRow(value: unknown): ChatDelegationStepRow | undefi
 
 function toChatDelegationStepRows(value: unknown): ChatDelegationStepRow[] {
   return Array.isArray(value) ? value.filter(isChatDelegationStepRow) : [];
+}
+
+function isChatDelegationParentRow(value: unknown): value is ChatDelegationParentRow {
+  if (!isChatDelegationStepRow(value) || !isRecord(value)) {
+    return false;
+  }
+  return typeof value.parent_session_id === "string";
+}
+
+function toChatDelegationParentRows(value: unknown): ChatDelegationParentRow[] {
+  return Array.isArray(value) ? value.filter(isChatDelegationParentRow) : [];
 }
 
 function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
@@ -226,5 +291,3 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     citations: row.citations_json ? safeJsonParse<ChatCitationRecord[]>(row.citations_json, []) : undefined,
   };
 }
-
-

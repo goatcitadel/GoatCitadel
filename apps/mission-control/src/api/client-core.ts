@@ -128,10 +128,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const res = await fetch(buildGatewayUrl(path), {
+        ...init,
         headers: {
           ...headers,
         },
-        ...init,
         method,
       });
       const responseCorrelationId = res.headers.get("x-goatcitadel-correlation-id") ?? correlationId;

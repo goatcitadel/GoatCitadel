@@ -13,7 +13,7 @@ This table is the current `1.0` installer support matrix for GoatCitadel.
 
 ## Notes
 
-- Windows installer artifacts include an embedded Node runtime and the built Mission Control Next assets.
+- Windows installer artifacts include an embedded Node runtime, the built Mission Control Next assets, and the native Mission Control desktop host.
 - macOS and Linux package scripts are not release-proofed until `.github/workflows/release-installers.yml` emits signed artifacts and smoke evidence for those targets.
 - Installer-managed optional components, such as Chromium and the local voice runtime, are still platform-dependent.
 - `apps/npu-sidecar` remains optional experimental infrastructure and is not part of the support matrix above.

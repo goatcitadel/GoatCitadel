@@ -1,9 +1,9 @@
 import type { DevDiagnosticsEvent, DevDiagnosticsLevel, DevDiagnosticsListResponse } from "@goatcitadel/contracts";
 
 import { recordClientDiagnostic, setDevDiagnosticsGatewayReachable } from "../state/dev-diagnostics-store";
-import { buildGatewayUrl, readStoredGatewayAuthState, request } from "./client-core.js";
+import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState, request } from "./client-core.js";
 import { isApiRequestError } from "./http-internal";
-import { computeReconnectDelay, issueSseBridgeToken } from "./sse-bridge.js";
+import { computeReconnectDelay, isSseBridgeNotNeededError, issueSseBridgeToken } from "./sse-bridge.js";
 
 export async function fetchDevDiagnostics(
   params: {
@@ -75,6 +75,10 @@ export function connectDevDiagnosticsStream(onEvent: (event: DevDiagnosticsEvent
         const issued = await issueSseBridgeToken("dev:diagnostics:stream");
         url.searchParams.set("sse_token", issued.token);
       } catch (error) {
+        if (isSseBridgeNotNeededError(error)) {
+          clearGatewayAuthState();
+          return url.toString();
+        }
         if (!(isApiRequestError(error) && error.status === 400)) {
           throw error;
         }

@@ -27,6 +27,7 @@ export interface ResolvedRuntimeGuidance {
 
 export const CHAT_PLANNER_MAX_STEPS = 8;
 export const CHAT_PLANNER_MIN_STEPS = 3;
+const CONTROL_ORCHESTRATION_ROLES = new Set<OrchestrationRole>(["synthesizer", "reviewer", "critic", "qa-validator"]);
 
 export function normalizeChatInputParts(
   content: string,
@@ -442,45 +443,47 @@ export function coercePlannerExecutionPlanDraft(
   if (rawSteps.length === 0) {
     return undefined;
   }
-  const allowedDelegatedRoles = new Set(templatePlan.steps.map((step) => step.role));
   let usedFallback = false;
   const steps = templatePlan.steps.map((templateStep, index) => {
     const raw = rawSteps[index];
+    const controlStep = shouldProtectPlannerTemplateStep(templatePlan, templateStep, index);
     const objective =
-      typeof raw?.objective === "string" && raw.objective.trim() ? raw.objective.trim() : templateStep.objective;
+      !controlStep && typeof raw?.objective === "string" && raw.objective.trim()
+        ? raw.objective.trim()
+        : templateStep.objective;
     if (objective === templateStep.objective) {
       usedFallback = true;
     }
     const successCriteria =
-      typeof raw?.successCriteria === "string" && raw.successCriteria.trim()
+      !controlStep && typeof raw?.successCriteria === "string" && raw.successCriteria.trim()
         ? raw.successCriteria.trim()
         : templateStep.successCriteria;
-    const suggestedTools = Array.isArray(raw?.suggestedTools)
-      ? dedupeStrings(
-          raw.suggestedTools
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean),
-        )
-      : templateStep.suggestedTools;
+    const suggestedTools =
+      Array.isArray(raw?.suggestedTools) && !controlStep
+        ? dedupeStrings(
+            raw.suggestedTools
+              .filter((value): value is string => typeof value === "string")
+              .map((value) => value.trim())
+              .filter(Boolean),
+          )
+        : templateStep.suggestedTools;
     const expectedOutput =
-      typeof raw?.expectedOutput === "string" && raw.expectedOutput.trim()
+      !controlStep && typeof raw?.expectedOutput === "string" && raw.expectedOutput.trim()
         ? raw.expectedOutput.trim()
         : templateStep.expectedOutput;
-    const dependsOnStepIds = Array.isArray(raw?.dependsOnStepIds)
-      ? dedupeStrings(
-          raw.dependsOnStepIds
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter((value) => templatePlan.steps.some((step) => step.stepId === value)),
-        )
-      : templateStep.dependsOnStepIds;
-    const delegatedRole =
-      input.mode === "chat" || input.advisoryOnly
-        ? undefined
-        : typeof raw?.delegatedRole === "string" && allowedDelegatedRoles.has(raw.delegatedRole as OrchestrationRole)
-          ? raw.delegatedRole
-          : templateStep.delegatedRole;
+    const dependsOnStepIds =
+      !controlStep && Array.isArray(raw?.dependsOnStepIds)
+        ? dedupeStrings(
+            raw.dependsOnStepIds
+              .filter((value): value is string => typeof value === "string")
+              .map((value) => value.trim())
+              .filter((value) => templatePlan.steps.some((step) => step.stepId === value)),
+          )
+        : templateStep.dependsOnStepIds;
+    const delegatedRole = input.mode === "chat" || input.advisoryOnly ? undefined : templateStep.delegatedRole;
+    if (controlStep && raw && plannerStepOverridesTemplate(raw, templateStep)) {
+      usedFallback = true;
+    }
     return {
       stepId: templateStep.stepId,
       index,
@@ -488,7 +491,8 @@ export function coercePlannerExecutionPlanDraft(
       successCriteria,
       suggestedTools: suggestedTools?.length ? suggestedTools : undefined,
       expectedOutput,
-      parallelizable: typeof raw?.parallelizable === "boolean" ? raw.parallelizable : templateStep.parallelizable,
+      parallelizable:
+        !controlStep && typeof raw?.parallelizable === "boolean" ? raw.parallelizable : templateStep.parallelizable,
       dependsOnStepIds: dependsOnStepIds?.length ? dependsOnStepIds : undefined,
       delegatedRole,
       status: "pending" as const,
@@ -516,6 +520,13 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
     const planned = draft.steps[index];
     if (!planned) {
       return step;
+    }
+    if (shouldProtectPlannerTemplateStep(templatePlan, step, index)) {
+      return {
+        ...step,
+        index: step.index,
+        label: step.label,
+      };
     }
     return {
       ...step,
@@ -546,6 +557,39 @@ export function applyExecutionPlanDraftToOrchestrationPlan(
     },
     steps,
   };
+}
+
+function shouldProtectPlannerTemplateStep(
+  plan: ModeOrchestrationPlan,
+  step: ModeOrchestrationPlan["steps"][number],
+  index: number,
+): boolean {
+  if (CONTROL_ORCHESTRATION_ROLES.has(step.role)) {
+    return true;
+  }
+  const lastStepIndex = plan.steps.length - 1;
+  return index === lastStepIndex && plan.steps.some((candidate) => candidate.role === "synthesizer");
+}
+
+function plannerStepOverridesTemplate(
+  raw: Record<string, unknown>,
+  templateStep: ModeOrchestrationPlan["steps"][number],
+): boolean {
+  const rawDependsOn = Array.isArray(raw.dependsOnStepIds)
+    ? dedupeStrings(raw.dependsOnStepIds.filter((value): value is string => typeof value === "string"))
+    : undefined;
+  const rawSuggestedTools = Array.isArray(raw.suggestedTools)
+    ? dedupeStrings(raw.suggestedTools.filter((value): value is string => typeof value === "string"))
+    : undefined;
+  return (
+    (typeof raw.objective === "string" && raw.objective.trim() !== templateStep.objective) ||
+    (typeof raw.successCriteria === "string" && raw.successCriteria.trim() !== (templateStep.successCriteria ?? "")) ||
+    (typeof raw.expectedOutput === "string" && raw.expectedOutput.trim() !== (templateStep.expectedOutput ?? "")) ||
+    (typeof raw.parallelizable === "boolean" && raw.parallelizable !== templateStep.parallelizable) ||
+    (typeof raw.delegatedRole === "string" && raw.delegatedRole.trim() !== (templateStep.delegatedRole ?? "")) ||
+    (rawDependsOn !== undefined && rawDependsOn.join("|") !== (templateStep.dependsOnStepIds ?? []).join("|")) ||
+    (rawSuggestedTools !== undefined && rawSuggestedTools.join("|") !== (templateStep.suggestedTools ?? []).join("|"))
+  );
 }
 
 export function parseLooseJsonRecord(raw: string): Record<string, unknown> | undefined {

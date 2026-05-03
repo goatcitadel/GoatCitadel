@@ -701,20 +701,25 @@ export function MissionThreadedControllerHost({
     mcpServers,
     mcpTemplates,
   });
+  const executionSurfaceMode: ChatMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
   const executionRoutePrefs = useMemo(
     () =>
       prefs && (selectedProviderId || selectedModel)
         ? {
             ...prefs,
+            mode: executionSurfaceMode,
             providerId: prefs.providerId ?? selectedProviderId,
             model: prefs.model ?? selectedModel,
           }
-        : prefs,
-    [prefs, selectedModel, selectedProviderId],
+        : prefs
+          ? { ...prefs, mode: executionSurfaceMode }
+          : prefs,
+    [executionSurfaceMode, prefs, selectedModel, selectedProviderId],
   );
   const routePreflight = useChatRoutePreflight({
     sessionId: selectedSessionId,
     prefs: executionRoutePrefs,
+    surfaceMode: executionSurfaceMode,
     displayAction: editingTurnId ? "edit" : "send",
     displayTurnId: editingTurnId,
     enabled: Boolean(selectedSessionId),
@@ -848,6 +853,7 @@ export function MissionThreadedControllerHost({
   } = contextActions;
 
   const outbound = useChatOutboundExecution({
+    surfaceMode: executionSurfaceMode,
     selectedSessionId,
     selectedSession,
     streamEnabled,

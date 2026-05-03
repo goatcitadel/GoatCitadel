@@ -22,11 +22,15 @@ env:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [windows-x64, windows-arm64]
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: windows-arm64
+            runner: windows-11-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +48,21 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust
+        run: rustup default stable-msvc
+
+      - name: Build desktop executable
+        run: pnpm package:desktop --target ${{ matrix.target }}
+
+      - name: Sign desktop executable
+        if: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 != '' && secrets.WINDOWS_SIGN_CERT_PASSWORD != '' }}
+        shell: pwsh
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "goatcitadel-signing-cert.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String("${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}"))
+          $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
+          & $signtool sign /fd SHA256 /f $certPath /p "${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}" /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
 
       - name: Build packaged bundle
         run: pnpm package:bundle --target ${{ matrix.target }}

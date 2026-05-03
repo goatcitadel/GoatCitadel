@@ -1,6 +1,7 @@
 export {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
+  groupDelegatedSessionsForRail,
   revealGeneratedArtifactInSurface,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,

@@ -457,9 +457,10 @@ export async function generatePreparedExecutionPlanDraft(
             "Return strict JSON with keys: summary, steps.",
             `Return between ${CHAT_PLANNER_MIN_STEPS} and ${CHAT_PLANNER_MAX_STEPS} steps.`,
             "Each step must include: objective, successCriteria, suggestedTools, expectedOutput, parallelizable, dependsOnStepIds, delegatedRole.",
-            "Use delegatedRole only from the allowed role list.",
+            "Use the template delegatedRole as-is. Do not repurpose synthesis, review, critic, or QA steps into worker steps.",
             "If the mode is chat, delegatedRole must be null for all steps.",
             "Keep step objectives specific, practical, and directly tied to the user request.",
+            "You may refine production/planning step wording, but terminal control steps must preserve the template role, objective, dependencies, and expected output.",
           ].join("\n"),
         },
         {
@@ -474,6 +475,7 @@ export async function generatePreparedExecutionPlanDraft(
             templateSteps: templatePlan.steps.map((step) => ({
               stepId: step.stepId,
               role: step.role,
+              label: step.label,
               objective: step.objective,
               successCriteria: step.successCriteria,
               suggestedTools: step.suggestedTools,

@@ -286,6 +286,25 @@
   gap: 0.4rem;
 }
 
+.mc-next-threaded-orphan-delegates {
+  display: grid;
+  gap: 0.42rem;
+  padding-top: 0.25rem;
+}
+
+.mc-next-threaded-orphan-delegates-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
 .mc-next-threaded-session-row-main,
 .mc-next-threaded-session-row-copy {
   min-width: 0;
@@ -559,6 +578,24 @@
   color: var(--text-secondary);
   font-size: 0.84rem;
   font-weight: 650;
+}
+
+.mc-next-thread-step-output {
+  width: 100%;
+  padding: 0.85rem;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  background: color-mix(in oklab, var(--background) 72%, var(--mc-surface-1));
+  color: var(--foreground);
+}
+
+.mc-next-thread-step-output .mc-assistant-renderer-viewport,
+.mc-next-thread-step-output .mc-assistant-renderer-message,
+.mc-next-thread-step-output .mc-assistant-renderer-shell,
+.mc-next-thread-step-output .mc-assistant-renderer-body,
+.mc-next-thread-step-output .mc-assistant-markdown {
+  background: transparent;
+  color: inherit;
 }
 
 .mc-next-thread-turn-surface,

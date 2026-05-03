@@ -56,6 +56,19 @@ import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagno
 import { buildGatewayHeaders, buildGatewayUrl, readGatewayAuthHeaders, request } from "./client-core.js";
 import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
 
+export interface ChatRequestSurfaceOptions {
+  originSurface?: ChatMode;
+}
+
+function originSurfaceHeader(options?: ChatRequestSurfaceOptions): HeadersInit | undefined {
+  return options?.originSurface ? { "x-goatcitadel-origin-surface": options.originSurface } : undefined;
+}
+
+function originSurfaceInit(options?: ChatRequestSurfaceOptions): Pick<RequestInit, "headers"> {
+  const headers = originSurfaceHeader(options);
+  return headers ? { headers } : {};
+}
+
 export interface ChatProjectsResponse {
   items: ChatProjectRecord[];
   view?: "active" | "archived" | "all";
@@ -193,19 +206,23 @@ export async function fetchChatSessions(input?: {
   return request<ChatSessionsResponse>(`/api/v1/chat/sessions?${query.toString()}`);
 }
 
-export async function createChatSession(input?: {
-  workspaceId?: string;
-  title?: string;
-  folderId?: string;
-  folderName?: string;
-  tags?: string[];
-  projectId?: string;
-  mode?: ChatMode;
-  origin?: ChatSessionOrigin;
-  includeInHistory?: boolean;
-}): Promise<ChatSessionRecord> {
+export async function createChatSession(
+  input?: {
+    workspaceId?: string;
+    title?: string;
+    folderId?: string;
+    folderName?: string;
+    tags?: string[];
+    projectId?: string;
+    mode?: ChatMode;
+    origin?: ChatSessionOrigin;
+    includeInHistory?: boolean;
+  },
+  options?: ChatRequestSurfaceOptions,
+): Promise<ChatSessionRecord> {
   return request<ChatSessionRecord>("/api/v1/chat/sessions", {
     method: "POST",
+    ...originSurfaceInit(options),
     body: JSON.stringify(input ?? {}),
   });
 }
@@ -510,9 +527,11 @@ export async function fetchChatPendingApprovals(sessionId: string): Promise<{
 export async function sendAgentChatMessage(
   sessionId: string,
   input: ChatSendMessageRequest,
+  options?: ChatRequestSurfaceOptions,
 ): Promise<ChatSendMessageResponse> {
   return request<ChatSendMessageResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`, {
     method: "POST",
+    ...originSurfaceInit(options),
     body: JSON.stringify(input),
   });
 }
@@ -520,9 +539,11 @@ export async function sendAgentChatMessage(
 export async function preflightChatRoute(
   sessionId: string,
   input: RoutingPreflightRequest,
+  options?: ChatRequestSurfaceOptions,
 ): Promise<RoutingPreflightResult> {
   return request<RoutingPreflightResult>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/route-preflight`, {
     method: "POST",
+    ...originSurfaceInit(options),
     body: JSON.stringify(input),
   });
 }
@@ -531,7 +552,7 @@ export async function streamAgentChatMessage(
   sessionId: string,
   input: ChatSendMessageRequest,
   onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; originSurface?: ChatMode } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send/stream`;
   const correlationId = createCorrelationId();
@@ -549,6 +570,7 @@ export async function streamAgentChatMessage(
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
+      ...originSurfaceHeader(options),
     }),
     body: JSON.stringify(input),
   });
@@ -610,11 +632,13 @@ export async function retryChatTurn(
   sessionId: string,
   turnId: string,
   input?: Partial<ChatSendMessageRequest>,
+  options?: ChatRequestSurfaceOptions,
 ): Promise<ChatSendMessageResponse> {
   return request<ChatSendMessageResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/retry`,
     {
       method: "POST",
+      ...originSurfaceInit(options),
       body: JSON.stringify(input ?? {}),
     },
   );
@@ -625,7 +649,7 @@ export async function streamRetryChatTurn(
   turnId: string,
   input: Partial<ChatSendMessageRequest>,
   onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; originSurface?: ChatMode } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/retry/stream`;
   const correlationId = createCorrelationId();
@@ -634,6 +658,7 @@ export async function streamRetryChatTurn(
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
+      ...originSurfaceHeader(options),
     }),
     body: JSON.stringify(input),
   });
@@ -648,11 +673,13 @@ export async function editChatTurn(
   sessionId: string,
   turnId: string,
   input: ChatSendMessageRequest,
+  options?: ChatRequestSurfaceOptions,
 ): Promise<ChatSendMessageResponse> {
   return request<ChatSendMessageResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit`,
     {
       method: "POST",
+      ...originSurfaceInit(options),
       body: JSON.stringify(input),
     },
   );
@@ -663,7 +690,7 @@ export async function streamEditChatTurn(
   turnId: string,
   input: ChatSendMessageRequest,
   onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; originSurface?: ChatMode } = {},
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit/stream`;
   const correlationId = createCorrelationId();
@@ -672,6 +699,7 @@ export async function streamEditChatTurn(
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
+      ...originSurfaceHeader(options),
     }),
     body: JSON.stringify(input),
   });

@@ -70,6 +70,7 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
 }
 
 export function useChatOutboundExecution(input: {
+  surfaceMode?: ChatSessionPrefsRecord["mode"];
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   streamEnabled: boolean;
@@ -119,6 +120,7 @@ export function useChatOutboundExecution(input: {
   isRoutePreflightAcknowledged: (hash: string) => boolean;
 }) {
   const {
+    surfaceMode,
     selectedSessionId,
     selectedSession,
     streamEnabled,
@@ -523,12 +525,14 @@ export function useChatOutboundExecution(input: {
       const attachmentsSnapshot = item.attachments;
       const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       const currentPrefs = prefsRef.current;
+      const effectiveMode = surfaceMode ?? currentPrefs?.mode ?? "chat";
       const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
       const executionModel = currentPrefs?.model ?? selectedModel;
       const optimisticPrefs =
         currentPrefs && (executionProviderId || executionModel)
           ? {
               ...currentPrefs,
+              mode: effectiveMode,
               providerId: executionProviderId,
               model: executionModel,
             }
@@ -803,13 +807,13 @@ export function useChatOutboundExecution(input: {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    mode: currentPrefs?.mode,
+                    mode: effectiveMode,
                     webMode: currentPrefs?.webMode,
                     memoryMode: currentPrefs?.memoryMode,
                     thinkingLevel: currentPrefs?.thinkingLevel,
                   },
                   onChunk,
-                  { signal: controller.signal },
+                  { signal: controller.signal, originSurface: effectiveMode },
                 );
               } else if (item.action === "edit" && item.targetTurnId) {
                 await streamEditChatTurn(
@@ -819,7 +823,7 @@ export function useChatOutboundExecution(input: {
                     content: trimmedContent,
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-                    mode: currentPrefs?.mode ?? "chat",
+                    mode: effectiveMode,
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
@@ -828,7 +832,7 @@ export function useChatOutboundExecution(input: {
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
                   },
                   onChunk,
-                  { signal: controller.signal },
+                  { signal: controller.signal, originSurface: effectiveMode },
                 );
               } else {
                 await streamAgentChatMessage(
@@ -837,7 +841,7 @@ export function useChatOutboundExecution(input: {
                     content: trimmedContent,
                     attachments: attachmentIds,
                     useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-                    mode: currentPrefs?.mode ?? "chat",
+                    mode: effectiveMode,
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
@@ -846,7 +850,7 @@ export function useChatOutboundExecution(input: {
                     thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
                   },
                   onChunk,
-                  { signal: controller.signal },
+                  { signal: controller.signal, originSurface: effectiveMode },
                 );
               }
               break;
@@ -877,40 +881,54 @@ export function useChatOutboundExecution(input: {
           setPendingApproval(null);
           const sent =
             item.action === "retry" && item.targetTurnId
-              ? await retryChatTurn(session.sessionId, item.targetTurnId, {
-                  providerId: routeExecutionProviderId,
-                  model: routeExecutionModel,
-                  routeDecision: routeExecutionDecision,
-                  mode: currentPrefs?.mode,
-                  webMode: currentPrefs?.webMode,
-                  memoryMode: currentPrefs?.memoryMode,
-                  thinkingLevel: currentPrefs?.thinkingLevel,
-                })
+              ? await retryChatTurn(
+                  session.sessionId,
+                  item.targetTurnId,
+                  {
+                    providerId: routeExecutionProviderId,
+                    model: routeExecutionModel,
+                    routeDecision: routeExecutionDecision,
+                    mode: effectiveMode,
+                    webMode: currentPrefs?.webMode,
+                    memoryMode: currentPrefs?.memoryMode,
+                    thinkingLevel: currentPrefs?.thinkingLevel,
+                  },
+                  { originSurface: effectiveMode },
+                )
               : item.action === "edit" && item.targetTurnId
-                ? await editChatTurn(session.sessionId, item.targetTurnId, {
-                    content: trimmedContent,
-                    attachments: attachmentIds,
-                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-                    mode: currentPrefs?.mode ?? "chat",
-                    providerId: routeExecutionProviderId,
-                    model: routeExecutionModel,
-                    routeDecision: routeExecutionDecision,
-                    webMode: currentPrefs?.webMode ?? "auto",
-                    memoryMode: currentPrefs?.memoryMode ?? "auto",
-                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-                  })
-                : await sendAgentChatMessage(session.sessionId, {
-                    content: trimmedContent,
-                    attachments: attachmentIds,
-                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
-                    mode: currentPrefs?.mode ?? "chat",
-                    providerId: routeExecutionProviderId,
-                    model: routeExecutionModel,
-                    routeDecision: routeExecutionDecision,
-                    webMode: currentPrefs?.webMode ?? "auto",
-                    memoryMode: currentPrefs?.memoryMode ?? "auto",
-                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-                  });
+                ? await editChatTurn(
+                    session.sessionId,
+                    item.targetTurnId,
+                    {
+                      content: trimmedContent,
+                      attachments: attachmentIds,
+                      useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                      mode: effectiveMode,
+                      providerId: routeExecutionProviderId,
+                      model: routeExecutionModel,
+                      routeDecision: routeExecutionDecision,
+                      webMode: currentPrefs?.webMode ?? "auto",
+                      memoryMode: currentPrefs?.memoryMode ?? "auto",
+                      thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+                    },
+                    { originSurface: effectiveMode },
+                  )
+                : await sendAgentChatMessage(
+                    session.sessionId,
+                    {
+                      content: trimmedContent,
+                      attachments: attachmentIds,
+                      useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                      mode: effectiveMode,
+                      providerId: routeExecutionProviderId,
+                      model: routeExecutionModel,
+                      routeDecision: routeExecutionDecision,
+                      webMode: currentPrefs?.webMode ?? "auto",
+                      memoryMode: currentPrefs?.memoryMode ?? "auto",
+                      thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
+                    },
+                    { originSurface: effectiveMode },
+                  );
           if (sent.trace) {
             setCapabilitySuggestions(sent.trace.capabilityUpgradeSuggestions ?? []);
             setSpecialistSuggestions(sent.trace.specialistCandidateSuggestions ?? []);
@@ -989,6 +1007,7 @@ export function useChatOutboundExecution(input: {
       scheduleStreamMessageReconciliation,
       selectedModel,
       selectedProviderId,
+      surfaceMode,
       setCapabilitySuggestions,
       setSpecialistSuggestions,
       setDraft,

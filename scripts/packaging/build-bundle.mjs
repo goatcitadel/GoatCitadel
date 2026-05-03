@@ -30,6 +30,16 @@ const bundleRoot = path.join(outDir, bundleName);
 const appRoot = path.join(bundleRoot, "app");
 const gatewayDeployDir = path.join(appRoot, "gateway");
 const missionControlDistDir = path.join(appRoot, "mission-control", "dist");
+const desktopRuntimeDir = path.join(appRoot, "desktop");
+const desktopExecutableName = "GoatCitadel-Mission-Control-Desktop.exe";
+const desktopArtifactPath = path.join(
+  repoRoot,
+  "artifacts",
+  "installers",
+  "desktop",
+  target,
+  desktopExecutableName,
+);
 const runtimeNodeDir = path.join(appRoot, "runtime", "node");
 const templatesRoot = path.join(appRoot, "templates");
 const nodeVersion = args.nodeVersion || process.version;
@@ -58,6 +68,9 @@ async function main() {
   copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
   copyDirectory(uiTarget.distDir, missionControlDistDir);
   writeUiTargetManifest(appRoot);
+  if (!args.skipDesktop) {
+    copyDesktopExecutable();
+  }
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
   copyIfExists(path.join(repoRoot, ".env.example"), path.join(templatesRoot, ".env.example"));
   copyIfExists(path.join(repoRoot, "skills"), path.join(templatesRoot, "skills"));
@@ -113,6 +126,10 @@ function parseArgs(argv) {
       parsed.skipBuild = true;
       continue;
     }
+    if (value === "--skip-desktop") {
+      parsed.skipDesktop = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${value}`);
   }
   return parsed;
@@ -120,7 +137,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--skip-build]",
+    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--skip-build] [--skip-desktop]",
   );
 }
 
@@ -267,6 +284,12 @@ function writeReleaseManifest({
         description: "Embedded Node runtime used by the packaged launcher.",
       },
       {
+        id: "mission-control-desktop",
+        required: !args.skipDesktop,
+        path: `app/desktop/${desktopExecutableName}`,
+        description: "Native desktop host for Mission Control, tray controls, runtime recovery, and local notifications.",
+      },
+      {
         id: "chromium-runtime",
         required: false,
         description: "Installer-managed Playwright Chromium runtime.",
@@ -281,9 +304,23 @@ function writeReleaseManifest({
     launcher: {
       command: "goatcitadel launch",
       windows: "bin/goatcitadel.cmd",
+      desktop: `app/desktop/${desktopExecutableName}`,
     },
   };
   fs.writeFileSync(path.join(packagedAppRoot, "release-manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+}
+
+function copyDesktopExecutable() {
+  if (!fs.existsSync(desktopArtifactPath)) {
+    throw new Error(
+      `Desktop executable is missing: ${desktopArtifactPath}. Run pnpm package:desktop --target ${target} before package:bundle, or pass --skip-desktop for a browser-only bundle.`,
+    );
+  }
+  copyFile(desktopArtifactPath, path.join(desktopRuntimeDir, desktopExecutableName));
+  copyIfExists(
+    path.join(path.dirname(desktopArtifactPath), "desktop-manifest.json"),
+    path.join(desktopRuntimeDir, "desktop-manifest.json"),
+  );
 }
 
 function writeUiTargetManifest(packagedAppRoot) {

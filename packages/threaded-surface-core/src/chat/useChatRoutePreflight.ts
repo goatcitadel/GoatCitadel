@@ -17,10 +17,11 @@ function buildPreflightRequest(input: {
   action: RoutingPreflightAction;
   turnId?: string | null;
   prefs: ChatSessionPrefsRecord | null;
+  surfaceMode?: ChatSessionPrefsRecord["mode"];
 }): RoutingPreflightRequest {
   const prefsOverride = input.prefs
     ? {
-        mode: input.prefs.mode,
+        mode: input.surfaceMode ?? input.prefs.mode,
         providerId: input.prefs.providerId,
         model: input.prefs.model,
         webMode: input.prefs.webMode,
@@ -38,18 +39,20 @@ function buildPreflightRequest(input: {
 export function useChatRoutePreflight(input: {
   sessionId: string | null;
   prefs: ChatSessionPrefsRecord | null;
+  surfaceMode?: ChatSessionPrefsRecord["mode"];
   displayAction: RoutingPreflightAction;
   displayTurnId?: string | null;
   enabled?: boolean;
 }) {
-  const { sessionId, prefs, displayAction, displayTurnId, enabled = true } = input;
+  const { sessionId, prefs, surfaceMode, displayAction, displayTurnId, enabled = true } = input;
   const cacheRef = useRef(new Map<string, { fetchedAt: number; result: RoutingPreflightResult }>());
   const [result, setResult] = useState<RoutingPreflightResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const displayRequest = useMemo(
-    () => (sessionId ? buildPreflightRequest({ action: displayAction, turnId: displayTurnId, prefs }) : null),
-    [displayAction, displayTurnId, prefs, sessionId],
+    () =>
+      sessionId ? buildPreflightRequest({ action: displayAction, turnId: displayTurnId, prefs, surfaceMode }) : null,
+    [displayAction, displayTurnId, prefs, sessionId, surfaceMode],
   );
   const displayKey = useMemo(
     () => (sessionId && displayRequest ? `${sessionId}:${stableHash(displayRequest)}` : null),
@@ -67,7 +70,9 @@ export function useChatRoutePreflight(input: {
       if (!options?.force && cached && Date.now() - cached.fetchedAt < PREFLIGHT_TTL_MS) {
         return cached.result;
       }
-      const next = await preflightChatRoute(targetSessionId, request);
+      const next = await preflightChatRoute(targetSessionId, request, {
+        originSurface: request.prefsOverride?.mode,
+      });
       cacheRef.current.set(cacheKey, {
         fetchedAt: Date.now(),
         result: next,
@@ -127,6 +132,7 @@ export function useChatRoutePreflight(input: {
         action: override.action,
         turnId: override.turnId,
         prefs,
+        surfaceMode,
       });
       const cacheKey = `${targetSessionId}:${stableHash(request)}`;
       const cached = cacheRef.current.get(cacheKey);
@@ -138,7 +144,7 @@ export function useChatRoutePreflight(input: {
       }
       return next;
     },
-    [displayKey, fetchPreflight, prefs, sessionId],
+    [displayKey, fetchPreflight, prefs, sessionId, surfaceMode],
   );
 
   const resultHash = useMemo(() => (result ? stableHash(result) : null), [result]);

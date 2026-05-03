@@ -22,6 +22,8 @@ Default installer home is under your user home directory:
 - app dir: `~/.GoatCitadel/app`
 - launcher dir: `~/.GoatCitadel/bin`
 
+The Windows installer also installs the native Mission Control desktop host. Start Menu and desktop shortcuts open the desktop host by default; the host starts the same gateway and web Mission Control runtime behind the scenes and keeps it warm while the app is open.
+
 The installer also places a local `pnpm` shim in the launcher directory, so GoatCitadel runtime commands do not require a separate global pnpm install after setup.
 
 When GoatCitadel installs or repairs local tooling for you, it should describe:
@@ -127,11 +129,14 @@ bash install.sh --voice-model small.en
 
 ```bash
 goatcitadel help
+goatcitadel status --json
+goatcitadel launch --no-open --json --wait
 goatcitadel verify install
 goatcitadel up
 goatcitadel onboard
 goatcitadel doctor --deep
 goatcitadel voice status
+goatcitadel stop --json
 goatcitadel uninstall --force
 ```
 
@@ -150,6 +155,7 @@ PowerShell note:
 
 - use `goatcitadel` or `goat`
 - onboarding uses the live gateway API, so start with `goat up`
+- the desktop app is the Windows shortcut default, but `goatcitadel launch` still opens Mission Control in the browser
 - do not use `gc` in PowerShell because it is the built-in alias for `Get-Content`
 - if `goatcitadel` is not found immediately after install, open a new PowerShell window
 - immediate fallback: `& "$HOME\\.GoatCitadel\\bin\\goatcitadel.cmd" onboard`
@@ -438,6 +444,7 @@ Use this matrix when handing the repo to external manual testers:
 
 | Flow | Required setup | Expected proof |
 | --- | --- | --- |
+| Desktop host | Windows installer or `pnpm desktop:dev` from source | native window loads Mission Control, close-to-tray keeps runtime warm, Open in Browser and logs actions work |
 | Installer bootstrap | `goatcitadel verify install` or `pnpm verify:install` | isolated gateway/UI stack starts, onboarding bootstrap succeeds, provider bootstrap writes expected config/env state |
 | Onboarding + dashboard | `goatcitadel up`, then complete onboarding | Dashboard, Chat, Sessions, and Settings load without auth/origin errors |
 | Chat command flow | any started stack, one session | `/help` or another local command path returns a stable thread/update result without requiring cloud provider access |

@@ -1,10 +1,7 @@
 import type {
-  ChatCompletionRequest,
   ChatMode,
-  ChatOrchestrationIntensity,
   ChatOrchestrationParallelism,
   ChatOrchestrationProviderPreference,
-  ChatOrchestrationReviewDepth,
   ChatOrchestrationRouteDecision,
   ChatOrchestrationVisibility,
   ChatSessionPrefsRecord,
@@ -49,21 +46,13 @@ export function shouldUseModeOrchestration(input: OrchestrationRouterInput): boo
   if (hasLiveDataKeywords(text)) {
     return false;
   }
-  const triggerKeywords = [
-    "compare",
-    "research",
-    "critique",
-    "review",
-    "analyze",
-    "tradeoff",
-    "plan",
-  ];
-  return input.task.prefs.orchestrationIntensity !== "minimal"
-    && (
-      text.length > 220
-      || triggerKeywords.some((keyword) => text.includes(keyword))
-      || input.task.prefs.planningMode === "advisory"
-    );
+  const triggerKeywords = ["compare", "research", "critique", "review", "analyze", "tradeoff", "plan"];
+  return (
+    input.task.prefs.orchestrationIntensity !== "minimal" &&
+    (text.length > 220 ||
+      triggerKeywords.some((keyword) => text.includes(keyword)) ||
+      input.task.prefs.planningMode === "advisory")
+  );
 }
 
 export function buildOrchestrationPlan(input: OrchestrationRouterInput): OrchestrationPlan {
@@ -72,21 +61,23 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
   const requestedVisibility = clampVisibility(task.prefs.orchestrationVisibility, policy.maxVisibleVisibility);
   const requestedParallelism = normalizeParallelism(task.prefs.orchestrationParallelism, policy.allowParallelWorkers);
   const requestedWorkstreams = task.mode === "cowork" ? extractRequestedWorkstreams(task.objective) : [];
-  const workflowTemplate = requestedWorkstreams.length > 0
-    ? "cowork.workstreams.synthesize"
-    : selectWorkflowTemplate(task.mode, task.objective);
-  const steps = workflowTemplate === "cowork.workstreams.synthesize"
-    ? buildWorkstreamStepPlans(requestedWorkstreams, capabilities, {
-      objective: task.objective,
-      prefs: task.prefs,
-      parallelism: requestedParallelism,
-    })
-    : buildStepPlans(selectRolesForWorkflow(workflowTemplate), capabilities, {
-    objective: task.objective,
-    prefs: task.prefs,
-    parallelism: requestedParallelism,
-    workflowTemplate,
-  });
+  const workflowTemplate =
+    requestedWorkstreams.length > 0
+      ? "cowork.workstreams.synthesize"
+      : selectWorkflowTemplate(task.mode, task.objective);
+  const steps =
+    workflowTemplate === "cowork.workstreams.synthesize"
+      ? buildWorkstreamStepPlans(requestedWorkstreams, capabilities, {
+          objective: task.objective,
+          prefs: task.prefs,
+          parallelism: requestedParallelism,
+        })
+      : buildStepPlans(selectRolesForWorkflow(workflowTemplate), capabilities, {
+          objective: task.objective,
+          prefs: task.prefs,
+          parallelism: requestedParallelism,
+          workflowTemplate,
+        });
   const routeDecision: ChatOrchestrationRouteDecision = {
     modePolicy: task.mode,
     workflowTemplate,
@@ -221,19 +212,14 @@ function buildWorkstreamStepPlans(
       index,
       role,
       label,
-      stage: role === "reviewer"
-        ? (parallelProduction ? 2 : productionCount + 1)
-        : parallelProduction
-          ? 1
-          : index + 1,
+      stage: role === "reviewer" ? (parallelProduction ? 2 : productionCount + 1) : parallelProduction ? 1 : index + 1,
       objective: buildWorkstreamStepObjective(input.objective, label, role),
       successCriteria: `Return a complete ${label} workstream that can be merged into the final Cowork answer.`,
       suggestedTools: buildFallbackSuggestedTools(role, "cowork.workstreams.synthesize"),
       expectedOutput: `${label} section for the final answer.`,
       parallelizable: role !== "reviewer" && parallelProduction,
-      dependsOnStepIds: role === "reviewer"
-        ? labels.slice(0, index).map((_, priorIndex) => `orch-step-${priorIndex + 1}`)
-        : undefined,
+      dependsOnStepIds:
+        role === "reviewer" ? labels.slice(0, index).map((_, priorIndex) => `orch-step-${priorIndex + 1}`) : undefined,
       delegatedRole: label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
@@ -284,9 +270,9 @@ function buildStepPlans(
   },
 ): OrchestrationStepPlan[] {
   const usedProviders = new Set<string>();
-  const parallelStages = input.parallelism === "parallel" || (
-    input.parallelism === "auto" && input.workflowTemplate === "cowork.research.synthesize.critic"
-  );
+  const parallelStages =
+    input.parallelism === "parallel" ||
+    (input.parallelism === "auto" && input.workflowTemplate === "cowork.research.synthesize.critic");
   return roles.map((role, index) => {
     const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
     if (!input.prefs.providerId && provider?.providerId) {
@@ -296,36 +282,53 @@ function buildStepPlans(
     const priorStepId = index > 0 ? `orch-step-${index}` : undefined;
     const objective = buildFallbackStepObjective(input.objective, role, index, roles.length);
     const expectedOutput = buildFallbackExpectedOutput(role);
+    const label = buildFallbackStepLabel(role, index, roles, input.workflowTemplate);
     return {
       stepId,
       index,
       role,
-      stage: parallelStages && role === "researcher"
-        ? 1
-        : parallelStages && index > 1
-          ? index
-          : index + 1,
+      label,
+      stage: parallelStages && role === "researcher" ? 1 : parallelStages && index > 1 ? index : index + 1,
       objective,
       successCriteria: buildFallbackSuccessCriteria(role, expectedOutput),
       suggestedTools: buildFallbackSuggestedTools(role, input.workflowTemplate),
       expectedOutput,
       parallelizable: parallelStages && role === "researcher",
       dependsOnStepIds: priorStepId ? [priorStepId] : [],
-      delegatedRole: input.prefs.mode === "chat" ? undefined : role,
+      delegatedRole: input.prefs.mode === "chat" ? undefined : label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
     };
   });
 }
 
-function buildWorkflowTemplateSummary(
-  mode: ChatMode,
-  workflowTemplate: string,
-  objective: string,
-): string {
+function buildWorkflowTemplateSummary(mode: ChatMode, workflowTemplate: string, objective: string): string {
   const modeLabel = mode === "code" ? "Code" : mode === "cowork" ? "Cowork" : "Chat";
   const conciseObjective = objective.trim().replace(/\s+/g, " ");
   return `${modeLabel} orchestration plan for ${conciseObjective.slice(0, 160)} using ${workflowTemplate}.`;
+}
+
+function buildFallbackStepLabel(
+  role: OrchestrationRole,
+  index: number,
+  roles: OrchestrationRole[],
+  workflowTemplate: string,
+): string {
+  const duplicateRoleCount = roles.filter((candidate) => candidate === role).length;
+  if (duplicateRoleCount > 1) {
+    const duplicateIndex = roles.slice(0, index + 1).filter((candidate) => candidate === role).length;
+    return `${toTitleCase(role)} ${duplicateIndex}`;
+  }
+  if (workflowTemplate === "code.plan.code.review.qa" && role === "qa-validator") {
+    return "QA";
+  }
+  if (role === "answerer") {
+    return "Answer";
+  }
+  if (role === "qa-validator") {
+    return "QA Validation";
+  }
+  return toTitleCase(role);
 }
 
 function buildFallbackStepObjective(
@@ -425,29 +428,38 @@ function selectProviderForRole(
   usedProviders: Set<string>,
 ): ProviderCapabilityRecord | undefined {
   if (prefs.providerId) {
-    return capabilities.find((item) => item.providerId === prefs.providerId)
-      ?? (prefs.model ? {
-        providerId: prefs.providerId,
-        model: prefs.model,
-        qualityScore: 0.75,
-        speedScore: 0.75,
-        costScore: 0.75,
-        reliabilityScore: 0.75,
-        reasoningScore: 0.75,
-        codingScore: 0.75,
-        reviewScore: 0.75,
-        synthesisScore: 0.75,
-        researchScore: 0.75,
-        jsonScore: 0.75,
-        toolScore: 0.75,
-        longContextScore: 0.75,
-      } : undefined);
+    return (
+      capabilities.find((item) => item.providerId === prefs.providerId) ??
+      (prefs.model
+        ? {
+            providerId: prefs.providerId,
+            model: prefs.model,
+            qualityScore: 0.75,
+            speedScore: 0.75,
+            costScore: 0.75,
+            reliabilityScore: 0.75,
+            reasoningScore: 0.75,
+            codingScore: 0.75,
+            reviewScore: 0.75,
+            synthesisScore: 0.75,
+            researchScore: 0.75,
+            jsonScore: 0.75,
+            toolScore: 0.75,
+            longContextScore: 0.75,
+          }
+        : undefined)
+    );
   }
 
   const ranked = [...capabilities]
     .map((candidate) => ({
       candidate,
-      score: scoreCandidateForRole(candidate, role, prefs.orchestrationProviderPreference, usedProviders.has(candidate.providerId)),
+      score: scoreCandidateForRole(
+        candidate,
+        role,
+        prefs.orchestrationProviderPreference,
+        usedProviders.has(candidate.providerId),
+      ),
     }))
     .sort((left, right) => right.score - left.score);
   return ranked.at(0)?.candidate;
@@ -497,11 +509,7 @@ function scoreCandidateForRole(
       case "low_cost":
         return candidate.costScore * 0.18;
       default:
-        return (
-          candidate.qualityScore * 0.08
-          + candidate.speedScore * 0.05
-          + candidate.costScore * 0.05
-        );
+        return candidate.qualityScore * 0.08 + candidate.speedScore * 0.05 + candidate.costScore * 0.05;
     }
   })();
   const diversityPenalty = alreadyUsed ? 0.03 : 0;

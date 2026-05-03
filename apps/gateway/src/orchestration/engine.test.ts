@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ChatCitationRecord,
-  ChatCompletionResponse,
-  ChatSessionPrefsRecord,
-} from "@goatcitadel/contracts";
+import type { ChatCitationRecord, ChatCompletionResponse, ChatSessionPrefsRecord } from "@goatcitadel/contracts";
 import { executeOrchestrationPlan } from "./engine.js";
 import type { OrchestrationPlan, OrchestrationTaskInput } from "./types.js";
 
@@ -149,14 +145,14 @@ describe("orchestration engine", () => {
     const onStepResult = vi.fn();
     const createChatCompletion = vi
       .fn()
-      .mockResolvedValueOnce(createCompletion(
-        "Research angle one",
-        [{ citationId: "c1", url: "https://example.com/1", title: "Source 1" }],
-      ))
-      .mockResolvedValueOnce(createCompletion(
-        "Research angle two",
-        [{ citationId: "c1b", url: "https://example.com/1", title: "Source 1" }],
-      ))
+      .mockResolvedValueOnce(
+        createCompletion("Research angle one", [{ citationId: "c1", url: "https://example.com/1", title: "Source 1" }]),
+      )
+      .mockResolvedValueOnce(
+        createCompletion("Research angle two", [
+          { citationId: "c1b", url: "https://example.com/1", title: "Source 1" },
+        ]),
+      )
       .mockResolvedValueOnce(createCompletion("Critical caveats"))
       .mockResolvedValueOnce(createCompletion("Synthesized recommendation"));
 
@@ -176,9 +172,7 @@ describe("orchestration engine", () => {
     expect(result.finalStep?.role).toBe("synthesizer");
     expect(result.stepResults).toHaveLength(4);
     expect(result.stepResults.every((step) => step.status === "completed")).toBe(true);
-    expect(result.citations).toEqual([
-      { citationId: "c1", url: "https://example.com/1", title: "Source 1" },
-    ]);
+    expect(result.citations).toEqual([{ citationId: "c1", url: "https://example.com/1", title: "Source 1" }]);
   });
 
   it("prefers the synthesizer as final output even if a later non-terminal role completed", async () => {
@@ -264,9 +258,7 @@ describe("orchestration engine", () => {
   });
 
   it("fails downstream synthesis and review roles when no upstream handoff completed", async () => {
-    const createChatCompletion = vi
-      .fn()
-      .mockRejectedValue(new Error("provider unavailable"));
+    const createChatCompletion = vi.fn().mockRejectedValue(new Error("provider unavailable"));
 
     const result = await executeOrchestrationPlan({
       task: createTask(),
@@ -348,18 +340,22 @@ describe("orchestration engine", () => {
       .mockResolvedValueOnce(createCompletion("## Logistics\nPrep timeline."))
       .mockResolvedValueOnce(createCompletion("## Risk Review\nConfirm allergies and keep LED cords safe."))
       .mockResolvedValueOnce(createCompletion("## Logistics\nOnly the logistics survived."))
-      .mockResolvedValueOnce(createCompletion([
-        "## Menu",
-        "Night market ramen bar.",
-        "## Atmosphere",
-        "Warm neon hideout.",
-        "## Logistics",
-        "Prep timeline.",
-        "## Risk Review",
-        "Confirm allergies.",
-        "## Final Host-Ready Checklist",
-        "- Shop.",
-      ].join("\n")));
+      .mockResolvedValueOnce(
+        createCompletion(
+          [
+            "## Menu",
+            "Night market ramen bar.",
+            "## Atmosphere",
+            "Warm neon hideout.",
+            "## Logistics",
+            "Prep timeline.",
+            "## Risk Review",
+            "Confirm allergies.",
+            "## Final Host-Ready Checklist",
+            "- Shop.",
+          ].join("\n"),
+        ),
+      );
 
     const result = await executeOrchestrationPlan({
       task: {
@@ -415,6 +411,36 @@ describe("orchestration engine", () => {
       "orchestration_final_synthesis_missing_required_sections",
       "orchestration_final_synthesis_fallback",
     ]);
+  });
+
+  it("repairs generic Cowork runs when the final synthesis step fails after useful handoffs", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(createCompletion("Prioritized acquisition plan."))
+      .mockResolvedValueOnce(createCompletion("Concrete SEO and outreach assets."))
+      .mockRejectedValueOnce(new Error("synthesis provider unavailable"))
+      .mockResolvedValueOnce(createCompletion("Final beta acquisition plan that merges the plan, assets, and risks."));
+
+    const result = await executeOrchestrationPlan({
+      task: {
+        ...createTask(),
+        objective: "Update SEO and get beta users beyond flyers.",
+      },
+      plan: createPlanWorkSynthesizePlan(),
+      callbacks: { createChatCompletion },
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(4);
+    expect(result.finalOutput).toBe("Final beta acquisition plan that merges the plan, assets, and risks.");
+    expect(result.finalStep?.role).toBe("synthesizer");
+    expect(result.integritySignals).toEqual([
+      "orchestration_final_synthesis_missing",
+      "orchestration_final_synthesis_role_drift",
+      "orchestration_final_synthesis_repaired",
+    ]);
+    const repairPrompt = createChatCompletion.mock.calls[3]?.[0].messages.at(-1)?.content ?? "";
+    expect(repairPrompt).toContain("Prioritized acquisition plan.");
+    expect(repairPrompt).toContain("Concrete SEO and outreach assets.");
   });
 });
 
@@ -488,6 +514,62 @@ function createWorkstreamPlan(): OrchestrationPlan {
         label: "Synthesis",
         stage: 3,
         objective: "Merge workstreams.",
+        parallelizable: false,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+    ],
+  };
+}
+
+function createPlanWorkSynthesizePlan(): OrchestrationPlan {
+  return {
+    workflowTemplate: "cowork.plan.work.synthesize",
+    summary: "Plan, work, synthesize.",
+    source: "workflow_template",
+    routeDecision: {
+      modePolicy: "cowork",
+      workflowTemplate: "cowork.plan.work.synthesize",
+      hidden: false,
+      visibility: "explicit",
+      intensity: "balanced",
+      providerPreference: "balanced",
+      reviewDepth: "standard",
+      parallelism: "sequential",
+      selectedRoles: ["Plan", "Work", "Synthesis"],
+      selectedProviders: [],
+      triggerReason: "cowork_explicit_orchestration",
+    },
+    steps: [
+      {
+        stepId: "step-1",
+        index: 0,
+        role: "planner",
+        label: "Plan",
+        stage: 1,
+        objective: "Plan beta acquisition.",
+        parallelizable: false,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+      {
+        stepId: "step-2",
+        index: 1,
+        role: "worker",
+        label: "Work",
+        stage: 2,
+        objective: "Produce assets.",
+        parallelizable: false,
+        providerId: "openai",
+        model: "gpt-5.5",
+      },
+      {
+        stepId: "step-3",
+        index: 2,
+        role: "synthesizer",
+        label: "Synthesis",
+        stage: 3,
+        objective: "Merge plan and assets.",
         parallelizable: false,
         providerId: "openai",
         model: "gpt-5.5",

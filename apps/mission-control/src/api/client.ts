@@ -185,8 +185,8 @@ import type {
 } from "./types.js";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
 import { iterateSsePayloads, parseSseJson } from "./streaming.js";
-import { buildGatewayUrl, readStoredGatewayAuthState } from "./client-core.js";
-import { computeReconnectDelay, issueSseBridgeToken } from "./sse-bridge.js";
+import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState } from "./client-core.js";
+import { computeReconnectDelay, isSseBridgeNotNeededError, issueSseBridgeToken } from "./sse-bridge.js";
 
 export type { GuidanceDocumentRecord };
 export type { ObsidianIntegrationConfig, ObsidianIntegrationStatus };
@@ -779,8 +779,15 @@ async function buildEventStreamUrl(): Promise<string> {
     Boolean(auth.token?.trim()) ||
     Boolean(auth.username && auth.password)
   ) {
-    const issued = await issueSseBridgeToken("events:stream");
-    url.searchParams.set("sse_token", issued.token);
+    try {
+      const issued = await issueSseBridgeToken("events:stream");
+      url.searchParams.set("sse_token", issued.token);
+    } catch (error) {
+      if (!isSseBridgeNotNeededError(error)) {
+        throw error;
+      }
+      clearGatewayAuthState();
+    }
   }
 
   return url.toString();

@@ -27,6 +27,7 @@ The release lane treats these files as the minimum rebuild inputs:
 
 - Node `24.x` in GitHub Actions
 - pnpm `10.31.0`
+- Rust stable MSVC for the Tauri desktop host
 - Inno Setup `6.x` for Windows packaging
 - `zip` for the final proof bundle assembly
 - `cosign` keyless signing in the release job
@@ -37,6 +38,7 @@ The release workflow uses these commands:
 
 ```text
 pnpm install --frozen-lockfile
+pnpm package:desktop --target <target>
 pnpm package:bundle --target <target>
 pnpm package:windows --target <windows-target>
 pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom-path>

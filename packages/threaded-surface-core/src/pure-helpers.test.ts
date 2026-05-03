@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSessionLabel,
+  groupDelegatedSessionsForRail,
   resolveOptimisticChatPrefs,
   resolveSelectedTurnId,
   shouldApplyFetchedMessagesAfterStream,
@@ -176,6 +177,59 @@ describe("threaded-surface-core pure helpers", () => {
         account: "Support",
       } as never),
     ).toBe("External chat - Slack / Support");
+  });
+
+  it("groups delegated sessions under parents and keeps parentless matches in a delegated fallback group", () => {
+    const groups = groupDelegatedSessionsForRail([
+      {
+        sessionId: "parent-1",
+        updatedAt: "2026-05-03T16:00:00.000Z",
+      },
+      {
+        sessionId: "child-2",
+        updatedAt: "2026-05-03T16:02:00.000Z",
+        delegationParent: {
+          parentSessionId: "parent-1",
+          runId: "run-1",
+          stepId: "step-2",
+          role: "worker",
+          label: "Work",
+          index: 2,
+        },
+      },
+      {
+        sessionId: "child-1",
+        updatedAt: "2026-05-03T16:01:00.000Z",
+        delegationParent: {
+          parentSessionId: "parent-1",
+          runId: "run-1",
+          stepId: "step-1",
+          role: "planner",
+          label: "Plan",
+          index: 1,
+        },
+      },
+      {
+        sessionId: "orphan-child",
+        updatedAt: "2026-05-03T16:03:00.000Z",
+        delegationParent: {
+          parentSessionId: "filtered-parent",
+          runId: "run-2",
+          stepId: "step-1",
+          role: "researcher",
+          label: "Research",
+          index: 0,
+        },
+      },
+    ]);
+
+    expect(groups.topLevelSessions.map((session) => session.sessionId)).toEqual(["parent-1"]);
+    expect(groups.delegatedChildrenByParentId["parent-1"]?.map((session) => session.sessionId)).toEqual([
+      "child-1",
+      "child-2",
+    ]);
+    expect(groups.orphanDelegatedSessions.map((session) => session.sessionId)).toEqual(["orphan-child"]);
+    expect(groups.delegatedChildSessionIds).toEqual(["child-2", "child-1", "orphan-child"]);
   });
 
   it("keeps trace visibility calm for chat but always visible for non-chat surfaces", () => {

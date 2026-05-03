@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Code2, FolderPlus, Menu, MessageSquareText, PanelRight, Search, Workflow } from "lucide-react";
-import type { ChatMode } from "@goatcitadel/contracts";
+import type { ChatMode, ChatSessionRecord } from "@goatcitadel/contracts";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
   MissionThreadedDropTargetProps,
@@ -55,32 +55,14 @@ export function ThreadedSurfacePage({
   const workflowPanel = input.workflowPanel;
   const modeMeta = MODE_META[surface];
   const SurfaceIcon = modeMeta.icon;
-  const delegatedChildSessionIds = useMemo(() => {
-    if (surface !== "cowork" || !activeProps?.delegationRun) {
-      return [];
-    }
-    return [
-      ...new Set(
-        activeProps.delegationRun.steps
-          .map((step) => step.childSessionId)
-          .filter((sessionId): sessionId is string => Boolean(sessionId)),
-      ),
-    ];
-  }, [activeProps?.delegationRun, surface]);
-  const delegatedChildSessionIdSet = useMemo(() => new Set(delegatedChildSessionIds), [delegatedChildSessionIds]);
-  const missionSessions = useMemo(
-    () => input.sessionRail.missionSessions.filter((item) => !delegatedChildSessionIdSet.has(item.sessionId)),
-    [delegatedChildSessionIdSet, input.sessionRail.missionSessions],
+  const missionSessionGroups = useMemo(
+    () => groupRailSessionsByDelegation(input.sessionRail.missionSessions),
+    [input.sessionRail.missionSessions],
   );
-  const delegatedChildSessions = useMemo(() => {
-    if (delegatedChildSessionIds.length === 0) {
-      return [];
-    }
-    const sessionById = new Map(input.sessionRail.missionSessions.map((item) => [item.sessionId, item]));
-    return delegatedChildSessionIds
-      .map((sessionId) => sessionById.get(sessionId))
-      .filter((item): item is (typeof input.sessionRail.missionSessions)[number] => Boolean(item));
-  }, [delegatedChildSessionIds, input.sessionRail.missionSessions]);
+  const externalSessionGroups = useMemo(
+    () => groupRailSessionsByDelegation(input.sessionRail.externalSessions),
+    [input.sessionRail.externalSessions],
+  );
   const stageLayoutClass = [
     "mc-next-threaded-stage",
     workflowPanel ? "has-workbench" : "",
@@ -248,24 +230,23 @@ export function ThreadedSurfacePage({
 
         <SessionGroup
           title="Mission"
-          items={missionSessions}
-          count={input.sessionRail.missionSessions.length}
+          items={missionSessionGroups.topLevelSessions}
+          count={missionSessionGroups.topLevelSessions.length}
           selectedSessionId={input.sessionRail.selectedSessionId}
           onSelectSession={input.sessionRail.onSelectSession}
           renderSessionLabel={input.sessionRail.renderSessionLabel}
-          nestedChildrenByParentId={
-            surface === "cowork" && input.sessionRail.selectedSessionId && delegatedChildSessions.length > 0
-              ? { [input.sessionRail.selectedSessionId]: delegatedChildSessions }
-              : undefined
-          }
+          nestedChildrenByParentId={missionSessionGroups.delegatedChildrenByParentId}
+          orphanDelegatedItems={missionSessionGroups.orphanDelegatedSessions}
         />
         <SessionGroup
           title="External"
-          items={input.sessionRail.externalSessions}
-          count={input.sessionRail.externalSessions.length}
+          items={externalSessionGroups.topLevelSessions}
+          count={externalSessionGroups.topLevelSessions.length}
           selectedSessionId={input.sessionRail.selectedSessionId}
           onSelectSession={input.sessionRail.onSelectSession}
           renderSessionLabel={input.sessionRail.renderSessionLabel}
+          nestedChildrenByParentId={externalSessionGroups.delegatedChildrenByParentId}
+          orphanDelegatedItems={externalSessionGroups.orphanDelegatedSessions}
           emptyCopy="External bindings show up here when a thread is linked out."
         />
       </aside>
@@ -512,7 +493,62 @@ type SessionGroupItem = {
   updatedAt?: string;
   projectName?: string | null;
   channel?: string | null;
+  delegationParent?: ChatSessionRecord["delegationParent"];
 };
+
+interface DelegatedSessionRailGroups<TSession> {
+  topLevelSessions: TSession[];
+  delegatedChildrenByParentId: Record<string, TSession[]>;
+  orphanDelegatedSessions: TSession[];
+}
+
+function groupRailSessionsByDelegation<TSession extends SessionGroupItem>(
+  sessions: readonly TSession[],
+): DelegatedSessionRailGroups<TSession> {
+  const sessionIds = new Set(sessions.map((session) => session.sessionId));
+  const topLevelSessions: TSession[] = [];
+  const delegatedChildrenByParentId: Record<string, TSession[]> = {};
+  const orphanDelegatedSessions: TSession[] = [];
+
+  for (const session of sessions) {
+    const parentSessionId = session.delegationParent?.parentSessionId;
+    if (!parentSessionId) {
+      topLevelSessions.push(session);
+      continue;
+    }
+    if (sessionIds.has(parentSessionId)) {
+      const children = delegatedChildrenByParentId[parentSessionId] ?? [];
+      children.push(session);
+      delegatedChildrenByParentId[parentSessionId] = children;
+    } else {
+      orphanDelegatedSessions.push(session);
+    }
+  }
+
+  for (const children of Object.values(delegatedChildrenByParentId)) {
+    children.sort(compareDelegatedSessionOrder);
+  }
+  orphanDelegatedSessions.sort(compareDelegatedSessionOrder);
+
+  return {
+    topLevelSessions,
+    delegatedChildrenByParentId,
+    orphanDelegatedSessions,
+  };
+}
+
+function compareDelegatedSessionOrder<TSession extends SessionGroupItem>(left: TSession, right: TSession): number {
+  const leftIndex = left.delegationParent?.index ?? Number.MAX_SAFE_INTEGER;
+  const rightIndex = right.delegationParent?.index ?? Number.MAX_SAFE_INTEGER;
+  if (leftIndex !== rightIndex) {
+    return leftIndex - rightIndex;
+  }
+  const byUpdated = Date.parse(right.updatedAt ?? "") - Date.parse(left.updatedAt ?? "");
+  if (Number.isFinite(byUpdated) && byUpdated !== 0) {
+    return byUpdated;
+  }
+  return left.sessionId.localeCompare(right.sessionId);
+}
 
 function SessionGroup({
   title,
@@ -522,6 +558,7 @@ function SessionGroup({
   onSelectSession,
   renderSessionLabel,
   nestedChildrenByParentId,
+  orphanDelegatedItems = [],
   emptyCopy = "No sessions in this lane yet.",
 }: {
   title: string;
@@ -531,9 +568,20 @@ function SessionGroup({
   onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
   renderSessionLabel: (sessionId: string) => string;
   nestedChildrenByParentId?: Record<string, SessionGroupItem[]>;
+  orphanDelegatedItems?: SessionGroupItem[];
   emptyCopy?: string;
 }) {
   const [collapsedParents, setCollapsedParents] = useState<Record<string, boolean>>({});
+  const selectedParentId = useMemo(() => {
+    if (!selectedSessionId || !nestedChildrenByParentId) {
+      return null;
+    }
+    return (
+      Object.entries(nestedChildrenByParentId).find(([, children]) =>
+        children.some((child) => child.sessionId === selectedSessionId),
+      )?.[0] ?? null
+    );
+  }, [nestedChildrenByParentId, selectedSessionId]);
   useEffect(() => {
     if (!nestedChildrenByParentId) {
       return;
@@ -543,13 +591,18 @@ function SessionGroup({
       const next = { ...current };
       for (const parentId of Object.keys(nestedChildrenByParentId)) {
         if (next[parentId] === undefined) {
+          next[parentId] = true;
+          changed = true;
+        }
+        if (parentId === selectedParentId && next[parentId]) {
           next[parentId] = false;
           changed = true;
         }
       }
       return changed ? next : current;
     });
-  }, [nestedChildrenByParentId]);
+  }, [nestedChildrenByParentId, selectedParentId]);
+  const hasVisibleItems = items.length > 0 || orphanDelegatedItems.length > 0;
 
   return (
     <section className="mc-next-threaded-session-group">
@@ -557,11 +610,11 @@ function SessionGroup({
         <h3>{title}</h3>
         <span>{count ?? items.length}</span>
       </div>
-      {items.length > 0 ? (
+      {hasVisibleItems ? (
         <div className="mc-next-threaded-session-list">
           {items.map((item) => {
             const children = nestedChildrenByParentId?.[item.sessionId] ?? [];
-            const collapsed = collapsedParents[item.sessionId] ?? false;
+            const collapsed = collapsedParents[item.sessionId] ?? children.length > 0;
             return (
               <div key={item.sessionId} className="mc-next-threaded-session-tree-node">
                 <SessionRow
@@ -576,7 +629,7 @@ function SessionGroup({
                       ? () =>
                           setCollapsedParents((current) => ({
                             ...current,
-                            [item.sessionId]: !(current[item.sessionId] ?? false),
+                            [item.sessionId]: !collapsed,
                           }))
                       : undefined
                   }
@@ -598,6 +651,24 @@ function SessionGroup({
               </div>
             );
           })}
+          {orphanDelegatedItems.length > 0 ? (
+            <div className="mc-next-threaded-orphan-delegates">
+              <div className="mc-next-threaded-orphan-delegates-head">
+                <span>Delegated tasks</span>
+                <span>{orphanDelegatedItems.length}</span>
+              </div>
+              {orphanDelegatedItems.map((child) => (
+                <SessionRow
+                  key={child.sessionId}
+                  item={child}
+                  selectedSessionId={selectedSessionId}
+                  onSelectSession={onSelectSession}
+                  renderSessionLabel={renderSessionLabel}
+                  nested
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : (
         <p className="mc-next-threaded-empty-copy">{emptyCopy}</p>
@@ -626,7 +697,10 @@ function SessionRow({
   nested?: boolean;
 }) {
   const label = item.title?.trim() || renderSessionLabel(item.sessionId);
-  const meta = item.projectName?.trim() || item.channel?.trim() || "Workspace session";
+  const delegatedLabel = item.delegationParent?.label?.trim() || item.delegationParent?.role?.trim();
+  const meta = delegatedLabel
+    ? `Delegated task · ${delegatedLabel}`
+    : item.projectName?.trim() || item.channel?.trim() || "Workspace session";
   const updatedAtLabel = formatRelativeTime(item.updatedAt);
 
   return (

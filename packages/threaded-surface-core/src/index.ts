@@ -3,6 +3,7 @@ export {
   formatSessionLabel,
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
+  groupDelegatedSessionsForRail,
   looksMachineSessionLabel,
   revealGeneratedArtifactInSurface,
   resolveChatRefreshPlan,

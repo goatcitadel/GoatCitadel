@@ -281,6 +281,67 @@ describe("isTrustedGatewayHost", () => {
     disconnect();
   });
 
+  it("falls back to direct realtime SSE when stored auth is stale but gateway auth mode is none", async () => {
+    persistGatewayAuthState({
+      mode: "token",
+      token: "stale-token",
+    });
+
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/auth/sse-token")) {
+        return new Response(JSON.stringify({ error: "SSE token bridge is not needed when auth mode is none" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    class MockEventSource {
+      public static instances: MockEventSource[] = [];
+      public readonly url: string;
+
+      public constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+
+      public close(): void {}
+
+      public addEventListener(): void {}
+    }
+
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    const states: string[] = [];
+    const disconnect = connectEventStream(
+      () => undefined,
+      (state) => {
+        states.push(state);
+      },
+    );
+
+    await settlePromises(8);
+
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes("/api/v1/auth/sse-token"))).toHaveLength(1);
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(MockEventSource.instances[0]?.url).toContain("/api/v1/events/stream");
+    expect(MockEventSource.instances[0]?.url).not.toContain("sse_token=");
+    expect(readStoredGatewayAuthState()).toBeUndefined();
+    expect(states).not.toContain("retrying");
+
+    disconnect();
+  });
+
   it("migrates legacy localStorage auth into session storage", () => {
     window.localStorage.setItem(
       "goatcitadel.gateway.auth",

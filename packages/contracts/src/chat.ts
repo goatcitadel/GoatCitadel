@@ -117,6 +117,15 @@ export interface ChatSessionHandoffRecord {
   createdAt: string;
 }
 
+export interface ChatSessionDelegationParentRecord {
+  parentSessionId: string;
+  runId: string;
+  stepId: string;
+  role: string;
+  label?: string;
+  index: number;
+}
+
 export type ChatGeneratedArtifactKind = "markdown" | "html" | "mermaid" | "code" | "text";
 
 export type ChatGeneratedArtifactSourceSurface = "chat" | "cowork" | "code";
@@ -176,6 +185,7 @@ export interface ChatSessionRecord {
   projectName?: string;
   searchHits?: ChatSessionSearchHitRecord[];
   lastHandoff?: ChatSessionHandoffRecord;
+  delegationParent?: ChatSessionDelegationParentRecord;
   generatedArtifacts?: ChatGeneratedArtifactReference[];
   channel: string;
   account: string;

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GoatCitadel Mission Control</title>
+  </head>
+  <body>
+    <div id="app">
+      <section id="startup" class="desktop-shell">
+        <div class="status-panel">
+          <div class="brand-row">
+            <span class="brand-mark"></span>
+            <div>
+              <p class="eyebrow">GoatCitadel</p>
+              <h1>Mission Control</h1>
+            </div>
+          </div>
+          <p id="status-copy" class="status-copy">Starting the local runtime...</p>
+          <div class="progress-track"><span id="progress-bar"></span></div>
+          <div id="runtime-meta" class="runtime-meta"></div>
+          <div id="recovery-actions" class="actions is-hidden">
+            <button id="retry-button" type="button">Retry</button>
+            <button id="open-browser-button" type="button">Open in Browser</button>
+            <button id="open-logs-button" type="button">Open Logs</button>
+            <button id="open-folder-button" type="button">Open Install Folder</button>
+          </div>
+        </div>
+      </section>
+      <div id="desktop-toast" class="desktop-toast is-hidden" role="status" aria-live="polite"></div>
+      <iframe id="mission-control-frame" title="Mission Control" class="mission-control-frame"></iframe>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

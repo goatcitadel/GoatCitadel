@@ -60,7 +60,7 @@ const installArgs =
     : { passthrough: runtimeArgs.passthrough, verbose: runtimeArgs.verbose };
 const repoUrl = installArgs.repoUrl || defaultRepoUrl;
 const baseDir = resolveBaseDir(installArgs.installDir);
-const appDir = path.join(baseDir, "app");
+const appDir = resolveAppDir(baseDir);
 const binDir = path.join(baseDir, "bin");
 const packagedReleaseManifestPath = path.join(appDir, "release-manifest.json");
 const packagedGatewayDir = path.join(appDir, "gateway");
@@ -87,6 +87,7 @@ const runtimeProcessEnv = {
   ...verboseEnv,
   GOATCITADEL_TERMINAL_TASK: taskTitle,
 };
+let jsonStdoutMode = false;
 
 async function main() {
   setTerminalTitle(taskTitle);
@@ -108,6 +109,16 @@ async function main() {
 
   if (command === "secrets") {
     secrets(rest);
+    return;
+  }
+
+  if (command === "status") {
+    await printRuntimeCommandResult(() => readRuntimeStatus(), rest);
+    return;
+  }
+
+  if (command === "stop") {
+    await printRuntimeCommandResult(() => stopGoatCitadelRuntime(), rest);
     return;
   }
 
@@ -383,6 +394,19 @@ function resolveBaseDir(installDirOverride) {
       : preferredBaseDir;
 }
 
+function resolveAppDir(currentBaseDir) {
+  if (process.env.GOATCITADEL_APP_DIR?.trim()) {
+    return path.resolve(process.env.GOATCITADEL_APP_DIR.trim());
+  }
+  if (
+    fs.existsSync(path.join(currentBaseDir, "pnpm-workspace.yaml")) &&
+    fs.existsSync(path.join(currentBaseDir, "bin", "goatcitadel.mjs"))
+  ) {
+    return currentBaseDir;
+  }
+  return path.join(currentBaseDir, "app");
+}
+
 function preserveManagedConfigForUpdate(gitCmd, repositoryPath) {
   const status = spawnCommandSync(gitCmd, ["-C", repositoryPath, "status", "--porcelain", "--untracked-files=no"], {
     encoding: "utf8",
@@ -466,46 +490,60 @@ function doctor(extraArgs = []) {
 }
 
 async function launchGoatCitadel(extraArgs = []) {
+  const launchOptions = parseLaunchOptions(extraArgs);
   const gatewayUrl = process.env.GOATCITADEL_GATEWAY_URL || defaultGatewayUrl;
   const uiUrl = process.env.GOATCITADEL_MISSION_CONTROL_URL || defaultUiUrl;
 
-  ensureLaunchRuntimeDirectories();
+  const result = await withJsonCleanStdout(launchOptions.json, async () => {
+    ensureLaunchRuntimeDirectories();
 
-  if (isPackagedInstall()) {
-    seedPackagedRuntimeRoot();
-    const nodeExecutable = resolvePackagedNodeExecutable();
-    await ensureGatewayReady({
-      packaged: true,
-      gatewayUrl,
-      nodeExecutable,
-    });
-    await ensureUiReady({
-      packaged: true,
+    if (isPackagedInstall()) {
+      seedPackagedRuntimeRoot();
+      const nodeExecutable = resolvePackagedNodeExecutable();
+      await ensureGatewayReady({
+        packaged: true,
+        gatewayUrl,
+        nodeExecutable,
+      });
+      await ensureUiReady({
+        packaged: true,
+        gatewayUrl,
+        uiUrl,
+        nodeExecutable,
+      });
+    } else {
+      ensureWorkspaceRuntimeBuilds();
+      await ensureGatewayReady({
+        packaged: false,
+        gatewayUrl,
+      });
+      await ensureUiReady({
+        packaged: false,
+        gatewayUrl,
+        uiUrl,
+      });
+    }
+
+    return readRuntimeStatus({
       gatewayUrl,
       uiUrl,
-      nodeExecutable,
+      assumeReady: true,
     });
-  } else {
-    ensureWorkspaceRuntimeBuilds();
-    await ensureGatewayReady({
-      packaged: false,
-      gatewayUrl,
-    });
-    await ensureUiReady({
-      packaged: false,
-      gatewayUrl,
-      uiUrl,
-    });
+  });
+
+  if (!launchOptions.noOpen) {
+    openBrowser(result.targetUrl);
   }
 
-  const startupState = await fetchJson(`${gatewayUrl}/api/v1/onboarding/startup`);
-  const targetUrl = startupState?.completed ? `${uiUrl}/?tab=dashboard` : `${uiUrl}/?tab=onboarding`;
-  openBrowser(targetUrl);
+  if (launchOptions.json) {
+    writeJsonResult(result);
+    return;
+  }
 
-  if (extraArgs.includes("--wait")) {
-    console.log(`GoatCitadel is ready at ${targetUrl}`);
+  if (launchOptions.wait) {
+    console.log(`GoatCitadel is ready at ${result.targetUrl}`);
   } else {
-    console.log(`Launching GoatCitadel at ${targetUrl}`);
+    console.log(`Launching GoatCitadel at ${result.targetUrl}`);
   }
 }
 
@@ -521,6 +559,232 @@ function isPackagedInstall() {
 function ensureLaunchRuntimeDirectories() {
   fs.mkdirSync(runtimeStateDir, { recursive: true });
   fs.mkdirSync(runtimeLogDir, { recursive: true });
+}
+
+async function readRuntimeStatus(options = {}) {
+  const gatewayUrl = options.gatewayUrl || process.env.GOATCITADEL_GATEWAY_URL || defaultGatewayUrl;
+  const uiUrl = options.uiUrl || process.env.GOATCITADEL_MISSION_CONTROL_URL || defaultUiUrl;
+  ensureLaunchRuntimeDirectories();
+
+  const gatewayPid = readManagedPid(gatewayPidPath);
+  const uiPid = readManagedPid(uiPidPath);
+  const gatewayReady = options.assumeReady === true || (await waitForHttp(`${gatewayUrl}/health`, 750, 1));
+  const uiReady = options.assumeReady === true || (await waitForHttp(`${uiUrl}/health`, 750, 1));
+  const startupState = gatewayReady
+    ? await fetchJson(`${gatewayUrl}/api/v1/onboarding/startup`).catch(() => undefined)
+    : undefined;
+  const onboardingCompleted = startupState?.completed === true;
+  const targetUrl = onboardingCompleted ? `${uiUrl}/?tab=dashboard` : `${uiUrl}/?tab=onboarding`;
+  const pidStates = [gatewayPid.state, uiPid.state];
+  const anyAlive = pidStates.includes("running");
+  const anyStale = pidStates.includes("stale");
+  const anyReady = gatewayReady || uiReady;
+  const status =
+    gatewayReady && uiReady
+      ? "ready"
+      : anyAlive || anyReady
+        ? "degraded"
+        : anyStale
+          ? "stale"
+          : "stopped";
+
+  return buildRuntimeCommandResult({
+    status,
+    gatewayUrl,
+    uiUrl,
+    targetUrl,
+    onboardingCompleted,
+    packaged: isPackagedInstall(),
+    gatewayReady,
+    uiReady,
+    gatewayPid,
+    uiPid,
+  });
+}
+
+async function stopGoatCitadelRuntime() {
+  ensureLaunchRuntimeDirectories();
+  const before = await readRuntimeStatus();
+  const stopped = [];
+  const stale = [];
+
+  for (const item of [
+    { label: "ui", path: uiPidPath },
+    { label: "gateway", path: gatewayPidPath },
+  ]) {
+    const pidInfo = readManagedPid(item.path);
+    if (pidInfo.state === "running" && pidInfo.pid) {
+      stopManagedProcess(pidInfo.pid);
+      stopped.push({ label: item.label, pid: pidInfo.pid });
+    } else if (pidInfo.state === "stale") {
+      stale.push({ label: item.label, pid: pidInfo.pid });
+    }
+    fs.rmSync(item.path, { force: true });
+  }
+
+  const after = await readRuntimeStatus();
+  return {
+    ...after,
+    action: "stop",
+    previousStatus: before.status,
+    stopped,
+    stale,
+  };
+}
+
+function buildRuntimeCommandResult({
+  status,
+  gatewayUrl,
+  uiUrl,
+  targetUrl,
+  onboardingCompleted,
+  packaged,
+  gatewayReady,
+  uiReady,
+  gatewayPid,
+  uiPid,
+}) {
+  return {
+    status,
+    gatewayUrl,
+    uiUrl,
+    targetUrl,
+    packaged,
+    runtimeRoot: packaged ? packagedRuntimeRoot : appDir,
+    runtimeStateDir,
+    pidFiles: {
+      gateway: gatewayPidPath,
+      ui: uiPidPath,
+    },
+    pids: {
+      gateway: gatewayPid,
+      ui: uiPid,
+    },
+    logFiles: {
+      gatewayStdout: path.join(runtimeLogDir, "gateway.stdout.log"),
+      gatewayStderr: path.join(runtimeLogDir, "gateway.stderr.log"),
+      missionControlStdout: path.join(runtimeLogDir, "mission-control.stdout.log"),
+      missionControlStderr: path.join(runtimeLogDir, "mission-control.stderr.log"),
+    },
+    readiness: {
+      gateway: gatewayReady,
+      ui: uiReady,
+    },
+    onboardingCompleted,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function readManagedPid(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { state: "missing" };
+  }
+  const raw = fs.readFileSync(filePath, "utf8").trim();
+  const pid = Number.parseInt(raw, 10);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return { state: "invalid", raw };
+  }
+  return {
+    pid,
+    state: isProcessAlive(pid) ? "running" : "stale",
+  };
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stopManagedProcess(pid) {
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/PID", String(pid), "/T"], { stdio: "ignore" });
+    if (isProcessAlive(pid)) {
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+    }
+    return;
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  const start = Date.now();
+  while (Date.now() - start < 2500 && isProcessAlive(pid)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  if (isProcessAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Best effort stop.
+    }
+  }
+}
+
+async function printRuntimeCommandResult(fn, args) {
+  const options = parseRuntimeOutputOptions(args);
+  const result = await withJsonCleanStdout(options.json, fn);
+  if (options.json) {
+    writeJsonResult(result);
+    return;
+  }
+  console.log(`${result.status}: ${result.targetUrl}`);
+}
+
+function parseLaunchOptions(args) {
+  const options = {
+    json: false,
+    noOpen: false,
+    wait: false,
+  };
+  for (const arg of args) {
+    if (arg === "--json") {
+      options.json = true;
+    } else if (arg === "--no-open") {
+      options.noOpen = true;
+    } else if (arg === "--wait") {
+      options.wait = true;
+    } else {
+      throw new Error(`Unsupported launch flag: ${arg}`);
+    }
+  }
+  return options;
+}
+
+function parseRuntimeOutputOptions(args) {
+  const options = { json: false };
+  for (const arg of args) {
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+    throw new Error(`Unsupported runtime flag: ${arg}`);
+  }
+  return options;
+}
+
+async function withJsonCleanStdout(json, fn) {
+  if (!json) {
+    return fn();
+  }
+  const originalLog = console.log;
+  const originalJsonStdoutMode = jsonStdoutMode;
+  jsonStdoutMode = true;
+  console.log = (...args) => console.error(...args);
+  try {
+    return await fn();
+  } finally {
+    console.log = originalLog;
+    jsonStdoutMode = originalJsonStdoutMode;
+  }
+}
+
+function writeJsonResult(result) {
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
 function seedPackagedRuntimeRoot() {
@@ -1078,7 +1342,10 @@ function spawnPnpmCommand(args, options = {}) {
 }
 
 function run(cmd, cmdArgs, options = {}) {
-  const result = spawnCommandSync(cmd, cmdArgs, { stdio: "inherit", ...options });
+  const result = spawnCommandSync(cmd, cmdArgs, jsonStdoutMode ? jsonSafeSpawnOptions(options) : { stdio: "inherit", ...options });
+  if (jsonStdoutMode && result.stdout) {
+    process.stderr.write(result.stdout);
+  }
   if (result.error) {
     throw result.error;
   }
@@ -1092,6 +1359,17 @@ function spawnCommandSync(cmd, cmdArgs, options = {}) {
     return spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", buildWindowsCommand([cmd, ...cmdArgs])], options);
   }
   return spawnSync(cmd, cmdArgs, options);
+}
+
+function jsonSafeSpawnOptions(options) {
+  if (Object.hasOwn(options, "stdio")) {
+    return options;
+  }
+  return {
+    stdio: ["inherit", "pipe", "inherit"],
+    encoding: "utf8",
+    ...options,
+  };
 }
 
 function inspectWorkspaceTooling(rootDir) {
@@ -1176,7 +1454,9 @@ Commands:
   install    Install GoatCitadel from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
   update     Update existing install from GitHub [--install-dir <path>] [--repo <url>] [--skip-voice] [--voice-model <id>] [--verbose]
   uninstall  Remove a local GoatCitadel install [--install-dir <path>] [--force]
-  launch     Start the local stack if needed, wait for health, and open Mission Control
+  launch     Start the local stack if needed, wait for health, and open Mission Control [--no-open] [--json] [--wait]
+  status     Report local runtime status [--json]
+  stop       Stop GoatCitadel-managed local runtime processes [--json]
   up         Start gateway + mission control [--verbose]
   gateway    Start gateway only [--verbose]
   ui         Start mission control UI only

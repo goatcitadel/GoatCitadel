@@ -116,6 +116,7 @@ export function useChatSessionControls(input: {
           selectedProjectId !== "all" && selectedProjectId !== "none"
             ? { workspaceId, projectId: selectedProjectId, mode }
             : { workspaceId, mode },
+          { originSurface: mode },
         );
         if (nextHistoryView !== historyView) {
           setHistoryView(nextHistoryView);
@@ -146,6 +147,7 @@ export function useChatSessionControls(input: {
       selectedProjectId !== "all" && selectedProjectId !== "none"
         ? { workspaceId, projectId: selectedProjectId, mode: sessionMode }
         : { workspaceId, mode: sessionMode },
+      { originSurface: sessionMode },
     );
     if (nextHistoryView !== historyView) {
       setHistoryView(nextHistoryView);

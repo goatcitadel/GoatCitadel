@@ -12,6 +12,7 @@ import {
   type ChatCapabilityUpgradeSuggestion,
   type ChatGeneratedArtifactRecord,
   type ChatMode,
+  type ChatSessionRecord,
   type ChatSessionPrefsPatch,
   type ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
@@ -24,6 +25,15 @@ export type ChatRefreshPlan = {
   refreshSidebar: boolean;
   refreshSession: "none" | "light" | "full";
 };
+
+export interface DelegatedSessionRailGroups<TSession> {
+  topLevelSessions: TSession[];
+  delegatedChildrenByParentId: Record<string, TSession[]>;
+  orphanDelegatedSessions: TSession[];
+  delegatedChildSessionIds: string[];
+}
+
+type DelegatedSessionRailItem = Pick<ChatSessionRecord, "sessionId" | "updatedAt" | "delegationParent">;
 
 export type ConfirmableCapabilityAction =
   | "enable_skill"
@@ -125,6 +135,60 @@ export function resolveChatRefreshPlan(
     refreshSidebar,
     refreshSession,
   };
+}
+
+export function groupDelegatedSessionsForRail<TSession extends DelegatedSessionRailItem>(
+  sessions: readonly TSession[],
+): DelegatedSessionRailGroups<TSession> {
+  const sessionIds = new Set(sessions.map((session) => session.sessionId));
+  const topLevelSessions: TSession[] = [];
+  const delegatedChildrenByParentId: Record<string, TSession[]> = {};
+  const orphanDelegatedSessions: TSession[] = [];
+  const delegatedChildSessionIds: string[] = [];
+
+  for (const session of sessions) {
+    const parent = session.delegationParent;
+    if (!parent?.parentSessionId) {
+      topLevelSessions.push(session);
+      continue;
+    }
+    delegatedChildSessionIds.push(session.sessionId);
+    if (sessionIds.has(parent.parentSessionId)) {
+      const children = delegatedChildrenByParentId[parent.parentSessionId] ?? [];
+      children.push(session);
+      delegatedChildrenByParentId[parent.parentSessionId] = children;
+    } else {
+      orphanDelegatedSessions.push(session);
+    }
+  }
+
+  for (const children of Object.values(delegatedChildrenByParentId)) {
+    children.sort(compareDelegatedSessionOrder);
+  }
+  orphanDelegatedSessions.sort(compareDelegatedSessionOrder);
+
+  return {
+    topLevelSessions,
+    delegatedChildrenByParentId,
+    orphanDelegatedSessions,
+    delegatedChildSessionIds,
+  };
+}
+
+function compareDelegatedSessionOrder<TSession extends DelegatedSessionRailItem>(
+  left: TSession,
+  right: TSession,
+): number {
+  const leftIndex = left.delegationParent?.index ?? Number.MAX_SAFE_INTEGER;
+  const rightIndex = right.delegationParent?.index ?? Number.MAX_SAFE_INTEGER;
+  if (leftIndex !== rightIndex) {
+    return leftIndex - rightIndex;
+  }
+  const byUpdated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  if (byUpdated !== 0 && Number.isFinite(byUpdated)) {
+    return byUpdated;
+  }
+  return left.sessionId.localeCompare(right.sessionId);
 }
 
 export function isConfirmableCapabilityAction(

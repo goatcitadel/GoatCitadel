@@ -68,6 +68,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   );
   const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
   const generatedArtifactsBySessionId = deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
+  const delegationParentBySessionId = deps.storage.chatDelegationSteps.listParentsByChildSessionIds(sessionIds);
 
   let records = allSessions.map((session) => {
     const meta = metaBySessionId.get(session.sessionId) ?? {
@@ -84,6 +85,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
       { ...meta, mode: prefsModeBySessionId.get(session.sessionId) ?? "chat" },
       project,
       {
+        delegationParent: delegationParentBySessionId.get(session.sessionId),
         generatedArtifacts: (generatedArtifactsBySessionId.get(session.sessionId) ?? [])
           .slice(0, 6)
           .map(buildGeneratedArtifactReference),

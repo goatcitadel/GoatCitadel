@@ -24,6 +24,7 @@ Each release bundle installs to a mutable GoatCitadel home with this split:
   Immutable packaged payload:
   - deployed gateway runtime
   - built Mission Control assets
+  - native Mission Control desktop host
   - embedded Node runtime
   - packaged launcher helpers
   - runtime templates
@@ -37,7 +38,9 @@ This keeps the shipped payload separate from operator data so upgrades can repla
 
 ## Entry point
 
-Use:
+The Windows installer shortcut launches the native Mission Control desktop host by default. The desktop host starts the same packaged gateway and Mission Control web assets through the launcher, keeps the local runtime warm while the app is open, and exposes tray actions for browser fallback, logs, status, restart, and stop.
+
+Browser and CLI fallback remain supported with:
 
 ```text
 goatcitadel launch
@@ -51,6 +54,14 @@ goatcitadel launch
 4. waits for gateway and Mission Control health
 5. opens onboarding when setup is incomplete
 6. opens the dashboard route when setup is complete
+
+Machine-readable runtime control is available with:
+
+```text
+goatcitadel launch --no-open --json --wait
+goatcitadel status --json
+goatcitadel stop --json
+```
 
 `goat up`, `goat onboard`, and `goat doctor --deep` remain available for source and operator workflows.
 
@@ -83,13 +94,15 @@ Do not cite Linux packages as release proof until the workflow emits, signs, and
 ## Build commands
 
 ```text
+pnpm package:desktop --target windows-x64
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
+pnpm verify:desktop
 ```
 
 ## Release workflow
 
-The GitHub Actions release workflow currently builds and publishes Windows x64/arm64 installers. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
+The GitHub Actions release workflow currently builds and publishes Windows x64/arm64 installers. The desktop executable is built before the bundle, copied into `app/desktop/`, and signed before the final installer when signing secrets are available. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
 
 Tagged releases assemble a proof bundle alongside the raw installers. The proof bundle includes:
 

@@ -34,7 +34,6 @@ if (!fs.existsSync(bundleDir)) {
 }
 
 fs.mkdirSync(outDir, { recursive: true });
-createBundleArchive(bundleDir, bundleZipPath);
 fs.writeFileSync(issPath, renderIss({
   target,
   architecture: supportedTargets[target],
@@ -47,6 +46,8 @@ if (args.emitOnly) {
   console.log(`Wrote Inno Setup script: ${issPath}`);
   process.exit(0);
 }
+
+createBundleArchive(bundleDir, bundleZipPath);
 
 const iscc = resolveIscc();
 if (!iscc) {
@@ -155,6 +156,7 @@ function renderIss({ target: bundleTarget, architecture, version: bundleVersion,
 #define MyAppURL "https://github.com/goatcitadel/GoatCitadel"
 #define MyBundleZip "${normalizeForInno(currentBundleZipPath)}"
 #define MyOutputDir "${normalizeForInno(currentOutDir)}"
+#define MyDesktopExe "app\\desktop\\GoatCitadel-Mission-Control-Desktop.exe"
 
 [Setup]
 AppId=com.goatcitadel.installer.${bundleTarget}
@@ -176,7 +178,7 @@ Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest
 WizardStyle=modern
-UninstallDisplayIcon={app}\\bin\\goatcitadel.cmd
+UninstallDisplayIcon={app}\\{#MyDesktopExe}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -197,14 +199,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "S
 Source: "{#MyBundleZip}"; DestDir: "{tmp}"; DestName: "bundle.zip"; Flags: deleteafterinstall
 
 [Icons]
-Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\bin\\goatcitadel.cmd"; Parameters: "launch"; WorkingDir: "{app}"
-Name: "{autodesktop}\\GoatCitadel"; Filename: "{app}\\bin\\goatcitadel.cmd"; Parameters: "launch"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"
+Name: "{autodesktop}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Expand-Archive -LiteralPath '{tmp}\\bundle.zip' -DestinationPath '{app}' -Force"""; StatusMsg: "Expanding GoatCitadel bundle..."; Flags: waituntilterminated runhidden
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\node_modules\\playwright\\cli.js"" install chromium"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing Chromium runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: chromium
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\dist\\voice-runtime-cli.js"" install --model base.en"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing local voice runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: voice
-Filename: "{app}\\bin\\goatcitadel.cmd"; Parameters: "launch"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
 `.trimStart();
 }
 

@@ -1,0 +1,22 @@
+{
+  "name": "@goatcitadel/mission-control-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "dev:desktop": "tauri dev",
+    "build": "tsc -p tsconfig.json && vite build",
+    "build:desktop": "pnpm build && tauri build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/plugin-notification": "2.3.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.0",
+    "typescript": "^6.0.0",
+    "vite": "^6.4.2"
+  }
+}
