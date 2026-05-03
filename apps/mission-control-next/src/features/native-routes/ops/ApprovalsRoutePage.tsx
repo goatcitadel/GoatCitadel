@@ -1,5 +1,5 @@
 import { useMemo, useState, type MouseEvent } from "react";
-import { AlertTriangle, History, Play, RefreshCw, ShieldCheck, Waypoints } from "lucide-react";
+import { AlertTriangle, Clock, History, Play, RefreshCw, ShieldCheck, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
@@ -141,6 +141,11 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                           {effectiveStatus}
                         </StatusChip>
                         {approval.linkage?.durableRunId ? <StatusChip tone="default">durable</StatusChip> : null}
+                        {approval.followUp && approval.followUp.status !== "none" ? (
+                          <StatusChip tone={approvalFollowUpTone(approval.followUp.status)}>
+                            {formatApprovalFollowUp(approval.followUp.status)}
+                          </StatusChip>
+                        ) : null}
                       </div>
                       <p>{approval.explanation?.summary || approval.resolutionNote || "Operator decision required."}</p>
                     </button>
@@ -323,6 +328,11 @@ function ApprovalInspectorCard(props: {
             {approval.explanationStatus}
           </StatusChip>
         ) : null}
+        {approval.followUp && approval.followUp.status !== "none" ? (
+          <StatusChip tone={approvalFollowUpTone(approval.followUp.status)}>
+            {formatApprovalFollowUp(approval.followUp.status)}
+          </StatusChip>
+        ) : null}
       </div>
 
       <div className="mc-next-approvals-decision-shell">
@@ -361,6 +371,21 @@ function ApprovalInspectorCard(props: {
           <div className="mc-next-approvals-explainer-error">
             <strong>Approval summary unavailable</strong>
             <span>{formatApprovalExplanationError(approval.explanationError)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {approval.followUp && approval.followUp.status !== "none" ? (
+        <div className="mc-next-directory-alert">
+          <Clock className="h-4 w-4" />
+          <div>
+            <strong>{formatApprovalFollowUp(approval.followUp.status)}</strong>
+            <span>
+              {approval.followUp.reason ??
+                `${approval.followUp.effectKind ?? "Follow-up"} for ${approval.followUp.targetKind ?? "target"} ${
+                  approval.followUp.targetId ?? ""
+                }`.trim()}
+            </span>
           </div>
         </div>
       ) : null}
@@ -615,4 +640,40 @@ function formatApprovalExplanationError(error: string): string {
     return "The approval is still usable, but the optional explainer sent a parameter this model provider does not accept.";
   }
   return `The approval is still usable. Explainer detail: ${message}`;
+}
+
+function formatApprovalFollowUp(status: NonNullable<ApprovalRequest["followUp"]>["status"]): string {
+  switch (status) {
+    case "queued":
+      return "Accepted, waking worker";
+    case "running":
+      return "Worker wake running";
+    case "completed":
+      return "Worker resumed";
+    case "skipped":
+      return "Wake skipped";
+    case "failed":
+      return "Wake failed";
+    case "none":
+      return "No follow-up";
+  }
+  return "Follow-up status unknown";
+}
+
+function approvalFollowUpTone(
+  status: NonNullable<ApprovalRequest["followUp"]>["status"],
+): "critical" | "warning" | "success" | "muted" | "default" {
+  switch (status) {
+    case "failed":
+      return "critical";
+    case "queued":
+    case "running":
+      return "warning";
+    case "completed":
+      return "success";
+    case "skipped":
+    case "none":
+      return "muted";
+  }
+  return "muted";
 }

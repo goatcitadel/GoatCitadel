@@ -357,8 +357,8 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     createChatSessionWorkbenchWorktree: (sessionId, input) =>
       chatWorkbenchService.createChatSessionWorkbenchWorktree(ChatWorkbenchDependencies, sessionId, input),
     deleteChatSession: (sessionId) => chatSessionService.deleteChatSession(ChatSessionDependencies, sessionId),
-    getChatGeneratedArtifact: (artifactId) =>
-      chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId),
+    getChatGeneratedArtifact: (artifactId, options) =>
+      chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, options),
     getChatSessionBinding: (sessionId) => chatSessionService.getChatSessionBinding(ChatSessionDependencies, sessionId),
     getChatSessionWorkbench: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbench(ChatWorkbenchDependencies, sessionId),
@@ -409,7 +409,8 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     suggestChatDelegation: (sessionId, input) => gateway.suggestChatDelegation(sessionId, input),
   };
   const chatTools: GatewayRouteServiceDependencies["chatTools"] = {
-    getChatToolArtifactContent: (artifactId) => chatToolArtifactService.getChatToolArtifactContent(gateway, artifactId),
+    getChatToolArtifactContent: (artifactId, options) =>
+      chatToolArtifactService.getChatToolArtifactContent(gateway, artifactId, options),
     listChatPendingApprovals: (sessionId) => gateway.capabilitySystemService.listChatPendingApprovals(sessionId),
     resolveChatToolApproval: (sessionId, approvalId, decision, options) =>
       gateway.approvalRuntime.resolveChatToolApproval(sessionId, approvalId, decision, options),

@@ -179,7 +179,7 @@ describe("chat-generated-artifact-service", () => {
       supersedeLatest: true,
     });
 
-    const hydrated = getChatGeneratedArtifact(host, superseded.artifactId);
+    const hydrated = getChatGeneratedArtifact(host, superseded.artifactId, { workspaceId: session.workspaceId });
 
     assert.equal(initial.sourceBlockIndex, 0);
     assert.match(initial.contentHash ?? "", /^[a-f0-9]{64}$/);
@@ -187,6 +187,29 @@ describe("chat-generated-artifact-service", () => {
     assert.equal(superseded.version, 2);
     assert.equal(superseded.supersedesArtifactId, initial.artifactId);
     assert.equal(hydrated.contentHash, initial.contentHash);
+  });
+
+  it("rejects artifact reads when the requested workspace does not own the session", async () => {
+    const { storage, rootDir } = await createStorage();
+    roots.push(rootDir);
+    storages.push(storage);
+    const session = seedSession(storage, "sess-workspace-check", "workspace-a");
+    seedAssistantTurn(storage, session.sessionId, "turn-workspace-check", "```ts\nexport const answer = 42;\n```");
+
+    const host = {
+      storage,
+      requireChatSession: () => session,
+    };
+
+    const artifact = createChatGeneratedArtifactFromTurn(host, {
+      sessionId: session.sessionId,
+      turnId: "turn-workspace-check",
+    });
+
+    assert.throws(
+      () => getChatGeneratedArtifact(host, artifact.artifactId, { workspaceId: "workspace-b" }),
+      /Artifact does not belong to the requested workspace/,
+    );
   });
 
   it("returns the same superseded artifact for repeated identical new-version requests", async () => {

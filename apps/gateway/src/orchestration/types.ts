@@ -109,6 +109,7 @@ export interface OrchestrationStepExecutionResult {
   summary?: string;
   error?: string;
   failureGuidance?: string;
+  repairedFromStepId?: string;
   childRunId?: string;
   durableRunId?: string;
   childSessionId?: string;
@@ -136,7 +137,10 @@ export interface OrchestrationExecutionCallbacks {
     priorSteps: OrchestrationStepExecutionResult[];
     step: OrchestrationPlan["steps"][number];
   }) => Promise<OrchestrationStepExecutionResult>;
-  onStepResult?: (step: OrchestrationStepExecutionResult, currentSteps: OrchestrationStepExecutionResult[]) => Promise<void> | void;
+  onStepResult?: (
+    step: OrchestrationStepExecutionResult,
+    currentSteps: OrchestrationStepExecutionResult[],
+  ) => Promise<void> | void;
 }
 
 export interface OrchestrationRouterInput {

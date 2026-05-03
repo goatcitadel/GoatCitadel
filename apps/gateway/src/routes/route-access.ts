@@ -126,7 +126,7 @@ async function enforceRouteAccessClass(
       if (!authMode || authMode === "none") {
         return;
       }
-      const allowedSources = new Set(["sse", "token", "basic", "loopback", "companion"]);
+      const allowedSources = new Set(["sse", "token", "basic", "loopback"]);
       if (allowedSources.has(request.authActorSource)) {
         return;
       }

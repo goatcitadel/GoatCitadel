@@ -427,8 +427,14 @@ export async function fetchChatGeneratedArtifacts(input?: {
   return request<ChatGeneratedArtifactsResponse>(`/api/v1/chat/generated-artifacts?${query.toString()}`);
 }
 
-export async function fetchChatGeneratedArtifact(artifactId: string): Promise<ChatGeneratedArtifactResponse> {
-  return request<ChatGeneratedArtifactResponse>(`/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}`);
+export async function fetchChatGeneratedArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatGeneratedArtifactResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<ChatGeneratedArtifactResponse>(
+    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}?${query.toString()}`,
+  );
 }
 
 export async function fetchChatSessionGeneratedArtifacts(
@@ -730,7 +736,7 @@ export async function resumeChatTurnStream(
   sessionId: string,
   turnId: string,
   onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal; sinceEventId?: string } = {},
+  options: { signal?: AbortSignal; sinceEventId?: string; originSurface?: ChatMode } = {},
 ): Promise<void> {
   const query = new URLSearchParams();
   if (options.sinceEventId) {
@@ -746,6 +752,7 @@ export async function resumeChatTurnStream(
       "Cache-Control": "no-cache",
       "x-goatcitadel-session-id": sessionId,
       ...(options.sinceEventId ? { "Last-Event-ID": options.sinceEventId } : {}),
+      ...originSurfaceHeader(options),
     }),
   });
   if (!response.ok || !response.body) {
@@ -804,8 +811,14 @@ export async function denyChatTool(
   });
 }
 
-export async function fetchChatToolArtifact(artifactId: string): Promise<ChatToolArtifactResponse> {
-  return request<ChatToolArtifactResponse>(`/api/v1/chat/tools/artifacts/${encodeURIComponent(artifactId)}`);
+export async function fetchChatToolArtifact(
+  artifactId: string,
+  workspaceId: string,
+): Promise<ChatToolArtifactResponse> {
+  const query = new URLSearchParams({ workspaceId });
+  return request<ChatToolArtifactResponse>(
+    `/api/v1/chat/tools/artifacts/${encodeURIComponent(artifactId)}?${query.toString()}`,
+  );
 }
 
 export async function uploadChatAttachment(input: {
@@ -1082,6 +1095,7 @@ export async function fetchChatResearchRun(
 export async function runChatDelegation(sessionId: string, input: ChatDelegateRequest): Promise<ChatDelegateResponse> {
   return request<ChatDelegateResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate`, {
     method: "POST",
+    ...originSurfaceInit({ originSurface: input.surfaceMode }),
     body: JSON.stringify(input),
   });
 }
@@ -1120,6 +1134,7 @@ export async function streamChatDelegation(
     method: "POST",
     headers: buildGatewayHeaders(path, "POST", correlationId, {
       "x-goatcitadel-session-id": sessionId,
+      ...originSurfaceHeader({ originSurface: input.surfaceMode }),
     }),
     body: JSON.stringify(input),
   });

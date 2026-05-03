@@ -16,6 +16,10 @@ const chatToolArtifactParamsSchema = z.object({
   artifactId: z.string().uuid(),
 });
 
+const chatToolArtifactQuerySchema = z.object({
+  workspaceId: z.string().min(1),
+});
+
 export function registerChatToolRoutes(fastify: FastifyInstance): void {
   fastify.get("/api/v1/chat/tools/approvals", async (request, reply) => {
     const query = chatToolApprovalsQuerySchema.safeParse(request.query);
@@ -35,11 +39,19 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
 
   fastify.get("/api/v1/chat/tools/artifacts/:artifactId", async (request, reply) => {
     const params = chatToolArtifactParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const query = chatToolArtifactQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
-      const result = await fastify.services.chatTools.getChatToolArtifactContent(params.data.artifactId);
+      const result = await fastify.services.chatTools.getChatToolArtifactContent(params.data.artifactId, {
+        workspaceId: query.data.workspaceId,
+      });
       return reply.send(result);
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

@@ -160,6 +160,11 @@ export interface DurableDiagnosticsResponse {
   deadLetterCount: number;
   recentRuns: DurableRunRecord[];
   recentDeadLetters: DurableDeadLetterRecord[];
+  eventLoopLag?: {
+    lastMs: number;
+    lastObservedAt: string;
+    leaseAcquisitionPausedUntil?: string;
+  };
   generatedAt: string;
 }
 
@@ -178,6 +183,7 @@ export interface DurableRunTimelineEvent {
     | "run_completed"
     | "run_failed"
     | "run_dead_lettered"
+    | "worker_event_loop_lag"
     | "dead_letter_recovered";
   stepKey?: string;
   payload?: Record<string, unknown>;

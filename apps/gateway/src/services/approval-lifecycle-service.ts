@@ -157,7 +157,11 @@ export function listApprovals(
   status?: ApprovalRequest["status"],
   limit = 100,
 ): ApprovalRequest[] {
-  return host.storage.approvals.list(status, limit);
+  return host.storage.approvals
+    .list(status, limit)
+    .map((approval) =>
+      withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
+    );
 }
 
 export function getApprovalReplay(
@@ -165,7 +169,9 @@ export function getApprovalReplay(
   approvalId: string,
   replayedBy = "operator",
 ): ApprovalReplayResult {
-  const approval = host.storage.approvals.get(approvalId);
+  const storedApproval = host.storage.approvals.get(approvalId);
+  const effects = host.storage.approvalEffects.listByApproval(approvalId);
+  const approval = withApprovalFollowUp(storedApproval, effects);
 
   host.storage.approvalEvents.append({
     approvalId,
@@ -181,7 +187,7 @@ export function getApprovalReplay(
     events: host.storage.approvalEvents.listByApprovalId(approvalId),
     pendingAction: host.storage.pendingApprovalActions.find(approvalId),
     durableRunId: host.storage.approvalWaitRuns.getRunId(approvalId),
-    effects: host.storage.approvalEffects.listByApproval(approvalId),
+    effects,
   };
 }
 
@@ -542,6 +548,7 @@ export async function resolveApproval(
   if (wakeRunId && approval.linkage?.durableRunId !== wakeRunId) {
     approval = host.storage.approvals.mergeLinkage(approval.approvalId, { durableRunId: wakeRunId });
   }
+  approval = withApprovalFollowUp(approval, effects);
 
   return {
     approval,
@@ -555,6 +562,54 @@ export async function resolveApproval(
     durableRunId: wakeRunId,
     resolutionEffects,
   };
+}
+
+function withApprovalFollowUp(approval: ApprovalRequest, effects: ApprovalEffectRecord[]): ApprovalRequest {
+  const followUp = deriveApprovalFollowUp(effects);
+  return {
+    ...approval,
+    followUp,
+  };
+}
+
+function deriveApprovalFollowUp(effects: ApprovalEffectRecord[]): ApprovalRequest["followUp"] {
+  if (effects.length === 0) {
+    return { status: "none" };
+  }
+
+  const ranked = [...effects].sort((left, right) => followUpStatusRank(left.status) - followUpStatusRank(right.status));
+  const effect = ranked[0] as ApprovalEffectRecord;
+  const status = effect.status === "pending" ? "queued" : effect.status;
+  return {
+    status,
+    effectId: effect.effectId,
+    effectKind: effect.effectKind,
+    targetKind: effect.targetKind,
+    targetId: effect.targetId,
+    reason: effect.lastError ?? readFollowUpReason(effect.result),
+    updatedAt: effect.updatedAt,
+    completedAt: effect.completedAt,
+  };
+}
+
+function followUpStatusRank(status: ApprovalEffectRecord["status"]): number {
+  switch (status) {
+    case "running":
+      return 0;
+    case "pending":
+      return 1;
+    case "failed":
+      return 2;
+    case "skipped":
+      return 3;
+    case "completed":
+      return 4;
+  }
+}
+
+function readFollowUpReason(result: Record<string, unknown>): string | undefined {
+  const reason = result.reason ?? result.outcome ?? result.detail ?? result.error;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : undefined;
 }
 
 export async function resolveChatToolApproval(

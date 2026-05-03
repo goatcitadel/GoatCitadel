@@ -16,10 +16,11 @@ function formatBytes(value?: number): string | null {
 
 export function ChatToolArtifactInspector(props: {
   artifactId: string;
+  workspaceId: string;
   artifactPath?: string;
   originalByteLength?: number;
 }) {
-  const { artifactId, artifactPath, originalByteLength } = props;
+  const { artifactId, workspaceId, artifactPath, originalByteLength } = props;
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +38,7 @@ export function ChatToolArtifactInspector(props: {
     }
     setLoading(true);
     try {
-      const response = await fetchChatToolArtifact(artifactId);
+      const response = await fetchChatToolArtifact(artifactId, workspaceId);
       setContent(response.content);
       setContentType(response.artifact.contentType);
       setError(null);
@@ -53,7 +54,7 @@ export function ChatToolArtifactInspector(props: {
       <button type="button" className="gc-button chat-tool-artifact-link" onClick={() => void handleToggle()}>
         {open ? "Hide raw artifact" : "Inspect raw artifact"}
       </button>
-      {(artifactPath || originalByteLength) ? (
+      {artifactPath || originalByteLength ? (
         <span className="chat-tool-artifact-caption">
           {[artifactPath, formatBytes(originalByteLength)].filter(Boolean).join(" · ")}
         </span>

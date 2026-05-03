@@ -22,6 +22,18 @@ for (const relativePath of requiredFiles) {
   }
 }
 
+const cargoCheck = spawnSync("cargo", ["check"], {
+  cwd: path.join(repoRoot, "apps", "mission-control-desktop", "src-tauri"),
+  encoding: "utf8",
+});
+assertSuccessfulSpawn(cargoCheck, "Desktop cargo check");
+
+const cargoTest = spawnSync("cargo", ["test"], {
+  cwd: path.join(repoRoot, "apps", "mission-control-desktop", "src-tauri"),
+  encoding: "utf8",
+});
+assertSuccessfulSpawn(cargoTest, "Desktop cargo test");
+
 const launcherStatus = spawnSync(process.execPath, [path.join(repoRoot, "bin", "goatcitadel.mjs"), "status", "--json"], {
   cwd: repoRoot,
   env: {
@@ -50,8 +62,20 @@ for (const key of ["status", "gatewayUrl", "uiUrl", "targetUrl", "runtimeRoot", 
     fail(`Launcher status JSON is missing ${key}`);
   }
 }
+if (parsed.status === "ready" && parsed.desktopEventStream && parsed.desktopEventStream.error) {
+  fail(`Desktop SSE credential status returned an error: ${parsed.desktopEventStream.error}`);
+}
 
 console.log("Desktop verification passed.");
+
+function assertSuccessfulSpawn(result, label) {
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    fail(`${label} failed:\n${result.stdout || ""}\n${result.stderr || ""}`);
+  }
+}
 
 function fail(message) {
   console.error(`Desktop verification failed: ${message}`);

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     env,
     io::{BufRead, BufReader},
@@ -12,11 +12,15 @@ use std::{
     thread,
     time::Duration,
 };
+#[cfg(target_os = "windows")]
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, State, WindowEvent,
 };
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
 
 #[derive(Default)]
 struct DesktopState {
@@ -85,6 +89,7 @@ struct DesktopLaunchResult {
     log_files: RuntimeLogFiles,
     readiness: RuntimeReadiness,
     onboarding_completed: bool,
+    desktop_event_stream: Option<DesktopEventStreamCredential>,
     checked_at: String,
 }
 
@@ -104,6 +109,16 @@ struct ApprovalNotificationPayload {
     kind: Option<String>,
     risk_level: Option<String>,
     status: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopEventStreamCredential {
+    scope: Option<String>,
+    token: Option<String>,
+    expires_at: Option<String>,
+    auth_mode: Option<String>,
+    error: Option<String>,
 }
 
 fn main() {
@@ -175,7 +190,7 @@ fn stop_runtime(state: State<'_, DesktopState>) -> Result<Value, String> {
 
 #[tauri::command]
 fn open_browser(url: String) -> Result<DesktopActionResult, String> {
-    open_external(&url)?;
+    open_external(validate_browser_target(&url)?.as_str())?;
     Ok(DesktopActionResult {
         ok: true,
         message: "Opened browser fallback.".to_string(),
@@ -244,8 +259,20 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             "restart" => {
                 let handle = app.clone();
                 thread::spawn(move || {
+                    if let Some(state) = handle.try_state::<DesktopState>() {
+                        let _ = stop_approval_watcher(&state);
+                    }
                     let _ = run_launcher(["stop", "--json"]);
-                    let _ = run_launcher(["launch", "--no-open", "--json", "--wait"]);
+                    if let Ok(output) = run_launcher(["launch", "--no-open", "--json", "--wait"]) {
+                        if let Ok(result) = serde_json::from_str::<DesktopLaunchResult>(&output) {
+                            if let Some(state) = handle.try_state::<DesktopState>() {
+                                if let Ok(mut last_runtime) = state.last_runtime.lock() {
+                                    *last_runtime = Some(result.clone());
+                                }
+                                let _ = start_approval_watcher(handle.clone(), state, result);
+                            }
+                        }
+                    }
                     let _ = handle.emit("desktop://runtime-restarted", ());
                 });
             }
@@ -307,7 +334,7 @@ fn start_approval_watcher(
     }
 
     thread::spawn(move || {
-        watch_approval_events(app, runtime.gateway_url, stop);
+        watch_approval_events(app, runtime, stop);
     });
     Ok(())
 }
@@ -323,24 +350,37 @@ fn stop_approval_watcher(state: &State<'_, DesktopState>) -> Result<(), String> 
     Ok(())
 }
 
-fn watch_approval_events(app: AppHandle, gateway_url: String, stop: Arc<AtomicBool>) {
+fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc<AtomicBool>) {
     let client = match reqwest::blocking::Client::builder()
-        .timeout(None)
+        .timeout(Duration::from_secs(70))
         .connect_timeout(Duration::from_secs(5))
         .build()
     {
         Ok(client) => client,
         Err(_) => return,
     };
-    let stream_url = format!("{}/api/v1/events/stream?replay=0", trim_trailing_slash(&gateway_url));
+    let gateway_url = runtime.gateway_url.clone();
+    let mut token = runtime.desktop_event_stream.as_ref().and_then(|value| value.token.clone());
+    if let Some(error) = runtime.desktop_event_stream.as_ref().and_then(|value| value.error.clone()) {
+        emit_watcher_error(&app, "desktop_sse_token_unavailable", &error);
+    }
 
     while !stop.load(Ordering::Relaxed) {
+        let stream_url = build_event_stream_url(&gateway_url, token.as_deref());
         let response = client.get(&stream_url).send();
         let Ok(response) = response else {
             sleep_or_stop(&stop, Duration::from_secs(5));
             continue;
         };
         if !response.status().is_success() {
+            if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
+                token = refresh_desktop_event_stream_token(&gateway_url);
+                emit_watcher_error(
+                    &app,
+                    "desktop_sse_auth_failed",
+                    "Desktop approval notifications could not authenticate to the gateway event stream.",
+                );
+            }
             sleep_or_stop(&stop, Duration::from_secs(10));
             continue;
         }
@@ -368,6 +408,47 @@ fn watch_approval_events(app: AppHandle, gateway_url: String, stop: Arc<AtomicBo
         }
         sleep_or_stop(&stop, Duration::from_secs(2));
     }
+}
+
+fn build_event_stream_url(gateway_url: &str, token: Option<&str>) -> String {
+    let mut url = format!("{}/api/v1/events/stream?replay=0", trim_trailing_slash(gateway_url));
+    if let Some(token) = token.filter(|value| !value.is_empty()) {
+        url.push_str("&sse_token=");
+        url.push_str(&url_encode_query_value(token));
+    }
+    url
+}
+
+fn refresh_desktop_event_stream_token(gateway_url: &str) -> Option<String> {
+    let output = run_launcher(["status", "--json"]).ok()?;
+    let status: DesktopRuntimeStatus = serde_json::from_str(&output).ok()?;
+    if trim_trailing_slash(&status.gateway_url) != trim_trailing_slash(gateway_url) {
+        return None;
+    }
+    status.desktop_event_stream?.token
+}
+
+fn emit_watcher_error(app: &AppHandle, code: &str, message: &str) {
+    let _ = app.emit(
+        "desktop://approval-watcher-error",
+        json!({
+            "code": code,
+            "message": message,
+        }),
+    );
+}
+
+fn url_encode_query_value(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn parse_approval_notification(data: &str) -> Option<ApprovalNotificationPayload> {
@@ -561,19 +642,31 @@ fn quote_windows_command_arg(value: &str) -> String {
 }
 
 fn open_external(target: &str) -> Result<(), String> {
+    let target = validate_open_target(target)?;
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/d", "/s", "/c", "start", "", target])
-            .spawn()
-            .map_err(|error| format!("Failed to open {target}: {error}"))?;
+        let operation = to_wide_null("open");
+        let file = to_wide_null(&target);
+        let result = unsafe {
+            ShellExecuteW(
+                ptr::null_mut(),
+                operation.as_ptr(),
+                file.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result as isize <= 32 {
+            return Err(format!("Failed to open {target}: ShellExecuteW returned {result:?}"));
+        }
         return Ok(());
     }
 
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
-            .arg(target)
+            .arg(&target)
             .spawn()
             .map_err(|error| format!("Failed to open {target}: {error}"))?;
         return Ok(());
@@ -582,11 +675,73 @@ fn open_external(target: &str) -> Result<(), String> {
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         Command::new("xdg-open")
-            .arg(target)
+            .arg(&target)
             .spawn()
             .map_err(|error| format!("Failed to open {target}: {error}"))?;
         return Ok(());
     }
+}
+
+fn validate_open_target(target: &str) -> Result<String, String> {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return Err("Open target is empty.".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("Open target contains control characters.".to_string());
+    }
+    if looks_like_url(trimmed) {
+        return validate_browser_target(trimmed);
+    }
+    if Path::new(trimmed).exists() {
+        return Ok(trimmed.to_string());
+    }
+    Err("Open target must be a supported local URL or an existing local path.".to_string())
+}
+
+fn validate_browser_target(target: &str) -> Result<String, String> {
+    let trimmed = target.trim();
+    if trimmed.chars().any(char::is_control) {
+        return Err("Browser target contains control characters.".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let scheme_end = lower
+        .find("://")
+        .ok_or_else(|| "Browser target must be an http or https URL.".to_string())?;
+    let scheme = &lower[..scheme_end];
+    if scheme != "http" && scheme != "https" {
+        return Err("Browser target must use http or https.".to_string());
+    }
+    let authority_start = scheme_end + 3;
+    let authority_end = trimmed[authority_start..]
+        .char_indices()
+        .find(|(_, character)| matches!(character, '/' | '?' | '#'))
+        .map(|(index, _)| authority_start + index)
+        .unwrap_or(trimmed.len());
+    let authority = &trimmed[authority_start..authority_end];
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    }
+    .to_ascii_lowercase();
+    if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1") {
+        return Ok(trimmed.to_string());
+    }
+    Err("Browser target host is not an allowed local GoatCitadel host.".to_string())
+}
+
+fn looks_like_url(target: &str) -> bool {
+    target.contains("://")
+}
+
+#[cfg(target_os = "windows")]
+fn to_wide_null(value: &str) -> Vec<u16> {
+    OsStr::new(value).encode_wide().chain(std::iter::once(0)).collect()
 }
 
 fn path_to_open_target(path: &Path) -> Result<&str, String> {
@@ -596,4 +751,54 @@ fn path_to_open_target(path: &Path) -> Result<&str, String> {
 
 fn trim_trailing_slash(value: &str) -> &str {
     value.trim_end_matches('/')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_browser_targets_to_loopback_hosts() {
+        assert!(validate_browser_target("http://127.0.0.1:5174/?tab=dashboard").is_ok());
+        assert!(validate_browser_target("https://localhost:8787/status").is_ok());
+        assert!(validate_browser_target("http://[::1]:5174/").is_ok());
+        assert!(validate_browser_target("https://example.com").is_err());
+        assert!(validate_browser_target("file:///C:/Windows/System32/calc.exe").is_err());
+    }
+
+    #[test]
+    fn encodes_sse_token_query_value() {
+        assert_eq!(url_encode_query_value("abc 123+/="), "abc%20123%2B%2F%3D");
+    }
+
+    #[test]
+    fn builds_event_stream_url_with_optional_sse_token() {
+        assert_eq!(
+            build_event_stream_url("http://127.0.0.1:8787/", Some("token value")),
+            "http://127.0.0.1:8787/api/v1/events/stream?replay=0&sse_token=token%20value",
+        );
+        assert_eq!(
+            build_event_stream_url("http://127.0.0.1:8787", None),
+            "http://127.0.0.1:8787/api/v1/events/stream?replay=0",
+        );
+    }
+
+    #[test]
+    fn quotes_windows_command_arguments_with_shell_metacharacters() {
+        assert_eq!(quote_windows_command_arg("plain"), "plain");
+        assert_eq!(quote_windows_command_arg("with space"), "\"with space\"");
+        assert_eq!(quote_windows_command_arg("a&b"), "\"a&b\"");
+    }
+
+    #[test]
+    fn parses_approval_created_notification() {
+        let payload = parse_approval_notification(
+            r#"{"eventType":"approval_created","payload":{"approvalId":"ap-1","kind":"tool","riskLevel":"medium","status":"pending"}}"#,
+        )
+        .expect("approval notification");
+        assert_eq!(payload.approval_id, "ap-1");
+        assert_eq!(payload.kind.as_deref(), Some("tool"));
+        assert_eq!(payload.risk_level.as_deref(), Some("medium"));
+        assert_eq!(payload.status.as_deref(), Some("pending"));
+    }
 }

@@ -4,6 +4,7 @@ import { fetchChatGeneratedArtifact } from "@goatcitadel/mission-control-shared/
 
 export function useRouteGeneratedArtifactReveal(input: {
   routeArtifactId: string | null;
+  workspaceId: string;
   revealGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord) => Promise<void> | void;
   setActiveGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord | null) => void;
 }): void {
@@ -13,7 +14,7 @@ export function useRouteGeneratedArtifactReveal(input: {
       return;
     }
     let cancelled = false;
-    void fetchChatGeneratedArtifact(input.routeArtifactId)
+    void fetchChatGeneratedArtifact(input.routeArtifactId, input.workspaceId)
       .then((response) => {
         if (!cancelled) {
           void input.revealGeneratedArtifact(response.item);
@@ -27,5 +28,5 @@ export function useRouteGeneratedArtifactReveal(input: {
     return () => {
       cancelled = true;
     };
-  }, [input.revealGeneratedArtifact, input.routeArtifactId, input.setActiveGeneratedArtifact]);
+  }, [input.revealGeneratedArtifact, input.routeArtifactId, input.setActiveGeneratedArtifact, input.workspaceId]);
 }

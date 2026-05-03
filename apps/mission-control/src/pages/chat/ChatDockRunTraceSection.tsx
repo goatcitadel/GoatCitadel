@@ -40,6 +40,7 @@ function renderCoworkTimeline(viewModel: CoworkRunViewModel | null) {
 export function ChatDockRunTraceSection(props: {
   isChatSurface: boolean;
   isCoworkSurface?: boolean;
+  workspaceId: string;
   selectedTurn: ChatThreadTurnRecord;
   coworkViewModel?: CoworkRunViewModel | null;
   routePreflight?: RoutingPreflightResult | null;
@@ -48,6 +49,7 @@ export function ChatDockRunTraceSection(props: {
   const {
     isChatSurface,
     isCoworkSurface = false,
+    workspaceId,
     selectedTurn,
     coworkViewModel = null,
     routePreflight = null,
@@ -97,7 +99,7 @@ export function ChatDockRunTraceSection(props: {
           </StatusChip>
         }
       >
-        <ChatTraceCard trace={selectedTurn.trace} defaultCollapsed={isChatSurface} />
+        <ChatTraceCard trace={selectedTurn.trace} workspaceId={workspaceId} defaultCollapsed={isChatSurface} />
       </Panel>
     );
   }

@@ -117,8 +117,13 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-    if (value === "--node-version") {
+  if (value === "--node-version") {
       parsed.nodeVersion = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (value === "--node-sha256") {
+      parsed.nodeSha256 = argv[index + 1];
       index += 1;
       continue;
     }
@@ -137,7 +142,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--skip-build] [--skip-desktop]",
+    "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--skip-build] [--skip-desktop]",
   );
 }
 
@@ -177,6 +182,12 @@ async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: r
     throw new Error(`Failed to download embedded Node runtime from ${archiveUrl} (${response.status})`);
   }
   const archiveBuffer = Buffer.from(await response.arrayBuffer());
+  await verifyNodeArchiveChecksum({
+    archiveName,
+    archiveUrl,
+    archiveBuffer,
+    expectedSha256: args.nodeSha256,
+  });
   fs.writeFileSync(archivePath, archiveBuffer);
   fs.mkdirSync(expandedRoot, { recursive: true });
 
@@ -205,6 +216,29 @@ async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: r
     throw new Error(`Embedded Node runtime was extracted without node.exe: ${extractedNodePath}`);
   }
   fs.copyFileSync(extractedNodePath, destinationPath);
+}
+
+async function verifyNodeArchiveChecksum({ archiveName, archiveUrl, archiveBuffer, expectedSha256 }) {
+  const actual = createHash("sha256").update(archiveBuffer).digest("hex").toLowerCase();
+  let expected = expectedSha256?.trim().toLowerCase();
+  if (!expected) {
+    const checksumsUrl = archiveUrl.replace(/\/[^/]+$/, "/SHASUMS256.txt");
+    const response = await fetch(checksumsUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download Node runtime checksums from ${checksumsUrl} (${response.status})`);
+    }
+    const checksums = await response.text();
+    const line = checksums
+      .split(/\r?\n/)
+      .find((candidate) => candidate.trim().endsWith(` ${archiveName}`) || candidate.trim().endsWith(` *${archiveName}`));
+    expected = line?.trim().split(/\s+/)[0]?.toLowerCase();
+    if (!expected) {
+      throw new Error(`Node runtime checksum for ${archiveName} was not found in ${checksumsUrl}`);
+    }
+  }
+  if (actual !== expected) {
+    throw new Error(`Node runtime checksum mismatch for ${archiveName}: expected ${expected}, got ${actual}`);
+  }
 }
 
 function writeLaunchers(bundleRootPath) {

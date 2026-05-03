@@ -91,6 +91,46 @@ function toHeaderRecord(headers: HeadersInit | undefined): Record<string, string
   return Object.fromEntries(normalized.entries());
 }
 
+type ChatApiModule = typeof import("./chat");
+
+async function captureChatApiRequest(
+  loadApi: () => Promise<ChatApiModule>,
+  invoke: (api: ChatApiModule) => Promise<void>,
+): Promise<{ url: string; headers: Record<string, string>; body?: string }> {
+  vi.resetModules();
+  installMockWindow();
+  vi.stubGlobal("crypto", {
+    randomUUID: () => "test-uuid",
+  });
+  const fetchMock = vi.fn(async (input: string | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/stream")) {
+      return new Response("", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    return jsonResponse({
+      item: { artifactId: "artifact-1" },
+      artifact: { artifactId: "tool-artifact-1" },
+      content: "artifact content",
+      runId: "run-1",
+      steps: [],
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const api = await loadApi();
+  await invoke(api);
+
+  const [url, init] = fetchMock.mock.calls[0] ?? [];
+  return {
+    url: String(url),
+    headers: toHeaderRecord(init?.headers),
+    body: typeof init?.body === "string" ? init.body : undefined,
+  };
+}
+
 describe("Mission Control transport parity", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -178,5 +218,96 @@ describe("Mission Control transport parity", () => {
     expect(MockEventSource.instances.length).toBeGreaterThanOrEqual(2);
 
     stop();
+  });
+
+  it("keeps legacy and shared chat artifact routes workspace-scoped", async () => {
+    const legacyGenerated = await captureChatApiRequest(
+      () => import("./chat"),
+      async (api) => {
+        await api.fetchChatGeneratedArtifact("artifact-1", "workspace-1");
+      },
+    );
+    const sharedGenerated = await captureChatApiRequest(
+      () => import("../../../../packages/mission-control-shared/src/api/chat"),
+      async (api) => {
+        await api.fetchChatGeneratedArtifact("artifact-1", "workspace-1");
+      },
+    );
+    const legacyTool = await captureChatApiRequest(
+      () => import("./chat"),
+      async (api) => {
+        await api.fetchChatToolArtifact("tool-artifact-1", "workspace-1");
+      },
+    );
+    const sharedTool = await captureChatApiRequest(
+      () => import("../../../../packages/mission-control-shared/src/api/chat"),
+      async (api) => {
+        await api.fetchChatToolArtifact("tool-artifact-1", "workspace-1");
+      },
+    );
+
+    expect(new URL(legacyGenerated.url).pathname).toBe(new URL(sharedGenerated.url).pathname);
+    expect(new URL(legacyGenerated.url).searchParams.get("workspaceId")).toBe("workspace-1");
+    expect(new URL(sharedGenerated.url).searchParams.get("workspaceId")).toBe("workspace-1");
+    expect(new URL(legacyTool.url).pathname).toBe(new URL(sharedTool.url).pathname);
+    expect(new URL(legacyTool.url).searchParams.get("workspaceId")).toBe("workspace-1");
+    expect(new URL(sharedTool.url).searchParams.get("workspaceId")).toBe("workspace-1");
+  });
+
+  it("keeps legacy and shared resume stream surface headers in parity", async () => {
+    const legacy = await captureChatApiRequest(
+      () => import("./chat"),
+      async (api) => {
+        await api.resumeChatTurnStream("session-1", "turn-1", () => undefined, {
+          originSurface: "cowork",
+          sinceEventId: "event-1",
+        });
+      },
+    );
+    const shared = await captureChatApiRequest(
+      () => import("../../../../packages/mission-control-shared/src/api/chat"),
+      async (api) => {
+        await api.resumeChatTurnStream("session-1", "turn-1", () => undefined, {
+          originSurface: "cowork",
+          sinceEventId: "event-1",
+        });
+      },
+    );
+
+    expect(new URL(legacy.url).pathname).toBe(new URL(shared.url).pathname);
+    expect(new URL(legacy.url).searchParams.get("sinceEventId")).toBe("event-1");
+    expect(new URL(shared.url).searchParams.get("sinceEventId")).toBe("event-1");
+    expect(legacy.headers["last-event-id"]).toBe("event-1");
+    expect(shared.headers["last-event-id"]).toBe("event-1");
+    expect(legacy.headers["x-goatcitadel-origin-surface"]).toBe("cowork");
+    expect(shared.headers["x-goatcitadel-origin-surface"]).toBe("cowork");
+  });
+
+  it("keeps legacy and shared delegation surface propagation in parity", async () => {
+    const legacy = await captureChatApiRequest(
+      () => import("./chat"),
+      async (api) => {
+        await api.runChatDelegation("session-1", {
+          objective: "Implement the plan",
+          surfaceMode: "code",
+          roles: ["Coder"],
+        });
+      },
+    );
+    const shared = await captureChatApiRequest(
+      () => import("../../../../packages/mission-control-shared/src/api/chat"),
+      async (api) => {
+        await api.runChatDelegation("session-1", {
+          objective: "Implement the plan",
+          surfaceMode: "code",
+          roles: ["Coder"],
+        });
+      },
+    );
+
+    expect(new URL(legacy.url).pathname).toBe(new URL(shared.url).pathname);
+    expect(legacy.headers["x-goatcitadel-origin-surface"]).toBe("code");
+    expect(shared.headers["x-goatcitadel-origin-surface"]).toBe("code");
+    expect(JSON.parse(legacy.body ?? "{}")).toEqual(JSON.parse(shared.body ?? "{}"));
   });
 });

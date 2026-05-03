@@ -7,7 +7,8 @@ import { useRouteGeneratedArtifactReveal } from "./useRouteGeneratedArtifactReve
 const fetchChatGeneratedArtifactMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
-  fetchChatGeneratedArtifact: (artifactId: string) => fetchChatGeneratedArtifactMock(artifactId),
+  fetchChatGeneratedArtifact: (artifactId: string, workspaceId: string) =>
+    fetchChatGeneratedArtifactMock(artifactId, workspaceId),
 }));
 
 function makeArtifact(overrides: Partial<ChatGeneratedArtifactRecord> = {}): ChatGeneratedArtifactRecord {
@@ -32,15 +33,18 @@ function makeArtifact(overrides: Partial<ChatGeneratedArtifactRecord> = {}): Cha
 
 function Harness({
   routeArtifactId,
+  workspaceId = "default",
   revealGeneratedArtifact,
   setActiveGeneratedArtifact,
 }: {
   routeArtifactId: string | null;
+  workspaceId?: string;
   revealGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord) => Promise<void> | void;
   setActiveGeneratedArtifact: (artifact: ChatGeneratedArtifactRecord | null) => void;
 }) {
   useRouteGeneratedArtifactReveal({
     routeArtifactId,
+    workspaceId,
     revealGeneratedArtifact,
     setActiveGeneratedArtifact,
   });
@@ -83,7 +87,7 @@ describe("useRouteGeneratedArtifactReveal", () => {
       await Promise.resolve();
     });
 
-    expect(fetchChatGeneratedArtifactMock).toHaveBeenCalledWith(artifact.artifactId);
+    expect(fetchChatGeneratedArtifactMock).toHaveBeenCalledWith(artifact.artifactId, "default");
     expect(revealGeneratedArtifact).toHaveBeenCalledWith(artifact);
     expect(setActiveGeneratedArtifact).not.toHaveBeenCalledWith(null);
   });

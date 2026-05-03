@@ -19,19 +19,19 @@ It is intentionally broader than a smoke test and narrower than "test literally 
 
 This plan is based on the current codebase and release contract, especially:
 
-- [README.md](F:/code/personal-ai/README.md)
-- [docs/1_0_CONTRACT.md](F:/code/personal-ai/docs/1_0_CONTRACT.md)
-- [docs/1_0_RELEASE_EVIDENCE.md](F:/code/personal-ai/docs/1_0_RELEASE_EVIDENCE.md)
-- [docs/CANONICAL_RUNTIME_STATE_MODEL.md](F:/code/personal-ai/docs/CANONICAL_RUNTIME_STATE_MODEL.md)
-- [docs/INSTALL_SETUP_TESTING.md](F:/code/personal-ai/docs/INSTALL_SETUP_TESTING.md)
-- [scripts/verification/lib/release-surface-manifest.mjs](F:/code/personal-ai/scripts/verification/lib/release-surface-manifest.mjs)
-- [apps/mission-control/src/content/page-registry.ts](F:/code/personal-ai/apps/mission-control/src/content/page-registry.ts)
-- [apps/gateway/src/app.ts](F:/code/personal-ai/apps/gateway/src/app.ts)
-- [apps/gateway/src/routes/approvals.ts](F:/code/personal-ai/apps/gateway/src/routes/approvals.ts)
-- [apps/gateway/src/routes/durable.ts](F:/code/personal-ai/apps/gateway/src/routes/durable.ts)
-- [apps/gateway/src/routes/prompt-packs.ts](F:/code/personal-ai/apps/gateway/src/routes/prompt-packs.ts)
-- [apps/gateway/src/routes/admin.test.ts](F:/code/personal-ai/apps/gateway/src/routes/admin.test.ts)
-- [apps/mission-control/src/pages/ApprovalsPage.test.tsx](F:/code/personal-ai/apps/mission-control/src/pages/ApprovalsPage.test.tsx)
+- [README.md](../README.md)
+- [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md)
+- [docs/1_0_RELEASE_EVIDENCE.md](./1_0_RELEASE_EVIDENCE.md)
+- [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md)
+- [docs/INSTALL_SETUP_TESTING.md](./INSTALL_SETUP_TESTING.md)
+- [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs)
+- [apps/mission-control/src/content/page-registry.ts](../apps/mission-control/src/content/page-registry.ts)
+- [apps/gateway/src/app.ts](../apps/gateway/src/app.ts)
+- [apps/gateway/src/routes/approvals.ts](../apps/gateway/src/routes/approvals.ts)
+- [apps/gateway/src/routes/durable.ts](../apps/gateway/src/routes/durable.ts)
+- [apps/gateway/src/routes/prompt-packs.ts](../apps/gateway/src/routes/prompt-packs.ts)
+- [apps/gateway/src/routes/admin.test.ts](../apps/gateway/src/routes/admin.test.ts)
+- [apps/mission-control/src/pages/ApprovalsPage.test.tsx](../apps/mission-control/src/pages/ApprovalsPage.test.tsx)
 
 ## How To Use This Plan
 

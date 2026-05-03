@@ -257,7 +257,7 @@ describe("orchestration engine", () => {
     expect(result.finalOutput).toContain("Planner");
   });
 
-  it("fails downstream synthesis and review roles when no upstream handoff completed", async () => {
+  it("aborts downstream stages when no upstream handoff completed", async () => {
     const createChatCompletion = vi.fn().mockRejectedValue(new Error("provider unavailable"));
 
     const result = await executeOrchestrationPlan({
@@ -269,7 +269,7 @@ describe("orchestration engine", () => {
     });
 
     expect(createChatCompletion).toHaveBeenCalledTimes(2);
-    expect(result.stepResults).toHaveLength(4);
+    expect(result.stepResults).toHaveLength(2);
     expect(result.stepResults[0]).toMatchObject({
       role: "researcher",
       status: "failed",
@@ -280,20 +280,48 @@ describe("orchestration engine", () => {
       status: "failed",
       error: "provider unavailable",
     });
-    expect(result.stepResults[2]).toMatchObject({
-      role: "critic",
-      status: "failed",
-      summary: "Critic blocked",
-      error: "No completed upstream handoffs were available for critic.",
-    });
-    expect(result.stepResults[3]).toMatchObject({
-      role: "synthesizer",
-      status: "failed",
-      summary: "Synthesizer blocked",
-      error: "No completed upstream handoffs were available for synthesizer.",
-    });
-    expect(result.finalOutput).toContain("Critic");
-    expect(result.finalOutput).toContain("Synthesizer");
+    expect(result.finalOutput).toContain("Researcher");
+    expect(result.finalOutput).not.toContain("Critic blocked");
+  });
+
+  it("rejects orchestration plans with same-stage dependency violations before execution", async () => {
+    const plan = createPlan();
+    const createChatCompletion = vi.fn();
+
+    await expect(
+      executeOrchestrationPlan({
+        task: createTask(),
+        plan: {
+          ...plan,
+          steps: plan.steps.map((step) =>
+            step.stepId === "step-2" ? { ...step, dependsOnStepIds: ["step-1"] } : step,
+          ),
+        },
+        callbacks: { createChatCompletion },
+      }),
+    ).rejects.toThrow(/same or a later stage/i);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("rejects orchestration plans with dependency cycles before execution", async () => {
+    const plan = createPlan();
+
+    await expect(
+      executeOrchestrationPlan({
+        task: createTask(),
+        plan: {
+          ...plan,
+          steps: plan.steps.map((step) =>
+            step.stepId === "step-1"
+              ? { ...step, dependsOnStepIds: ["step-3"] }
+              : step.stepId === "step-3"
+                ? { ...step, dependsOnStepIds: ["step-1"] }
+                : step,
+          ),
+        },
+        callbacks: { createChatCompletion: vi.fn() },
+      }),
+    ).rejects.toThrow(/same or a later stage|cycle/i);
   });
 
   it("caps default stage concurrency at four steps when no override is provided", async () => {
@@ -418,7 +446,7 @@ describe("orchestration engine", () => {
       .fn()
       .mockResolvedValueOnce(createCompletion("Prioritized acquisition plan."))
       .mockResolvedValueOnce(createCompletion("Concrete SEO and outreach assets."))
-      .mockRejectedValueOnce(new Error("synthesis provider unavailable"))
+      .mockRejectedValueOnce(new Error("synthesis output empty"))
       .mockResolvedValueOnce(createCompletion("Final beta acquisition plan that merges the plan, assets, and risks."));
 
     const result = await executeOrchestrationPlan({
@@ -433,6 +461,9 @@ describe("orchestration engine", () => {
     expect(createChatCompletion).toHaveBeenCalledTimes(4);
     expect(result.finalOutput).toBe("Final beta acquisition plan that merges the plan, assets, and risks.");
     expect(result.finalStep?.role).toBe("synthesizer");
+    expect(result.finalStep?.stepId).toBe("repair-step-3");
+    expect(result.finalStep?.label).toBe("Synthesis repair");
+    expect(result.finalStep?.repairedFromStepId).toBe("step-3");
     expect(result.integritySignals).toEqual([
       "orchestration_final_synthesis_missing",
       "orchestration_final_synthesis_role_drift",
@@ -441,6 +472,27 @@ describe("orchestration engine", () => {
     const repairPrompt = createChatCompletion.mock.calls[3]?.[0].messages.at(-1)?.content ?? "";
     expect(repairPrompt).toContain("Prioritized acquisition plan.");
     expect(repairPrompt).toContain("Concrete SEO and outreach assets.");
+  });
+
+  it("does not retry the same synthesizer provider after a provider outage", async () => {
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(createCompletion("Prioritized acquisition plan."))
+      .mockResolvedValueOnce(createCompletion("Concrete SEO and outreach assets."))
+      .mockRejectedValueOnce(new Error("provider unavailable"));
+
+    const result = await executeOrchestrationPlan({
+      task: {
+        ...createTask(),
+        objective: "Update SEO and get beta users beyond flyers.",
+      },
+      plan: createPlanWorkSynthesizePlan(),
+      callbacks: { createChatCompletion },
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(3);
+    expect(result.integritySignals).toContain("orchestration_final_synthesis_fallback");
+    expect(result.finalOutput).toContain("Synthesis Incomplete");
   });
 });
 

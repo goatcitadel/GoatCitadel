@@ -522,7 +522,7 @@ export async function executePreparedModeOrchestration(
     finishedAt: new Date().toISOString(),
   });
   host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-    status: summary.status === "failed" ? "failed" : "completed",
+    status: summary.status === "failed" ? "failed" : summary.status === "partial" ? "partial" : "completed",
     summary: result.finalSummary,
     finishedAt: new Date().toISOString(),
     steps: mergeExecutionPlanStepStatuses(
@@ -833,11 +833,15 @@ function buildDelegatedPriorStepContext(
     const raw = step.output?.trim() || step.error?.trim() || step.summary?.trim() || "No handoff provided.";
     const excerpt = raw.slice(0, Math.min(3_000, remaining));
     remaining -= excerpt.length;
-    sections.push([
-      `### ${formatDelegatedStepTitle(step)} (${step.status})`,
-      excerpt,
-      raw.length > excerpt.length ? "[truncated]" : undefined,
-    ].filter(Boolean).join("\n"));
+    sections.push(
+      [
+        `### ${formatDelegatedStepTitle(step)} (${step.status})`,
+        excerpt,
+        raw.length > excerpt.length ? "[truncated]" : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
   return sections.join("\n\n");
 }
@@ -1038,7 +1042,12 @@ export async function* streamPreparedAgentChatTurn(
         ...host.storage.chatTurnTraces.patch(turnId, {
           assistantMessageId,
           executionPlanId: orchestrationResult.executionPlanId,
-          status: orchestrationResult.summary.status === "failed" ? "failed" : "completed",
+          status:
+            orchestrationResult.summary.status === "failed"
+              ? "failed"
+              : orchestrationResult.summary.status === "partial"
+                ? "partial"
+                : "completed",
           finishedAt: new Date().toISOString(),
           model:
             orchestrationResult.finalStep?.model ??

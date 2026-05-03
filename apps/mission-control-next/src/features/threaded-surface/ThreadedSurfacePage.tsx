@@ -6,6 +6,7 @@ import type {
   MissionThreadedDropTargetProps,
   MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
+import { groupDelegatedSessionsForRail } from "@goatcitadel/threaded-surface-core";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
@@ -56,11 +57,11 @@ export function ThreadedSurfacePage({
   const modeMeta = MODE_META[surface];
   const SurfaceIcon = modeMeta.icon;
   const missionSessionGroups = useMemo(
-    () => groupRailSessionsByDelegation(input.sessionRail.missionSessions),
+    () => groupDelegatedSessionsForRail(input.sessionRail.missionSessions),
     [input.sessionRail.missionSessions],
   );
   const externalSessionGroups = useMemo(
-    () => groupRailSessionsByDelegation(input.sessionRail.externalSessions),
+    () => groupDelegatedSessionsForRail(input.sessionRail.externalSessions),
     [input.sessionRail.externalSessions],
   );
   const stageLayoutClass = [
@@ -495,60 +496,6 @@ type SessionGroupItem = {
   channel?: string | null;
   delegationParent?: ChatSessionRecord["delegationParent"];
 };
-
-interface DelegatedSessionRailGroups<TSession> {
-  topLevelSessions: TSession[];
-  delegatedChildrenByParentId: Record<string, TSession[]>;
-  orphanDelegatedSessions: TSession[];
-}
-
-function groupRailSessionsByDelegation<TSession extends SessionGroupItem>(
-  sessions: readonly TSession[],
-): DelegatedSessionRailGroups<TSession> {
-  const sessionIds = new Set(sessions.map((session) => session.sessionId));
-  const topLevelSessions: TSession[] = [];
-  const delegatedChildrenByParentId: Record<string, TSession[]> = {};
-  const orphanDelegatedSessions: TSession[] = [];
-
-  for (const session of sessions) {
-    const parentSessionId = session.delegationParent?.parentSessionId;
-    if (!parentSessionId) {
-      topLevelSessions.push(session);
-      continue;
-    }
-    if (sessionIds.has(parentSessionId)) {
-      const children = delegatedChildrenByParentId[parentSessionId] ?? [];
-      children.push(session);
-      delegatedChildrenByParentId[parentSessionId] = children;
-    } else {
-      orphanDelegatedSessions.push(session);
-    }
-  }
-
-  for (const children of Object.values(delegatedChildrenByParentId)) {
-    children.sort(compareDelegatedSessionOrder);
-  }
-  orphanDelegatedSessions.sort(compareDelegatedSessionOrder);
-
-  return {
-    topLevelSessions,
-    delegatedChildrenByParentId,
-    orphanDelegatedSessions,
-  };
-}
-
-function compareDelegatedSessionOrder<TSession extends SessionGroupItem>(left: TSession, right: TSession): number {
-  const leftIndex = left.delegationParent?.index ?? Number.MAX_SAFE_INTEGER;
-  const rightIndex = right.delegationParent?.index ?? Number.MAX_SAFE_INTEGER;
-  if (leftIndex !== rightIndex) {
-    return leftIndex - rightIndex;
-  }
-  const byUpdated = Date.parse(right.updatedAt ?? "") - Date.parse(left.updatedAt ?? "");
-  if (Number.isFinite(byUpdated) && byUpdated !== 0) {
-    return byUpdated;
-  }
-  return left.sessionId.localeCompare(right.sessionId);
-}
 
 function SessionGroup({
   title,

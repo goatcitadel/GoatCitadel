@@ -635,6 +635,7 @@ export type ChatTurnLifecycleStatus =
   | "waiting_for_approval"
   | "waiting_for_user_input"
   | "completed"
+  | "partial"
   | "failed"
   | "cancelled";
 
@@ -772,6 +773,7 @@ export const CHAT_TURN_ACTIVE_STATUSES = [
 
 export const CHAT_TURN_TERMINAL_STATUSES = [
   "completed",
+  "partial",
   "failed",
   "cancelled",
 ] as const satisfies ChatTurnLifecycleStatus[];
@@ -864,7 +866,14 @@ export interface ChatOrchestrationSummary {
   steps: ChatOrchestrationStepSummary[];
 }
 
-export type ChatExecutionPlanStatus = "drafted" | "ready" | "running" | "completed" | "failed" | "cancelled";
+export type ChatExecutionPlanStatus =
+  | "drafted"
+  | "ready"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "cancelled";
 
 export type ChatExecutionPlanStepStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
@@ -1076,6 +1085,7 @@ export interface ChatDelegateRequest {
   objective: string;
   roles: string[];
   mode?: ChatDelegationMode;
+  surfaceMode?: ChatMode;
   providerId?: string;
   model?: string;
   steps?: ChatDelegateStepRequest[];
@@ -1221,6 +1231,7 @@ export interface ChatDelegateAcceptRequest {
   objective: string;
   roles: string[];
   mode?: ChatDelegationMode;
+  surfaceMode?: ChatMode;
   providerId?: string;
   model?: string;
 }

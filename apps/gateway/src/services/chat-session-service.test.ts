@@ -111,4 +111,51 @@ describe("chat session service", () => {
       cleanup();
     }
   });
+
+  it("does not reclassify other-workspace or missing-meta sessions into the requested workspace", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      storage.sessions.upsert({
+        sessionId: "default-session",
+        sessionKey: "mission:operator:default",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        displayName: "Default workspace",
+        timestamp: NOW,
+      });
+      storage.sessions.upsert({
+        sessionId: "other-session",
+        sessionKey: "mission:operator:other",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        displayName: "Other workspace",
+        timestamp: NOW,
+      });
+      storage.sessions.upsert({
+        sessionId: "missing-meta-session",
+        sessionKey: "mission:operator:missing",
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        displayName: "Missing metadata",
+        timestamp: NOW,
+      });
+      storage.chatSessionMeta.ensure("default-session", NOW, "default");
+      storage.chatSessionMeta.ensure("other-session", NOW, "other");
+
+      const records = listChatSessions(createDeps(storage), {
+        scope: "all",
+        view: "all",
+        workspaceId: "default",
+      });
+
+      expect(records.map((record) => record.sessionId)).toContain("default-session");
+      expect(records.map((record) => record.sessionId)).not.toContain("other-session");
+      expect(records.map((record) => record.sessionId)).not.toContain("missing-meta-session");
+    } finally {
+      cleanup();
+    }
+  });
 });

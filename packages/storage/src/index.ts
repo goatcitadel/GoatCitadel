@@ -336,6 +336,16 @@ export class Storage {
       this.db
         .prepare(
           `
+        UPDATE chat_delegation_steps
+        SET child_session_id = NULL,
+            child_turn_id = NULL
+        WHERE child_session_id = ?
+      `,
+        )
+        .run(normalizedSessionId);
+      this.db
+        .prepare(
+          `
         DELETE FROM chat_delegation_steps
         WHERE run_id IN (SELECT run_id FROM chat_delegation_runs WHERE session_id = ?)
       `,

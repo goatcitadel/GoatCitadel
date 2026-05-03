@@ -21,12 +21,12 @@ All notable changes to GoatCitadel are documented in this file.
 ### Changed
 
 - `SECURITY.md` now reflects the shipped `1.x` support posture instead of the pre-1.0 beta line.
-- Release workflow is expanded from raw installer publishing to a signed Windows proof-package handoff with commit-bound release certification.
+- Release workflow is expanded from raw installer publishing to a signed Windows proof-package handoff with commit-bound release certification, plus a manual unsigned packaging-smoke path that does not publish a GitHub release.
 - Packaging docs now explicitly label macOS/Linux release artifacts as development-only until those workflow matrices produce signed proof.
 - Approval control routes are now explicitly operator-fenced, while remote approval token resolution remains on its separate capability-token path.
 - Mission Control Channel Setup now shows only shipped guided channels instead of mixing visible built-ins with manual/later-state copy.
 - Remote approval delivery now keeps connector delivery auth boundaries explicit instead of implying that approval-control fencing covers the delivery path.
-- Public Windows x64 and arm64 installer artifacts were refreshed after the `1.0.0` cut.
+- Windows x64 and arm64 installer proof was refreshed after the `1.0.0` cut; unsigned artifacts remain development smoke evidence until public Authenticode signing is configured.
 - README and Mission Control screenshot gallery were refreshed to match the current main-branch UI and docs posture.
 
 ### Verification

@@ -23,6 +23,7 @@ export async function executeOrchestrationPlan(input: {
   callbacks: OrchestrationExecutionCallbacks;
   concurrency?: number;
 }): Promise<OrchestrationExecutionResult> {
+  validateOrchestrationPlan(input.plan);
   const groupedStages = new Map<number, typeof input.plan.steps>();
   for (const step of input.plan.steps) {
     const steps = groupedStages.get(step.stage) ?? [];
@@ -51,7 +52,7 @@ export async function executeOrchestrationPlan(input: {
       await input.callbacks.onStepResult?.(execution, [...completedSteps]);
     }
     const stageHadSuccess = executions.some((execution) => execution.status === "completed");
-    if (!stageHadSuccess && isTerminalStage(stage, stageNumbers.at(-1) ?? stage)) {
+    if (!stageHadSuccess) {
       break;
     }
   }
@@ -110,8 +111,44 @@ async function mapWithConcurrency<TItem, TResult>(
   return results;
 }
 
-function isTerminalStage(stage: number, finalStage: number): boolean {
-  return stage === finalStage;
+function validateOrchestrationPlan(plan: OrchestrationPlan): void {
+  const byId = new Map(plan.steps.map((step) => [step.stepId, step]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  for (const step of plan.steps) {
+    for (const dependencyId of step.dependsOnStepIds ?? []) {
+      const dependency = byId.get(dependencyId);
+      if (!dependency) {
+        throw new Error(`Malformed orchestration plan: step ${step.stepId} depends on missing step ${dependencyId}.`);
+      }
+      if (dependency.stage >= step.stage) {
+        throw new Error(
+          `Malformed orchestration plan: step ${step.stepId} depends on ${dependencyId} from the same or a later stage.`,
+        );
+      }
+    }
+  }
+
+  const visit = (stepId: string, path: string[]): void => {
+    if (visited.has(stepId)) {
+      return;
+    }
+    if (visiting.has(stepId)) {
+      throw new Error(`Malformed orchestration plan: dependency cycle detected (${[...path, stepId].join(" -> ")}).`);
+    }
+    visiting.add(stepId);
+    const step = byId.get(stepId);
+    for (const dependencyId of step?.dependsOnStepIds ?? []) {
+      visit(dependencyId, [...path, stepId]);
+    }
+    visiting.delete(stepId);
+    visited.add(stepId);
+  };
+
+  for (const step of plan.steps) {
+    visit(step.stepId, []);
+  }
 }
 
 function getMissingHandoffFailure(
@@ -523,13 +560,22 @@ async function tryRepairFinalSynthesis(input: {
   finalStep?: OrchestrationStepExecutionResult;
   initialOutput: string;
 }): Promise<{ output: string; finalStep: OrchestrationStepExecutionResult } | undefined> {
+  const failedSynthesisStep = [...input.steps]
+    .reverse()
+    .find((step) => step.role === "synthesizer" && step.status === "failed");
   const repairSourceStep =
-    input.finalStep ?? [...input.steps].reverse().find((step) => step.status === "completed" && step.output?.trim());
+    failedSynthesisStep ??
+    input.finalStep ??
+    [...input.steps].reverse().find((step) => step.status === "completed" && step.output?.trim());
   if (!repairSourceStep) {
+    return undefined;
+  }
+  if (shouldSkipSameProviderRepair(repairSourceStep)) {
     return undefined;
   }
   const requiredLabels = getRequiredWorkstreamLabels(input.plan);
   try {
+    const startedAt = new Date().toISOString();
     const response = await input.callbacks.createChatCompletion({
       providerId: repairSourceStep.providerId,
       model: repairSourceStep.model,
@@ -569,21 +615,39 @@ async function tryRepairFinalSynthesis(input: {
     if (!output) {
       return undefined;
     }
+    const finishedAt = new Date().toISOString();
     return {
       output,
       finalStep: {
-        ...repairSourceStep,
+        stepId: `repair-${repairSourceStep.stepId}`,
         role: "synthesizer",
-        label: repairSourceStep.label ?? "Synthesis",
+        label: "Synthesis repair",
+        index: input.steps.length,
+        providerId: repairSourceStep.providerId,
+        startedAt,
+        finishedAt,
+        durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+        status: "completed",
         output,
         summary: summarizeOutput(output),
         model: response.model ?? repairSourceStep.model,
+        repairedFromStepId: repairSourceStep.stepId,
         citations: dedupeCitations([...repairSourceStep.citations, ...readCompletionCitations(response)]),
       },
     };
   } catch {
     return undefined;
   }
+}
+
+function shouldSkipSameProviderRepair(step: OrchestrationStepExecutionResult): boolean {
+  if (step.status !== "failed") {
+    return false;
+  }
+  const error = `${step.error ?? ""} ${step.failureGuidance ?? ""}`.toLowerCase();
+  return /\b(provider|refusal|context window|context-window|context_length|overloaded|rate limit|timeout|unavailable)\b/.test(
+    error,
+  );
 }
 
 function getRequiredWorkstreamLabels(plan: OrchestrationPlan): string[] {

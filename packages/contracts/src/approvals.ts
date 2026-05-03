@@ -27,6 +27,19 @@ export interface ApprovalExplanation {
   model?: string;
 }
 
+export type ApprovalFollowUpStatus = "none" | "queued" | ApprovalEffectStatus;
+
+export interface ApprovalFollowUpState {
+  status: ApprovalFollowUpStatus;
+  effectId?: string;
+  effectKind?: ApprovalEffectKind;
+  targetKind?: ApprovalEffectTargetKind;
+  targetId?: string;
+  reason?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 export interface ApprovalRequest {
   approvalId: string;
   kind: string;
@@ -43,6 +56,7 @@ export interface ApprovalRequest {
   explanationStatus: ApprovalExplanationStatus;
   explanation?: ApprovalExplanation;
   explanationError?: string;
+  followUp?: ApprovalFollowUpState;
 }
 
 export interface ApprovalCreateInput {

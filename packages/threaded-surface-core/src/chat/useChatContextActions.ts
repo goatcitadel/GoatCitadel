@@ -1,5 +1,6 @@
 import type {
   ChatMessageRecord,
+  ChatMode,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatSpecialistCandidateRecord,
@@ -27,6 +28,7 @@ export function useChatContextActions(input: {
   prefs: ChatSessionPrefsRecord | null;
   selectedProviderId?: string;
   selectedModel?: string;
+  surfaceMode: ChatMode;
   sending: boolean;
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;

@@ -798,6 +798,7 @@ export function useChatOutboundExecution(input: {
                 await resumeChatTurnStream(session.sessionId, liveStream.turnId, onChunk, {
                   signal: controller.signal,
                   sinceEventId: liveStream.lastEventId,
+                  originSurface: effectiveMode,
                 });
               } else if (item.action === "retry" && item.targetTurnId) {
                 await streamRetryChatTurn(

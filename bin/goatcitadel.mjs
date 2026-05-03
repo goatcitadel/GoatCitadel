@@ -2,7 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import readline from "node:readline/promises";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
@@ -573,6 +573,7 @@ async function readRuntimeStatus(options = {}) {
   const startupState = gatewayReady
     ? await fetchJson(`${gatewayUrl}/api/v1/onboarding/startup`).catch(() => undefined)
     : undefined;
+  const desktopEventStream = gatewayReady ? await issueDesktopEventStreamToken(gatewayUrl) : undefined;
   const onboardingCompleted = startupState?.completed === true;
   const targetUrl = onboardingCompleted ? `${uiUrl}/?tab=dashboard` : `${uiUrl}/?tab=onboarding`;
   const pidStates = [gatewayPid.state, uiPid.state];
@@ -599,6 +600,7 @@ async function readRuntimeStatus(options = {}) {
     uiReady,
     gatewayPid,
     uiPid,
+    desktopEventStream,
   });
 }
 
@@ -643,6 +645,7 @@ function buildRuntimeCommandResult({
   uiReady,
   gatewayPid,
   uiPid,
+  desktopEventStream,
 }) {
   return {
     status,
@@ -671,8 +674,59 @@ function buildRuntimeCommandResult({
       ui: uiReady,
     },
     onboardingCompleted,
+    ...(desktopEventStream ? { desktopEventStream } : {}),
     checkedAt: new Date().toISOString(),
   };
+}
+
+async function issueDesktopEventStreamToken(gatewayUrl) {
+  try {
+    const response = await fetch(`${gatewayUrl}/api/v1/auth/sse-token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `desktop-sse-token:${randomUUID()}`,
+        ...readLauncherOperatorAuthHeaders(),
+      },
+      body: JSON.stringify({ scope: "events:stream" }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok && payload?.token) {
+      return {
+        scope: payload.scope || "events:stream",
+        token: payload.token,
+        expiresAt: payload.expiresAt,
+      };
+    }
+    if (response.status === 400 && /not needed/i.test(String(payload?.error ?? ""))) {
+      return {
+        scope: "events:stream",
+        authMode: "none",
+      };
+    }
+    return {
+      scope: "events:stream",
+      error: payload?.error || `SSE token request failed with HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      scope: "events:stream",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function readLauncherOperatorAuthHeaders() {
+  const token = process.env.GOATCITADEL_AUTH_TOKEN?.trim();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  const username = process.env.GOATCITADEL_AUTH_BASIC_USERNAME?.trim();
+  const password = process.env.GOATCITADEL_AUTH_BASIC_PASSWORD;
+  if (username && password) {
+    return { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` };
+  }
+  return {};
 }
 
 function readManagedPid(filePath) {

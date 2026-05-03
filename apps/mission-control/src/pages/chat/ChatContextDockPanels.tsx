@@ -50,6 +50,7 @@ export function ChatContextDockPanels(props: ChatContextDockPanelsProps) {
           <ChatDockRunTraceSection
             isChatSurface={props.isChatSurface}
             isCoworkSurface={props.isCoworkSurface}
+            workspaceId={props.selectedSession.workspaceId ?? "default"}
             selectedTurn={selectedTurn}
             coworkViewModel={props.coworkViewModel ?? null}
             routePreflight={props.routePreflight ?? null}

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Durable run lifecycle service intentionally centralizes lease, recovery, timeline, and diagnostics behavior. */
 import { randomUUID } from "node:crypto";
 import type {
   DurableCheckpointRecord,
@@ -37,6 +38,8 @@ const DURABLE_LEASE_TTL_MS = 15_000;
 const DURABLE_WORKER_POLL_MIN_MS = 750;
 const DURABLE_WORKER_POLL_JITTER_MS = 500;
 const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
+const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
+const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
 
 function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
   return {
@@ -57,6 +60,9 @@ export class DurableRunService {
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly workerId = randomUUID();
   private readonly activeRunAbortControllers = new Map<string, AbortController>();
+  private lastEventLoopLagMs = 0;
+  private lastEventLoopLagAt: string | undefined;
+  private leaseAcquisitionPausedUntilMs = 0;
 
   constructor(
     private readonly ctx: DurableRunServiceContext,
@@ -85,6 +91,17 @@ export class DurableRunService {
       deadLetterCount: this.ctx.storage.durableRuns.listDeadLetters(1000).length,
       recentRuns: this.ctx.storage.durableRuns.listRuns(25),
       recentDeadLetters: this.ctx.storage.durableRuns.listDeadLetters(25),
+      ...(this.lastEventLoopLagAt
+        ? {
+            eventLoopLag: {
+              lastMs: this.lastEventLoopLagMs,
+              lastObservedAt: this.lastEventLoopLagAt,
+              ...(this.leaseAcquisitionPausedUntilMs > Date.now()
+                ? { leaseAcquisitionPausedUntil: new Date(this.leaseAcquisitionPausedUntilMs).toISOString() }
+                : {}),
+            },
+          }
+        : {}),
       generatedAt: new Date().toISOString(),
     };
   }
@@ -652,6 +669,9 @@ export class DurableRunService {
     const deps = this.deps;
     const timeoutMs = this.ctx.config.assistant.durable.workflowTimeoutMs;
     while (true) {
+      if (this.isLeaseAcquisitionPaused()) {
+        return;
+      }
       const run = this.claimNextQueuedRun();
       if (!run) {
         return;
@@ -713,10 +733,15 @@ export class DurableRunService {
     const heartbeatFailure = new Promise<never>((_, reject) => {
       rejectHeartbeatFailure = reject;
     });
-    const heartbeat = async () => {
+    const scheduleHeartbeat = () => {
+      const expectedAtMs = Date.now() + DURABLE_LEASE_HEARTBEAT_MS;
+      heartbeatTimer = setTimeout(() => void heartbeat(expectedAtMs), DURABLE_LEASE_HEARTBEAT_MS);
+    };
+    const heartbeat = async (expectedAtMs: number) => {
       if (!active) {
         return;
       }
+      this.recordEventLoopLag(Date.now() - expectedAtMs, run.runId);
       let current: DurableRunRecord;
       try {
         current = this.ctx.storage.durableRuns.getRun(run.runId);
@@ -753,10 +778,10 @@ export class DurableRunService {
         );
         return;
       }
-      heartbeatTimer = setTimeout(() => void heartbeat(), DURABLE_LEASE_HEARTBEAT_MS);
+      scheduleHeartbeat();
     };
 
-    heartbeatTimer = setTimeout(() => void heartbeat(), DURABLE_LEASE_HEARTBEAT_MS);
+    scheduleHeartbeat();
     try {
       return await Promise.race([execute({ signal: controller.signal, controller }), heartbeatFailure]);
     } finally {
@@ -766,6 +791,47 @@ export class DurableRunService {
       }
       this.activeRunAbortControllers.delete(run.runId);
     }
+  }
+
+  private recordEventLoopLag(lagMs: number, runId: string): void {
+    const boundedLagMs = Math.max(0, Math.floor(lagMs));
+    this.lastEventLoopLagMs = boundedLagMs;
+    this.lastEventLoopLagAt = new Date().toISOString();
+    if (boundedLagMs < DURABLE_EVENT_LOOP_LAG_WARN_MS) {
+      return;
+    }
+    if (boundedLagMs >= DURABLE_EVENT_LOOP_LAG_PAUSE_MS) {
+      this.leaseAcquisitionPausedUntilMs = Math.max(
+        this.leaseAcquisitionPausedUntilMs,
+        Date.now() + Math.min(30_000, Math.max(5_000, boundedLagMs)),
+      );
+    }
+    this.recordDurableTimelineEvent(runId, "worker_event_loop_lag", {
+      lagMs: boundedLagMs,
+      thresholdMs: DURABLE_EVENT_LOOP_LAG_WARN_MS,
+      leaseAcquisitionPausedUntil:
+        this.leaseAcquisitionPausedUntilMs > Date.now()
+          ? new Date(this.leaseAcquisitionPausedUntilMs).toISOString()
+          : undefined,
+    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_worker_event_loop_lag",
+        runId,
+        lagMs: boundedLagMs,
+        leaseAcquisitionPausedUntil:
+          this.leaseAcquisitionPausedUntilMs > Date.now()
+            ? new Date(this.leaseAcquisitionPausedUntilMs).toISOString()
+            : undefined,
+      },
+      buildDurableRealtimeOptions(runId),
+    );
+  }
+
+  private isLeaseAcquisitionPaused(): boolean {
+    return this.leaseAcquisitionPausedUntilMs > Date.now();
   }
 
   private claimNextQueuedRun(): DurableRunRecord | undefined {

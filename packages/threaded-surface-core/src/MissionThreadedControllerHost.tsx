@@ -802,9 +802,12 @@ export function MissionThreadedControllerHost({
     prefs,
     selectedProviderId,
     selectedModel,
+    surfaceMode: executionSurfaceMode,
     sending,
     streamEnabled,
-    codeModeNeedsProjectBinding: Boolean(selectedSession && prefs?.mode === "code" && !selectedSession.projectId),
+    codeModeNeedsProjectBinding: Boolean(
+      selectedSession && executionSurfaceMode === "code" && !selectedSession.projectId,
+    ),
     loadSidebar,
     ensureSession,
     setError: setUiError,
@@ -1402,6 +1405,7 @@ export function MissionThreadedControllerHost({
   );
   useRouteGeneratedArtifactReveal({
     routeArtifactId,
+    workspaceId,
     revealGeneratedArtifact,
     setActiveGeneratedArtifact,
   });
@@ -1418,13 +1422,13 @@ export function MissionThreadedControllerHost({
           pushLocalNotice("Create an artifact from this turn before opening it.", "warning");
           return;
         }
-        const artifact = (await fetchChatGeneratedArtifact(existingArtifactId)).item;
+        const artifact = (await fetchChatGeneratedArtifact(existingArtifactId, workspaceId)).item;
         await revealGeneratedArtifact(artifact);
       } catch (err) {
         setUiError((err as Error).message);
       }
     },
-    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setUiError, thread?.turns],
+    [pushLocalNotice, revealGeneratedArtifact, selectedSessionId, setUiError, thread?.turns, workspaceId],
   );
 
   const handleCreateGeneratedArtifactFromTurn = useCallback(

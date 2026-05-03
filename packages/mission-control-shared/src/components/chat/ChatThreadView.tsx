@@ -75,6 +75,9 @@ function getTraceTone(trace: ChatTurnTraceRecord): "muted" | "warning" | "critic
   if (trace.status === "completed" && !trace.failure) {
     return "success";
   }
+  if (trace.status === "partial") {
+    return "warning";
+  }
   if (trace.status === "cancelled") {
     return "muted";
   }
@@ -95,6 +98,8 @@ function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
       return "Turn cancelled.";
     case "failed":
       return trace.failure?.message ?? "Turn failed.";
+    case "partial":
+      return "Turn partially completed.";
     default:
       return "Working...";
   }
@@ -418,7 +423,8 @@ function ChatDelegationRunSummary({
     delegationRun.steps.find((step) => step.status === "running") ??
     [...delegationRun.steps].reverse().find((step) => step.status === "completed" || step.status === "failed") ??
     delegationRun.steps[0];
-  const formatStepLabel = (step: ActiveChatDelegationRun["steps"][number]) => step.label?.trim() || toTitleCase(step.role);
+  const formatStepLabel = (step: ActiveChatDelegationRun["steps"][number]) =>
+    step.label?.trim() || toTitleCase(step.role);
   const countsLine = `Completed ${completedCount} · Running ${runningCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
   if (isCowork) {
     return (
@@ -474,13 +480,19 @@ function ChatDelegationRunSummary({
                   {step.output ? (
                     <details className="chat-cowork-step-output-details">
                       <summary>Show subagent output</summary>
-                      <AssistantMessageRenderer role="assistant" content={step.output} className="chat-cowork-step-output" />
+                      <AssistantMessageRenderer
+                        role="assistant"
+                        content={step.output}
+                        className="chat-cowork-step-output"
+                      />
                     </details>
                   ) : null}
                 </li>
               ))}
             </ol>
-            {delegationRun.stitchedOutput ? <p>Final synthesized answer is shown in the main assistant message.</p> : null}
+            {delegationRun.stitchedOutput ? (
+              <p>Final synthesized answer is shown in the main assistant message.</p>
+            ) : null}
           </div>
         </details>
       </section>

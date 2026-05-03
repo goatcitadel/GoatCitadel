@@ -150,7 +150,7 @@ describe("ChatTraceCard", () => {
   it("renders routing and browser diagnostics", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<ChatTraceCard trace={makeTrace()} defaultCollapsed={false} />);
+      renderer = create(<ChatTraceCard trace={makeTrace()} workspaceId="default" defaultCollapsed={false} />);
     });
     const text = renderer.root
       .findAllByType("p")
@@ -193,7 +193,7 @@ describe("ChatTraceCard", () => {
   it("surfaces requested versus effective routing in the collapsed header", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<ChatTraceCard trace={makeTrace()} />);
+      renderer = create(<ChatTraceCard trace={makeTrace()} workspaceId="default" />);
     });
     const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
 

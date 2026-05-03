@@ -40,13 +40,21 @@ export function listChatGeneratedArtifacts(
 export function getChatGeneratedArtifact(
   deps: ChatGeneratedArtifactDependencies,
   artifactId: string,
+  options: { workspaceId: string },
 ): ChatGeneratedArtifactRecord {
   const normalizedArtifactId = artifactId.trim();
   if (!normalizedArtifactId) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "artifactId" });
   }
+  const workspaceId = options.workspaceId.trim();
+  if (!workspaceId) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
+  }
   const artifact = deps.storage.chatGeneratedArtifacts.get(normalizedArtifactId);
-  deps.requireChatSession(artifact.sessionId);
+  const session = deps.requireChatSession(artifact.sessionId);
+  if (session.workspaceId !== workspaceId) {
+    throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
+  }
   return artifact;
 }
 

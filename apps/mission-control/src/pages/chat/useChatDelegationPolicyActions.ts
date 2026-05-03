@@ -553,6 +553,7 @@ export function useChatDelegationPolicyActions(input: {
         objective,
         roles: graph.roles,
         mode,
+        surfaceMode: prefs?.mode ?? "chat",
         providerId: prefs?.providerId,
         model: prefs?.model,
         ...(graph.steps?.length ? { steps: graph.steps } : {}),

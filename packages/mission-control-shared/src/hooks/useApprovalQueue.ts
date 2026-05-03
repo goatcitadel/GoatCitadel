@@ -165,6 +165,10 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
           setSummary(
             `Approval ${approvalId} resolved and action ${result.executedAction.outcome}: ${result.executedAction.policyReason}`,
           );
+        } else if (result.approval.followUp && result.approval.followUp.status !== "none") {
+          setSummary(
+            `Approval ${approvalId} resolved. ${formatApprovalFollowUpSummary(result.approval.followUp.status)}.`,
+          );
         } else if (result.effects.length > 0) {
           setSummary(`Approval ${approvalId} resolved. ${result.effects.length} follow-on effects queued.`);
         } else {
@@ -407,4 +411,22 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     loadDurableStatus,
     resumeFromCheckpoint,
   };
+}
+
+function formatApprovalFollowUpSummary(status: NonNullable<ApprovalRequest["followUp"]>["status"]): string {
+  switch (status) {
+    case "queued":
+      return "Follow-on work is queued";
+    case "running":
+      return "Follow-on work is running";
+    case "completed":
+      return "Follow-on work completed";
+    case "skipped":
+      return "Follow-on work was skipped";
+    case "failed":
+      return "Follow-on work failed";
+    case "none":
+      return "No follow-on work was needed";
+  }
+  return "Follow-on work status is unknown";
 }

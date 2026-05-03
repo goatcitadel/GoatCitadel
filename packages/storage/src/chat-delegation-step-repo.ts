@@ -180,16 +180,34 @@ export class ChatDelegationStepRepository {
     return rows.map(mapRow);
   }
 
-  public listParentsByChildSessionIds(sessionIds: string[]): Map<string, ChatSessionDelegationParentRecord> {
+  public listParentsByChildSessionIds(
+    sessionIds: string[],
+    workspaceId?: string,
+  ): Map<string, ChatSessionDelegationParentRecord> {
     const childSessionIds = [...new Set(sessionIds.map((item) => item.trim()).filter(Boolean))];
     if (childSessionIds.length === 0) {
       return new Map();
     }
     const placeholders = childSessionIds.map(() => "?").join(", ");
+    const workspace = workspaceId?.trim();
     const rows = toChatDelegationParentRows(
       this.db
         .prepare(
+          workspace
+            ? `
+            SELECT steps.*, runs.session_id AS parent_session_id
+            FROM chat_delegation_steps steps
+            INNER JOIN chat_delegation_runs runs ON runs.run_id = steps.run_id
+            INNER JOIN chat_session_meta child_meta
+              ON child_meta.session_id = steps.child_session_id
+             AND child_meta.workspace_id = ?
+            INNER JOIN chat_session_meta parent_meta
+              ON parent_meta.session_id = runs.session_id
+             AND parent_meta.workspace_id = child_meta.workspace_id
+            WHERE steps.child_session_id IN (${placeholders})
+            ORDER BY steps.started_at DESC, steps.step_index DESC, steps.step_id DESC
           `
+            : `
             SELECT steps.*, runs.session_id AS parent_session_id
             FROM chat_delegation_steps steps
             INNER JOIN chat_delegation_runs runs ON runs.run_id = steps.run_id
@@ -197,7 +215,7 @@ export class ChatDelegationStepRepository {
             ORDER BY steps.started_at DESC, steps.step_index DESC, steps.step_id DESC
           `,
         )
-        .all(...childSessionIds),
+        .all(...(workspace ? [workspace, ...childSessionIds] : childSessionIds)),
     );
     const byChildSessionId = new Map<string, ChatSessionDelegationParentRecord>();
     for (const row of rows) {

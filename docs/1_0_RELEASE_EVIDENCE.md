@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Evidence
 
-Last updated: 2026-04-23
+Last updated: 2026-05-03
 
 This document maps the public `1.0` claims to the repo-visible code paths, tests, and named verification lanes that back them.
 
@@ -13,7 +13,7 @@ Current shell posture for this map:
 
 - `apps/mission-control-next` is the canonical `1.0` shell.
 - `apps/mission-control` remains a compatibility-only shell. Legacy code and tests are cited here only when they are explicitly needed for parity or rollback continuity evidence.
-- `release-certificate.json` is the commit-bound release proof record. A tagged build is not 1.0-ready unless the certificate lists every required lane as `success` with an empty `acceptedFailures` array.
+- `release-certificate.json` is the commit-bound proof record for signed public Windows installer releases. Source/dev/onboarding 1.0 readiness is backed by the named verification lanes below; public-trust EXE distribution additionally requires a green release certificate with an empty `acceptedFailures` array.
 
 ## Recovery Truth
 
@@ -37,6 +37,16 @@ Current shell posture for this map:
 - `verify:ui:parity` is the named compatibility proof lane for the seeded next-vs-legacy surface set while the legacy shell remains shipped for rollback/comparison.
 - `verify:visual:regression` is the read-only screenshot gate in [scripts/verification/run.mjs](../scripts/verification/run.mjs); intentional baseline maintenance now goes through `verify:visual:rebaseline`, which threads explicit baseline-write intent into [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs) instead of letting the normal lane rewrite proof artifacts.
 - Checked-in visual baselines live under [scripts/verification/baselines/visual](../scripts/verification/baselines/visual).
+
+## Desktop and Installer Evidence
+
+- The Windows desktop host lives in [apps/mission-control-desktop](../apps/mission-control-desktop) and is the default Windows shortcut target for packaged installs.
+- Desktop approval notifications use the same short-lived SSE bridge credential semantics as the web client: the packaged launcher exposes desktop event-stream metadata in [bin/goatcitadel.mjs](../bin/goatcitadel.mjs), and the Tauri watcher attaches the token, refreshes on auth failure, and surfaces watcher errors in [apps/mission-control-desktop/src-tauri/src/main.rs](../apps/mission-control-desktop/src-tauri/src/main.rs).
+- Desktop external opening is constrained by URL validation before handing a target to the OS, with Windows using `ShellExecuteW` instead of `cmd /c start` in [apps/mission-control-desktop/src-tauri/src/main.rs](../apps/mission-control-desktop/src-tauri/src/main.rs).
+- Desktop compile and unit-test proof is wired through `pnpm verify:desktop`, which now runs `cargo check`, `cargo test`, launcher status JSON validation, and desktop SSE credential shape checks in [scripts/verify-desktop.mjs](../scripts/verify-desktop.mjs).
+- Windows bundle trust is anchored by checksum verification for the embedded Node archive in [scripts/packaging/build-bundle.mjs](../scripts/packaging/build-bundle.mjs).
+- Tagged public Windows releases must sign and verify both the desktop executable and final installer, validate x64/arm64 artifact completeness, and run silent install/uninstall smoke before upload in [.github/workflows/release-installers.yml](../.github/workflows/release-installers.yml).
+- Manual `workflow_dispatch` runs with `allow_unsigned=true` are development packaging smoke only: they build x64/arm64 installers, run the same desktop checks and silent install/uninstall smoke, upload workflow artifacts named `*-unsigned-package-smoke-assets`, and skip GitHub release publication.
 
 ## Durable Ownership Evidence
 
@@ -113,5 +123,7 @@ Current shell posture for this map:
 
 - Closeout validation keeps the contract and handbook anchored through `pnpm docs:check`.
 - The hardening pass now ships named runtime-truth, auth-matrix, ui-parity, memory-truth, realtime-truth, and architecture-metrics lanes through [scripts/verification/run.mjs](../scripts/verification/run.mjs) and [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs). Each named truth lane now runs a bespoke scenario body instead of delegating to older shared coverage.
+- The architecture-metrics baseline was refreshed on 2026-05-03 after the desktop/auth/runtime-truth hardening batch. Direct chat delegation execution was then extracted into `ChatDelegationService`, reducing `GatewayService` line count while keeping host-callback and route-service coupling non-increasing. Broad GatewayService reduction remains post-1.0 debt; the refreshed baseline keeps future changes fail-closed against the actual hardened snapshot.
 - The visual regression lane remains read-only and any intentional baseline updates must go through `verify:visual:rebaseline` before a clean rerun against the checked-in assets under [scripts/verification/baselines/visual](../scripts/verification/baselines/visual).
+- Signed Windows x64/arm64 installer proof is public-trust EXE distribution evidence, not a blocker for the source/dev/onboarding 1.0 runtime claim. Unsigned x64/arm64 workflow-dispatch smoke can close packaging correctness for this branch, provided no GitHub release is published from that run. Future public EXE publication must run with `allow_unsigned=false`, signing secrets present, both Windows matrix artifacts present, `signtool verify /pa` green, silent install/uninstall smoke green, and a successful `release-certificate.json` before publication.
 - No known non-blocking failures remain explicitly accepted for this pass.

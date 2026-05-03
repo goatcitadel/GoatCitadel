@@ -63,7 +63,7 @@ goatcitadel status --json
 goatcitadel stop --json
 ```
 
-`goat up`, `goat onboard`, and `goat doctor --deep` remain available for source and operator workflows.
+`goat up` is installer-safe. Deep diagnostics, verification lanes, and source-oriented operator commands remain source-checkout workflows unless a tagged release explicitly documents them as packaged commands.
 
 ## Windows packaging
 
@@ -100,9 +100,15 @@ pnpm package:windows --target windows-x64
 pnpm verify:desktop
 ```
 
+`package:bundle` verifies the embedded Node archive against either `--node-sha256 <sha256>` or the upstream Node `SHASUMS256.txt` entry before copying `node.exe` into the bundle.
+
 ## Release workflow
 
-The GitHub Actions release workflow currently builds and publishes Windows x64/arm64 installers. The desktop executable is built before the bundle, copied into `app/desktop/`, and signed before the final installer when signing secrets are available. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
+The GitHub Actions installer workflow currently builds Windows x64/arm64 installers. The desktop executable is built before the bundle, checked with `cargo check` and `cargo test`, and copied into `app/desktop/`. Public release publication requires signing before the final installer is uploaded.
+
+Public `v*` releases are fail-closed: Authenticode signing secrets must be present, and `signtool verify /pa` must pass for both the desktop executable and the generated installer. Unsigned Windows artifacts are only allowed for explicit manual/dev workflow runs that opt into unsigned output; those runs upload workflow artifacts for packaging smoke evidence and skip GitHub release publication. macOS/Linux remain development targets until the workflow matrix explicitly produces those assets.
+
+Before public release upload, the workflow also verifies that both Windows matrix targets produced installers/checksums and runs a silent install/uninstall smoke for each generated Windows installer. The manual unsigned smoke path runs the same matrix build and install/uninstall smoke, but its artifacts are named as unsigned package smoke assets and are not published as releases.
 
 Tagged releases assemble a proof bundle alongside the raw installers. The proof bundle includes:
 
@@ -113,4 +119,4 @@ Tagged releases assemble a proof bundle alongside the raw installers. The proof 
 - reproducibility and platform docs
 - generated handoff and provenance metadata
 
-The release job also writes `release-certificate.json`, which binds the release artifacts and required verification-lane status to the exact commit. A release should not be treated as 1.0-ready unless that certificate is green with no accepted failures.
+The release job also writes `release-certificate.json`, which binds the release artifacts and required verification-lane status to the exact commit. A signed public installer release should not be treated as public-trust ready unless that certificate is green with no accepted failures. Source/dev/onboarding 1.0 readiness is validated through the repo verification lanes; public Windows EXE trust additionally requires signing and the certificate.

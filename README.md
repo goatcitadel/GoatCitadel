@@ -26,7 +26,7 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 - **Guided `llama.cpp` setup**: Mission Control now includes richer local-runtime setup, diagnostics, and provider handoff for `llama.cpp`, with the operator rollout notes captured in [docs/LLAMA_CPP_INTEGRATION_MEMO.md](./docs/LLAMA_CPP_INTEGRATION_MEMO.md).
 - **Approval delivery auth clarified**: remote approval delivery now keeps connector delivery auth boundaries explicit, making channel-backed approval routing easier to reason about during setup and testing.
-- **Windows installers refreshed**: the published Windows x64 and arm64 installer artifacts were regenerated after the `1.0.0` cut so the public install path stays aligned with the current branch.
+- **Windows installer proof refreshed**: the x64 and arm64 installer workflow now supports unsigned packaging smoke for development evidence, while public-trust EXE distribution remains gated on Authenticode signing proof.
 
 ## What ships in this repo
 

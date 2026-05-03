@@ -30,6 +30,10 @@ const artifactParamsSchema = z.object({
   artifactId: z.string().min(1),
 });
 
+const artifactWorkspaceQuerySchema = z.object({
+  workspaceId: z.string().min(1),
+});
+
 const createSessionSchema = z.object({
   workspaceId: z.string().min(1).optional(),
   title: z.string().optional(),
@@ -119,12 +123,20 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
 
   fastify.get("/api/v1/chat/generated-artifacts/:artifactId", async (request, reply) => {
     const params = artifactParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
+    const query = artifactWorkspaceQuerySchema.safeParse(request.query ?? {});
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
       return reply.send({
-        item: fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId),
+        item: fastify.services.chatSessions.getChatGeneratedArtifact(params.data.artifactId, {
+          workspaceId: query.data.workspaceId,
+        }),
       });
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });

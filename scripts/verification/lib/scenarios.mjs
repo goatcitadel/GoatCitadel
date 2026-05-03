@@ -518,19 +518,20 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       assertOk(createdSession, "create verification lifecycle session");
       const sessionId = createdSession.body?.sessionId;
 
-      const chatSend = await requestJson(
+      const chatCommand = await requestJson(
         gatewayUrl,
-        `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`,
+        `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/commands/parse`,
         {
           method: "POST",
           body: {
-            content: "/help",
             commandText: "/help",
-            mode: "chat",
           },
         },
       );
-      assertOk(chatSend, "send chat command");
+      assertOk(chatCommand, "parse chat command");
+      if (chatCommand.body?.ok !== true || chatCommand.body?.command !== "/help") {
+        throw new Error(`expected /help command parse to succeed: ${JSON.stringify(chatCommand.body ?? null)}`);
+      }
 
       const codeModeRun = await requestJson(gatewayUrl, "/api/v1/code-mode/runs", {
         method: "POST",
@@ -591,7 +592,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       const outPath = path.join(context.artifactRoot, "diagnostics", "core-api-chat-code-mode-lifecycle.json");
       await writeJson(outPath, {
         session: createdSession.body,
-        chatSend: chatSend.body,
+        chatCommand: chatCommand.body,
         codeModeRun: codeModeRun.body,
         resolvedApproval: resolvedApproval.body,
         completedRun: completedRun.body,
@@ -962,19 +963,20 @@ export async function runOperatorProofLane(context, options = {}) {
         assertOk(createdSession, "create operator-proof session");
         const sessionId = createdSession.body?.sessionId;
 
-        const chatSend = await requestJson(
+        const chatCommand = await requestJson(
           stack.gatewayUrl,
-          `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send`,
+          `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/commands/parse`,
           {
             method: "POST",
             body: {
-              content: "/help",
               commandText: "/help",
-              mode: "chat",
             },
           },
         );
-        assertOk(chatSend, "send operator-proof chat message");
+        assertOk(chatCommand, "parse operator-proof chat command");
+        if (chatCommand.body?.ok !== true || chatCommand.body?.command !== "/help") {
+          throw new Error(`expected /help command parse to succeed: ${JSON.stringify(chatCommand.body ?? null)}`);
+        }
 
         const chatApprovalSeed = await requestJson(
           stack.gatewayUrl,
@@ -1112,7 +1114,7 @@ export async function runOperatorProofLane(context, options = {}) {
         const outPath = path.join(context.artifactRoot, "diagnostics", "operator-proof-chat-code-mode-lifecycle.json");
         await writeJson(outPath, {
           session: createdSession.body,
-          chatSend: chatSend.body,
+          chatCommand: chatCommand.body,
           chatApprovalSeed: chatApprovalSeed.body,
           pendingChatApprovals: pendingChatApprovals.body,
           pendingChatLifecycle: pendingChatLifecycle.body,

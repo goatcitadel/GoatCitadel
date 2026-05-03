@@ -45,6 +45,9 @@ function getTraceTone(trace: ChatTurnTraceRecord): "muted" | "warning" | "critic
   if (trace.status === "completed" && !trace.failure) {
     return "success";
   }
+  if (trace.status === "partial") {
+    return "warning";
+  }
   if (trace.status === "cancelled") {
     return "muted";
   }
@@ -65,6 +68,8 @@ function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
       return "Turn cancelled.";
     case "failed":
       return trace.failure?.message ?? "Turn failed.";
+    case "partial":
+      return "Turn partially completed.";
     default:
       return "Working…";
   }
@@ -319,8 +324,9 @@ function ThreadDelegationSummary({
     delegationRun.steps.find((step) => step.status === "running") ??
     [...delegationRun.steps].reverse().find((step) => step.status === "completed" || step.status === "failed") ??
     delegationRun.steps[0];
-  const formatStepLabel = (step: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number]) =>
-    step.label?.trim() || toTitleCase(step.role);
+  const formatStepLabel = (
+    step: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number],
+  ) => step.label?.trim() || toTitleCase(step.role);
   const countsLine = `Completed ${completedCount} · Running ${runningCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
 
   if (isCowork) {
@@ -387,7 +393,9 @@ function ThreadDelegationSummary({
                 </li>
               ))}
             </ol>
-            {delegationRun.stitchedOutput ? <p>Final synthesized answer is shown in the main assistant message.</p> : null}
+            {delegationRun.stitchedOutput ? (
+              <p>Final synthesized answer is shown in the main assistant message.</p>
+            ) : null}
           </div>
         </details>
       </section>

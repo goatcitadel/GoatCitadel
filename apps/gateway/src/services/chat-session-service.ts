@@ -34,6 +34,7 @@ import {
 import { buildGeneratedArtifactReference } from "./chat-generated-artifact-service.js";
 
 const log = logger.child("chat-session-service");
+const MISSING_CHAT_SESSION_META_WORKSPACE_ID = "__legacy_unknown__";
 
 export interface ChatSessionDependencies {
   readonly storage: Storage;
@@ -62,17 +63,20 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
   const sessionIds = allSessions.map((session) => session.sessionId);
-  const metaBySessionId = deps.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
+  const metaBySessionId = deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
   const prefsModeBySessionId = new Map(
     sessionIds.map((sessionId) => [sessionId, deps.storage.chatSessionPrefs.get(sessionId)?.mode ?? "chat"]),
   );
   const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
   const generatedArtifactsBySessionId = deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
-  const delegationParentBySessionId = deps.storage.chatDelegationSteps.listParentsByChildSessionIds(sessionIds);
+  const delegationParentBySessionId = deps.storage.chatDelegationSteps.listParentsByChildSessionIds(
+    sessionIds,
+    workspaceId,
+  );
 
   let records = allSessions.map((session) => {
     const meta = metaBySessionId.get(session.sessionId) ?? {
-      workspaceId,
+      workspaceId: MISSING_CHAT_SESSION_META_WORKSPACE_ID,
       includeInHistory: true,
       pinned: false,
       lifecycleStatus: "active" as const,

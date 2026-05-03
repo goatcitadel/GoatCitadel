@@ -6,6 +6,7 @@ import type {
   ChatSessionPrefsRecord,
 } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
+import { ChatDelegationService } from "./chat-delegation-service.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -207,7 +208,10 @@ function createDelegationHarness() {
     },
   };
 
+  const service = new ChatDelegationService(gateway as never);
+
   return {
+    service,
     gateway: gateway as GatewayService & {
       storage: {
         chatSessionPrefs: { ensure: ReturnType<typeof vi.fn> };
@@ -251,9 +255,9 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 describe("GatewayService.runChatDelegation", () => {
   it("uses a real child session runtime and persists truthful lineage for sequential delegation", async () => {
-    const { gateway } = createDelegationHarness();
+    const { gateway, service } = createDelegationHarness();
 
-    const result = (await GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
+    const result = (await service.runChatDelegation("sess-1", {
       objective: "Design the change",
       roles: ["architect"],
       mode: "sequential",
@@ -293,7 +297,7 @@ describe("GatewayService.runChatDelegation", () => {
   });
 
   it("runs parallel delegation with a worker cap of four and starts dependency-gated steps only after prerequisites settle", async () => {
-    const { gateway, sessionRoles, buildResponse } = createDelegationHarness();
+    const { gateway, service, sessionRoles, buildResponse } = createDelegationHarness();
     const starts: string[] = [];
     let active = 0;
     let maxActive = 0;
@@ -320,7 +324,7 @@ describe("GatewayService.runChatDelegation", () => {
       });
     });
 
-    const runPromise = GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
+    const runPromise = service.runChatDelegation("sess-1", {
       objective: "Ship the plan",
       roles: ["architect", "researcher", "qa", "ops", "coder", "writer", "synth"],
       mode: "parallel",
@@ -377,14 +381,14 @@ describe("GatewayService.runChatDelegation", () => {
   });
 
   it("marks downstream dependents as skipped and the run as partial when a prerequisite fails", async () => {
-    const { gateway, sessionRoles, buildResponse } = createDelegationHarness();
+    const { gateway, service, sessionRoles, buildResponse } = createDelegationHarness();
 
     gateway.agentSendChatMessage.mockImplementation(async (childSessionId: string) => {
       const role = sessionRoles.get(childSessionId) ?? "delegate";
       return buildResponse(role, childSessionId, role === "architect");
     });
 
-    const result = (await GatewayService.prototype.runChatDelegation.call(gateway, "sess-1", {
+    const result = (await service.runChatDelegation("sess-1", {
       objective: "Run the split",
       roles: ["architect", "qa", "synth"],
       mode: "parallel",

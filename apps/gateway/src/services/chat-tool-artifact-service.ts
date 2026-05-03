@@ -5,10 +5,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { ValidationError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
+import type { ChatSessionRecord } from "@goatcitadel/contracts";
 
 export interface ChatToolArtifactHost {
   readonly config: GatewayRuntimeConfig;
   readonly storage: Pick<Storage, "chatToolArtifacts">;
+  requireChatSession(sessionId: string): ChatSessionRecord;
 }
 
 export async function persistChatToolArtifact(
@@ -63,6 +65,7 @@ export async function persistChatToolArtifact(
 export async function getChatToolArtifactContent(
   deps: ChatToolArtifactHost,
   artifactId: string,
+  options: { workspaceId: string },
 ): Promise<{
   artifact: {
     artifactId: string;
@@ -78,7 +81,15 @@ export async function getChatToolArtifactContent(
   };
   content: string;
 }> {
+  const workspaceId = options.workspaceId.trim();
+  if (!workspaceId) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspaceId" });
+  }
   const artifact = deps.storage.chatToolArtifacts.get(artifactId);
+  const session = deps.requireChatSession(artifact.sessionId);
+  if (session.workspaceId !== workspaceId) {
+    throw new ValidationError({ message: "Artifact does not belong to the requested workspace." });
+  }
   const artifactRoot = path.resolve(deps.config.rootDir, deps.config.assistant.dataDir);
   const absolutePath = path.resolve(artifactRoot, artifact.storageRelPath);
   const normalizedRoot = `${artifactRoot}${path.sep}`;

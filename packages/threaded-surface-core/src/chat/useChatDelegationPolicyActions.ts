@@ -6,6 +6,7 @@ import type {
   ChatDelegationStepStatus,
   ChatDelegationSuggestionRecord,
   ChatMessageRecord,
+  ChatMode,
   ChatProactiveMode,
   ChatReflectionMode,
   ChatRetrievalMode,
@@ -219,6 +220,7 @@ export function useChatDelegationPolicyActions(input: {
   prefs: ChatSessionPrefsRecord | null;
   selectedProviderId?: string;
   selectedModel?: string;
+  surfaceMode: ChatMode;
   sending: boolean;
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;
@@ -239,6 +241,7 @@ export function useChatDelegationPolicyActions(input: {
     prefs,
     selectedProviderId,
     selectedModel,
+    surfaceMode,
     sending,
     streamEnabled,
     codeModeNeedsProjectBinding,
@@ -563,12 +566,13 @@ export function useChatDelegationPolicyActions(input: {
         objective,
         roles: graph.roles,
         mode,
+        surfaceMode,
         providerId: prefs?.providerId ?? selectedProviderId,
         model: prefs?.model ?? selectedModel,
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
       } satisfies ChatDelegateRequest;
     },
-    [prefs?.model, prefs?.providerId, selectedModel, selectedProviderId, selectedTurn],
+    [prefs?.model, prefs?.providerId, selectedModel, selectedProviderId, selectedTurn, surfaceMode],
   );
 
   const handleAcceptDelegation = useCallback(async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatDelegateRequest, ChatDelegateResponse, ChatDelegationStepRecord } from "@goatcitadel/contracts";
-import { GatewayService } from "./gateway-service.js";
+import { ChatDelegationService } from "./chat-delegation-service.js";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -19,12 +19,12 @@ function createStep(overrides: Partial<ChatDelegationStepRecord> = {}): ChatDele
   };
 }
 
-describe("GatewayService delegation stream bridge", () => {
+describe("ChatDelegationService stream bridge", () => {
   it("emits interleaved step chunks before the final done chunk", async () => {
-    const gateway = Object.create(GatewayService.prototype) as GatewayService & {
+    const service = Object.create(ChatDelegationService.prototype) as ChatDelegationService & {
       runChatDelegation: ReturnType<typeof vi.fn>;
     };
-    gateway.runChatDelegation = vi.fn(
+    service.runChatDelegation = vi.fn(
       async (
         _sessionId: string,
         _input: ChatDelegateRequest,
@@ -81,7 +81,7 @@ describe("GatewayService delegation stream bridge", () => {
       result?: ChatDelegateResponse;
     }> = [];
 
-    for await (const chunk of GatewayService.prototype.runChatDelegationStream.call(gateway, "sess-1", {
+    for await (const chunk of ChatDelegationService.prototype.runChatDelegationStream.call(service, "sess-1", {
       objective: "Implement the fix",
       roles: ["Architect"],
       mode: "sequential",

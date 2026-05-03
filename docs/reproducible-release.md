@@ -1,6 +1,6 @@
 # Reproducible Release
 
-This document defines the current GoatCitadel release recipe for installer builds and the proof bundle that ships with each tagged release.
+This document defines the current GoatCitadel release recipe for installer builds and the proof bundle that ships with each signed public Windows release.
 
 ## Scope
 
@@ -9,7 +9,7 @@ This process covers the signed installer artifacts published by `.github/workflo
 - `windows-x64`
 - `windows-arm64`
 
-macOS and Linux package scripts are not current release proof. They stay development-only until the release workflow emits signed artifacts and smoke evidence for those targets.
+macOS and Linux package scripts are not current release proof. They stay development-only until the release workflow emits signed artifacts and smoke evidence for those targets. Manual unsigned Windows workflow-dispatch runs are also development packaging smoke only: they may prove x64/arm64 build and install/uninstall behavior, but they are workflow artifacts and do not publish a GitHub release.
 
 ## Locked Inputs
 
@@ -29,6 +29,7 @@ The release lane treats these files as the minimum rebuild inputs:
 - pnpm `10.31.0`
 - Rust stable MSVC for the Tauri desktop host
 - Inno Setup `6.x` for Windows packaging
+- Authenticode certificate secrets for public `v*` Windows releases
 - `zip` for the final proof bundle assembly
 - `cosign` keyless signing in the release job
 
@@ -50,6 +51,8 @@ node scripts/release/write-release-certificate.mjs --version <version> --artifac
 ## Environment Notes
 
 - Installer builds run on GitHub-hosted Windows runners.
+- Public tag builds fail if Authenticode signing secrets are missing. Unsigned output is reserved for explicit manual/dev workflow runs and is not published as a GitHub release.
+- The embedded Node archive is verified against a pinned `--node-sha256` value or the upstream Node `SHASUMS256.txt` entry before it is copied into the bundle.
 - The final release package is assembled on Ubuntu after the per-platform artifacts are downloaded.
 - GitHub Actions context values are copied into `provenance/build-metadata.json`, `provenance/slsa-attestation.json`, and the separate `release-certificate.json`.
 
@@ -62,7 +65,7 @@ To validate a published release:
 3. Verify the installer signature with the adjacent `.sig` and `.pem` files.
 4. Inspect `provenance/build-metadata.json` for the exact tag, commit, workflow run, and toolchain versions.
 5. Inspect `SBOM/*.cyclonedx.json` for the dependency inventory used for the release.
-6. Inspect `release-certificate.json` and require every required lane to be `success` with an empty `acceptedFailures` array before treating the build as 1.0-ready.
+6. Inspect `release-certificate.json` and require every required lane to be `success` with an empty `acceptedFailures` array before treating the signed public installer build as public-trust ready.
 
 ## Local Rebuild
 

@@ -75,6 +75,9 @@ function getTraceTone(trace: ChatTurnTraceRecord): "muted" | "warning" | "critic
   if (trace.status === "completed" && !trace.failure) {
     return "success";
   }
+  if (trace.status === "partial") {
+    return "warning";
+  }
   if (trace.status === "cancelled") {
     return "muted";
   }
@@ -95,6 +98,8 @@ function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
       return "Turn cancelled.";
     case "failed":
       return trace.failure?.message ?? "Turn failed.";
+    case "partial":
+      return "Turn partially completed.";
     default:
       return "Working...";
   }

@@ -60,9 +60,11 @@ function summarizeTraceRouting(trace: ChatTurnTraceRecord): {
 
 export function ChatTraceCard({
   trace,
+  workspaceId,
   defaultCollapsed = true,
 }: {
   trace: ChatTurnTraceRecord;
+  workspaceId: string;
   defaultCollapsed?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -187,6 +189,7 @@ export function ChatTraceCard({
                       {diagnostics.artifactId ? (
                         <ChatToolArtifactInspector
                           artifactId={diagnostics.artifactId}
+                          workspaceId={workspaceId}
                           artifactPath={diagnostics.artifactPath}
                           originalByteLength={diagnostics.originalByteLength}
                         />

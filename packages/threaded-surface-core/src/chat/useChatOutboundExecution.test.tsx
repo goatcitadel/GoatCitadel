@@ -401,4 +401,53 @@ describe("useChatOutboundExecution", () => {
       expect.objectContaining({ originSurface: "cowork" }),
     );
   });
+
+  it("resumes interrupted streams with the locked Cowork surface mode", async () => {
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      throw new Error("network dropped");
+    });
+    resumeChatTurnStreamMock.mockImplementationOnce(async (_sessionId, _turnId, onChunk) => {
+      onChunk({
+        type: "message_done",
+        eventId: "evt-1",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        content: "Done after resume",
+      });
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled surfaceMode="cowork" />);
+    });
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Coordinate beta outreach",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    expect(resumeChatTurnStreamMock).toHaveBeenCalledWith(
+      "session-1",
+      "turn-2",
+      expect.any(Function),
+      expect.objectContaining({
+        sinceEventId: "evt-0",
+        originSurface: "cowork",
+      }),
+    );
+  });
 });
