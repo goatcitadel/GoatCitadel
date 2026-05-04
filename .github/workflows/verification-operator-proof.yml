@@ -10,16 +10,6 @@ on:
       - ".github/workflows/verification-operator-proof.yml"
       - "package.json"
       - "pnpm-lock.yaml"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "scripts/verification/**"
-      - ".github/workflows/verification-operator-proof.yml"
-      - "package.json"
-      - "pnpm-lock.yaml"
 
 permissions:
   contents: read

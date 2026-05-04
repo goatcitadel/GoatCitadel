@@ -13,19 +13,6 @@ on:
       - "README.md"
       - "package.json"
       - "pnpm-lock.yaml"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "scripts/verification/**"
-      - ".github/workflows/verification-truth-lanes.yml"
-      - "docs/1_0_CONTRACT.md"
-      - "docs/1_0_RELEASE_EVIDENCE.md"
-      - "README.md"
-      - "package.json"
-      - "pnpm-lock.yaml"
 
 permissions:
   contents: read

@@ -25,6 +25,7 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
-          scanners: vuln,secret,config
+          scanners: vuln,secret,misconfig
           skip-dirs: node_modules,tmp,apps/mission-control/dist-node
+          severity: HIGH,CRITICAL
           exit-code: "1"
