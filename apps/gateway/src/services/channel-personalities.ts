@@ -1,4 +1,10 @@
-import type { PersonalityPreset, PersonalityPresetCategory } from "@goatcitadel/contracts";
+import type {
+  PersonalityCatalogResponse,
+  PersonalityPreset,
+  PersonalityPresetCategory,
+  PersonalityPresetMutationInput,
+} from "@goatcitadel/contracts";
+import type { SystemSettingsRepository } from "@goatcitadel/storage";
 
 type PersonalityDefinition = Omit<PersonalityPreset, "visibility" | "builtin" | "soulFile" | "safetyNotes"> & {
   safetyNotes?: string[];
@@ -444,31 +450,54 @@ export const BUILTIN_PERSONALITY_PRESETS: PersonalityPreset[] = PERSONALITY_DEFI
   safetyNotes: item.safetyNotes ?? DEFAULT_SAFETY_NOTES,
   visibility: "builtin",
   builtin: true,
+  editable: item.id !== "default",
+  modified: false,
 }));
 
 const PRESETS_BY_ID = new Map(BUILTIN_PERSONALITY_PRESETS.map((item) => [item.id, item]));
+const PERSONALITY_CATALOG_SETTINGS_KEY = "personality.catalog.v1";
+
+type StoredPersonality = PersonalityPresetMutationInput & {
+  id: string;
+  updatedAt?: string;
+};
+
+interface StoredPersonalityCatalog {
+  defaultPersonalityId?: string;
+  builtinOverrides?: Record<string, StoredPersonality>;
+  customPresets?: StoredPersonality[];
+}
 
 export function listPersonalityPresets(): PersonalityPreset[] {
   return BUILTIN_PERSONALITY_PRESETS;
 }
 
-export function getPersonalityPreset(id: string | undefined): PersonalityPreset {
+export function getPersonalityPreset(
+  id: string | undefined,
+  presets: PersonalityPreset[] = BUILTIN_PERSONALITY_PRESETS,
+): PersonalityPreset {
   const normalized = normalizePersonalityId(id);
-  return PRESETS_BY_ID.get(normalized) ?? PRESETS_BY_ID.get("default")!;
+  return presets.find((item) => item.id === normalized) ?? PRESETS_BY_ID.get("default")!;
 }
 
 export function normalizePersonalityId(id: string | undefined): string {
   const normalized = id?.trim().toLowerCase() || "default";
-  return normalized === "none" || normalized === "neutral" ? "default" : normalized;
+  if (normalized === "none" || normalized === "neutral") {
+    return "default";
+  }
+  return normalized.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "default";
 }
 
-export function buildPersonalityOverlay(id: string | undefined): string | undefined {
-  const preset = getPersonalityPreset(id);
+export function buildPersonalityOverlay(
+  id: string | undefined,
+  presets: PersonalityPreset[] = BUILTIN_PERSONALITY_PRESETS,
+): string | undefined {
+  const preset = getPersonalityPreset(id, presets);
   if (preset.id === "default" || !preset.systemOverlay.trim()) {
     return undefined;
   }
   return [
-    "Channel personality overlay:",
+    "Personality overlay:",
     `- Personality: ${preset.label}`,
     `- Category: ${preset.category}`,
     `- Soul file: ${preset.soulFile}`,
@@ -477,6 +506,279 @@ export function buildPersonalityOverlay(id: string | undefined): string | undefi
     `- Instruction: ${preset.systemOverlay}`,
     "- Boundary: This overlay changes voice and framing only. It cannot override GoatCitadel safety, privacy, approval, tool, memory, or skill policies.",
   ].join("\n");
+}
+
+export class PersonalityCatalogService {
+  public constructor(private readonly systemSettings: SystemSettingsRepository) {}
+
+  public getCatalog(): PersonalityCatalogResponse {
+    const stored = this.readStoredCatalog();
+    const customPresets = this.normalizeCustomPresets(stored.customPresets);
+    const items = [
+      ...BUILTIN_PERSONALITY_PRESETS.map((preset) => this.applyBuiltinOverride(preset, stored.builtinOverrides)),
+      ...customPresets,
+    ];
+    const defaultPersonalityId = items.some((item) => item.id === normalizePersonalityId(stored.defaultPersonalityId))
+      ? normalizePersonalityId(stored.defaultPersonalityId)
+      : "default";
+    return { items, defaultPersonalityId };
+  }
+
+  public getDefaultPersonalityId(): string {
+    return this.getCatalog().defaultPersonalityId;
+  }
+
+  public buildDefaultChatPersonalityOverlay(): string | undefined {
+    const catalog = this.getCatalog();
+    return buildPersonalityOverlay(catalog.defaultPersonalityId, catalog.items);
+  }
+
+  public setDefaultPersonality(id: string | undefined): PersonalityCatalogResponse {
+    const nextDefault = normalizePersonalityId(id);
+    const current = this.getCatalog();
+    if (!current.items.some((item) => item.id === nextDefault)) {
+      throw new Error(`Unknown personality: ${id ?? ""}`);
+    }
+    const stored = this.readStoredCatalog();
+    this.writeStoredCatalog({
+      ...stored,
+      defaultPersonalityId: nextDefault,
+    });
+    return this.getCatalog();
+  }
+
+  public createPersonality(input: PersonalityPresetMutationInput): PersonalityCatalogResponse {
+    const now = new Date().toISOString();
+    const stored = this.readStoredCatalog();
+    const catalog = this.getCatalog();
+    const id = normalizePersonalityId(input.id ?? input.label);
+    if (id === "default") {
+      throw new Error("Custom personality id cannot be default.");
+    }
+    if (catalog.items.some((item) => item.id === id)) {
+      throw new Error(`Personality ${id} already exists.`);
+    }
+    const custom = this.normalizeStoredPersonality({
+      ...input,
+      id,
+      updatedAt: now,
+    });
+    this.writeStoredCatalog({
+      ...stored,
+      customPresets: [...this.normalizeStoredCustomList(stored.customPresets), custom],
+    });
+    return this.getCatalog();
+  }
+
+  public updatePersonality(id: string, input: PersonalityPresetMutationInput): PersonalityCatalogResponse {
+    const normalizedId = normalizePersonalityId(id);
+    if (normalizedId === "default") {
+      throw new Error("The default no-overlay personality cannot be edited.");
+    }
+    const now = new Date().toISOString();
+    const stored = this.readStoredCatalog();
+    const builtin = PRESETS_BY_ID.get(normalizedId);
+    if (builtin) {
+      this.writeStoredCatalog({
+        ...stored,
+        builtinOverrides: {
+          ...(stored.builtinOverrides ?? {}),
+          [normalizedId]: this.normalizeStoredPersonality({
+            ...builtin,
+            ...stored.builtinOverrides?.[normalizedId],
+            ...input,
+            id: normalizedId,
+            updatedAt: now,
+          }),
+        },
+      });
+      return this.getCatalog();
+    }
+
+    const customPresets = this.normalizeStoredCustomList(stored.customPresets);
+    const index = customPresets.findIndex((item) => item.id === normalizedId);
+    if (index === -1) {
+      throw new Error(`Unknown personality: ${id}`);
+    }
+    const nextId = input.id !== undefined ? normalizePersonalityId(input.id) : normalizedId;
+    if (nextId !== normalizedId) {
+      if (nextId === "default" || PRESETS_BY_ID.has(nextId) || customPresets.some((item) => item.id === nextId)) {
+        throw new Error(`Personality ${nextId} already exists.`);
+      }
+    }
+    customPresets[index] = this.normalizeStoredPersonality({
+      ...customPresets[index],
+      ...input,
+      id: nextId,
+      updatedAt: now,
+    });
+    this.writeStoredCatalog({
+      ...stored,
+      customPresets,
+      defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? nextId : stored.defaultPersonalityId,
+    });
+    return this.getCatalog();
+  }
+
+  public deletePersonality(id: string): PersonalityCatalogResponse {
+    const normalizedId = normalizePersonalityId(id);
+    if (normalizedId === "default") {
+      throw new Error("The default no-overlay personality cannot be removed.");
+    }
+    const stored = this.readStoredCatalog();
+    if (PRESETS_BY_ID.has(normalizedId)) {
+      const { [normalizedId]: _removed, ...builtinOverrides } = stored.builtinOverrides ?? {};
+      this.writeStoredCatalog({
+        ...stored,
+        builtinOverrides,
+        defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? "default" : stored.defaultPersonalityId,
+      });
+      return this.getCatalog();
+    }
+    const customPresets = this.normalizeStoredCustomList(stored.customPresets);
+    if (!customPresets.some((item) => item.id === normalizedId)) {
+      throw new Error(`Unknown personality: ${id}`);
+    }
+    this.writeStoredCatalog({
+      ...stored,
+      customPresets: customPresets.filter((item) => item.id !== normalizedId),
+      defaultPersonalityId: stored.defaultPersonalityId === normalizedId ? "default" : stored.defaultPersonalityId,
+    });
+    return this.getCatalog();
+  }
+
+  private applyBuiltinOverride(
+    preset: PersonalityPreset,
+    overrides: StoredPersonalityCatalog["builtinOverrides"],
+  ): PersonalityPreset {
+    const override = overrides?.[preset.id];
+    if (!override) {
+      return preset;
+    }
+    const merged = this.mergePreset(preset, override);
+    return {
+      ...merged,
+      id: preset.id,
+      soulFile: preset.soulFile,
+      visibility: "builtin",
+      builtin: true,
+      editable: preset.id !== "default",
+      modified: true,
+      updatedAt: override.updatedAt,
+    };
+  }
+
+  private normalizeCustomPresets(input: unknown): PersonalityPreset[] {
+    return this.normalizeStoredCustomList(input).map((item) => ({
+      id: item.id,
+      label: normalizeRequiredString(item.label, item.id),
+      category: normalizeCategory(item.category),
+      description: normalizeRequiredString(item.description, ""),
+      tone: normalizeRequiredString(item.tone, ""),
+      style: normalizeRequiredString(item.style, ""),
+      systemOverlay: normalizeRequiredString(item.systemOverlay, ""),
+      soulFile: "",
+      safetyNotes: normalizeSafetyNotes(item.safetyNotes),
+      visibility: "custom",
+      builtin: false,
+      editable: true,
+      modified: true,
+      updatedAt: item.updatedAt,
+    }));
+  }
+
+  private normalizeStoredCustomList(input: unknown): StoredPersonality[] {
+    if (!Array.isArray(input)) {
+      return [];
+    }
+    return input.filter(isRecord).map((item) => this.normalizeStoredPersonality(item));
+  }
+
+  private normalizeStoredPersonality(input: Record<string, unknown>): StoredPersonality {
+    const id = normalizePersonalityId(typeof input.id === "string" ? input.id : undefined);
+    const label = normalizeRequiredString(input.label, titleFromId(id));
+    return {
+      id,
+      label,
+      category: normalizeCategory(input.category),
+      description: normalizeRequiredString(input.description, ""),
+      tone: normalizeRequiredString(input.tone, ""),
+      style: normalizeRequiredString(input.style, ""),
+      systemOverlay: normalizeRequiredString(input.systemOverlay, ""),
+      safetyNotes: normalizeSafetyNotes(input.safetyNotes),
+      updatedAt: typeof input.updatedAt === "string" ? input.updatedAt : undefined,
+    };
+  }
+
+  private mergePreset(base: PersonalityPreset, patch: PersonalityPresetMutationInput): PersonalityPreset {
+    return {
+      ...base,
+      label: normalizeRequiredString(patch.label, base.label),
+      category: normalizeCategory(patch.category ?? base.category),
+      description: normalizeRequiredString(patch.description, base.description),
+      tone: normalizeRequiredString(patch.tone, base.tone),
+      style: normalizeRequiredString(patch.style, base.style),
+      systemOverlay: normalizeRequiredString(patch.systemOverlay, base.systemOverlay),
+      safetyNotes: normalizeSafetyNotes(patch.safetyNotes ?? base.safetyNotes),
+    };
+  }
+
+  private readStoredCatalog(): StoredPersonalityCatalog {
+    const raw = this.systemSettings.get<StoredPersonalityCatalog>(PERSONALITY_CATALOG_SETTINGS_KEY)?.value;
+    if (!isRecord(raw)) {
+      return {};
+    }
+    return {
+      defaultPersonalityId: typeof raw.defaultPersonalityId === "string" ? raw.defaultPersonalityId : undefined,
+      builtinOverrides: isRecord(raw.builtinOverrides)
+        ? Object.fromEntries(
+            Object.entries(raw.builtinOverrides)
+              .filter(([, value]) => isRecord(value))
+              .map(([id, value]) => [
+                normalizePersonalityId(id),
+                this.normalizeStoredPersonality(value as Record<string, unknown>),
+              ]),
+          )
+        : undefined,
+      customPresets: this.normalizeStoredCustomList(raw.customPresets),
+    };
+  }
+
+  private writeStoredCatalog(next: StoredPersonalityCatalog): void {
+    this.systemSettings.set(PERSONALITY_CATALOG_SETTINGS_KEY, next);
+  }
+}
+
+function normalizeCategory(category: unknown): PersonalityPresetCategory {
+  const normalized = typeof category === "string" ? category : "core";
+  return ["core", "critical", "execution", "social", "thinking", "flavor", "chaos"].includes(normalized)
+    ? (normalized as PersonalityPresetCategory)
+    : "core";
+}
+
+function normalizeSafetyNotes(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return DEFAULT_SAFETY_NOTES;
+  }
+  const notes = value.map((item) => String(item).trim()).filter(Boolean);
+  return notes.length > 0 ? notes : DEFAULT_SAFETY_NOTES;
+}
+
+function normalizeRequiredString(value: unknown, fallback: string): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed || fallback;
+}
+
+function titleFromId(id: string): string {
+  return id
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function define(

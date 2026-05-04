@@ -48,6 +48,7 @@ import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
+import { PersonalityCatalogService } from "./channel-personalities.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type {
@@ -713,6 +714,7 @@ export class GatewayService {
   private readonly researchService: ResearchService;
   private readonly obsidianVaultService: ObsidianVaultService;
   private readonly skillImportService: SkillImportService;
+  public readonly personalityCatalogService: PersonalityCatalogService;
   public readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
@@ -764,6 +766,7 @@ export class GatewayService {
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
     this.storage = createGatewayStorage(config);
+    this.personalityCatalogService = new PersonalityCatalogService(this.storage.systemSettings);
     this.realtimeEventService = new RealtimeEventService({
       storage: this.storage,
       getGatewayNodeId: () => this.config.assistant.mesh.nodeId,
@@ -4719,6 +4722,18 @@ export class GatewayService {
 
   public getSettings(): RuntimeSettings {
     return settingsAuthService.getSettings(createSettingsRuntimeDependenciesForGateway(this));
+  }
+
+  public getPersonalityCatalog() {
+    return this.personalityCatalogService.getCatalog();
+  }
+
+  public setDefaultPersonality(id: string) {
+    return this.personalityCatalogService.setDefaultPersonality(id);
+  }
+
+  public buildDefaultChatPersonalityOverlay() {
+    return this.personalityCatalogService.buildDefaultChatPersonalityOverlay();
   }
 
   public updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings {

@@ -34,6 +34,45 @@ const mocks = vi.hoisted(() => ({
     },
   })),
   patchSettings: vi.fn(async () => ({})),
+  fetchPersonalities: vi.fn(async () => ({
+    defaultPersonalityId: "operator",
+    items: [
+      {
+        id: "default",
+        label: "Default",
+        category: "core",
+        description: "No personality overlay.",
+        tone: "",
+        style: "",
+        systemOverlay: "",
+        soulFile: "docs/personalities/core/default.md",
+        safetyNotes: ["Personality overlays never override safety policy."],
+        visibility: "builtin",
+        builtin: true,
+        editable: false,
+        modified: false,
+      },
+      {
+        id: "operator",
+        label: "Operator",
+        category: "core",
+        description: "Crisp mission-control style.",
+        tone: "Composed",
+        style: "Operational and compact",
+        systemOverlay: "Use crisp mission-control language.",
+        soulFile: "docs/personalities/core/operator.md",
+        safetyNotes: ["Personality overlays never override safety policy."],
+        visibility: "builtin",
+        builtin: true,
+        editable: true,
+        modified: false,
+      },
+    ],
+  })),
+  createPersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
+  updatePersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
+  deletePersonality: vi.fn(async () => ({ defaultPersonalityId: "default", items: [] })),
+  setDefaultPersonality: vi.fn(async () => ({ defaultPersonalityId: "operator", items: [] })),
   saveProviderSecret: vi.fn(async () => ({
     providerId: "openai",
     hasSecret: true,
@@ -339,6 +378,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
   return {
     ...actual,
     patchSettings: mocks.patchSettings,
+    fetchPersonalities: mocks.fetchPersonalities,
+    createPersonality: mocks.createPersonality,
+    updatePersonality: mocks.updatePersonality,
+    deletePersonality: mocks.deletePersonality,
+    setDefaultPersonality: mocks.setDefaultPersonality,
     saveProviderSecret: mocks.saveProviderSecret,
     deleteProviderSecret: mocks.deleteProviderSecret,
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
@@ -530,6 +574,60 @@ beforeEach(async () => {
       providerConfigs: [],
     },
   });
+  mocks.fetchPersonalities.mockResolvedValue({
+    defaultPersonalityId: "operator",
+    items: [
+      {
+        id: "default",
+        label: "Default",
+        category: "core",
+        description: "No personality overlay.",
+        tone: "",
+        style: "",
+        systemOverlay: "",
+        soulFile: "docs/personalities/core/default.md",
+        safetyNotes: ["Personality overlays never override safety policy."],
+        visibility: "builtin",
+        builtin: true,
+        editable: false,
+        modified: false,
+      },
+      {
+        id: "operator",
+        label: "Operator",
+        category: "core",
+        description: "Crisp mission-control style.",
+        tone: "Composed",
+        style: "Operational and compact",
+        systemOverlay: "Use crisp mission-control language.",
+        soulFile: "docs/personalities/core/operator.md",
+        safetyNotes: ["Personality overlays never override safety policy."],
+        visibility: "builtin",
+        builtin: true,
+        editable: true,
+        modified: true,
+      },
+      {
+        id: "direct-custom",
+        label: "Direct Custom",
+        category: "execution",
+        description: "Custom direct operator tone.",
+        tone: "Direct",
+        style: "Short",
+        systemOverlay: "Keep it blunt and useful.",
+        soulFile: "",
+        safetyNotes: ["Personality overlays never override safety policy."],
+        visibility: "custom",
+        builtin: false,
+        editable: true,
+        modified: true,
+      },
+    ],
+  });
+  mocks.createPersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
+  mocks.updatePersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
+  mocks.deletePersonality.mockResolvedValue({ defaultPersonalityId: "default", items: [] });
+  mocks.setDefaultPersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
   mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
   mocks.fetchOnboardingState.mockResolvedValue({
     completed: false,
@@ -675,6 +773,91 @@ beforeEach(async () => {
   };
 });
 
+describe("SettingsNativePage personalities", () => {
+  it("renders the catalog and calls create, save, reset, remove, and default APIs", async () => {
+    const previousWindow = globalThis.window;
+    const confirmSpy = vi.fn(() => true);
+    Object.assign(globalThis, {
+      window: {
+        confirm: confirmSpy,
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+
+    try {
+      await act(async () => {
+        renderer = renderPage("personalities");
+      });
+
+      let text = collectText(renderer!.root);
+      expect(text).toContain("Personality catalog");
+      expect(text).toContain("Operator");
+      expect(text).toContain("Chat default");
+      expect(text).toContain("Add custom personality");
+
+      await act(async () => {
+        findButton(renderer!.root, "Save edits").props.onClick();
+      });
+      expect(mocks.updatePersonality).toHaveBeenCalledWith(
+        "operator",
+        expect.objectContaining({
+          id: "operator",
+          label: "Operator",
+          systemOverlay: "Use crisp mission-control language.",
+        }),
+      );
+
+      await act(async () => {
+        findButton(renderer!.root, "Set as Chat default").props.onClick();
+      });
+      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("operator");
+
+      await act(async () => {
+        findButton(renderer!.root, "Reset built-in").props.onClick();
+      });
+      expect(mocks.deletePersonality).toHaveBeenCalledWith("operator");
+
+      await act(async () => {
+        findButton(renderer!.root, "Direct Custom").props.onClick();
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Remove custom").props.onClick();
+      });
+      expect(confirmSpy).toHaveBeenCalledWith("Remove Direct Custom?");
+      expect(mocks.deletePersonality).toHaveBeenCalledWith("direct-custom");
+
+      await act(async () => {
+        findButton(renderer!.root, "Add custom personality").props.onClick();
+      });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "direct-operator").props.onChange({
+          target: { value: "night-shift" },
+        });
+      });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Direct Operator").props.onChange({
+          target: { value: "Night Shift" },
+        });
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Create personality").props.onClick();
+      });
+      expect(mocks.createPersonality).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "night-shift",
+          label: "Night Shift",
+          category: "core",
+        }),
+      );
+
+      text = collectText(renderer!.root);
+      expect(text).toContain("Personality overlays affect Chat tone and framing only");
+    } finally {
+      Object.assign(globalThis, { window: previousWindow });
+    }
+  });
+});
+
 describe("SettingsNativePage providers", () => {
   it("renders onboarding, budget, and unknown sections without silently falling through to General", async () => {
     let renderer: ReactTestRenderer | null = null;
@@ -693,7 +876,7 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Apply defaults").props.onClick();
     });
     expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
-      defaultToolProfile: "standard",
+      toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
     });

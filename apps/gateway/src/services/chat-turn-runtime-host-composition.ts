@@ -28,6 +28,7 @@ export function createChatTurnRuntimeHost(source: ChatTurnRuntimeHost): ChatTurn
     beginDurableChatRun: (prepared, input, threadEventType) =>
       source.beginDurableChatRun(prepared, input, threadEventType),
     buildChatOrchestrationSummary: (input) => source.buildChatOrchestrationSummary(input),
+    buildDefaultChatPersonalityOverlay: () => source.buildDefaultChatPersonalityOverlay(),
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
     closeActiveChatTurnStream: (turnId) => source.closeActiveChatTurnStream(turnId),

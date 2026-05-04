@@ -869,6 +869,7 @@ function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] 
           (item) =>
             item.section === "general" ||
             item.section === "providers" ||
+            item.section === "personalities" ||
             item.section === "access" ||
             item.section === "runtime" ||
             item.section === "workspaces",

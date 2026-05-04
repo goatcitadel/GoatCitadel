@@ -202,6 +202,25 @@ export interface PersonalityPreset {
   safetyNotes: string[];
   visibility: PersonalityPresetVisibility;
   builtin: boolean;
+  modified?: boolean;
+  editable?: boolean;
+  updatedAt?: string;
+}
+
+export interface PersonalityCatalogResponse {
+  items: PersonalityPreset[];
+  defaultPersonalityId: string;
+}
+
+export interface PersonalityPresetMutationInput {
+  id?: string;
+  label?: string;
+  category?: PersonalityPresetCategory;
+  description?: string;
+  tone?: string;
+  style?: string;
+  systemOverlay?: string;
+  safetyNotes?: string[];
 }
 
 export interface ChannelPersonalitySelection {

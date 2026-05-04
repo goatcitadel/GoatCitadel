@@ -17,8 +17,10 @@ import type {
   ChatWebMode,
   McpServerRecord,
   McpServerTemplateRecord,
+  PersonalityCatalogResponse,
   ResearchSummaryRecord,
 } from "@goatcitadel/contracts";
+import { getPersonalityPreset, normalizePersonalityId } from "./channel-personalities.js";
 import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
 import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
@@ -73,6 +75,7 @@ export interface ChatCommandDependencies {
       activeModel?: string;
     };
   };
+  getPersonalityCatalog(): PersonalityCatalogResponse;
   installSkillImport(input: { sourceRef: string; confirmHighRisk?: boolean }): Promise<{ installedSkillId?: string }>;
   listMcpServers(): McpServerRecord[];
   listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
@@ -146,6 +149,7 @@ export interface ChatCommandDependencies {
     state: "enabled" | "sleep" | "disabled",
     reason: string,
   ): { skillId: string; state: string };
+  setDefaultPersonality(id: string): PersonalityCatalogResponse;
   updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): ChatSessionPrefsRecord;
   updateChatSessionProactivePolicy(sessionId: string, patch: Record<string, unknown>): { mode: ChatProactiveMode };
   validateSkillImport(input: { sourceRef: string }): Promise<{
@@ -184,6 +188,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     },
     { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
     { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
+    {
+      command: "/personality",
+      usage: "/personality [id|none]",
+      description: "Show or set the global Chat personality default.",
+    },
     { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
     { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
     { command: "/think", usage: "/think off|minimal|standard|extended|deep", description: "Set thinking depth." },
@@ -389,6 +398,47 @@ export async function parseChatCommand(
     }
     const prefs = deps.updateChatSessionPrefs(sessionId, { memoryMode });
     return { ok: true, command, args, prefs, message: `Memory mode set to ${prefs.memoryMode}.` };
+  }
+
+  if (command === "/personality") {
+    const requested = args.join(" ").trim();
+    const catalog = deps.getPersonalityCatalog();
+    if (!requested) {
+      const active = getPersonalityPreset(catalog.defaultPersonalityId, catalog.items);
+      return {
+        ok: true,
+        command,
+        args,
+        message: [
+          `Current Chat personality: ${active.label} (${active.id}).`,
+          "",
+          "Available personalities:",
+          ...catalog.items.map((preset) => `- ${preset.id}: ${preset.description}`),
+          "",
+          "Use /personality <id> to set the global Chat default, or /personality none to clear it.",
+        ].join("\n"),
+      };
+    }
+    const normalized = normalizePersonalityId(requested);
+    if (!catalog.items.some((item) => item.id === normalized)) {
+      return {
+        ok: false,
+        command,
+        args,
+        message: `Unknown personality "${requested}". Use /personality to list available presets.`,
+      };
+    }
+    const updated = deps.setDefaultPersonality(normalized);
+    const active = getPersonalityPreset(updated.defaultPersonalityId, updated.items);
+    return {
+      ok: true,
+      command,
+      args,
+      message:
+        active.id === "default"
+          ? "Chat personality cleared. GoatCitadel will use the default voice."
+          : `Chat personality set to ${active.label} (${active.id}).`,
+    };
   }
 
   if (command === "/dream") {

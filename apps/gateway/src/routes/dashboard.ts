@@ -56,6 +56,27 @@ const llmApiStyleSchema = z.enum([
   "anthropic-messages",
 ]);
 
+const personalityCategorySchema = z.enum(["core", "critical", "execution", "social", "thinking", "flavor", "chaos"]);
+
+const personalityParamsSchema = z.object({
+  personalityId: z.string().min(1),
+});
+
+const personalityMutationSchema = z.object({
+  id: z.string().min(1).optional(),
+  label: z.string().min(1).optional(),
+  category: personalityCategorySchema.optional(),
+  description: z.string().optional(),
+  tone: z.string().optional(),
+  style: z.string().optional(),
+  systemOverlay: z.string().optional(),
+  safetyNotes: z.array(z.string()).optional(),
+});
+
+const personalityDefaultSchema = z.object({
+  personalityId: z.string().min(1),
+});
+
 const updateSettingsSchema = z.object({
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
@@ -444,6 +465,64 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       return reply.send(fastify.services.settings.updateSettings({ auth: parsed.data }).auth);
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/personalities", async (_request, reply) => {
+    return reply.send(fastify.services.settings.getPersonalityCatalog());
+  });
+
+  fastify.post("/api/v1/personalities", async (request, reply) => {
+    const parsed = personalityMutationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.services.settings.createPersonality(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.patch("/api/v1/personalities/default", async (request, reply) => {
+    const parsed = personalityDefaultSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.settings.setDefaultPersonality(parsed.data.personalityId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.patch("/api/v1/personalities/:personalityId", async (request, reply) => {
+    const params = personalityParamsSchema.safeParse(request.params);
+    const body = personalityMutationSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.services.settings.updatePersonality(params.data.personalityId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.delete("/api/v1/personalities/:personalityId", async (request, reply) => {
+    const params = personalityParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.settings.deletePersonality(params.data.personalityId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

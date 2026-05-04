@@ -19,6 +19,7 @@ import {
   Server,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Trash2,
   Wrench,
@@ -33,6 +34,8 @@ import type {
   IntegrationFormSchema,
   McpServerRecord,
   OnboardingState,
+  PersonalityPreset,
+  PersonalityPresetCategory,
   ToolApprovalMode,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
@@ -44,11 +47,13 @@ import {
   createChannelSetupDraft,
   createIntegrationConnection,
   createMcpServer,
+  createPersonality,
   createToolGrant,
   createWorkspace,
   deleteOpenAICodexOAuthCredential,
   deleteIntegrationConnection,
   deleteMcpServer,
+  deletePersonality,
   deleteProviderSecret,
   disconnectMcpServer,
   fetchAddonStatus,
@@ -74,6 +79,7 @@ import {
   fetchNpuModels,
   fetchOpenAICodexOAuthStatus,
   fetchOnboardingState,
+  fetchPersonalities,
   fetchProviderSecretStatus,
   fetchSettings,
   fetchToolCatalog,
@@ -97,6 +103,7 @@ import {
   runMcpServerHealthCheck,
   saveProviderSecret,
   selectVoiceRuntimeModel,
+  setDefaultPersonality,
   startDaemon,
   startSlackOAuth,
   startOpenAICodexOAuthDeviceFlow,
@@ -112,6 +119,7 @@ import {
   updateChannelSetupDraft,
   updateIntegrationConnection,
   updateMcpServer,
+  updatePersonality,
   updateWorkspace,
   validateChannelSetupDraft,
   type IntegrationConnection,
@@ -161,6 +169,15 @@ type NativeLoadResult<T> = {
 
 const TOOL_APPROVAL_MODE_OPTIONS: ToolApprovalMode[] = ["approve_all", "approve_risky", "bypass"];
 const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
+const PERSONALITY_CATEGORY_OPTIONS: PersonalityPresetCategory[] = [
+  "core",
+  "critical",
+  "execution",
+  "social",
+  "thinking",
+  "flavor",
+  "chaos",
+];
 const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 
 type SettingsSectionProps = SettingsNativePageProps & {
@@ -192,6 +209,8 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <BudgetSection {...props} />;
     case "providers":
       return <ProvidersSection {...props} />;
+    case "personalities":
+      return <PersonalitiesSection {...props} />;
     case "access":
       return <AccessSection {...props} />;
     case "runtime":
@@ -282,6 +301,11 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                   label: "Providers",
                   description: "Choose active model routing and manage provider secrets.",
                   onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+                },
+                {
+                  label: "Personalities",
+                  description: "Edit Chat tone presets and choose the global Chat default.",
+                  onClick: () => navigate({ area: "settings", section: "personalities", theme: route.theme }),
                 },
                 {
                   label: "Runtime",
@@ -569,6 +593,329 @@ function UnknownSettingsSection({ section, route, navigate }: SettingsSectionPro
         />
       </SettingsPanel>
     </SettingsGrid>
+  );
+}
+
+type PersonalityEditorDraft = {
+  id: string;
+  label: string;
+  category: PersonalityPresetCategory;
+  description: string;
+  tone: string;
+  style: string;
+  systemOverlay: string;
+  safetyNotes: string;
+};
+
+function PersonalitiesSection(_props: SettingsSectionProps) {
+  const load = useCallback(async () => fetchPersonalities(), []);
+  const { loading, error, data, reload } = useAsyncLoad(load);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [selectedPersonalityId, setSelectedPersonalityId] = useState("");
+  const [editorMode, setEditorMode] = useState<"selected" | "new">("selected");
+  const [draft, setDraft] = useState<PersonalityEditorDraft>(() => createEmptyPersonalityEditorDraft());
+  const selectedPersonality = data?.items.find((item) => item.id === selectedPersonalityId) ?? data?.items[0] ?? null;
+  const defaultPersonalityId = data?.defaultPersonalityId ?? "default";
+  const customCount = data?.items.filter((item) => !item.builtin).length ?? 0;
+  const modifiedBuiltinCount = data?.items.filter((item) => item.builtin && item.modified).length ?? 0;
+  const editorLocked = editorMode === "selected" && (!selectedPersonality || selectedPersonality.editable === false);
+  const editingBuiltin = editorMode === "selected" && selectedPersonality?.builtin === true;
+  const canSave = editorMode === "new" || !editorLocked;
+
+  useEffect(() => {
+    if (!data?.items.length) {
+      setSelectedPersonalityId("");
+      return;
+    }
+    setSelectedPersonalityId((current) =>
+      current && data.items.some((item) => item.id === current) ? current : data.defaultPersonalityId,
+    );
+  }, [data?.defaultPersonalityId, data?.items]);
+
+  useEffect(() => {
+    if (editorMode === "new") {
+      return;
+    }
+    setDraft(createPersonalityEditorDraft(selectedPersonality));
+  }, [editorMode, selectedPersonality]);
+
+  const beginCustomPersonality = () => {
+    setEditorMode("new");
+    setDraft(createEmptyPersonalityEditorDraft());
+    setNotice(null);
+  };
+
+  const savePersonality = async () => {
+    const input = personalityDraftToMutationInput(draft);
+    if (!input.label) {
+      setNotice({ tone: "warning", message: "Personality label is required." });
+      return;
+    }
+    try {
+      if (editorMode === "new") {
+        const nextId = normalizePersonalityEditorId(input.id || input.label);
+        await createPersonality(input);
+        setNotice({ tone: "success", message: "Custom personality created." });
+        await reload();
+        setEditorMode("selected");
+        setSelectedPersonalityId(nextId);
+        return;
+      }
+      if (!selectedPersonality || selectedPersonality.editable === false) {
+        setNotice({ tone: "warning", message: "This personality cannot be edited." });
+        return;
+      }
+      const nextId = selectedPersonality.builtin
+        ? selectedPersonality.id
+        : normalizePersonalityEditorId(input.id || selectedPersonality.id);
+      await updatePersonality(selectedPersonality.id, input);
+      setNotice({ tone: "success", message: `${selectedPersonality.label} saved.` });
+      await reload();
+      setSelectedPersonalityId(nextId);
+    } catch (saveError) {
+      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    }
+  };
+
+  const makeDefault = async () => {
+    if (!selectedPersonality) {
+      return;
+    }
+    try {
+      await setDefaultPersonality(selectedPersonality.id);
+      setNotice({
+        tone: "success",
+        message:
+          selectedPersonality.id === "default"
+            ? "Chat personality cleared."
+            : `${selectedPersonality.label} is now the global Chat default.`,
+      });
+      await reload();
+    } catch (defaultError) {
+      setNotice({ tone: "error", message: getErrorMessage(defaultError) });
+    }
+  };
+
+  const removeOrResetPersonality = async () => {
+    if (!selectedPersonality || selectedPersonality.id === "default") {
+      return;
+    }
+    if (!selectedPersonality.builtin && !window.confirm(`Remove ${selectedPersonality.label}?`)) {
+      return;
+    }
+    try {
+      await deletePersonality(selectedPersonality.id);
+      setNotice({
+        tone: "success",
+        message: selectedPersonality.builtin
+          ? `${selectedPersonality.label} reset to the shipped preset.`
+          : `${selectedPersonality.label} removed.`,
+      });
+      await reload();
+      setSelectedPersonalityId(selectedPersonality.builtin ? selectedPersonality.id : "default");
+      setEditorMode("selected");
+    } catch (removeError) {
+      setNotice({ tone: "error", message: getErrorMessage(removeError) });
+    }
+  };
+
+  const updateDraft = <K extends keyof PersonalityEditorDraft>(key: K, value: PersonalityEditorDraft[K]) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  return (
+    <SettingsSectionShell loading={loading} error={error}>
+      {notice ? <SettingsNotice notice={notice} /> : null}
+      {data ? (
+        <SettingsGrid>
+          <SettingsPanel
+            title="Personality catalog"
+            subtitle="Built-in presets, custom overlays, and the global Chat default."
+            stats={[
+              { label: "Presets", value: String(data.items.length) },
+              { label: "Custom", value: String(customCount) },
+              { label: "Modified", value: String(modifiedBuiltinCount) },
+            ]}
+          >
+            <SettingsButtonRow>
+              <button type="button" className="mc-next-button" onClick={beginCustomPersonality}>
+                <Plus size={16} />
+                Add custom personality
+              </button>
+              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            </SettingsButtonRow>
+            <SettingsSelectableList
+              items={data.items.map((item) => ({
+                id: item.id,
+                title: item.label,
+                meta: formatPersonalityStatus(item, defaultPersonalityId),
+                body: `${formatPersonalityCategoryLabel(item.category)} · ${item.tone || "No tone"} · ${
+                  item.description || "No description"
+                }`,
+              }))}
+              selectedId={editorMode === "new" ? "" : selectedPersonalityId}
+              onSelect={(id) => {
+                setEditorMode("selected");
+                setSelectedPersonalityId(id);
+              }}
+              emptyLabel="No personalities returned from the gateway."
+            />
+          </SettingsPanel>
+          <SettingsPanel
+            title={
+              editorMode === "new" ? "New custom personality" : (selectedPersonality?.label ?? "Personality editor")
+            }
+            subtitle={
+              editorMode === "new"
+                ? "Create a persisted custom Chat overlay."
+                : "Edit tone fields, reset built-ins, or set the global Chat default."
+            }
+          >
+            {editorMode === "new" || selectedPersonality ? (
+              <>
+                <SettingsFieldGrid>
+                  <SettingsField label="ID">
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.id}
+                      disabled={editorLocked || editingBuiltin}
+                      onChange={(event) => updateDraft("id", event.target.value)}
+                      placeholder="direct-operator"
+                    />
+                  </SettingsField>
+                  <SettingsField label="Label">
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.label}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("label", event.target.value)}
+                      placeholder="Direct Operator"
+                    />
+                  </SettingsField>
+                  <SettingsField label="Category">
+                    <select
+                      className="mc-next-settings-input"
+                      value={draft.category}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("category", event.target.value as PersonalityPresetCategory)}
+                    >
+                      {PERSONALITY_CATEGORY_OPTIONS.map((category) => (
+                        <option key={category} value={category}>
+                          {formatPersonalityCategoryLabel(category)}
+                        </option>
+                      ))}
+                    </select>
+                  </SettingsField>
+                  <SettingsField label="Tone">
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.tone}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("tone", event.target.value)}
+                      placeholder="Composed"
+                    />
+                  </SettingsField>
+                  <SettingsField label="Style">
+                    <input
+                      className="mc-next-settings-input"
+                      value={draft.style}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("style", event.target.value)}
+                      placeholder="Operational and compact"
+                    />
+                  </SettingsField>
+                  <SettingsField label="Description" span={2}>
+                    <textarea
+                      className="mc-next-settings-textarea"
+                      value={draft.description}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("description", event.target.value)}
+                      rows={3}
+                    />
+                  </SettingsField>
+                  <SettingsField label="System overlay" span={2}>
+                    <textarea
+                      className="mc-next-settings-textarea mc-next-settings-code"
+                      value={draft.systemOverlay}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("systemOverlay", event.target.value)}
+                      rows={7}
+                    />
+                  </SettingsField>
+                  <SettingsField label="Safety notes" span={2}>
+                    <textarea
+                      className="mc-next-settings-textarea"
+                      value={draft.safetyNotes}
+                      disabled={editorLocked}
+                      onChange={(event) => updateDraft("safetyNotes", event.target.value)}
+                      rows={4}
+                    />
+                  </SettingsField>
+                </SettingsFieldGrid>
+                <SettingsNotice
+                  notice={{
+                    tone: "info",
+                    message:
+                      "Personality overlays affect Chat tone and framing only; safety, privacy, memory, tools, approvals, and policy stay authoritative.",
+                  }}
+                />
+                <SettingsButtonRow>
+                  <button
+                    type="button"
+                    className="mc-next-button"
+                    onClick={() => void savePersonality()}
+                    disabled={!canSave}
+                  >
+                    <Save size={16} />
+                    {editorMode === "new" ? "Create personality" : "Save edits"}
+                  </button>
+                  {editorMode === "selected" ? (
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      onClick={() => void makeDefault()}
+                      disabled={!selectedPersonality}
+                    >
+                      <CheckCircle2 size={16} />
+                      {selectedPersonality?.id === "default" ? "Clear Chat default" : "Set as Chat default"}
+                    </button>
+                  ) : null}
+                  {editorMode === "selected" && selectedPersonality?.id !== "default" ? (
+                    <button
+                      type="button"
+                      className={selectedPersonality?.builtin ? "mc-next-button-secondary" : "mc-next-button-danger"}
+                      onClick={() => void removeOrResetPersonality()}
+                      disabled={selectedPersonality?.builtin === true && !selectedPersonality.modified}
+                    >
+                      {selectedPersonality?.builtin ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                      {selectedPersonality?.builtin ? "Reset built-in" : "Remove custom"}
+                    </button>
+                  ) : null}
+                  {editorMode === "new" ? (
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      onClick={() => {
+                        setEditorMode("selected");
+                        setDraft(createPersonalityEditorDraft(selectedPersonality));
+                      }}
+                    >
+                      <RotateCcw size={16} />
+                      Cancel
+                    </button>
+                  ) : null}
+                </SettingsButtonRow>
+              </>
+            ) : (
+              <SettingsEmptyState label="Choose a personality or create a custom one." />
+            )}
+          </SettingsPanel>
+        </SettingsGrid>
+      ) : null}
+    </SettingsSectionShell>
   );
 }
 
@@ -5139,6 +5486,13 @@ function splitCommaList(value: string) {
     .filter(Boolean);
 }
 
+function splitLineList(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function normalizeToolApprovalMode(value: string | undefined): ToolApprovalMode {
   return TOOL_APPROVAL_MODE_OPTIONS.includes(value as ToolApprovalMode) ? (value as ToolApprovalMode) : "approve_risky";
 }
@@ -5244,6 +5598,79 @@ function deriveLlamaCppAlias(input: string) {
   return filename.replace(/\.(gguf|bin)$/i, "") || trimmed;
 }
 
+function createEmptyPersonalityEditorDraft(): PersonalityEditorDraft {
+  return {
+    id: "",
+    label: "",
+    category: "core",
+    description: "",
+    tone: "",
+    style: "",
+    systemOverlay: "",
+    safetyNotes: "Personality overlays never override safety, privacy, approval, tool, memory, or skill policies.",
+  };
+}
+
+function createPersonalityEditorDraft(personality: PersonalityPreset | null): PersonalityEditorDraft {
+  if (!personality) {
+    return createEmptyPersonalityEditorDraft();
+  }
+  return {
+    id: personality.id,
+    label: personality.label,
+    category: personality.category,
+    description: personality.description,
+    tone: personality.tone,
+    style: personality.style,
+    systemOverlay: personality.systemOverlay,
+    safetyNotes: personality.safetyNotes.join("\n"),
+  };
+}
+
+function personalityDraftToMutationInput(draft: PersonalityEditorDraft) {
+  return {
+    id: draft.id.trim() || undefined,
+    label: draft.label.trim(),
+    category: draft.category,
+    description: draft.description.trim(),
+    tone: draft.tone.trim(),
+    style: draft.style.trim(),
+    systemOverlay: draft.systemOverlay.trim(),
+    safetyNotes: splitLineList(draft.safetyNotes),
+  };
+}
+
+function formatPersonalityStatus(personality: PersonalityPreset, defaultPersonalityId: string): string {
+  const tags = [personality.builtin ? "Built-in" : "Custom"];
+  if (personality.modified) {
+    tags.push("Modified");
+  }
+  if (personality.id === defaultPersonalityId) {
+    tags.push("Chat default");
+  }
+  if (personality.editable === false) {
+    tags.push("Locked");
+  }
+  return tags.join(" · ");
+}
+
+function formatPersonalityCategoryLabel(category: PersonalityPresetCategory): string {
+  return category
+    .split("_")
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function normalizePersonalityEditorId(input: string | undefined): string {
+  return (
+    input
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "default"
+  );
+}
+
 function formatDateTime(value?: string | null) {
   if (!value) {
     return "Unknown";
@@ -5265,6 +5692,8 @@ function iconForSettingsSection(section: string) {
       return Gauge;
     case "providers":
       return SlidersHorizontal;
+    case "personalities":
+      return Sparkles;
     case "access":
       return ShieldCheck;
     case "runtime":
@@ -5296,6 +5725,8 @@ function labelForSettingsSection(section: string) {
       return "Budget";
     case "providers":
       return "Providers";
+    case "personalities":
+      return "Personalities";
     case "access":
       return "Access";
     case "runtime":
@@ -5327,6 +5758,8 @@ function descriptionForSettingsSection(section: string) {
       return "Cost-control deep links route to explicit budget guidance instead of silent fallback.";
     case "providers":
       return "Choose active routing, inspect provider posture, and manage secrets.";
+    case "personalities":
+      return "Manage Chat tone presets and choose the global Chat default.";
     case "access":
       return "Manage gateway auth posture, install tokens, and device access.";
     case "runtime":

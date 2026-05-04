@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { IntegrationConnection, PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   buildSlackOAuthConnectionInput,
@@ -19,6 +19,15 @@ const kindEnum = z.enum(["channel", "model_provider", "productivity", "automatio
 const catalogQuerySchema = z.object({
   kind: kindEnum.optional(),
 });
+
+function resolveRoutePersonalityCatalog(services: unknown): PersonalityCatalogResponse {
+  const settings = (
+    services as {
+      settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse };
+    }
+  ).settings;
+  return settings?.getPersonalityCatalog?.() ?? { items: listPersonalityPresets(), defaultPersonalityId: "default" };
+}
 
 const connectionsQuerySchema = z.object({
   kind: kindEnum.optional(),
@@ -356,7 +365,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.get("/api/v1/channels/personalities", async (_request, reply) => {
-    return reply.send({ items: listPersonalityPresets() });
+    return reply.send(resolveRoutePersonalityCatalog(fastify.services));
   });
 
   fastify.post("/api/v1/channels/connections/:connectionId/telegram/pairing/approve", async (request, reply) => {

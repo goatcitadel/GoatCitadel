@@ -1,4 +1,5 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
+import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   deriveLineWebhookIdempotencyKey,
@@ -24,6 +25,7 @@ import {
   buildChannelPersonalitySystemOverlay,
   handleTelegramChannelCommand,
 } from "../services/telegram-channel-commands.js";
+import { listPersonalityPresets } from "../services/channel-personalities.js";
 import { authorizeTelegramChannelActor } from "../services/telegram-channel-pairing.js";
 import {
   applyTelegramChannelSessionRotation,
@@ -47,6 +49,15 @@ import {
 } from "./webhook-handler-factory.js";
 
 const CHANNEL_INBOUND_MAX_CONTENT_CHARS = 20_000;
+
+function resolveRoutePersonalityCatalog(fastify: FastifyInstance): PersonalityCatalogResponse {
+  const settings = (
+    fastify.services as {
+      settings?: { getPersonalityCatalog?: () => PersonalityCatalogResponse };
+    }
+  ).settings;
+  return settings?.getPersonalityCatalog?.() ?? { items: listPersonalityPresets(), defaultPersonalityId: "default" };
+}
 
 const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
@@ -284,6 +295,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
               actorId: parsed.actorId,
               actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
               content: parsed.content,
+              personalityCatalog: resolveRoutePersonalityCatalog(fastify),
               cancelActiveSession: async () => {
                 const sessionId = resolveTelegramChannelSessionId(connection.config, {
                   account: parsed.account,
@@ -357,7 +369,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
           responseOptions: {
             deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
             channelSystemInstruction: target
-              ? buildChannelPersonalitySystemOverlay(connection.config, target)
+              ? buildChannelPersonalitySystemOverlay(connection.config, target, resolveRoutePersonalityCatalog(fastify))
               : undefined,
           },
         });

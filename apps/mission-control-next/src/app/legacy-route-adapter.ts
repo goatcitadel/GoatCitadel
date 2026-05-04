@@ -128,7 +128,10 @@ export function coerceLegacyHrefToNext(input: string | URL): string | null {
   return route ? buildAppHref(route) : null;
 }
 
-function translateLegacyTab(tab: string, querySurface?: string): Omit<AppRoute, "sessionId" | "turnId" | "artifactId" | "approvalId" | "theme"> | null {
+function translateLegacyTab(
+  tab: string,
+  querySurface?: string,
+): Omit<AppRoute, "sessionId" | "turnId" | "artifactId" | "approvalId" | "theme"> | null {
   const normalized = tab.trim().toLowerCase();
   const workSurface = querySurface === "cowork" || querySurface === "code" ? querySurface : "chat";
 
@@ -201,6 +204,8 @@ function translateSettingsTab(tab?: string): AppRoute["section"] {
   switch (tab) {
     case "providers":
       return "providers";
+    case "personalities":
+      return "personalities";
     case "access":
       return "access";
     case "budget":

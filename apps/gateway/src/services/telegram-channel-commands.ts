@@ -1,4 +1,4 @@
-import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { IntegrationConnection, PersonalityCatalogResponse } from "@goatcitadel/contracts";
 import { DEFAULT_CHANNEL_TOOLSET_POSTURE, SHARED_CHANNEL_COMMANDS } from "./channel-command-contract.js";
 import {
   buildPersonalityOverlay,
@@ -24,6 +24,7 @@ export interface TelegramCommandContext {
   actorId: string;
   actorDisplayName?: string;
   content: string;
+  personalityCatalog?: PersonalityCatalogResponse;
   cancelActiveSession?: () => Promise<TelegramStopCommandOutcome>;
   resolveApprovalToken?: (
     token: string,
@@ -161,8 +162,9 @@ export function readActiveChannelPersonality(config: Record<string, unknown>, ch
 export function buildChannelPersonalitySystemOverlay(
   config: Record<string, unknown>,
   chatId: string,
+  catalog?: PersonalityCatalogResponse,
 ): string | undefined {
-  return buildPersonalityOverlay(readActiveChannelPersonality(config, chatId));
+  return buildPersonalityOverlay(readActiveChannelPersonality(config, chatId), catalog?.items);
 }
 
 function handlePersonalityCommand(argument: string, context: TelegramCommandContext): TelegramCommandResult {
@@ -173,14 +175,16 @@ function handlePersonalityCommand(argument: string, context: TelegramCommandCont
       context,
       [
         "Available personalities:",
-        ...listPersonalityPresets().map((preset) => `- ${preset.id}: ${preset.description}`),
+        ...(context.personalityCatalog?.items ?? listPersonalityPresets()).map(
+          (preset) => `- ${preset.id}: ${preset.description}`,
+        ),
         "",
         "Use /personality <name> to set one for this chat, or /personality none to clear it.",
       ].join("\n"),
     );
   }
 
-  const preset = getPersonalityPreset(requested);
+  const preset = getPersonalityPreset(requested, context.personalityCatalog?.items);
   if (requested !== "default" && preset.id === "default") {
     return respond(
       "/personality",
@@ -229,7 +233,10 @@ function renderStart(context: TelegramCommandContext): string {
 }
 
 function renderStatus(context: TelegramCommandContext): string {
-  const active = getPersonalityPreset(readActiveChannelPersonality(context.connection.config, context.chatId));
+  const active = getPersonalityPreset(
+    readActiveChannelPersonality(context.connection.config, context.chatId),
+    context.personalityCatalog?.items,
+  );
   const home =
     readString(context.connection.config.defaultChannelId) ?? readString(context.connection.config.defaultChatId);
   return [

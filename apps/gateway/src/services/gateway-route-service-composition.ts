@@ -442,8 +442,13 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
   const settingsAuthDeps = createSettingsAuthRuntimeDependenciesForGateway(gateway);
   const settings: GatewayRouteServiceDependencies["settings"] = {
+    createPersonality: (input) => gateway.personalityCatalogService.createPersonality(input),
+    deletePersonality: (id) => gateway.personalityCatalogService.deletePersonality(id),
     getAuthRuntimeSettings: () => settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps),
+    getPersonalityCatalog: () => gateway.personalityCatalogService.getCatalog(),
     getSettings: () => settingsAuthService.getSettings(settingsRuntimeDeps),
+    setDefaultPersonality: (id) => gateway.personalityCatalogService.setDefaultPersonality(id),
+    updatePersonality: (id, input) => gateway.personalityCatalogService.updatePersonality(id, input),
     updateSettings: (input) => settingsAuthService.updateSettings(settingsRuntimeDeps, input),
   };
 

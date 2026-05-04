@@ -15,6 +15,7 @@ export type OpsSection =
 export type SettingsSection =
   | "general"
   | "providers"
+  | "personalities"
   | "access"
   | "budget"
   | "onboarding"
@@ -337,6 +338,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Model and provider defaults.",
       area: "settings",
       section: "providers",
+    },
+    {
+      id: "settings-personalities",
+      label: "Personalities",
+      description: "Chat personality presets and the global Chat default.",
+      area: "settings",
+      section: "personalities",
     },
     {
       id: "settings-access",

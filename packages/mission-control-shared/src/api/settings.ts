@@ -7,6 +7,8 @@ import type {
   OnboardingBootstrapInput,
   OnboardingBootstrapResult,
   OnboardingState,
+  PersonalityCatalogResponse,
+  PersonalityPresetMutationInput,
 } from "@goatcitadel/contracts";
 import type { OnboardingCompleteResponse, RuntimeSettingsResponse } from "./types.js";
 import { request } from "./client-core.js";
@@ -140,5 +142,39 @@ export async function patchSettings(input: {
   return request<RuntimeSettingsResponse>("/api/v1/settings", {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+export async function fetchPersonalities(): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>("/api/v1/personalities");
+}
+
+export async function createPersonality(input: PersonalityPresetMutationInput): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>("/api/v1/personalities", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePersonality(
+  personalityId: string,
+  input: PersonalityPresetMutationInput,
+): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>(`/api/v1/personalities/${encodeURIComponent(personalityId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deletePersonality(personalityId: string): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>(`/api/v1/personalities/${encodeURIComponent(personalityId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function setDefaultPersonality(personalityId: string): Promise<PersonalityCatalogResponse> {
+  return request<PersonalityCatalogResponse>("/api/v1/personalities/default", {
+    method: "PATCH",
+    body: JSON.stringify({ personalityId }),
   });
 }

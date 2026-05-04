@@ -86,4 +86,88 @@ describe("dashboard settings routes", () => {
       },
     });
   });
+
+  it("routes canonical personality catalog APIs to settings services", async () => {
+    const catalog = {
+      defaultPersonalityId: "operator",
+      items: [
+        {
+          id: "operator",
+          label: "Operator",
+          category: "core",
+          description: "Crisp mission-control style.",
+          tone: "Composed",
+          style: "Operational",
+          systemOverlay: "Use crisp language.",
+          soulFile: "docs/personalities/core/operator.md",
+          safetyNotes: ["Tone only."],
+          visibility: "builtin",
+          builtin: true,
+          editable: true,
+          modified: false,
+        },
+      ],
+    };
+    const settings = {
+      getPersonalityCatalog: vi.fn(() => catalog),
+      createPersonality: vi.fn((input: Record<string, unknown>) => ({ ...catalog, created: input })),
+      updatePersonality: vi.fn((id: string, input: Record<string, unknown>) => ({
+        ...catalog,
+        updated: { id, input },
+      })),
+      deletePersonality: vi.fn((id: string) => ({ ...catalog, deleted: id })),
+      setDefaultPersonality: vi.fn((id: string) => ({ ...catalog, defaultPersonalityId: id })),
+    };
+
+    app = Fastify();
+    app.decorate("services", { settings } as never);
+    await app.register(dashboardRoutes);
+
+    let response = await app.inject({ method: "GET", url: "/api/v1/personalities" });
+    expect(response.statusCode).toBe(200);
+    expect(settings.getPersonalityCatalog).toHaveBeenCalled();
+
+    response = await app.inject({
+      method: "POST",
+      url: "/api/v1/personalities",
+      payload: {
+        id: "direct-custom",
+        label: "Direct Custom",
+        category: "execution",
+        systemOverlay: "Be direct.",
+        safetyNotes: ["Tone only."],
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(settings.createPersonality).toHaveBeenCalledWith({
+      id: "direct-custom",
+      label: "Direct Custom",
+      category: "execution",
+      systemOverlay: "Be direct.",
+      safetyNotes: ["Tone only."],
+    });
+
+    response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/personalities/operator",
+      payload: { label: "Operator Prime", style: "Compact" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(settings.updatePersonality).toHaveBeenCalledWith("operator", {
+      label: "Operator Prime",
+      style: "Compact",
+    });
+
+    response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/personalities/default",
+      payload: { personalityId: "none" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(settings.setDefaultPersonality).toHaveBeenCalledWith("none");
+
+    response = await app.inject({ method: "DELETE", url: "/api/v1/personalities/operator" });
+    expect(response.statusCode).toBe(200);
+    expect(settings.deletePersonality).toHaveBeenCalledWith("operator");
+  });
 });

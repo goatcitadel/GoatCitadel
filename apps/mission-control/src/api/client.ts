@@ -557,12 +557,17 @@ export {
 export {
   completeOnboarding,
   bootstrapOnboarding,
+  createPersonality,
+  deletePersonality,
   fetchDeviceAccessGrants,
   fetchOnboardingState,
+  fetchPersonalities,
   fetchSettings,
   patchSettings,
   resolveGatewayInstallToken,
   revokeDeviceAccessGrant,
+  setDefaultPersonality,
+  updatePersonality,
 } from "./settings.js";
 export {
   bulkUpdateSkillState,

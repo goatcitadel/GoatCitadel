@@ -1,6 +1,15 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
-export const settingsRouteMethods = ["getAuthRuntimeSettings", "getSettings", "updateSettings"] as const;
+export const settingsRouteMethods = [
+  "createPersonality",
+  "deletePersonality",
+  "getAuthRuntimeSettings",
+  "getPersonalityCatalog",
+  "getSettings",
+  "setDefaultPersonality",
+  "updatePersonality",
+  "updateSettings",
+] as const;
 
 export type SettingsRouteMethod = (typeof settingsRouteMethods)[number];
 export type SettingsRoutePort = RoutePort<SettingsRouteMethod>;

@@ -102,6 +102,7 @@ export interface ChatTurnPrepHost {
   ): SessionAutonomyPrefsRecord;
   ensureChatSessionModelDefaults(sessionId: string, prefs: ChatSessionPrefsRecord): ChatSessionPrefsRecord;
   getSessionAutonomyPrefs(sessionId: string): SessionAutonomyPrefsRecord;
+  buildDefaultChatPersonalityOverlay(): string | undefined;
   resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance>;
   resolveThreadKnowledgeContext(sessionId: string, query: string): Promise<ResolvedThreadKnowledgeContext>;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
@@ -252,9 +253,11 @@ export async function prepareAgentChatTurn(
   });
   const resolvedGuidance = await host.resolveRuntimeGuidance(workspaceId);
   const threadKnowledgeContext = await host.resolveThreadKnowledgeContext(sessionId, content);
+  const personalityOverlay = prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
   const guidanceSystemInstruction = mergeChatSystemInstructions(
     resolvedGuidance.systemInstruction,
     threadKnowledgeContext.systemInstruction,
+    personalityOverlay,
     buildPlanningModeSystemInstruction(prefs.planningMode),
     missingRequiredProjectBinding
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
