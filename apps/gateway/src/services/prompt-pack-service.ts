@@ -5882,20 +5882,46 @@ function extractPromptPackOrderedSections(prompt: string): string[] {
       return sections;
     }
   }
-  const sectionsForMatch = prompt.match(
-    /\bsections?\s+for\s+((?!a\b|an\b|the\b)[A-Z][A-Za-z /-]*(?:\s*,\s*(?:and\s+)?[A-Z][A-Za-z /-]*)*)(?:,\s*then\b|\s+then\b|[.]\s|$)/,
-  );
-  if (sectionsForMatch?.[1]) {
-    const sections = splitPromptPackLabelList(sectionsForMatch[1]);
-    if (sections.length > 0) {
-      return sections;
-    }
+  const sectionsForLabels = extractPromptPackSectionsForLabels(prompt);
+  if (sectionsForLabels.length > 0) {
+    return sectionsForLabels;
   }
   const rolesInOrderMatch = prompt.match(/roles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b[:\s]*([^\n]+)/i);
   if (!rolesInOrderMatch?.[1]) {
     return [];
   }
   return splitPromptPackLabelList(trimPromptPackRoleOrderTail(rolesInOrderMatch[1]));
+}
+
+function extractPromptPackSectionsForLabels(prompt: string): string[] {
+  const marker = "sections for";
+  const lowerPrompt = prompt.toLowerCase();
+  let searchStart = 0;
+  while (searchStart < prompt.length) {
+    const markerIndex = lowerPrompt.indexOf(marker, searchStart);
+    if (markerIndex < 0) {
+      return [];
+    }
+    const tail = prompt.slice(markerIndex + marker.length).trimStart();
+    const firstChar = tail[0] ?? "";
+    if (firstChar >= "A" && firstChar <= "Z") {
+      const endIndex = findPromptPackSectionListEnd(tail);
+      const rawLabels = tail.slice(0, endIndex).trim().replace(/[.]+$/, "");
+      const sections = splitPromptPackLabelList(rawLabels);
+      if (sections.length > 0) {
+        return sections;
+      }
+    }
+    searchStart = markerIndex + marker.length;
+  }
+  return [];
+}
+
+function findPromptPackSectionListEnd(value: string): number {
+  const candidates = [value.indexOf(", then"), value.indexOf(" then"), value.indexOf(". "), value.indexOf("\n")].filter(
+    (index) => index >= 0,
+  );
+  return candidates.length > 0 ? Math.min(...candidates) : value.length;
 }
 
 function parsePromptPackOrderedSectionTail(rawTail: string): string[] {

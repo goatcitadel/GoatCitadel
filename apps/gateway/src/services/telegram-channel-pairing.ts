@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 
 export interface TelegramPairingDecision {
   authorized: boolean;
@@ -173,10 +173,7 @@ function createPendingPairing(
 }
 
 function createPairingCode(): string {
-  const bytes = randomBytes(8);
-  return Array.from(bytes)
-    .map((byte) => PAIRING_ALPHABET[byte % PAIRING_ALPHABET.length])
-    .join("");
+  return Array.from({ length: 8 }, () => PAIRING_ALPHABET[randomInt(PAIRING_ALPHABET.length)]).join("");
 }
 
 function readRecord(value: unknown): Record<string, unknown> {

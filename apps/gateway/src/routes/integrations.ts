@@ -185,8 +185,17 @@ const channelTargetDirectoryQuerySchema = z.object({
   query: z.string().min(1).optional(),
 });
 
+const SLACK_OAUTH_RATE_LIMIT_MAX = 60;
+const slackOAuthRouteOptions = {
+  config: {
+    rateLimit: {
+      max: SLACK_OAUTH_RATE_LIMIT_MAX,
+    },
+  },
+} as const;
+
 export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/api/v1/integrations/slack/oauth/status", async (_request, reply) => {
+  fastify.get("/api/v1/integrations/slack/oauth/status", slackOAuthRouteOptions, async (_request, reply) => {
     const start = buildSlackOAuthStart(readSlackOAuthConfig());
     const allConnections: IntegrationConnection[] = fastify.services.integrations.listIntegrationConnections(
       "channel",
@@ -207,7 +216,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  fastify.post("/api/v1/integrations/slack/oauth/start", async (_request, reply) => {
+  fastify.post("/api/v1/integrations/slack/oauth/start", slackOAuthRouteOptions, async (_request, reply) => {
     const start = buildSlackOAuthStart(readSlackOAuthConfig());
     if (!start.configured) {
       return reply.code(400).send({
@@ -218,7 +227,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send(start);
   });
 
-  fastify.get("/api/v1/integrations/slack/oauth/callback", async (request, reply) => {
+  fastify.get("/api/v1/integrations/slack/oauth/callback", slackOAuthRouteOptions, async (request, reply) => {
     const parsed = slackOAuthCallbackQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -265,7 +274,7 @@ export const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/integrations/slack/oauth/disconnect", async (request, reply) => {
+  fastify.post("/api/v1/integrations/slack/oauth/disconnect", slackOAuthRouteOptions, async (request, reply) => {
     const parsed = slackOAuthDisconnectSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

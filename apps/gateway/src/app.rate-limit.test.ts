@@ -43,6 +43,19 @@ describe("gateway route rate limits", () => {
       await app.close();
     }
   });
+
+  it("applies explicit rate limits to Slack OAuth routes", async () => {
+    configureRateLimitedGateway();
+    const app = await buildApp();
+    try {
+      await expectRouteToRateLimit(app, "GET", "/api/v1/integrations/slack/oauth/status", "203.0.113.51", 200);
+      await expectRouteToRateLimit(app, "POST", "/api/v1/integrations/slack/oauth/start", "203.0.113.52", 400);
+      await expectRouteToRateLimit(app, "GET", "/api/v1/integrations/slack/oauth/callback", "203.0.113.53", 400);
+      await expectRouteToRateLimit(app, "POST", "/api/v1/integrations/slack/oauth/disconnect", "203.0.113.54", 400);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 function configureRateLimitedGateway(): void {
@@ -52,7 +65,7 @@ function configureRateLimitedGateway(): void {
   process.env.GOATCITADEL_AUTH_MODE = "token";
   process.env.GOATCITADEL_AUTH_TOKEN = TOKEN;
   process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "true";
-  process.env.GOATCITADEL_RATE_LIMIT_MAX_GENERAL = "20";
+  process.env.GOATCITADEL_RATE_LIMIT_MAX_GENERAL = "2";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_MUTATION = "2";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_AUTH = "20";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_SSE_CONNECT = "20";
@@ -73,4 +86,27 @@ async function expectMutationRouteToRateLimit(app: Awaited<ReturnType<typeof bui
   }
 
   expect(statuses).toEqual([400, 400, 429]);
+}
+
+async function expectRouteToRateLimit(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  method: "GET" | "POST",
+  url: string,
+  ip: string,
+  expectedInitialStatus: number,
+) {
+  const statuses: number[] = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await app.inject({
+      method,
+      url,
+      remoteAddress: ip,
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+      },
+    });
+    statuses.push(response.statusCode);
+  }
+
+  expect(statuses).toEqual([expectedInitialStatus, expectedInitialStatus, 429]);
 }

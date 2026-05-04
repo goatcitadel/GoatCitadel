@@ -4,7 +4,12 @@ import path from "node:path";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import type { ChannelDeliveryStatus, ToolGrantRecord, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
+import type {
+  ChannelDeliveryStatus,
+  ToolGrantRecord,
+  ToolInvokeRequest,
+  ToolPolicyConfig,
+} from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
@@ -1147,7 +1152,13 @@ async function commsInvoke(
       message,
     );
     storage.commsDeliveries.markSent(queued.deliveryId, providerMessageId);
-    return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId, updatedAt: new Date().toISOString() };
+    return {
+      ...queued,
+      status: "sent",
+      deliveryStatus: "sent",
+      providerMessageId,
+      updatedAt: new Date().toISOString(),
+    };
   } catch (error) {
     const errorMessage = (error as Error).message;
     const deliveryStatus = classifyChannelDeliveryFailure(errorMessage);
@@ -1164,13 +1175,21 @@ async function commsInvoke(
 }
 
 function classifyChannelDeliveryFailure(message: string): ChannelDeliveryStatus {
-  if (/\b(408|429|502|503|504)\b/.test(message)) {
+  const normalized = message.toLowerCase();
+  if (["408", "429", "502", "503", "504"].some((status) => normalized.includes(status))) {
     return "degraded";
   }
-  if (/allowlist|blocked|unsafe|forbidden|unauthorized|http or https/i.test(message)) {
+  if (
+    ["allowlist", "blocked", "unsafe", "forbidden", "unauthorized", "http or https"].some((term) =>
+      normalized.includes(term),
+    )
+  ) {
     return "blocked";
   }
-  if (/missing .*url|not supported|does not support|unavailable|not configured/i.test(message)) {
+  if (
+    (normalized.includes("missing") && normalized.includes("url")) ||
+    ["not supported", "does not support", "unavailable", "not configured"].some((term) => normalized.includes(term))
+  ) {
     return "not_available";
   }
   return "degraded";

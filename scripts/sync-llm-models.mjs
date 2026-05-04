@@ -25,9 +25,7 @@ function deriveSuggestedDefault(providerId, currentDefault, modelIds) {
     return currentDefault;
   }
   if (providerId === "google") {
-    const googleExact = currentDefault.startsWith("models/")
-      ? currentDefault
-      : `models/${currentDefault}`;
+    const googleExact = currentDefault.startsWith("models/") ? currentDefault : `models/${currentDefault}`;
     if (modelIds.includes(googleExact)) {
       return googleExact;
     }
@@ -37,7 +35,10 @@ function deriveSuggestedDefault(providerId, currentDefault, modelIds) {
 }
 
 function markdownCell(value) {
-  return String(value ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, " ");
 }
 
 function buildMarkdown(report) {
@@ -61,7 +62,9 @@ function buildMarkdown(report) {
   if (mismatches.length > 0) {
     lines.push("", "## Mismatched defaults", "");
     for (const item of mismatches) {
-      lines.push(`- \`${item.providerId}\`: current \`${item.currentDefault}\`, suggested \`${item.suggestedDefault}\``);
+      lines.push(
+        `- \`${item.providerId}\`: current \`${item.currentDefault}\`, suggested \`${item.suggestedDefault}\``,
+      );
     }
   }
 
@@ -112,7 +115,9 @@ async function main() {
     }
 
     try {
-      const response = await requestJson(`${gatewayUrl}/api/v1/llm/models?providerId=${encodeURIComponent(provider.providerId)}`);
+      const response = await requestJson(
+        `${gatewayUrl}/api/v1/llm/models?providerId=${encodeURIComponent(provider.providerId)}`,
+      );
       const modelIds = (response.items ?? []).map((item) => item.id).filter(Boolean);
       record.models = modelIds;
       record.modelCount = modelIds.length;
@@ -149,8 +154,8 @@ async function main() {
   for (const item of report.providers) {
     console.log(
       `${item.providerId}: ${item.status}` +
-      (item.suggestedDefault ? ` (suggested: ${item.suggestedDefault})` : "") +
-      (item.error ? ` (${item.error})` : ""),
+        (item.suggestedDefault ? ` (suggested: ${item.suggestedDefault})` : "") +
+        (item.error ? ` (${item.error})` : ""),
     );
   }
 }
