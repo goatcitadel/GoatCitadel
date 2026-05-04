@@ -538,9 +538,15 @@ export function MissionThreadedControllerHost({
     loadSidebar,
     loadSessionCoreState,
   } = sessionData;
-  const currentSessionMode: ChatMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
+  const fallbackSessionMode: ChatMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
+  const currentSessionMode: ChatMode = selectedSessionId
+    ? lockSurface && surface
+      ? surface
+      : (sessions?.items.find((item) => item.sessionId === selectedSessionId)?.mode ?? fallbackSessionMode)
+    : fallbackSessionMode;
   const threadController = useChatThreadController({
     surfaceMode: currentSessionMode,
+    showAllModes: lockSurface,
     routeSearch,
     sessions: sessions?.items,
     projects: projects?.items,
@@ -701,7 +707,8 @@ export function MissionThreadedControllerHost({
     mcpServers,
     mcpTemplates,
   });
-  const executionSurfaceMode: ChatMode = lockSurface && surface ? surface : (prefs?.mode ?? "chat");
+  const executionSurfaceMode: ChatMode =
+    lockSurface && surface ? surface : (selectedSession?.mode ?? fallbackSessionMode);
   const executionRoutePrefs = useMemo(
     () =>
       prefs && (selectedProviderId || selectedModel)
@@ -1822,17 +1829,25 @@ export function MissionThreadedControllerHost({
     if (!selectedTurn) {
       return;
     }
+    if (dockOpen && selectedTurnId === selectedTurn.turnId) {
+      handleDockOpenChange(false);
+      return;
+    }
     setSelectedTurnId(selectedTurn.turnId);
     handleDockOpenChange(true);
-  }, [handleDockOpenChange, selectedTurn]);
+  }, [dockOpen, handleDockOpenChange, selectedTurn, selectedTurnId]);
   const handleRevealActiveTurnDetails = useCallback(() => {
     const nextTurn = activeWorkflowTurn ?? selectedTurn;
     if (!nextTurn) {
       return;
     }
+    if (dockOpen && selectedTurnId === nextTurn.turnId) {
+      handleDockOpenChange(false);
+      return;
+    }
     setSelectedTurnId(nextTurn.turnId);
     handleDockOpenChange(true);
-  }, [activeWorkflowTurn, handleDockOpenChange, selectedTurn]);
+  }, [activeWorkflowTurn, dockOpen, handleDockOpenChange, selectedTurn, selectedTurnId]);
 
   const handleSelectBranchTurnAndSync = useCallback(
     async (turnId: string) => {
@@ -2043,8 +2058,11 @@ export function MissionThreadedControllerHost({
         selectedProviderId,
         selectedModel,
         modelSwitchDisabled: !selectedSessionId || sending,
+        sessionLifecycleStatus: selectedSession.lifecycleStatus,
+        sessionArchivePending: sessionControlPending === "archive",
         dockOpen,
         onToggleDock: handleToggleDock,
+        onToggleArchiveSession: () => void handleToggleArchiveSession(),
         onNavigateSurface: handleNavigateSurface,
         onRequestProviderChange: (providerId) => {
           const provider = providerOptions.find((item) => item.providerId === providerId);
@@ -2081,6 +2099,10 @@ export function MissionThreadedControllerHost({
         onRetryTurn: (turnId) => void handleRetryTurn(turnId),
         onEditTurn: handleBeginEditTurn,
         onOpenRunDetails: (turnId) => {
+          if (dockOpen && selectedTurnId === turnId) {
+            handleDockOpenChange(false);
+            return;
+          }
           setSelectedTurnId(turnId);
           handleDockOpenChange(true);
         },
@@ -2125,6 +2147,9 @@ export function MissionThreadedControllerHost({
         selectedTurn,
         selectedSessionId,
         currentWebMode: prefs?.webMode ?? "auto",
+        currentThinkingLevel: prefs?.thinkingLevel ?? "standard",
+        currentSpeedMode: prefs?.speedMode ?? "standard",
+        currentSubagentPolicy: prefs?.subagentPolicy ?? "ask_when_useful",
         routePreflight: currentRoutePreflight,
         routePreflightLoading: routePreflight.loading,
         routePreflightError: routePreflight.error,
@@ -2148,6 +2173,9 @@ export function MissionThreadedControllerHost({
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
         onTogglePlanningMode: handleTogglePlanningMode,
         onSetDeepMode: () => handleSetDeepMode(),
+        onSetThinkingLevel: (level) => void handlePrefPatch({ thinkingLevel: level }),
+        onSetSpeedMode: (mode) => void handlePrefPatch({ speedMode: mode }),
+        onSetSubagentPolicy: (policy) => void handlePrefPatch({ subagentPolicy: policy }),
         onReviewRunDetails: handleRevealSelectedTurnDetails,
         onDraftChange: setDraft,
         onComposerKeyDown: handleComposerKeyDown,

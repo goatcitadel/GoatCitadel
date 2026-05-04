@@ -13,6 +13,7 @@ export {
 export {
   formatSessionLabel,
   looksMachineSessionLabel,
+  resolveMissionControlMessageMode,
   shouldShowLearnedMemoryPanel,
   shouldShowSuggestionsPanel,
   shouldShowTracePanel,

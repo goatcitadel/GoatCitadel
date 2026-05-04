@@ -81,7 +81,10 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     requireMtls: runtime.config.assistant.mesh.security.requireMtls,
     tailnetEnabled: runtime.config.assistant.mesh.security.tailnet.enabled,
   };
-  const defaultToolProfile = runtime.config.toolPolicy.tools.profile;
+  const toolApprovalMode =
+    runtime.config.toolPolicy.tools.approvalMode ??
+    (runtime.config.toolPolicy.tools.profile === "danger" ? "bypass" : "approve_risky");
+  const defaultToolProfile = runtime.config.toolPolicy.tools.profile ?? "";
   const budgetMode = runtime.config.budgets.mode;
   const networkAllowlist = runtime.config.toolPolicy.sandbox.networkAllowlist;
   const activeProvider = llm.providers.find((provider) => provider.providerId === llm.activeProviderId);
@@ -91,7 +94,7 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     llm.activeModel.trim() &&
     (activeProvider.hasApiKey || isProviderLikelyLocal(activeProvider.baseUrl)),
   );
-  const runtimeReady = Boolean(defaultToolProfile.trim()) && Boolean(budgetMode.trim());
+  const runtimeReady = Boolean(toolApprovalMode.trim()) && Boolean(budgetMode.trim());
   const meshReady = mesh.enabled
     ? Boolean(mesh.nodeId.trim()) && (mesh.mode !== "tailnet" || mesh.tailnetEnabled)
     : true;
@@ -119,8 +122,8 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
       label: "Runtime defaults",
       status: runtimeReady ? "complete" : "needs_input",
       detail: runtimeReady
-        ? `Profile ${defaultToolProfile} / budget ${budgetMode}.`
-        : "Choose a default tool profile and budget mode.",
+        ? `Tool approvals ${toolApprovalMode} / budget ${budgetMode}.`
+        : "Choose a tool approval mode and budget mode.",
     },
     {
       id: "mesh",
@@ -150,6 +153,7 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     completedBy: runtime.onboardingMarker.completedBy,
     checklist,
     settings: {
+      toolApprovalMode,
       defaultToolProfile,
       budgetMode,
       networkAllowlist,
@@ -189,6 +193,7 @@ export function bootstrapOnboarding(
   input: OnboardingBootstrapInput,
 ): OnboardingBootstrapResult {
   runtime.updateSettings({
+    toolApprovalMode: input.toolApprovalMode,
     defaultToolProfile: input.defaultToolProfile,
     budgetMode: input.budgetMode,
     networkAllowlist: input.networkAllowlist,

@@ -7,6 +7,7 @@ export {
   looksMachineSessionLabel,
   revealGeneratedArtifactInSurface,
   resolveChatRefreshPlan,
+  resolveMissionControlMessageMode,
   resolveOptimisticChatPrefs,
   resolveSelectedTurnId,
   shouldApplyFetchedMessagesAfterStream,

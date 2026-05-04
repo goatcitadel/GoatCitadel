@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
-import { assertHostAllowed, assertHostAllowedInDangerProfile } from "./sandbox/network-guard.js";
+import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 
 type BrowserToolName =
@@ -36,14 +36,12 @@ interface BrowserStepInput {
 }
 
 function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
-  return config.tools.profile !== "danger";
+  void config;
+  return true;
 }
 
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
-  if (!shouldEnforceNetworkAllowlist(config)) {
-    assertHostAllowedInDangerProfile(hostOrUrl, config.sandbox.networkAllowlist);
-    return;
-  }
+  void shouldEnforceNetworkAllowlist(config);
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
 }
 

@@ -2,6 +2,8 @@ import type {
   ChatCompletionRequest,
   ChatMode,
   ChatNormalizationProfile,
+  ChatSpeedMode,
+  ChatSubagentPolicy,
   ChatStreamChunkDraft,
   ChatThinkingLevel,
   ChatTurnBranchKind,
@@ -23,6 +25,8 @@ export interface TurnRuntimeRequest {
   webMode: ChatWebMode;
   memoryMode: "auto" | "on" | "off";
   thinkingLevel: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy: "safe_auto" | "manual";
   normalizationProfile?: ChatNormalizationProfile;
   historyMessages: ChatCompletionRequest["messages"];

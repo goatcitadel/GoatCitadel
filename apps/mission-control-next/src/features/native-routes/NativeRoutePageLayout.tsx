@@ -22,7 +22,7 @@ export function NativePageFrame({
 }) {
   return (
     <section className="mc-next-directory-page">
-      <header className="mc-next-directory-header">
+      <header className="mc-next-directory-header" data-native-kicker={kicker}>
         <div className="mc-next-directory-icon">
           <Icon className="h-5 w-5" />
         </div>

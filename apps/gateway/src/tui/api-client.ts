@@ -34,6 +34,10 @@ import type {
   ToolGrantRecord,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+
+type TuiThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
+type TuiSpeedMode = "standard" | "fast";
+type TuiSubagentPolicy = "off" | "ask_when_useful" | "auto_when_useful";
 import type { TuiResolvedAuth } from "./profile.js";
 
 export interface TuiApiClientOptions {
@@ -226,7 +230,9 @@ export class TuiApiClient {
       mode?: "chat" | "cowork" | "code";
       webMode?: "auto" | "off" | "quick" | "deep";
       memoryMode?: "auto" | "on" | "off";
-      thinkingLevel?: "minimal" | "standard" | "extended";
+      thinkingLevel?: TuiThinkingLevel;
+      speedMode?: TuiSpeedMode;
+      subagentPolicy?: TuiSubagentPolicy;
     },
   ): Promise<Record<string, unknown>> {
     return this.request(
@@ -248,7 +254,9 @@ export class TuiApiClient {
       mode?: "chat" | "cowork" | "code";
       webMode?: "auto" | "off" | "quick" | "deep";
       memoryMode?: "auto" | "on" | "off";
-      thinkingLevel?: "minimal" | "standard" | "extended";
+      thinkingLevel?: TuiThinkingLevel;
+      speedMode?: TuiSpeedMode;
+      subagentPolicy?: TuiSubagentPolicy;
       agentMode?: boolean;
     },
   ): AsyncGenerator<Record<string, unknown>> {

@@ -44,6 +44,7 @@ import {
   type FilesystemReadAccessMode,
   type LlmProviderRequestConfig,
   type RealtimeEvent,
+  type ToolApprovalMode,
 } from "@goatcitadel/contracts";
 import type { MeshService } from "@goatcitadel/mesh-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -157,6 +158,8 @@ export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings 
   return {
     environment: deps.config.assistant.environment,
     deploymentProfile: deps.config.assistant.deploymentProfile,
+    toolApprovalMode:
+      deps.config.toolPolicy.tools.approvalMode ?? legacyProfileToApprovalMode(deps.config.toolPolicy.tools.profile),
     defaultToolProfile: deps.config.toolPolicy.tools.profile,
     budgetMode: deps.config.budgets.mode,
     workspaceDir: deps.config.assistant.workspaceDir,
@@ -232,6 +235,7 @@ export function getSettings(deps: SettingsRuntimeDependencies): RuntimeSettings 
 
 export interface UpdateSettingsInput {
   deploymentProfile?: DeploymentProfile;
+  toolApprovalMode?: ToolApprovalMode;
   defaultToolProfile?: string;
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: FilesystemReadAccessMode;
@@ -323,14 +327,23 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
     persistAssistant = true;
   }
 
-  if (input.defaultToolProfile) {
+  if (input.toolApprovalMode) {
+    deps.config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
+    deps.config.assistant.toolApprovalMode = input.toolApprovalMode;
+    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
+      enforce: true,
+    });
+    persistAssistant = true;
+    persistToolPolicy = true;
+  } else if (input.defaultToolProfile) {
     if (!Object.prototype.hasOwnProperty.call(deps.config.toolPolicy.profiles, input.defaultToolProfile)) {
-      throw new Error(`Unknown tool profile: ${input.defaultToolProfile}`);
+      throw new Error(`Unknown legacy tool profile: ${input.defaultToolProfile}`);
     }
     deps.config.toolPolicy.tools.profile = input.defaultToolProfile as typeof deps.config.toolPolicy.tools.profile;
+    deps.config.toolPolicy.tools.approvalMode = legacyProfileToApprovalMode(input.defaultToolProfile);
     deps.config.assistant.defaultToolProfile = input.defaultToolProfile;
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
-      enforce: deps.config.toolPolicy.tools.profile !== "danger",
+      enforce: true,
     });
     persistAssistant = true;
     persistToolPolicy = true;
@@ -351,7 +364,7 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
       .map((host_) => host_.trim())
       .filter(Boolean);
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
-      enforce: deps.config.toolPolicy.tools.profile !== "danger",
+      enforce: true,
     });
     persistToolPolicy = true;
   }
@@ -2090,4 +2103,8 @@ export function verifyCompanionRequestSignature(
     nonce,
     requestHash,
   });
+}
+
+function legacyProfileToApprovalMode(profile: string | undefined): ToolApprovalMode {
+  return profile === "danger" ? "bypass" : "approve_risky";
 }

@@ -351,6 +351,60 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             />
           </NativeGrid>
         );
+      case "notifications": {
+        const items = [
+          ...(data.dashboard?.pendingApprovals
+            ? [
+                {
+                  title: "Approvals need review",
+                  meta: `${data.dashboard.pendingApprovals} pending`,
+                  body: "Risky or approval-gated work is waiting for an operator decision.",
+                },
+              ]
+            : []),
+          ...(data.health?.daemonStatus.running
+            ? []
+            : [
+                {
+                  title: "Daemon needs intervention",
+                  meta: data.health?.daemonStatus.state ?? "unknown",
+                  body: "Self-repair can propose a recovery plan, but service changes remain approval-gated.",
+                },
+              ]),
+          ...(data.timeline?.events.items ?? [])
+            .filter((item) => /error|failed|repair|approval|runtime/i.test(item.eventType))
+            .slice(0, 10)
+            .map((item) => ({
+              title: item.eventType,
+              meta: item.eventClass ?? "event",
+              body: item.timestamp ? formatDateTime(item.timestamp) : "No timestamp",
+            })),
+        ];
+        return (
+          <NativeGrid>
+            <NativeCard
+              title="Operator notifications"
+              subtitle="Runtime issues and repair opportunities stay visible until the operator acts."
+              stats={[
+                { label: "Open", value: String(items.length) },
+                { label: "Self-repair", value: "Approval-gated" },
+              ]}
+            >
+              <NativeList items={items} emptyLabel="No operator notifications." />
+            </NativeCard>
+            <QuickJumpCard
+              title="Act on notification"
+              subtitle="Review the underlying surface before approving any repair or mutation."
+              actions={[
+                { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
+                { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
+                { label: "Improvement", route: { area: "ops", section: "improvement", theme: route.theme } },
+              ]}
+              navigate={navigate}
+            />
+          </NativeGrid>
+        );
+      }
       case "activity":
       default:
         return (
@@ -437,6 +491,8 @@ function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
       return "Schedules";
     case "improvement":
       return "Improvement";
+    case "notifications":
+      return "Notifications";
     case "costs":
       return "Costs";
     case "runtime":
@@ -456,6 +512,8 @@ function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
       return "Scheduled work and review queue pressure without the legacy wrapper stack.";
     case "improvement":
       return "Replay and improvement signals that stay visible to the operator.";
+    case "notifications":
+      return "Operator-facing runtime issues, approvals, and repair opportunities.";
     case "costs":
       return "Spend coverage, QMD efficiency, and current usage posture.";
     case "runtime":

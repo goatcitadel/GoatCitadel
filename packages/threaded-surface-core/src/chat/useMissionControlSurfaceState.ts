@@ -180,6 +180,18 @@ function buildWorkspaceSummaryCards(input: {
   ];
 }
 
+export function resolveMissionControlMessageMode(input: {
+  lockSurface: boolean;
+  surface?: ChatMode;
+  selectedSessionMode?: ChatMode | null;
+  prefsMode?: ChatMode | null;
+}): ChatMode {
+  if (input.lockSurface && input.surface) {
+    return input.surface;
+  }
+  return input.selectedSessionMode ?? input.prefsMode ?? "chat";
+}
+
 export function useMissionControlSurfaceState(input: {
   lockSurface: boolean;
   surface?: ChatMode;
@@ -229,7 +241,12 @@ export function useMissionControlSurfaceState(input: {
   showLearnedMemoryPanel: boolean;
   dockSectionOrder: MissionControlDockSectionId[];
 } {
-  const messageMode = input.lockSurface && input.surface ? input.surface : (input.prefs?.mode ?? "chat");
+  const messageMode = resolveMissionControlMessageMode({
+    lockSurface: input.lockSurface,
+    surface: input.surface,
+    selectedSessionMode: input.selectedSession?.mode,
+    prefsMode: input.prefs?.mode,
+  });
   const activeModePreset = CHAT_MODE_PRESETS[messageMode];
   const isChatSurface = messageMode === "chat";
   const isCoworkSurface = messageMode === "cowork";

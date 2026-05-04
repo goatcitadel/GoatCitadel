@@ -2,7 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AuthMode, DeploymentProfile, LlmConfigFile, ToolPolicyConfig } from "@goatcitadel/contracts";
+import type {
+  AuthMode,
+  DeploymentProfile,
+  LlmConfigFile,
+  ToolApprovalMode,
+  ToolPolicyConfig,
+} from "@goatcitadel/contracts";
 import {
   AssistantConfigInputSchema,
   BudgetConfigSchema,
@@ -23,6 +29,7 @@ const configLog = logger.child("config");
 export interface AssistantConfig {
   environment: string;
   deploymentProfile: DeploymentProfile;
+  toolApprovalMode: ToolApprovalMode;
   defaultToolProfile: string;
   dataDir: string;
   transcriptsDir: string;
@@ -329,6 +336,7 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
 
   applyEnvironmentOverrides(assistant);
 
+  toolPolicy.tools.approvalMode = assistant.toolApprovalMode ?? toolPolicy.tools.approvalMode;
   toolPolicy.sandbox.writeJailRoots = toolPolicy.sandbox.writeJailRoots.map((root) => path.resolve(rootDir, root));
   toolPolicy.sandbox.readOnlyRoots = toolPolicy.sandbox.readOnlyRoots.map((root) => path.resolve(rootDir, root));
 
@@ -748,6 +756,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   return {
     environment: input.environment ?? "local",
     deploymentProfile: input.deploymentProfile ?? "local_dev",
+    toolApprovalMode: input.toolApprovalMode ?? (input.defaultToolProfile === "danger" ? "bypass" : "approve_risky"),
     defaultToolProfile: input.defaultToolProfile ?? "minimal",
     dataDir: input.dataDir ?? "./data",
     transcriptsDir: input.transcriptsDir ?? "./data/transcripts",

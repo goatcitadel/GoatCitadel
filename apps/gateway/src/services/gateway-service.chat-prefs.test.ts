@@ -30,25 +30,25 @@ function createPrefs(overrides: Partial<ChatSessionPrefsRecord> = {}): ChatSessi
 }
 
 describe("GatewayService chat session provider normalization", () => {
-  it("treats outbound hosts as implicitly allowed under the danger tool profile", () => {
+  it("keeps outbound hosts allowlist-gated in bypass approval mode", () => {
     const gateway = Object.create(GatewayService.prototype) as any;
 
     gateway.config = {
       toolPolicy: {
-        tools: { profile: "danger" },
+        tools: { approvalMode: "bypass" },
         sandbox: { networkAllowlist: [] },
       },
     };
 
     expect(
       (GatewayService.prototype as any).isUrlAllowlisted.call(gateway, "https://lite.duckduckgo.com/lite/?q=test"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       (GatewayService.prototype as any).isConnectionUrlAllowlisted.call(
         gateway,
         "https://www.google.com/search?q=test",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("defaults browser tools to Firecrawl and keeps native fallback enabled", () => {

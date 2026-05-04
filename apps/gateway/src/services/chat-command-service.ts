@@ -186,7 +186,7 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
     { command: "/dream", usage: "/dream", description: "Run workspace memory maintenance now." },
     { command: "/dream", usage: "/dream status", description: "Show workspace memory maintenance status." },
-    { command: "/think", usage: "/think minimal|standard|extended", description: "Set thinking depth." },
+    { command: "/think", usage: "/think off|minimal|standard|extended|deep", description: "Set thinking depth." },
     { command: "/tool", usage: "/tool safe_auto|manual", description: "Set tool autonomy mode." },
     {
       command: "/proactive",
@@ -433,11 +433,29 @@ export async function parseChatCommand(
 
   if (command === "/think") {
     const thinkingLevel = (args[0] ?? "").toLowerCase() as ChatThinkingLevel;
-    if (!["minimal", "standard", "extended"].includes(thinkingLevel)) {
-      return { ok: false, command, args, message: "Usage: /think minimal|standard|extended" };
+    if (!["off", "minimal", "standard", "extended", "deep"].includes(thinkingLevel)) {
+      return { ok: false, command, args, message: "Usage: /think off|minimal|standard|extended|deep" };
     }
     const prefs = deps.updateChatSessionPrefs(sessionId, { thinkingLevel });
     return { ok: true, command, args, prefs, message: `Thinking level set to ${prefs.thinkingLevel}.` };
+  }
+
+  if (command === "/speed") {
+    const speedMode = (args[0] ?? "").toLowerCase() as "standard" | "fast";
+    if (!["standard", "fast"].includes(speedMode)) {
+      return { ok: false, command, args, message: "Usage: /speed standard|fast" };
+    }
+    const prefs = deps.updateChatSessionPrefs(sessionId, { speedMode });
+    return { ok: true, command, args, prefs, message: `Speed mode set to ${prefs.speedMode}.` };
+  }
+
+  if (command === "/subagents") {
+    const subagentPolicy = (args[0] ?? "").toLowerCase() as "off" | "ask_when_useful" | "auto_when_useful";
+    if (!["off", "ask_when_useful", "auto_when_useful"].includes(subagentPolicy)) {
+      return { ok: false, command, args, message: "Usage: /subagents off|ask_when_useful|auto_when_useful" };
+    }
+    const prefs = deps.updateChatSessionPrefs(sessionId, { subagentPolicy });
+    return { ok: true, command, args, prefs, message: `Subagent policy set to ${prefs.subagentPolicy}.` };
   }
 
   if (command === "/tool") {

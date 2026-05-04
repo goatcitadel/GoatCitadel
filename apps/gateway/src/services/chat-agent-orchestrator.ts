@@ -219,6 +219,8 @@ export interface ChatAgentTurnInput {
   webMode: ChatWebMode;
   memoryMode: "auto" | "on" | "off";
   thinkingLevel: ChatThinkingLevel;
+  speedMode?: "standard" | "fast";
+  subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
   normalizationProfile?: ChatNormalizationProfile;
   toolAutonomy: "safe_auto" | "manual";
   historyMessages: ChatCompletionRequest["messages"];
@@ -340,6 +342,8 @@ export class ChatAgentOrchestrator {
       webMode: input.webMode,
       memoryMode: input.memoryMode,
       thinkingLevel: input.thinkingLevel,
+      speedMode: input.speedMode ?? "standard",
+      subagentPolicy: input.subagentPolicy ?? "ask_when_useful",
       effectiveToolAutonomy: input.toolAutonomy,
       routing: {
         liveDataIntent: intents.liveData,
@@ -1586,7 +1590,7 @@ export class ChatAgentOrchestrator {
             effectiveCompletionTimeoutMs,
             ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs),
           );
-          const promptLabControls = resolvePromptLabOpenAiControls(input, toolSchema.tools.length > 0);
+          const modelControls = resolveModelControlOptions(input, toolSchema.tools.length > 0);
           const rawToolsForCompletion = promptLabSynthesisOnly ? [] : toolSchema.tools;
           const toolsForCompletion =
             normalizationProfile === "prompt_pack_harness" &&
@@ -1608,8 +1612,9 @@ export class ChatAgentOrchestrator {
             max_tokens: executionBudget.maxTokens,
             timeoutMs: completionTimeoutMs,
             signal: input.signal,
-            reasoning: promptLabControls.reasoning,
-            verbosity: promptLabControls.verbosity,
+            reasoning: modelControls.reasoning,
+            verbosity: modelControls.verbosity,
+            service_tier: modelControls.service_tier,
             memory: {
               enabled: input.memoryMode !== "off",
               mode: input.memoryMode === "off" ? "off" : "qmd",
@@ -15416,6 +15421,25 @@ function looksLikeHarnessContaminatedQuery(value: string): boolean {
   return PROMPT_HARNESS_QUERY_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+function resolveModelControlOptions(
+  input: Pick<ChatAgentTurnInput, "content" | "providerId" | "model" | "mode" | "thinkingLevel" | "speedMode">,
+  hasFunctionTools = false,
+): Pick<ChatCompletionRequest, "reasoning" | "verbosity" | "service_tier"> {
+  const promptLabControls = resolvePromptLabOpenAiControls(input, hasFunctionTools);
+  if (Object.keys(promptLabControls).length > 0) {
+    return {
+      ...promptLabControls,
+      service_tier: input.speedMode === "fast" ? "auto" : undefined,
+    };
+  }
+  const reasoning = resolveReasoningEffort(input.thinkingLevel);
+  return {
+    reasoning: reasoning ? { effort: reasoning } : undefined,
+    verbosity: input.speedMode === "fast" ? "low" : input.mode === "code" ? "medium" : undefined,
+    service_tier: input.speedMode === "fast" ? "auto" : undefined,
+  };
+}
+
 function resolvePromptLabOpenAiControls(
   input: Pick<ChatAgentTurnInput, "content" | "providerId" | "model" | "mode" | "thinkingLevel">,
   hasFunctionTools = false,
@@ -15459,6 +15483,24 @@ function resolvePromptLabReasoningEffort(
     return mode === "cowork" ? "medium" : "low";
   }
   return mode === "cowork" ? "high" : "medium";
+}
+
+function resolveReasoningEffort(
+  thinkingLevel: ChatThinkingLevel,
+): NonNullable<ChatCompletionRequest["reasoning"]>["effort"] | undefined {
+  if (thinkingLevel === "off") {
+    return "none";
+  }
+  if (thinkingLevel === "minimal") {
+    return "low";
+  }
+  if (thinkingLevel === "standard") {
+    return "medium";
+  }
+  if (thinkingLevel === "extended") {
+    return "high";
+  }
+  return "xhigh";
 }
 
 function inferLocalToolPathFromPrompt(toolName: string, userContent: string): string | undefined {
@@ -16898,11 +16940,17 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
 }
 
 export function defaultThinkingTokens(level: ChatThinkingLevel): number | undefined {
+  if (level === "off") {
+    return 300;
+  }
   if (level === "minimal") {
     return 300;
   }
   if (level === "extended") {
     return 1800;
+  }
+  if (level === "deep") {
+    return 2600;
   }
   return 900;
 }
@@ -17790,12 +17838,17 @@ function truncatePlainText(value: string, maxChars: number): string {
 
 export function normalizeAgentInputFromSend(
   request: ChatSendMessageRequest,
-): Pick<ChatAgentTurnInput, "mode" | "webMode" | "memoryMode" | "thinkingLevel" | "normalizationProfile"> {
+): Pick<
+  ChatAgentTurnInput,
+  "mode" | "webMode" | "memoryMode" | "thinkingLevel" | "speedMode" | "subagentPolicy" | "normalizationProfile"
+> {
   return {
     mode: request.mode ?? "chat",
     webMode: request.webMode ?? "auto",
     memoryMode: request.memoryMode ?? (request.useMemory === false ? "off" : "auto"),
     thinkingLevel: request.thinkingLevel ?? "standard",
+    speedMode: request.speedMode ?? "standard",
+    subagentPolicy: request.subagentPolicy ?? "ask_when_useful",
     normalizationProfile: request.normalizationProfile ?? "live",
   };
 }

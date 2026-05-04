@@ -51,6 +51,7 @@ const policyConfig: ToolPolicyConfig = {
   },
   tools: {
     profile: "danger",
+    approvalMode: "approve_risky",
     allow: [],
     deny: [],
   },
@@ -91,7 +92,7 @@ describe("ToolPolicyEngine bankr migration gating", () => {
 });
 
 describe("ToolPolicyEngine outside-root read access", () => {
-  it("allows browser navigation to public hosts under the danger profile even when not allowlisted", () => {
+  it("blocks browser navigation to public hosts when they are not allowlisted even in bypass mode", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockReturnValue([
       {
@@ -110,6 +111,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
         ...policyConfig,
         tools: {
           ...policyConfig.tools,
+          approvalMode: "bypass",
           allow: [],
         },
       },
@@ -123,8 +125,9 @@ describe("ToolPolicyEngine outside-root read access", () => {
       sessionId: "session",
     });
 
-    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.allowed).toBe(false);
     expect(evaluation.requiresApproval).toBe(false);
+    expect(evaluation.reasonCodes).toContain("structural_safety_block");
   });
 
   it("still blocks metadata hosts under the danger profile", () => {
@@ -134,6 +137,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
         ...policyConfig,
         tools: {
           ...policyConfig.tools,
+          approvalMode: "bypass",
           allow: [],
         },
       },
@@ -151,13 +155,14 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(evaluation.reasonCodes).toContain("structural_safety_block");
   });
 
-  it("audits public-host bypasses under the danger profile", async () => {
+  it("does not audit public-host bypasses because bypass mode preserves the network allowlist", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
       {
         ...policyConfig,
         tools: {
           ...policyConfig.tools,
+          approvalMode: "bypass",
           allow: [],
         },
       },
@@ -185,18 +190,10 @@ describe("ToolPolicyEngine outside-root read access", () => {
       dryRun: true,
     });
 
-    expect(result.outcome).toBe("executed");
-    expect(vi.mocked(storage.audit.append)).toHaveBeenCalledWith(
+    expect(result.outcome).toBe("blocked");
+    expect(vi.mocked(storage.audit.append)).not.toHaveBeenCalledWith(
       "tool_invocations",
-      expect.objectContaining({
-        event: "danger_profile_network_bypass",
-        toolName: "browser.navigate",
-        targets: [
-          expect.objectContaining({
-            target: "https://apnews.com/oddities",
-          }),
-        ],
-      }),
+      expect.objectContaining({ event: "approval_bypass_mode_network_target" }),
     );
   });
 

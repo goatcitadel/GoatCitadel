@@ -5,7 +5,12 @@ import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { confirm, input, password, select } from "@inquirer/prompts";
-import type { LlmModelPreviewResponse, LlmRuntimeConfig, OnboardingBootstrapResult, OnboardingState } from "@goatcitadel/contracts";
+import type {
+  LlmModelPreviewResponse,
+  LlmRuntimeConfig,
+  OnboardingBootstrapResult,
+  OnboardingState,
+} from "@goatcitadel/contracts";
 import { providerTemplates } from "@goatcitadel/contracts";
 import { resolveGoatCitadelAppDir } from "./onboarding-tui-paths.js";
 import { renderBox, renderBulletList, renderKeyValueSummary, renderSection } from "./tui/render.js";
@@ -109,7 +114,7 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = providerTemplates.map((template) 
   note: PROVIDER_TEMPLATE_META[template.providerId]?.note ?? "OpenAI-compatible provider template.",
 }));
 
-const TOOL_PROFILES = ["minimal", "standard", "coding", "ops", "research", "danger"] as const;
+const TOOL_APPROVAL_MODES = ["approve_all", "approve_risky", "bypass"] as const;
 const BUDGET_MODES = ["saver", "balanced", "power"] as const;
 const MESH_MODES = ["lan", "wan", "tailnet"] as const;
 const MANUAL_MODEL_ENTRY = "__manual__";
@@ -165,7 +170,7 @@ async function run(): Promise<void> {
         { key: "Base URL", value: provider.providerBaseUrl },
         { key: "Active model", value: provider.activeModel },
         { key: "Default model", value: provider.providerDefaultModel },
-        { key: "Tool profile", value: runtimeDefaults.defaultToolProfile },
+        { key: "Tool approvals", value: runtimeDefaults.toolApprovalMode },
         { key: "Budget mode", value: runtimeDefaults.budgetMode },
         {
           key: "Network allowlist",
@@ -204,7 +209,7 @@ async function run(): Promise<void> {
       {
         method: "POST",
         body: JSON.stringify({
-          defaultToolProfile: runtimeDefaults.defaultToolProfile,
+          toolApprovalMode: runtimeDefaults.toolApprovalMode,
           budgetMode: runtimeDefaults.budgetMode,
           networkAllowlist: runtimeDefaults.networkAllowlist,
           auth: {
@@ -673,7 +678,7 @@ async function promptRuntimeDefaults(
   initialState: OnboardingState,
   providerBaseUrl: string,
 ): Promise<{
-  defaultToolProfile: (typeof TOOL_PROFILES)[number];
+  toolApprovalMode: (typeof TOOL_APPROVAL_MODES)[number];
   budgetMode: (typeof BUDGET_MODES)[number];
   networkAllowlist: string[];
 }> {
@@ -695,19 +700,24 @@ async function promptRuntimeDefaults(
     ),
   );
 
-  const defaultToolProfile = await select<(typeof TOOL_PROFILES)[number]>({
-    message: "Default tool profile",
-    default: clampOption(initialState.settings.defaultToolProfile, TOOL_PROFILES, "minimal"),
+  const toolApprovalMode = await select<(typeof TOOL_APPROVAL_MODES)[number]>({
+    message: "Tool approval mode",
+    default: clampOption(initialState.settings.toolApprovalMode, TOOL_APPROVAL_MODES, "approve_risky"),
     choices: [
-      { name: "minimal", value: "minimal", description: "Safest default. Best for first-time testing." },
-      { name: "standard", value: "standard", description: "Balanced default for most everyday work." },
-      { name: "coding", value: "coding", description: "File and code oriented profile." },
-      { name: "ops", value: "ops", description: "Operational and runtime oriented profile." },
-      { name: "research", value: "research", description: "Discovery-oriented profile." },
       {
-        name: "danger",
-        value: "danger",
-        description: "High-risk profile. Only use when you intentionally want broad power.",
+        name: "Ask every time",
+        value: "approve_all",
+        description: "Require approval before every tool action.",
+      },
+      {
+        name: "Ask for risky work",
+        value: "approve_risky",
+        description: "Require approval for risky or policy-gated actions.",
+      },
+      {
+        name: "Bypass approval prompts",
+        value: "bypass",
+        description: "Skip prompts for allowed actions. Hard safety blocks still apply.",
       },
     ],
   });
@@ -736,7 +746,7 @@ async function promptRuntimeDefaults(
     ).trim(),
   );
 
-  return { defaultToolProfile, budgetMode, networkAllowlist };
+  return { toolApprovalMode, budgetMode, networkAllowlist };
 }
 
 async function promptMesh(

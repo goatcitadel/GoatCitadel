@@ -4,6 +4,7 @@ import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/compo
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
+import { Paperclip } from "lucide-react";
 import { useEffect, useState } from "react";
 import { describeThreadedUiError } from "./threaded-error-copy";
 
@@ -27,6 +28,51 @@ function getPlaceholder(mode: MissionThreadedActiveSessionSurfaceProps["mode"]):
     return "Describe the work to coordinate, research, or move forward…";
   }
   return "Ask GoatCitadel anything…";
+}
+
+function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
+  if (props.mode === "cowork") {
+    if (
+      props.selectedTurn?.trace.status === "waiting_for_approval" ||
+      props.selectedTurn?.trace.status === "waiting_for_user_input"
+    ) {
+      return "Resolve blocker";
+    }
+    if (props.editingTurnId) {
+      return "Edit and delegate";
+    }
+    return props.sending ? "Delegating..." : "Delegate";
+  }
+
+  if (props.mode === "code") {
+    if (props.editingTurnId) {
+      return "Edit and implement";
+    }
+    return props.sending ? "Implementing..." : "Implement";
+  }
+
+  if (props.editingTurnId) {
+    return "Edit and resend";
+  }
+  return props.sending ? "Sending..." : "Send";
+}
+
+function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
+  const totals = (thread?.turns ?? []).reduce(
+    (next, turn) => {
+      const messages = [turn.userMessage, turn.assistantMessage].filter(Boolean);
+      for (const message of messages) {
+        next.tokens += (message?.tokenInput ?? 0) + (message?.tokenOutput ?? 0);
+        next.costUsd += message?.costUsd ?? 0;
+      }
+      return next;
+    },
+    { tokens: 0, costUsd: 0 },
+  );
+  const tokenLabel = `${new Intl.NumberFormat("en-US").format(totals.tokens)} tokens`;
+  const costLabel =
+    totals.costUsd > 0 && totals.costUsd < 0.01 ? "<$0.01" : `$${totals.costUsd.toFixed(totals.costUsd >= 10 ? 1 : 2)}`;
+  return `${tokenLabel} / ${costLabel}`;
 }
 
 function isImageAttachment(attachment: PendingAttachment): boolean {
@@ -142,6 +188,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         : props.currentWebMode === "quick"
           ? "Quick web"
           : "Web auto";
+  const thinkingLabel = `Think ${props.currentThinkingLevel}`;
+  const speedLabel = props.currentSpeedMode === "fast" ? "Fast" : "Standard";
   const helperCopy =
     props.mode === "code"
       ? "Paste larger prompts, drag files, and keep heavier implementation context in one place."
@@ -149,6 +197,54 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
         : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
   const planningEnabled = props.planningMode === "advisory";
+  const routeLabel =
+    props.routePreflightLoading && !currentRouteLabel
+      ? "Route checking"
+      : currentRouteLabel
+        ? currentRouteLabel
+        : (props.trust?.providerModelSummary ?? "Provider routing pending");
+  const sendLabel = getSendLabel(props);
+  const usageLabel = formatUsageLabel(props.thread);
+  const plusActions = [
+    {
+      label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",
+      disabled: !props.voiceInputAvailable || props.voiceBusy || props.sending,
+      active: Boolean(props.voiceTalkActive),
+      onSelect: () => props.onToggleVoiceTalk?.(),
+    },
+    {
+      label: "Transcribe audio",
+      disabled: !props.voiceInputAvailable || props.voiceBusy || props.sending,
+      onSelect: () => props.onOpenAudioTranscribe?.(),
+    },
+    ...(props.voiceOutputAvailable
+      ? [
+          {
+            label: props.speakResponsesEnabled ? "Stop speaking replies" : "Speak replies",
+            active: Boolean(props.speakResponsesEnabled),
+            onSelect: () => props.onToggleSpeakResponses?.(),
+          },
+        ]
+      : []),
+    {
+      label: props.imageBusy ? "Creating image..." : "Create image",
+      disabled: !props.imageGenerationAvailable || props.imageBusy || props.sending || props.draft.trim().length === 0,
+      onSelect: () => props.onGenerateImage?.(),
+    },
+    ...(props.imageEditAvailable
+      ? [
+          {
+            label: props.imageBusy ? "Editing image..." : "Edit image",
+            disabled: props.imageBusy || props.sending || props.draft.trim().length === 0,
+            onSelect: () => props.onEditImage?.(),
+          },
+        ]
+      : []),
+    {
+      label: "Quick web research",
+      onSelect: props.onRunQuickResearch,
+    },
+  ];
 
   return (
     <div className="mc-next-composer">
@@ -224,14 +320,17 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       ) : null}
 
       <div className="mc-next-composer-head">
-        <div>
+        <div className="mc-next-composer-title">
           <p className="mc-next-composer-kicker">{getSurfaceLabel(props.mode)}</p>
           <h3>{props.selectedTurnRecovery?.label ?? "Send the next instruction"}</h3>
         </div>
         <div className="mc-next-composer-chip-row">
           <span className="mc-next-composer-chip">{sessionStateLabel}</span>
           {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
-          {currentRouteLabel ? <span className="mc-next-composer-chip subtle">{currentRouteLabel}</span> : null}
+          <span className="mc-next-composer-chip subtle">{thinkingLabel}</span>
+          <span className="mc-next-composer-chip subtle">{speedLabel}</span>
+          <span className="mc-next-composer-chip subtle">{routeLabel}</span>
+          <span className="mc-next-composer-chip subtle">{usageLabel}</span>
         </div>
       </div>
 
@@ -280,7 +379,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       </div>
 
       {props.commandSuggestions.length > 0 ? (
-        <div className="mc-next-command-popover" role="listbox" aria-label="Slash command suggestions">
+        <div className="mc-next-command-popover" role="listbox" aria-label="Composer suggestions">
           {props.commandSuggestions.map((item, index) => (
             <button
               key={item.key}
@@ -352,11 +451,71 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-controls">
         <div className="mc-next-composer-controls-start">
-          <ChatComposerPlusMenu
+          <ChatComposerPlusMenu disabled={props.sending} actions={plusActions}>
+            {presetOptions.length > 0 ? (
+              <div className="mc-next-composer-plus-section">
+                <label htmlFor="threaded-composer-preset">Preset</label>
+                <div className="mc-next-composer-preset-row">
+                  <select
+                    id="threaded-composer-preset"
+                    value={props.selectedPresetId}
+                    onChange={(event) => props.onPresetChange?.(event.target.value)}
+                  >
+                    <option value="">Choose preset</option>
+                    {presetOptions.map((preset) => (
+                      <option key={preset.value} value={preset.value}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="mc-next-composer-inline-button"
+                    disabled={!props.selectedPresetId}
+                    onClick={() => props.onApplyPreset?.()}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="mc-next-composer-plus-section">
+              <label htmlFor="threaded-composer-knowledge-url">Knowledge URL</label>
+              <div className="mc-next-composer-knowledge-url-row">
+                <input
+                  id="threaded-composer-knowledge-url"
+                  value={knowledgeUrlDraft}
+                  onChange={(event) => props.onKnowledgeUrlDraftChange?.(event.target.value)}
+                  placeholder="Attach a URL"
+                />
+                <select
+                  value={knowledgeUrlMode}
+                  onChange={(event) => props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode)}
+                >
+                  <option value="retrieval">Use retrieval</option>
+                  <option value="full_text">Read in full</option>
+                </select>
+                <button
+                  type="button"
+                  className="mc-next-composer-inline-button"
+                  disabled={!knowledgeUrlDraft.trim()}
+                  onClick={() => props.onAttachKnowledgeUrl?.()}
+                >
+                  Attach source
+                </button>
+              </div>
+            </div>
+          </ChatComposerPlusMenu>
+          <button
+            type="button"
+            className="mc-next-composer-icon-button"
             disabled={props.sending}
-            onAttachFiles={props.onAttachFiles}
-            onRunQuickResearch={props.onRunQuickResearch}
-          />
+            onClick={props.onAttachFiles}
+            aria-label="Attach files"
+            title="Attach files"
+          >
+            <Paperclip aria-hidden="true" size={17} strokeWidth={2} />
+          </button>
           <input
             ref={props.audioInputRef}
             type="file"
@@ -364,27 +523,42 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             className="mc-next-hidden-file"
             onChange={(event) => props.onAudioFileSelected?.(event.target.files)}
           />
-          {presetOptions.length > 0 ? (
-            <div className="mc-next-composer-preset-row">
-              <select value={props.selectedPresetId} onChange={(event) => props.onPresetChange?.(event.target.value)}>
-                <option value="">Preset</option>
-                {presetOptions.map((preset) => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="mc-next-composer-inline-button"
-                disabled={!props.selectedPresetId}
-                onClick={() => props.onApplyPreset?.()}
-              >
-                Apply
-              </button>
-            </div>
-          ) : null}
           <div className="mc-next-composer-multimodal-row">
+            <select
+              className="mc-next-composer-inline-select"
+              value={props.currentThinkingLevel}
+              onChange={(event) =>
+                props.onSetThinkingLevel(event.target.value as "off" | "minimal" | "standard" | "extended" | "deep")
+              }
+              aria-label="Thinking level"
+            >
+              <option value="off">No thinking</option>
+              <option value="minimal">Minimal</option>
+              <option value="standard">Standard</option>
+              <option value="extended">Extended</option>
+              <option value="deep">Deep</option>
+            </select>
+            <select
+              className="mc-next-composer-inline-select"
+              value={props.currentSpeedMode}
+              onChange={(event) => props.onSetSpeedMode(event.target.value as "standard" | "fast")}
+              aria-label="Speed mode"
+            >
+              <option value="standard">Standard</option>
+              <option value="fast">Fast</option>
+            </select>
+            <select
+              className="mc-next-composer-inline-select"
+              value={props.currentSubagentPolicy}
+              onChange={(event) =>
+                props.onSetSubagentPolicy(event.target.value as "off" | "ask_when_useful" | "auto_when_useful")
+              }
+              aria-label="Subagent policy"
+            >
+              <option value="off">No subagents</option>
+              <option value="ask_when_useful">Ask for subagents</option>
+              <option value="auto_when_useful">Auto subagents</option>
+            </select>
             <button
               type="button"
               className={`mc-next-composer-inline-button${planningEnabled ? " active" : ""}`}
@@ -393,73 +567,6 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               onClick={props.onTogglePlanningMode}
             >
               {planningEnabled ? "Plan on" : "Plan"}
-            </button>
-            <button
-              type="button"
-              className={`mc-next-composer-inline-button${props.voiceTalkActive ? " active" : ""}`}
-              disabled={!props.voiceInputAvailable || props.voiceBusy || props.sending}
-              onClick={props.onToggleVoiceTalk}
-            >
-              {props.voiceBusy ? "Voice…" : props.voiceTalkActive ? "Stop talk" : "Start talk"}
-            </button>
-            <button
-              type="button"
-              className="mc-next-composer-inline-button"
-              disabled={!props.voiceInputAvailable || props.voiceBusy || props.sending}
-              onClick={props.onOpenAudioTranscribe}
-            >
-              Transcript
-            </button>
-            {props.voiceOutputAvailable ? (
-              <button
-                type="button"
-                className={`mc-next-composer-inline-button${props.speakResponsesEnabled ? " active" : ""}`}
-                onClick={() => props.onToggleSpeakResponses?.()}
-              >
-                {props.speakResponsesEnabled ? "Speak on" : "Speak off"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="mc-next-composer-inline-button"
-              disabled={
-                !props.imageGenerationAvailable || props.imageBusy || props.sending || props.draft.trim().length === 0
-              }
-              onClick={() => props.onGenerateImage?.()}
-            >
-              {props.imageBusy ? "Imaging…" : "Create image"}
-            </button>
-            {props.imageEditAvailable ? (
-              <button
-                type="button"
-                className="mc-next-composer-inline-button"
-                disabled={props.imageBusy || props.sending || props.draft.trim().length === 0}
-                onClick={() => props.onEditImage?.()}
-              >
-                {props.imageBusy ? "Imaging…" : "Edit image"}
-              </button>
-            ) : null}
-          </div>
-          <div className="mc-next-composer-knowledge-url-row">
-            <input
-              value={knowledgeUrlDraft}
-              onChange={(event) => props.onKnowledgeUrlDraftChange?.(event.target.value)}
-              placeholder="Attach a URL to thread knowledge"
-            />
-            <select
-              value={knowledgeUrlMode}
-              onChange={(event) => props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode)}
-            >
-              <option value="retrieval">Use retrieval</option>
-              <option value="full_text">Read in full</option>
-            </select>
-            <button
-              type="button"
-              className="mc-next-composer-inline-button"
-              disabled={!knowledgeUrlDraft.trim()}
-              onClick={() => props.onAttachKnowledgeUrl?.()}
-            >
-              Attach source
             </button>
           </div>
         </div>
@@ -471,18 +578,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             </button>
           ) : (
             <button type="button" className="mc-next-composer-primary" disabled={!props.canSend} onClick={props.onSend}>
-              {props.mode === "cowork"
-                ? props.selectedTurn?.trace.status === "waiting_for_approval" ||
-                  props.selectedTurn?.trace.status === "waiting_for_user_input"
-                  ? "Resolve blocker"
-                  : props.editingTurnId
-                    ? "Edit and resend"
-                    : "Send instruction"
-                : props.sending
-                  ? "Sending…"
-                  : props.editingTurnId
-                    ? "Edit and resend"
-                    : "Send message"}
+              {sendLabel}
             </button>
           )}
         </div>

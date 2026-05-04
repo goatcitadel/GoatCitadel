@@ -228,6 +228,8 @@ export async function prepareAgentChatTurn(
     webMode: input.webMode ?? input.prefsOverride?.webMode,
     memoryMode: input.memoryMode ?? input.prefsOverride?.memoryMode,
     thinkingLevel: input.thinkingLevel ?? input.prefsOverride?.thinkingLevel,
+    speedMode: input.speedMode ?? input.prefsOverride?.speedMode,
+    subagentPolicy: input.subagentPolicy ?? input.prefsOverride?.subagentPolicy,
   });
   const splitPrefs = splitChatPrefsPatch(prefsOverride);
   if (Object.keys(splitPrefs.autonomyPatch).length > 0) {

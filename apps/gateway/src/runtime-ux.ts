@@ -272,18 +272,16 @@ function formatMetaDetail(
   if (!merged) {
     return "";
   }
-  const normalized = verbose ? sanitizeUnknown(merged, true) : compactMeta(sanitizeUnknown(merged, false));
+  const normalized = verbose
+    ? summarizeVerboseMeta(sanitizeUnknown(merged, true))
+    : compactMeta(sanitizeUnknown(merged, false));
   if (!normalized || (typeof normalized === "object" && Object.keys(normalized).length === 0)) {
     return "";
   }
   return colorizeTerminalLine(level, variant, chalk.dim(JSON.stringify(normalized)));
 }
 
-function colorizeTerminalLine(
-  level: TerminalLevel,
-  variant: "default" | "success",
-  value: string,
-): string {
+function colorizeTerminalLine(level: TerminalLevel, variant: "default" | "success", value: string): string {
   if (variant === "success") {
     return chalk.green(value);
   }
@@ -374,6 +372,64 @@ function compactMeta(value: unknown): unknown {
     }
   }
   return result;
+}
+
+function summarizeVerboseMeta(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => summarizeVerboseMeta(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if ((key === "req" || key === "request") && entry && typeof entry === "object") {
+      result[key] = summarizeRequestMeta(entry as Record<string, unknown>);
+      continue;
+    }
+    if (key === "res" && entry && typeof entry === "object") {
+      result.res = summarizeResponseMeta(entry as Record<string, unknown>);
+      continue;
+    }
+    result[key] = summarizeVerboseMeta(entry);
+  }
+  return result;
+}
+
+function summarizeRequestMeta(request: Record<string, unknown>): Record<string, unknown> {
+  const raw = request.raw && typeof request.raw === "object" ? (request.raw as Record<string, unknown>) : undefined;
+  return dropUndefined({
+    id: request.id,
+    method: request.method ?? raw?.method,
+    url: request.url ?? raw?.url,
+    route: readNestedText(request.routeOptions, "url"),
+    correlationId: request.correlationId,
+    traceId: request.traceId,
+    originSurface: request.originSurface,
+    sessionId: request.requestSessionId,
+    authActorId: request.authActorId,
+    authActorSource: request.authActorSource,
+    idempotencyKey: request.idempotencyKey,
+  });
+}
+
+function summarizeResponseMeta(response: Record<string, unknown>): Record<string, unknown> {
+  const raw = response.raw && typeof response.raw === "object" ? (response.raw as Record<string, unknown>) : undefined;
+  return dropUndefined({
+    statusCode: response.statusCode ?? raw?.statusCode,
+    statusMessage: response.statusMessage ?? raw?.statusMessage,
+  });
+}
+
+function readNestedText(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return asShortText((value as Record<string, unknown>)[key]);
+}
+
+function dropUndefined(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
 
 function normalizeLogArgs(args: unknown[]): { message: string; meta?: unknown } {

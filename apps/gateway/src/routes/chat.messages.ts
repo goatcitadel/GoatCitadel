@@ -74,7 +74,9 @@ const sendMessageSchema = z.object({
   mode: z.enum(["chat", "cowork", "code"]).optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
-  thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
+  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+  speedMode: z.enum(["standard", "fast"]).optional(),
+  subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
   commandText: z.string().optional(),
   prefsOverride: z
     .object({
@@ -85,7 +87,9 @@ const sendMessageSchema = z.object({
       imageModel: z.string().optional(),
       webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
       memoryMode: z.enum(["auto", "on", "off"]).optional(),
-      thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
+      thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+      speedMode: z.enum(["standard", "fast"]).optional(),
+      subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
       toolAutonomy: z.enum(["safe_auto", "manual"]).optional(),
       visionFallbackModel: z.string().optional(),
       orchestrationEnabled: z.boolean().optional(),
@@ -122,7 +126,9 @@ const routePreflightSchema = z.object({
   model: z.string().optional(),
   mode: z.enum(["chat", "cowork", "code"]).optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
-  thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
+  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
+  speedMode: z.enum(["standard", "fast"]).optional(),
+  subagentPolicy: z.enum(["off", "ask_when_useful", "auto_when_useful"]).optional(),
   prefsOverride: sendMessageSchema.shape.prefsOverride,
 });
 
@@ -571,6 +577,8 @@ async function requireFreshRouteDecision(
     mode: input.body.mode,
     webMode: input.body.webMode,
     thinkingLevel: input.body.thinkingLevel,
+    speedMode: input.body.speedMode,
+    subagentPolicy: input.body.subagentPolicy,
     prefsOverride: replayedPrefsOverride,
   });
   if (current.blockedReason) {

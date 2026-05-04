@@ -61,6 +61,7 @@ export async function resolveGatewayInstallToken(input?: {
 
 export async function patchSettings(input: {
   deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
+  toolApprovalMode?: "approve_all" | "approve_risky" | "bypass";
   defaultToolProfile?: string;
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";

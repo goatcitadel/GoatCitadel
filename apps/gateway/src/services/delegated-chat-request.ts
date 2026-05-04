@@ -4,6 +4,8 @@ import type {
   ChatMode,
   ChatSendMessageRequest,
   ChatSessionPrefsPatch,
+  ChatSpeedMode,
+  ChatSubagentPolicy,
   ChatThinkingLevel,
   ChatWebMode,
   ChatSessionPrefsRecord,
@@ -17,6 +19,8 @@ interface BuildDelegatedChatSendRequestInput {
   webMode: ChatWebMode;
   memoryMode: ChatMemoryMode;
   thinkingLevel: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   retrievalMode: ChatRetrievalMode;
   toolAutonomy?: ChatSessionPrefsRecord["toolAutonomy"];
   normalizationProfile?: ChatSendMessageRequest["normalizationProfile"];
@@ -30,6 +34,8 @@ export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendReque
     orchestrationVisibility: "explicit",
     orchestrationParallelism: "sequential",
     toolAutonomy: input.toolAutonomy,
+    speedMode: input.speedMode,
+    subagentPolicy: input.subagentPolicy ?? "off",
     proactiveMode: "off",
     retrievalMode: input.retrievalMode,
     reflectionMode: "off",
@@ -43,6 +49,8 @@ export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendReque
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,
+    speedMode: input.speedMode,
+    subagentPolicy: input.subagentPolicy ?? "off",
     normalizationProfile: input.normalizationProfile,
     prefsOverride,
   };

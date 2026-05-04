@@ -53,6 +53,7 @@ import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePa
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
+import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
 import type { NativeRoutePagesProps } from "./types";
 import "./native-routes.css";
 
@@ -106,6 +107,9 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
       return <ApprovalsRoutePage {...props} />;
     }
     return <RuntimeRoutePage {...props} />;
+  }
+  if (route.area === "projects") {
+    return <ProjectsRoutePage {...props} />;
   }
   return <SettingsNativePage {...props} />;
 }

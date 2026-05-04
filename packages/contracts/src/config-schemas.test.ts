@@ -40,14 +40,15 @@ describe("ToolPolicyConfigSchema", () => {
     expect(() => ToolPolicyConfigSchema.parse(input)).toThrow();
   });
 
-  it("rejects when tools.profile is missing", () => {
+  it("defaults approval mode when legacy tools.profile is missing", () => {
     const input = {
       profiles: {},
       tools: { allow: [], deny: [] },
       agents: {},
       sandbox: { writeJailRoots: [], readOnlyRoots: [] },
     };
-    expect(() => ToolPolicyConfigSchema.parse(input)).toThrow();
+    const result = ToolPolicyConfigSchema.parse(input);
+    expect(result.tools.approvalMode).toBe("approve_risky");
   });
 
   it("allows unknown keys via passthrough", () => {

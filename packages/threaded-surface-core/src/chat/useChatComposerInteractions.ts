@@ -13,6 +13,14 @@ export function isPlanningModeToggleShortcut(input: {
   return input.key === "Tab" && Boolean(input.shiftKey) && !input.altKey && !input.ctrlKey && !input.metaKey;
 }
 
+export function applyComposerSuggestion(currentDraft: string, suggestion: string): string {
+  if (suggestion.startsWith("$")) {
+    const replaced = currentDraft.replace(/(^|\s)\$[^\s]*$/, `$1${suggestion}`);
+    return `${replaced === currentDraft ? suggestion : replaced} `;
+  }
+  return `${suggestion} `;
+}
+
 export function useChatComposerInteractions(input: {
   draft: string;
   commandSuggestions: CommandSuggestionItem[];
@@ -116,7 +124,7 @@ export function useChatComposerInteractions(input: {
         if (event.key === "Tab") {
           event.preventDefault();
           const suggestion = commandSuggestions[commandIndex];
-          if (suggestion) setDraft(`${suggestion.applyValue} `);
+          if (suggestion) setDraft((current) => applyComposerSuggestion(current, suggestion.applyValue));
           return;
         }
       }
@@ -211,7 +219,10 @@ export function useChatComposerInteractions(input: {
   const handleRunQuickResearch = useCallback(() => {
     void runQuickResearch();
   }, [runQuickResearch]);
-  const handleApplyDraftCommand = useCallback((command: string) => setDraft(`${command} `), [setDraft]);
+  const handleApplyDraftCommand = useCallback(
+    (command: string) => setDraft((current) => applyComposerSuggestion(current, command)),
+    [setDraft],
+  );
   const handleRemoveAttachment = useCallback(
     (attachmentId: string) => {
       setPendingAttachments((current) => current.filter((entry) => entry.attachmentId !== attachmentId));

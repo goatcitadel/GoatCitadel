@@ -167,11 +167,8 @@ export function getMissionControlSurfaceConfig(mode: ChatMode): MissionControlSu
 export const DESKTOP_DOCK_BREAKPOINT = 1200;
 
 export function defaultDockOpenForMode(mode: ChatMode, viewportWidth?: number): boolean {
-  if (mode === "chat") {
-    return false;
-  }
   if (viewportWidth === undefined || viewportWidth < DESKTOP_DOCK_BREAKPOINT) {
     return false;
   }
-  return mode === "cowork" || mode === "code";
+  return mode === "chat" || mode === "cowork" || mode === "code";
 }

@@ -19,11 +19,7 @@ import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
-import {
-  assertHostAllowed,
-  assertHostAllowedInDangerProfile,
-  evaluateDangerousHostBypass,
-} from "./sandbox/network-guard.js";
+import { assertHostAllowed, evaluateDangerousHostBypass } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { executeTool } from "./tool-executor.js";
 import {
@@ -45,15 +41,7 @@ interface AccessEvaluation {
   grantToConsume?: string;
 }
 
-function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
-  return config.tools.profile !== "danger";
-}
-
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
-  if (!shouldEnforceNetworkAllowlist(config)) {
-    assertHostAllowedInDangerProfile(hostOrUrl, config.sandbox.networkAllowlist);
-    return;
-  }
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
 }
 
@@ -488,11 +476,7 @@ export class ToolPolicyEngine {
       );
     }
 
-    if (riskLevel !== "safe") {
-      if (!grantDecision || grantDecision.decision !== "allow") {
-        return deny(riskLevel, "grant_required", `tool risk ${riskLevel} requires explicit grant`);
-      }
-
+    if (riskLevel !== "safe" && grantDecision?.decision === "allow") {
       const constraintsError = this.applyGrantConstraints(request, grantDecision.grant, toolDef);
       if (constraintsError) {
         return {
@@ -509,10 +493,10 @@ export class ToolPolicyEngine {
     const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
     const hasAllowGrant = grantDecision?.decision === "allow";
     if (!inProfile && !hasAllowGrant) {
-      return deny(riskLevel, "profile_disallow", "tool not available in resolved profile");
+      return deny(riskLevel, "policy_disallow", "tool not available in resolved policy");
     }
 
-    let requiresApproval = Boolean(toolDef?.requiresApproval);
+    let requiresApproval = policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval);
     const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, allowGrant);
 
     if (
@@ -533,9 +517,27 @@ export class ToolPolicyEngine {
     if (outsideRootsReadRequiresApproval) {
       requiresApproval = true;
     }
+    if (policy.approvalMode === "approve_risky" && riskLevel !== "safe") {
+      requiresApproval = true;
+    }
+    if (policy.approvalMode === "bypass") {
+      requiresApproval = false;
+    }
 
     const reasonCodes = ["allowed"];
-    let policyReason = requiresApproval ? "approval required by risk gate" : "allowed";
+    if (policy.approvalMode === "bypass") {
+      reasonCodes.push("approval_bypass_mode");
+    } else if (policy.approvalMode === "approve_all") {
+      reasonCodes.push("approval_mode_all");
+    } else if (riskLevel !== "safe") {
+      reasonCodes.push("approval_mode_risky");
+    }
+    let policyReason =
+      policy.approvalMode === "bypass"
+        ? "allowed by bypass approval mode"
+        : requiresApproval
+          ? "approval required by approval mode"
+          : "allowed";
     if (shellRisk?.risky) {
       reasonCodes.push("shell_risky_requires_approval");
       policyReason = `risky shell command matched policy pattern "${shellRisk.matchedPattern}"`;
@@ -997,7 +999,7 @@ export class ToolPolicyEngine {
     auditEventId: string,
     request: ToolInvokeRequest,
   ): Promise<void> {
-    if (this.config.tools.profile !== "danger") {
+    if ((this.config.tools.approvalMode ?? "approve_risky") !== "bypass") {
       return;
     }
     const bypassedTargets = extractOutboundHostCandidates(request).flatMap((target) => {
@@ -1017,7 +1019,7 @@ export class ToolPolicyEngine {
     }
     await this.storage.audit.append("tool_invocations", {
       auditEventId,
-      event: "danger_profile_network_bypass",
+      event: "approval_bypass_mode_network_target",
       agentId: request.agentId,
       sessionId: request.sessionId,
       taskId: request.taskId,

@@ -1,38 +1,7 @@
 {
-  "profiles": {
-    "minimal": ["session.status", "memory.read"],
-    "standard": ["session.status", "memory.read", "http.get", "fs.read", "fs.write"],
-    "coding": ["session.status", "memory.read", "fs.read", "fs.write", "shell.exec", "git.exec"],
-    "ops": ["session.status", "memory.read", "http.get", "http.post", "process.control", "logs.read"],
-    "research": [
-      "session.status",
-      "time.now",
-      "memory.read",
-      "browser.search",
-      "browser.navigate",
-      "browser.extract",
-      "browser.screenshot",
-      "http.get",
-      "citations.build"
-    ],
-    "chat-agent": [
-      "session.status",
-      "time.now",
-      "memory.read",
-      "memory.search",
-      "memory.write",
-      "memory.upsert",
-      "browser.search",
-      "browser.navigate",
-      "browser.extract",
-      "http.get",
-      "citations.build"
-    ],
-    "danger": ["*"]
-  },
   "tools": {
-    "profile": "chat-agent",
-    "allow": [],
+    "approvalMode": "approve_risky",
+    "allow": ["*"],
     "deny": []
   },
   "agents": {},

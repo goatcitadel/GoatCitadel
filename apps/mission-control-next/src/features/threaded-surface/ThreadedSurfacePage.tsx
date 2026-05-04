@@ -54,19 +54,31 @@ export function ThreadedSurfacePage({
   const dockOpen = input.dockOpen && Boolean(input.activeSessionSurfaceProps);
   const activeProps = input.activeSessionSurfaceProps;
   const workflowPanel = input.workflowPanel;
-  const modeMeta = MODE_META[surface];
-  const SurfaceIcon = modeMeta.icon;
+  const activeMode = activeProps?.mode ?? surface;
+  const modeMeta = MODE_META[activeMode];
+  const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(true);
+  const [postureFilter, setPostureFilter] = useState<ChatMode | "all">("all");
+  const workflowPanelOpen = Boolean(workflowPanel && (workflowPanel.kind !== "code" || codeWorkbenchOpen));
+  const filterSessionsByPosture = useMemo(
+    () => (items: Array<ChatSessionRecord & { projectName?: string | null }>) =>
+      postureFilter === "all" ? items : items.filter((item) => (item.mode ?? "chat") === postureFilter),
+    [postureFilter],
+  );
   const missionSessionGroups = useMemo(
-    () => groupDelegatedSessionsForRail(input.sessionRail.missionSessions),
-    [input.sessionRail.missionSessions],
+    () => groupDelegatedSessionsForRail(filterSessionsByPosture(input.sessionRail.missionSessions)),
+    [filterSessionsByPosture, input.sessionRail.missionSessions],
   );
   const externalSessionGroups = useMemo(
-    () => groupDelegatedSessionsForRail(input.sessionRail.externalSessions),
-    [input.sessionRail.externalSessions],
+    () => groupDelegatedSessionsForRail(filterSessionsByPosture(input.sessionRail.externalSessions)),
+    [filterSessionsByPosture, input.sessionRail.externalSessions],
   );
+  const allSessionCount = input.sessionRail.missionSessions.length + input.sessionRail.externalSessions.length;
   const stageLayoutClass = [
     "mc-next-threaded-stage",
-    workflowPanel ? "has-workbench" : "",
+    `mode-${activeMode}`,
+    workflowPanelOpen ? "has-workbench" : "",
+    workflowPanelOpen && workflowPanel?.kind === "cowork" ? "has-cowork-panel" : "",
+    workflowPanelOpen && workflowPanel?.kind === "code" ? "has-code-panel" : "",
     dockOpen ? "has-context" : "",
   ]
     .filter(Boolean)
@@ -91,7 +103,7 @@ export function ThreadedSurfacePage({
   };
 
   return (
-    <div className="mc-next-threaded-surface" data-mode={surface}>
+    <div className="mc-next-threaded-surface unified" data-mode={surface} data-active-mode={activeMode}>
       <button
         type="button"
         className={`mc-next-threaded-scrim${railOpen ? " open" : ""}`}
@@ -103,9 +115,9 @@ export function ThreadedSurfacePage({
       <aside className={`mc-next-threaded-rail${railOpen ? " open" : ""}`}>
         <div className="mc-next-threaded-rail-head">
           <div>
-            <p>{modeMeta.label}</p>
+            <p>Sessions</p>
             <h2>{input.sessionRail.summaryTitle}</h2>
-            <span>{input.sessionRail.summaryCopy}</span>
+            <span>Chat, Cowork, and Code threads stay connected by project.</span>
           </div>
           <button
             type="button"
@@ -119,8 +131,8 @@ export function ThreadedSurfacePage({
 
         <div className="mc-next-threaded-rail-actions">
           <button type="button" className="mc-next-threaded-primary" onClick={input.sessionRail.onCreateSession}>
-            <SurfaceIcon size={16} />
-            <span>{surface === "chat" ? "New chat" : surface === "cowork" ? "New cowork run" : "New code run"}</span>
+            <MessageSquareText size={16} />
+            <span>New session</span>
           </button>
           <button
             type="button"
@@ -141,7 +153,19 @@ export function ThreadedSurfacePage({
           />
         </label>
 
-        <div className="mc-next-threaded-filters">
+        <div className="mc-next-threaded-filters posture">
+          <FilterChip active={postureFilter === "all"} onClick={() => setPostureFilter("all")}>
+            All {allSessionCount}
+          </FilterChip>
+          {(Object.keys(MODE_META) as ChatMode[]).map((mode) => (
+            <FilterChip key={mode} active={postureFilter === mode} onClick={() => setPostureFilter(mode)}>
+              <span className={`mc-next-threaded-mode-dot mode-${mode}`} />
+              {MODE_META[mode].label}
+            </FilterChip>
+          ))}
+        </div>
+
+        <div className="mc-next-threaded-filters secondary">
           <FilterChip
             active={input.sessionRail.historyView === "active"}
             onClick={() => input.sessionRail.onHistoryViewChange("active")}
@@ -270,6 +294,16 @@ export function ThreadedSurfacePage({
               <Menu size={16} />
               <span>Sessions</span>
             </button>
+            {workflowPanel?.kind === "code" ? (
+              <button
+                type="button"
+                className="mc-next-threaded-menu-button"
+                onClick={() => setCodeWorkbenchOpen((current) => !current)}
+              >
+                <Code2 size={16} />
+                <span>{codeWorkbenchOpen ? "Hide editor" : "Code editor"}</span>
+              </button>
+            ) : null}
             {activeProps ? (
               <button
                 type="button"
@@ -284,11 +318,15 @@ export function ThreadedSurfacePage({
 
           {activeProps ? (
             <ThreadConversationSurface
-              surface={surface}
+              surface={activeProps.mode}
               compactLayout={compactLayout}
               props={activeProps}
               dropTarget={input.dropTargetProps}
               onToggleDock={() => input.onDockOpenChange(!input.dockOpen)}
+              codeWorkbenchOpen={codeWorkbenchOpen}
+              onToggleCodeWorkbench={
+                workflowPanel?.kind === "code" ? () => setCodeWorkbenchOpen((current) => !current) : undefined
+              }
             />
           ) : (
             <ThreadEmptyState
@@ -300,15 +338,15 @@ export function ThreadedSurfacePage({
           )}
         </div>
 
-        {workflowPanel ? (
-          <aside className="mc-next-threaded-side-panel">
+        {workflowPanelOpen && workflowPanel ? (
+          <aside className={`mc-next-threaded-side-panel ${workflowPanel.kind}`}>
             <ThreadedWorkflowPanel panel={workflowPanel} />
           </aside>
         ) : null}
 
         {dockOpen && input.contextDockProps ? (
           <aside className="mc-next-threaded-context-panel">
-            <ThreadedContextDrawer surface={surface} props={input.contextDockProps} />
+            <ThreadedContextDrawer surface={activeMode} props={input.contextDockProps} />
           </aside>
         ) : null}
       </section>
@@ -322,12 +360,16 @@ function ThreadConversationSurface({
   props,
   dropTarget,
   onToggleDock,
+  codeWorkbenchOpen,
+  onToggleCodeWorkbench,
 }: {
   surface: ChatMode;
   compactLayout: boolean;
   props: MissionThreadedActiveSessionSurfaceProps;
   dropTarget: MissionThreadedDropTargetProps;
   onToggleDock: () => void;
+  codeWorkbenchOpen: boolean;
+  onToggleCodeWorkbench?: () => void;
 }) {
   const compactArtifactSheet = useMediaQuery("(max-width: 840px)");
   const actions = useMemo(() => {
@@ -398,11 +440,24 @@ function ThreadConversationSurface({
                 {action.label}
               </button>
             ))}
+            {onToggleCodeWorkbench ? (
+              <button type="button" className="mc-next-threaded-secondary" onClick={onToggleCodeWorkbench}>
+                {codeWorkbenchOpen ? "Hide editor" : "Code editor"}
+              </button>
+            ) : null}
             {props.onExportRunBundle ? (
               <button type="button" className="mc-next-threaded-secondary" onClick={props.onExportRunBundle}>
                 Export run bundle
               </button>
             ) : null}
+            <button
+              type="button"
+              className="mc-next-threaded-secondary"
+              disabled={props.sessionArchivePending}
+              onClick={props.onToggleArchiveSession}
+            >
+              {getArchiveActionLabel(props.sessionLifecycleStatus, props.sessionArchivePending)}
+            </button>
             <button type="button" className="mc-next-threaded-secondary" onClick={onToggleDock}>
               {props.dockOpen ? "Hide context" : "Show context"}
             </button>
@@ -435,6 +490,11 @@ function ThreadConversationSurface({
       ) : null}
     </div>
   );
+}
+
+function getArchiveActionLabel(lifecycleStatus: string, pending: boolean) {
+  if (pending) return lifecycleStatus === "archived" ? "Restoring..." : "Archiving...";
+  return lifecycleStatus === "archived" ? "Restore" : "Archive";
 }
 
 function ThreadEmptyState({
@@ -494,6 +554,7 @@ type SessionGroupItem = {
   updatedAt?: string;
   projectName?: string | null;
   channel?: string | null;
+  mode?: ChatMode | null;
   delegationParent?: ChatSessionRecord["delegationParent"];
 };
 
@@ -644,6 +705,7 @@ function SessionRow({
   nested?: boolean;
 }) {
   const label = item.title?.trim() || renderSessionLabel(item.sessionId);
+  const mode = item.mode ?? "chat";
   const delegatedLabel = item.delegationParent?.label?.trim() || item.delegationParent?.role?.trim();
   const meta = delegatedLabel
     ? `Delegated task · ${delegatedLabel}`
@@ -654,12 +716,13 @@ function SessionRow({
     <div className={`mc-next-threaded-session-row-shell${nested ? " nested" : ""}`}>
       <button
         type="button"
-        className={`mc-next-threaded-session-row${selectedSessionId === item.sessionId ? " active" : ""}`}
+        className={`mc-next-threaded-session-row mode-${mode}${selectedSessionId === item.sessionId ? " active" : ""}`}
         onClick={() => onSelectSession(item.sessionId)}
         title={label}
       >
         <div className="mc-next-threaded-session-row-main">
           <div className="mc-next-threaded-session-row-copy">
+            <span className={`mc-next-threaded-mode-label mode-${mode}`}>{MODE_META[mode].label}</span>
             <strong>{label}</strong>
             <span title={meta}>{meta}</span>
           </div>

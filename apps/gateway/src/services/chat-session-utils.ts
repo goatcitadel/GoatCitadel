@@ -137,6 +137,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
+    | "speedMode"
+    | "subagentPolicy"
     | "toolAutonomy"
     | "visionFallbackModel"
     | "orchestrationEnabled"
@@ -167,6 +169,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
+    | "speedMode"
+    | "subagentPolicy"
     | "toolAutonomy"
     | "visionFallbackModel"
     | "orchestrationEnabled"
@@ -186,6 +190,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,
+    speedMode: input.speedMode,
+    subagentPolicy: input.subagentPolicy,
     toolAutonomy: input.toolAutonomy,
     visionFallbackModel: input.visionFallbackModel,
     orchestrationEnabled: input.orchestrationEnabled,

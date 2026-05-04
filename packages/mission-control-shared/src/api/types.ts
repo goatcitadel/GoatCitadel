@@ -342,7 +342,8 @@ export interface AgentsResponse {
 export interface RuntimeSettingsResponse {
   environment: string;
   deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
-  defaultToolProfile: string;
+  toolApprovalMode: "approve_all" | "approve_risky" | "bypass";
+  defaultToolProfile?: string;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
   writeJailRoots: string[];

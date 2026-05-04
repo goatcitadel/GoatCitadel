@@ -5,6 +5,29 @@
   min-height: calc(100dvh - 8.5rem);
 }
 
+.mc-next-threaded-surface.unified {
+  --mc-mode-chat: var(--gc-area-chat, oklch(0.72 0.12 240));
+  --mc-mode-cowork: var(--gc-area-cowork, oklch(0.73 0.13 315));
+  --mc-mode-code: var(--gc-area-code, oklch(0.74 0.12 175));
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 0;
+  min-height: calc(100dvh - 58px);
+  border-top: 0;
+  background: var(--background);
+}
+
+.mc-next-threaded-surface.unified[data-mode="chat"] {
+  --mc-area-color: var(--mc-mode-chat);
+}
+
+.mc-next-threaded-surface.unified[data-mode="cowork"] {
+  --mc-area-color: var(--mc-mode-cowork);
+}
+
+.mc-next-threaded-surface.unified[data-mode="code"] {
+  --mc-area-color: var(--mc-mode-code);
+}
+
 .mc-next-threaded-scrim {
   display: none;
 }
@@ -53,11 +76,43 @@
   overflow: auto;
 }
 
+.mc-next-threaded-surface.unified .mc-next-threaded-rail {
+  gap: 0.42rem;
+  max-height: calc(100dvh - 58px);
+  padding: 8px 6px;
+  border-radius: 0;
+  border-width: 0 1px 0 0;
+  border-color: var(--mc-border-subtle);
+  background: var(--mc-surface-2);
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-rail-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.32rem;
+  padding: 0 4px;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-rail-actions .mc-next-threaded-primary {
+  justify-content: flex-start;
+  height: 26px;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-rail-actions .mc-next-threaded-secondary {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 0.34rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-rail-actions .mc-next-threaded-secondary span {
+  display: none;
+}
+
 .mc-next-threaded-rail-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.75rem;
+  display: none;
 }
 
 .mc-next-threaded-rail-head p,
@@ -80,6 +135,12 @@
   letter-spacing: -0.03em;
 }
 
+.mc-next-threaded-surface.unified .mc-next-threaded-header-copy h1 {
+  font-size: 1.12rem;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
 .mc-next-threaded-rail-head span,
 .mc-next-threaded-header-copy span,
 .mc-next-threaded-empty p,
@@ -87,6 +148,13 @@
   color: var(--text-secondary);
   font-size: 0.95rem;
   line-height: 1.55;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-header-copy span {
+  display: block;
+  max-width: 36rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
 }
 
 .mc-next-threaded-menu-button,
@@ -98,15 +166,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: 0.28rem;
   min-width: 0;
   max-width: 100%;
-  min-height: 2.35rem;
-  padding: 0.45rem 0.85rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  min-height: 1.42rem;
+  padding: 0.14rem 0.36rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--mc-border-subtle);
+  background: transparent;
   color: var(--foreground);
+  font-size: 0.64rem;
   line-height: 1.18;
   text-align: center;
   white-space: normal;
@@ -123,8 +192,11 @@
 }
 
 .mc-next-threaded-primary {
-  background: color-mix(in oklab, var(--mc-area-color) 17%, var(--card));
-  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border));
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  border-radius: 0.34rem;
+  font-weight: 700;
 }
 
 .mc-next-threaded-secondary.active,
@@ -140,19 +212,65 @@
 .mc-next-threaded-folder-row,
 .mc-next-threaded-empty-actions {
   display: flex;
-  gap: 0.55rem;
+  gap: 0.34rem;
   flex-wrap: wrap;
+}
+
+.mc-next-threaded-filters.posture {
+  display: flex;
+  gap: 4px;
+  padding: 0 6px 4px;
+  flex-wrap: wrap;
+}
+
+.mc-next-threaded-filters.posture .mc-next-threaded-filter {
+  min-height: 1.7rem;
+  padding: 0.2rem 0.48rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.mc-next-threaded-filters.secondary .mc-next-threaded-filter {
+  min-height: 1.65rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+}
+
+.mc-next-threaded-filters.secondary,
+.mc-next-threaded-folder-row {
+  padding: 0 6px;
+}
+
+.mc-next-threaded-mode-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: var(--mc-mode-chat);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-mode-chat) 16%, transparent);
+}
+
+.mc-next-threaded-mode-dot.mode-cowork {
+  background: var(--mc-mode-cowork);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-mode-cowork) 16%, transparent);
+}
+
+.mc-next-threaded-mode-dot.mode-code {
+  background: var(--mc-mode-code);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-mode-code) 16%, transparent);
 }
 
 .mc-next-threaded-search {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0 0.85rem;
-  min-height: 2.75rem;
-  border-radius: 1rem;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  gap: 0.4rem;
+  padding: 0 0.48rem;
+  min-height: 26px;
+  margin: 0 4px;
+  border-radius: 0.34rem;
+  border: 1px solid var(--mc-border-subtle);
+  background: var(--mc-surface-1);
 }
 
 .mc-next-threaded-search input,
@@ -162,6 +280,7 @@
   background: transparent;
   color: var(--foreground);
   outline: none;
+  font-size: 0.68rem;
 }
 
 .mc-next-threaded-project-card {
@@ -203,9 +322,19 @@
   gap: 0.75rem;
 }
 
+.mc-next-threaded-group-head span {
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+}
+
+.mc-next-threaded-group-head h3 {
+  display: none;
+}
+
 .mc-next-threaded-session-list {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.24rem;
 }
 
 .mc-next-threaded-session-tree-node {
@@ -238,20 +367,50 @@
 
 .mc-next-threaded-session-row {
   appearance: none;
+  --mc-session-mode-color: var(--mc-mode-chat);
+  position: relative;
   display: grid;
-  gap: 0.35rem;
+  gap: 0.18rem;
   width: 100%;
   min-width: 0;
-  min-height: 5.15rem;
-  padding: 0.75rem 0.82rem;
-  border-radius: 1rem;
-  border: 1px solid var(--border-subtle);
-  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  min-height: 3.05rem;
+  padding: 0.34rem 0.45rem 0.34rem 0.72rem;
+  border-radius: 0.34rem;
+  border: 1px solid transparent;
+  background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
   overflow: hidden;
   justify-items: stretch;
+}
+
+.mc-next-threaded-session-row::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--mc-session-mode-color);
+}
+
+.mc-next-threaded-session-row:hover {
+  background: var(--mc-surface-1);
+}
+
+.mc-next-threaded-session-row.mode-cowork {
+  --mc-session-mode-color: var(--mc-mode-cowork);
+}
+
+.mc-next-threaded-session-row.mode-code {
+  --mc-session-mode-color: var(--mc-mode-code);
+}
+
+.mc-next-threaded-session-row.active {
+  background: var(--mc-surface-1);
+  border-color: var(--mc-border-subtle);
 }
 
 .mc-next-threaded-session-toggle {
@@ -314,7 +473,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 0.6rem;
+  gap: 0.38rem;
   min-width: 0;
 }
 
@@ -333,8 +492,33 @@
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: 0.9rem;
-  line-height: 1.3;
+  font-size: 0.7rem;
+  line-height: 1.22;
+}
+
+.mc-next-threaded-mode-label {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 0.12rem;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in oklab, var(--mc-mode-chat) 74%, var(--foreground));
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-mode-label.mode-cowork {
+  background: transparent;
+  color: color-mix(in oklab, var(--mc-mode-cowork) 74%, var(--foreground));
+}
+
+.mc-next-threaded-mode-label.mode-code {
+  background: transparent;
+  color: color-mix(in oklab, var(--mc-mode-code) 74%, var(--foreground));
 }
 
 .mc-next-threaded-session-row span {
@@ -344,21 +528,38 @@
   text-overflow: ellipsis;
   white-space: normal;
   overflow-wrap: anywhere;
-  font-size: 0.8rem;
+  font-size: 0.66rem;
   line-height: 1.24;
   color: var(--text-secondary);
+}
+
+.mc-next-threaded-session-row .mc-next-threaded-mode-label {
+  display: inline-flex;
+  width: fit-content;
+  color: color-mix(in oklab, var(--mc-mode-chat) 74%, var(--foreground));
+  font-size: 0.56rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.mc-next-threaded-session-row .mc-next-threaded-mode-label.mode-cowork {
+  color: color-mix(in oklab, var(--mc-mode-cowork) 74%, var(--foreground));
+}
+
+.mc-next-threaded-session-row .mc-next-threaded-mode-label.mode-code {
+  color: color-mix(in oklab, var(--mc-mode-code) 74%, var(--foreground));
 }
 
 .mc-next-threaded-session-time {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  min-height: 1.45rem;
-  padding: 0 0.45rem;
+  min-height: 1rem;
+  padding: 0;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--mc-area-color) 10%, transparent);
+  background: transparent;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -370,22 +571,67 @@
   gap: 1rem;
 }
 
+.mc-next-threaded-surface.unified .mc-next-threaded-stage {
+  padding: 0;
+  background: var(--background);
+}
+
 .mc-next-threaded-stage.has-workbench {
   grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.95fr);
+}
+
+.mc-next-threaded-stage.has-cowork-panel {
+  grid-template-columns: minmax(28rem, 0.92fr) minmax(24rem, 1.08fr);
+}
+
+.mc-next-threaded-stage.has-code-panel {
+  grid-template-columns: minmax(27rem, 0.78fr) minmax(34rem, 1.22fr);
 }
 
 .mc-next-threaded-stage.has-context {
   grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.88fr);
 }
 
+.mc-next-threaded-stage.mode-chat {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mc-next-threaded-stage.mode-chat.has-context {
+  grid-template-columns: minmax(34rem, 1fr) minmax(18rem, 0.34fr);
+}
+
 .mc-next-threaded-stage.has-workbench.has-context {
   grid-template-columns: minmax(0, 1.3fr) minmax(20rem, 0.9fr) minmax(18rem, 0.72fr);
+}
+
+.mc-next-threaded-stage.has-cowork-panel.has-context {
+  grid-template-columns: minmax(25rem, 0.82fr) minmax(22rem, 0.96fr) minmax(17rem, 0.62fr);
+}
+
+.mc-next-threaded-stage.has-code-panel.has-context {
+  grid-template-columns: minmax(24rem, 0.72fr) minmax(31rem, 1.08fr) minmax(17rem, 0.58fr);
 }
 
 .mc-next-threaded-primary-column {
   min-width: 0;
   display: grid;
   gap: 0.9rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-primary-column {
+  max-width: min(100%, 980px);
+  width: 100%;
+  margin-inline: auto;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context .mc-next-threaded-primary-column {
+  max-width: none;
+  margin-inline: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench .mc-next-threaded-primary-column {
+  max-width: none;
+  margin-inline: 0;
 }
 
 .mc-next-threaded-mobile-bar {
@@ -398,6 +644,27 @@
   padding: 1rem 1.1rem;
 }
 
+.mc-next-threaded-surface.unified .mc-next-threaded-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.55rem;
+  padding: 14px 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--mc-border-subtle);
+  border-radius: 0;
+  background: transparent;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-header-meta {
+  grid-column: 1 / -1;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-items: end;
+}
+
 .mc-next-threaded-header-meta,
 .mc-next-threaded-model-picker {
   min-width: 0;
@@ -406,19 +673,19 @@
 .mc-next-threaded-chip-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.28rem;
 }
 
 .mc-next-threaded-header-actions {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.45rem;
   justify-items: start;
 }
 
 .mc-next-threaded-model-picker .chat-model-picker {
   display: grid;
-  gap: 0.55rem;
-  grid-template-columns: minmax(9.75rem, 11.5rem) minmax(12.5rem, 16rem);
+  gap: 0.28rem;
+  grid-template-columns: minmax(6.2rem, 7.4rem) minmax(7.8rem, 9.2rem);
   justify-content: start;
   align-items: start;
 }
@@ -427,6 +694,10 @@
 .mc-next-threaded-model-picker .gc-combobox-trigger {
   width: 100%;
   min-width: 0;
+  min-height: 1.65rem;
+  padding: 0.12rem 0.42rem;
+  border-radius: 0.34rem;
+  font-size: 0.66rem;
 }
 
 .mc-next-threaded-model-picker .gc-combobox-trigger > span {
@@ -437,25 +708,70 @@
 }
 
 .mc-next-threaded-model-picker .chat-model-picker-note {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.45;
-  max-width: 28rem;
+  display: none;
 }
 
 .mc-next-threaded-conversation {
   display: grid;
-  gap: 0.9rem;
+  gap: 0;
 }
 
 .mc-next-threaded-thread-card,
 .mc-next-threaded-composer-card,
 .mc-next-threaded-side-panel,
 .mc-next-threaded-context-panel {
+  position: relative;
   min-width: 0;
   padding: 0.9rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-header,
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card,
+.mc-next-threaded-surface.unified .mc-next-threaded-composer-card,
+.mc-next-threaded-surface.unified .mc-next-threaded-side-panel,
+.mc-next-threaded-surface.unified .mc-next-threaded-context-panel,
+.mc-next-threaded-surface.unified .mc-next-threaded-empty {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
+  min-height: 20rem;
+  padding: 22px 0;
+  border: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  padding: 16px 0;
+  border: 0;
+  background: linear-gradient(to top, var(--background) 72%, transparent);
+}
+
+.mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card {
+  opacity: 0.58;
+  filter: saturate(0.72);
+}
+
+.mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card::after {
+  content: "Resolve the inline blocker above to continue.";
+  position: absolute;
+  inset: 0.55rem;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 32%, var(--border));
+  background: color-mix(in oklab, var(--card) 76%, transparent);
+  color: var(--foreground);
+  font-size: 0.92rem;
+  font-weight: 700;
+  text-align: center;
+  backdrop-filter: blur(7px);
 }
 
 .mc-next-threaded-side-panel,
@@ -463,8 +779,40 @@
   align-self: start;
   position: sticky;
   top: 0;
-  max-height: calc(100dvh - 8.75rem);
+  max-height: calc(100dvh - 58px);
   overflow: auto;
+}
+
+.mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
+  height: calc(100dvh - 58px);
+  padding: 0.65rem;
+  border-left: 1px solid var(--mc-border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
+}
+
+.mc-next-threaded-stage.mode-chat .mc-next-context-drawer {
+  gap: 0.55rem;
+}
+
+.mc-next-threaded-stage.mode-chat .mc-next-context-card {
+  padding: 0.72rem;
+  border-radius: 0.48rem;
+}
+
+.mc-next-threaded-side-panel.cowork,
+.mc-next-threaded-side-panel.code {
+  height: calc(100dvh - 58px);
+  padding: 0.7rem;
+  border-left: 1px solid var(--mc-border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, var(--background));
+}
+
+.mc-next-threaded-side-panel.cowork {
+  --mc-area-color: var(--mc-mode-cowork);
+}
+
+.mc-next-threaded-side-panel.code {
+  --mc-area-color: var(--mc-mode-code);
 }
 
 .mc-next-threaded-panel-fallback {
@@ -481,6 +829,15 @@
   display: grid;
   gap: 0.85rem;
   min-width: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer {
+  gap: 0.42rem;
+  padding: 0.48rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: 0.46rem;
+  background: var(--mc-surface-1);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.2);
 }
 
 .mc-next-code-source-picker,
@@ -523,6 +880,8 @@
 .mc-next-thread-scroll {
   max-height: min(58dvh, 44rem);
   overflow: auto;
+  scroll-behavior: smooth;
+  overflow-anchor: none;
 }
 
 .mc-next-thread-view,
@@ -533,21 +892,135 @@
 
 .mc-next-thread-list {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.56rem;
+}
+
+.mc-next-thread-blocking-prompt {
+  scroll-margin-block: 1rem;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-card {
+  display: grid;
+  gap: 0.72rem;
+  padding: 0.95rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--card));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 12%, transparent);
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-header,
+.mc-next-thread-blocking-prompt .chat-approval-actions,
+.mc-next-thread-blocking-prompt .chat-user-input-option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.34rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-header {
+  justify-content: space-between;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-title,
+.mc-next-thread-blocking-prompt .chat-approval-reason,
+.mc-next-thread-blocking-prompt .chat-approval-tool,
+.mc-next-thread-blocking-prompt .chat-approval-id,
+.mc-next-thread-blocking-prompt .chat-user-input-option-description {
+  margin: 0;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-title,
+.mc-next-thread-blocking-prompt .chat-approval-tool {
+  color: var(--foreground);
+  font-weight: 750;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-countdown {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 1.75rem;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+  font-size: 0.76rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-countdown.is-expired,
+.mc-next-thread-blocking-prompt .chat-approval-countdown.is-low-time {
+  background: color-mix(in oklab, var(--gc-risk-danger) 14%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--foreground));
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-reason,
+.mc-next-thread-blocking-prompt .chat-approval-id,
+.mc-next-thread-blocking-prompt .chat-user-input-option-description {
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-actions {
+  align-items: stretch;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-confirm,
+.mc-next-thread-blocking-prompt .chat-user-input-card,
+.mc-next-thread-blocking-prompt .chat-user-input-options,
+.mc-next-thread-blocking-prompt .chat-user-input-option-copy {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mc-next-thread-blocking-prompt .chat-user-input-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
+}
+
+.mc-next-thread-blocking-prompt .chat-user-input-input,
+.mc-next-thread-blocking-prompt .chat-user-input-textarea {
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.72rem 0.8rem;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
+  color: var(--foreground);
+}
+
+.mc-next-thread-blocking-prompt .chat-user-input-textarea {
+  resize: vertical;
 }
 
 .mc-next-thread-turn {
+  position: relative;
   display: grid;
-  gap: 0.7rem;
-  padding: 0.9rem;
-  border-radius: 1rem;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  gap: 0.45rem;
+  padding: 0.15rem 0 0.7rem;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
 }
 
-.mc-next-thread-turn.selected {
-  border-color: color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
-  background: color-mix(in oklab, var(--mc-area-color) 8%, var(--card));
+.mc-next-thread-turn.selected::before {
+  content: "";
+  position: absolute;
+  left: -0.7rem;
+  top: 0.35rem;
+  bottom: 0.9rem;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-area-color) 62%, var(--foreground));
+  opacity: 0.72;
 }
 
 .mc-next-thread-turn.delegation.compact {
@@ -614,14 +1087,24 @@
 }
 
 .mc-next-thread-bubble {
-  padding: 0.9rem 1rem;
-  border-radius: 1rem;
-  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
-  background: color-mix(in oklab, var(--card) 96%, transparent);
+  padding: 0.74rem 0.8rem;
+  border-radius: 0.48rem;
+  border: 1px solid transparent;
+  background: transparent;
 }
 
 .mc-next-thread-bubble.user {
-  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--card));
+  border-color: color-mix(in oklab, var(--mc-area-color) 18%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 7%, var(--mc-surface-1));
+}
+
+.mc-next-thread-bubble.assistant {
+  background: color-mix(in oklab, var(--mc-surface-1) 70%, transparent);
+}
+
+.mc-next-threaded-surface.unified .mc-next-thread-bubble.user,
+.mc-next-threaded-surface.unified .mc-next-thread-bubble.assistant {
+  border-radius: 0.5rem;
 }
 
 .mc-assistant-renderer-shell,
@@ -632,8 +1115,8 @@
 
 .mc-assistant-renderer-shell {
   display: grid;
-  gap: 0.55rem;
-  justify-items: start;
+  gap: 0.34rem;
+  justify-items: stretch;
 }
 
 .mc-assistant-renderer-body {
@@ -664,15 +1147,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  max-width: 100%;
-  min-height: 2.05rem;
-  padding: 0.34rem 0.62rem;
-  border-radius: 0.75rem;
+  justify-self: end;
+  gap: 0;
+  width: 1.55rem;
+  max-width: 1.55rem;
+  min-height: 1.55rem;
+  padding: 0;
+  border-radius: 0.34rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
-  font-size: 0.82rem;
+  font-size: 0.68rem;
   font-weight: 650;
   line-height: 1.15;
   white-space: normal;
@@ -689,12 +1174,12 @@
   color: color-mix(in oklab, var(--gc-risk-safe) 72%, var(--foreground));
 }
 
-.chat-v11-attachment-preview-stack {
+.mc-next-thread-bubble > div:has(> article) {
   display: grid;
   gap: 0.55rem;
 }
 
-.chat-v11-attachment-preview-card {
+.mc-next-thread-bubble article {
   display: grid;
   gap: 0.45rem;
   padding: 0.72rem 0.8rem;
@@ -703,7 +1188,7 @@
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
-.chat-v11-attachment-preview-head {
+.mc-next-thread-bubble article > div:first-child {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -711,38 +1196,35 @@
   flex-wrap: wrap;
 }
 
-.chat-v11-attachment-preview-head strong {
+.mc-next-thread-bubble article > div:first-child strong {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.chat-v11-attachment-preview-head span,
-.chat-v11-attachment-preview-meta,
-.chat-v11-attachment-preview-label,
-.chat-v11-attachment-preview-copy.muted,
-.chat-v11-attachment-action-status,
+.mc-next-thread-bubble article > div:first-child span,
+.mc-next-thread-bubble article > p:first-of-type,
+.mc-next-thread-bubble article > p:last-child,
+.mc-next-thread-bubble article [aria-live],
 .mc-next-composer-attachment-action-status {
   color: var(--text-secondary);
   font-size: 0.82rem;
 }
 
-.chat-v11-attachment-preview-meta,
-.chat-v11-attachment-preview-label,
-.chat-v11-attachment-preview-copy {
+.mc-next-thread-bubble article > p {
   margin: 0;
 }
 
-.chat-v11-attachment-preview-label {
+.mc-next-thread-bubble article > p:nth-of-type(2) {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.chat-v11-attachment-preview-copy {
+.mc-next-thread-bubble article > p:last-child {
   line-height: 1.55;
 }
 
-.chat-v11-attachment-preview-actions,
+.mc-next-thread-bubble article > div:has(> button),
 .mc-next-composer-attachment-actions {
   display: flex;
   gap: 0.45rem;
@@ -750,7 +1232,7 @@
   align-items: center;
 }
 
-.chat-v11-attachment-preview-action {
+.mc-next-thread-bubble article > div > button {
   appearance: none;
   min-height: 2rem;
   padding: 0 0.72rem;
@@ -800,7 +1282,8 @@
 .mc-next-composer-controls,
 .mc-next-composer-controls-start,
 .mc-next-composer-controls-end,
-.mc-next-composer-multimodal-row {
+.mc-next-composer-multimodal-row,
+.chat-plus-menu {
   display: flex;
   gap: 0.55rem;
   flex-wrap: wrap;
@@ -826,7 +1309,9 @@
 .mc-next-panel-button,
 .mc-next-panel-tab,
 .mc-next-command-item,
+.mc-next-composer-inline-select,
 .mc-next-composer-inline-button,
+.mc-next-composer-icon-button,
 .mc-next-composer-primary {
   appearance: none;
   display: inline-flex;
@@ -834,12 +1319,12 @@
   justify-content: center;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  border: 1px solid var(--mc-border-subtle);
+  background: transparent;
   color: var(--foreground);
-  border-radius: 0.9rem;
-  min-height: 2.2rem;
-  padding: 0.42rem 0.8rem;
+  border-radius: 0.3rem;
+  min-height: 1.45rem;
+  padding: 0.14rem 0.36rem;
   line-height: 1.18;
   text-align: center;
   white-space: normal;
@@ -847,16 +1332,111 @@
   cursor: pointer;
 }
 
+.mc-next-composer-inline-select {
+  max-width: 12rem;
+  background: var(--card);
+}
+
+.mc-next-threaded-surface.unified .mc-next-thread-inline-button,
+.mc-next-threaded-surface.unified .mc-next-panel-button {
+  min-height: 1.42rem;
+  padding: 0.12rem 0.36rem;
+  border-radius: 0.3rem;
+  font-size: 0.64rem;
+}
+
 .mc-next-panel-button.primary,
 .mc-next-composer-primary,
 .mc-next-panel-tab.active,
 .mc-next-command-item.active {
-  background: color-mix(in oklab, var(--mc-area-color) 14%, var(--card));
-  border-color: color-mix(in oklab, var(--mc-area-color) 30%, var(--border));
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .mc-next-composer-inline-button {
-  min-height: 2.65rem;
+  min-height: 1.45rem;
+}
+
+.mc-next-composer-icon-button,
+.chat-plus-trigger {
+  width: 1.55rem;
+  min-width: 1.55rem;
+  padding-inline: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-controls {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.38rem;
+  align-items: end;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-helper {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-primary {
+  min-width: 3.1rem;
+  min-height: 1.55rem;
+  border-radius: 0.34rem;
+  font-weight: 700;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-chip {
+  min-height: 1.05rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--mc-font-mono);
+  font-size: 0.6rem;
+}
+
+.chat-plus-popover {
+  z-index: 80;
+  display: grid;
+  gap: 0.28rem;
+  width: min(280px, calc(100vw - 1rem));
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--card) 98%, var(--background));
+  box-shadow:
+    0 20px 45px rgba(15, 23, 42, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.chat-plus-action {
+  justify-content: flex-start;
+  min-height: 1.65rem;
+  width: 100%;
+  font-size: 0.66rem;
+}
+
+.chat-plus-action.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 36%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 13%, var(--card));
+}
+
+.chat-plus-custom,
+.mc-next-composer-plus-section {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.mc-next-composer-plus-section {
+  padding-top: 0.35rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+}
+
+.mc-next-composer-plus-section label {
+  color: var(--text-secondary);
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .mc-next-panel-button.danger {
@@ -922,6 +1502,24 @@
   align-items: flex-start;
 }
 
+.mc-next-threaded-surface.unified .mc-next-composer-head {
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-title h3 {
+  display: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-kicker {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .mc-next-composer-head h3,
 .mc-next-context-card h4,
 .mc-next-cowork-head h4,
@@ -938,17 +1536,42 @@
 .mc-next-composer-knowledge-url-row select,
 .mc-next-composer-preset-row select {
   width: 100%;
-  min-height: 2.7rem;
-  border-radius: 0.95rem;
+  min-height: 2rem;
+  border-radius: 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
   color: var(--foreground);
-  padding: 0.75rem 0.85rem;
+  padding: 0.42rem 0.5rem;
+  font-size: 0.7rem;
 }
 
 .mc-next-composer-input-shell textarea {
-  min-height: 8.75rem;
+  min-height: 5.5rem;
   resize: vertical;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea {
+  min-height: 3rem;
+  padding: 0.25rem 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  resize: none;
+  outline: none;
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus,
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer:focus-within {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--mc-border-subtle));
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.2),
+    inset 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 18%, transparent);
 }
 
 .mc-next-command-popover,
@@ -1028,7 +1651,7 @@
 .mc-next-composer-knowledge-url-row,
 .mc-next-composer-preset-row {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.32rem;
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
@@ -1106,6 +1729,33 @@
   grid-template-columns: minmax(14rem, 0.7fr) minmax(0, 1.2fr);
 }
 
+.mc-next-threaded-side-panel.code .mc-next-workbench-panel,
+.mc-next-threaded-side-panel.code .mc-next-workbench-body,
+.mc-next-threaded-side-panel.code .mc-next-workbench-main,
+.mc-next-threaded-side-panel.code .mc-next-workbench-pane {
+  min-height: 0;
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-panel {
+  height: 100%;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-body {
+  grid-template-columns: minmax(13rem, 0.58fr) minmax(0, 1.42fr);
+  overflow: hidden;
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-sidebar,
+.mc-next-threaded-side-panel.code .mc-next-workbench-main,
+.mc-next-threaded-side-panel.code .mc-next-workbench-pane {
+  overflow: auto;
+}
+
+.mc-next-threaded-side-panel.cowork .mc-next-cowork-panel {
+  align-content: start;
+}
+
 .mc-next-workbench-sidebar,
 .mc-next-workbench-main {
   display: grid;
@@ -1147,8 +1797,18 @@
   }
 
   .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-stage.mode-chat,
+  .mc-next-threaded-stage.has-cowork-panel,
+  .mc-next-threaded-stage.has-code-panel,
   .mc-next-threaded-stage.has-context {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-side-panel.cowork,
+  .mc-next-threaded-side-panel.code {
+    height: auto;
+    border-left: 0;
+    border-top: 1px solid var(--mc-border-subtle);
   }
 }
 
@@ -1191,6 +1851,9 @@
 
   .mc-next-threaded-stage,
   .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-stage.mode-chat,
+  .mc-next-threaded-stage.has-cowork-panel,
+  .mc-next-threaded-stage.has-code-panel,
   .mc-next-threaded-stage.has-context,
   .mc-next-threaded-stage.has-workbench.has-context {
     grid-template-columns: minmax(0, 1fr);
@@ -1200,6 +1863,17 @@
   .mc-next-threaded-context-panel {
     position: static;
     max-height: none;
+  }
+
+  .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
+    height: auto;
+    border-left: 0;
+    border-top: 1px solid var(--mc-border-subtle);
+  }
+
+  .mc-next-threaded-side-panel.cowork,
+  .mc-next-threaded-side-panel.code {
+    height: auto;
   }
 
   .mc-next-threaded-menu-button span {
@@ -1240,6 +1914,50 @@
     grid-template-columns: 1fr;
   }
 
+  .mc-next-composer-banner,
+  .mc-next-composer-head,
+  .mc-next-panel-list-head,
+  .mc-next-thread-blocking-prompt .chat-approval-header {
+    align-items: stretch;
+  }
+
+  .mc-next-composer-banner {
+    flex-direction: column;
+  }
+
+  .mc-next-composer-chip-row,
+  .mc-next-composer-action-row,
+  .mc-next-composer-controls,
+  .mc-next-composer-controls-start,
+  .mc-next-composer-controls-end {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .mc-next-composer-chip-row > span,
+  .mc-next-thread-blocking-prompt .chat-approval-countdown,
+  .mc-next-thread-inline-button,
+  .mc-next-panel-button,
+  .mc-next-composer-inline-button,
+  .mc-next-composer-primary {
+    width: 100%;
+    justify-content: center;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: none;
+  }
+
+  .mc-next-composer-controls-start {
+    grid-template-columns: repeat(3, minmax(0, auto));
+    justify-content: start;
+  }
+
+  .mc-next-composer-controls-end {
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  }
+
   .mc-next-composer-attachment {
     flex-direction: column;
   }
@@ -1247,4 +1965,9 @@
   .mc-next-composer-attachment-actions {
     justify-content: flex-start;
   }
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-banner {
+  border-radius: 0.5rem;
+  background: var(--mc-surface-3);
 }

@@ -197,6 +197,7 @@ function AssistantMessageContainer({
 
   return (
     <div className="mc-assistant-renderer-shell">
+      <div className="mc-assistant-renderer-body">{children}</div>
       {role === "assistant" ? (
         <button
           type="button"
@@ -206,10 +207,8 @@ function AssistantMessageContainer({
           title={copied ? "Copied" : "Copy"}
         >
           {copied ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2.2} />}
-          <span>{copied ? "Copied" : "Copy"}</span>
         </button>
       ) : null}
-      <div className="mc-assistant-renderer-body">{children}</div>
     </div>
   );
 }

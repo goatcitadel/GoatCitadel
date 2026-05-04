@@ -27,6 +27,8 @@ function buildPreflightRequest(input: {
         webMode: input.prefs.webMode,
         memoryMode: input.prefs.memoryMode,
         thinkingLevel: input.prefs.thinkingLevel,
+        speedMode: input.prefs.speedMode,
+        subagentPolicy: input.prefs.subagentPolicy,
       }
     : undefined;
   return {

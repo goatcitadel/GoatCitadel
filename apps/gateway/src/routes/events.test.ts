@@ -182,4 +182,38 @@ describe("events stream route", () => {
     expect(afterDisconnect.status).toBe(200);
     await afterDisconnect.body?.cancel();
   });
+
+  it("allows startup reconnect bursts above five active streams by default", async () => {
+    delete process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP;
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    let leaseIndex = 0;
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => [],
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => {
+        leaseIndex += 1;
+        return {
+          leaseId: `lease-burst-${leaseIndex}`,
+          clientId: `client-burst-${leaseIndex}`,
+          gatewayNodeId: "node-burst",
+        };
+      },
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        fetch(`${address}/api/v1/events/stream?clientId=client-burst-${index}&replay=1`),
+      ),
+    );
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200, 200, 200]);
+    await Promise.all(responses.map((response) => response.body?.cancel()));
+  });
 });

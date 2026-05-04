@@ -683,6 +683,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   },
   {
     version: 21,
+    name: "chat_operator_control_prefs",
+    sql: `
+      ALTER TABLE chat_session_prefs
+        ADD COLUMN IF NOT EXISTS speed_mode TEXT DEFAULT 'standard',
+        ADD COLUMN IF NOT EXISTS subagent_policy TEXT DEFAULT 'ask_when_useful';
+    `,
+  },
+  {
+    version: 22,
     name: "prompt_pack_agentic_diagnostics_repairs",
     sql: `
       ALTER TABLE prompt_pack_tests
@@ -697,7 +706,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 22,
+    version: 23,
     name: "prompt_pack_benchmark_item_unique_repairs",
     sql: `
       WITH ranked_benchmark_items AS (
@@ -723,7 +732,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 23,
+    version: 24,
     name: "pending_approval_action_expiry_and_trace_index_parity",
     sql: `
       ALTER TABLE pending_approval_actions
@@ -734,7 +743,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 24,
+    version: 25,
     name: "chat_delegation_step_current_shape_repairs",
     sql: `
       ALTER TABLE chat_delegation_steps

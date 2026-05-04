@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionLabel,
   groupDelegatedSessionsForRail,
+  resolveMissionControlMessageMode,
   resolveOptimisticChatPrefs,
   resolveSelectedTurnId,
   shouldApplyFetchedMessagesAfterStream,
@@ -283,5 +284,25 @@ describe("threaded-surface-core pure helpers", () => {
     expect(shouldShowLearnedMemoryPanel("chat", 0)).toBe(false);
     expect(shouldShowLearnedMemoryPanel("chat", 2)).toBe(true);
     expect(shouldShowLearnedMemoryPanel("code", 0)).toBe(true);
+  });
+
+  it("lets locked top-level surfaces override the previously selected session mode", () => {
+    expect(
+      resolveMissionControlMessageMode({
+        lockSurface: true,
+        surface: "cowork",
+        selectedSessionMode: "chat",
+        prefsMode: "chat",
+      }),
+    ).toBe("cowork");
+
+    expect(
+      resolveMissionControlMessageMode({
+        lockSurface: true,
+        surface: "code",
+        selectedSessionMode: "chat",
+        prefsMode: "chat",
+      }),
+    ).toBe("code");
   });
 });

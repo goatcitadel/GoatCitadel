@@ -615,9 +615,6 @@ function hasConnectionEnvValue(
 }
 
 function isHostAllowlisted(deps: IntegrationDiagnosticsPort, hostname: string): boolean {
-  if (deps.config.toolPolicy.tools.profile === "danger") {
-    return true;
-  }
   return connectionUrlHelpers.isHostAllowlistedInList(hostname, deps.config.toolPolicy.sandbox.networkAllowlist);
 }
 

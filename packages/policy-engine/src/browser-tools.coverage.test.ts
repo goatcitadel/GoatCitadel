@@ -714,12 +714,12 @@ describe("browser tools coverage sweep", () => {
     ).rejects.toThrow(/Unsupported browser\.interact step action/i);
   });
 
-  it("bypasses browser host allowlist enforcement under the danger profile", async () => {
+  it("keeps browser host allowlist enforcement in bypass approval mode", async () => {
     const baseConfig = createConfig(tempRoot);
     const config: ToolPolicyConfig = {
       ...baseConfig,
       tools: {
-        profile: "danger",
+        approvalMode: "bypass",
         allow: [],
         deny: [],
       },
@@ -729,13 +729,9 @@ describe("browser tools coverage sweep", () => {
       },
     };
 
-    const nav = await executeBrowserTool(
-      "browser.navigate",
-      { url: "https://apnews.com/oddities", maxChars: 400 },
-      config,
-    );
-
-    expect(nav.action).toBe("navigate");
+    await expect(
+      executeBrowserTool("browser.navigate", { url: "https://apnews.com/oddities", maxChars: 400 }, config),
+    ).rejects.toThrow(/allowlisted/i);
   });
 
   it("still blocks metadata hosts under the danger profile", async () => {
@@ -743,7 +739,7 @@ describe("browser tools coverage sweep", () => {
     const config: ToolPolicyConfig = {
       ...baseConfig,
       tools: {
-        profile: "danger",
+        approvalMode: "bypass",
         allow: [],
         deny: [],
       },

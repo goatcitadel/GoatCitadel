@@ -1,6 +1,9 @@
+// @vitest-environment happy-dom
 import React from "react";
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 
 function buildProps(overrides: Partial<any> = {}) {
@@ -116,6 +119,26 @@ function buildProps(overrides: Partial<any> = {}) {
 }
 
 describe("ThreadedTimeline", () => {
+  let container: HTMLDivElement | null = null;
+  let root: Root | null = null;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    if (root) {
+      await act(async () => {
+        root?.unmount();
+      });
+    }
+    container?.remove();
+    root = null;
+    container = null;
+  });
+
   it("folds Cowork subagent activity behind an expandable card", () => {
     const markup = renderToStaticMarkup(<ThreadedTimeline props={buildProps() as any} />);
 
@@ -125,5 +148,89 @@ describe("ThreadedTimeline", () => {
     expect(markup).toContain("Menu");
     expect(markup).toContain("Show subagent output");
     expect(markup).not.toContain("<details open");
+  });
+
+  it("renders pending approval as an inline blocker near the thread bottom", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedTimeline
+        props={
+          buildProps({
+            pendingApproval: {
+              approvalId: "approval-1",
+              kind: "tool_call",
+              toolName: "filesystem.write",
+              reason: "Needs permission to update a file.",
+            },
+          }) as any
+        }
+      />,
+    );
+
+    expect(markup).toContain("mc-next-thread-blocking-prompt");
+    expect(markup).toContain("Approval required");
+    expect(markup).toContain("Allow once");
+    expect(markup).toContain("Deny");
+    expect(markup).toContain("Open persisted approval record");
+  });
+
+  it("renders pending user input as an inline blocker with submit affordance", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedTimeline
+        props={
+          buildProps({
+            pendingUserInput: {
+              turnId: "turn-1",
+              promptId: "prompt-1",
+              kind: "text",
+              title: "Need a constraint",
+              question: "What budget should Cowork optimize for?",
+              placeholder: "Budget",
+              dismissible: false,
+            },
+          }) as any
+        }
+      />,
+    );
+
+    expect(markup).toContain("mc-next-thread-blocking-prompt");
+    expect(markup).toContain("Need a constraint");
+    expect(markup).toContain("Answer required");
+    expect(markup).toContain("Submit");
+    expect(markup).not.toContain("Dismiss");
+  });
+
+  it("marks the adjacent composer card inert while a blocker is active", async () => {
+    await act(async () => {
+      root?.render(
+        <div>
+          <div className="mc-next-threaded-thread-card">
+            <ThreadedTimeline
+              props={
+                buildProps({
+                  pendingUserInput: {
+                    turnId: "turn-1",
+                    promptId: "prompt-1",
+                    kind: "text",
+                    title: "Need a constraint",
+                    question: "What budget should Cowork optimize for?",
+                  },
+                }) as any
+              }
+            />
+          </div>
+          <div className="mc-next-threaded-composer-card">
+            <textarea aria-label="composer" />
+          </div>
+        </div>,
+      );
+      await Promise.resolve();
+    });
+
+    const composerCard = container?.querySelector(".mc-next-threaded-composer-card") as
+      | (HTMLElement & { inert?: boolean })
+      | null;
+    expect(composerCard?.getAttribute("aria-disabled")).toBe("true");
+    expect(composerCard?.dataset.blockedByInlinePrompt).toBe("true");
+    expect(composerCard?.inert).toBe(true);
   });
 });

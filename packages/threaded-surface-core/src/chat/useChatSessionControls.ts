@@ -253,15 +253,22 @@ export function useChatSessionControls(input: {
     if (!selectedSession) return;
     setSessionControlPending("archive");
     try {
-      if (selectedSession.lifecycleStatus === "archived") await restoreChatSession(selectedSession.sessionId);
+      const restoring = selectedSession.lifecycleStatus === "archived";
+      if (restoring) await restoreChatSession(selectedSession.sessionId);
       else await archiveChatSession(selectedSession.sessionId);
-      await loadSidebar();
+      const sessionLeavesView = (!restoring && historyView === "active") || (restoring && historyView === "archived");
+      if (sessionLeavesView) {
+        setQueuedOutbound((current) => current.filter((item) => item.sessionId !== selectedSession.sessionId));
+        setThread(null);
+        setSelectedSessionId((current) => (current === selectedSession.sessionId ? null : current));
+      }
+      await loadSidebar(historyView, { bypassCache: true });
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setSessionControlPending(null);
     }
-  }, [loadSidebar, selectedSession, setError]);
+  }, [historyView, loadSidebar, selectedSession, setError, setQueuedOutbound, setSelectedSessionId, setThread]);
 
   const handleDeleteSession = useCallback(
     (label: string) => {

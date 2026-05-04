@@ -71,6 +71,7 @@ describe("mission-control-next route model", () => {
       turnId: undefined,
       artifactId: undefined,
       approvalId: undefined,
+      projectId: undefined,
       theme: undefined,
     });
   });
@@ -85,6 +86,25 @@ describe("mission-control-next route model", () => {
     ).toBe("/chat?sessionId=session-9&turnId=turn-4");
   });
 
+  it("parses and builds project detail routes", () => {
+    expect(parseAppRoute("http://goatcitadel.local/projects/Project-ABC")).toEqual({
+      area: "projects",
+      section: undefined,
+      sessionId: undefined,
+      turnId: undefined,
+      artifactId: undefined,
+      approvalId: undefined,
+      projectId: "Project-ABC",
+      theme: undefined,
+      view: undefined,
+    });
+    expect(buildAppHref({ area: "projects", projectId: "Project-ABC" })).toBe("/projects/Project-ABC");
+  });
+
+  it("keeps malformed project path segments from crashing route parsing", () => {
+    expect(parseAppRoute("http://goatcitadel.local/projects/Project-%").projectId).toBe("Project-%");
+  });
+
   it("prefers legacy query parsing when old shell links are opened", () => {
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=memory")).toEqual({
       area: "library",
@@ -93,6 +113,7 @@ describe("mission-control-next route model", () => {
       turnId: undefined,
       artifactId: undefined,
       approvalId: undefined,
+      projectId: undefined,
       theme: undefined,
       view: undefined,
     });

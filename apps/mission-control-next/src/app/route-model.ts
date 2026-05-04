@@ -1,4 +1,4 @@
-export type PrimaryArea = "chat" | "cowork" | "code" | "library" | "ops" | "settings";
+export type PrimaryArea = "chat" | "cowork" | "code" | "projects" | "library" | "ops" | "settings";
 export type CoworkSection = "workspace" | "tasks" | "board";
 export type LibrarySection = "agents" | "skills" | "memory" | "knowledge" | "files" | "artifacts" | "prompt-packs";
 export type OpsSection =
@@ -6,6 +6,7 @@ export type OpsSection =
   | "sessions"
   | "schedules"
   | "improvement"
+  | "notifications"
   | "approvals"
   | "costs"
   | "runtime"
@@ -33,6 +34,7 @@ export interface AppRoute {
   turnId?: string;
   artifactId?: string;
   approvalId?: string;
+  projectId?: string;
   theme?: string;
 }
 
@@ -70,6 +72,12 @@ export const AREA_META: Record<PrimaryArea, AreaMeta> = {
     label: "Code",
     kicker: "Implementation",
     description: "Workbench, files, diffs, runs, and code-mode control.",
+  },
+  projects: {
+    id: "projects",
+    label: "Projects",
+    kicker: "Containers",
+    description: "Project containers with Chat, Cowork, and Code threads grouped together.",
   },
   library: {
     id: "library",
@@ -184,6 +192,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "prompt-packs",
     },
   ],
+  projects: [
+    {
+      id: "projects-list",
+      label: "Projects",
+      description: "Browse project containers and their cross-surface threads.",
+      area: "projects",
+    },
+  ],
   library: [
     {
       id: "library-agents",
@@ -263,6 +279,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Replay and improvement loops.",
       area: "ops",
       section: "improvement",
+    },
+    {
+      id: "ops-notifications",
+      label: "Notifications",
+      description: "Runtime issues, self-repair proposals, and operator follow-up.",
+      area: "ops",
+      section: "notifications",
     },
     {
       id: "ops-approvals",
@@ -381,6 +404,7 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
     turnId: route.turnId,
     artifactId: route.artifactId,
     approvalId: route.approvalId,
+    projectId: route.projectId,
     theme: route.theme,
     view: route.view,
   };
@@ -421,19 +445,24 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
 
 export function parseAppRoute(input: string | URL): AppRoute {
   const url = typeof input === "string" ? new URL(input, "http://goatcitadel.local") : input;
-  const parts = url.pathname
+  const rawParts = url.pathname
     .split("/")
-    .map((part) => part.trim().toLowerCase())
+    .map((part) => part.trim())
     .filter(Boolean);
+  const parts = rawParts.map((part) => part.toLowerCase());
   const params = url.searchParams;
   const area = (parts[0] as PrimaryArea | undefined) ?? "chat";
   const nextRoute: AppRoute = normalizeAppRoute({
     area: isPrimaryArea(area) ? area : "chat",
-    section: parts[1] as AppRoute["section"],
+    section: area === "projects" ? undefined : (parts[1] as AppRoute["section"]),
     sessionId: readParam(params, "sessionId"),
     turnId: readParam(params, "turnId"),
     artifactId: readParam(params, "artifactId"),
     approvalId: readParam(params, "approvalId"),
+    projectId:
+      area === "projects"
+        ? safeDecodePathSegment(rawParts[1]) || readParam(params, "projectId")
+        : readParam(params, "projectId"),
     theme: readParam(params, "theme"),
     view: readParam(params, "view"),
   });
@@ -447,15 +476,20 @@ export function buildAppHref(route: AppRoute): string {
   writeParam(params, "turnId", next.turnId);
   writeParam(params, "artifactId", next.artifactId);
   writeParam(params, "approvalId", next.approvalId);
+  if (next.area !== "projects") {
+    writeParam(params, "projectId", next.projectId);
+  }
   writeParam(params, "view", next.view);
   writeParam(params, "theme", next.theme);
 
   const path =
     next.area === "chat" || next.area === "code"
       ? `/${next.area}`
-      : next.area === "cowork" && (!next.section || next.section === "workspace")
-        ? "/cowork"
-        : `/${next.area}/${next.section ?? ""}`;
+      : next.area === "projects"
+        ? `/projects${next.projectId ? `/${encodeURIComponent(next.projectId)}` : ""}`
+        : next.area === "cowork" && (!next.section || next.section === "workspace")
+          ? "/cowork"
+          : `/${next.area}/${next.section ?? ""}`;
 
   const query = params.toString();
   return query ? `${path}?${query}` : path;
@@ -463,7 +497,7 @@ export function buildAppHref(route: AppRoute): string {
 
 export function getRouteLabel(route: AppRoute): string {
   const next = normalizeAppRoute(route);
-  if (next.area === "chat" || next.area === "code") {
+  if (next.area === "chat" || next.area === "code" || next.area === "projects") {
     return AREA_META[next.area].label;
   }
   if (next.area === "cowork") {
@@ -476,7 +510,7 @@ export function getRouteLabel(route: AppRoute): string {
 
 export function getRouteDescription(route: AppRoute): string {
   const next = normalizeAppRoute(route);
-  if (next.area === "chat" || next.area === "code") {
+  if (next.area === "chat" || next.area === "code" || next.area === "projects") {
     return AREA_META[next.area].description;
   }
   if (next.area === "cowork") {
@@ -503,6 +537,7 @@ export function buildNavigationTarget(current: AppRoute, item: RailItem): AppRou
     turnId: preserveThread ? current.turnId : undefined,
     artifactId: preserveThread ? current.artifactId : undefined,
     approvalId: preserveThread ? current.approvalId : undefined,
+    projectId: item.area === "projects" ? current.projectId : undefined,
     theme: current.theme,
     view:
       item.area === "library" && item.section === "agents" && current.area === "library" && current.view === "catalog"
@@ -527,6 +562,7 @@ function isPrimaryArea(value: string | undefined): value is PrimaryArea {
     value === "chat" ||
     value === "cowork" ||
     value === "code" ||
+    value === "projects" ||
     value === "library" ||
     value === "ops" ||
     value === "settings"
@@ -536,6 +572,17 @@ function isPrimaryArea(value: string | undefined): value is PrimaryArea {
 function readParam(params: URLSearchParams, key: string): string | undefined {
   const value = params.get(key)?.trim();
   return value ? value : undefined;
+}
+
+function safeDecodePathSegment(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function writeParam(params: URLSearchParams, key: string, value?: string): void {

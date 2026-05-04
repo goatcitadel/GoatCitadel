@@ -11,6 +11,8 @@ import type {
   ChatOrchestrationVisibility,
   ChatPlanningMode,
   ChatSessionPrefsRecord,
+  ChatSpeedMode,
+  ChatSubagentPolicy,
   ChatThinkingLevel,
   ChatWebMode,
 } from "@goatcitadel/contracts";
@@ -26,6 +28,8 @@ interface ChatSessionPrefsRow {
   web_mode: ChatWebMode;
   memory_mode: ChatMemoryMode;
   thinking_level: ChatThinkingLevel;
+  speed_mode: ChatSpeedMode | null;
+  subagent_policy: ChatSubagentPolicy | null;
   tool_autonomy: "safe_auto" | "manual";
   vision_fallback_model: string | null;
   orchestration_enabled: number;
@@ -49,6 +53,8 @@ export interface ChatSessionPrefsPatchInput {
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy?: "safe_auto" | "manual";
   visionFallbackModel?: string;
   orchestrationEnabled?: boolean;
@@ -70,6 +76,8 @@ const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "createdAt" | "u
   webMode: "auto",
   memoryMode: "auto",
   thinkingLevel: "standard",
+  speedMode: "standard",
+  subagentPolicy: "ask_when_useful",
   toolAutonomy: "safe_auto",
   visionFallbackModel: undefined,
   orchestrationEnabled: true,
@@ -90,13 +98,13 @@ export class ChatSessionPrefsRepository {
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_prefs (
         session_id, mode, planning_mode, provider_id, model, image_provider_id, image_model,
-        web_mode, memory_mode, thinking_level,
+        web_mode, memory_mode, thinking_level, speed_mode, subagent_policy,
         tool_autonomy, vision_fallback_model, orchestration_enabled, orchestration_intensity,
         orchestration_visibility, orchestration_provider_preference, orchestration_review_depth,
         orchestration_parallelism, code_auto_apply, created_at, updated_at
       ) VALUES (
         @sessionId, @mode, @planningMode, @providerId, @model, @imageProviderId, @imageModel,
-        @webMode, @memoryMode, @thinkingLevel,
+        @webMode, @memoryMode, @thinkingLevel, @speedMode, @subagentPolicy,
         @toolAutonomy, @visionFallbackModel, @orchestrationEnabled, @orchestrationIntensity,
         @orchestrationVisibility, @orchestrationProviderPreference, @orchestrationReviewDepth,
         @orchestrationParallelism, @codeAutoApply, @createdAt, @updatedAt
@@ -111,6 +119,8 @@ export class ChatSessionPrefsRepository {
         web_mode = excluded.web_mode,
         memory_mode = excluded.memory_mode,
         thinking_level = excluded.thinking_level,
+        speed_mode = excluded.speed_mode,
+        subagent_policy = excluded.subagent_policy,
         tool_autonomy = excluded.tool_autonomy,
         vision_fallback_model = excluded.vision_fallback_model,
         orchestration_enabled = excluded.orchestration_enabled,
@@ -145,6 +155,8 @@ export class ChatSessionPrefsRepository {
       webMode: DEFAULT_PREFS.webMode,
       memoryMode: DEFAULT_PREFS.memoryMode,
       thinkingLevel: DEFAULT_PREFS.thinkingLevel,
+      speedMode: DEFAULT_PREFS.speedMode,
+      subagentPolicy: DEFAULT_PREFS.subagentPolicy,
       toolAutonomy: DEFAULT_PREFS.toolAutonomy,
       visionFallbackModel: null,
       orchestrationEnabled: DEFAULT_PREFS.orchestrationEnabled ? 1 : 0,
@@ -192,6 +204,8 @@ export class ChatSessionPrefsRepository {
       webMode: input.webMode ?? current.webMode,
       memoryMode: input.memoryMode ?? current.memoryMode,
       thinkingLevel: input.thinkingLevel ?? current.thinkingLevel,
+      speedMode: input.speedMode ?? current.speedMode,
+      subagentPolicy: input.subagentPolicy ?? current.subagentPolicy,
       toolAutonomy: input.toolAutonomy ?? current.toolAutonomy,
       visionFallbackModel:
         input.visionFallbackModel !== undefined
@@ -238,6 +252,8 @@ function mapRow(row: ChatSessionPrefsRow): ChatSessionPrefsRecord {
     webMode: row.web_mode,
     memoryMode: row.memory_mode,
     thinkingLevel: row.thinking_level,
+    speedMode: row.speed_mode ?? "standard",
+    subagentPolicy: row.subagent_policy ?? "ask_when_useful",
     toolAutonomy: row.tool_autonomy,
     visionFallbackModel: row.vision_fallback_model ?? undefined,
     orchestrationEnabled: row.orchestration_enabled !== 0,
@@ -276,6 +292,10 @@ function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {
     typeof value.web_mode === "string" &&
     typeof value.memory_mode === "string" &&
     typeof value.thinking_level === "string" &&
+    (typeof value.speed_mode === "string" || value.speed_mode === null || value.speed_mode === undefined) &&
+    (typeof value.subagent_policy === "string" ||
+      value.subagent_policy === null ||
+      value.subagent_policy === undefined) &&
     typeof value.tool_autonomy === "string" &&
     (typeof value.vision_fallback_model === "string" || value.vision_fallback_model === null) &&
     typeof value.orchestration_enabled === "number" &&

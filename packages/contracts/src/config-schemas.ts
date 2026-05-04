@@ -45,7 +45,8 @@ export const ToolPolicyConfigSchema = z
     profiles: z.record(z.string(), z.array(z.string())).default({}),
     tools: z
       .object({
-        profile: z.string(),
+        approvalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
+        profile: z.string().optional(),
         allow: z.array(z.string()).default([]),
         deny: z.array(z.string()).default([]),
         loopDetection: ToolLoopDetectionConfigSchema.default({
@@ -74,7 +75,18 @@ export const ToolPolicyConfigSchema = z
       })
       .passthrough(),
   })
-  .passthrough();
+  .passthrough()
+  .transform((value) => {
+    const legacyProfile = value.tools.profile;
+    const approvalMode = value.tools.approvalMode ?? (legacyProfile === "danger" ? "bypass" : "approve_risky");
+    return {
+      ...value,
+      tools: {
+        ...value.tools,
+        approvalMode,
+      },
+    };
+  });
 
 export type ToolPolicyConfigInput = z.input<typeof ToolPolicyConfigSchema>;
 
@@ -235,6 +247,7 @@ export const AssistantConfigInputSchema = z
   .object({
     environment: z.string().optional(),
     deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
+    toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
     defaultToolProfile: z.string().optional(),
     dataDir: z.string().optional(),
     transcriptsDir: z.string().optional(),

@@ -837,7 +837,7 @@ export class GatewayService {
     this.orchestrationEngine = new OrchestrationEngine();
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
-      enforceNetworkAllowlist: config.toolPolicy.tools.profile !== "danger",
+      enforceNetworkAllowlist: true,
       secretStore,
     });
     this.assemblyService = new AssemblyService({
@@ -5454,7 +5454,7 @@ export class GatewayService {
   }
 
   private isNetworkAllowlistEnforced(): boolean {
-    return this.config.toolPolicy.tools.profile !== "danger";
+    return true;
   }
 
   private isHostAllowlistedInList(hostname: string, allowlist: string[]): boolean {
@@ -6846,6 +6846,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
+    | "speedMode"
+    | "subagentPolicy"
     | "toolAutonomy"
     | "visionFallbackModel"
     | "orchestrationEnabled"
@@ -6876,6 +6878,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     | "webMode"
     | "memoryMode"
     | "thinkingLevel"
+    | "speedMode"
+    | "subagentPolicy"
     | "toolAutonomy"
     | "visionFallbackModel"
     | "orchestrationEnabled"
@@ -6895,6 +6899,8 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
     webMode: input.webMode,
     memoryMode: input.memoryMode,
     thinkingLevel: input.thinkingLevel,
+    speedMode: input.speedMode,
+    subagentPolicy: input.subagentPolicy,
     toolAutonomy: input.toolAutonomy,
     visionFallbackModel: input.visionFallbackModel,
     orchestrationEnabled: input.orchestrationEnabled,

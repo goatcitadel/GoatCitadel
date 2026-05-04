@@ -1,12 +1,22 @@
 .mc-next-directory-page {
   display: grid;
-  gap: 1rem;
+  gap: 0.55rem;
+  max-width: min(100%, 920px);
+  width: 100%;
+  margin-inline: auto;
+  padding: 0.7rem 0.8rem 1rem;
 }
 
 .mc-next-shell[data-area="settings"] .mc-next-rail-menu,
 .mc-next-shell[data-area="library"] .mc-next-rail-menu,
 .mc-next-shell[data-area="ops"] .mc-next-rail-menu {
   gap: 1.15rem;
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-menu,
+.mc-next-shell[data-area="library"] .mc-next-rail-menu,
+.mc-next-shell[data-area="ops"] .mc-next-rail-menu {
+  gap: 0.55rem;
 }
 
 .mc-next-shell[data-area="settings"] .mc-next-rail-group,
@@ -22,6 +32,21 @@
   border-radius: 0.9rem;
 }
 
+.mc-next-shell[data-area="settings"] .mc-next-rail-link,
+.mc-next-shell[data-area="library"] .mc-next-rail-link,
+.mc-next-shell[data-area="ops"] .mc-next-rail-link {
+  gap: 0.45rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.42rem;
+}
+
+.mc-next-shell[data-area="settings"] .mc-next-rail-link strong,
+.mc-next-shell[data-area="library"] .mc-next-rail-link strong,
+.mc-next-shell[data-area="ops"] .mc-next-rail-link strong {
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
 .mc-next-shell[data-area="library"] .notification-stack,
 .mc-next-shell[data-area="ops"] .notification-stack,
 .mc-next-shell[data-area="settings"] .notification-stack {
@@ -32,18 +57,19 @@
 
 .mc-next-directory-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.18rem;
   align-items: start;
-  padding: 1rem 1.05rem;
-  border: 1px solid var(--border);
-  border-radius: 1.2rem;
-  background: color-mix(in oklab, var(--card) 96%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  padding: 0.55rem 0 0.45rem;
+  border: 0;
+  border-bottom: 1px solid var(--mc-border-subtle);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .mc-next-directory-icon {
-  display: inline-flex;
+  display: none;
   align-items: center;
   justify-content: center;
   width: 2.75rem;
@@ -55,7 +81,7 @@
 
 .mc-next-directory-copy {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.12rem;
   min-width: 0;
 }
 
@@ -71,7 +97,7 @@
 }
 
 .mc-next-directory-copy p {
-  font-size: 0.78rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -84,22 +110,22 @@
 }
 
 .mc-next-directory-copy h1 {
-  font-size: clamp(1.35rem, 2.1vw, 1.85rem);
+  font-size: clamp(1.02rem, 1.35vw, 1.22rem);
   line-height: 1.05;
 }
 
 .mc-next-directory-copy span {
-  font-size: 0.98rem;
-  line-height: 1.55;
+  font-size: 0.68rem;
+  line-height: 1.38;
 }
 
 .mc-next-directory-alert {
   display: inline-flex;
   align-items: flex-start;
-  gap: 0.65rem;
-  padding: 0.85rem 0.95rem;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 34%, var(--border));
-  border-radius: 1rem;
+  border-radius: 0.5rem;
   background: color-mix(in oklab, var(--gc-risk-caution) 10%, var(--card));
   color: var(--foreground);
 }
@@ -124,21 +150,21 @@
 
 .mc-next-directory-grid-native {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.55rem;
   align-items: start;
 }
 
 .mc-next-directory-card {
   display: grid;
-  gap: 1rem;
+  gap: 0.55rem;
   min-width: 0;
   align-self: start;
-  padding: 1rem 1.05rem;
+  padding: 0.62rem 0.68rem;
   border: 1px solid var(--border);
-  border-radius: 1.2rem;
+  border-radius: 0.5rem;
   background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  box-shadow: none;
 }
 
 .mc-next-directory-card-compact {
@@ -147,27 +173,37 @@
 
 .mc-next-directory-card-head {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.42rem;
+}
+
+.mc-next-directory-card-head h2 {
+  font-size: 0.82rem;
+  line-height: 1.18;
+}
+
+.mc-next-directory-card-head p {
+  font-size: 0.66rem;
+  line-height: 1.35;
 }
 
 .mc-next-directory-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 0.7rem;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 0.35rem;
 }
 
 .mc-next-directory-stats div {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.1rem;
   min-width: 0;
-  padding: 0.8rem 0.85rem;
+  padding: 0.4rem 0.45rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.42rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-directory-stats strong {
-  font-size: 1.12rem;
+  font-size: 0.78rem;
   line-height: 1;
 }
 
@@ -177,28 +213,28 @@
 .mc-next-directory-lane-meta span,
 .mc-next-directory-lane-status span {
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: 0.6rem;
 }
 
 .mc-next-directory-list {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.35rem;
 }
 
 .mc-next-directory-list-item {
   display: grid;
-  gap: 0.32rem;
+  gap: 0.2rem;
   min-width: 0;
-  padding: 0.85rem 0.9rem;
+  padding: 0.5rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
 }
 
 .mc-next-directory-list-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.7rem;
+  gap: 0.45rem;
   align-items: start;
   min-width: 0;
   white-space: normal;
@@ -207,7 +243,7 @@
 
 .mc-next-directory-list-head strong {
   min-width: 0;
-  font-size: 0.96rem;
+  font-size: 0.72rem;
   line-height: 1.3;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -218,7 +254,7 @@
   min-width: 0;
   max-width: min(14rem, 42vw);
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: 0.62rem;
   line-height: 1.25;
   text-align: right;
   white-space: normal;
@@ -257,7 +293,9 @@
 }
 
 .mc-next-approvals-view-button {
-  padding: 0.72rem 0.88rem;
+  padding: 0.28rem 0.48rem;
+  border-radius: 0.42rem;
+  font-size: 0.66rem;
   border-radius: 999px;
   font: inherit;
   line-height: 1.18;
@@ -287,23 +325,23 @@
 .mc-next-approvals-inline-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
+  gap: 0.32rem;
   align-items: center;
 }
 
 .mc-next-approvals-list {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.42rem;
 }
 
 .mc-next-approvals-list-item {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.35rem;
   width: 100%;
-  min-height: 6.4rem;
+  min-height: 4.1rem;
   height: auto;
-  padding: 0.9rem;
-  border-radius: 1rem;
+  padding: 0.52rem;
+  border-radius: 0.5rem;
   text-align: left;
   line-height: 1.3;
   white-space: normal;
@@ -331,7 +369,7 @@
 }
 
 .mc-next-approvals-kicker {
-  font-size: 0.78rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -339,7 +377,7 @@
 
 .mc-next-approvals-copy h3 {
   margin: 0;
-  font-size: 1.12rem;
+  font-size: 0.84rem;
   line-height: 1.3;
 }
 
@@ -349,10 +387,11 @@
   justify-content: center;
   min-width: 0;
   max-width: 100%;
-  min-height: 2.5rem;
-  padding: 0.68rem 0.9rem;
+  min-height: 1.55rem;
+  padding: 0.24rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.95rem;
+  border-radius: 0.42rem;
+  font-size: 0.66rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   line-height: 1.18;
@@ -367,7 +406,7 @@
 }
 
 .mc-next-approvals-support-grid {
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
 
 .mc-next-approvals-compact-list {
@@ -377,9 +416,9 @@
 }
 
 .mc-next-approvals-summary {
-  padding: 0.9rem 0.95rem;
+  padding: 0.52rem 0.58rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--border));
-  border-radius: 1rem;
+  border-radius: 0.5rem;
   background: color-mix(in oklab, var(--mc-area-color) 8%, var(--card));
 }
 
@@ -398,8 +437,9 @@
 
 .mc-next-approvals-details pre {
   overflow: auto;
-  padding: 0.9rem;
-  border-radius: 0.95rem;
+  padding: 0.55rem;
+  border-radius: 0.48rem;
+  font-size: 0.66rem;
   background: color-mix(in oklab, var(--background) 84%, var(--mc-surface-1));
 }
 
@@ -407,12 +447,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.8rem;
+  gap: 0.45rem;
   min-width: 0;
   max-width: 100%;
-  padding: 0.9rem 0.95rem;
+  padding: 0.48rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
+  font-size: 0.68rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   line-height: 1.2;
@@ -435,14 +476,15 @@
 .mc-next-runtime-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
+  gap: 0.34rem;
   align-items: center;
 }
 
 .mc-next-runtime-notice {
-  padding: 0.85rem 0.95rem;
+  padding: 0.5rem 0.56rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.95rem;
+  border-radius: 0.48rem;
+  font-size: 0.68rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
 }
@@ -461,28 +503,28 @@
 
 .mc-next-runtime-metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 0.42rem;
 }
 
 .mc-next-runtime-metric {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.16rem;
   min-width: 0;
-  padding: 0.8rem 0.85rem;
+  padding: 0.46rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 0.95rem;
+  border-radius: 0.46rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-runtime-metric span {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.58rem;
   font-weight: 700;
 }
 
 .mc-next-runtime-metric strong {
-  font-size: 1rem;
+  font-size: 0.76rem;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -495,7 +537,7 @@
 .mc-next-task-lanes,
 .mc-next-board-lanes {
   display: grid;
-  gap: 0.8rem;
+  gap: 0.48rem;
 }
 
 .mc-next-task-lanes {
@@ -508,10 +550,10 @@
 
 .mc-next-directory-lane {
   display: grid;
-  gap: 0.7rem;
-  padding: 0.8rem;
+  gap: 0.42rem;
+  padding: 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -524,20 +566,20 @@
 
 .mc-next-directory-lane-list {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.34rem;
 }
 
 .mc-next-directory-lane-item {
   display: grid;
-  gap: 0.35rem;
-  padding: 0.8rem;
+  gap: 0.22rem;
+  padding: 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
-  border-radius: 0.95rem;
+  border-radius: 0.46rem;
   background: color-mix(in oklab, var(--card) 94%, transparent);
 }
 
 .mc-next-directory-lane-item strong {
-  font-size: 0.94rem;
+  font-size: 0.72rem;
   line-height: 1.35;
 }
 
@@ -545,7 +587,7 @@
 .mc-next-directory-lane-status {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.28rem;
   align-items: center;
 }
 
@@ -553,15 +595,36 @@
   color: var(--text-secondary);
 }
 
+.mc-next-project-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin-top: 0.35rem;
+}
+
+.mc-next-project-counts span {
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 0.58rem;
+  padding: 0.12rem 0.32rem;
+}
+
+.mc-next-project-thread-groups {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
 .mc-next-settings-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.35fr);
-  gap: 1rem;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.35fr);
+  gap: 0.55rem;
 }
 
 .mc-next-settings-stack {
   display: grid;
-  gap: 1rem;
+  gap: 0.55rem;
   min-width: 0;
 }
 
@@ -571,19 +634,19 @@
 
 .mc-next-settings-panel-body {
   display: grid;
-  gap: 0.95rem;
+  gap: 0.55rem;
   min-width: 0;
 }
 
 .mc-next-settings-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.8rem;
+  gap: 0.48rem;
 }
 
 .mc-next-settings-field {
   display: grid;
-  gap: 0.38rem;
+  gap: 0.22rem;
   min-width: 0;
 }
 
@@ -596,7 +659,7 @@
 .mc-next-settings-action-copy span,
 .mc-next-settings-metric span {
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -606,9 +669,9 @@
 .mc-next-settings-textarea {
   width: 100%;
   min-width: 0;
-  padding: 0.8rem 0.9rem;
+  padding: 0.42rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.95rem;
+  border-radius: 0.42rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   font: inherit;
@@ -616,7 +679,7 @@
 }
 
 .mc-next-settings-input:is(select) {
-  min-height: 3rem;
+  min-height: 1.85rem;
   line-height: 1.25;
 }
 
@@ -627,7 +690,7 @@
 }
 
 .mc-next-settings-textarea {
-  min-height: 8rem;
+  min-height: 5.2rem;
   resize: vertical;
 }
 
@@ -639,11 +702,11 @@
 .mc-next-settings-toggle {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  min-height: 3rem;
-  padding: 0.75rem 0.85rem;
+  gap: 0.38rem;
+  min-height: 1.9rem;
+  padding: 0.42rem 0.5rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 0.95rem;
+  border-radius: 0.42rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
 }
@@ -656,20 +719,21 @@
 .mc-next-settings-filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.65rem;
+  gap: 0.36rem;
 }
 
 .mc-next-settings-filter {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: 0.28rem;
   min-width: 0;
   max-width: 100%;
-  min-height: 2.25rem;
-  padding: 0.43rem 0.85rem;
+  min-height: 1.55rem;
+  padding: 0.22rem 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 999px;
+  border-radius: 0.42rem;
+  font-size: 0.66rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   line-height: 1.16;
@@ -694,21 +758,21 @@
 
 .mc-next-settings-metric-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.42rem;
 }
 
 .mc-next-settings-metric {
   display: grid;
-  gap: 0.28rem;
-  padding: 0.85rem 0.9rem;
+  gap: 0.16rem;
+  padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-settings-metric strong {
-  font-size: 1.02rem;
+  font-size: 0.78rem;
   line-height: 1.25;
   word-break: break-word;
 }
@@ -716,13 +780,13 @@
 .mc-next-settings-metric p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.88rem;
+  font-size: 0.66rem;
   line-height: 1.45;
 }
 
 .mc-next-settings-wizard {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.38rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -731,11 +795,11 @@
 .mc-next-settings-wizard-step {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.75rem;
+  gap: 0.45rem;
   align-items: start;
-  padding: 0.82rem 0.9rem;
+  padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -752,13 +816,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.25rem;
+  height: 1.25rem;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
   color: var(--foreground);
-  font-size: 0.82rem;
+  font-size: 0.62rem;
   font-weight: 800;
 }
 
@@ -773,23 +837,23 @@
 
 .mc-next-settings-wizard-step strong {
   display: block;
-  font-size: 0.96rem;
+  font-size: 0.72rem;
   line-height: 1.35;
 }
 
 .mc-next-settings-wizard-step p {
   margin: 0.2rem 0 0;
   color: var(--text-secondary);
-  font-size: 0.88rem;
+  font-size: 0.66rem;
   line-height: 1.45;
 }
 
 .mc-next-settings-oauth-code-card {
   display: grid;
-  gap: 0.42rem;
-  padding: 1rem;
+  gap: 0.24rem;
+  padding: 0.58rem;
   border: 1px solid color-mix(in oklab, var(--mc-area-color) 38%, var(--border));
-  border-radius: 0.95rem;
+  border-radius: 0.48rem;
   background:
     linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 14%, transparent), transparent 62%),
     color-mix(in oklab, var(--card) 94%, transparent);
@@ -797,7 +861,7 @@
 
 .mc-next-settings-oauth-code-card span {
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: 0.58rem;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -805,7 +869,7 @@
 .mc-next-settings-oauth-code-card strong {
   max-width: 100%;
   font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
-  font-size: clamp(1.9rem, 4vw, 3.2rem);
+  font-size: clamp(1.25rem, 2.4vw, 2rem);
   line-height: 1;
   letter-spacing: 0;
   overflow-wrap: anywhere;
@@ -816,26 +880,26 @@
   max-width: 58rem;
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.92rem;
+  font-size: 0.68rem;
   line-height: 1.5;
 }
 
 .mc-next-settings-selectable-list,
 .mc-next-settings-action-list {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.36rem;
 }
 
 .mc-next-settings-selectable {
   display: grid;
-  gap: 0.34rem;
+  gap: 0.2rem;
   width: 100%;
   min-width: 0;
-  min-height: 4.25rem;
+  min-height: 3rem;
   height: auto;
-  padding: 0.85rem 0.9rem;
+  padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: inherit;
   text-align: left;
@@ -869,10 +933,22 @@
   overflow-wrap: anywhere;
 }
 
+.mc-next-settings-selectable p,
+.mc-next-settings-action-copy p,
+.mc-next-directory-list-item p,
+.mc-next-directory-lane-item p,
+.mc-next-runtime-metric p,
+.mc-next-approvals-list-item p,
+.mc-next-approvals-copy p,
+.mc-next-approvals-summary,
+.mc-next-approvals-compact-list {
+  font-size: 0.66rem;
+}
+
 .mc-next-settings-field-note {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.88rem;
+  font-size: 0.66rem;
   line-height: 1.4;
   word-break: break-word;
 }
@@ -881,7 +957,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 0.75rem;
+  gap: 0.45rem;
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -890,7 +966,7 @@
 .mc-next-settings-selectable-head strong,
 .mc-next-settings-action-copy strong {
   min-width: 0;
-  font-size: 0.96rem;
+  font-size: 0.72rem;
   line-height: 1.35;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -901,7 +977,7 @@
   min-width: 0;
   max-width: min(12rem, 36vw);
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.58rem;
   line-height: 1.25;
   text-align: right;
   white-space: normal;
@@ -911,18 +987,18 @@
 .mc-next-settings-action-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.75rem;
+  gap: 0.45rem;
   align-items: start;
   min-width: 0;
-  padding: 0.85rem 0.9rem;
+  padding: 0.48rem 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
 .mc-next-settings-action-copy {
   display: grid;
-  gap: 0.28rem;
+  gap: 0.16rem;
   min-width: 0;
 }
 
@@ -931,13 +1007,13 @@
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  min-height: 2rem;
-  padding: 0.32rem 0.72rem;
+  min-height: 1.35rem;
+  padding: 0.16rem 0.4rem;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.62rem;
   font-weight: 700;
   line-height: 1.16;
   white-space: normal;
@@ -946,10 +1022,10 @@
 
 .mc-next-settings-code-block {
   display: grid;
-  gap: 0.5rem;
-  padding: 0.9rem;
+  gap: 0.3rem;
+  padding: 0.52rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
 
@@ -958,14 +1034,15 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--foreground);
-  font-size: 0.9rem;
+  font-size: 0.66rem;
   line-height: 1.55;
 }
 
 .mc-next-settings-notice {
-  padding: 0.85rem 0.95rem;
+  padding: 0.48rem 0.55rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
-  border-radius: 1rem;
+  border-radius: 0.48rem;
+  font-size: 0.68rem;
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
 }
@@ -988,8 +1065,8 @@
 .mc-next-settings-loading {
   display: grid;
   place-items: center;
-  gap: 0.9rem;
-  padding: 2rem 1rem;
+  gap: 0.48rem;
+  padding: 1rem 0.5rem;
 }
 
 .mc-next-shell[data-area="library"] .page-header,
@@ -1086,5 +1163,17 @@
 
   .mc-next-settings-action-row {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .mc-next-directory-page {
+    padding-inline: 0.45rem;
+  }
+
+  .mc-next-directory-action,
+  .mc-next-settings-filter,
+  .mc-next-approvals-link-button {
+    width: 100%;
   }
 }

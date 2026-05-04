@@ -274,6 +274,8 @@ export function resolveOptimisticChatPrefs(
     webMode: normalizedPatch.webMode ?? current.webMode,
     memoryMode: normalizedPatch.memoryMode ?? current.memoryMode,
     thinkingLevel: normalizedPatch.thinkingLevel ?? current.thinkingLevel,
+    speedMode: normalizedPatch.speedMode ?? current.speedMode,
+    subagentPolicy: normalizedPatch.subagentPolicy ?? current.subagentPolicy,
     toolAutonomy: normalizedPatch.toolAutonomy ?? current.toolAutonomy,
     visionFallbackModel:
       normalizedPatch.visionFallbackModel !== undefined ? nextVisionFallbackModel : current.visionFallbackModel,

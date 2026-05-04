@@ -14,7 +14,9 @@ export type ChatMode = "chat" | "cowork" | "code";
 export type ChatModeTeamBehavior = "single_lead" | "guided_swarm" | "constrained_squad";
 export type ChatWebMode = "auto" | "off" | "quick" | "deep";
 export type ChatMemoryMode = "auto" | "on" | "off";
-export type ChatThinkingLevel = "minimal" | "standard" | "extended";
+export type ChatThinkingLevel = "off" | "minimal" | "standard" | "extended" | "deep";
+export type ChatSpeedMode = "standard" | "fast";
+export type ChatSubagentPolicy = "off" | "ask_when_useful" | "auto_when_useful";
 export type ChatNormalizationProfile = "live" | "prompt_pack_harness";
 export type ChatProactiveMode = "off" | "suggest" | "auto_safe" | "auto_full";
 export type ChatRetrievalMode = "standard" | "layered";
@@ -392,6 +394,8 @@ export interface ChatSessionPrefsRecord {
   webMode: ChatWebMode;
   memoryMode: ChatMemoryMode;
   thinkingLevel: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy: "safe_auto" | "manual";
   visionFallbackModel?: string;
   orchestrationEnabled: boolean;
@@ -425,6 +429,8 @@ export interface ChatSessionPrefsPatch {
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy?: "safe_auto" | "manual";
   visionFallbackModel?: string;
   orchestrationEnabled?: boolean;
@@ -455,6 +461,8 @@ export interface ChatModePresetRecord {
     | "planningMode"
     | "webMode"
     | "thinkingLevel"
+    | "speedMode"
+    | "subagentPolicy"
     | "toolAutonomy"
     | "orchestrationEnabled"
     | "orchestrationIntensity"
@@ -487,6 +495,8 @@ export const CHAT_MODE_PRESETS = {
       planningMode: "off",
       webMode: "auto",
       thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "ask_when_useful",
       toolAutonomy: "safe_auto",
       orchestrationEnabled: true,
       orchestrationIntensity: "minimal",
@@ -521,6 +531,8 @@ export const CHAT_MODE_PRESETS = {
       planningMode: "off",
       webMode: "auto",
       thinkingLevel: "extended",
+      speedMode: "standard",
+      subagentPolicy: "ask_when_useful",
       toolAutonomy: "safe_auto",
       orchestrationEnabled: true,
       orchestrationIntensity: "balanced",
@@ -555,6 +567,8 @@ export const CHAT_MODE_PRESETS = {
       planningMode: "off",
       webMode: "auto",
       thinkingLevel: "extended",
+      speedMode: "standard",
+      subagentPolicy: "ask_when_useful",
       toolAutonomy: "safe_auto",
       orchestrationEnabled: true,
       orchestrationIntensity: "balanced",
@@ -962,6 +976,8 @@ export interface ChatTurnTraceRecord {
   webMode: ChatWebMode;
   memoryMode: ChatMemoryMode;
   thinkingLevel: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   effectiveToolAutonomy?: "safe_auto" | "manual";
   startedAt: string;
   finishedAt?: string;
@@ -1249,6 +1265,8 @@ export interface ChatSendMessageRequest {
   webMode?: ChatWebMode;
   memoryMode?: ChatMemoryMode;
   thinkingLevel?: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   normalizationProfile?: ChatNormalizationProfile;
   commandText?: string;
   prefsOverride?: ChatSessionPrefsPatch;
@@ -1269,6 +1287,8 @@ export interface RoutingPreflightRequest {
   mode?: ChatMode;
   webMode?: ChatWebMode;
   thinkingLevel?: ChatThinkingLevel;
+  speedMode?: ChatSpeedMode;
+  subagentPolicy?: ChatSubagentPolicy;
   prefsOverride?: ChatSessionPrefsPatch;
 }
 

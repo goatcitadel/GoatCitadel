@@ -31,7 +31,7 @@ const promptPackRunBodySchema = z.object({
   toolAutonomy: z.enum(["manual", "safe_auto"]).optional(),
   webMode: z.enum(["off", "auto", "quick", "deep"]).optional(),
   memoryMode: z.enum(["off", "on", "auto"]).optional(),
-  thinkingLevel: z.enum(["minimal", "standard", "extended"]).optional(),
+  thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
   placeholderValues: z.record(z.string(), z.string()).optional(),
 });
 

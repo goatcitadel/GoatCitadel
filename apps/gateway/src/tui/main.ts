@@ -517,12 +517,29 @@ async function viewChat(client: TuiApiClient): Promise<void> {
         { name: "off", value: "off" },
       ],
     });
-    const thinkingLevel = await select<"minimal" | "standard" | "extended">({
+    const thinkingLevel = await select<"off" | "minimal" | "standard" | "extended" | "deep">({
       message: "Thinking level",
       choices: [
+        { name: "off", value: "off" },
         { name: "minimal", value: "minimal" },
         { name: "standard", value: "standard" },
         { name: "extended", value: "extended" },
+        { name: "deep", value: "deep" },
+      ],
+    });
+    const speedMode = await select<"standard" | "fast">({
+      message: "Speed mode",
+      choices: [
+        { name: "standard", value: "standard" },
+        { name: "fast", value: "fast" },
+      ],
+    });
+    const subagentPolicy = await select<"off" | "ask_when_useful" | "auto_when_useful">({
+      message: "Subagent policy",
+      choices: [
+        { name: "off", value: "off" },
+        { name: "ask when useful", value: "ask_when_useful" },
+        { name: "auto when useful", value: "auto_when_useful" },
       ],
     });
     const confirmed = await confirm({ message: `Patch prefs for ${sessionId}?`, default: false });
@@ -534,6 +551,8 @@ async function viewChat(client: TuiApiClient): Promise<void> {
       webMode,
       memoryMode,
       thinkingLevel,
+      speedMode,
+      subagentPolicy,
     });
     console.log(
       renderBox(
@@ -544,6 +563,8 @@ async function viewChat(client: TuiApiClient): Promise<void> {
           `Web: ${toText(patched.webMode ?? webMode)}`,
           `Memory: ${toText(patched.memoryMode ?? memoryMode)}`,
           `Thinking: ${toText(patched.thinkingLevel ?? thinkingLevel)}`,
+          `Speed: ${toText(patched.speedMode ?? speedMode)}`,
+          `Subagents: ${toText(patched.subagentPolicy ?? subagentPolicy)}`,
         ],
         "success",
       ),
@@ -577,7 +598,9 @@ async function viewChat(client: TuiApiClient): Promise<void> {
   let mode: "chat" | "cowork" | "code" = "chat";
   let webMode: "auto" | "off" | "quick" | "deep" = "auto";
   let memoryMode: "auto" | "on" | "off" = "auto";
-  let thinkingLevel: "minimal" | "standard" | "extended" = "standard";
+  let thinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep" = "standard";
+  let speedMode: "standard" | "fast" = "standard";
+  let subagentPolicy: "off" | "ask_when_useful" | "auto_when_useful" = "ask_when_useful";
   let agentMode = true;
 
   const sendStyle = await select({
@@ -591,7 +614,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
       {
         name: "Configure options",
         value: "configure",
-        description: "Choose mode, web, memory, thinking, and agent path before sending.",
+        description: "Choose mode, web, memory, thinking, speed, subagents, and agent path before sending.",
       },
     ],
   });
@@ -621,12 +644,29 @@ async function viewChat(client: TuiApiClient): Promise<void> {
         { name: "off", value: "off" },
       ],
     });
-    thinkingLevel = await select<"minimal" | "standard" | "extended">({
+    thinkingLevel = await select<"off" | "minimal" | "standard" | "extended" | "deep">({
       message: "Thinking level",
       choices: [
+        { name: "off", value: "off" },
         { name: "minimal", value: "minimal" },
         { name: "standard", value: "standard" },
         { name: "extended", value: "extended" },
+        { name: "deep", value: "deep" },
+      ],
+    });
+    speedMode = await select<"standard" | "fast">({
+      message: "Speed mode",
+      choices: [
+        { name: "standard", value: "standard" },
+        { name: "fast", value: "fast" },
+      ],
+    });
+    subagentPolicy = await select<"off" | "ask_when_useful" | "auto_when_useful">({
+      message: "Subagent policy",
+      choices: [
+        { name: "off", value: "off" },
+        { name: "ask when useful", value: "ask_when_useful" },
+        { name: "auto when useful", value: "auto_when_useful" },
       ],
     });
     agentMode = await confirm({
@@ -640,7 +680,8 @@ async function viewChat(client: TuiApiClient): Promise<void> {
       "Request",
       [
         `Session: ${sessionId}`,
-        `Mode: ${mode} / web ${webMode} / memory ${memoryMode} / thinking ${thinkingLevel}`,
+        `Mode: ${mode} / web ${webMode} / memory ${memoryMode} / thinking ${thinkingLevel} / speed ${speedMode}`,
+        `Subagents: ${subagentPolicy}`,
         `Agent path: ${agentMode ? "enabled" : "off"}`,
         `Prompt: ${content}`,
       ],
@@ -657,6 +698,8 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     webMode,
     memoryMode,
     thinkingLevel,
+    speedMode,
+    subagentPolicy,
     agentMode,
   })) {
     const type = toText(event.type);
@@ -2009,7 +2052,7 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
         `Completed at: ${state.completedAt ? formatTimestamp(state.completedAt) : "not yet"}`,
         `Completed by: ${state.completedBy || "n/a"}`,
         `Provider: ${state.settings?.llm?.activeProviderId || "unset"} / ${state.settings?.llm?.activeModel || "unset"}`,
-        `Runtime defaults: ${state.settings?.defaultToolProfile || "unset"} / ${state.settings?.budgetMode || "unset"}`,
+        `Runtime defaults: ${state.settings?.toolApprovalMode || "unset"} / ${state.settings?.budgetMode || "unset"}`,
       ],
       state.completed ? "success" : "warning",
     ),
@@ -2079,15 +2122,12 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
     return;
   }
   if (action === "bootstrap") {
-    const defaultToolProfile = await select<"minimal" | "standard" | "coding" | "ops" | "research" | "danger">({
-      message: "Default tool profile",
+    const toolApprovalMode = await select<"approve_all" | "approve_risky" | "bypass">({
+      message: "Tool approval mode",
       choices: [
-        { name: "minimal", value: "minimal" },
-        { name: "standard", value: "standard" },
-        { name: "coding", value: "coding" },
-        { name: "ops", value: "ops" },
-        { name: "research", value: "research" },
-        { name: "danger", value: "danger" },
+        { name: "Ask every time", value: "approve_all" },
+        { name: "Ask for risky work", value: "approve_risky" },
+        { name: "Bypass approval prompts", value: "bypass" },
       ],
     });
     const budgetMode = await select<"saver" | "balanced" | "power">({
@@ -2103,7 +2143,7 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
       return;
     }
     const result = await client.onboardingBootstrap({
-      defaultToolProfile,
+      toolApprovalMode,
       budgetMode,
       markComplete: false,
       completedBy: "tui-operator",
@@ -2111,7 +2151,7 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
     console.log(
       renderBox(
         "Bootstrap applied",
-        [`Applied at: ${formatTimestamp(result.appliedAt)}`, `Profile: ${defaultToolProfile}`, `Budget: ${budgetMode}`],
+        [`Applied at: ${formatTimestamp(result.appliedAt)}`, `Approvals: ${toolApprovalMode}`, `Budget: ${budgetMode}`],
         "success",
       ),
     );
@@ -2136,7 +2176,7 @@ async function viewSettings(client: TuiApiClient, profilePath: string, profileNa
     choices: [
       { name: "Back", value: "back" },
       { name: "Set budget mode", value: "budget" },
-      { name: "Set default tool profile", value: "profile" },
+      { name: "Set tool approval mode", value: "profile" },
       { name: "Save TUI local defaults", value: "save-local" },
     ],
   });
@@ -2160,23 +2200,20 @@ async function viewSettings(client: TuiApiClient, profilePath: string, profileNa
   }
 
   if (action === "profile") {
-    const defaultToolProfile = await select<"minimal" | "standard" | "coding" | "ops" | "research" | "danger">({
-      message: "Default tool profile",
+    const toolApprovalMode = await select<"approve_all" | "approve_risky" | "bypass">({
+      message: "Tool approval mode",
       choices: [
-        { name: "minimal", value: "minimal" },
-        { name: "standard", value: "standard" },
-        { name: "coding", value: "coding" },
-        { name: "ops", value: "ops" },
-        { name: "research", value: "research" },
-        { name: "danger", value: "danger" },
+        { name: "Ask every time", value: "approve_all" },
+        { name: "Ask for risky work", value: "approve_risky" },
+        { name: "Bypass approval prompts", value: "bypass" },
       ],
     });
-    const confirmed = await confirm({ message: "Apply gateway tool profile update?", default: false });
+    const confirmed = await confirm({ message: "Apply gateway approval mode update?", default: false });
     if (!confirmed) {
       return;
     }
-    await client.patchRuntimeSettings({ defaultToolProfile });
-    console.log("Default tool profile updated.");
+    await client.patchRuntimeSettings({ toolApprovalMode });
+    console.log("Tool approval mode updated.");
     await pause();
     return;
   }

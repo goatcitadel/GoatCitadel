@@ -1396,6 +1396,8 @@ function createChatImageRoutePreferenceSchema(db: DatabaseSync): void {
   createChatSessionPrefsTableIfMissing(db);
   addColumnIfMissing(db, "chat_session_prefs", "image_provider_id", "TEXT");
   addColumnIfMissing(db, "chat_session_prefs", "image_model", "TEXT");
+  addColumnIfMissing(db, "chat_session_prefs", "speed_mode", "TEXT NOT NULL DEFAULT 'standard'");
+  addColumnIfMissing(db, "chat_session_prefs", "subagent_policy", "TEXT NOT NULL DEFAULT 'ask_when_useful'");
 }
 
 function createChatSpecialistCandidateSchema(db: DatabaseSync): void {
@@ -2148,6 +2150,8 @@ function createChatSessionPrefsTableIfMissing(db: DatabaseSync): void {
       web_mode TEXT NOT NULL DEFAULT 'auto',
       memory_mode TEXT NOT NULL DEFAULT 'auto',
       thinking_level TEXT NOT NULL DEFAULT 'standard',
+      speed_mode TEXT NOT NULL DEFAULT 'standard',
+      subagent_policy TEXT NOT NULL DEFAULT 'ask_when_useful',
       tool_autonomy TEXT NOT NULL DEFAULT 'safe_auto',
       vision_fallback_model TEXT,
       orchestration_enabled INTEGER NOT NULL DEFAULT 1,

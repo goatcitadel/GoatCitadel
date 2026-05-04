@@ -33,7 +33,7 @@ import type {
   IntegrationFormSchema,
   McpServerRecord,
   OnboardingState,
-  ToolProfile,
+  ToolApprovalMode,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -159,15 +159,7 @@ type NativeLoadResult<T> = {
   issue: NativeLoadIssue | null;
 };
 
-const TOOL_PROFILE_OPTIONS: ToolProfile[] = [
-  "minimal",
-  "standard",
-  "coding",
-  "ops",
-  "research",
-  "chat-agent",
-  "danger",
-];
+const TOOL_APPROVAL_MODE_OPTIONS: ToolApprovalMode[] = ["approve_all", "approve_risky", "bypass"];
 const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
 const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 
@@ -340,11 +332,11 @@ function OnboardingSection({ route, navigate }: SettingsSectionProps) {
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [defaultsDraft, setDefaultsDraft] = useState<{
-    defaultToolProfile: ToolProfile;
+    toolApprovalMode: ToolApprovalMode;
     budgetMode: OnboardingState["settings"]["budgetMode"];
     networkAllowlist: string;
   }>({
-    defaultToolProfile: "standard",
+    toolApprovalMode: "approve_risky",
     budgetMode: "balanced",
     networkAllowlist: "",
   });
@@ -354,7 +346,7 @@ function OnboardingSection({ route, navigate }: SettingsSectionProps) {
       return;
     }
     setDefaultsDraft({
-      defaultToolProfile: normalizeToolProfile(data.settings.defaultToolProfile),
+      toolApprovalMode: normalizeToolApprovalMode(data.settings.toolApprovalMode),
       budgetMode: normalizeBudgetMode(data.settings.budgetMode),
       networkAllowlist: data.settings.networkAllowlist.join(", "),
     });
@@ -363,7 +355,7 @@ function OnboardingSection({ route, navigate }: SettingsSectionProps) {
   const applyDefaults = async () => {
     try {
       await bootstrapOnboarding({
-        defaultToolProfile: defaultsDraft.defaultToolProfile,
+        toolApprovalMode: defaultsDraft.toolApprovalMode,
         budgetMode: defaultsDraft.budgetMode,
         networkAllowlist: splitCommaList(defaultsDraft.networkAllowlist),
       });
@@ -431,20 +423,20 @@ function OnboardingSection({ route, navigate }: SettingsSectionProps) {
             subtitle="Set the minimum runtime defaults without duplicating advanced setup."
           >
             <SettingsFieldGrid>
-              <SettingsField label="Tool profile">
+              <SettingsField label="Tool approvals">
                 <select
                   className="mc-next-settings-input"
-                  value={defaultsDraft.defaultToolProfile}
+                  value={defaultsDraft.toolApprovalMode}
                   onChange={(event) =>
                     setDefaultsDraft((current) => ({
                       ...current,
-                      defaultToolProfile: normalizeToolProfile(event.target.value),
+                      toolApprovalMode: normalizeToolApprovalMode(event.target.value),
                     }))
                   }
                 >
-                  {TOOL_PROFILE_OPTIONS.map((profile) => (
-                    <option key={profile} value={profile}>
-                      {profile}
+                  {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {describeToolApprovalMode(mode)}
                     </option>
                   ))}
                 </select>
@@ -4238,20 +4230,23 @@ function McpSection(_props: SettingsSectionProps) {
 
 function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [tools, grants] = await Promise.all([
+    const [tools, grants, settings] = await Promise.all([
       nativeLoad("Tool catalog", fetchToolCatalog(), { items: [] }),
       nativeLoad("Tool grants", fetchToolGrants({ limit: 400 }), { items: [] }),
+      fetchSettings().catch(() => null),
     ]);
     return {
       issues: nativeLoadIssues([tools, grants]),
       tools: tools.data.items,
       grants: grants.data.items,
+      settings,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [search, setSearch] = useState("");
   const [selectedToolName, setSelectedToolName] = useState("");
+  const [approvalModeDraft, setApprovalModeDraft] = useState<ToolApprovalMode>("approve_risky");
   const [grantForm, setGrantForm] = useState({
     toolPattern: "",
     decision: "allow",
@@ -4282,6 +4277,12 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       current && filteredTools.some((item) => item.toolName === current) ? current : filteredTools[0]?.toolName || "",
     );
   }, [filteredTools]);
+
+  useEffect(() => {
+    if (data?.settings?.toolApprovalMode) {
+      setApprovalModeDraft(normalizeToolApprovalMode(data.settings.toolApprovalMode));
+    }
+  }, [data?.settings?.toolApprovalMode]);
 
   useEffect(() => {
     if (!selectedTool) {
@@ -4325,12 +4326,53 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
+  const handleSaveApprovalMode = async () => {
+    try {
+      await patchSettings({ toolApprovalMode: approvalModeDraft });
+      setNotice({ tone: "success", message: "Tool approval mode saved." });
+      await reload();
+    } catch (saveError) {
+      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+          <SettingsPanel
+            title="Approval mode"
+            subtitle="Choose when GoatCitadel asks before running otherwise-allowed tools."
+            stats={[
+              {
+                label: "Current",
+                value: describeToolApprovalMode(data.settings?.toolApprovalMode ?? "approve_risky"),
+              },
+              { label: "Hard blocks", value: "Always enforced" },
+            ]}
+          >
+            <SettingsField label="Tool approvals">
+              <select
+                className="mc-next-settings-input"
+                value={approvalModeDraft}
+                onChange={(event) => setApprovalModeDraft(normalizeToolApprovalMode(event.target.value))}
+              >
+                {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {describeToolApprovalMode(mode)}
+                  </option>
+                ))}
+              </select>
+            </SettingsField>
+            <SettingsButtonRow>
+              <button type="button" className="mc-next-button" onClick={() => void handleSaveApprovalMode()}>
+                <Save size={16} />
+                Save mode
+              </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
           <SettingsStack>
             <SettingsPanel
               title="Tool catalog"
@@ -5097,8 +5139,18 @@ function splitCommaList(value: string) {
     .filter(Boolean);
 }
 
-function normalizeToolProfile(value: string | undefined): ToolProfile {
-  return TOOL_PROFILE_OPTIONS.includes(value as ToolProfile) ? (value as ToolProfile) : "standard";
+function normalizeToolApprovalMode(value: string | undefined): ToolApprovalMode {
+  return TOOL_APPROVAL_MODE_OPTIONS.includes(value as ToolApprovalMode) ? (value as ToolApprovalMode) : "approve_risky";
+}
+
+function describeToolApprovalMode(value: ToolApprovalMode): string {
+  if (value === "approve_all") {
+    return "Ask every time";
+  }
+  if (value === "bypass") {
+    return "Bypass prompts";
+  }
+  return "Ask for risky work";
 }
 
 function normalizeBudgetMode(value: string | undefined): OnboardingState["settings"]["budgetMode"] {

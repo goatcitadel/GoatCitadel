@@ -498,7 +498,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
         "Apply and verify configuration safely.",
       ],
       terms: [
-        { term: "Tool profile", meaning: "Baseline capability set used by policy resolver." },
+        { term: "Approval mode", meaning: "How often GoatCitadel asks before allowed tool actions run." },
         {
           term: "Remember credentials",
           meaning: "Stores gateway credentials in browser local storage for convenience; leave off on shared devices.",
@@ -544,7 +544,10 @@ export const pageCopy: Record<PageId, PageCopy> = {
       ],
       terms: [
         { term: "Scope precedence", meaning: "task > agent > session > workspace > global." },
-        { term: "Grant", meaning: "An explicit allow or deny rule layered on top of the baseline tool profile." },
+        {
+          term: "Grant",
+          meaning: "An explicit allow or deny rule layered on top of approval mode and hard safety policy.",
+        },
         {
           term: "Dry-run",
           meaning: "Validation-focused tool execution used to confirm args and policy before a live call.",

@@ -63,6 +63,8 @@ export interface ChatTurnTraceCreateInput {
   webMode: ChatWebMode;
   memoryMode: ChatMemoryMode;
   thinkingLevel: ChatThinkingLevel;
+  speedMode?: ChatTurnTraceRecord["speedMode"];
+  subagentPolicy?: ChatTurnTraceRecord["subagentPolicy"];
   effectiveToolAutonomy?: ChatTurnTraceRecord["effectiveToolAutonomy"];
   routing?: ChatTurnTraceRecord["routing"];
   retrieval?: ChatTurnTraceRecord["retrieval"];
@@ -192,7 +194,10 @@ export class ChatTurnTraceRepository {
       webMode: input.webMode,
       memoryMode: input.memoryMode,
       thinkingLevel: input.thinkingLevel,
-      routingJson: serializeRoutingJson(input.routing ?? {}, input.effectiveToolAutonomy),
+      routingJson: serializeRoutingJson(input.routing ?? {}, input.effectiveToolAutonomy, {
+        speedMode: input.speedMode,
+        subagentPolicy: input.subagentPolicy,
+      }),
       retrievalJson: input.retrieval ? JSON.stringify(input.retrieval) : null,
       reflectionJson: input.reflection ? JSON.stringify(input.reflection) : null,
       proactiveJson: input.proactive ? JSON.stringify(input.proactive) : null,
@@ -225,12 +230,9 @@ export class ChatTurnTraceRepository {
       parentTurnId: input.parentTurnId !== undefined ? input.parentTurnId : (current.parentTurnId ?? null),
       branchKind: input.branchKind ?? current.branchKind,
       sourceTurnId: input.sourceTurnId !== undefined ? input.sourceTurnId : (current.sourceTurnId ?? null),
-      assistantMessageId: input.assistantMessageId !== undefined
-        ? input.assistantMessageId
-        : (current.assistantMessageId ?? null),
-      executionPlanId: input.executionPlanId !== undefined
-        ? input.executionPlanId
-        : (current.executionPlanId ?? null),
+      assistantMessageId:
+        input.assistantMessageId !== undefined ? input.assistantMessageId : (current.assistantMessageId ?? null),
+      executionPlanId: input.executionPlanId !== undefined ? input.executionPlanId : (current.executionPlanId ?? null),
       status: input.status ?? current.status,
       model: input.model !== undefined ? input.model : (current.model ?? null),
       routingJson: serializeRoutingJson(
@@ -245,9 +247,11 @@ export class ChatTurnTraceRepository {
       orchestrationJson: JSON.stringify(input.orchestration ?? current.orchestration ?? null),
       guidanceJson: JSON.stringify(input.guidance ?? current.guidance ?? null),
       loopGuardJson: JSON.stringify(input.loopGuard ?? current.loopGuard ?? null),
-      pendingUserInputJson: JSON.stringify(hasPendingUserInput ? input.pendingUserInput ?? null : current.pendingUserInput ?? null),
+      pendingUserInputJson: JSON.stringify(
+        hasPendingUserInput ? (input.pendingUserInput ?? null) : (current.pendingUserInput ?? null),
+      ),
       citationsJson: JSON.stringify(input.citations ?? current.citations ?? []),
-      failureJson: JSON.stringify(hasFailure ? input.failure ?? null : current.failure ?? null),
+      failureJson: JSON.stringify(hasFailure ? (input.failure ?? null) : (current.failure ?? null)),
       capabilityUpgradeSuggestionsJson: JSON.stringify(
         input.capabilityUpgradeSuggestions ?? current.capabilityUpgradeSuggestions ?? [],
       ),
@@ -260,16 +264,18 @@ export class ChatTurnTraceRepository {
   }
 
   public listBySession(sessionId: string, limit = 100): ChatTurnTraceRecord[] {
-    const rows = toChatTurnTraceRows(this.listBySessionStmt.all({
-      sessionId,
-      limit: Math.max(1, Math.min(limit, 1000)),
-    }));
+    const rows = toChatTurnTraceRows(
+      this.listBySessionStmt.all({
+        sessionId,
+        limit: Math.max(1, Math.min(limit, 1000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 }
 
 function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
-  const { routing, effectiveToolAutonomy } = parseRoutingJson(row.routing_json);
+  const { routing, effectiveToolAutonomy, speedMode, subagentPolicy } = parseRoutingJson(row.routing_json);
   return {
     turnId: row.turn_id,
     sessionId: row.session_id,
@@ -285,6 +291,8 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     webMode: row.web_mode,
     memoryMode: row.memory_mode,
     thinkingLevel: row.thinking_level,
+    speedMode,
+    subagentPolicy,
     effectiveToolAutonomy,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
@@ -300,7 +308,10 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     orchestration: safeJsonParse<ChatOrchestrationSummary | undefined>(row.orchestration_json ?? "", undefined),
     guidance: safeJsonParse<ChatTurnTraceRecord["guidance"] | undefined>(row.guidance_json ?? "", undefined),
     loopGuard: safeJsonParse<ChatTurnTraceRecord["loopGuard"] | undefined>(row.loop_guard_json ?? "", undefined),
-    pendingUserInput: safeJsonParse<ChatUserInputPromptRecord | undefined>(row.pending_user_input_json ?? "", undefined),
+    pendingUserInput: safeJsonParse<ChatUserInputPromptRecord | undefined>(
+      row.pending_user_input_json ?? "",
+      undefined,
+    ),
     capabilityUpgradeSuggestions: safeJsonParse<ChatCapabilityUpgradeSuggestion[] | undefined>(
       row.capability_upgrade_suggestions_json ?? "",
       undefined,
@@ -314,27 +325,44 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
 
 type PersistedRoutingJson = ChatTurnTraceRecord["routing"] & {
   __effectiveToolAutonomy?: ChatTurnTraceRecord["effectiveToolAutonomy"];
+  __speedMode?: ChatTurnTraceRecord["speedMode"];
+  __subagentPolicy?: ChatTurnTraceRecord["subagentPolicy"];
 };
 
 function serializeRoutingJson(
   routing: ChatTurnTraceRecord["routing"],
   effectiveToolAutonomy?: ChatTurnTraceRecord["effectiveToolAutonomy"],
+  operatorControls?: {
+    speedMode?: ChatTurnTraceRecord["speedMode"];
+    subagentPolicy?: ChatTurnTraceRecord["subagentPolicy"];
+  },
 ): string {
   return JSON.stringify({
     ...routing,
     ...(effectiveToolAutonomy ? { __effectiveToolAutonomy: effectiveToolAutonomy } : {}),
+    ...(operatorControls?.speedMode ? { __speedMode: operatorControls.speedMode } : {}),
+    ...(operatorControls?.subagentPolicy ? { __subagentPolicy: operatorControls.subagentPolicy } : {}),
   } satisfies PersistedRoutingJson);
 }
 
 function parseRoutingJson(raw: string): {
   routing: ChatTurnTraceRecord["routing"];
   effectiveToolAutonomy?: ChatTurnTraceRecord["effectiveToolAutonomy"];
+  speedMode?: ChatTurnTraceRecord["speedMode"];
+  subagentPolicy?: ChatTurnTraceRecord["subagentPolicy"];
 } {
   const parsed = safeJsonParse<PersistedRoutingJson>(raw, {});
-  const { __effectiveToolAutonomy: effectiveToolAutonomy, ...routing } = parsed;
+  const {
+    __effectiveToolAutonomy: effectiveToolAutonomy,
+    __speedMode: speedMode,
+    __subagentPolicy: subagentPolicy,
+    ...routing
+  } = parsed;
   return {
     routing,
     effectiveToolAutonomy,
+    speedMode,
+    subagentPolicy,
   };
 }
 
@@ -373,41 +401,43 @@ function toChatTurnTraceRows(value: unknown): ChatTurnTraceRow[] {
 }
 
 function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
-  return isRecord(value)
-    && typeof value.turn_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.user_message_id === "string"
-    && (typeof value.parent_turn_id === "string" || value.parent_turn_id === null)
-    && typeof value.branch_kind === "string"
-    && (typeof value.source_turn_id === "string" || value.source_turn_id === null)
-    && (typeof value.assistant_message_id === "string" || value.assistant_message_id === null)
-    && (typeof value.execution_plan_id === "string" || value.execution_plan_id === null)
-    && typeof value.status === "string"
-    && typeof value.mode === "string"
-    && (typeof value.model === "string" || value.model === null)
-    && typeof value.web_mode === "string"
-    && typeof value.memory_mode === "string"
-    && typeof value.thinking_level === "string"
-    && typeof value.routing_json === "string"
-    && (typeof value.retrieval_json === "string" || value.retrieval_json === null)
-    && (typeof value.reflection_json === "string" || value.reflection_json === null)
-    && (typeof value.proactive_json === "string" || value.proactive_json === null)
-    && (typeof value.completion_json === "string" || value.completion_json === null)
-    && (typeof value.durable_json === "string" || value.durable_json === null)
-    && (typeof value.orchestration_json === "string" || value.orchestration_json === null)
-    && (typeof value.guidance_json === "string" || value.guidance_json === null)
-    && (typeof value.loop_guard_json === "string" || value.loop_guard_json === null)
-    && (typeof value.pending_user_input_json === "string" || value.pending_user_input_json === null)
-    && (typeof value.citations_json === "string" || value.citations_json === null)
-    && (typeof value.capability_upgrade_suggestions_json === "string" || value.capability_upgrade_suggestions_json === null)
-    && (typeof value.specialist_candidate_suggestions_json === "string" || value.specialist_candidate_suggestions_json === null)
-    && (typeof value.failure_json === "string" || value.failure_json === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    isRecord(value) &&
+    typeof value.turn_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.user_message_id === "string" &&
+    (typeof value.parent_turn_id === "string" || value.parent_turn_id === null) &&
+    typeof value.branch_kind === "string" &&
+    (typeof value.source_turn_id === "string" || value.source_turn_id === null) &&
+    (typeof value.assistant_message_id === "string" || value.assistant_message_id === null) &&
+    (typeof value.execution_plan_id === "string" || value.execution_plan_id === null) &&
+    typeof value.status === "string" &&
+    typeof value.mode === "string" &&
+    (typeof value.model === "string" || value.model === null) &&
+    typeof value.web_mode === "string" &&
+    typeof value.memory_mode === "string" &&
+    typeof value.thinking_level === "string" &&
+    typeof value.routing_json === "string" &&
+    (typeof value.retrieval_json === "string" || value.retrieval_json === null) &&
+    (typeof value.reflection_json === "string" || value.reflection_json === null) &&
+    (typeof value.proactive_json === "string" || value.proactive_json === null) &&
+    (typeof value.completion_json === "string" || value.completion_json === null) &&
+    (typeof value.durable_json === "string" || value.durable_json === null) &&
+    (typeof value.orchestration_json === "string" || value.orchestration_json === null) &&
+    (typeof value.guidance_json === "string" || value.guidance_json === null) &&
+    (typeof value.loop_guard_json === "string" || value.loop_guard_json === null) &&
+    (typeof value.pending_user_input_json === "string" || value.pending_user_input_json === null) &&
+    (typeof value.citations_json === "string" || value.citations_json === null) &&
+    (typeof value.capability_upgrade_suggestions_json === "string" ||
+      value.capability_upgrade_suggestions_json === null) &&
+    (typeof value.specialist_candidate_suggestions_json === "string" ||
+      value.specialist_candidate_suggestions_json === null) &&
+    (typeof value.failure_json === "string" || value.failure_json === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

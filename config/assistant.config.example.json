@@ -1,6 +1,6 @@
 {
   "environment": "local",
-  "defaultToolProfile": "chat-agent",
+  "toolApprovalMode": "approve_risky",
   "dataDir": "./data",
   "transcriptsDir": "./data/transcripts",
   "auditDir": "./data/audit",

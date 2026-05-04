@@ -230,6 +230,24 @@ export function useChatProviderRoutingController(input: {
 
   const commandSuggestions = useMemo(() => {
     const trimmed = input.draft.trimStart();
+    const skillMentionMatch = input.draft.match(/(^|\s)\$([^\s]*)$/);
+    if (skillMentionMatch) {
+      const query = (skillMentionMatch[2] ?? "").toLowerCase();
+      return input.installedSkills
+        .filter((skill) => {
+          if (!query) {
+            return true;
+          }
+          return `${skill.skillId} ${skill.name} ${skill.tags?.join(" ") ?? ""}`.toLowerCase().includes(query);
+        })
+        .slice(0, 8)
+        .map((skill) => ({
+          key: `mention-${skill.skillId}`,
+          command: `$${skill.skillId}`,
+          description: `${skill.state} · ${skill.name}`,
+          applyValue: `$${skill.skillId}`,
+        }));
+    }
     if (!trimmed.startsWith("/")) {
       return [] as CommandSuggestionItem[];
     }

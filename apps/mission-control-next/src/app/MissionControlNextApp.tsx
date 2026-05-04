@@ -1,6 +1,7 @@
 import { Suspense, startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
+  Bell,
   Bot,
   BookOpenText,
   Code2,
@@ -10,6 +11,7 @@ import {
   MoonStar,
   PanelRightClose,
   PanelRightOpen,
+  Search,
   ShieldCheck,
   SlidersHorizontal,
   SunMedium,
@@ -100,6 +102,7 @@ const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: typeof Bot }> = [
   { area: "chat", icon: Bot },
   { area: "cowork", icon: Workflow },
   { area: "code", icon: Code2 },
+  { area: "projects", icon: FolderKanban },
   { area: "library", icon: LibraryBig },
   { area: "ops", icon: Activity },
   { area: "settings", icon: SlidersHorizontal },
@@ -228,6 +231,8 @@ export function MissionControlNextApp() {
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
+  const operatorNotificationCount =
+    pendingApprovals + (status.health?.daemonStatus?.running ? 0 : 1) + (notifications.length > 0 ? 1 : 0);
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
   const railSignalLines =
     route.area === "settings"
@@ -526,6 +531,11 @@ export function MissionControlNextApp() {
               </nav>
             </div>
             <div className="mc-next-topbar-right">
+              <button type="button" className="mc-next-command-search" onClick={() => setInspectorOpen(true)}>
+                <Search size={15} />
+                <span>Search sessions, agents, files...</span>
+                <kbd>⌘K</kbd>
+              </button>
               <label className="mc-next-select-field">
                 <span>Workspace</span>
                 <select value={activeWorkspaceId} onChange={(event) => setActiveWorkspaceId(event.target.value)}>
@@ -545,6 +555,16 @@ export function MissionControlNextApp() {
                 <span className="mc-next-badge">{realtimeStatusCopy.badge}</span>
                 <span className="mc-next-badge">{pendingApprovals} approvals</span>
               </div>
+              <button
+                type="button"
+                className="mc-next-icon-button"
+                onClick={() => navigate({ area: "ops", section: "notifications", theme: route.theme ?? theme })}
+                aria-label="Open notifications"
+                title="Notifications"
+              >
+                <Bell size={16} />
+                <span>{operatorNotificationCount}</span>
+              </button>
               <button
                 type="button"
                 className="mc-next-button mc-next-button-secondary mc-next-wa-button"
@@ -805,6 +825,10 @@ function renderRouteContent(input: {
     );
   }
 
+  if (route.area === "projects") {
+    return <LazyNativeRoutePages {...input} route={route} />;
+  }
+
   if (route.area === "library") {
     if (route.section === "prompt-packs") {
       return (
@@ -992,6 +1016,7 @@ function isImmersiveRoute(route: AppRoute): boolean {
 function usesEmbeddedRouteHeader(route: AppRoute): boolean {
   return (
     route.area === "library" ||
+    route.area === "projects" ||
     route.area === "ops" ||
     route.area === "settings" ||
     (route.area === "cowork" && (route.section === "tasks" || route.section === "board"))

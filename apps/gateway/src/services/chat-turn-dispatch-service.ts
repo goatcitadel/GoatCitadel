@@ -427,6 +427,8 @@ export async function sendPreparedIntegrationChatTurn(
     webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
     memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
     thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+    speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+    subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
     effectiveToolAutonomy: prepared.effectiveToolAutonomy,
     routing: {},
     startedAt,

@@ -1,4 +1,5 @@
 import { InlineApprovalPrompt } from "../InlineApprovalPrompt";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 export interface ChatPendingApprovalState {
   approvalId: string;
@@ -29,30 +30,44 @@ export function ChatPendingApprovalPanel(props: {
   if (!pendingApproval) {
     return null;
   }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    event.stopPropagation();
+    const activeElement = globalThis.document?.activeElement;
+    if (activeElement instanceof HTMLElement && event.currentTarget.contains(activeElement)) {
+      activeElement.blur();
+    }
+  }
+
   return (
-    <InlineApprovalPrompt
-      approvalId={pendingApproval.approvalId}
-      kind={pendingApproval.kind}
-      toolName={pendingApproval.toolName}
-      reason={pendingApproval.reason}
-      riskLevel={pendingApproval.riskLevel}
-      expiresAt={pendingApproval.expiresAt}
-      codeHash={pendingApproval.codeHash}
-      wrapperManifestHash={pendingApproval.wrapperManifestHash}
-      capabilitySnapshotId={pendingApproval.capabilitySnapshotId}
-      inspectPath={pendingApproval.inspectPath}
-      requestedOutputIntent={pendingApproval.requestedOutputIntent}
-      saveCandidateOnSuccess={pendingApproval.saveCandidateOnSuccess}
-      remainingCount={pendingApproval.remainingCount}
-      affectedResources={pendingApproval.affectedResources}
-      codePreview={pendingApproval.codePreview}
-      pending={pending}
-      approvalsHref={`?space=operate&page=approvals&approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
-      workspaceAllowAvailable={Boolean(workspaceId?.trim())}
-      onApproveOnce={() => onApprove("once")}
-      onApproveInSession={() => onApprove("session")}
-      onApproveInWorkspace={() => onApprove("workspace")}
-      onDeny={onDeny}
-    />
+    <div className="chat-blocking-prompt chat-blocking-prompt-approval" onKeyDown={handleKeyDown}>
+      <InlineApprovalPrompt
+        approvalId={pendingApproval.approvalId}
+        kind={pendingApproval.kind}
+        toolName={pendingApproval.toolName}
+        reason={pendingApproval.reason}
+        riskLevel={pendingApproval.riskLevel}
+        expiresAt={pendingApproval.expiresAt}
+        codeHash={pendingApproval.codeHash}
+        wrapperManifestHash={pendingApproval.wrapperManifestHash}
+        capabilitySnapshotId={pendingApproval.capabilitySnapshotId}
+        inspectPath={pendingApproval.inspectPath}
+        requestedOutputIntent={pendingApproval.requestedOutputIntent}
+        saveCandidateOnSuccess={pendingApproval.saveCandidateOnSuccess}
+        remainingCount={pendingApproval.remainingCount}
+        affectedResources={pendingApproval.affectedResources}
+        codePreview={pendingApproval.codePreview}
+        pending={pending}
+        approvalsHref={`?space=operate&page=approvals&approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
+        workspaceAllowAvailable={Boolean(workspaceId?.trim())}
+        onApproveOnce={() => onApprove("once")}
+        onApproveInSession={() => onApprove("session")}
+        onApproveInWorkspace={() => onApprove("workspace")}
+        onDeny={onDeny}
+      />
+    </div>
   );
 }

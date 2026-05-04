@@ -7,24 +7,13 @@ import type {
 } from "./internal-tooling.js";
 import type { ContextSourceAttribution } from "./ingestion.js";
 
-export type ToolProfile =
-  | "minimal"
-  | "standard"
-  | "coding"
-  | "ops"
-  | "research"
-  | "chat-agent"
-  | "danger";
+export type ToolApprovalMode = "approve_all" | "approve_risky" | "bypass";
 
-export type FilesystemReadAccessMode =
-  | "roots_only"
-  | "approval_required"
-  | "full_disk";
+export type ToolProfile = "minimal" | "standard" | "coding" | "ops" | "research" | "chat-agent" | "danger";
 
-export type ToolLoopDetectorKind =
-  | "repeated_same_call"
-  | "no_progress_polling"
-  | "ping_pong";
+export type FilesystemReadAccessMode = "roots_only" | "approval_required" | "full_disk";
+
+export type ToolLoopDetectorKind = "repeated_same_call" | "no_progress_polling" | "ping_pong";
 
 export interface ToolLoopDetectionConfig {
   enabled: boolean;
@@ -36,9 +25,10 @@ export interface ToolLoopDetectionConfig {
 }
 
 export interface ToolPolicyConfig {
-  profiles: Record<string, string[]>;
+  profiles?: Record<string, string[]>;
   tools: {
-    profile: ToolProfile;
+    approvalMode?: ToolApprovalMode;
+    profile?: ToolProfile;
     allow: string[];
     deny: string[];
     loopDetection?: ToolLoopDetectionConfig;
@@ -89,7 +79,8 @@ export interface ToolInvokeResult {
 }
 
 export interface EffectiveToolPolicy {
-  profile: string;
+  approvalMode: ToolApprovalMode;
+  profile?: string;
   allowSet: Set<string>;
   denySet: Set<string>;
   effectiveTools: Set<string>;

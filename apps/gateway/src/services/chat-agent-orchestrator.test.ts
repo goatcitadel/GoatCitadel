@@ -7646,7 +7646,7 @@ describe("ChatAgentOrchestrator", () => {
     expect(firstCall?.verbosity).toBe("low");
   });
 
-  it("suppresses prompt-lab OpenAI reasoning controls on tool-enabled turns", async () => {
+  it("preserves OpenAI reasoning controls on tool-enabled turns", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "gpt-5.4",
       choices: [
@@ -7692,8 +7692,8 @@ describe("ChatAgentOrchestrator", () => {
 
     expect(result.turnTrace.status).toBe("completed");
     const firstCall = (createChatCompletion.mock.calls as unknown as Array<[ChatCompletionRequest]>)[0]?.[0];
-    expect(firstCall?.reasoning).toBeUndefined();
-    expect(firstCall?.verbosity).toBeUndefined();
+    expect(firstCall?.reasoning).toEqual({ effort: "high" });
+    expect(firstCall?.verbosity).toBe("medium");
   });
 
   it("continues MCP fallback tiers when one tier throws instead of returning", async () => {

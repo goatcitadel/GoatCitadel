@@ -16,7 +16,7 @@ const streamQuerySchema = z.object({
 });
 
 const STREAM_REPLAY_LIMIT = 500;
-const DEFAULT_MAX_SSE_CONNECTIONS_PER_IP = 5;
+const DEFAULT_MAX_SSE_CONNECTIONS_PER_IP = 25;
 
 export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
   const activeSseConnectionsByIp = new Map<string, number>();

@@ -107,7 +107,7 @@ describe("Postgres runtime schema generation", () => {
   });
 
   it("reasserts current chat delegation step columns for already-migrated Postgres runtimes", () => {
-    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 24);
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 25);
 
     assert.equal(repairMigration?.name, "chat_delegation_step_current_shape_repairs");
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_delegation_steps/);
@@ -176,8 +176,17 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS image_model TEXT/);
   });
 
-  it("repairs prompt-pack agentic diagnostic columns for older Postgres runtimes", () => {
+  it("adds chat operator control preferences for older Postgres runtimes", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 21);
+
+    assert.equal(repairMigration?.name, "chat_operator_control_prefs");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE chat_session_prefs/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS speed_mode TEXT DEFAULT 'standard'/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS subagent_policy TEXT DEFAULT 'ask_when_useful'/);
+  });
+
+  it("repairs prompt-pack agentic diagnostic columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 22);
 
     assert.equal(repairMigration?.name, "prompt_pack_agentic_diagnostics_repairs");
     assert.match(repairMigration?.sql ?? "", /ALTER TABLE prompt_pack_tests/);
@@ -188,7 +197,7 @@ describe("Postgres runtime schema generation", () => {
   });
 
   it("repairs benchmark item uniqueness for older Postgres prompt-pack runtimes", () => {
-    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 22);
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 23);
 
     assert.equal(repairMigration?.name, "prompt_pack_benchmark_item_unique_repairs");
     assert.match(repairMigration?.sql ?? "", /DELETE FROM prompt_pack_benchmark_items AS item/);

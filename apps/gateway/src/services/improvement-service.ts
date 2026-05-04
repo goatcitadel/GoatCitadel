@@ -4914,7 +4914,7 @@ function buildRepairCandidateTitle(causeClass: CapabilityGapCauseClass, requeste
   const toolLabel = requestedTool ? ` for ${requestedTool}` : "";
   switch (causeClass) {
     case "tool_exists_but_not_in_profile":
-      return `Tool profile mismatch${toolLabel}`;
+      return `Tool approval mismatch${toolLabel}`;
     case "tool_requires_approval_but_not_exposed":
       return `Approval path missing${toolLabel}`;
     case "skill_missing":

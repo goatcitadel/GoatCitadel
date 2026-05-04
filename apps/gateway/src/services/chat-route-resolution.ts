@@ -83,6 +83,8 @@ function buildPreviewPrefs(
     model: input.model ?? input.prefsOverride?.model,
     webMode: input.webMode ?? input.prefsOverride?.webMode,
     thinkingLevel: input.thinkingLevel ?? input.prefsOverride?.thinkingLevel,
+    speedMode: input.speedMode ?? input.prefsOverride?.speedMode,
+    subagentPolicy: input.subagentPolicy ?? input.prefsOverride?.subagentPolicy,
   });
   const splitPrefs = splitChatPrefsPatch(prefsOverride);
   return {

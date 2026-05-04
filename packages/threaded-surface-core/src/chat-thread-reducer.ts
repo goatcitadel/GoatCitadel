@@ -76,6 +76,8 @@ export function updateThreadFromStreamChunk(
         webMode: prefs?.webMode ?? "auto",
         memoryMode: prefs?.memoryMode ?? "auto",
         thinkingLevel: prefs?.thinkingLevel ?? "standard",
+        speedMode: prefs?.speedMode ?? "standard",
+        subagentPolicy: prefs?.subagentPolicy ?? "ask_when_useful",
         effectiveToolAutonomy: prefs?.planningMode === "advisory" ? "manual" : prefs?.toolAutonomy,
         startedAt,
         toolRuns: [],

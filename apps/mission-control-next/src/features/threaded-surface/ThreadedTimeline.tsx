@@ -160,7 +160,6 @@ function ThreadTurnCard({
   onSelect,
   onSwitchBranch,
   onRetryTurn,
-  onEditTurn,
   onOpenRunDetails,
   onOpenGeneratedArtifact,
   onCreateGeneratedArtifact,
@@ -172,7 +171,6 @@ function ThreadTurnCard({
   onSelect: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
-  onEditTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifact: (turnId: string) => void;
@@ -253,9 +251,6 @@ function ThreadTurnCard({
               {mode === "cowork" ? "Retry run step" : "Retry"}
             </button>
           ) : null}
-          <button type="button" className="mc-next-thread-inline-button" onClick={() => onEditTurn(turn.turnId)}>
-            Edit and resend
-          </button>
           {turn.assistantMessage ? (
             <button
               type="button"
@@ -456,13 +451,32 @@ function ThreadDelegationSummary({
 }
 
 export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
+  const blockerActive = Boolean(pendingApproval || props.pendingUserInput);
 
   useEffect(() => {
     if (!props.followOutput) {
       return;
     }
-    threadEndRef.current?.scrollIntoView({ block: "end" });
+    if (scrollFrameRef.current !== null) {
+      cancelAnimationFrame(scrollFrameRef.current);
+    }
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      threadEndRef.current?.scrollIntoView({
+        block: "end",
+        behavior: props.streamStatus === "streaming" ? "smooth" : "auto",
+      });
+    });
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
+        scrollFrameRef.current = null;
+      }
+    };
   }, [
     props.followOutput,
     props.notices.length,
@@ -477,10 +491,55 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
     props.onBottomStateChange(true);
   }, [props]);
 
-  const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
+  useEffect(() => {
+    const threadCard = shellRef.current?.closest(".mc-next-threaded-thread-card");
+    const composerCard = threadCard?.nextElementSibling;
+    if (!(composerCard instanceof HTMLElement) || !composerCard.classList.contains("mc-next-threaded-composer-card")) {
+      return undefined;
+    }
+
+    if (!blockerActive) {
+      return undefined;
+    }
+
+    const inertComposerCard = composerCard as HTMLElement & { inert?: boolean };
+    const activeElement = globalThis.document?.activeElement;
+    composerCard.setAttribute("aria-disabled", "true");
+    composerCard.setAttribute("data-blocked-by-inline-prompt", "true");
+    inertComposerCard.inert = true;
+    if (activeElement instanceof HTMLElement && composerCard.contains(activeElement)) {
+      activeElement.blur();
+    }
+
+    return () => {
+      composerCard.removeAttribute("aria-disabled");
+      composerCard.removeAttribute("data-blocked-by-inline-prompt");
+      inertComposerCard.inert = false;
+    };
+  }, [blockerActive]);
+
+  const blockingPrompt = pendingApproval ? (
+    <div className="mc-next-thread-blocking-prompt" data-blocker-kind="approval">
+      <ChatPendingApprovalPanel
+        pendingApproval={pendingApproval}
+        workspaceId={props.workspaceId}
+        pending={props.approvalPending}
+        onApprove={props.onApprovePending}
+        onDeny={props.onDenyPending}
+      />
+    </div>
+  ) : props.pendingUserInput ? (
+    <div className="mc-next-thread-blocking-prompt" data-blocker-kind="user-input">
+      <ChatPendingUserInputPanel
+        pendingUserInput={props.pendingUserInput}
+        pending={props.userInputPending}
+        onSubmit={props.onSubmitUserInput}
+      />
+    </div>
+  ) : null;
 
   return (
-    <div className={`mc-next-thread-shell mode-${props.mode}`}>
+    <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
       <div className="mc-next-thread-status-lane">
         <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
       </div>
@@ -521,7 +580,6 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                   onSelect={(turnId) => props.onSelectTurn(turnId)}
                   onSwitchBranch={props.onSwitchBranch}
                   onRetryTurn={props.onRetryTurn}
-                  onEditTurn={props.onEditTurn}
                   onOpenRunDetails={props.onOpenRunDetails}
                   onOpenGeneratedArtifact={props.onOpenGeneratedArtifact}
                   onCreateGeneratedArtifact={props.onCreateGeneratedArtifact}
@@ -529,26 +587,13 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                 />
               ))}
               <ThreadNotices notices={props.notices} />
+              {blockingPrompt}
               <div ref={threadEndRef} aria-hidden="true" />
             </div>
           </div>
         )}
       </div>
-      {pendingApproval ? (
-        <ChatPendingApprovalPanel
-          pendingApproval={pendingApproval}
-          workspaceId={props.workspaceId}
-          pending={props.approvalPending}
-          onApprove={props.onApprovePending}
-          onDeny={props.onDenyPending}
-        />
-      ) : (
-        <ChatPendingUserInputPanel
-          pendingUserInput={props.pendingUserInput}
-          pending={props.userInputPending}
-          onSubmit={props.onSubmitUserInput}
-        />
-      )}
+      {props.loading || !props.thread || props.thread.turns.length === 0 ? blockingPrompt : null}
     </div>
   );
 }

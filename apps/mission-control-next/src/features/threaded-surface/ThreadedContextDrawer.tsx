@@ -199,6 +199,30 @@ export function ThreadedContextDrawer({
             </section>
           ) : null}
 
+          {props.delegationSuggestion ? (
+            <section className="mc-next-context-card">
+              <p className="mc-next-panel-kicker">Subagents</p>
+              <strong>{props.delegationSuggestion.mode}</strong>
+              <p>{props.delegationSuggestion.objective}</p>
+              <div className="mc-next-context-chip-row">
+                {props.delegationSuggestion.roles.map((role) => (
+                  <StatusChip key={role} tone="muted">
+                    {role}
+                  </StatusChip>
+                ))}
+              </div>
+              <div className="mc-next-context-actions">
+                <button
+                  type="button"
+                  className="mc-next-panel-button primary"
+                  onClick={() => void props.onAcceptDelegation()}
+                >
+                  Use subagents
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {props.specialistSuggestions.length > 0 ? (
             <section className="mc-next-context-card">
               <p className="mc-next-panel-kicker">Specialists</p>

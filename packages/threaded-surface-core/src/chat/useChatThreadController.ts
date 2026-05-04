@@ -19,6 +19,7 @@ type ProjectListItem = {
 
 export function useChatThreadController(input: {
   surfaceMode: ChatMode;
+  showAllModes?: boolean;
   routeSearch: string;
   sessions?: SessionListItem[];
   projects?: ProjectListItem[];
@@ -123,7 +124,7 @@ export function useChatThreadController(input: {
   const visibleSessions = useMemo(() => {
     const all = input.sessions ?? [];
     return all.filter((item) => {
-      if ((item.mode ?? "chat") !== input.surfaceMode) {
+      if (!input.showAllModes && (item.mode ?? "chat") !== input.surfaceMode) {
         return false;
       }
       if (input.selectedProjectId !== "all") {
@@ -149,7 +150,14 @@ export function useChatThreadController(input: {
       }
       return true;
     });
-  }, [input.selectedFolderId, input.selectedProjectId, input.selectedTag, input.sessions, input.surfaceMode]);
+  }, [
+    input.selectedFolderId,
+    input.selectedProjectId,
+    input.selectedTag,
+    input.sessions,
+    input.showAllModes,
+    input.surfaceMode,
+  ]);
 
   const missionSessions = useMemo(() => visibleSessions.filter((item) => item.scope === "mission"), [visibleSessions]);
   const externalSessions = useMemo(

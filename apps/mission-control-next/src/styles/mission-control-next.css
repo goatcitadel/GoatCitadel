@@ -2,6 +2,7 @@
   --gc-area-chat: oklch(0.72 0.12 240);
   --gc-area-cowork: oklch(0.73 0.13 315);
   --gc-area-code: oklch(0.74 0.12 175);
+  --gc-area-projects: oklch(0.76 0.13 205);
   --gc-area-library: oklch(0.72 0.1 255);
   --gc-area-ops: oklch(0.71 0.08 220);
   --gc-area-settings: oklch(0.78 0.1 85);
@@ -15,7 +16,7 @@
   overflow-x: clip;
   background: var(--mc-shell-bg);
   color: var(--foreground);
-  font-size: 15px;
+  font-size: 12.5px;
 }
 
 .mc-next-shell[data-area="chat"] {
@@ -28,6 +29,10 @@
 
 .mc-next-shell[data-area="code"] {
   --mc-area-color: var(--gc-area-code);
+}
+
+.mc-next-shell[data-area="projects"] {
+  --mc-area-color: var(--gc-area-projects);
 }
 
 .mc-next-shell[data-area="library"] {
@@ -44,25 +49,23 @@
 
 .mc-next-shell.theme-signal-noir[data-area] {
   color-scheme: dark;
-  --background: oklch(0.286 0.012 255);
-  --foreground: oklch(0.968 0.004 255);
-  --card: oklch(0.362 0.012 255);
-  --muted: oklch(0.402 0.012 255);
-  --muted-foreground: oklch(0.86 0.01 250);
-  --border: oklch(0.78 0.012 255 / 42%);
+  --background: #14181d;
+  --foreground: #f4f1ea;
+  --card: #1b2027;
+  --muted: #232934;
+  --muted-foreground: #898f99;
+  --border: rgba(255, 255, 255, 0.1);
   --input: oklch(0.72 0.01 255 / 40%);
-  --primary: color-mix(in oklab, var(--mc-area-color) 66%, white);
-  --primary-foreground: oklch(0.18 0.01 255);
-  --mc-shell-bg:
-    radial-gradient(circle at top left, color-mix(in oklab, var(--mc-area-color) 10%, transparent), transparent 34%),
-    linear-gradient(180deg, #4f5d71 0%, #435063 48%, #394657 100%);
-  --mc-surface-1: rgba(64, 76, 95, 0.96);
-  --mc-surface-2: rgba(74, 87, 108, 0.97);
-  --mc-surface-3: rgba(87, 100, 122, 0.98);
-  --mc-border-subtle: rgba(255, 255, 255, 0.14);
+  --primary: #f4ead6;
+  --primary-foreground: #0b0d0f;
+  --mc-shell-bg: #14181d;
+  --mc-surface-1: #181d24;
+  --mc-surface-2: #10141a;
+  --mc-surface-3: #222833;
+  --mc-border-subtle: rgba(255, 255, 255, 0.08);
   --mc-border-strong: color-mix(in oklab, var(--mc-area-color) 18%, rgba(255, 255, 255, 0.22));
-  --mc-shadow-soft: 0 18px 42px rgba(10, 14, 22, 0.2);
-  --mc-shadow-strong: 0 24px 58px rgba(10, 14, 22, 0.3);
+  --mc-shadow-soft: none;
+  --mc-shadow-strong: 0 18px 48px rgba(0, 0, 0, 0.36);
   --mc-scrollbar-track: rgba(28, 35, 48, 0.58);
   --mc-scrollbar-thumb: rgba(164, 177, 201, 0.44);
   --mc-scrollbar-thumb-hover: rgba(189, 202, 225, 0.62);
@@ -80,8 +83,8 @@
   --border-subtle: var(--mc-border-subtle);
   --border-emphasis: var(--mc-border-strong);
   --accent-primary: var(--primary);
-  --accent-strong: color-mix(in oklab, var(--mc-area-color) 78%, white);
-  --accent-soft: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
+  --accent-strong: #f4ead6;
+  --accent-soft: rgba(244, 234, 214, 0.1);
   --accent: var(--primary);
   --line: var(--border);
   --panel: var(--mc-surface-2);
@@ -147,13 +150,7 @@
 }
 
 .mc-next-shell::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 18% 0, color-mix(in oklab, var(--mc-area-color) 8%, transparent), transparent 28%),
-    radial-gradient(circle at 86% 14%, rgba(255, 255, 255, 0.03), transparent 24%);
+  display: none;
 }
 
 .mc-next-shell,
@@ -281,7 +278,7 @@
 .mc-next-app-frame {
   position: relative;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: 36px 1fr 22px;
   min-height: 100dvh;
 }
 
@@ -292,71 +289,98 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.9rem;
-  padding: 0.9rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
-  backdrop-filter: blur(20px);
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--mc-border-subtle);
+  background: var(--background);
+  backdrop-filter: none;
 }
 
 .mc-next-topbar-left,
 .mc-next-topbar-right {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.45rem;
 }
 
 .mc-next-topbar-left {
+  flex: 0 0 auto;
   min-width: 0;
 }
 
 .mc-next-topbar-right {
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
 .mc-next-brand {
+  position: relative;
   display: grid;
-  gap: 0.08rem;
+  gap: 0;
+  width: 10.8rem;
+  min-width: 0;
+  padding-left: 1.55rem;
+  padding-right: 0.55rem;
+  border-right: 1px solid var(--mc-border-subtle);
+}
+
+.mc-next-brand::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.08rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 0.32rem;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.78), transparent 34%),
+    linear-gradient(135deg, #f4ead6, #948b78);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 18px rgba(244, 234, 214, 0.16);
 }
 
 .mc-next-brand p {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: 0.52rem;
   font-weight: 650;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--mc-area-color) 56%, var(--foreground));
+  color: var(--text-muted);
 }
 
 .mc-next-brand h1 {
   margin: 0;
-  font-size: 1.08rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
+  line-height: 1.05;
 }
 
 .mc-next-primary-nav {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.28rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  gap: 0.12rem;
+  padding: 0.12rem;
+  border-radius: 0.42rem;
+  border: 1px solid var(--mc-border-subtle);
+  background: var(--mc-surface-1);
+  box-shadow: none;
 }
 
 .mc-next-primary-link {
   display: inline-flex;
   align-items: center;
-  gap: 0.42rem;
-  min-height: 2.35rem;
-  padding: 0 0.86rem;
+  gap: 0.24rem;
+  min-height: 1.55rem;
+  padding: 0 0.42rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: 0.32rem;
   background: transparent;
   color: var(--text-secondary);
+  font-size: 0.68rem;
   cursor: pointer;
   transition:
     background-color 160ms ease,
@@ -366,24 +390,61 @@
 
 .mc-next-primary-link:hover,
 .mc-next-primary-link:focus-visible {
-  background: color-mix(in oklab, var(--mc-surface-3) 76%, transparent);
+  background: var(--mc-surface-3);
   color: var(--foreground);
 }
 
 .mc-next-primary-link.active {
-  background: color-mix(in oklab, var(--mc-area-color) 18%, var(--card));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-3));
   color: var(--foreground);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 32%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 28%, transparent);
+}
+
+.mc-next-command-search {
+  order: -1;
+  flex: 1 1 18rem;
+  max-width: 25rem;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  padding: 0 0.48rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: 0.34rem;
+  background: var(--mc-surface-1);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.mc-next-command-search span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-command-search kbd {
+  padding: 0.02rem 0.26rem;
+  border-radius: 0.2rem;
+  border: 1px solid var(--mc-border-subtle);
+  background: var(--mc-surface-3);
+  color: var(--text-muted);
+  font: 0.56rem var(--mc-font-mono);
 }
 
 .mc-next-select-field {
-  display: grid;
-  gap: 0.28rem;
-  min-width: 15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .mc-next-select-field span {
-  font-size: 0.72rem;
+  font-size: 0;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -391,32 +452,48 @@
 }
 
 .mc-next-select-field select {
-  min-height: 2.75rem;
-  border-radius: 0.95rem;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  width: 8.6rem;
+  min-height: 1.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--mc-border-subtle);
+  background: var(--mc-surface-1);
   color: var(--foreground);
-  padding: 0.72rem 0.9rem;
-  box-shadow: var(--mc-shadow-soft);
+  padding: 0.14rem 0.45rem;
+  box-shadow: none;
+  font-size: 0.66rem;
 }
 
 .mc-next-topbar-status {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 0.45rem;
   flex-wrap: wrap;
 }
 
+.mc-next-topbar-right > button:not(.mc-next-command-search) {
+  width: 1.55rem;
+  min-width: 1.55rem;
+  padding: 0;
+  font-size: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.mc-next-topbar-right > button:not(.mc-next-command-search) svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
 .mc-next-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 1.9rem;
-  padding: 0 0.7rem;
+  min-height: 1.35rem;
+  padding: 0 0.45rem;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
+  border: 1px solid var(--mc-border-subtle);
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 0.74rem;
+  font-size: 0.62rem;
   font-weight: 650;
 }
 
@@ -432,72 +509,39 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: 0.28rem;
   min-width: 0;
   max-width: 100%;
-  min-height: 2.4rem;
-  padding: 0.46rem 0.9rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-1) 90%, transparent);
+  min-height: 1.45rem;
+  padding: 0.16rem 0.42rem;
+  border-radius: 0.32rem;
+  border: 1px solid var(--mc-border-subtle);
+  background: transparent;
   color: var(--foreground);
   line-height: 1.18;
   text-align: center;
   white-space: normal;
   overflow-wrap: anywhere;
   cursor: pointer;
-  box-shadow: var(--mc-shadow-soft);
+  box-shadow: none;
+  font-size: 0.66rem;
 }
 
 .mc-next-button {
   position: relative;
   overflow: hidden;
   isolation: isolate;
-  background: color-mix(in oklab, var(--mc-area-color) 18%, var(--card));
-  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .mc-next-button::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(
-    115deg,
-    transparent 8%,
-    color-mix(in oklab, white 54%, var(--mc-area-color)) 24%,
-    color-mix(in oklab, white 84%, var(--mc-area-color)) 40%,
-    color-mix(in oklab, white 54%, var(--mc-area-color)) 56%,
-    transparent 76%
-  );
-  background-size: 220% 100%;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0.82;
-  pointer-events: none;
-  animation: mc-next-button-shimmer 3.2s linear infinite;
+  display: none;
 }
 
 .mc-next-button::after {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  background: linear-gradient(
-    105deg,
-    transparent 24%,
-    color-mix(in oklab, white 24%, transparent) 46%,
-    transparent 68%
-  );
-  background-size: 220% 100%;
-  opacity: 0.42;
-  pointer-events: none;
-  mix-blend-mode: screen;
-  animation: mc-next-button-shimmer 3.2s linear infinite;
+  display: none;
 }
 
 .mc-next-button > * {
@@ -507,7 +551,8 @@
 
 .mc-next-button-secondary,
 .mc-next-shell .gc-action-secondary {
-  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  background: transparent;
+  color: var(--foreground);
 }
 
 .mc-next-button-ghost {
@@ -551,9 +596,9 @@
 }
 
 .mc-next-icon-button {
-  min-width: 2.4rem;
+  min-width: 1.65rem;
   flex: 0 0 auto;
-  padding-inline: 0.55rem;
+  padding-inline: 0.35rem;
   white-space: nowrap;
 }
 
@@ -563,11 +608,11 @@
 
 .mc-next-body {
   display: grid;
-  grid-template-columns: 13.75rem minmax(0, 1fr);
-  gap: 0.85rem;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 0;
   align-items: start;
   min-height: 0;
-  padding: 1rem 1.25rem 1rem;
+  padding: 0;
 }
 
 .mc-next-body.is-work-area {
@@ -576,18 +621,19 @@
 
 .mc-next-rail {
   position: sticky;
-  top: 5.2rem;
+  top: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  min-height: calc(100dvh - 6.95rem);
-  max-height: calc(100dvh - 6.95rem);
+  gap: 0.42rem;
+  min-height: calc(100dvh - 58px);
+  max-height: calc(100dvh - 58px);
   overflow: auto;
-  padding: 0.82rem;
-  border-radius: 1.15rem;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  padding: 8px 6px;
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--mc-border-subtle);
+  background: var(--mc-surface-2);
+  box-shadow: none;
 }
 
 .mc-next-body.is-work-area .mc-next-rail {
@@ -598,12 +644,12 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 1rem;
+  gap: 0.45rem;
 }
 
 .mc-next-rail-menu {
   display: grid;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .mc-next-rail-section {
@@ -614,12 +660,12 @@
 .mc-next-rail-separator {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.35rem;
   min-width: 0;
 }
 
 .mc-next-rail-separator span {
-  font-size: 0.72rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -638,7 +684,7 @@
 .mc-next-stage-header p,
 .side-inspector-drawer-kicker {
   margin: 0;
-  font-size: 0.72rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -649,7 +695,7 @@
 .mc-next-stage-header h2,
 .side-inspector-drawer-title {
   margin: 0.18rem 0 0;
-  font-size: 1.08rem;
+  font-size: 0.82rem;
   line-height: 1.12;
 }
 
@@ -676,10 +722,10 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.85rem;
+  gap: 0.45rem;
   width: 100%;
-  padding: 0.74rem 0.82rem;
-  border-radius: 0.95rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.42rem;
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
@@ -700,7 +746,7 @@
 
 .mc-next-rail-link strong {
   display: block;
-  font-size: 0.96rem;
+  font-size: 0.72rem;
 }
 
 .mc-next-rail-link span {
@@ -709,20 +755,20 @@
 
 .mc-next-rail-count {
   display: inline-flex;
-  min-width: 1.85rem;
+  min-width: 1.25rem;
   align-items: center;
   justify-content: center;
-  padding: 0.1rem 0.42rem;
+  padding: 0.04rem 0.28rem;
   border-radius: 999px;
   background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
   color: color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
-  font-size: 0.76rem;
+  font-size: 0.58rem;
   font-weight: 700;
 }
 
 .mc-next-rail-signal-card {
+  display: none;
   margin-top: auto;
-  display: grid;
   gap: 0.6rem;
   padding: 0.78rem;
   border-radius: 1rem;
@@ -904,23 +950,27 @@
 
 .mc-next-status-strip {
   display: flex;
-  gap: 0.65rem;
+  gap: 1rem;
   flex-wrap: wrap;
-  padding: 0 1.25rem 1rem;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-top: 1px solid var(--mc-border-subtle);
+  background: var(--background);
 }
 
 .mc-next-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.65rem;
+  gap: 0.26rem;
   min-width: 0;
   max-width: 100%;
-  min-height: 2.5rem;
-  padding: 0.55rem 0.8rem;
-  border-radius: 1rem;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  min-height: 1.1rem;
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .mc-next-status-pill div {
@@ -929,14 +979,16 @@
 
 .mc-next-status-pill span {
   display: block;
-  font-size: 0.74rem;
+  font-size: 0;
   color: var(--text-muted);
 }
 
 .mc-next-status-pill strong {
   display: block;
   color: var(--foreground);
-  font-size: 0.86rem;
+  font-size: 0.6rem;
+  font-family: var(--mc-font-mono);
+  font-weight: 500;
   line-height: 1.2;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -946,9 +998,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.95rem;
-  height: 1.95rem;
-  border-radius: 0.75rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 0.45rem;
   background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
   color: color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
 }
@@ -1362,10 +1414,10 @@
 .mc-next-shell .chat-trace-card,
 .mc-next-shell .generated-artifact-sheet,
 .mc-next-shell .chat-preset-picker-card {
-  border-radius: 1.1rem;
+  border-radius: 0.5rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 95%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  box-shadow: none;
 }
 
 .mc-next-shell .card,
@@ -1374,7 +1426,7 @@
 .mc-next-shell .operator-summary-card,
 .mc-next-shell .event-card,
 .mc-next-shell .shell-page-error-card {
-  padding: 1rem;
+  padding: 0.62rem;
 }
 
 .mc-next-shell .page-guide-card,
@@ -1393,7 +1445,7 @@
 .mc-next-shell input,
 .mc-next-shell select,
 .mc-next-shell textarea {
-  border-radius: 0.95rem;
+  border-radius: 0.42rem;
   border-color: var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -1408,8 +1460,8 @@
 .mc-next-shell .event-card-summary,
 .mc-next-shell .event-card-meta {
   color: var(--text-secondary);
-  font-size: 0.92rem;
-  line-height: 1.45;
+  font-size: 0.68rem;
+  line-height: 1.35;
 }
 
 .mc-next-shell .page-header-eyebrow,
@@ -1423,11 +1475,12 @@
 .mc-next-shell .page-header,
 .mc-next-shell .page-header-citadel,
 .mc-next-shell .page-header-command {
-  padding: 1rem 1.05rem;
-  border-radius: 1.15rem;
-  border: 1px solid var(--border);
-  background: color-mix(in oklab, var(--card) 96%, transparent);
-  box-shadow: var(--mc-shadow-soft);
+  padding: 0.55rem 0;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 1px solid var(--mc-border-subtle);
+  background: transparent;
+  box-shadow: none;
   backdrop-filter: none;
 }
 
@@ -1437,7 +1490,7 @@
 }
 
 .mc-next-shell .page-header-title {
-  font-size: clamp(1.28rem, 1.95vw, 1.7rem);
+  font-size: clamp(1.02rem, 1.45vw, 1.24rem);
   line-height: 1.08;
   letter-spacing: -0.03em;
 }
@@ -1445,17 +1498,17 @@
 .mc-next-shell .page-header-subtitle {
   max-width: 52rem;
   color: var(--text-secondary);
-  font-size: 0.98rem;
-  line-height: 1.55;
+  font-size: 0.68rem;
+  line-height: 1.38;
 }
 
 .mc-next-shell .stat-card-value {
-  font-size: clamp(1.1rem, 1.6vw, 1.45rem);
+  font-size: clamp(0.82rem, 1.1vw, 1rem);
 }
 
 .mc-next-shell .stat-card-note {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: 0.66rem;
 }
 
 .mc-next-shell .workflow-summary-strip,
@@ -1468,13 +1521,13 @@
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  min-height: 1.5rem;
-  padding: 0.14rem 0.48rem;
+  min-height: 1.18rem;
+  padding: 0.08rem 0.34rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.62rem;
   line-height: 1.16;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -1483,8 +1536,8 @@
 
 .mc-next-shell .workflow-status-stack > .error,
 .mc-next-shell .workflow-status-stack > .office-subtitle {
-  padding: 0.7rem 0.8rem;
-  border-radius: 0.95rem;
+  padding: 0.42rem 0.48rem;
+  border-radius: 0.46rem;
   border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
@@ -1494,7 +1547,7 @@
 }
 
 .mc-next-shell .status-banner {
-  border-radius: 1rem;
+  border-radius: 0.5rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 95%, transparent);
   color: var(--foreground);
@@ -1546,22 +1599,29 @@
   }
 
   .mc-next-topbar {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .mc-next-topbar-left,
   .mc-next-topbar-right {
-    width: 100%;
-    justify-content: space-between;
+    width: auto;
+    justify-content: flex-start;
   }
 
   .mc-next-topbar-right {
-    gap: 0.65rem;
+    gap: 0.35rem;
+    margin-left: auto;
+    min-width: 0;
+  }
+
+  .mc-next-command-search,
+  .mc-next-select-field {
+    display: none;
   }
 
   .mc-next-select-field {
-    min-width: min(18rem, 100%);
-    flex: 1 1 16rem;
+    min-width: 0;
+    flex: 0 0 auto;
   }
 
   .mc-next-body {
@@ -1631,8 +1691,8 @@
   .mc-next-topbar,
   .mc-next-body,
   .mc-next-status-strip {
-    padding-left: 0.9rem;
-    padding-right: 0.9rem;
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
   }
 
   .mc-next-inline-metrics {

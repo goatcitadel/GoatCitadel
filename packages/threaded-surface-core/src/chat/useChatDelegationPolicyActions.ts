@@ -17,7 +17,7 @@ import type {
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useMemo, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   fetchChatDelegationRun,
   runChatDelegation,
@@ -68,6 +68,20 @@ const CODE_DELEGATION_PRESETS = {
       "Run an implement-review-test cycle for this task, then stitch the result into one operator-ready handoff. ",
   },
 } as const;
+
+function shouldRecommendSubagents(objective: string, surfaceMode: ChatMode): boolean {
+  const normalized = objective.toLowerCase();
+  const complexitySignals = [
+    /\bimplement\b|\brefactor\b|\bfix\b|\bdebug\b|\btest\b|\breview\b/,
+    /\bresearch\b|\binvestigate\b|\bcompare\b|\baudit\b|\bqa\b/,
+    /\bplan\b.*\bimplement\b|\bimplement\b.*\btest\b|\breview\b.*\bfix\b/,
+    /\bparallel\b|\bsubagent\b|\bdelegate\b|\bagents\b/,
+    /\bmultiple\b|\bseveral\b|\bend[- ]to[- ]end\b|\bfull\b|\bthorough\b/,
+  ];
+  const signalCount = complexitySignals.filter((pattern) => pattern.test(normalized)).length;
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  return surfaceMode !== "chat" || signalCount >= 2 || wordCount >= 60;
+}
 
 export interface ActiveChatDelegationStep {
   stepId: string;
@@ -258,6 +272,7 @@ export function useChatDelegationPolicyActions(input: {
 
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
   const [activeDelegationRun, setActiveDelegationRun] = useState<ActiveChatDelegationRun | null>(null);
+  const subagentRecommendationKeyRef = useRef<string>("");
   const selectedTurn = useMemo(
     () => resolveSelectedTurn(input.thread, input.selectedTurnId),
     [input.selectedTurnId, input.thread],
@@ -656,6 +671,86 @@ export function useChatDelegationPolicyActions(input: {
       setSending,
     ],
   );
+
+  useEffect(() => {
+    const subagentPolicy = prefs?.subagentPolicy ?? "ask_when_useful";
+    if (
+      subagentPolicy === "off" ||
+      !selectedSession ||
+      sending ||
+      activeDelegationRun?.status === "running" ||
+      delegationSuggestion
+    ) {
+      return;
+    }
+    if (draft.trim()) {
+      return;
+    }
+    const objective =
+      messages
+        .filter((item) => item.role === "user")
+        .at(-1)
+        ?.content?.trim() || "";
+    if (!objective || !shouldRecommendSubagents(objective, surfaceMode)) {
+      return;
+    }
+    const recommendationKey = `${selectedSession.sessionId}:${subagentPolicy}:${objective.slice(0, 160)}`;
+    if (subagentRecommendationKeyRef.current === recommendationKey) {
+      return;
+    }
+    subagentRecommendationKeyRef.current = recommendationKey;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const suggested = await suggestChatDelegation(selectedSession.sessionId, { objective });
+        if (cancelled) {
+          return;
+        }
+        if (subagentPolicy === "ask_when_useful") {
+          setDelegationSuggestion(suggested.suggestion);
+          pushLocalNotice("Subagents may help with this task. Review the suggested delegation plan in Assist.");
+          return;
+        }
+        setSending(true);
+        pushLocalNotice("Subagent policy is auto. Starting a delegated run because this task looks parallelizable.");
+        const accepted = await runDelegationAction(
+          selectedSession.sessionId,
+          buildDelegationRequest(suggested.suggestion.objective, suggested.suggestion.roles, suggested.suggestion.mode),
+          "Delegation",
+        );
+        if (!cancelled) {
+          pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
+          await loadSidebar();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError((err as Error).message);
+        }
+      } finally {
+        if (!cancelled && subagentPolicy === "auto_when_useful") {
+          setSending(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeDelegationRun?.status,
+    buildDelegationRequest,
+    delegationSuggestion,
+    draft,
+    loadSidebar,
+    messages,
+    prefs?.subagentPolicy,
+    pushLocalNotice,
+    runDelegationAction,
+    selectedSession,
+    sending,
+    setError,
+    setSending,
+    surfaceMode,
+  ]);
 
   return {
     activeDelegationRun,

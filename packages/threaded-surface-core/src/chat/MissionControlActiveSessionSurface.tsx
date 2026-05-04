@@ -2,6 +2,7 @@ import type {
   ChatAttachmentRecord,
   ChatGeneratedArtifactRecord,
   ChatMode,
+  ChatSessionRecord,
   ChatThreadResponse,
   RoutingPreflightResult,
   ThreadKnowledgeAttachmentRecord,
@@ -28,8 +29,11 @@ export interface MissionControlActiveSessionSurfaceProps {
   selectedProviderId?: string;
   selectedModel?: string;
   modelSwitchDisabled: boolean;
+  sessionLifecycleStatus: ChatSessionRecord["lifecycleStatus"];
+  sessionArchivePending: boolean;
   dockOpen: boolean;
   onToggleDock: () => void;
+  onToggleArchiveSession: () => void;
   onNavigateSurface: (surface: ChatMode) => void;
   onRequestProviderChange: (providerId: string) => void;
   onRequestModelChange: (model: string) => void;
@@ -91,6 +95,9 @@ export interface MissionControlActiveSessionSurfaceProps {
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   selectedSessionId: string | null;
   currentWebMode: "auto" | "off" | "quick" | "deep";
+  currentThinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep";
+  currentSpeedMode: "standard" | "fast";
+  currentSubagentPolicy: "off" | "ask_when_useful" | "auto_when_useful";
   routePreflight: RoutingPreflightResult | null;
   routePreflightLoading: boolean;
   routePreflightError: string | null;
@@ -114,6 +121,9 @@ export interface MissionControlActiveSessionSurfaceProps {
   onAcknowledgeRouteBoundary: () => void;
   onTogglePlanningMode: () => void;
   onSetDeepMode: () => void;
+  onSetThinkingLevel: (level: "off" | "minimal" | "standard" | "extended" | "deep") => void;
+  onSetSpeedMode: (mode: "standard" | "fast") => void;
+  onSetSubagentPolicy: (policy: "off" | "ask_when_useful" | "auto_when_useful") => void;
   onReviewRunDetails: () => void;
   onDraftChange: (next: string) => void;
   onComposerKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;

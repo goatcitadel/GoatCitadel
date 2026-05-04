@@ -1,6 +1,6 @@
 import type { AuthRuntimeSettings, AuthSettingsUpdateInput } from "./integrations.js";
 import type { LlmApiStyle, LlmProviderRequestConfig } from "./llm.js";
-import type { ToolProfile } from "./policy.js";
+import type { ToolApprovalMode, ToolProfile } from "./policy.js";
 
 export type OnboardingChecklistStatus = "complete" | "needs_input" | "optional";
 
@@ -17,6 +17,7 @@ export interface OnboardingState {
   completedBy?: string;
   checklist: OnboardingChecklistItem[];
   settings: {
+    toolApprovalMode: ToolApprovalMode;
     defaultToolProfile: string;
     budgetMode: "saver" | "balanced" | "power";
     networkAllowlist: string[];
@@ -56,6 +57,7 @@ export interface OnboardingStartupState {
 }
 
 export interface OnboardingBootstrapInput {
+  toolApprovalMode?: ToolApprovalMode;
   defaultToolProfile?: ToolProfile;
   budgetMode?: "saver" | "balanced" | "power";
   networkAllowlist?: string[];

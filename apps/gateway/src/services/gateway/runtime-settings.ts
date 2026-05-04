@@ -5,12 +5,14 @@ import type {
   LlamaCppRuntimeStatus,
   LlmRuntimeConfig,
   NpuRuntimeStatus,
+  ToolApprovalMode,
 } from "@goatcitadel/contracts";
 
 export interface RuntimeSettings {
   environment: string;
   deploymentProfile: DeploymentProfile;
-  defaultToolProfile: string;
+  toolApprovalMode: ToolApprovalMode;
+  defaultToolProfile?: string;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
   writeJailRoots: string[];

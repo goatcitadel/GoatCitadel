@@ -1,14 +1,26 @@
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
+
+export interface ChatComposerPlusMenuAction {
+  label: string;
+  disabled?: boolean;
+  active?: boolean;
+  onSelect: () => void;
+}
 
 export function ChatComposerPlusMenu({
   disabled,
   onAttachFiles,
   onRunQuickResearch,
+  actions = [],
+  children,
 }: {
   disabled?: boolean;
-  onAttachFiles: () => void;
-  onRunQuickResearch: () => void;
+  onAttachFiles?: () => void;
+  onRunQuickResearch?: () => void;
+  actions?: ChatComposerPlusMenuAction[];
+  children?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const portalContainer =
@@ -42,26 +54,45 @@ export function ChatComposerPlusMenu({
             sideOffset={8}
             onOpenAutoFocus={(event) => event.preventDefault()}
           >
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onAttachFiles();
-              }}
-              className="gc-button chat-plus-action"
-            >
-              Add files or photos
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onRunQuickResearch();
-              }}
-              className="gc-button chat-plus-action"
-            >
-              Quick web research
-            </button>
+            {onAttachFiles ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onAttachFiles();
+                }}
+                className="gc-button chat-plus-action"
+              >
+                Add files or photos
+              </button>
+            ) : null}
+            {onRunQuickResearch ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onRunQuickResearch();
+                }}
+                className="gc-button chat-plus-action"
+              >
+                Quick web research
+              </button>
+            ) : null}
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  action.onSelect();
+                }}
+                disabled={action.disabled}
+                className={`gc-button chat-plus-action${action.active ? " active" : ""}`}
+              >
+                {action.label}
+              </button>
+            ))}
+            {children ? <div className="chat-plus-custom">{children}</div> : null}
           </Popover.Content>
         </Popover.Portal>
       </div>

@@ -3,17 +3,12 @@ import { matchesToolPattern } from "./tool-patterns.js";
 
 export function resolveEffectivePolicy(config: ToolPolicyConfig, agentId = ""): EffectiveToolPolicy {
   const profileName = config.agents[agentId]?.tools?.profile ?? config.tools.profile;
-  const profileTools = new Set(config.profiles[profileName] ?? []);
+  const profileTools = profileName ? new Set(config.profiles?.[profileName] ?? []) : new Set<string>(["*"]);
+  const approvalMode = config.tools.approvalMode ?? (profileName === "danger" ? "bypass" : "approve_risky");
 
-  const allowSet = new Set<string>([
-    ...config.tools.allow,
-    ...(config.agents[agentId]?.tools?.allow ?? []),
-  ]);
+  const allowSet = new Set<string>([...config.tools.allow, ...(config.agents[agentId]?.tools?.allow ?? [])]);
 
-  const denySet = new Set<string>([
-    ...config.tools.deny,
-    ...(config.agents[agentId]?.tools?.deny ?? []),
-  ]);
+  const denySet = new Set<string>([...config.tools.deny, ...(config.agents[agentId]?.tools?.deny ?? [])]);
 
   const effectiveTools = new Set<string>();
 
@@ -38,6 +33,7 @@ export function resolveEffectivePolicy(config: ToolPolicyConfig, agentId = ""): 
   }
 
   return {
+    approvalMode,
     profile: profileName,
     allowSet,
     denySet,

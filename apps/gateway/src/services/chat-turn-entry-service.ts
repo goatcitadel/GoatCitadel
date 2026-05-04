@@ -162,6 +162,8 @@ export async function agentSendChatMessage(
       mode: input.mode,
       webMode: input.webMode,
       thinkingLevel: input.thinkingLevel,
+      speedMode: input.speedMode,
+      subagentPolicy: input.subagentPolicy,
       prefsOverride: input.prefsOverride,
     });
     host.recordDevDiagnostic({
@@ -176,6 +178,8 @@ export async function agentSendChatMessage(
         mode: input.mode,
         webMode: input.webMode,
         thinkingLevel: input.thinkingLevel,
+        speedMode: input.speedMode,
+        subagentPolicy: input.subagentPolicy,
         routePreflight: {
           requestedProviderId: routeDescriptor.requestedProviderId,
           requestedModel: routeDescriptor.requestedModel,
@@ -261,6 +265,8 @@ async function runAgentSendChatMessageLlmPath(
       webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
       memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
       thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+      speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+      subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
       normalizationProfile: prepared.normalized.normalizationProfile,
       toolAutonomy: prepared.effectiveToolAutonomy,
       historyMessages: prepared.history,
@@ -317,6 +323,8 @@ async function runAgentSendChatMessageLlmPath(
         webMode: prepared.normalized.webMode ?? prepared.prefs.webMode,
         memoryMode: prepared.normalized.memoryMode ?? prepared.prefs.memoryMode,
         thinkingLevel: prepared.normalized.thinkingLevel ?? prepared.prefs.thinkingLevel,
+        speedMode: prepared.normalized.speedMode ?? prepared.prefs.speedMode,
+        subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
         normalizationProfile: prepared.normalized.normalizationProfile,
         toolAutonomy: prepared.effectiveToolAutonomy,
         historyMessages: retryHistory,
@@ -565,6 +573,8 @@ export async function* agentSendChatMessageStream(
           mode: input.mode,
           webMode: input.webMode,
           thinkingLevel: input.thinkingLevel,
+          speedMode: input.speedMode,
+          subagentPolicy: input.subagentPolicy,
         },
       });
       const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
@@ -574,6 +584,8 @@ export async function* agentSendChatMessageStream(
         mode: input.mode,
         webMode: input.webMode,
         thinkingLevel: input.thinkingLevel,
+        speedMode: input.speedMode,
+        subagentPolicy: input.subagentPolicy,
         prefsOverride: input.prefsOverride,
       });
       host.recordDevDiagnostic({
@@ -642,6 +654,8 @@ export async function retryChatTurn(
       webMode: overrides.webMode,
       memoryMode: overrides.memoryMode,
       thinkingLevel: overrides.thinkingLevel,
+      speedMode: overrides.speedMode,
+      subagentPolicy: overrides.subagentPolicy,
       commandText: overrides.commandText,
       prefsOverride: overrides.prefsOverride,
     };
@@ -653,6 +667,8 @@ export async function retryChatTurn(
       mode: request.mode,
       webMode: request.webMode,
       thinkingLevel: request.thinkingLevel,
+      speedMode: request.speedMode,
+      subagentPolicy: request.subagentPolicy,
       prefsOverride: request.prefsOverride,
     });
     host.recordDevDiagnostic({
@@ -722,6 +738,8 @@ export async function* retryChatTurnStream(
         webMode: overrides.webMode,
         memoryMode: overrides.memoryMode,
         thinkingLevel: overrides.thinkingLevel,
+        speedMode: overrides.speedMode,
+        subagentPolicy: overrides.subagentPolicy,
         commandText: overrides.commandText,
         prefsOverride: overrides.prefsOverride,
       };
@@ -733,6 +751,8 @@ export async function* retryChatTurnStream(
         mode: request.mode,
         webMode: request.webMode,
         thinkingLevel: request.thinkingLevel,
+        speedMode: request.speedMode,
+        subagentPolicy: request.subagentPolicy,
         prefsOverride: request.prefsOverride,
       });
       host.recordDevDiagnostic({
@@ -808,6 +828,8 @@ export async function editChatTurn(
       mode: request.mode,
       webMode: request.webMode,
       thinkingLevel: request.thinkingLevel,
+      speedMode: request.speedMode,
+      subagentPolicy: request.subagentPolicy,
       prefsOverride: request.prefsOverride,
     });
     host.recordDevDiagnostic({
@@ -877,6 +899,8 @@ export async function* editChatTurnStream(
         mode: request.mode,
         webMode: request.webMode,
         thinkingLevel: request.thinkingLevel,
+        speedMode: request.speedMode,
+        subagentPolicy: request.subagentPolicy,
         prefsOverride: request.prefsOverride,
       });
       host.recordDevDiagnostic({

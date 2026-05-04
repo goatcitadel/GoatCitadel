@@ -112,6 +112,147 @@ function buildInput() {
   };
 }
 
+function buildActiveSessionProps(overrides: Partial<any> = {}) {
+  const noop = vi.fn();
+  return {
+    mode: "chat",
+    sessionTitle: "Smoke Chat Session",
+    summary: "Current session: Smoke Chat Session.",
+    trust: {
+      workspaceLabel: "Default workspace",
+      gatewayTone: "muted",
+      gatewayLabel: "Gateway ready",
+      approvalsSummary: "Decisions clear",
+      activeModeLabel: "Chat",
+      providerModelSummary: "OpenAI / gpt-test",
+      runtimeTone: "muted",
+      runtimeSummary: "Runtime ready",
+      fallbackSummary: null,
+      fallbackTone: "warning",
+      selectionSourceSummary: "Selection: session",
+      runStateSummary: "Run: completed",
+    },
+    providerOptions: [],
+    selectedProviderId: "",
+    selectedModel: "",
+    modelSwitchDisabled: false,
+    sessionLifecycleStatus: "active",
+    sessionArchivePending: false,
+    dockOpen: false,
+    onToggleDock: noop,
+    onToggleArchiveSession: noop,
+    onNavigateSurface: noop,
+    onRequestProviderChange: noop,
+    onRequestModelChange: noop,
+    loading: false,
+    thread: { sessionId: "session-1", turns: [] },
+    selectedTurnId: null,
+    delegationRun: null,
+    notices: [],
+    followOutput: false,
+    streamStatus: "idle",
+    queuedCount: 0,
+    streamError: null,
+    streamErrorSource: null,
+    pendingApproval: null,
+    pendingUserInput: null,
+    workspaceId: "default",
+    approvalPending: false,
+    userInputPending: false,
+    eventStreamStatus: { state: "open", reconnectAttempts: 0 },
+    onBottomStateChange: noop,
+    onSelectTurn: noop,
+    onSwitchBranch: noop,
+    onRetryTurn: noop,
+    onEditTurn: noop,
+    onOpenRunDetails: noop,
+    onExportRunBundle: noop,
+    onOpenGeneratedArtifact: noop,
+    onCreateGeneratedArtifact: noop,
+    onCreateGeneratedArtifactVersion: noop,
+    onApprovePending: noop,
+    onDenyPending: noop,
+    onSubmitUserInput: noop,
+    onRefreshThread: noop,
+    isDragActive: false,
+    queueItems: [],
+    editingTurnId: null,
+    planningMode: "off",
+    draft: "",
+    commandSuggestions: [],
+    commandIndex: 0,
+    pendingAttachments: [],
+    threadKnowledgeAttachments: [],
+    presetOptions: [],
+    selectedPresetId: "",
+    presetApplyWarning: null,
+    selectedTurnRecovery: null,
+    selectedTurn: null,
+    selectedSessionId: "session-1",
+    currentWebMode: "auto",
+    routePreflight: null,
+    routePreflightLoading: false,
+    routePreflightError: null,
+    routeBoundaryAckRequired: false,
+    routeBoundaryAcknowledged: false,
+    sending: false,
+    canSend: true,
+    hasActiveStream: false,
+    activeStreamTurnAssigned: false,
+    composerRef: createRef<HTMLTextAreaElement>(),
+    fileInputRef: createRef<HTMLInputElement>(),
+    audioInputRef: createRef<HTMLInputElement>(),
+    onDragEnter: noop,
+    onDragOver: noop,
+    onDragLeave: noop,
+    onDrop: noop,
+    onResumeAll: noop,
+    onRemoveQueuedItem: noop,
+    onCancelEdit: noop,
+    onDismissError: noop,
+    onAcknowledgeRouteBoundary: noop,
+    onTogglePlanningMode: noop,
+    onSetDeepMode: noop,
+    onReviewRunDetails: noop,
+    onDraftChange: noop,
+    onComposerKeyDown: noop,
+    onComposerPaste: noop,
+    onApplyDraftCommand: noop,
+    onPresetChange: noop,
+    onApplyPreset: noop,
+    onDismissPresetWarning: noop,
+    onSetAttachmentMode: noop,
+    onRemoveThreadKnowledgeAttachment: noop,
+    knowledgeUrlDraft: "",
+    knowledgeUrlMode: "retrieval",
+    onKnowledgeUrlDraftChange: noop,
+    onKnowledgeUrlModeChange: noop,
+    onAttachKnowledgeUrl: noop,
+    onRemoveAttachment: noop,
+    onAttachFiles: noop,
+    onUploadFiles: noop,
+    onRunQuickResearch: noop,
+    voiceInputAvailable: false,
+    voiceOutputAvailable: false,
+    voiceBusy: false,
+    voiceTalkActive: false,
+    speakResponsesEnabled: false,
+    imageGenerationAvailable: true,
+    imageEditAvailable: true,
+    imageBusy: false,
+    onAudioFileSelected: noop,
+    onToggleVoiceTalk: noop,
+    onOpenAudioTranscribe: noop,
+    onToggleSpeakResponses: noop,
+    onGenerateImage: noop,
+    onEditImage: noop,
+    activeGeneratedArtifact: null,
+    onStopActiveTurn: noop,
+    onSend: noop,
+    ...overrides,
+  };
+}
+
 describe("ThreadedSurfacePage", () => {
   it("hides delegated child sessions under a collapsed parent by default", () => {
     const markup = renderToStaticMarkup(<ThreadedSurfacePage surface="cowork" input={buildInput() as any} />);
@@ -119,5 +260,41 @@ describe("ThreadedSurfacePage", () => {
     expect(markup).toContain("Main Cowork run");
     expect(markup).toContain("Expand delegated chats");
     expect(markup).not.toContain("Delegate · Work");
+  });
+
+  it("renders a quick archive action for active sessions", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedSurfacePage
+        surface="chat"
+        input={
+          {
+            ...buildInput(),
+            messageMode: "chat",
+            activeSessionSurfaceProps: buildActiveSessionProps({ sessionLifecycleStatus: "active" }),
+            emptyStateProps: null,
+          } as any
+        }
+      />,
+    );
+
+    expect(markup).toContain(">Archive<");
+  });
+
+  it("renders a quick restore action for archived sessions", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedSurfacePage
+        surface="chat"
+        input={
+          {
+            ...buildInput(),
+            messageMode: "chat",
+            activeSessionSurfaceProps: buildActiveSessionProps({ sessionLifecycleStatus: "archived" }),
+            emptyStateProps: null,
+          } as any
+        }
+      />,
+    );
+
+    expect(markup).toContain(">Restore<");
   });
 });

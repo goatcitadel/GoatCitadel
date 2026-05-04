@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ChatUserInputPromptRecord } from "@goatcitadel/contracts";
 import { HelpHint } from "../HelpHint";
 
@@ -24,24 +24,54 @@ export function ChatPendingUserInputPanel(props: {
     return null;
   }
 
-  const submitLabel = pendingUserInput.submitLabel?.trim() || "Submit";
-  const canSubmit =
-    pendingUserInput.kind === "single_select" ? selectedOptionId.length > 0 : trimmedText.length > 0;
-  const showDismiss = pendingUserInput.dismissible && typeof onDismiss === "function";
+  const activePrompt = pendingUserInput;
+  const submitLabel = activePrompt.submitLabel?.trim() || "Submit";
+  const canSubmit = activePrompt.kind === "single_select" ? selectedOptionId.length > 0 : trimmedText.length > 0;
+  const showDismiss = activePrompt.dismissible && typeof onDismiss === "function";
+
+  function handleSubmit() {
+    if (activePrompt.kind === "single_select") {
+      onSubmit({ kind: "single_select", optionId: selectedOptionId });
+      return;
+    }
+    onSubmit({ kind: "text", text: trimmedText });
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    event.stopPropagation();
+    if (showDismiss && !pending) {
+      onDismiss();
+      return;
+    }
+    const activeElement = globalThis.document?.activeElement;
+    if (activeElement instanceof HTMLElement && event.currentTarget.contains(activeElement)) {
+      activeElement.blur();
+    }
+  }
 
   return (
-    <div className="chat-approval-card chat-user-input-card" role="alert" key={promptKey}>
+    <div
+      className="chat-approval-card chat-user-input-card chat-blocking-prompt chat-blocking-prompt-user-input"
+      role="alert"
+      aria-live="assertive"
+      key={promptKey}
+      onKeyDown={handleKeyDown}
+    >
       <div className="chat-approval-header">
-        <p className="chat-approval-title">{pendingUserInput.title}</p>
+        <p className="chat-approval-title">{activePrompt.title}</p>
+        <span className="chat-approval-countdown">Answer required</span>
       </div>
-      <p className="chat-approval-reason">{pendingUserInput.question}</p>
-      {pendingUserInput.kind === "single_select" ? (
-        <div className="chat-user-input-options" role="radiogroup" aria-label={pendingUserInput.question}>
-          {(pendingUserInput.options ?? []).map((option) => (
+      <p className="chat-approval-reason">{activePrompt.question}</p>
+      {activePrompt.kind === "single_select" ? (
+        <div className="chat-user-input-options" role="radiogroup" aria-label={activePrompt.question}>
+          {(activePrompt.options ?? []).map((option) => (
             <label key={option.optionId} className="chat-user-input-option">
               <input
                 type="radio"
-                name={pendingUserInput.promptId}
+                name={activePrompt.promptId}
                 value={option.optionId}
                 checked={selectedOptionId === option.optionId}
                 disabled={pending}
@@ -64,11 +94,11 @@ export function ChatPendingUserInputPanel(props: {
             </label>
           ))}
         </div>
-      ) : pendingUserInput.multiline ? (
+      ) : activePrompt.multiline ? (
         <textarea
           className="chat-user-input-textarea"
           value={textValue}
-          placeholder={pendingUserInput.placeholder}
+          placeholder={activePrompt.placeholder}
           disabled={pending}
           rows={4}
           onChange={(event) => setTextValue(event.target.value)}
@@ -78,7 +108,7 @@ export function ChatPendingUserInputPanel(props: {
           className="chat-user-input-input"
           type="text"
           value={textValue}
-          placeholder={pendingUserInput.placeholder}
+          placeholder={activePrompt.placeholder}
           disabled={pending}
           onChange={(event) => setTextValue(event.target.value)}
         />
@@ -88,13 +118,7 @@ export function ChatPendingUserInputPanel(props: {
           type="button"
           className="gc-button chat-approval-allow"
           disabled={pending || !canSubmit}
-          onClick={() => {
-            if (pendingUserInput.kind === "single_select") {
-              onSubmit({ kind: "single_select", optionId: selectedOptionId });
-              return;
-            }
-            onSubmit({ kind: "text", text: trimmedText });
-          }}
+          onClick={handleSubmit}
         >
           {pending ? "Submitting..." : submitLabel}
         </button>
@@ -104,8 +128,8 @@ export function ChatPendingUserInputPanel(props: {
           </button>
         ) : null}
       </div>
-      {pendingUserInput.expiresAt ? <p className="chat-approval-id">Expires {pendingUserInput.expiresAt}</p> : null}
-      <p className="chat-approval-id">{pendingUserInput.promptId}</p>
+      {activePrompt.expiresAt ? <p className="chat-approval-id">Expires {activePrompt.expiresAt}</p> : null}
+      <p className="chat-approval-id">{activePrompt.promptId}</p>
     </div>
   );
 }

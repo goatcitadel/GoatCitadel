@@ -22,6 +22,16 @@ function buildMarkup(overrides: Partial<any> = {}) {
     selectedTurnRecovery: null,
     selectedTurn: null,
     selectedSessionId: "session-1",
+    thread: { sessionId: "session-1", turns: [] },
+    trust: {
+      workspaceLabel: "Test workspace",
+      gatewayTone: "muted",
+      gatewayLabel: "Gateway ready",
+      approvalsSummary: "Decisions clear",
+      activeModeLabel: "Chat",
+      providerModelSummary: "OpenAI / gpt-test",
+      runtimeSummary: "Runtime ready",
+    },
     currentWebMode: "auto",
     routePreflight: null,
     routePreflightLoading: false,
@@ -134,7 +144,15 @@ describe("ThreadedComposer", () => {
 
     expect(markup).toContain("Shift+Tab");
     expect(markup).toContain("Plan");
+    expect(markup).toContain("OpenAI / gpt-test");
+    expect(markup).toContain("0 tokens / $0.00");
     expect(markup).toContain('aria-pressed="false"');
+    expect(markup).toContain("Attach files");
+    expect(markup).toContain("Send");
+    expect(markup).not.toContain(">Delegate<");
+    expect(markup).not.toContain(">Implement<");
+    expect(markup).not.toContain("Start talk");
+    expect(markup).not.toContain("Create image");
     expect(markup).not.toContain("Planning mode is on");
   });
 
@@ -147,5 +165,26 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("Turn planning off");
     expect(markup).toContain("Plan on");
     expect(markup).toContain('aria-pressed="true"');
+  });
+
+  it("uses the compact suggestion popover for dollar skill mentions", () => {
+    const markup = buildMarkup({
+      commandSuggestions: [
+        {
+          key: "mention-react-expert",
+          command: "$react-expert",
+          description: "enabled · React Expert",
+          applyValue: "$react-expert",
+        },
+      ],
+    });
+
+    expect(markup).toContain('aria-label="Composer suggestions"');
+    expect(markup).toContain("$react-expert");
+  });
+
+  it("uses surface-specific primary action labels", () => {
+    expect(buildMarkup({ mode: "cowork" })).toContain("Delegate");
+    expect(buildMarkup({ mode: "code" })).toContain("Implement");
   });
 });
