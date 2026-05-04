@@ -37,7 +37,13 @@ export const llamaCppRoutes: FastifyPluginAsync = async (fastify) => {
       const items = await fastify.services.llamaCpp.listLlamaCppModels();
       return reply.send({ items });
     } catch (error) {
-      return reply.code(503).send({ error: (error as Error).message });
+      const message = (error as Error).message;
+      fastify.log.debug({ err: error }, "llama.cpp model discovery degraded");
+      return reply.send({
+        items: [],
+        degraded: true,
+        warning: message || "llama.cpp model discovery is unavailable.",
+      });
     }
   });
 

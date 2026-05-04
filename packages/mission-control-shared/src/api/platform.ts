@@ -14,7 +14,7 @@ import type {
   LlmProviderRequestConfig,
   LlamaCppAdvisorRecommendation,
   LlamaCppAdvisorRequest,
-  LlamaCppModelManifest,
+  LlamaCppModelsResponse,
   LlamaCppRuntimeStatus,
   ImageGenerationRequest,
   ImageGenerationResponse,
@@ -186,9 +186,7 @@ export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
   return request<LlmRuntimeConfigResponse>("/api/v1/llm/config");
 }
 
-export async function fetchLlmModels(
-  providerId?: string,
-): Promise<{
+export async function fetchLlmModels(providerId?: string): Promise<{
   items: Array<{ id: string; ownedBy?: string; created?: number }>;
   source: LlmModelDiscoverySource;
   warning?: string;
@@ -369,8 +367,8 @@ export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
   return request<LlamaCppRuntimeStatus>("/api/v1/llamacpp/status");
 }
 
-export async function fetchLlamaCppModels(): Promise<{ items: LlamaCppModelManifest[] }> {
-  return request<{ items: LlamaCppModelManifest[] }>("/api/v1/llamacpp/models");
+export async function fetchLlamaCppModels(): Promise<LlamaCppModelsResponse> {
+  return request<LlamaCppModelsResponse>("/api/v1/llamacpp/models");
 }
 
 export async function detectLlamaCppInstall(): Promise<LlamaCppInstallDetection> {

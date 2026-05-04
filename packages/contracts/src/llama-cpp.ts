@@ -45,6 +45,12 @@ export interface LlamaCppModelManifest {
   source?: "runtime" | "filesystem";
 }
 
+export interface LlamaCppModelsResponse {
+  items: LlamaCppModelManifest[];
+  degraded?: boolean;
+  warning?: string;
+}
+
 export interface LlamaCppRuntimeStatus {
   enabled: boolean;
   desiredState: "stopped" | "running";

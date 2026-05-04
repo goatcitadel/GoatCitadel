@@ -2,6 +2,28 @@ name: Verification Surface Regression
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "scripts/verification/**"
+      - ".github/workflows/verification-surface-regression.yml"
+      - "docs/1_0_CONTRACT.md"
+      - "docs/1_0_RELEASE_EVIDENCE.md"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  pull_request:
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "scripts/verification/**"
+      - ".github/workflows/verification-surface-regression.yml"
+      - "docs/1_0_CONTRACT.md"
+      - "docs/1_0_RELEASE_EVIDENCE.md"
+      - "package.json"
+      - "pnpm-lock.yaml"
 
 permissions:
   contents: read

@@ -206,6 +206,14 @@ jobs:
             --artifacts-dir release-artifacts \
             --sbom-file "artifacts/release/goatcitadel-${RELEASE_TAG}.cyclonedx.json"
 
+      - name: Wait for 1.0 release proof
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/release/wait-for-release-proof.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA"
+
       - name: Write commit-bound release certificate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,7 +12,8 @@ const version = normalizeVersion(args.version);
 const tagName = args.tag ?? process.env.GITHUB_REF_NAME ?? `v${version}`;
 const artifactsDir = path.resolve(args.artifactsDir ?? path.join(repoRoot, "release-artifacts"));
 const proofZipPath = path.resolve(
-  args.proofZip ?? path.join(repoRoot, "artifacts", "release", "package", `GoatCitadel-v${version}-release-package.zip`),
+  args.proofZip ??
+    path.join(repoRoot, "artifacts", "release", "package", `GoatCitadel-v${version}-release-package.zip`),
 );
 const outFile = path.resolve(args.outFile ?? path.join(repoRoot, "artifacts", "release", "release-certificate.json"));
 
@@ -60,11 +61,7 @@ console.log(`Release certificate ready: ${outFile}`);
 if (args.requireSuccess) {
   const blocking = requiredLanes.filter((lane) => lane.required && lane.status !== "success");
   if (blocking.length > 0) {
-    throw new Error(
-      `Required release lanes are not green for ${commit ?? "unknown commit"}: ${blocking
-        .map((lane) => `${lane.name}=${lane.status}`)
-        .join(", ")}`,
-    );
+    throw new Error(formatRequiredLaneFailure(blocking, commit));
   }
 }
 
@@ -126,6 +123,7 @@ function normalizeVersion(value) {
 }
 
 async function resolveRequiredLanes({ commit, repository }) {
+  const releaseProofWorkflowFile = "verification-1-0-release-proof.yml";
   const laneSpecs = [
     { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
     { name: "verify:runtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
@@ -143,15 +141,20 @@ async function resolveRequiredLanes({ commit, repository }) {
     { name: "security:trivy", workflowFile: "security-trivy.yml", required: true },
   ];
 
+  const releaseProofRun = await fetchLatestWorkflowRun({ repository, commit, workflowFile: releaseProofWorkflowFile });
+
   return Promise.all(
     laneSpecs.map(async (spec) => {
       const run = await fetchLatestWorkflowRun({ repository, commit, workflowFile: spec.workflowFile });
+      const effectiveRun = run.status === "success" || releaseProofRun.status !== "success" ? run : releaseProofRun;
       return {
         ...spec,
-        status: run.status,
-        conclusion: run.conclusion,
-        workflowRunUrl: run.html_url,
-        workflowRunId: run.id,
+        status: effectiveRun.status,
+        conclusion: effectiveRun.conclusion,
+        workflowRunUrl: effectiveRun.html_url,
+        workflowRunId: effectiveRun.id,
+        proofWorkflowFile: effectiveRun === releaseProofRun ? releaseProofWorkflowFile : spec.workflowFile,
+        proofSource: effectiveRun === releaseProofRun ? "release-proof" : "lane-workflow",
         checkedAt: new Date().toISOString(),
       };
     }),
@@ -209,6 +212,40 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       id: null,
     };
   }
+}
+
+function formatRequiredLaneFailure(blocking, commit) {
+  const sections = new Map([
+    ["missing", []],
+    ["unavailable", []],
+    ["failed", []],
+  ]);
+  for (const lane of blocking) {
+    const bucket =
+      lane.status === "missing"
+        ? "missing"
+        : lane.status === "unavailable" || String(lane.status).startsWith("github-api")
+          ? "unavailable"
+          : "failed";
+    sections.get(bucket).push(formatLaneFailure(lane));
+  }
+  const lines = [`Required release lanes are not green for ${commit ?? "unknown commit"}.`];
+  for (const [label, entries] of sections) {
+    if (entries.length === 0) {
+      continue;
+    }
+    lines.push(`${label}: ${entries.join("; ")}`);
+  }
+  lines.push(
+    "Run the missing lane workflow(s) or the umbrella Verification 1.0 Release Proof workflow on the exact release-candidate SHA, then rerun release certificate generation.",
+  );
+  return lines.join(" ");
+}
+
+function formatLaneFailure(lane) {
+  const workflow = lane.proofWorkflowFile ?? lane.workflowFile;
+  const url = lane.workflowRunUrl ? ` ${lane.workflowRunUrl}` : "";
+  return `${lane.name}=${lane.status} via ${workflow}${url}`;
 }
 
 function listFiles(rootDir) {

@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 const target = process.argv[2] ?? ".";
+const severity = process.env.TRIVY_SEVERITY ?? "HIGH,CRITICAL";
 const trivyBinary = resolveTrivyBinary();
 const skipDirs = [
   ".git",
@@ -39,6 +40,8 @@ if (version.status !== 0) {
     skipDirs.join(","),
     "--timeout",
     "15m",
+    "--severity",
+    severity,
     "--exit-code",
     "1",
     target,

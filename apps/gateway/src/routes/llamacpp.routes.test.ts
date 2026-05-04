@@ -178,7 +178,7 @@ describe("llama.cpp runtime routes", () => {
     });
   });
 
-  it("returns 503 when model discovery fails and rejects invalid advisor payloads", async () => {
+  it("returns a degraded empty model list when discovery fails and rejects invalid advisor payloads", async () => {
     const listLlamaCppModels = vi.fn(async () => {
       throw new Error("llama.cpp offline");
     });
@@ -196,9 +196,11 @@ describe("llama.cpp runtime routes", () => {
       method: "GET",
       url: "/api/v1/llamacpp/models",
     });
-    expect(modelsResponse.statusCode).toBe(503);
+    expect(modelsResponse.statusCode).toBe(200);
     expect(modelsResponse.json()).toMatchObject({
-      error: "llama.cpp offline",
+      degraded: true,
+      items: [],
+      warning: "llama.cpp offline",
     });
 
     const invalidAdvisorResponse = await app.inject({

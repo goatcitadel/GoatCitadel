@@ -1,43 +1,24 @@
-name: Verification Truth Lanes
+name: Verification 1.0 Release Proof
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "scripts/verification/**"
-      - ".github/workflows/verification-truth-lanes.yml"
-      - "docs/1_0_CONTRACT.md"
-      - "docs/1_0_RELEASE_EVIDENCE.md"
-      - "README.md"
-      - "package.json"
-      - "pnpm-lock.yaml"
-  pull_request:
-    paths:
-      - "apps/**"
-      - "packages/**"
-      - "scripts/verification/**"
-      - ".github/workflows/verification-truth-lanes.yml"
-      - "docs/1_0_CONTRACT.md"
-      - "docs/1_0_RELEASE_EVIDENCE.md"
-      - "README.md"
-      - "package.json"
-      - "pnpm-lock.yaml"
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
 jobs:
-  truth-lanes:
+  required-lanes:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         include:
+          - laneScript: verify:fast
+            artifactSlug: fast
           - laneScript: verify:runtime:truth
             artifactSlug: runtime-truth
           - laneScript: verify:auth:matrix
@@ -50,6 +31,20 @@ jobs:
             artifactSlug: realtime-truth
           - laneScript: verify:architecture:metrics
             artifactSlug: architecture-metrics
+          - laneScript: verify:operator:proof
+            artifactSlug: operator-proof
+          - laneScript: verify:durable:recovery
+            artifactSlug: durable-recovery
+          - laneScript: verify:surface:regression
+            artifactSlug: surface-regression
+          - laneScript: verify:visual:regression
+            artifactSlug: visual-regression
+          - laneScript: verify:backup:roundtrip
+            artifactSlug: backup-roundtrip
+          - laneScript: verify:catalog:parity
+            artifactSlug: catalog-parity
+          - laneScript: verify:api:compat
+            artifactSlug: api-compat
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,8 +66,9 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
 
-      - name: Run truth verification lane
+      - name: Run release proof lane
         env:
+          GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -91,6 +87,30 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: verification-${{ matrix.artifactSlug }}-artifacts
+          name: verification-release-proof-${{ matrix.artifactSlug }}-artifacts
           path: artifacts/verification
           if-no-files-found: ignore
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Trivy security gate
+        run: pnpm security:trivy

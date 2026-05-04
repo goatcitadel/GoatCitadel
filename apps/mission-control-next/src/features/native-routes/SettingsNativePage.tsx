@@ -2151,6 +2151,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
       daemon: daemon.data,
       voiceRuntime: voiceRuntime.data,
       llamaModels: llamaModels.data.items,
+      llamaModelsWarning: llamaModels.data.degraded ? llamaModels.data.warning : undefined,
       npuModels: npuModels.data.items,
     };
   }, []);
@@ -2252,6 +2253,9 @@ function RuntimeSection(_props: SettingsSectionProps) {
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+          {data.llamaModelsWarning ? (
+            <SettingsNotice notice={{ tone: "info", message: data.llamaModelsWarning }} />
+          ) : null}
           <SettingsPanel title="Runtime posture" subtitle="Providers, local runtimes, and attached systems.">
             <SettingsMetricGrid
               items={[

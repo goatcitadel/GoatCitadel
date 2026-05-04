@@ -14,6 +14,8 @@ Current shell posture for this map:
 - `apps/mission-control-next` is the canonical `1.0` shell.
 - `apps/mission-control` remains a compatibility-only shell. Legacy code and tests are cited here only when they are explicitly needed for parity or rollback continuity evidence.
 - `release-certificate.json` is the commit-bound proof record for signed public Windows installer releases. Source/dev/onboarding 1.0 readiness is backed by the named verification lanes below; public-trust EXE distribution additionally requires a green release certificate with an empty `acceptedFailures` array.
+- Required lane workflows run directly on relevant PR/main changes, and the umbrella `Verification 1.0 Release Proof` workflow can be dispatched or tag-triggered on a release-candidate SHA to refresh every required lane in one commit-bound proof run.
+- Signed release publication waits for the exact-SHA umbrella proof workflow before writing the release certificate, so tag-triggered installer builds cannot race ahead of their required proof.
 
 ## Recovery Truth
 
@@ -118,6 +120,7 @@ Current shell posture for this map:
 - Public release posture is defined in [README.md](../README.md), [CHANGELOG.md](../CHANGELOG.md), and [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md).
 - Governance freshness and implementation-anchor checks live in [scripts/validate-governance-docs.mjs](../scripts/validate-governance-docs.mjs).
 - Tagged release assets are bound to the exact commit, workflow run, required lane statuses, artifact digests, proof ZIP digest, Trivy status, and accepted-failure list by [scripts/release/write-release-certificate.mjs](../scripts/release/write-release-certificate.mjs).
+- The release certificate accepts either the direct exact-SHA lane workflow result or a successful exact-SHA umbrella 1.0 proof workflow result for each required lane, and fails with the missing, unavailable, or failed lane list when proof is stale.
 
 ## Closeout Validation Evidence
 
