@@ -5554,13 +5554,7 @@ export function buildPromptPackSessionAllowedPaths(input: {
   projectWorkspacePath?: string;
 }): string[] {
   const allowedPaths = new Set<string>();
-  const projectRoot = input.projectWorkspacePath
-    ? (resolveProjectRootForToolContext({
-        workspaceRoot: input.workspaceRoot,
-        repoRoot: input.rootDir,
-        projectWorkspacePath: input.projectWorkspacePath,
-      }) ?? input.workspaceRoot)
-    : undefined;
+  const projectRoot = resolvePromptPackProjectRootForAllowedPaths(input);
   if (input.projectWorkspacePath) {
     addPromptPackAllowedPath(allowedPaths, projectRoot ?? input.workspaceRoot, false);
   }
@@ -5575,6 +5569,29 @@ export function buildPromptPackSessionAllowedPaths(input: {
     }
   }
   return [...allowedPaths];
+}
+
+function resolvePromptPackProjectRootForAllowedPaths(input: {
+  rootDir: string;
+  workspaceRoot: string;
+  projectWorkspacePath?: string;
+}): string | undefined {
+  if (!input.projectWorkspacePath) {
+    return undefined;
+  }
+  if (input.projectWorkspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH) {
+    return resolvePromptPackPortablePath(input.rootDir);
+  }
+  const resolved =
+    resolveProjectRootForToolContext({
+      workspaceRoot: input.workspaceRoot,
+      repoRoot: input.rootDir,
+      projectWorkspacePath: input.projectWorkspacePath,
+    }) ?? input.workspaceRoot;
+  if (isPromptPackWindowsAbsolutePath(input.workspaceRoot) || isPromptPackWindowsAbsolutePath(input.rootDir)) {
+    return resolvePromptPackPortablePath(input.workspaceRoot, input.projectWorkspacePath);
+  }
+  return resolved;
 }
 
 function extractPromptPackPathHints(prompt: string): string[] {
@@ -5603,15 +5620,15 @@ function resolvePromptPackAllowedCandidates(input: {
   projectRoot?: string;
   projectWorkspacePath?: string;
 }): string[] {
-  if (path.isAbsolute(input.candidate) || /^[A-Za-z]:[\\/]/.test(input.candidate)) {
-    return [path.resolve(input.candidate)];
+  if (path.isAbsolute(input.candidate) || isPromptPackWindowsAbsolutePath(input.candidate)) {
+    return [resolvePromptPackPortablePath(input.candidate)];
   }
 
-  const candidates = new Set<string>([path.resolve(input.workspaceRoot, input.candidate)]);
+  const candidates = new Set<string>([resolvePromptPackPortablePath(input.workspaceRoot, input.candidate)]);
 
   if (input.projectRoot) {
     const projectRelative = normalizePromptPackProjectRelativeInput(input.candidate, input.projectWorkspacePath);
-    candidates.add(path.resolve(input.projectRoot, projectRelative));
+    candidates.add(resolvePromptPackPortablePath(input.projectRoot, projectRelative));
   }
 
   return [...candidates];
@@ -5643,16 +5660,29 @@ function normalizePromptPackProjectRelativeInput(rawPath: string, projectWorkspa
 }
 
 function addPromptPackAllowedPath(target: Set<string>, candidate: string, includeParentForFile: boolean): void {
-  const normalizedCandidate = path.resolve(candidate);
+  const pathApi = promptPackPathApiFor(candidate);
+  const normalizedCandidate = pathApi.resolve(candidate);
   target.add(normalizedCandidate);
   if (!includeParentForFile) {
     return;
   }
-  const basename = path.basename(normalizedCandidate);
-  const looksLikeFile = basename.startsWith(".") || path.extname(basename).length > 0;
+  const basename = pathApi.basename(normalizedCandidate);
+  const looksLikeFile = basename.startsWith(".") || pathApi.extname(basename).length > 0;
   if (looksLikeFile) {
-    target.add(path.dirname(normalizedCandidate));
+    target.add(pathApi.dirname(normalizedCandidate));
   }
+}
+
+function isPromptPackWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value.trim());
+}
+
+function promptPackPathApiFor(...values: string[]): typeof path.win32 | typeof path {
+  return values.some((value) => isPromptPackWindowsAbsolutePath(value)) ? path.win32 : path;
+}
+
+function resolvePromptPackPortablePath(...segments: string[]): string {
+  return promptPackPathApiFor(...segments).resolve(...segments);
 }
 
 function promptPackNeedsShellExec(prompt: string, directives: PromptPackToolDirectives): boolean {

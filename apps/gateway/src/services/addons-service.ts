@@ -531,8 +531,8 @@ function resolveCommandInvocation(
     return { file: command, args };
   }
 
-  const nodeDir = path.dirname(nodeExecutable);
-  const corepackEntrypoint = path.join(nodeDir, ...COREPACK_ENTRYPOINT_RELATIVE_PATH);
+  const nodeDir = path.win32.dirname(nodeExecutable);
+  const corepackEntrypoint = path.win32.join(nodeDir, ...COREPACK_ENTRYPOINT_RELATIVE_PATH);
   if (nodeExecutable === process.execPath && !fsSync.existsSync(corepackEntrypoint)) {
     throw new Error(`Unable to resolve the Corepack entrypoint at ${corepackEntrypoint}.`);
   }

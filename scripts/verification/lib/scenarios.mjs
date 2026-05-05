@@ -2482,6 +2482,7 @@ export async function runVisualRegressionLane(context, options = {}) {
                   }
                 });
                 await page.waitForTimeout(1000);
+                await stabilizeVisualRegressionSnapshot(page);
                 const artifactSlug = `visual-regression-${route.slug}-${variant.slug}`;
                 const artifacts = await captureBrowserArtifacts(context, {
                   slug: artifactSlug,
@@ -4336,6 +4337,49 @@ async function setBrowserCorrelation(page, correlationId, sessionId) {
     },
     { correlationId, sessionId },
   );
+}
+
+async function stabilizeVisualRegressionSnapshot(page) {
+  await page.evaluate(() => {
+    const replacements = [
+      {
+        pattern: /\b\d{1,2}\/\d{1,2}\/\d{4},\s*\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M\b/g,
+        value: "1/1/2026, 12:00:00 AM",
+      },
+      {
+        pattern: /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z\b/g,
+        value: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+        value: "00000000-0000-0000-0000-000000000000",
+      },
+      {
+        pattern: /\b[0-9a-f]{24,}\b/gi,
+        value: "000000000000000000000000",
+      },
+    ];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || ["SCRIPT", "STYLE", "NOSCRIPT"].includes(parent.tagName)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const nodes = [];
+    while (walker.nextNode()) {
+      nodes.push(walker.currentNode);
+    }
+    for (const node of nodes) {
+      let next = node.textContent ?? "";
+      for (const replacement of replacements) {
+        next = next.replace(replacement.pattern, replacement.value);
+      }
+      node.textContent = next;
+    }
+  });
 }
 
 function appendQuery(href, query) {

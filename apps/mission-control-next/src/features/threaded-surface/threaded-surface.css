@@ -778,6 +778,10 @@
   display: none;
 }
 
+:root[data-visual-regression="true"] .mc-next-composer-banner.warning {
+  display: none;
+}
+
 :root[data-visual-regression="true"]
   .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
   + .mc-next-threaded-composer-card {

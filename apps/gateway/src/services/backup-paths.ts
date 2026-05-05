@@ -14,11 +14,11 @@ export interface OfflineRestoreRequiredResponse {
 export function resolveBackupDirectory(explicitDir?: string): string {
   const fromInput = explicitDir?.trim();
   if (fromInput) {
-    return path.resolve(fromInput);
+    return resolveBackupFilesystemPath(fromInput);
   }
   const fromEnv = process.env.GOATCITADEL_BACKUP_DIR?.trim();
   if (fromEnv) {
-    return path.resolve(fromEnv);
+    return resolveBackupFilesystemPath(fromEnv);
   }
   return path.join(os.homedir(), ".GoatCitadel", "backups");
 }
@@ -27,10 +27,17 @@ export function resolveBackupPathWithinDirectory(
   filePath: string,
   backupDir?: string,
 ): { ok: true; resolvedPath: string; backupDirectory: string } | { ok: false; error: string } {
-  const backupDirectory = path.resolve(resolveBackupDirectory(backupDir));
-  const resolvedPath = path.resolve(backupDirectory, filePath);
-  const relative = path.relative(backupDirectory, resolvedPath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  const backupDirectory = resolveBackupFilesystemPath(resolveBackupDirectory(backupDir));
+  const pathApi = pathApiForBackupPath(backupDirectory);
+  if (isWindowsAbsolutePath(filePath) && !isWindowsAbsolutePath(backupDirectory)) {
+    return {
+      ok: false,
+      error: "Backup file path must stay within the GoatCitadel backup directory.",
+    };
+  }
+  const resolvedPath = pathApi.resolve(backupDirectory, filePath);
+  const relative = pathApi.relative(backupDirectory, resolvedPath);
+  if (!relative || relative.startsWith("..") || pathApi.isAbsolute(relative)) {
     return {
       ok: false,
       error: "Backup file path must stay within the GoatCitadel backup directory.",
@@ -41,6 +48,19 @@ export function resolveBackupPathWithinDirectory(
     resolvedPath,
     backupDirectory,
   };
+}
+
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value.trim());
+}
+
+function pathApiForBackupPath(value: string): typeof path.win32 | typeof path {
+  return isWindowsAbsolutePath(value) ? path.win32 : path;
+}
+
+function resolveBackupFilesystemPath(value: string): string {
+  const trimmed = value.trim();
+  return pathApiForBackupPath(trimmed).resolve(trimmed);
 }
 
 export function buildOfflineRestoreRequiredResponse(
