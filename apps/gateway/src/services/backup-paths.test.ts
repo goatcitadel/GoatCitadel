@@ -19,15 +19,15 @@ afterEach(() => {
 
 describe("backup path helpers", () => {
   it("prefers GOATCITADEL_BACKUP_DIR when no explicit directory is provided", () => {
-    process.env.GOATCITADEL_BACKUP_DIR = path.join("C:", "gc-backups");
-    expect(resolveBackupDirectory()).toBe(path.resolve(path.join("C:", "gc-backups")));
+    process.env.GOATCITADEL_BACKUP_DIR = "C:/gc-backups";
+    expect(resolveBackupDirectory()).toBe(path.win32.resolve("C:/gc-backups"));
   });
 
   it("keeps backup file paths jailed within the configured directory", () => {
-    process.env.GOATCITADEL_BACKUP_DIR = path.join("C:", "gc-backups");
+    process.env.GOATCITADEL_BACKUP_DIR = "C:/gc-backups";
     expect(resolveBackupPathWithinDirectory("daily/backup-1.backup")).toMatchObject({
       ok: true,
-      resolvedPath: path.resolve(path.join("C:", "gc-backups", "daily", "backup-1.backup")),
+      resolvedPath: path.win32.resolve("C:/gc-backups", "daily", "backup-1.backup"),
     });
     expect(resolveBackupPathWithinDirectory("../outside.backup")).toMatchObject({
       ok: false,
