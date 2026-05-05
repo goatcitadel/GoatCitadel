@@ -336,7 +336,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
     persistAssistant = true;
     persistToolPolicy = true;
   } else if (input.defaultToolProfile) {
-    if (!Object.prototype.hasOwnProperty.call(deps.config.toolPolicy.profiles, input.defaultToolProfile)) {
+    const knownLegacyProfiles = deps.config.toolPolicy.profiles
+      ? Object.prototype.hasOwnProperty.call(deps.config.toolPolicy.profiles, input.defaultToolProfile)
+      : true;
+    if (!knownLegacyProfiles) {
       throw new Error(`Unknown legacy tool profile: ${input.defaultToolProfile}`);
     }
     deps.config.toolPolicy.tools.profile = input.defaultToolProfile as typeof deps.config.toolPolicy.tools.profile;

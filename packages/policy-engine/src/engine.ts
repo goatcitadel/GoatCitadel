@@ -13,6 +13,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { ApprovalGate } from "./approval-gate.js";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
@@ -772,7 +773,7 @@ export class ToolPolicyEngine {
       if (this.hasApprovalBypass(request)) {
         continue;
       }
-      if (this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+      if (this.grantAllowsReadPath(allowGrant, target) || this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
         continue;
       }
       if (readAccessMode === "approval_required") {
@@ -799,7 +800,11 @@ export class ToolPolicyEngine {
         this.config.sandbox.writeJailRoots,
         this.config.sandbox.readOnlyRoots,
       );
-      if (!access.withinRoots && !this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+      if (
+        !access.withinRoots &&
+        !this.grantAllowsReadPath(allowGrant, target) &&
+        !this.grantAllowsReadPath(allowGrant, access.resolvedPath)
+      ) {
         return true;
       }
     }
@@ -1197,7 +1202,7 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
 }
 
 function normalizePathForMatch(value: string): string {
-  return value.replaceAll("\\", "/").replace(/\/+$/, "");
+  return path.posix.normalize(value.replaceAll("\\", "/")).replace(/\/+$/, "");
 }
 
 function deny(riskLevel: ToolRiskLevel, code: string, reason: string): AccessEvaluation {

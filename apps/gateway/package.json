@@ -40,6 +40,7 @@
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",
     "coverage:smoke": "c8 --report-dir=coverage-smoke --reporter=json tsx src/coverage-smoke.ts",
     "coverage:exercise": "c8 --report-dir=coverage-exercise --reporter=json tsx src/coverage-exercise.ts",
+    "presmoke": "pnpm --filter @goatcitadel/extensions-sdk build",
     "smoke": "tsx src/smoke.ts",
     "onboarding:tui": "tsx src/onboarding-tui.ts",
     "tui": "tsx src/tui/main.ts",

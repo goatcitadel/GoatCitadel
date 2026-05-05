@@ -485,6 +485,8 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     mode: string;
     document: { docId: string };
     chunksSaved: number;
+    outcome?: string;
+    approvalId?: string;
   }>(
     app,
     "/api/v1/knowledge/memory/write",
@@ -500,8 +502,28 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     },
   );
   assert.equal(memoryWrite.statusCode, 200);
-  assert.equal(memoryWrite.body.mode, "write");
-  assert.equal(memoryWrite.body.chunksSaved >= 1, true);
+  if (memoryWrite.body.outcome === "approval_required") {
+    const approvalId = memoryWrite.body.approvalId;
+    if (typeof approvalId !== "string") {
+      throw new Error("memory write approval response did not include approvalId");
+    }
+    const approvedWrite = await postJson(
+      app,
+      `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
+      {
+        decision: "approve",
+        resolvedBy: "smoke",
+        resolutionNote: "Approve smoke memory write.",
+      },
+      {
+        "Idempotency-Key": smokeIdempotencyKey("smoke-knowledge-write-approval-1"),
+      },
+    );
+    assert.equal(approvedWrite.statusCode, 200);
+  } else {
+    assert.equal(memoryWrite.body.mode, "write");
+    assert.equal(memoryWrite.body.chunksSaved >= 1, true);
+  }
 
   const createSearchGrant = await postJson<{ grantId: string }>(
     app,

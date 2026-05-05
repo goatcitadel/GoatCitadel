@@ -3976,6 +3976,13 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
   }
   if (route.readySelector) {
     await page.waitForSelector(route.readySelector, { timeout: timeoutMs });
+    if (packageName === NEXT_UI_PACKAGE && route.readySelector.includes("mc-next-threaded-surface")) {
+      await page.waitForFunction(
+        () => !document.querySelector(".mc-next-threaded-surface .mc-next-thread-empty"),
+        undefined,
+        { timeout: timeoutMs },
+      );
+    }
   }
   if (route.readyText) {
     if (packageName === NEXT_UI_PACKAGE) {
@@ -4526,18 +4533,20 @@ async function seedMissionControlNextFixture(gatewayUrl) {
   }
 
   assertOk(
-    await requestJson(gatewayUrl, "/api/v1/knowledge/memory/write", {
+    await requestJson(gatewayUrl, "/api/v1/dev/verification/memory-item-seed", {
       method: "POST",
       body: {
         namespace: "mission-control-next",
         title: "Mission Control Next shell posture",
         content: "Chat is the default lane, Cowork owns structured work, and Code stays workbench-first.",
-        tags: ["verification", "ui"],
-        source: "verification",
-        sessionId,
+        metadata: {
+          tags: ["verification", "ui"],
+          source: "verification",
+          sessionId,
+        },
       },
     }),
-    "write mission-control-next memory item",
+    "seed mission-control-next memory item",
   );
 
   assertOk(

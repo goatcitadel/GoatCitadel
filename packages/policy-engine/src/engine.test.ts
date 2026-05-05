@@ -340,6 +340,49 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(evaluation.requiresApproval).toBe(false);
   });
 
+  it("does not allow approved read-only reference roots to escape through parent segments", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-reference-root",
+        toolPattern: "file.read_range",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: {
+          referenceRoots: [
+            {
+              label: "claude-code-reference",
+              rootPath: "F:\\code\\claude-code",
+              access: "read_only",
+            },
+          ],
+        },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
+      },
+      storage,
+    );
+    const evaluation = engine.evaluateAccess({
+      toolName: "file.read_range",
+      args: { path: "F:/code/claude-code/../private/file.ts", startLine: 1, endLine: 5 },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+  });
+
   it("does not bypass outside-root read approval with a forged approval id", () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
