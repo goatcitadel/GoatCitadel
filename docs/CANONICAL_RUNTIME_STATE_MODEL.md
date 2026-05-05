@@ -54,7 +54,7 @@ Authority:
 - Persistence: `packages/storage/src/durable-run-repo.ts`
 
 Implementation status:
-- Schema and storage repository: complete (migration v21).
+- Schema and storage repository: complete through the protected storage migration set.
 - Read-only diagnostics API: complete.
 - Mission-session Chat / Cowork / Code LLM HTTP/SSE send, retry, resume, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics are durably owned for the `1.0` operator path.
 - Queue consumers / idempotent worker runtime for the shipped durable path: complete.

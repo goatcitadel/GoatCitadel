@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
-import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
+import { isAllowedMcpDefinitionForCreate, isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 
 describe("mcp template visibility", () => {
   it("keeps local stdio templates visible for the 1.0 surface", () => {
@@ -34,5 +34,17 @@ describe("mcp template visibility", () => {
         url: "https://example.test/mcp/sse",
       }),
     ).toBe(false);
+  });
+
+  it("keeps generic remote MCP creation behind an explicit experimental flag", () => {
+    const remoteDefinition = {
+      transport: "http" as const,
+      url: "https://api.githubcopilot.com/mcp/",
+    };
+
+    expect(isAllowedMcpDefinitionForCreate(remoteDefinition, {})).toBe(false);
+    expect(
+      isAllowedMcpDefinitionForCreate(remoteDefinition, { GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS: "true" }),
+    ).toBe(true);
   });
 });

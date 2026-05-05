@@ -1470,9 +1470,14 @@ export class GatewayService {
       throw error;
     });
     this.deferredInitPromise = task;
-    task.catch(() => {});
     this.backgroundTasks.add(task);
-    task.finally(() => this.backgroundTasks.delete(task));
+    void task
+      .catch((error) => {
+        log.debug("deferred startup failure observed by background task tracker", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => this.backgroundTasks.delete(task));
     return task;
   }
 

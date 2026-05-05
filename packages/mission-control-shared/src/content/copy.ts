@@ -611,13 +611,13 @@ export const pageCopy: Record<PageId, PageCopy> = {
   },
   mcp: {
     title: "MCP Servers",
-    subtitle: "Register local or remote MCP servers with trust and safety controls.",
+    subtitle: "Register local stdio MCP servers and runtime-supported templates with trust and safety controls.",
     guide: {
       what: "Control Model Context Protocol servers with explicit trust tiers and per-server tool policy.",
       when: "Use this before enabling external MCP tooling in chat or task workflows.",
       mostCommonAction: "Install from template, keep disabled by default, then connect and test one tool safely.",
       actions: [
-        "Register a server (stdio, HTTP, or SSE).",
+        "Register a local stdio server or the built-in Approval Inbox template.",
         "Connect/disconnect and confirm trust/cost posture.",
         "Set redaction and allow/block patterns before live invocation.",
       ],

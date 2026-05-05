@@ -75,50 +75,59 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
 
   const selectedRun = selectedRunDetail?.run ?? runs.find((run) => run.runId === selectedRunId) ?? null;
 
-  const load = useCallback(async (options?: { preserveSelection?: boolean }) => {
-    const preserveSelection = options?.preserveSelection ?? true;
-    try {
-      const [llmConfig, runResponse, reputationResponse] = await Promise.all([
-        fetchLlmConfig(),
-        fetchAssemblyRuns(25),
-        fetchAssemblyReputations(12),
-      ]);
-      const providerList = llmConfig.providers.map((provider) => ({
-        providerId: provider.providerId,
-        label: provider.label,
-        defaultModel: provider.defaultModel,
-      }));
-      setProviders(providerList);
-      const modelEntries = await Promise.all(providerList.map(async (provider) => {
-        const response = await fetchLlmModels(provider.providerId);
-        return [provider.providerId, response.items.map((item) => item.id)] as const;
-      }));
-      const nextModelsByProvider = Object.fromEntries(modelEntries);
-      setModelsByProvider(nextModelsByProvider);
-      setRuns(runResponse.items);
-      setReputations(reputationResponse.items);
-      setParticipants((current) => {
-        if (current.length >= 2) {
-          return current;
+  const handlePollingError = useCallback((pollError: unknown) => {
+    setError((pollError as Error).message);
+  }, []);
+
+  const load = useCallback(
+    async (options?: { preserveSelection?: boolean }) => {
+      const preserveSelection = options?.preserveSelection ?? true;
+      try {
+        const [llmConfig, runResponse, reputationResponse] = await Promise.all([
+          fetchLlmConfig(),
+          fetchAssemblyRuns(25),
+          fetchAssemblyReputations(12),
+        ]);
+        const providerList = llmConfig.providers.map((provider) => ({
+          providerId: provider.providerId,
+          label: provider.label,
+          defaultModel: provider.defaultModel,
+        }));
+        setProviders(providerList);
+        const modelEntries = await Promise.all(
+          providerList.map(async (provider) => {
+            const response = await fetchLlmModels(provider.providerId);
+            return [provider.providerId, response.items.map((item) => item.id)] as const;
+          }),
+        );
+        const nextModelsByProvider = Object.fromEntries(modelEntries);
+        setModelsByProvider(nextModelsByProvider);
+        setRuns(runResponse.items);
+        setReputations(reputationResponse.items);
+        setParticipants((current) => {
+          if (current.length >= 2) {
+            return current;
+          }
+          return buildDefaultParticipants(providerList, nextModelsByProvider);
+        });
+        const nextSelectedRunId = preserveSelection
+          ? (selectedRunId ?? runResponse.items[0]?.runId ?? null)
+          : (runResponse.items[0]?.runId ?? null);
+        setSelectedRunId(nextSelectedRunId);
+        if (nextSelectedRunId) {
+          setSelectedRunDetail(await fetchAssemblyRunDetail(nextSelectedRunId));
+        } else {
+          setSelectedRunDetail(null);
         }
-        return buildDefaultParticipants(providerList, nextModelsByProvider);
-      });
-      const nextSelectedRunId = preserveSelection
-        ? selectedRunId ?? runResponse.items[0]?.runId ?? null
-        : runResponse.items[0]?.runId ?? null;
-      setSelectedRunId(nextSelectedRunId);
-      if (nextSelectedRunId) {
-        setSelectedRunDetail(await fetchAssemblyRunDetail(nextSelectedRunId));
-      } else {
-        setSelectedRunDetail(null);
+        setError(null);
+      } catch (loadError) {
+        setError((loadError as Error).message);
+      } finally {
+        setIsInitialLoading(false);
       }
-      setError(null);
-    } catch (loadError) {
-      setError((loadError as Error).message);
-    } finally {
-      setIsInitialLoading(false);
-    }
-  }, [selectedRunId]);
+    },
+    [selectedRunId],
+  );
 
   useEffect(() => {
     void load({ preserveSelection: true });
@@ -129,11 +138,13 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
       return;
     }
     const interval = window.setInterval(() => {
-      void fetchAssemblyRunDetail(selectedRun.runId).then(setSelectedRunDetail).catch(() => {});
-      void fetchAssemblyRuns(25).then((response) => setRuns(response.items)).catch(() => {});
+      void fetchAssemblyRunDetail(selectedRun.runId).then(setSelectedRunDetail).catch(handlePollingError);
+      void fetchAssemblyRuns(25)
+        .then((response) => setRuns(response.items))
+        .catch(handlePollingError);
     }, 3500);
     return () => window.clearInterval(interval);
-  }, [selectedRun]);
+  }, [handlePollingError, selectedRun]);
 
   const participantModels = useMemo<AssemblyParticipantModel[]>(() => {
     return participants.map((participant, index) => ({
@@ -199,15 +210,23 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
         title={pageCopy.assembly.title}
         subtitle={pageCopy.assembly.subtitle}
         hint="Assembly is a dedicated multi-model surface. It persists its own runs, exposes each stage artifact, and only exports outward when you ask it to."
-        actions={(
+        actions={
           <div className="workflow-summary-strip">
-            <StatusChip tone={selectedRun?.status === "completed" ? "success" : selectedRun?.status === "failed" ? "critical" : "warning"}>
+            <StatusChip
+              tone={
+                selectedRun?.status === "completed"
+                  ? "success"
+                  : selectedRun?.status === "failed"
+                    ? "critical"
+                    : "warning"
+              }
+            >
               {selectedRun?.status ?? "idle"}
             </StatusChip>
             <StatusChip tone="muted">{runs.length} run(s)</StatusChip>
             <StatusChip tone="muted">{reputations.length} reputation snapshot(s)</StatusChip>
           </div>
-        )}
+        }
       />
       <PageGuideCard
         pageId="assembly"
@@ -222,12 +241,15 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
       <div className="assembly-grid">
         <Panel
           title="Setup"
-          subtitle={(
+          subtitle={
             <>
               Normalize the problem, choose the participant set, and keep the run bounded.
-              <HelpHint label="Assembly setup help" text="Domain presets change rubric weights and prompt framing, not the core protocol." />
+              <HelpHint
+                label="Assembly setup help"
+                text="Domain presets change rubric weights and prompt framing, not the core protocol."
+              />
             </>
-          )}
+          }
           className="assembly-pane"
         >
           <div className="assembly-form">
@@ -244,18 +266,30 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
               <span>Domain preset</span>
               <select
                 value={settings.domainPreset}
-                onChange={(event) => setSettings((current) => ({ ...current, domainPreset: event.target.value as AssemblyDomainPreset }))}
+                onChange={(event) =>
+                  setSettings((current) => ({ ...current, domainPreset: event.target.value as AssemblyDomainPreset }))
+                }
               >
-                {DOMAIN_PRESETS.map((item) => <option key={item} value={item}>{item}</option>)}
+                {DOMAIN_PRESETS.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="assembly-field">
               <span>Mode</span>
               <select
                 value={settings.mode}
-                onChange={(event) => setSettings((current) => ({ ...current, mode: event.target.value as AssemblyMode }))}
+                onChange={(event) =>
+                  setSettings((current) => ({ ...current, mode: event.target.value as AssemblyMode }))
+                }
               >
-                {MODES.map((item) => <option key={item} value={item}>{item}</option>)}
+                {MODES.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="assembly-field">
@@ -265,7 +299,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 min={1}
                 max={6}
                 value={settings.maxRounds}
-                onChange={(event) => setSettings((current) => ({ ...current, maxRounds: Number(event.target.value) || 1 }))}
+                onChange={(event) =>
+                  setSettings((current) => ({ ...current, maxRounds: Number(event.target.value) || 1 }))
+                }
               />
             </label>
             <label className="assembly-field">
@@ -276,7 +312,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 max={1}
                 step={0.01}
                 value={settings.convergenceThreshold}
-                onChange={(event) => setSettings((current) => ({ ...current, convergenceThreshold: Number(event.target.value) || 0.78 }))}
+                onChange={(event) =>
+                  setSettings((current) => ({ ...current, convergenceThreshold: Number(event.target.value) || 0.78 }))
+                }
               />
             </label>
             <label className="assembly-field">
@@ -286,7 +324,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 min={1000}
                 step={500}
                 value={settings.tokenBudget}
-                onChange={(event) => setSettings((current) => ({ ...current, tokenBudget: Number(event.target.value) || 1000 }))}
+                onChange={(event) =>
+                  setSettings((current) => ({ ...current, tokenBudget: Number(event.target.value) || 1000 }))
+                }
               />
             </label>
             <label className="assembly-field">
@@ -296,7 +336,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 min={0.1}
                 step={0.1}
                 value={settings.costBudgetUsd}
-                onChange={(event) => setSettings((current) => ({ ...current, costBudgetUsd: Number(event.target.value) || 0.1 }))}
+                onChange={(event) =>
+                  setSettings((current) => ({ ...current, costBudgetUsd: Number(event.target.value) || 0.1 }))
+                }
               />
             </label>
 
@@ -305,41 +347,64 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 <h3>Participant models</h3>
                 <button
                   type="button"
-                  onClick={() => setParticipants((current) => current.length >= 5 ? current : [...current, current[0] ?? buildDefaultParticipants(providers, modelsByProvider)[0]!])}
-                 className="gc-button">
+                  onClick={() =>
+                    setParticipants((current) =>
+                      current.length >= 5
+                        ? current
+                        : [...current, current[0] ?? buildDefaultParticipants(providers, modelsByProvider)[0]!],
+                    )
+                  }
+                  className="gc-button"
+                >
                   Add model
                 </button>
               </div>
               {participants.map((participant, index) => (
-                <div key={`${participant.providerId}-${participant.model}-${index}`} className="assembly-participant-row">
+                <div
+                  key={`${participant.providerId}-${participant.model}-${index}`}
+                  className="assembly-participant-row"
+                >
                   <select
                     value={participant.providerId}
                     onChange={(event) => {
                       const providerId = event.target.value;
                       const nextModel = modelsByProvider[providerId]?.[0] ?? "";
-                      setParticipants((current) => current.map((item, currentIndex) => currentIndex === index ? { providerId, model: nextModel } : item));
+                      setParticipants((current) =>
+                        current.map((item, currentIndex) =>
+                          currentIndex === index ? { providerId, model: nextModel } : item,
+                        ),
+                      );
                     }}
                   >
                     {providers.map((provider) => (
-                      <option key={provider.providerId} value={provider.providerId}>{provider.label}</option>
+                      <option key={provider.providerId} value={provider.providerId}>
+                        {provider.label}
+                      </option>
                     ))}
                   </select>
                   <select
                     value={participant.model}
                     onChange={(event) => {
                       const model = event.target.value;
-                      setParticipants((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, model } : item));
+                      setParticipants((current) =>
+                        current.map((item, currentIndex) => (currentIndex === index ? { ...item, model } : item)),
+                      );
                     }}
                   >
                     {(modelsByProvider[participant.providerId] ?? []).map((model) => (
-                      <option key={model} value={model}>{model}</option>
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
                     ))}
                   </select>
                   <button
                     type="button"
                     disabled={participants.length <= 2}
-                    onClick={() => setParticipants((current) => current.filter((_, currentIndex) => currentIndex !== index))}
-                   className="gc-button">
+                    onClick={() =>
+                      setParticipants((current) => current.filter((_, currentIndex) => currentIndex !== index))
+                    }
+                    className="gc-button"
+                  >
                     Remove
                   </button>
                 </div>
@@ -363,14 +428,21 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                     min={1}
                     max={5}
                     value={adversarial.reviewerCount}
-                    onChange={(event) => setAdversarial((current) => ({ ...current, reviewerCount: Number(event.target.value) || 1 }))}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({ ...current, reviewerCount: Number(event.target.value) || 1 }))
+                    }
                   />
                 </label>
                 <label className="assembly-field">
                   <span>Selection strategy</span>
                   <select
                     value={adversarial.selectionStrategy}
-                    onChange={(event) => setAdversarial((current) => ({ ...current, selectionStrategy: event.target.value as AdversarialSettings["selectionStrategy"] }))}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({
+                        ...current,
+                        selectionStrategy: event.target.value as AdversarialSettings["selectionStrategy"],
+                      }))
+                    }
                   >
                     <option value="rotate_among_participants">rotate_among_participants</option>
                     <option value="user_selected">user_selected</option>
@@ -381,45 +453,116 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                   <span>Strictness</span>
                   <select
                     value={adversarial.strictness}
-                    onChange={(event) => setAdversarial((current) => ({ ...current, strictness: event.target.value as AdversarialSettings["strictness"] }))}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({
+                        ...current,
+                        strictness: event.target.value as AdversarialSettings["strictness"],
+                      }))
+                    }
                   >
                     <option value="light">light</option>
                     <option value="balanced">balanced</option>
                     <option value="aggressive">aggressive</option>
                   </select>
                 </label>
-                <label className="assembly-check"><input type="checkbox" checked={adversarial.requireMitigations} onChange={(event) => setAdversarial((current) => ({ ...current, requireMitigations: event.target.checked }))} />Require mitigations</label>
-                <label className="assembly-check"><input type="checkbox" checked={adversarial.requireEvidenceTags} onChange={(event) => setAdversarial((current) => ({ ...current, requireEvidenceTags: event.target.checked }))} />Require evidence tags</label>
-                <label className="assembly-check"><input type="checkbox" checked={adversarial.defenseRoundEnabled} onChange={(event) => setAdversarial((current) => ({ ...current, defenseRoundEnabled: event.target.checked }))} />Defense round</label>
-                <label className="assembly-check"><input type="checkbox" checked={adversarial.repetitiveObjectionCutoff} onChange={(event) => setAdversarial((current) => ({ ...current, repetitiveObjectionCutoff: event.target.checked }))} />Repetitive objection cutoff</label>
-                <label className="assembly-check"><input type="checkbox" checked={adversarial.minorityReportRequired} onChange={(event) => setAdversarial((current) => ({ ...current, minorityReportRequired: event.target.checked }))} />Minority report required</label>
+                <label className="assembly-check">
+                  <input
+                    type="checkbox"
+                    checked={adversarial.requireMitigations}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({ ...current, requireMitigations: event.target.checked }))
+                    }
+                  />
+                  Require mitigations
+                </label>
+                <label className="assembly-check">
+                  <input
+                    type="checkbox"
+                    checked={adversarial.requireEvidenceTags}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({ ...current, requireEvidenceTags: event.target.checked }))
+                    }
+                  />
+                  Require evidence tags
+                </label>
+                <label className="assembly-check">
+                  <input
+                    type="checkbox"
+                    checked={adversarial.defenseRoundEnabled}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({ ...current, defenseRoundEnabled: event.target.checked }))
+                    }
+                  />
+                  Defense round
+                </label>
+                <label className="assembly-check">
+                  <input
+                    type="checkbox"
+                    checked={adversarial.repetitiveObjectionCutoff}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({ ...current, repetitiveObjectionCutoff: event.target.checked }))
+                    }
+                  />
+                  Repetitive objection cutoff
+                </label>
+                <label className="assembly-check">
+                  <input
+                    type="checkbox"
+                    checked={adversarial.minorityReportRequired}
+                    onChange={(event) =>
+                      setAdversarial((current) => ({ ...current, minorityReportRequired: event.target.checked }))
+                    }
+                  />
+                  Minority report required
+                </label>
               </div>
             ) : null}
 
             <div className="assembly-actions">
-              <button type="button" onClick={handleSubmit} disabled={isSubmitting || participantModels.length < 2 || prompt.trim().length === 0} className="gc-button">
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={isSubmitting || participantModels.length < 2 || prompt.trim().length === 0}
+                className="gc-button"
+              >
                 {isSubmitting ? "Launching..." : "Start Assembly"}
               </button>
             </div>
           </div>
         </Panel>
 
-        <Panel title="Live Deliberation" subtitle="Stage timeline, recent runs, and artifact pressure." className="assembly-pane">
+        <Panel
+          title="Live Deliberation"
+          subtitle="Stage timeline, recent runs, and artifact pressure."
+          className="assembly-pane"
+        >
           <div className="assembly-run-list">
-            {runs.length === 0 ? <p>No Assembly runs yet.</p> : runs.map((run) => (
-              <button
-                key={run.runId}
-                type="button"
-                className={["gc-button", (`assembly-run-row${selectedRun?.runId === run.runId ? " active" : ""}`)].filter(Boolean).join(" ")}
-                onClick={() => {
-                  setSelectedRunId(run.runId);
-                  void fetchAssemblyRunDetail(run.runId).then(setSelectedRunDetail).catch((detailError) => setError((detailError as Error).message));
-                }}
-              >
-                <span>{run.title}</span>
-                <StatusChip tone={run.status === "completed" ? "success" : run.status === "failed" ? "critical" : "warning"}>{run.status}</StatusChip>
-              </button>
-            ))}
+            {runs.length === 0 ? (
+              <p>No Assembly runs yet.</p>
+            ) : (
+              runs.map((run) => (
+                <button
+                  key={run.runId}
+                  type="button"
+                  className={["gc-button", `assembly-run-row${selectedRun?.runId === run.runId ? " active" : ""}`]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={() => {
+                    setSelectedRunId(run.runId);
+                    void fetchAssemblyRunDetail(run.runId)
+                      .then(setSelectedRunDetail)
+                      .catch((detailError) => setError((detailError as Error).message));
+                  }}
+                >
+                  <span>{run.title}</span>
+                  <StatusChip
+                    tone={run.status === "completed" ? "success" : run.status === "failed" ? "critical" : "warning"}
+                  >
+                    {run.status}
+                  </StatusChip>
+                </button>
+              ))
+            )}
           </div>
           {selectedRunDetail ? (
             <>
@@ -441,7 +584,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
               </ul>
               <div className="assembly-artifact-summary">
                 {Object.entries(runSummary ?? {}).map(([artifactType, count]) => (
-                  <StatusChip key={artifactType} tone="default">{artifactType}: {count}</StatusChip>
+                  <StatusChip key={artifactType} tone="default">
+                    {artifactType}: {count}
+                  </StatusChip>
                 ))}
               </div>
             </>
@@ -450,7 +595,11 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
           )}
         </Panel>
 
-        <Panel title="Result" subtitle="Consensus, disagreements, minority preservation, and export outcomes." className="assembly-pane">
+        <Panel
+          title="Result"
+          subtitle="Consensus, disagreements, minority preservation, and export outcomes."
+          className="assembly-pane"
+        >
           {selectedRun?.result ? (
             <div className="assembly-result">
               <div className="assembly-result-block">
@@ -460,15 +609,23 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
               <div className="assembly-result-block">
                 <h3>Disagreements</h3>
                 <ul>
-                  {selectedRun.result.disagreements.length === 0 ? <li>No material disagreement clusters remained.</li> : selectedRun.result.disagreements.map((item) => (
-                    <li key={item.clusterId}><strong>{item.topic}</strong>: {item.summary}</li>
-                  ))}
+                  {selectedRun.result.disagreements.length === 0 ? (
+                    <li>No material disagreement clusters remained.</li>
+                  ) : (
+                    selectedRun.result.disagreements.map((item) => (
+                      <li key={item.clusterId}>
+                        <strong>{item.topic}</strong>: {item.summary}
+                      </li>
+                    ))
+                  )}
                 </ul>
               </div>
               <div className="assembly-result-block">
                 <h3>Implementation plan</h3>
                 <ul>
-                  {selectedRun.result.implementationPlan.map((item) => <li key={item}>{item}</li>)}
+                  {selectedRun.result.implementationPlan.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
                 </ul>
               </div>
               {selectedRun.result.minorityReport ? (
@@ -476,7 +633,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                   <h3>Minority report</h3>
                   <p>{selectedRun.result.minorityReport.summary}</p>
                   <ul>
-                    {selectedRun.result.minorityReport.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                    {selectedRun.result.minorityReport.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
                   </ul>
                 </div>
               ) : null}
@@ -484,7 +643,10 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 <h3>Exports</h3>
                 <ul>
                   {selectedRun.result.exports.map((item) => (
-                    <li key={item.target}>{item.target}: {item.status}{item.detail ? ` - ${item.detail}` : ""}</li>
+                    <li key={item.target}>
+                      {item.target}: {item.status}
+                      {item.detail ? ` - ${item.detail}` : ""}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -492,7 +654,9 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
                 <h3>Contribution summary</h3>
                 <ul>
                   {selectedRun.result.modelContributionSummary.map((item) => (
-                    <li key={`${item.modelRef}-${item.contributionRole}`}>{item.modelRef}: {item.summary}</li>
+                    <li key={`${item.modelRef}-${item.contributionRole}`}>
+                      {item.modelRef}: {item.summary}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -504,12 +668,16 @@ export function AssemblyPage({ workspaceId }: { workspaceId?: string }) {
           <div className="assembly-reputation">
             <h3>Reputation snapshot</h3>
             <ul>
-              {reputations.length === 0 ? <li>No reputation data recorded yet.</li> : reputations.map((item) => (
-                <li key={item.modelRef}>
-                  <strong>{item.modelRef}</strong>
-                  <span>{item.overall.toFixed(2)} overall</span>
-                </li>
-              ))}
+              {reputations.length === 0 ? (
+                <li>No reputation data recorded yet.</li>
+              ) : (
+                reputations.map((item) => (
+                  <li key={item.modelRef}>
+                    <strong>{item.modelRef}</strong>
+                    <span>{item.overall.toFixed(2)} overall</span>
+                  </li>
+                ))
+              )}
             </ul>
           </div>
         </Panel>

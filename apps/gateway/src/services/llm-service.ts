@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { logger } from "@goatcitadel/gateway-core";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
@@ -37,6 +38,8 @@ import {
   SecretStoreService,
   SecretStoreUnavailableError,
 } from "./secret-store-service.js";
+
+const log = logger.child("llm-service");
 
 export interface LlmRuntimeUpdateInput {
   activeProviderId?: string;
@@ -1308,7 +1311,11 @@ export class LlmService {
     for (const dispatcher of this.requestDispatcherCache.values()) {
       const close = (dispatcher as { close?: () => Promise<void> }).close;
       if (typeof close === "function") {
-        void close.call(dispatcher).catch(() => {});
+        void close.call(dispatcher).catch((error) => {
+          log.debug("request dispatcher close failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       }
     }
     this.requestDispatcherCache.clear();

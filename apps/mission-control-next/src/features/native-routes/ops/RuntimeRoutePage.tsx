@@ -17,6 +17,47 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
       return null;
     }
 
+    const daemonSourceUnavailable = sourceFailed(data, "daemon");
+    const healthSourceUnavailable = sourceFailed(data, "health");
+    const daemonRuntimeUnavailable = daemonSourceUnavailable && healthSourceUnavailable;
+    const daemonRunning = daemonRuntimeUnavailable
+      ? null
+      : (data.daemon?.running ?? data.health?.daemonStatus.running ?? null);
+    const daemonHost = daemonRuntimeUnavailable
+      ? "unavailable"
+      : (data.daemon?.host ?? data.health?.daemonStatus.host ?? "Unknown");
+    const daemonState = daemonRuntimeUnavailable
+      ? "unavailable"
+      : (data.daemon?.state ?? data.health?.daemonStatus.state ?? "unknown");
+    const daemonPid = daemonRuntimeUnavailable
+      ? "unavailable"
+      : String(data.daemon?.pid ?? data.health?.daemonStatus.pid ?? 0);
+    const daemonUptime = daemonRuntimeUnavailable
+      ? "unavailable"
+      : formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus.uptimeSeconds ?? 0);
+    const memoryUsed = healthSourceUnavailable
+      ? "unavailable"
+      : formatBytes(data.health?.systemVitals.memoryUsedBytes ?? 0);
+    const processRss = healthSourceUnavailable
+      ? "process unavailable"
+      : `process ${formatBytes(data.health?.systemVitals.processRssBytes ?? 0)}`;
+    const systemHostname = healthSourceUnavailable ? "unavailable" : (data.health?.systemVitals.hostname ?? "Unknown");
+    const systemPlatform = healthSourceUnavailable
+      ? "platform unavailable"
+      : (data.health?.systemVitals.platform ?? "Unknown platform");
+    const systemUptime = healthSourceUnavailable
+      ? "unavailable"
+      : formatDuration(data.health?.systemVitals.uptimeSeconds ?? 0);
+    const systemRelease = healthSourceUnavailable
+      ? "release unavailable"
+      : (data.health?.systemVitals.release ?? "Unknown release");
+    const heapUsed = healthSourceUnavailable
+      ? "unavailable"
+      : formatBytes(data.health?.systemVitals.processHeapUsedBytes ?? 0);
+    const memoryFree = healthSourceUnavailable
+      ? "Free unavailable"
+      : `Free ${formatBytes(data.health?.systemVitals.memoryFreeBytes ?? 0)}`;
+
     switch (section) {
       case "sessions":
         return (
@@ -248,18 +289,18 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                 items={[
                   {
                     label: "Host",
-                    value: data.daemon?.host ?? data.health?.daemonStatus.host ?? "Unknown",
-                    meta: data.daemon?.state ?? data.health?.daemonStatus.state ?? "unknown",
+                    value: daemonHost,
+                    meta: daemonState,
                   },
                   {
                     label: "PID",
-                    value: String(data.daemon?.pid ?? data.health?.daemonStatus.pid ?? 0),
-                    meta: `uptime ${formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus.uptimeSeconds ?? 0)}`,
+                    value: daemonPid,
+                    meta: daemonRuntimeUnavailable ? "uptime unavailable" : `uptime ${daemonUptime}`,
                   },
                   {
                     label: "Memory used",
-                    value: formatBytes(data.health?.systemVitals.memoryUsedBytes ?? 0),
-                    meta: `process ${formatBytes(data.health?.systemVitals.processRssBytes ?? 0)}`,
+                    value: memoryUsed,
+                    meta: processRss,
                   },
                 ]}
               />
@@ -331,18 +372,18 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                 items={[
                   {
                     label: "Hostname",
-                    value: data.health?.systemVitals.hostname ?? "Unknown",
-                    meta: data.health?.systemVitals.platform ?? "Unknown platform",
+                    value: systemHostname,
+                    meta: systemPlatform,
                   },
                   {
                     label: "System uptime",
-                    value: formatDuration(data.health?.systemVitals.uptimeSeconds ?? 0),
-                    meta: data.health?.systemVitals.release ?? "Unknown release",
+                    value: systemUptime,
+                    meta: systemRelease,
                   },
                   {
                     label: "Heap used",
-                    value: formatBytes(data.health?.systemVitals.processHeapUsedBytes ?? 0),
-                    meta: `Free ${formatBytes(data.health?.systemVitals.memoryFreeBytes ?? 0)}`,
+                    value: heapUsed,
+                    meta: memoryFree,
                   },
                 ]}
               />
@@ -460,8 +501,8 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   },
                   {
                     label: "Daemon",
-                    value: data.daemon?.running ? "running" : "stopped",
-                    meta: data.daemon?.host ?? "Host unavailable",
+                    value: daemonRunning === null ? "unavailable" : daemonRunning ? "running" : "stopped",
+                    meta: daemonHost,
                   },
                 ]}
               />

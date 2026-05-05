@@ -25,12 +25,20 @@ This plan is based on the current codebase and release contract, especially:
 - [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md)
 - [docs/INSTALL_SETUP_TESTING.md](./INSTALL_SETUP_TESTING.md)
 - [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs)
-- [apps/mission-control/src/content/page-registry.ts](../apps/mission-control/src/content/page-registry.ts)
+- [apps/mission-control-next/src/app/MissionControlNextApp.tsx](../apps/mission-control-next/src/app/MissionControlNextApp.tsx)
+- [apps/mission-control-next/src/features/native-routes](../apps/mission-control-next/src/features/native-routes)
+- [apps/mission-control-next/src/features/threaded-surface](../apps/mission-control-next/src/features/threaded-surface)
+- [packages/mission-control-shared](../packages/mission-control-shared)
+- [packages/threaded-surface-core](../packages/threaded-surface-core)
 - [apps/gateway/src/app.ts](../apps/gateway/src/app.ts)
 - [apps/gateway/src/routes/approvals.ts](../apps/gateway/src/routes/approvals.ts)
 - [apps/gateway/src/routes/durable.ts](../apps/gateway/src/routes/durable.ts)
 - [apps/gateway/src/routes/prompt-packs.ts](../apps/gateway/src/routes/prompt-packs.ts)
 - [apps/gateway/src/routes/admin.test.ts](../apps/gateway/src/routes/admin.test.ts)
+
+Compatibility-only legacy Mission Control anchors remain useful for rollback/parity checks, but they are not the canonical 1.0 shell:
+
+- [apps/mission-control/src/content/page-registry.ts](../apps/mission-control/src/content/page-registry.ts)
 - [apps/mission-control/src/pages/ApprovalsPage.test.tsx](../apps/mission-control/src/pages/ApprovalsPage.test.tsx)
 
 ## How To Use This Plan

@@ -1,7 +1,13 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RuntimeRoutePage } from "./RuntimeRoutePage";
+
+const runtimeSnapshotOverrides = vi.hoisted(() => ({
+  sourceStatus: null as null | Record<string, { status: "ok" | "error"; error?: string }>,
+  daemon: undefined as unknown,
+  health: undefined as unknown,
+}));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
   useOpsRuntimeSnapshot: () => ({
@@ -42,50 +48,53 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
           replayRuns: [{ runId: "replay-1", status: "completed", updatedAt: "2026-04-22T00:10:00.000Z" }],
         },
       },
-      health: {
-        generatedAt: "2026-04-22T00:00:00.000Z",
-        systemVitals: {
-          hostname: "goat",
-          platform: "win32",
-          release: "1.0",
-          uptimeSeconds: 3600,
-          loadAverage: [0.2, 0.1, 0.05],
-          cpuCount: 8,
-          memoryTotalBytes: 1000,
-          memoryFreeBytes: 400,
-          memoryUsedBytes: 600,
-          processRssBytes: 300,
-          processHeapUsedBytes: 200,
-        },
-        daemonStatus: {
-          running: true,
-          pid: 42,
-          uptimeSeconds: 1200,
-          host: "localhost",
-          state: "running",
-          supported: true,
-          controllable: true,
-          controlMessage: "ok",
-        },
-        daemonLogs: { items: [] },
-        costs: {
-          summary: {
-            scope: "day",
-            from: "",
-            to: "",
-            items: [],
-            usageAvailability: { trackedEvents: 12, unknownEvents: 1, totalAgentEvents: 13 },
-          },
-          qmd: {
-            totalRuns: 8,
-            compressionPercent: 24,
-            expansionPercent: 0,
-            efficiencyLabel: "reduced",
-            netTokenDelta: -320,
-          },
-        },
-        backups: { items: [], latest: null },
-      },
+      health:
+        runtimeSnapshotOverrides.health === undefined
+          ? {
+              generatedAt: "2026-04-22T00:00:00.000Z",
+              systemVitals: {
+                hostname: "goat",
+                platform: "win32",
+                release: "1.0",
+                uptimeSeconds: 3600,
+                loadAverage: [0.2, 0.1, 0.05],
+                cpuCount: 8,
+                memoryTotalBytes: 1000,
+                memoryFreeBytes: 400,
+                memoryUsedBytes: 600,
+                processRssBytes: 300,
+                processHeapUsedBytes: 200,
+              },
+              daemonStatus: {
+                running: true,
+                pid: 42,
+                uptimeSeconds: 1200,
+                host: "localhost",
+                state: "running",
+                supported: true,
+                controllable: true,
+                controlMessage: "ok",
+              },
+              daemonLogs: { items: [] },
+              costs: {
+                summary: {
+                  scope: "day",
+                  from: "",
+                  to: "",
+                  items: [],
+                  usageAvailability: { trackedEvents: 12, unknownEvents: 1, totalAgentEvents: 13 },
+                },
+                qmd: {
+                  totalRuns: 8,
+                  compressionPercent: 24,
+                  expansionPercent: 0,
+                  efficiencyLabel: "reduced",
+                  netTokenDelta: -320,
+                },
+              },
+              backups: { items: [], latest: null },
+            }
+          : runtimeSnapshotOverrides.health,
       cost: {
         scope: "day",
         from: "",
@@ -95,16 +104,19 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
           { key: "openai:gpt-5", tokenInput: 0, tokenOutput: 0, tokenCachedInput: 0, tokenTotal: 4000, costUsd: 12.34 },
         ],
       },
-      daemon: {
-        running: true,
-        pid: 42,
-        uptimeSeconds: 1200,
-        host: "localhost",
-        state: "running",
-        supported: true,
-        controllable: true,
-        controlMessage: "ok",
-      },
+      daemon:
+        runtimeSnapshotOverrides.daemon === undefined
+          ? {
+              running: true,
+              pid: 42,
+              uptimeSeconds: 1200,
+              host: "localhost",
+              state: "running",
+              supported: true,
+              controllable: true,
+              controlMessage: "ok",
+            }
+          : runtimeSnapshotOverrides.daemon,
       backups: [],
       sessions: [],
       mcpServers: [{ serverId: "srv-1", label: "GitHub", transport: "stdio", enabled: true, category: "code" }],
@@ -117,12 +129,19 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
         backups: { status: "ok" },
         sessions: { status: "ok" },
         mcpServers: { status: "ok" },
+        ...(runtimeSnapshotOverrides.sourceStatus ?? {}),
       },
     },
   }),
 }));
 
 describe("RuntimeRoutePage", () => {
+  afterEach(() => {
+    runtimeSnapshotOverrides.sourceStatus = null;
+    runtimeSnapshotOverrides.daemon = undefined;
+    runtimeSnapshotOverrides.health = undefined;
+  });
+
   it("renders runtime posture and daemon controls in the canonical next shell", () => {
     const markup = renderToStaticMarkup(
       <RuntimeRoutePage
@@ -177,5 +196,31 @@ describe("RuntimeRoutePage", () => {
       theme: "ops",
     });
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("space");
+  });
+
+  it("renders unavailable state instead of false runtime measurements when sources fail", () => {
+    runtimeSnapshotOverrides.daemon = null;
+    runtimeSnapshotOverrides.health = null;
+    runtimeSnapshotOverrides.sourceStatus = {
+      daemon: { status: "error", error: "daemon route failed" },
+      health: { status: "error", error: "health route failed" },
+    };
+
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={2}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Daemon unavailable");
+    expect(markup).toContain("Backup status unavailable");
+    expect(markup).toContain("unavailable");
+    expect(markup).not.toContain("<strong>0</strong>");
+    expect(markup).not.toContain("<strong>0 B</strong>");
   });
 });

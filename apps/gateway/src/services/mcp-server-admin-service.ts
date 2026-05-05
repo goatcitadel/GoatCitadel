@@ -9,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
+import { buildUnsupportedMcpTransportMessage, isAllowedMcpDefinitionForCreate } from "./mcp-template-visibility.js";
 
 interface McpAuthStateRecord {
   accessTokenRef?: string;
@@ -37,6 +38,9 @@ export interface McpServerAdminHost {
 }
 
 export function createMcpServer(host: McpServerAdminHost, input: McpServerCreateInput): McpServerRecord {
+  if (!isAllowedMcpDefinitionForCreate(input)) {
+    throw new Error(buildUnsupportedMcpTransportMessage(input.transport));
+  }
   const now = new Date().toISOString();
   const created: McpServerRecord = {
     serverId: randomUUID(),

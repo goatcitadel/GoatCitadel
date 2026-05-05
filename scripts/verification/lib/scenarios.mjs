@@ -66,8 +66,22 @@ const VISUAL_REGRESSION_VARIANTS = RELEASE_SURFACE_VARIANTS;
 
 const NEXT_UI_PACKAGE = "@goatcitadel/mission-control-next";
 const VISUAL_BASELINE_ROOT_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
-const API_COMPAT_BASELINE_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "rest-sse.json");
-const API_COMPAT_ALLOWLIST_PATH = path.join(repoRoot, "scripts", "verification", "baselines", "api-compat", "allowlist.json");
+const API_COMPAT_BASELINE_PATH = path.join(
+  repoRoot,
+  "scripts",
+  "verification",
+  "baselines",
+  "api-compat",
+  "rest-sse.json",
+);
+const API_COMPAT_ALLOWLIST_PATH = path.join(
+  repoRoot,
+  "scripts",
+  "verification",
+  "baselines",
+  "api-compat",
+  "allowlist.json",
+);
 const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.005;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
@@ -76,6 +90,11 @@ const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
 export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.repo-hygiene", title: "Repo hygiene", args: ["verify:repo:hygiene"] },
   { id: "fast.storage-migration-parity", title: "Storage migration parity", args: ["verify:storage:migration-parity"] },
+  {
+    id: "fast.extensions-sdk-build",
+    title: "Extensions SDK build",
+    args: ["--filter", "@goatcitadel/extensions-sdk", "build"],
+  },
   { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
   { id: "fast.test", title: "Root tests", args: ["test"] },
   { id: "fast.smoke", title: "Gateway smoke", args: ["smoke"] },
@@ -174,15 +193,7 @@ export async function runCodeModeSandboxRequiredLane(context) {
       const proofPath = path.join(context.artifactRoot, "diagnostics", "code-mode-sandbox-required.json");
       const result = await runCommand(
         pnpmCommand(),
-        [
-          "--filter",
-          "@goatcitadel/gateway",
-          "exec",
-          "tsx",
-          "src/code-mode-sandbox-proof.ts",
-          "--output",
-          proofPath,
-        ],
+        ["--filter", "@goatcitadel/gateway", "exec", "tsx", "src/code-mode-sandbox-proof.ts", "--output", proofPath],
         {
           cwd: repoRoot,
           artifactRoot: path.join(context.artifactRoot, "diagnostics"),
@@ -509,7 +520,6 @@ export async function runDeepCoreLane(context, options = {}) {
   } finally {
     await stopVerificationStack(stack);
   }
-
 }
 
 async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
@@ -1217,7 +1227,9 @@ export async function runOperatorProofLane(context, options = {}) {
         const approvedStatus = await waitForApprovedDeviceAccessRequest(authStack.gatewayUrl, requestId, requestSecret);
         const deviceToken = approvedStatus.body?.deviceToken;
         if (typeof deviceToken !== "string" || deviceToken.length === 0) {
-          throw new Error(`device request approval did not yield a device token: ${JSON.stringify(approvedStatus.body)}`);
+          throw new Error(
+            `device request approval did not yield a device token: ${JSON.stringify(approvedStatus.body)}`,
+          );
         }
 
         const companionKeys = generateKeyPairSync("ed25519");
@@ -1670,9 +1682,7 @@ export async function runSurfaceRegressionLane(context, options = {}) {
   });
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-surface-regression");
-    const fixture = verificationTarget.isNext
-      ? await seedMissionControlNextFixture(stack.gatewayUrl)
-      : null;
+    const fixture = verificationTarget.isNext ? await seedMissionControlNextFixture(stack.gatewayUrl) : null;
     const browser = await chromium.launch({ headless: true });
     try {
       const browserContext = await browser.newContext({
@@ -1700,7 +1710,11 @@ export async function runSurfaceRegressionLane(context, options = {}) {
             await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
             await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
             await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
-            const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, verificationTarget.packageName);
+            const browserSanity = assertBrowserConsoleHealthy(
+              browserLog,
+              browserLogCursor,
+              verificationTarget.packageName,
+            );
             await page.waitForTimeout(250);
             const artifacts = await captureBrowserArtifacts(context, {
               slug: `surface-regression-${route.slug}`,
@@ -1743,8 +1757,16 @@ export async function runSurfaceRegressionLane(context, options = {}) {
             await assertLegacyRedirectResolution(page, redirect.expectedPath);
             await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
             await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
-            await performVerificationInteraction(page, redirect.interaction ?? route.interaction, verificationTarget.packageName);
-            const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, verificationTarget.packageName);
+            await performVerificationInteraction(
+              page,
+              redirect.interaction ?? route.interaction,
+              verificationTarget.packageName,
+            );
+            const browserSanity = assertBrowserConsoleHealthy(
+              browserLog,
+              browserLogCursor,
+              verificationTarget.packageName,
+            );
             const artifacts = await captureBrowserArtifacts(context, {
               slug: `surface-regression-redirect-${redirect.slug}`,
               page,
@@ -1809,13 +1831,7 @@ export async function runCatalogParityLane(context, options = {}) {
         subsystem: "gateway",
       },
       async () => {
-        const visibleCatalogKinds = [
-          "channel",
-          "model_provider",
-          "productivity",
-          "automation",
-          "platform",
-        ];
+        const visibleCatalogKinds = ["channel", "model_provider", "productivity", "automation", "platform"];
         const visibleItems = [];
         for (const kind of visibleCatalogKinds) {
           const response = await requestJson(stack.gatewayUrl, `/api/v1/integrations/catalog?kind=${kind}`);
@@ -1858,26 +1874,45 @@ export async function runCatalogParityLane(context, options = {}) {
         ];
         const targetedEntries = visibleItems.filter((item) => mandatoryVisibleIds.has(item.catalogId));
         const plannedEntries = visibleItems.filter((item) => item.maturity === "planned");
-        const nonOperatorReady = targetedEntries.filter((item) => item.maturity !== "beta" && item.maturity !== "native");
+        const nonOperatorReady = targetedEntries.filter(
+          (item) => item.maturity !== "beta" && item.maturity !== "native",
+        );
         const pluginVisible = targetedEntries.filter((item) => item.maturity === "plugin");
-        const blockedWithoutSchema = targetedEntries.filter((item) => !item.formSchema || !Array.isArray(item.formSchema.fields) || item.formSchema.fields.length === 0);
+        const blockedWithoutSchema = targetedEntries.filter(
+          (item) => !item.formSchema || !Array.isArray(item.formSchema.fields) || item.formSchema.fields.length === 0,
+        );
         if (targetedEntries.length !== mandatoryVisibleIds.size) {
-          throw new Error(`catalog parity expected ${mandatoryVisibleIds.size} mandatory visible entries, found ${targetedEntries.length}`);
+          throw new Error(
+            `catalog parity expected ${mandatoryVisibleIds.size} mandatory visible entries, found ${targetedEntries.length}`,
+          );
         }
         if (plannedEntries.length > 0) {
-          throw new Error(`catalog parity found visible planned entries: ${plannedEntries.map((item) => item.catalogId).join(", ")}`);
+          throw new Error(
+            `catalog parity found visible planned entries: ${plannedEntries.map((item) => item.catalogId).join(", ")}`,
+          );
         }
         if (nonOperatorReady.length > 0) {
-          throw new Error(`catalog parity found non-operator-ready entries: ${nonOperatorReady.map((item) => `${item.catalogId}:${item.maturity}`).join(", ")}`);
+          throw new Error(
+            `catalog parity found non-operator-ready entries: ${nonOperatorReady.map((item) => `${item.catalogId}:${item.maturity}`).join(", ")}`,
+          );
         }
         if (pluginVisible.length > 0) {
-          throw new Error(`catalog parity found visible plugin-backed entries: ${pluginVisible.map((item) => item.catalogId).join(", ")}`);
+          throw new Error(
+            `catalog parity found visible plugin-backed entries: ${pluginVisible.map((item) => item.catalogId).join(", ")}`,
+          );
         }
         if (targetedEntries.some((item) => item.runtimeAvailability !== "runnable")) {
-          throw new Error(`catalog parity found non-runnable mandatory entries: ${targetedEntries.filter((item) => item.runtimeAvailability !== "runnable").map((item) => item.catalogId).join(", ")}`);
+          throw new Error(
+            `catalog parity found non-runnable mandatory entries: ${targetedEntries
+              .filter((item) => item.runtimeAvailability !== "runnable")
+              .map((item) => item.catalogId)
+              .join(", ")}`,
+          );
         }
         if (blockedWithoutSchema.length > 0) {
-          throw new Error(`catalog parity found mandatory entries without guided form schema: ${blockedWithoutSchema.map((item) => item.catalogId).join(", ")}`);
+          throw new Error(
+            `catalog parity found mandatory entries without guided form schema: ${blockedWithoutSchema.map((item) => item.catalogId).join(", ")}`,
+          );
         }
         const runtimeActionResults = [];
         for (const catalogId of runtimeActionCatalogIds) {
@@ -1977,13 +2012,13 @@ export async function runApiCompatibilityLane(context, options = {}) {
           sse: await snapshotRealtimeContract(),
         };
         const baseline = await readJson(API_COMPAT_BASELINE_PATH);
-        const allowlist = (await readJson(API_COMPAT_ALLOWLIST_PATH).catch(() => ({
+        const allowlist = await readJson(API_COMPAT_ALLOWLIST_PATH).catch(() => ({
           removedRestPaths: [],
           removedRestMethods: [],
           removedRestResponses: [],
           removedSseEventTypes: [],
           removedSseEnvelopeFields: [],
-        })));
+        }));
         const issues = [
           ...compareRestContract(baseline.rest ?? {}, current.rest, allowlist),
           ...compareRealtimeContract(baseline.sse ?? {}, current.sse, allowlist),
@@ -2087,7 +2122,9 @@ export async function runBackupRoundtripLane(context, options = {}) {
             };
           }),
         );
-        const providerConfigSnapshot = configSnapshots.find((item) => item.relativePath === "config/llm-providers.json");
+        const providerConfigSnapshot = configSnapshots.find(
+          (item) => item.relativePath === "config/llm-providers.json",
+        );
         if (!providerConfigSnapshot) {
           throw new Error("backup roundtrip expected config/llm-providers.json in the runtime root");
         }
@@ -2119,8 +2156,8 @@ export async function runBackupRoundtripLane(context, options = {}) {
         });
         assertOk(createdRetentionPolicy, "seed DB-backed retention policy sentinel");
         if (
-          createdRetentionPolicy.body?.transcriptsDays !== dbSentinelPolicy.transcriptsDays
-          || createdRetentionPolicy.body?.auditDays !== dbSentinelPolicy.auditDays
+          createdRetentionPolicy.body?.transcriptsDays !== dbSentinelPolicy.transcriptsDays ||
+          createdRetentionPolicy.body?.auditDays !== dbSentinelPolicy.auditDays
         ) {
           throw new Error("DB-backed retention policy sentinel was not visible before backup");
         }
@@ -2257,15 +2294,12 @@ export async function runBackupRoundtripLane(context, options = {}) {
         if (restoredConfigRaw !== originalConfigRaw) {
           throw new Error("config state did not return to its pre-backup byte content after restore");
         }
-        const restoredRetentionPolicy = await requestJson(
-          stack.gatewayUrl,
-          "/api/v1/admin/retention",
-        );
+        const restoredRetentionPolicy = await requestJson(stack.gatewayUrl, "/api/v1/admin/retention");
         assertOk(restoredRetentionPolicy, "read retention policy after restore");
         const retentionRestored =
-          restoredRetentionPolicy.body?.transcriptsDays === dbSentinelPolicy.transcriptsDays
-          && restoredRetentionPolicy.body?.auditDays === dbSentinelPolicy.auditDays
-          && restoredRetentionPolicy.body?.backupsKeep === dbSentinelPolicy.backupsKeep;
+          restoredRetentionPolicy.body?.transcriptsDays === dbSentinelPolicy.transcriptsDays &&
+          restoredRetentionPolicy.body?.auditDays === dbSentinelPolicy.auditDays &&
+          restoredRetentionPolicy.body?.backupsKeep === dbSentinelPolicy.backupsKeep;
         if (!retentionRestored) {
           throw new Error("DB-backed retention policy sentinel was not restored");
         }
@@ -2290,12 +2324,20 @@ export async function runBackupRoundtripLane(context, options = {}) {
           config: Object.values(configManifestChecks).every(Boolean),
         };
         if (Object.values(expectedManifestChecks).some((value) => !value)) {
-          throw new Error(`backup manifest missed part of the minimum backup set: ${JSON.stringify(expectedManifestChecks)}`);
+          throw new Error(
+            `backup manifest missed part of the minimum backup set: ${JSON.stringify(expectedManifestChecks)}`,
+          );
         }
-        const verifiedConfigCoverage = Array.isArray(verifiedBackup.body?.contractCoverage?.minimumSet?.config?.expectedPaths)
-          ? [...verifiedBackup.body.contractCoverage.minimumSet.config.expectedPaths].sort((left, right) => left.localeCompare(right))
+        const verifiedConfigCoverage = Array.isArray(
+          verifiedBackup.body?.contractCoverage?.minimumSet?.config?.expectedPaths,
+        )
+          ? [...verifiedBackup.body.contractCoverage.minimumSet.config.expectedPaths].sort((left, right) =>
+              left.localeCompare(right),
+            )
           : [];
-        const expectedConfigCoverage = configSnapshots.map((snapshot) => snapshot.relativePath).sort((left, right) => left.localeCompare(right));
+        const expectedConfigCoverage = configSnapshots
+          .map((snapshot) => snapshot.relativePath)
+          .sort((left, right) => left.localeCompare(right));
         if (JSON.stringify(verifiedConfigCoverage) !== JSON.stringify(expectedConfigCoverage)) {
           throw new Error(
             `backup verify contract coverage did not report the exact config file set: ${JSON.stringify({
@@ -2398,9 +2440,7 @@ export async function runVisualRegressionLane(context, options = {}) {
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
     await pinVisualRegressionProvider(stack.gatewayUrl);
-    const fixture = verificationTarget.isNext
-      ? await seedMissionControlNextFixture(stack.gatewayUrl)
-      : null;
+    const fixture = verificationTarget.isNext ? await seedMissionControlNextFixture(stack.gatewayUrl) : null;
     const manualProofArtifacts = [];
     const browser = await chromium.launch({ headless: true });
     try {
@@ -2431,7 +2471,11 @@ export async function runVisualRegressionLane(context, options = {}) {
                 });
                 await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
                 await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
-                const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, verificationTarget.packageName);
+                const browserSanity = assertBrowserConsoleHealthy(
+                  browserLog,
+                  browserLogCursor,
+                  verificationTarget.packageName,
+                );
                 await page.evaluate(async () => {
                   if (document.fonts?.ready) {
                     await document.fonts.ready;
@@ -2832,7 +2876,9 @@ export async function runRuntimeTruthLane(context, options = {}) {
         const sessionId = approvalSeed.body?.sessionId;
         const durableRunId = approvalSeed.body?.chatTurnDurableRunId;
         if (!approvalId || !sessionId || !durableRunId) {
-          throw new Error(`runtime-truth seed missing approval/session/run identifiers: ${JSON.stringify(approvalSeed.body)}`);
+          throw new Error(
+            `runtime-truth seed missing approval/session/run identifiers: ${JSON.stringify(approvalSeed.body)}`,
+          );
         }
 
         const beforeRestart = await requestJson(
@@ -2858,7 +2904,9 @@ export async function runRuntimeTruthLane(context, options = {}) {
         });
         assertOk(approved, "resume runtime-truth approval-gated turn");
         if (approved.body?.resumedRunId !== durableRunId) {
-          throw new Error(`runtime-truth expected resumed run ${durableRunId}, got ${approved.body?.resumedRunId ?? "unknown"}`);
+          throw new Error(
+            `runtime-truth expected resumed run ${durableRunId}, got ${approved.body?.resumedRunId ?? "unknown"}`,
+          );
         }
 
         const durableRun = await waitForDurableRunStatus(stack.gatewayUrl, durableRunId, ["running", "completed"]);
@@ -2880,10 +2928,7 @@ export async function runRuntimeTruthLane(context, options = {}) {
           const browserLogCursor = browserLog.mark();
 
           await page.goto(
-            buildVerificationUiUrl(
-              stack.uiUrl,
-              `/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`,
-            ),
+            buildVerificationUiUrl(stack.uiUrl, `/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`),
             { waitUntil: "domcontentloaded" },
           );
           await waitForVerificationRouteReady(
@@ -2916,7 +2961,11 @@ export async function runRuntimeTruthLane(context, options = {}) {
             correlationId,
             logCursor: browserLogCursor,
           });
-          const outPath = path.join(context.artifactRoot, "diagnostics", "runtime-truth-approval-restart-ui-consistency.json");
+          const outPath = path.join(
+            context.artifactRoot,
+            "diagnostics",
+            "runtime-truth-approval-restart-ui-consistency.json",
+          );
           await writeJson(outPath, {
             seeded: seeded.body,
             approvalSeed: approvalSeed.body,
@@ -3202,11 +3251,9 @@ export async function runUiParityLane(context, options = {}) {
     assertOk(memoryItems, "read ui-parity memory items");
     const events = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
     assertOk(events, "read ui-parity events");
-    const approvalNeedle =
-      approvals.body?.items?.[0]?.kind ?? approvals.body?.items?.[0]?.approvalId ?? "shell.exec";
+    const approvalNeedle = approvals.body?.items?.[0]?.kind ?? approvals.body?.items?.[0]?.approvalId ?? "shell.exec";
     const memoryNeedle = "Memory items";
-    const activityNeedle =
-      events.body?.items?.[0]?.eventType ?? "approval_created";
+    const activityNeedle = events.body?.items?.[0]?.eventType ?? "approval_created";
 
     await runScenario(
       context,
@@ -3341,7 +3388,9 @@ export async function runUiParityLane(context, options = {}) {
               label !== "activity" &&
               label !== "memory"
             ) {
-              throw new Error(`ui-parity legacy ${label} surface did not expose the seeded fact ${legacyResult.needle}`);
+              throw new Error(
+                `ui-parity legacy ${label} surface did not expose the seeded fact ${legacyResult.needle}`,
+              );
             }
           }
 
@@ -3419,7 +3468,8 @@ export async function runMemoryTruthLane(context, options = {}) {
       {
         id: "memory-truth.ttl-lifecycle-visibility",
         lane: "memory-truth",
-        title: "TTL expiry hides active reads but remains visible as expired lifecycle truth in API and Mission Control Next",
+        title:
+          "TTL expiry hides active reads but remains visible as expired lifecycle truth in API and Mission Control Next",
         subsystem: "memory",
       },
       async ({ correlationId }) => {
@@ -3457,16 +3507,12 @@ export async function runMemoryTruthLane(context, options = {}) {
           throw new Error(`memory-truth could not find seeded memory item ${memoryTitle}`);
         }
 
-        const patched = await requestJson(
-          stack.gatewayUrl,
-          `/api/v1/memory/items/${encodeURIComponent(item.itemId)}`,
-          {
-            method: "PATCH",
-            body: {
-              ttlOverrideSeconds: 1,
-            },
+        const patched = await requestJson(stack.gatewayUrl, `/api/v1/memory/items/${encodeURIComponent(item.itemId)}`, {
+          method: "PATCH",
+          body: {
+            ttlOverrideSeconds: 1,
           },
-        );
+        });
         assertOk(patched, "patch memory item ttl");
         await delay(1500);
 
@@ -3511,11 +3557,11 @@ export async function runMemoryTruthLane(context, options = {}) {
             NEXT_UI_PACKAGE,
           );
           await setBrowserCorrelation(page, correlationId, seeded.body.sessionId);
+          await page.getByRole("heading", { name: memoryTitle, exact: false }).first().waitFor({ timeout: 15000 });
           await page
-            .getByRole("heading", { name: memoryTitle, exact: false })
+            .getByText(/Lifecycle expired/i, { exact: false })
             .first()
             .waitFor({ timeout: 15000 });
-          await page.getByText(/Lifecycle expired/i, { exact: false }).first().waitFor({ timeout: 15000 });
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "memory-truth-ttl-lifecycle-visibility",
@@ -3573,7 +3619,8 @@ export async function runRealtimeTruthLane(context, options = {}) {
       {
         id: "realtime-truth.explicit-compatibility-replay-gap",
         lane: "realtime-truth",
-        title: "Realtime explicit metadata, compatibility fallback, and replay-gap paths stay legible in Mission Control Next",
+        title:
+          "Realtime explicit metadata, compatibility fallback, and replay-gap paths stay legible in Mission Control Next",
         subsystem: "mission-control",
       },
       async ({ correlationId }) => {
@@ -3610,7 +3657,9 @@ export async function runRealtimeTruthLane(context, options = {}) {
 
           const explicitEvents = await requestJson(stack.gatewayUrl, "/api/v1/events?limit=20");
           assertOk(explicitEvents, "list realtime events after explicit seed");
-          const explicitEvent = explicitEvents.body?.items?.find((item) => item.eventId === seeded.body?.explicitEvent?.eventId);
+          const explicitEvent = explicitEvents.body?.items?.find(
+            (item) => item.eventId === seeded.body?.explicitEvent?.eventId,
+          );
           const compatibilityEvent = explicitEvents.body?.items?.find(
             (item) => item.eventId === seeded.body?.compatibilityEvent?.eventId,
           );
@@ -3618,7 +3667,9 @@ export async function runRealtimeTruthLane(context, options = {}) {
             throw new Error("realtime-truth expected explicit event metadata to survive the API envelope");
           }
           if (!compatibilityEvent?.eventId) {
-            throw new Error("realtime-truth expected compatibility fallback event to remain visible in the retained API list");
+            throw new Error(
+              "realtime-truth expected compatibility fallback event to remain visible in the retained API list",
+            );
           }
 
           const replayGap = await requestJson(
@@ -3650,9 +3701,12 @@ export async function runRealtimeTruthLane(context, options = {}) {
             NEXT_UI_PACKAGE,
           );
 
-          await page.evaluate((cursor) => {
-            window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
-          }, String(seeded.body?.staleCursor ?? ""));
+          await page.evaluate(
+            (cursor) => {
+              window.localStorage.setItem("goatcitadel.events.cursor.v1", cursor);
+            },
+            String(seeded.body?.staleCursor ?? ""),
+          );
           await page.reload({ waitUntil: "domcontentloaded" });
           await waitForVerificationRouteReady(
             page,
@@ -3670,8 +3724,13 @@ export async function runRealtimeTruthLane(context, options = {}) {
             )
             .first()
             .waitFor({ timeout: 15000 });
-          await page.getByText("Polling", { exact: false }).first().waitFor({ timeout: 15000 });
-          await page.getByText("Polling fallback", { exact: false }).first().waitFor({ timeout: 15000 });
+          const realtimeCopy = (await page.locator("body").innerText({ timeout: 15000 })) ?? "";
+          if (!/(Live recovery|Polling|Realtime degraded)/.test(realtimeCopy)) {
+            throw new Error("realtime-truth expected visible realtime degraded/recovery posture copy");
+          }
+          if (!/(Streaming via replay recovery|Polling fallback|Streaming \(replay recovery\))/.test(realtimeCopy)) {
+            throw new Error("realtime-truth expected visible realtime replay recovery or polling fallback copy");
+          }
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "realtime-truth-explicit-compatibility-replay-gap",
@@ -3681,7 +3740,11 @@ export async function runRealtimeTruthLane(context, options = {}) {
             correlationId,
             logCursor: browserLogCursor,
           });
-          const outPath = path.join(context.artifactRoot, "diagnostics", "realtime-truth-explicit-compatibility-replay-gap.json");
+          const outPath = path.join(
+            context.artifactRoot,
+            "diagnostics",
+            "realtime-truth-explicit-compatibility-replay-gap.json",
+          );
           await writeJson(outPath, {
             fixture,
             seeded: seeded.body,
@@ -3874,8 +3937,7 @@ async function runLiveProviderScenarios(context, gatewayUrl) {
 
 async function waitForMissionControlShell(page, options = {}) {
   const timeoutMs = typeof options === "number" ? options : (options.timeoutMs ?? 30000);
-  const packageName =
-    typeof options === "number" ? DEFAULT_UI_PACKAGE : (options.packageName ?? DEFAULT_UI_PACKAGE);
+  const packageName = typeof options === "number" ? DEFAULT_UI_PACKAGE : (options.packageName ?? DEFAULT_UI_PACKAGE);
   const shellContract = resolveShellContract(packageName);
   await page.waitForFunction(
     ({ shellSelector, forbiddenSelector }) => {
@@ -3902,11 +3964,7 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
           return false;
         }
         const fallback = document.querySelector(loadingSelector);
-        return (
-          !fallback &&
-          shell.dataset.area === area &&
-          shell.dataset.section === (section ?? "root")
-        );
+        return !fallback && shell.dataset.area === area && shell.dataset.section === (section ?? "root");
       },
       {
         area: route.expectedArea ?? "chat",
@@ -3921,11 +3979,7 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
   }
   if (route.readyText) {
     if (packageName === NEXT_UI_PACKAGE) {
-      await page
-        .locator("h1, h2, h3")
-        .filter({ hasText: route.readyText })
-        .first()
-        .waitFor({ timeout: timeoutMs });
+      await page.locator("h1, h2, h3").filter({ hasText: route.readyText }).first().waitFor({ timeout: timeoutMs });
       return;
     }
     await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: timeoutMs });
@@ -3995,12 +4049,8 @@ function assertBrowserConsoleHealthy(browserLog, cursor, packageName = DEFAULT_U
   if (packageName === NEXT_UI_PACKAGE && (consoleErrors.length > 0 || pageErrors.length > 0)) {
     throw new Error(
       [
-        consoleErrors.length > 0
-          ? `console errors: ${consoleErrors.map((item) => item.text).join(" | ")}`
-          : null,
-        pageErrors.length > 0
-          ? `page errors: ${pageErrors.map((item) => item.message).join(" | ")}`
-          : null,
+        consoleErrors.length > 0 ? `console errors: ${consoleErrors.map((item) => item.text).join(" | ")}` : null,
+        pageErrors.length > 0 ? `page errors: ${pageErrors.map((item) => item.message).join(" | ")}` : null,
       ]
         .filter(Boolean)
         .join(" ; "),
@@ -4151,15 +4201,11 @@ function sortCompanionVerificationValue(value) {
 async function waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, requestSecret, attempts = 20) {
   let latest = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    latest = await requestJson(
-      gatewayUrl,
-      `/api/v1/auth/device-requests/${encodeURIComponent(requestId)}/status`,
-      {
-        headers: {
-          "x-goatcitadel-device-request-secret": requestSecret,
-        },
+    latest = await requestJson(gatewayUrl, `/api/v1/auth/device-requests/${encodeURIComponent(requestId)}/status`, {
+      headers: {
+        "x-goatcitadel-device-request-secret": requestSecret,
       },
-    );
+    });
     assertOk(latest, "read device access request status");
     if (latest.body?.status === "approved" && typeof latest.body?.deviceToken === "string") {
       return latest;
@@ -4337,10 +4383,7 @@ async function seedMissionControlNextFixture(gatewayUrl) {
     throw new Error("mission-control-next verification seed did not return workspaceId/sessionId");
   }
 
-  const threadResponse = await requestJson(
-    gatewayUrl,
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`,
-  );
+  const threadResponse = await requestJson(gatewayUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
   assertOk(threadResponse, "read mission-control-next verification thread");
   const artifactTurnId =
     threadResponse.body?.selectedTurnId ??
@@ -4572,22 +4615,17 @@ function forceVerificationUiPackage(packageName) {
 async function restartGatewayProcess(context, stack, gatewayEnv = {}) {
   const gatewayPort = Number.parseInt(new URL(stack.gatewayUrl).port, 10);
   await stopProcess(stack.gateway);
-  const gateway = await startProcess(
-    context,
-    "gateway",
-    [pnpmCommand(), "--dir", repoRoot, "dev:gateway"],
-    {
-      GOATCITADEL_ROOT_DIR: stack.runtimeRoot,
-      GATEWAY_HOST: "127.0.0.1",
-      GATEWAY_PORT: String(gatewayPort),
-      GOATCITADEL_AUTH_MODE: "none",
-      GOATCITADEL_DATABASE_DRIVER: "sqlite",
-      GOATCITADEL_DISABLE_SECRET_STORE: "true",
-      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
-      GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
-      ...gatewayEnv,
-    },
-  );
+  const gateway = await startProcess(context, "gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], {
+    GOATCITADEL_ROOT_DIR: stack.runtimeRoot,
+    GATEWAY_HOST: "127.0.0.1",
+    GATEWAY_PORT: String(gatewayPort),
+    GOATCITADEL_AUTH_MODE: "none",
+    GOATCITADEL_DATABASE_DRIVER: "sqlite",
+    GOATCITADEL_DISABLE_SECRET_STORE: "true",
+    GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
+    GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+    ...gatewayEnv,
+  });
   await waitForHttp(`${stack.gatewayUrl}/health`, "Gateway health", 180000, gateway);
   return gateway;
 }
@@ -4712,19 +4750,15 @@ async function createAuthMatrixCredentials(gatewayUrl, operatorHeaders) {
       throw new Error(`auth-matrix device request missing identifiers: ${JSON.stringify(deviceRequest.body)}`);
     }
 
-    const resolved = await requestJson(
-      gatewayUrl,
-      `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
-      {
-        method: "POST",
-        headers: operatorHeaders,
-        body: {
-          decision: "approve",
-          resolvedBy: "verification-auth-matrix",
-          resolutionNote: "Approved for auth-matrix verification.",
-        },
+    const resolved = await requestJson(gatewayUrl, `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`, {
+      method: "POST",
+      headers: operatorHeaders,
+      body: {
+        decision: "approve",
+        resolvedBy: "verification-auth-matrix",
+        resolutionNote: "Approved for auth-matrix verification.",
       },
-    );
+    });
     assertOk(resolved, `approve ${deviceLabel} device request`);
 
     const approvedStatus = await waitForApprovedDeviceAccessRequest(gatewayUrl, requestId, requestSecret);
@@ -4803,10 +4837,7 @@ function selectRepresentativeManifestRoute(manifestItems, accessClass) {
   const preferred = preferredRoutes[accessClass] ?? [];
   for (const candidate of preferred) {
     const exact = manifestItems.find(
-      (item) =>
-        item.accessClass === accessClass &&
-        item.method === candidate.method &&
-        item.url === candidate.url,
+      (item) => item.accessClass === accessClass && item.method === candidate.method && item.url === candidate.url,
     );
     if (exact) {
       return exact;
@@ -4955,16 +4986,7 @@ function isAllowedStatus(status) {
   return Number.isFinite(status) && status >= 200 && status < 300;
 }
 
-async function collectUiParitySurface({
-  page,
-  baseUrl,
-  href,
-  route,
-  packageName,
-  correlationId,
-  sessionId,
-  needle,
-}) {
+async function collectUiParitySurface({ page, baseUrl, href, route, packageName, correlationId, sessionId, needle }) {
   let ready = false;
   let error = null;
   let preview = "";
@@ -5023,7 +5045,11 @@ async function runMissionControlNextMobileShellProof(context, input) {
         await page.goto(buildVerificationUiUrl(input.uiUrl, "/chat"), { waitUntil: "domcontentloaded" });
         await waitForVerificationRouteReady(
           page,
-          { expectedArea: "chat", expectedSection: "root", readySelector: ".mc-next-threaded-surface[data-mode=\"chat\"]" },
+          {
+            expectedArea: "chat",
+            expectedSection: "root",
+            readySelector: '.mc-next-threaded-surface[data-mode="chat"]',
+          },
           input.packageName,
         );
         await setBrowserCorrelation(page, correlationId, input.sessionId);
@@ -5082,9 +5108,7 @@ async function runMissionControlNextMobileShellProof(context, input) {
         );
         await setBrowserCorrelation(page, correlationId, input.sessionId);
         await assertNoHorizontalOverflow(page, "mobile cowork tasks");
-        const primaryTaskAction = page
-          .locator(".mc-next-directory-page button, .mc-next-directory-action")
-          .first();
+        const primaryTaskAction = page.locator(".mc-next-directory-page button, .mc-next-directory-action").first();
         await assertLocatorFullyVisible(page, primaryTaskAction, "task board primary action");
         await performVerificationInteraction(page, "open-inspector", input.packageName);
         await assertNoHorizontalOverflow(page, "mobile cowork tasks with inspector");
@@ -5177,9 +5201,7 @@ async function writeMissionControlNextManualProofChecklist(context, entries) {
     "## Captured screenshots",
   ];
   for (const entry of normalizedEntries) {
-    lines.push(
-      `- ${entry.routeSlug} / ${entry.variantSlug}: ${entry.screenshots.join(", ")}`,
-    );
+    lines.push(`- ${entry.routeSlug} / ${entry.variantSlug}: ${entry.screenshots.join(", ")}`);
   }
   lines.push("");
   lines.push(`Generated at ${new Date().toISOString()}`);
@@ -5269,7 +5291,9 @@ async function compareVisualBaseline(context, slug, options = {}) {
         height: current.info.height,
         channels: 4,
       },
-    }).png().toFile(diffPath);
+    })
+      .png()
+      .toFile(diffPath);
   }
 
   await writeJson(diagnosticsPath, {
@@ -5312,7 +5336,8 @@ async function loadVisualComparisonImage(filePath) {
 
 async function assertVisualBaselineCoverage(context, options = {}) {
   const packageName = options.packageName ?? DEFAULT_UI_PACKAGE;
-  const routes = packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionManifest(packageName) : RELEASE_SURFACE_MANIFEST;
+  const routes =
+    packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionManifest(packageName) : RELEASE_SURFACE_MANIFEST;
   const variants =
     packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionVariants(packageName) : RELEASE_SURFACE_VARIANTS;
   const baselineDir = resolveVisualBaselineDir(packageName);
@@ -5340,9 +5365,13 @@ async function assertVisualBaselineCoverage(context, options = {}) {
 }
 
 function snapshotRestContract(openApiDocument) {
-  const paths = openApiDocument && typeof openApiDocument === "object" && openApiDocument.paths && typeof openApiDocument.paths === "object"
-    ? openApiDocument.paths
-    : {};
+  const paths =
+    openApiDocument &&
+    typeof openApiDocument === "object" &&
+    openApiDocument.paths &&
+    typeof openApiDocument.paths === "object"
+      ? openApiDocument.paths
+      : {};
   return Object.fromEntries(
     Object.entries(paths)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -5398,7 +5427,10 @@ function compareRestContract(baseline, current, allowlist) {
       }
       for (const responseCode of baselineDefinition?.responses ?? []) {
         const allowlistKey = `${String(method).toUpperCase()} ${routePath} -> ${responseCode}`;
-        if (!current[routePath][method].responses.includes(responseCode) && !allowlist.removedRestResponses?.includes(allowlistKey)) {
+        if (
+          !current[routePath][method].responses.includes(responseCode) &&
+          !allowlist.removedRestResponses?.includes(allowlistKey)
+        ) {
           issues.push(`REST response removed: ${allowlistKey}`);
         }
       }
@@ -5435,14 +5467,16 @@ async function startCatalogParityFixtureServer() {
 
     if (url.pathname === "/v1/integrations/actions" && method === "POST") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        message: "fixture bridge ok",
-        output: {
-          catalogId: parsedBody?.catalogId,
-          actionId: parsedBody?.actionId,
-          input: parsedBody?.input ?? {},
-        },
-      }));
+      response.end(
+        JSON.stringify({
+          message: "fixture bridge ok",
+          output: {
+            catalogId: parsedBody?.catalogId,
+            actionId: parsedBody?.actionId,
+            input: parsedBody?.input ?? {},
+          },
+        }),
+      );
       return;
     }
     if (url.pathname === "/1/members/me/boards" && method === "GET") {
@@ -5457,19 +5491,21 @@ async function startCatalogParityFixtureServer() {
     }
     if (url.pathname === "/v2/search" && method === "GET") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({
-        results: [
-          {
-            id: "gif-1",
-            content_description: "Happy goat",
-            media_formats: {
-              gif: {
-                url: "https://media.example.test/happy-goat.gif",
+      response.end(
+        JSON.stringify({
+          results: [
+            {
+              id: "gif-1",
+              content_description: "Happy goat",
+              media_formats: {
+                gif: {
+                  url: "https://media.example.test/happy-goat.gif",
+                },
               },
             },
-          },
-        ],
-      }));
+          ],
+        }),
+      );
       return;
     }
     if (url.pathname === "/gmail/v1/users/me/messages" && method === "GET") {

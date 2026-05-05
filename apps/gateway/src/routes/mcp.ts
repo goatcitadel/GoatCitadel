@@ -1,5 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import {
+  buildUnsupportedMcpTransportMessage,
+  isAllowedMcpDefinitionForCreate,
+} from "../services/mcp-template-visibility.js";
 
 const serverParamsSchema = z.object({
   serverId: z.string().min(1),
@@ -105,6 +109,9 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = createServerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (!isAllowedMcpDefinitionForCreate(parsed.data)) {
+      return reply.code(400).send({ error: buildUnsupportedMcpTransportMessage(parsed.data.transport) });
     }
     try {
       return reply.code(201).send(fastify.services.mcp.createMcpServer(parsed.data));

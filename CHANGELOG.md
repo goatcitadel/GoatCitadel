@@ -29,6 +29,17 @@ All notable changes to GoatCitadel are documented in this file.
 - Windows x64 and arm64 installer proof was refreshed after the `1.0.0` cut; unsigned artifacts remain development smoke evidence until public Authenticode signing is configured.
 - README and Mission Control screenshot gallery were refreshed to match the current main-branch UI and docs posture.
 
+### Fixed
+
+- Postgres upgrade safety for chat sessions: the operator-control prefs repair now appends as a protected migration instead of mutating historical migration numbering, and migration immutability checks lock applied migration names and SQL hashes.
+- Chat session creation is now transaction-wrapped so prefs, metadata, bindings, and workspace checks cannot leave half-created sessions when a later write fails.
+- Gateway health now surfaces Postgres migration-name drift and required chat prefs columns instead of reporting a clean max migration version for a broken schema.
+- Durable chat cancellation now records a `run_cancelled` checkpoint and trace metadata instead of mixing cancelled runs with failed-run trace truth.
+- Mission Control Next runtime status now carries per-source backend errors so daemon, backup, and metric panels can render unavailable state instead of false stopped/zero facts.
+- Memory admin defaults to the shipped operator lifecycle path, and Discord interaction/autocomplete response failures now emit diagnostics instead of being silently swallowed.
+- Release verification now builds `@goatcitadel/extensions-sdk` before fast test/smoke steps so clean generated-output lanes do not depend on prior local build artifacts.
+- MCP 1.0 authoring now keeps the visible runtime-invokable surface to local `stdio` plus the internal Approval Inbox template, with generic remote transports gated behind an explicit experimental flag.
+
 ### Verification
 
 - Approval auth-boundary proof now covers approval list, replay, resolve, bulk-resolve, and remote-token control routes.
