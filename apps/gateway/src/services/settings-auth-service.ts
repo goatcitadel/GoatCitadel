@@ -336,9 +336,10 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
     persistAssistant = true;
     persistToolPolicy = true;
   } else if (input.defaultToolProfile) {
-    const knownLegacyProfiles = deps.config.toolPolicy.profiles
-      ? Object.prototype.hasOwnProperty.call(deps.config.toolPolicy.profiles, input.defaultToolProfile)
-      : true;
+    const legacyProfiles = deps.config.toolPolicy.profiles ?? {};
+    const knownLegacyProfiles =
+      Object.keys(legacyProfiles).length === 0 ||
+      Object.prototype.hasOwnProperty.call(legacyProfiles, input.defaultToolProfile);
     if (!knownLegacyProfiles) {
       throw new Error(`Unknown legacy tool profile: ${input.defaultToolProfile}`);
     }

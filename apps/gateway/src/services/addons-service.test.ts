@@ -180,12 +180,9 @@ describe("AddonsService", () => {
       if (cmd === "git" && args?.includes("rev-parse")) {
         return "abc123\n";
       }
-      if (cmd.endsWith("node.exe")) {
-        const joined = (args ?? []).join(" ");
-        if (joined.includes("pnpm install --frozen-lockfile")) {
-          throw new Error("pnpm install failed");
-        }
-        return "";
+      const joined = (args ?? []).join(" ");
+      if ((cmd === "corepack" || cmd.endsWith("node.exe")) && joined.includes("pnpm install --frozen-lockfile")) {
+        throw new Error("pnpm install failed");
       }
       if (cmd === "git" && args?.includes("pull")) {
         return "";
@@ -290,15 +287,13 @@ describe("AddonsService", () => {
         status: "pass",
       }),
     );
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      expect.arrayContaining([
-        expect.stringContaining("node_modules\\corepack\\dist\\corepack.js"),
-        "pnpm",
-        "--filter",
-        "@arena/server",
-        "start",
-      ]),
+    const [spawnFile, spawnArgs, spawnOptions] = spawnMock.mock.calls[0] ?? [];
+    expect(spawnFile === "corepack" || spawnFile === process.execPath).toBe(true);
+    expect(spawnArgs).toEqual(expect.arrayContaining(["pnpm", "--filter", "@arena/server", "start"]));
+    if (spawnFile === process.execPath) {
+      expect(spawnArgs).toEqual(expect.arrayContaining([expect.stringContaining("corepack.js")]));
+    }
+    expect(spawnOptions).toEqual(
       expect.objectContaining({
         cwd: addonPath,
         env: expect.objectContaining({

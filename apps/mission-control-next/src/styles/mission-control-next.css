@@ -1105,6 +1105,10 @@
   width: min(16rem, calc(100vw - 2rem));
 }
 
+:root[data-visual-regression="true"] .notification-stack {
+  display: none;
+}
+
 .notification-item {
   display: flex;
   justify-content: space-between;

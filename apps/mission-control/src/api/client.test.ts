@@ -62,6 +62,16 @@ async function settlePromises(iterations = 4): Promise<void> {
   }
 }
 
+async function waitForCondition(condition: () => boolean, attempts = 20): Promise<void> {
+  for (let index = 0; index < attempts; index += 1) {
+    await settlePromises();
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe("isTrustedGatewayHost", () => {
   beforeEach(() => {
     installMockWindow();
@@ -271,7 +281,7 @@ describe("isTrustedGatewayHost", () => {
       },
     );
 
-    await settlePromises(8);
+    await waitForCondition(() => states.includes("retrying"));
 
     expect(MockEventSource.instances).toHaveLength(0);
     expect(states).toContain("error");
@@ -330,7 +340,7 @@ describe("isTrustedGatewayHost", () => {
       },
     );
 
-    await settlePromises(8);
+    await waitForCondition(() => MockEventSource.instances.length === 1);
 
     expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes("/api/v1/auth/sse-token"))).toHaveLength(1);
     expect(MockEventSource.instances).toHaveLength(1);

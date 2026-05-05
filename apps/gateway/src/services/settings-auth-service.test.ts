@@ -196,4 +196,27 @@ describe("settings-auth-service durable settings", () => {
     expect(settings.features.replayRegressionV1Enabled).toBe(true);
     expect(getSettings(host).features.durableKernelV1Enabled).toBe(true);
   });
+
+  it("accepts legacy tool profile names when the profile map is empty", () => {
+    const host = buildHost();
+    host.config.toolPolicy.profiles = {};
+
+    const settings = updateSettings(host, {
+      defaultToolProfile: "minimal",
+    });
+
+    expect(settings.defaultToolProfile).toBe("minimal");
+    expect(host.persistToolPolicyConfig).toHaveBeenCalled();
+    expect(host.persistAssistantConfig).toHaveBeenCalled();
+  });
+
+  it("rejects unknown legacy tool profile names when profiles are explicit", () => {
+    const host = buildHost();
+
+    expect(() =>
+      updateSettings(host, {
+        defaultToolProfile: "unknown",
+      }),
+    ).toThrow("Unknown legacy tool profile: unknown");
+  });
 });

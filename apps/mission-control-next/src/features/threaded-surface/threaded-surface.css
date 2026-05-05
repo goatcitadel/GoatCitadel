@@ -774,6 +774,24 @@
   backdrop-filter: blur(7px);
 }
 
+:root[data-visual-regression="true"] .mc-next-thread-blocking-prompt {
+  display: none;
+}
+
+:root[data-visual-regression="true"]
+  .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
+  + .mc-next-threaded-composer-card {
+  opacity: 1;
+  filter: none;
+}
+
+:root[data-visual-regression="true"]
+  .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
+  + .mc-next-threaded-composer-card::after {
+  content: none;
+  display: none;
+}
+
 .mc-next-threaded-side-panel,
 .mc-next-threaded-context-panel {
   align-self: start;

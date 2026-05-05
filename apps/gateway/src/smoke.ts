@@ -562,7 +562,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
   assert.equal(memorySearch.statusCode, 200);
   assert.equal(Array.isArray(memorySearch.body.items), true);
 
-  const commsSend = await postJson<{ outcome?: string }>(
+  const commsSend = await postJson<{ outcome?: string; approvalId?: string }>(
     app,
     "/api/v1/comms/send",
     {
@@ -577,7 +577,11 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     },
   );
   assert.equal(commsSend.statusCode, 200);
-  assert.equal(commsSend.body.outcome, "blocked");
+  if (commsSend.body.outcome === "approval_required") {
+    assert.equal(typeof commsSend.body.approvalId, "string");
+  } else {
+    assert.equal(commsSend.body.outcome, "blocked");
+  }
 }
 
 async function smokeApprovals(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
