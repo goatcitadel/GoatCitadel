@@ -683,15 +683,6 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   },
   {
     version: 21,
-    name: "chat_operator_control_prefs",
-    sql: `
-      ALTER TABLE chat_session_prefs
-        ADD COLUMN IF NOT EXISTS speed_mode TEXT DEFAULT 'standard',
-        ADD COLUMN IF NOT EXISTS subagent_policy TEXT DEFAULT 'ask_when_useful';
-    `,
-  },
-  {
-    version: 22,
     name: "prompt_pack_agentic_diagnostics_repairs",
     sql: `
       ALTER TABLE prompt_pack_tests
@@ -706,7 +697,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 23,
+    version: 22,
     name: "prompt_pack_benchmark_item_unique_repairs",
     sql: `
       WITH ranked_benchmark_items AS (
@@ -732,7 +723,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 24,
+    version: 23,
     name: "pending_approval_action_expiry_and_trace_index_parity",
     sql: `
       ALTER TABLE pending_approval_actions
@@ -743,7 +734,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 25,
+    version: 24,
     name: "chat_delegation_step_current_shape_repairs",
     sql: `
       ALTER TABLE chat_delegation_steps
@@ -761,7 +752,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 26,
+    version: 25,
     name: "runtime_evidence_envelopes",
     sql: `
       CREATE TABLE IF NOT EXISTS runtime_evidence_envelopes (
@@ -794,6 +785,37 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
+    version: 26,
+    name: "skill_evaluation_runs",
+    sql: `
+      CREATE TABLE IF NOT EXISTS skill_evaluation_runs (
+        run_id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        target_pass_rate DOUBLE PRECISION NOT NULL,
+        max_rounds INTEGER NOT NULL,
+        accepted INTEGER NOT NULL DEFAULT 0,
+        improvement_delta DOUBLE PRECISION NOT NULL DEFAULT 0,
+        proposal_id TEXT,
+        improvement_candidate_id TEXT,
+        ledger_signal_id TEXT,
+        record_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_skill_evaluation_runs_skill_updated
+        ON skill_evaluation_runs(skill_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_skill_evaluation_runs_status_updated
+        ON skill_evaluation_runs(status, updated_at DESC);
+    `,
+  },
+  // v27 intentionally repeats the idempotent skill migration. A short-lived
+  // faulty sequence applied this version before the chat prefs repair moved
+  // to v28, so keeping this tuple avoids turning repaired runtimes into
+  // permanent health-drift false positives.
+  {
     version: 27,
     name: "skill_evaluation_runs",
     sql: `
@@ -818,6 +840,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON skill_evaluation_runs(skill_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_skill_evaluation_runs_status_updated
         ON skill_evaluation_runs(status, updated_at DESC);
+    `,
+  },
+  {
+    version: 28,
+    name: "chat_operator_control_prefs",
+    sql: `
+      ALTER TABLE chat_session_prefs
+        ADD COLUMN IF NOT EXISTS speed_mode TEXT DEFAULT 'standard',
+        ADD COLUMN IF NOT EXISTS subagent_policy TEXT DEFAULT 'ask_when_useful';
     `,
   },
 ];

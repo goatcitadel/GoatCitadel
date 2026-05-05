@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - "apps/gateway/**"
+      - "packages/contracts/**"
+      - "packages/storage/**"
       - "scripts/verification/**"
       - ".github/workflows/verification-backup-roundtrip.yml"
       - "package.json"
@@ -14,6 +16,8 @@ on:
       - main
     paths:
       - "apps/gateway/**"
+      - "packages/contracts/**"
+      - "packages/storage/**"
       - "scripts/verification/**"
       - ".github/workflows/verification-backup-roundtrip.yml"
       - "package.json"

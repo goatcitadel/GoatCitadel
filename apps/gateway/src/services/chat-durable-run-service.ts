@@ -157,6 +157,7 @@ export function finalizeDurableChatRun(
     return;
   }
   if (trace.status === "cancelled") {
+    const checkpointKind: DurableCheckpointRecord["checkpointKind"] = "run_cancelled";
     deps.durableRuns.updateRun({
       runId,
       status: "cancelled",
@@ -164,12 +165,17 @@ export function finalizeDurableChatRun(
       finishedAt: now,
       clearLease: true,
     });
+    deps.durableRuns.createCheckpoint({
+      runId,
+      checkpointKind,
+      state: checkpointState,
+    });
     deps.recordDurableTimelineEvent(runId, "run_cancelled", checkpointState);
     deps.patchDurableTraceIfPresent(prepared.turnId, {
       durable: {
         runId,
         status: "cancelled",
-        checkpointKind: "run_failed",
+        checkpointKind,
       },
     });
     return;

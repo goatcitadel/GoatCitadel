@@ -125,6 +125,7 @@ export interface DurableCheckpointRecord {
     | "run_resumed"
     | "run_completed"
     | "run_failed"
+    | "run_cancelled"
     | "manual_replay_requested"
     | "continuation_gate";
   state: Record<string, unknown>;

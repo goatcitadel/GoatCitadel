@@ -108,6 +108,16 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
       backups: [],
       sessions: [],
       mcpServers: [{ serverId: "srv-1", label: "GitHub", transport: "stdio", enabled: true, category: "code" }],
+      sourceStatus: {
+        dashboard: { status: "ok" },
+        timeline: { status: "ok" },
+        health: { status: "ok" },
+        cost: { status: "ok" },
+        daemon: { status: "ok" },
+        backups: { status: "ok" },
+        sessions: { status: "ok" },
+        mcpServers: { status: "ok" },
+      },
     },
   }),
 }));

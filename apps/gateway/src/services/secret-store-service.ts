@@ -138,7 +138,7 @@ export class SecretStoreService {
 [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
 [Windows.Security.Credentials.PasswordCredential,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
 $vault = [Windows.Security.Credentials.PasswordVault]::new()
-try { $existing = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT); $vault.Remove($existing) } catch {}
+try { $existing = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT); $vault.Remove($existing) } catch { Write-Output "credential_not_found" | Out-Null }
 $credential = [Windows.Security.Credentials.PasswordCredential]::new($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT, $env:GOATCITADEL_SECRET_VALUE)
 $vault.Add($credential)
 Write-Output "ok"
@@ -185,7 +185,7 @@ $vault = [Windows.Security.Credentials.PasswordVault]::new()
 try {
   $credential = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT)
   $vault.Remove($credential)
-} catch {}
+} catch { Write-Output "credential_not_found" | Out-Null }
 Write-Output "ok"
 `;
     runCommand("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {

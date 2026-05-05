@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 
@@ -13,9 +16,12 @@ const ENV_KEYS = [
   "GOATCITADEL_RATE_LIMIT_MAX_MUTATION",
   "GOATCITADEL_RATE_LIMIT_MAX_AUTH",
   "GOATCITADEL_RATE_LIMIT_MAX_SSE_CONNECT",
+  "GOATCITADEL_DATABASE_DRIVER",
+  "GOATCITADEL_ROOT_DIR",
 ] as const;
 
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [key, process.env[key]]));
+const tempRoots: string[] = [];
 
 describe("gateway route rate limits", () => {
   afterEach(() => {
@@ -26,6 +32,9 @@ describe("gateway route rate limits", () => {
       } else {
         process.env[key] = original;
       }
+    }
+    for (const root of tempRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -69,6 +78,16 @@ function configureRateLimitedGateway(): void {
   process.env.GOATCITADEL_RATE_LIMIT_MAX_MUTATION = "2";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_AUTH = "20";
   process.env.GOATCITADEL_RATE_LIMIT_MAX_SSE_CONNECT = "20";
+  process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
+  process.env.GOATCITADEL_ROOT_DIR = createIsolatedConfigRoot();
+}
+
+function createIsolatedConfigRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-rate-limit-"));
+  const repoRoot = path.resolve(process.cwd(), "../..");
+  fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
+  tempRoots.push(root);
+  return root;
 }
 
 async function expectMutationRouteToRateLimit(app: Awaited<ReturnType<typeof buildApp>>, url: string, ip: string) {

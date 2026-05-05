@@ -179,6 +179,7 @@ export interface OrchestrationCheckpointRecord {
     | "run_started"
     | "run_paused_for_approval"
     | "run_resumed"
+    | "continuation_gate"
     | "phase_approved"
     | "phase_executed"
     | "wave_advanced"

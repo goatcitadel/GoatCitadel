@@ -1363,7 +1363,6 @@ export class LlmService {
   }
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
-    this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     if (isOpenAICodexProvider(resolved.provider)) {
       return {
@@ -1373,6 +1372,7 @@ export class LlmService {
           "OpenAI Codex model catalog is sourced from GoatCitadel's template because ChatGPT OAuth does not expose a stable /models endpoint.",
       };
     }
+    this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const target = this.buildRequestTarget(resolved, "models", `${resolved.provider.baseUrl}/models`);
 
     try {

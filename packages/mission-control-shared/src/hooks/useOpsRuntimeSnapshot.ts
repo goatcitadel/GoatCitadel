@@ -22,12 +22,32 @@ type RuntimeSnapshotData = {
   backups: Awaited<ReturnType<typeof listBackups>>["items"];
   sessions: Awaited<ReturnType<typeof fetchSessions>>["items"];
   mcpServers: Awaited<ReturnType<typeof fetchMcpServers>>["items"];
+  sourceStatus: RuntimeSnapshotSourceStatusMap;
 };
 
 type Notice = {
   tone: "success" | "warning" | "error" | "info";
   message: string;
 };
+
+type RuntimeSnapshotSourceKey =
+  | "dashboard"
+  | "timeline"
+  | "health"
+  | "cost"
+  | "daemon"
+  | "backups"
+  | "sessions"
+  | "mcpServers";
+
+export type RuntimeSnapshotSourceStatus =
+  | { status: "ok" }
+  | {
+      status: "error";
+      message: string;
+    };
+
+export type RuntimeSnapshotSourceStatusMap = Record<RuntimeSnapshotSourceKey, RuntimeSnapshotSourceStatus>;
 
 export function useOpsRuntimeSnapshot() {
   const [loading, setLoading] = useState(true);
@@ -38,25 +58,35 @@ export function useOpsRuntimeSnapshot() {
 
   const load = useCallback(async () => {
     const [dashboard, timeline, health, cost, daemon, backups, sessions, mcpServers] = await Promise.all([
-      fetchDashboardState().catch(() => null),
-      fetchTimelineSummary().catch(() => null),
-      fetchHealthSummary().catch(() => null),
-      fetchCostSummary("day").catch(() => null),
-      fetchDaemonStatus().catch(() => null),
-      listBackups(10).catch(() => ({ items: [] })),
-      fetchSessions().catch(() => ({ items: [] })),
-      fetchMcpServers().catch(() => ({ items: [] })),
+      captureRuntimeSource(() => fetchDashboardState()),
+      captureRuntimeSource(() => fetchTimelineSummary()),
+      captureRuntimeSource(() => fetchHealthSummary()),
+      captureRuntimeSource(() => fetchCostSummary("day")),
+      captureRuntimeSource(() => fetchDaemonStatus()),
+      captureRuntimeSource(() => listBackups(10)),
+      captureRuntimeSource(() => fetchSessions()),
+      captureRuntimeSource(() => fetchMcpServers()),
     ]);
 
     return {
-      dashboard,
-      timeline,
-      health,
-      cost,
-      daemon,
-      backups: backups.items,
-      sessions: sessions.items,
-      mcpServers: mcpServers.items,
+      dashboard: readRuntimeSourceData(dashboard, null),
+      timeline: readRuntimeSourceData(timeline, null),
+      health: readRuntimeSourceData(health, null),
+      cost: readRuntimeSourceData(cost, null),
+      daemon: readRuntimeSourceData(daemon, null),
+      backups: readRuntimeSourceData(backups, { items: [] }).items,
+      sessions: readRuntimeSourceData(sessions, { items: [] }).items,
+      mcpServers: readRuntimeSourceData(mcpServers, { items: [] }).items,
+      sourceStatus: {
+        dashboard: readRuntimeSourceStatus(dashboard),
+        timeline: readRuntimeSourceStatus(timeline),
+        health: readRuntimeSourceStatus(health),
+        cost: readRuntimeSourceStatus(cost),
+        daemon: readRuntimeSourceStatus(daemon),
+        backups: readRuntimeSourceStatus(backups),
+        sessions: readRuntimeSourceStatus(sessions),
+        mcpServers: readRuntimeSourceStatus(mcpServers),
+      },
     } satisfies RuntimeSnapshotData;
   }, []);
 
@@ -110,6 +140,10 @@ export function useOpsRuntimeSnapshot() {
             ? {
                 ...current,
                 daemon: response.status,
+                sourceStatus: {
+                  ...current.sourceStatus,
+                  daemon: { status: "ok" },
+                },
               }
             : current,
         );
@@ -140,6 +174,24 @@ export function useOpsRuntimeSnapshot() {
     runDaemonAction,
     clearNotice: () => setNotice(null),
   };
+}
+
+type RuntimeSourceResult<T> = { ok: true; data: T } | { ok: false; message: string };
+
+async function captureRuntimeSource<T>(load: () => Promise<T>): Promise<RuntimeSourceResult<T>> {
+  try {
+    return { ok: true, data: await load() };
+  } catch (error) {
+    return { ok: false, message: getErrorMessage(error) };
+  }
+}
+
+function readRuntimeSourceData<T, Fallback>(source: RuntimeSourceResult<T>, fallback: Fallback): T | Fallback {
+  return source.ok ? source.data : fallback;
+}
+
+function readRuntimeSourceStatus(source: RuntimeSourceResult<unknown>): RuntimeSnapshotSourceStatus {
+  return source.ok ? { status: "ok" } : { status: "error", message: source.message };
 }
 
 function getErrorMessage(error: unknown) {

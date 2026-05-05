@@ -120,10 +120,12 @@ export async function runFastLane(context) {
         subsystem: "fast",
       },
       async () => {
+        const env = await resolveFastLaneCommandEnv(context, command);
         const result = await runCommand(pnpmCommand(), command.args, {
           cwd: repoRoot,
           artifactRoot: path.join(context.artifactRoot, "diagnostics"),
           logName: command.id,
+          env,
         });
         return {
           status: result.code === 0 ? "passed" : "failed",
@@ -144,6 +146,19 @@ export async function runFastLane(context) {
       },
     );
   }
+}
+
+async function resolveFastLaneCommandEnv(context, command) {
+  if (command.id !== "fast.smoke") {
+    return command.env;
+  }
+  const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-fast-smoke`);
+  return {
+    ...(command.env ?? {}),
+    GOATCITADEL_ROOT_DIR: runtimeRoot,
+    GOATCITADEL_DATABASE_DRIVER: "sqlite",
+    GOATCITADEL_DISABLE_SECRET_STORE: "true",
+  };
 }
 
 export async function runCodeModeSandboxRequiredLane(context) {

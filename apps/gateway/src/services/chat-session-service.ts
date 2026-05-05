@@ -206,48 +206,50 @@ export function createChatSession(
     sessionId: `sess_${createHash("sha256").update(`${route.channel}:${route.account}:${route.peer}`).digest("hex").slice(0, 24)}`,
   };
   const now = new Date().toISOString();
-  deps.storage.sessions.upsert({
-    sessionId: resolution.sessionId,
-    sessionKey: resolution.sessionKey,
-    kind: resolution.kind,
-    channel: route.channel,
-    account: route.account,
-    displayName: input.title?.trim() || undefined,
-    timestamp: now,
-  });
-  deps.operatorSummaryCache.invalidate();
-  deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
-  deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
-  deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
-  deps.storage.chatSessionMeta.patch(
-    resolution.sessionId,
-    {
-      workspaceId,
-      title: input.title?.trim() ? input.title.trim() : undefined,
-      origin: input.origin,
-      includeInHistory: input.includeInHistory,
-      folderId: input.folderId,
-      folderName: input.folderName,
-      tags: input.tags,
-    },
-    now,
-  );
-  deps.storage.chatSessionBindings.upsert(
-    {
+  deps.storage.runImmediateTransaction(() => {
+    deps.storage.sessions.upsert({
       sessionId: resolution.sessionId,
-      workspaceId,
-      transport: "llm",
-      writable: true,
-    },
-    now,
-  );
-  if (input.projectId) {
-    const project = deps.storage.chatProjects.get(input.projectId);
-    if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
-      throw new Error("project workspace does not match requested session workspace");
+      sessionKey: resolution.sessionKey,
+      kind: resolution.kind,
+      channel: route.channel,
+      account: route.account,
+      displayName: input.title?.trim() || undefined,
+      timestamp: now,
+    });
+    deps.storage.chatSessionMeta.ensure(resolution.sessionId, now, workspaceId);
+    deps.storage.chatSessionPrefs.ensure(resolution.sessionId, now);
+    deps.storage.chatSessionMeta.patch(
+      resolution.sessionId,
+      {
+        workspaceId,
+        title: input.title?.trim() ? input.title.trim() : undefined,
+        origin: input.origin,
+        includeInHistory: input.includeInHistory,
+        folderId: input.folderId,
+        folderName: input.folderName,
+        tags: input.tags,
+      },
+      now,
+    );
+    deps.storage.chatSessionBindings.upsert(
+      {
+        sessionId: resolution.sessionId,
+        workspaceId,
+        transport: "llm",
+        writable: true,
+      },
+      now,
+    );
+    if (input.projectId) {
+      const project = deps.storage.chatProjects.get(input.projectId);
+      if (deps.normalizeWorkspaceId(project.workspaceId) !== workspaceId) {
+        throw new Error("project workspace does not match requested session workspace");
+      }
+      deps.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
     }
-    deps.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
-  }
+  });
+  deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
+  deps.operatorSummaryCache.invalidate();
   if (input.mode) {
     updateChatSessionPrefs(deps, resolution.sessionId, buildChatModePrefsPatch(input.mode));
   }

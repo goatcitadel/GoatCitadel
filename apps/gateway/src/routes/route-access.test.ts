@@ -7,7 +7,7 @@ import { durableRoutes } from "./durable.js";
 import { eventsRoutes } from "./events.js";
 import { memoryRoutes } from "./memory.js";
 import { orchestrationRoutes } from "./orchestration.js";
-import { installRouteAccessTracking, listMissingTrackedRouteAccessClasses } from "./route-access.js";
+import { installRouteAccessTracking, listMissingTrackedRouteAccessClasses, withRouteAccess } from "./route-access.js";
 
 describe("route access manifest", () => {
   let app: FastifyInstance | null = null;
@@ -138,6 +138,27 @@ describe("route access manifest", () => {
     ).toMatchObject({
       accessClass: "operator",
       tracked: true,
+    });
+  });
+
+  it("fails closed when an operator route is registered without the auth decorator", async () => {
+    app = Fastify();
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+        },
+      },
+    } as never);
+
+    app.get("/api/v1/operator-only", withRouteAccess(app, "operator"), async () => ({ ok: true }));
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/operator-only" });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: "Operator authentication is not installed for this route.",
     });
   });
 });

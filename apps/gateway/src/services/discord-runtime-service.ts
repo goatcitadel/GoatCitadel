@@ -10,6 +10,7 @@ import {
   type Message,
   type RESTPostAPIApplicationCommandsJSONBody,
 } from "discord.js";
+import { logger } from "@goatcitadel/gateway-core";
 import type {
   ChannelTypingResult,
   DiscordGuildAccessRule,
@@ -19,6 +20,8 @@ import type {
   DiscordRuntimeStatus,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+
+const log = logger.child("discord-runtime-service");
 
 type DiscordInboundEnvelope = {
   connectionId: string;
@@ -423,7 +426,11 @@ export class DiscordRuntimeService {
           content: "GoatCitadel is not enabled for slash commands in this channel or DM route.",
           ephemeral: !interaction.channel?.isDMBased(),
         })
-        .catch(() => {});
+        .catch((error) =>
+          this.recordInteractionResponseFailure(runtime, "discord.gateway.interaction_reply_error", error, {
+            commandName: interaction.commandName,
+          }),
+        );
     }
   }
 
@@ -435,7 +442,12 @@ export class DiscordRuntimeService {
       return;
     }
     if (interaction.commandName !== "model") {
-      await interaction.respond([]).catch(() => {});
+      await interaction.respond([]).catch((error) =>
+        this.recordInteractionResponseFailure(runtime, "discord.gateway.autocomplete_response_error", error, {
+          commandName: interaction.commandName,
+          reason: "unsupported_command",
+        }),
+      );
       return;
     }
     const connections = this.callbacks
@@ -443,12 +455,22 @@ export class DiscordRuntimeService {
       .filter((connection) => runtime.connectionIds.has(connection.connectionId));
     const allowed = connections.some((connection) => this.canHandleAutocompleteForConnection(connection, interaction));
     if (!allowed) {
-      await interaction.respond([]).catch(() => {});
+      await interaction.respond([]).catch((error) =>
+        this.recordInteractionResponseFailure(runtime, "discord.gateway.autocomplete_response_error", error, {
+          commandName: interaction.commandName,
+          reason: "route_not_allowed",
+        }),
+      );
       return;
     }
     const focused = interaction.options.getFocused(true);
     if (focused.name !== "model") {
-      await interaction.respond([]).catch(() => {});
+      await interaction.respond([]).catch((error) =>
+        this.recordInteractionResponseFailure(runtime, "discord.gateway.autocomplete_response_error", error, {
+          commandName: interaction.commandName,
+          reason: "unsupported_field",
+        }),
+      );
       return;
     }
     const suggestions = await this.callbacks.listModelSuggestions(String(focused.value ?? ""), 25);
@@ -459,7 +481,28 @@ export class DiscordRuntimeService {
           value: item.model,
         })),
       )
-      .catch(() => {});
+      .catch((error) =>
+        this.recordInteractionResponseFailure(runtime, "discord.gateway.autocomplete_response_error", error, {
+          commandName: interaction.commandName,
+          reason: "suggestions",
+        }),
+      );
+  }
+
+  private recordInteractionResponseFailure(
+    runtime: ManagedClientRecord,
+    event: string,
+    error: unknown,
+    context: Record<string, unknown>,
+  ): void {
+    const message = getErrorMessage(error);
+    runtime.lastError = message;
+    this.updateStatusSnapshot(runtime);
+    log.warn("Discord interaction response failed.", { ...context, error: message });
+    this.callbacks.publishDiagnostic(event, "Discord interaction response failed.", {
+      ...context,
+      error: message,
+    });
   }
 
   private async syncApplicationCommands(runtime: ManagedClientRecord): Promise<void> {
@@ -781,7 +824,9 @@ export class DiscordRuntimeService {
     try {
       await sendTyping();
       interval = setInterval(() => {
-        void sendTyping().catch(() => {});
+        void sendTyping().catch((error) => {
+          log.warn("Discord typing indicator failed.", { error: getErrorMessage(error) });
+        });
       }, 8_000);
       await task();
     } finally {
@@ -1023,6 +1068,10 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
     default:
       return `/${interaction.commandName}`;
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error);
 }
 
 function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJSONBody[] {

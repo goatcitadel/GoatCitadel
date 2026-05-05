@@ -114,7 +114,9 @@ async function enforceRouteAccessClass(
       return requireAuthenticatedAccess(fastify, request, reply, accessClass);
     case "operator":
       if (!hasOperatorAuthHandler(fastify)) {
-        return;
+        return reply.code(500).send({
+          error: "Operator authentication is not installed for this route.",
+        });
       }
       return fastify.requireOperatorAuth(request, reply);
     case "loopback":

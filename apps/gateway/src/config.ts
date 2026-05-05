@@ -948,7 +948,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     features: {
       durableKernelV1Enabled: true,
       replayOverridesV1Enabled: featuresInput.replayOverridesV1Enabled ?? false,
-      memoryLifecycleAdminV1Enabled: featuresInput.memoryLifecycleAdminV1Enabled ?? false,
+      memoryLifecycleAdminV1Enabled: featuresInput.memoryLifecycleAdminV1Enabled ?? true,
       memoryLifecycleAutoForgetEnabled: featuresInput.memoryLifecycleAutoForgetEnabled ?? true,
       memoryMaintenanceV1Enabled: featuresInput.memoryMaintenanceV1Enabled ?? false,
       connectorDiagnosticsV1Enabled: featuresInput.connectorDiagnosticsV1Enabled ?? false,

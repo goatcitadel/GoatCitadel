@@ -177,6 +177,46 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("marks cancelled traces as durable cancellation checkpoints", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "cancelled",
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+
+    expect(state.runs.get("run-cancelled")?.status).toBe("cancelled");
+    expect(state.runs.get("run-cancelled")?.finishedAt).toBeDefined();
+    expect(state.checkpoints).toEqual([
+      expect.objectContaining({
+        runId: "run-cancelled",
+        checkpointKind: "run_cancelled",
+        state: expect.objectContaining({
+          currentStep: "cancelled",
+        }),
+      }),
+    ]);
+    expect(state.timelineEvents).toEqual([
+      expect.objectContaining({
+        runId: "run-cancelled",
+        eventType: "run_cancelled",
+      }),
+    ]);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: {
+            runId: "run-cancelled",
+            status: "cancelled",
+            checkpointKind: "run_cancelled",
+          },
+        },
+      },
+    ]);
+  });
+
   it("records completed checkpoints with tool and artifact summaries", () => {
     const prepared = createPreparedTurn({ content: "Ship the patch" });
     const trace = createTrace({
@@ -457,6 +497,7 @@ function createFinalizeState(options?: {
   const runs = new Map<string, DurableRunRecord>([
     ["run-waiting", createRun("run-waiting", "running")],
     ["run-complete", createRun("run-complete", "running")],
+    ["run-cancelled", createRun("run-cancelled", "running")],
   ]);
   const checkpoints: DurableCheckpointRecord[] = [];
   const timelineEvents: Array<{

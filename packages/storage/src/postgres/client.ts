@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { Pool, type PoolClient, type PoolConfig, type QueryResultRow } from "pg";
+import { POSTGRES_MIGRATIONS } from "./migrations.js";
 import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
 
 export type PostgresSslMode = "disable" | "prefer" | "require";
@@ -111,13 +112,16 @@ export class PostgresDatabaseClient {
     try {
       await this.ensureMigrationsTable();
       await this.queryOne("SELECT 1 AS ok");
-      const latest = await this.queryOne<{ version: number }>(
-        `SELECT version FROM ${this.migrationsTable} ORDER BY version DESC LIMIT 1`,
+      const appliedMigrations = await this.query<{ version: number; name: string }>(
+        `SELECT version, name FROM ${this.migrationsTable} ORDER BY version ASC`,
       );
+      const latestVersion = appliedMigrations.reduce((max, row) => Math.max(max, Number(row.version)), 0);
+      issues.push(...findMigrationNameDrift(appliedMigrations));
+      issues.push(...(await this.findRequiredSchemaIssues(latestVersion, appliedMigrations)));
       return {
         reachable: true,
         latencyMs: Math.round((performance.now() - started) * 100) / 100,
-        migrationVersion: latest ? Number(latest.version) : 0,
+        migrationVersion: latestVersion,
         issues,
       };
     } catch (error) {
@@ -128,6 +132,27 @@ export class PostgresDatabaseClient {
         issues,
       };
     }
+  }
+
+  private async findRequiredSchemaIssues(
+    latestVersion: number,
+    appliedMigrations: ReadonlyArray<{ version: number; name: string }>,
+  ): Promise<string[]> {
+    const chatPrefsRepairApplied =
+      latestVersion >= 28 || appliedMigrations.some((migration) => migration.name === "chat_operator_control_prefs");
+    if (!chatPrefsRepairApplied) {
+      return [];
+    }
+    const rows = await this.query<{ column_name: string }>(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'chat_session_prefs'
+        AND column_name IN ('speed_mode', 'subagent_policy')
+    `);
+    const present = new Set(rows.map((row) => row.column_name));
+    const missing = ["speed_mode", "subagent_policy"].filter((column) => !present.has(column));
+    return missing.map((column) => `schema drift: chat_session_prefs.${column} is missing`);
   }
 
   public async close(): Promise<void> {
@@ -147,6 +172,23 @@ export class PostgresDatabaseClient {
     }
     return this.serverEncodingPromise;
   }
+}
+
+function findMigrationNameDrift(appliedMigrations: ReadonlyArray<{ version: number; name: string }>): string[] {
+  const expectedByVersion = new Map(POSTGRES_MIGRATIONS.map((migration) => [migration.version, migration.name]));
+  const issues: string[] = [];
+  for (const applied of appliedMigrations) {
+    const version = Number(applied.version);
+    const expectedName = expectedByVersion.get(version);
+    if (!expectedName) {
+      issues.push(`schema drift: unknown migration version ${version} (${applied.name})`);
+      continue;
+    }
+    if (applied.name !== expectedName) {
+      issues.push(`schema drift: migration ${version} is ${applied.name}, expected ${expectedName}`);
+    }
+  }
+  return issues;
 }
 
 function buildPoolConfig(options: PostgresConnectionOptions): PoolConfig {

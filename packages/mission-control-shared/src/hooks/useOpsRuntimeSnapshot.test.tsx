@@ -188,6 +188,35 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
     expect(latest?.data?.sessions).toHaveLength(1);
     expect(latest?.data?.mcpServers[0]?.label).toBe("GitHub");
+    expect(latest?.data?.sourceStatus.daemon).toEqual({ status: "ok" });
+  });
+
+  it("preserves failed source state instead of converting it into false runtime facts", async () => {
+    apiMocks.fetchDaemonStatus.mockRejectedValueOnce(new Error("daemon unavailable"));
+    apiMocks.fetchHealthSummary.mockRejectedValueOnce(new Error("health unavailable"));
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+
+    expect(latest?.error).toBeNull();
+    expect(latest?.data?.daemon).toBeNull();
+    expect(latest?.data?.health).toBeNull();
+    expect(latest?.data?.sourceStatus.daemon).toEqual({
+      status: "error",
+      message: "daemon unavailable",
+    });
+    expect(latest?.data?.sourceStatus.health).toEqual({
+      status: "error",
+      message: "health unavailable",
+    });
   });
 
   it("restarts the daemon and refreshes shared snapshot state", async () => {

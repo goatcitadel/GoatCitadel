@@ -218,14 +218,30 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                 </div>
               ) : null}
               <div className="mc-next-runtime-chip-row">
-                <StatusChip tone={data.daemon?.running ? "success" : "warning"}>
-                  {data.daemon?.running ? "Daemon running" : "Daemon stopped"}
+                <StatusChip
+                  tone={sourceFailed(data, "daemon") ? "critical" : data.daemon?.running ? "success" : "warning"}
+                >
+                  {sourceFailed(data, "daemon")
+                    ? "Daemon unavailable"
+                    : data.daemon?.running
+                      ? "Daemon running"
+                      : "Daemon stopped"}
                 </StatusChip>
-                <StatusChip tone={data.health?.backups.latest ? "success" : "warning"}>
-                  {data.health?.backups.latest ? "Backup ready" : "No backup"}
+                <StatusChip
+                  tone={sourceFailed(data, "health") ? "critical" : data.health?.backups.latest ? "success" : "warning"}
+                >
+                  {sourceFailed(data, "health")
+                    ? "Backup status unavailable"
+                    : data.health?.backups.latest
+                      ? "Backup ready"
+                      : "No backup"}
                 </StatusChip>
                 <StatusChip tone={data.daemon?.controllable ? "default" : "muted"}>
-                  {data.daemon?.controllable ? "Controllable" : "Read only"}
+                  {sourceFailed(data, "daemon")
+                    ? "Control status unavailable"
+                    : data.daemon?.controllable
+                      ? "Controllable"
+                      : "Read only"}
                 </StatusChip>
               </div>
               <MetricGrid
@@ -362,15 +378,15 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                 },
               ]
             : []),
-          ...(data.health?.daemonStatus.running
-            ? []
-            : [
+          ...(data.sourceStatus.health.status === "ok" && !data.health?.daemonStatus.running
+            ? [
                 {
                   title: "Daemon needs intervention",
                   meta: data.health?.daemonStatus.state ?? "unknown",
                   body: "Self-repair can propose a recovery plan, but service changes remain approval-gated.",
                 },
-              ]),
+              ]
+            : []),
           ...(data.timeline?.events.items ?? [])
             .filter((item) => /error|failed|repair|approval|runtime/i.test(item.eventType))
             .slice(0, 10)
@@ -565,6 +581,10 @@ function formatDateTime(value?: string | null) {
     return "Unknown";
   }
   return new Date(parsed).toLocaleString();
+}
+
+function sourceFailed(data: { sourceStatus: Record<string, { status: "ok" | "error" }> }, source: string): boolean {
+  return data.sourceStatus[source]?.status === "error";
 }
 
 function formatBytes(value: number) {

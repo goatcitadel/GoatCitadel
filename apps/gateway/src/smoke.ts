@@ -39,6 +39,7 @@ export async function runSmoke(): Promise<void> {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-smoke-"));
   const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
   const priorAuthMode = process.env.GOATCITADEL_AUTH_MODE;
+  const priorDatabaseDriver = process.env.GOATCITADEL_DATABASE_DRIVER;
   const priorDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
   const priorInsecureLocalOverride = process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY;
 
@@ -49,6 +50,7 @@ export async function runSmoke(): Promise<void> {
     await mkdir(path.join(tempRoot, "workspace"), { recursive: true });
     process.env.GOATCITADEL_ROOT_DIR = tempRoot;
     process.env.GOATCITADEL_AUTH_MODE = "none";
+    process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
     process.env.GOATCITADEL_DISABLE_SECRET_STORE = "true";
     process.env.GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY = "true";
 
@@ -82,6 +84,11 @@ export async function runSmoke(): Promise<void> {
       delete process.env.GOATCITADEL_AUTH_MODE;
     } else {
       process.env.GOATCITADEL_AUTH_MODE = priorAuthMode;
+    }
+    if (priorDatabaseDriver === undefined) {
+      delete process.env.GOATCITADEL_DATABASE_DRIVER;
+    } else {
+      process.env.GOATCITADEL_DATABASE_DRIVER = priorDatabaseDriver;
     }
     if (priorDisableSecretStore === undefined) {
       delete process.env.GOATCITADEL_DISABLE_SECRET_STORE;
@@ -272,7 +279,7 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(typeof run.body.runId, "string");
   assert.equal(["running", "completed", "failed", "queued"].includes(run.body.status), true);
 
-  if (!isNoProviderPromptPackRun(run.body)) {
+  if (!isUnscorablePromptPackRun(run.body)) {
     const score = await postJson<{
       reviewId: string;
       scores: {
@@ -315,16 +322,19 @@ async function smokePromptPacks(app: Awaited<ReturnType<typeof buildApp>>): Prom
   assert.equal(reportBody.summary.totalTests >= 2, true);
 }
 
-function isNoProviderPromptPackRun(run: {
+function isUnscorablePromptPackRun(run: {
   status: string;
   integrity?: { validationStatus?: string; signals?: string[] };
   trace?: { failure?: { message?: string } };
 }): boolean {
+  const failureMessage = run.trace?.failure?.message ?? "";
   return (
-    run.status === "completed" &&
-    run.integrity?.validationStatus === "invalid" &&
-    (run.integrity.signals ?? []).includes("completion_interrupted") &&
-    /No active LLM provider is configured/i.test(run.trace?.failure?.message ?? "")
+    (run.status === "failed" || run.status === "completed") &&
+    (run.integrity?.validationStatus === "invalid" || run.status === "failed") &&
+    ((run.integrity?.signals ?? []).includes("completion_interrupted") || run.status === "failed") &&
+    /No active LLM provider is configured|OAuth is not connected|API key is not configured|provider is not configured/i.test(
+      failureMessage,
+    )
   );
 }
 

@@ -34,6 +34,7 @@
     "dev:supervisor": "tsx src/dev-supervisor.ts",
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
+    "pretest": "pnpm --filter @goatcitadel/extensions-sdk build",
     "test": "vitest run && tsx --test src/services/chat-generated-artifact-service.test.ts src/services/chat-thread-knowledge-service.test.ts",
     "test:improvement-ledger": "tsx --test src/services/improvement-service.node.test.ts src/improvement-operator-proof.node.test.ts",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage",

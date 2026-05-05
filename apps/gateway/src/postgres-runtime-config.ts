@@ -8,7 +8,11 @@ export interface GatewayPostgresResolveOptions {
 }
 
 export function isBundledPostgresMode(config: GatewayRuntimeConfig): boolean {
-  return config.assistant.database.postgres.mode === "bundled" && config.assistant.database.bundledPostgres.enabled;
+  return (
+    config.assistant.database.driver === "postgres" &&
+    config.assistant.database.postgres.mode === "bundled" &&
+    config.assistant.database.bundledPostgres.enabled
+  );
 }
 
 export function resolveGatewayPostgresConnectionOptions(
@@ -16,14 +20,14 @@ export function resolveGatewayPostgresConnectionOptions(
   options: GatewayPostgresResolveOptions = {},
 ): PostgresConnectionOptions {
   const postgres = config.assistant.database.postgres;
-  const connectionString = options.connectionStringOverride?.trim()
-    || postgres.connectionString?.trim()
-    || readNamedEnv(postgres.connectionStringEnv);
+  const connectionString =
+    options.connectionStringOverride?.trim() ||
+    postgres.connectionString?.trim() ||
+    readNamedEnv(postgres.connectionStringEnv);
   const bundledMode = isBundledPostgresMode(config);
   const host = postgres.host?.trim() || (bundledMode && !connectionString ? "127.0.0.1" : undefined);
-  const port = host && bundledMode && !postgres.host?.trim()
-    ? config.assistant.database.bundledPostgres.port
-    : postgres.port;
+  const port =
+    host && bundledMode && !postgres.host?.trim() ? config.assistant.database.bundledPostgres.port : postgres.port;
   const database = options.databaseOverride?.trim() || postgres.database || "goatcitadel";
   const user = postgres.user?.trim() || (bundledMode && !connectionString ? "postgres" : undefined);
   const password = postgres.password ?? readNamedEnv(postgres.passwordEnv);

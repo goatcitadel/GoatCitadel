@@ -27,9 +27,18 @@ export async function ensureBundledPostgresRuntime(
     applicationName: "goatcitadel-bundled-probe",
     databaseOverride: "postgres",
   });
-  if (await canReachPostgres(maintenanceOptions)) {
+  const probe = await probeBundledPostgresRuntime(config, maintenanceOptions);
+  if (probe.matchesExpectedRoot) {
     await ensureDatabaseExists(config);
     return undefined;
+  }
+  if (probe.reachable) {
+    throw new Error(
+      `Bundled Postgres port ${config.assistant.database.bundledPostgres.port} is reachable but does not belong to this runtime root. Expected dataDir ${path.resolve(
+        config.rootDir,
+        config.assistant.database.bundledPostgres.dataDir,
+      )}; observed ${probe.dataDirectory ?? "unknown"}. Stop the other Postgres runtime or configure a different bundledPostgres.port.`,
+    );
   }
 
   if (!config.assistant.database.bundledPostgres.autoStart) {
@@ -98,7 +107,8 @@ async function tryStartNativeBundledPostgres(
     );
   } catch (error) {
     if (
-      !(await canReachPostgres(
+      !(await canReachExpectedBundledPostgres(
+        config,
         resolveGatewayPostgresConnectionOptions(config, {
           applicationName: "goatcitadel-bundled-native-fallback",
           databaseOverride: "postgres",
@@ -209,7 +219,7 @@ async function waitForBundledPostgres(config: GatewayRuntimeConfig): Promise<voi
   });
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (await canReachPostgres(options)) {
+    if (await canReachExpectedBundledPostgres(config, options)) {
       return;
     }
     await wait(READY_POLL_MS);
@@ -259,14 +269,54 @@ function resolveNativePostgresCommands(config: GatewayRuntimeConfig): { initdb: 
   return { initdb, pgCtl };
 }
 
-async function canReachPostgres(options: ReturnType<typeof resolveGatewayPostgresConnectionOptions>): Promise<boolean> {
+async function canReachExpectedBundledPostgres(
+  config: GatewayRuntimeConfig,
+  options: ReturnType<typeof resolveGatewayPostgresConnectionOptions>,
+): Promise<boolean> {
+  return (await probeBundledPostgresRuntime(config, options)).matchesExpectedRoot;
+}
+
+async function probeBundledPostgresRuntime(
+  config: GatewayRuntimeConfig,
+  options: ReturnType<typeof resolveGatewayPostgresConnectionOptions>,
+): Promise<{ reachable: boolean; matchesExpectedRoot: boolean; dataDirectory?: string }> {
   const client = new PostgresDatabaseClient(options);
   try {
-    const health = await client.healthCheck();
-    return health.reachable;
+    const row = await client.queryOne<{ data_directory: string }>("SHOW data_directory");
+    const dataDirectory = row?.data_directory;
+    return {
+      reachable: true,
+      matchesExpectedRoot: dataDirectory ? isExpectedBundledDataDirectory(config, dataDirectory) : false,
+      dataDirectory,
+    };
+  } catch {
+    return { reachable: false, matchesExpectedRoot: false };
   } finally {
     await client.close();
   }
+}
+
+function isExpectedBundledDataDirectory(config: GatewayRuntimeConfig, actualDataDirectory: string): boolean {
+  const expectedNative = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  if (sameFilesystemPath(actualDataDirectory, expectedNative)) {
+    return true;
+  }
+  if (!isDockerPostgresDataDirectory(actualDataDirectory)) {
+    return false;
+  }
+  return inspectDockerContainerState(buildBundledDockerContainerName(config.rootDir)) === "running";
+}
+
+function sameFilesystemPath(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    const normalized = path.normalize(value.trim());
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  return normalize(left) === normalize(right);
+}
+
+function isDockerPostgresDataDirectory(actualDataDirectory: string): boolean {
+  return actualDataDirectory.trim().replaceAll("\\", "/").replace(/\/+$/, "") === "/var/lib/postgresql/data";
 }
 
 function canUseDocker(): boolean {

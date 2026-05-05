@@ -156,7 +156,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
           "const status = 'green';",
           "```",
           "",
-          "[Open README](https://github.com/spurnout/GoatCitadel)",
+          "[Open README](https://github.com/goatcitadel/GoatCitadel)",
         ].join("\n"),
         timestamp: new Date(now - 75_000).toISOString(),
         tokenInput: 160,
