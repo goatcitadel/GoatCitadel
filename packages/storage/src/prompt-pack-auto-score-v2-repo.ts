@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./db.js";
-import type { PromptPackScoreRecordV2 } from "@goatcitadel/contracts";
+import type { PromptPackAutoScoreRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 
 interface PromptPackAutoScoreV2Row {
@@ -77,7 +77,7 @@ export class PromptPackAutoScoreV2Repository {
     this.deleteByPackStmt = db.prepare("DELETE FROM prompt_pack_auto_scores_v2 WHERE pack_id = ?");
   }
 
-  public get(autoScoreId: string): PromptPackScoreRecordV2 {
+  public get(autoScoreId: string): PromptPackAutoScoreRecord {
     const row = toPromptPackAutoScoreV2Row(this.getStmt.get(autoScoreId));
     if (!row) {
       throw new NotFoundError({ entity: "Prompt pack auto score", id: autoScoreId });
@@ -85,7 +85,7 @@ export class PromptPackAutoScoreV2Repository {
     return mapRow(row);
   }
 
-  public create(input: PromptPackScoreRecordV2): PromptPackScoreRecordV2 {
+  public create(input: PromptPackAutoScoreRecord): PromptPackAutoScoreRecord {
     this.insertStmt.run({
       autoScoreId: input.autoScoreId,
       packId: input.packId,
@@ -107,7 +107,7 @@ export class PromptPackAutoScoreV2Repository {
     return this.get(input.autoScoreId);
   }
 
-  public listByPack(packId: string, limit = 1000): PromptPackScoreRecordV2[] {
+  public listByPack(packId: string, limit = 1000): PromptPackAutoScoreRecord[] {
     return toPromptPackAutoScoreV2Rows(
       this.listByPackStmt.all({
         packId,
@@ -116,7 +116,7 @@ export class PromptPackAutoScoreV2Repository {
     ).map(mapRow);
   }
 
-  public listByTest(testId: string, limit = 500): PromptPackScoreRecordV2[] {
+  public listByTest(testId: string, limit = 500): PromptPackAutoScoreRecord[] {
     return toPromptPackAutoScoreV2Rows(
       this.listByTestStmt.all({
         testId,
@@ -125,7 +125,7 @@ export class PromptPackAutoScoreV2Repository {
     ).map(mapRow);
   }
 
-  public listByRun(runId: string, limit = 100): PromptPackScoreRecordV2[] {
+  public listByRun(runId: string, limit = 100): PromptPackAutoScoreRecord[] {
     return toPromptPackAutoScoreV2Rows(
       this.listByRunStmt.all({
         runId,
@@ -140,8 +140,8 @@ export class PromptPackAutoScoreV2Repository {
   }
 }
 
-function mapRow(row: PromptPackAutoScoreV2Row): PromptPackScoreRecordV2 {
-  const parsed = safeJsonParse<PromptPackScoreRecordV2 | undefined>(row.record_json, undefined);
+function mapRow(row: PromptPackAutoScoreV2Row): PromptPackAutoScoreRecord {
+  const parsed = safeJsonParse<PromptPackAutoScoreRecord | undefined>(row.record_json, undefined);
   if (parsed) {
     return parsed;
   }
@@ -189,5 +189,3 @@ function isPromptPackAutoScoreV2Row(value: unknown): value is PromptPackAutoScor
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

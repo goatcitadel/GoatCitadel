@@ -272,7 +272,7 @@ export interface RepairCandidateRecord {
   lastSeenAt: string;
 }
 
-export type ImprovementCandidateKind = "repair_policy" | "routing_policy";
+export type ImprovementCandidateKind = "repair_policy" | "routing_policy" | "skill_revision";
 
 export type ImprovementSignalOrigin = "runtime" | "human" | "evaluation" | "improvement_internal";
 
@@ -289,6 +289,8 @@ export type ImprovementEvidenceRefType =
   | "prompt_pack_benchmark"
   | "decision_replay_run"
   | "repair_candidate"
+  | "skill_evaluation_run"
+  | "capability_proposal"
   | "artifact_manifest";
 
 export type ImprovementCandidateStatus =
@@ -302,7 +304,11 @@ export type ImprovementCandidateStatus =
 
 export type ImprovementEvaluationStatus = "queued" | "running" | "passed" | "failed";
 
-export type ImprovementEvaluationKind = "repair_replay_validation" | "prompt_lab_regression" | "prompt_lab_benchmark";
+export type ImprovementEvaluationKind =
+  | "repair_replay_validation"
+  | "prompt_lab_regression"
+  | "prompt_lab_benchmark"
+  | "skill_eval_scorecard";
 
 export type ImprovementActivationStatus = "pending" | "active" | "paused" | "rolled_back" | "failed";
 

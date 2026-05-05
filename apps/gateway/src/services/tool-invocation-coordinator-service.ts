@@ -15,6 +15,7 @@ import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
+import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 
 type ToolCallHookPatch = Record<string, unknown> & {
   toolName?: string;
@@ -122,6 +123,7 @@ export interface ToolInvocationCoordinatorHost {
     output: Record<string, unknown>,
     mode: McpServerRecord["policy"]["redactionMode"],
   ): Record<string, unknown>;
+  recordEvidenceEnvelope?(input: EvidenceEnvelopeCreateRequest): void;
   recordDevDiagnostic?(input: {
     level: "debug" | "info" | "warn" | "error";
     category: string;
@@ -368,6 +370,21 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         policyReason: result.policyReason,
       },
     });
+    this.host.recordEvidenceEnvelope?.({
+      eventKind: "tool_invocation",
+      sessionId: hookableRequest.sessionId,
+      runId: approvalForResult?.linkage?.durableRunId,
+      approvalId: result.approvalId,
+      toolCallHashes: [result.auditEventId ?? toolHookEntityId],
+      metadata: {
+        runtime: "policy",
+        toolName: hookableRequest.toolName,
+        taskId: hookableRequest.taskId,
+        agentId: hookableRequest.agentId,
+        outcome: result.outcome,
+        policyReason: result.policyReason,
+      },
+    });
 
     if (result.outcome === "approval_required" && result.approvalId) {
       this.host.scheduleApprovalExplanationById(result.approvalId);
@@ -522,6 +539,20 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         taskId: input.taskId,
       }),
     );
+    this.host.recordEvidenceEnvelope?.({
+      eventKind: "tool_invocation",
+      sessionId: input.sessionId,
+      toolCallHashes: [`mcp:${input.serverId}:${input.toolName}:${runtimeStartedAt}`],
+      metadata: {
+        runtime: "mcp",
+        serverId: input.serverId,
+        toolName: input.toolName,
+        taskId: input.taskId,
+        trustTier: server.trustTier,
+        ok: runtime.ok,
+        error: runtime.ok ? undefined : runtime.error,
+      },
+    });
 
     if (!runtime.ok) {
       return {

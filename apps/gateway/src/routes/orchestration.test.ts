@@ -99,6 +99,111 @@ describe("orchestration routes", () => {
     });
   });
 
+  it("previews recipe-generated orchestration plans without running them", async () => {
+    const previewRecipe = vi.fn(() => ({
+      recipe: {
+        name: "Weekly review",
+        goal: "Review the week.",
+        process: "sequential",
+        agents: [{ id: "analyst", role: "Analyst" }],
+        steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
+      },
+      plan: {
+        planId: "recipe-weekly-review-abc",
+        goal: "Review the week.",
+        mode: "auto",
+        maxIterations: 3,
+        maxRuntimeMinutes: 30,
+        maxCostUsd: 3,
+        waves: [
+          {
+            waveId: "wave-1",
+            verify: [],
+            budgetUsd: 3,
+            ownership: [{ agentId: "analyst", paths: ["workspace"] }],
+            phases: [
+              {
+                phaseId: "review",
+                ownerAgentId: "analyst",
+                specPath: "recipe://weekly-review/steps/1-review",
+                loopMode: "fresh-context",
+                requiresApproval: false,
+              },
+            ],
+          },
+        ],
+      },
+      warnings: ["plan only"],
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 3, maxRuntimeMinutes: 30, maxCostUsd: 3 },
+    }));
+    app = Fastify();
+    app.decorate("services", { orchestration: { previewRecipe } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/recipes/preview",
+      payload: {
+        recipe: {
+          name: "Weekly review",
+          goal: "Review the week.",
+          process: "sequential",
+          agents: [{ id: "analyst", role: "Analyst" }],
+          steps: [{ title: "Review", agent: "analyst", prompt: "Review it." }],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(previewRecipe).toHaveBeenCalledTimes(1);
+    expect(response.json()).toMatchObject({ plan: { planId: "recipe-weekly-review-abc" } });
+  });
+
+  it("creates recipe plans through the existing plan creation route service", async () => {
+    const createPlanFromRecipe = vi.fn(async () => ({
+      recipe: {
+        name: "Campaign review",
+        goal: "Review campaign.",
+        process: "parallel",
+        agents: [{ id: "analyst", role: "Analyst" }],
+        steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
+      },
+      plan: { planId: "recipe-campaign-review-abc" },
+      run: { runId: "run-1", planId: "recipe-campaign-review-abc", status: "queued" },
+      warnings: [],
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 3, maxRuntimeMinutes: 30, maxCostUsd: 3 },
+    }));
+    app = Fastify();
+    app.decorate("services", { orchestration: { createPlanFromRecipe } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/recipes/plans",
+      payload: {
+        source: JSON.stringify({
+          name: "Campaign review",
+          goal: "Review campaign.",
+          process: "parallel",
+          agents: [{ id: "analyst", role: "Analyst" }],
+          steps: [{ title: "Review", agent: "analyst", prompt: "Review it." }],
+        }),
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createPlanFromRecipe).toHaveBeenCalledWith(expect.objectContaining({ source: expect.any(String) }));
+    expect(response.json()).toMatchObject({ run: { runId: "run-1" } });
+  });
+
   it("runs plans and exposes checkpoints/context", async () => {
     const runOrchestrationPlan = vi.fn(() => ({ runId: "run-1" }));
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);

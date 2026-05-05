@@ -197,7 +197,7 @@ function CodeSourceChooser({
 function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }> }) {
   const { viewModel, onRetryTurn, onStopTurn, onOpenTasks, onOpenDetails, onFocusComposer, onRefreshRunState } =
     panel.props;
-  const [activeTab, setActiveTab] = useState<"plan" | "timeline" | "actions">("plan");
+  const [activeTab, setActiveTab] = useState<"plan" | "run-map" | "timeline" | "actions">("plan");
 
   return (
     <section className={`mc-next-cowork-panel${viewModel.empty ? " is-empty" : ""}`}>
@@ -283,14 +283,20 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
       ) : null}
 
       <div className="mc-next-panel-tab-row">
-        {["plan", "timeline", "actions"].map((tab) => (
+        {["plan", "run-map", "timeline", "actions"].map((tab) => (
           <button
             key={tab}
             type="button"
             className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
             onClick={() => setActiveTab(tab as typeof activeTab)}
           >
-            {tab === "plan" ? "Plan" : tab === "timeline" ? "Timeline" : "Operator actions"}
+            {tab === "plan"
+              ? "Plan"
+              : tab === "run-map"
+                ? "Run Map"
+                : tab === "timeline"
+                  ? "Timeline"
+                  : "Operator actions"}
           </button>
         ))}
       </div>
@@ -314,6 +320,8 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
           />
         </div>
       ) : null}
+
+      {activeTab === "run-map" ? <RunMapPanel viewModel={viewModel} onOpenDetails={onOpenDetails} /> : null}
 
       {activeTab === "timeline" ? (
         <PanelList
@@ -349,6 +357,84 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
           ))}
         </section>
       ) : null}
+    </section>
+  );
+}
+
+function RunMapPanel({
+  viewModel,
+  onOpenDetails,
+}: {
+  viewModel: Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>["props"]["viewModel"];
+  onOpenDetails?: () => void;
+}) {
+  const gate = viewModel.continuationGate;
+  return (
+    <section className="mc-next-cowork-run-map">
+      <div className="mc-next-cowork-run-map-head">
+        <div>
+          <p className="mc-next-panel-kicker">Run map</p>
+          <h5>{viewModel.runMap.objective}</h5>
+          <p>{viewModel.runMap.currentState}</p>
+        </div>
+        <StatusChip
+          tone={gate.decision === "continue" ? "success" : gate.decision === "checkpoint" ? "warning" : "critical"}
+        >
+          Gate: {gate.decision}
+        </StatusChip>
+      </div>
+
+      <div className="mc-next-cowork-run-map-grid">
+        <section>
+          <p className="mc-next-panel-kicker">Current state</p>
+          <strong>{viewModel.runMap.currentState}</strong>
+          <span>{gate.summary}</span>
+        </section>
+        <section>
+          <p className="mc-next-panel-kicker">Next action</p>
+          <strong>{viewModel.runMap.nextAction}</strong>
+          <span>{gate.recommendedAction}</span>
+        </section>
+        <section>
+          <p className="mc-next-panel-kicker">State gaps</p>
+          <strong>{viewModel.stateGaps.length ? `${viewModel.stateGaps.length} open` : "None"}</strong>
+          <span>{viewModel.stateGaps.join(" · ") || "No state gaps detected in the current view."}</span>
+        </section>
+      </div>
+
+      <div className="mc-next-cowork-run-map-graph" aria-label="Cowork plan graph">
+        {viewModel.runMap.planNodes.map((node, index) => (
+          <div key={node.id} className="mc-next-cowork-run-map-node-wrap">
+            <article className="mc-next-cowork-run-map-node">
+              <span>{node.status}</span>
+              <strong>{node.label}</strong>
+              {node.meta ? <p>{node.meta}</p> : null}
+            </article>
+            {index < viewModel.runMap.planNodes.length - 1 ? <span className="mc-next-cowork-run-map-link" /> : null}
+          </div>
+        ))}
+      </div>
+
+      <div className="mc-next-cowork-run-map-footer">
+        <section>
+          <p className="mc-next-panel-kicker">{viewModel.evidenceSummary.label}</p>
+          <strong>{viewModel.evidenceSummary.detail}</strong>
+          <span>
+            Tool calls {gate.metrics.toolRunCount} · failures {gate.metrics.failedToolRunCount} · gaps{" "}
+            {gate.metrics.evidenceGapCount}
+          </span>
+        </section>
+        <section>
+          <p className="mc-next-panel-kicker">Checkpoint timeline</p>
+          <strong>{viewModel.runMap.checkpoints.length} retained</strong>
+          <span>{viewModel.runMap.checkpoints.map((item) => item.title).join(" -> ") || "No checkpoints yet."}</span>
+        </section>
+        {onOpenDetails ? (
+          <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
+            Inspect evidence
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }

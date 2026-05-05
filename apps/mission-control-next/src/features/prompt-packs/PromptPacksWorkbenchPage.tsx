@@ -1,8 +1,10 @@
 /* eslint-disable max-lines -- PromptPacksWorkbenchPage keeps the full quality workbench in one place until the page is split into smaller route-scoped panels. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  PromptPackAutoScoreRecord,
   PromptPackBenchmarkStatusRecord,
   PromptPackExecutionStyle,
+  PromptPackScoringSchemaVersion,
   PromptPackLatestAssessmentRecordV2,
   PromptPackReportRecord,
   PromptPackRunRecord,
@@ -1903,7 +1905,7 @@ export function PromptPacksWorkbenchPage({
                           </strong>
                           <p>
                             {selectedAutoScore
-                              ? `Auto verdict ${selectedAutoScore.autoVerdict} • judge ${selectedAutoScore.judgeStatus}`
+                              ? `${(selectedAutoScore.scoringSchemaVersion ?? "v2").toUpperCase()} ${selectedAutoScore.autoVerdict} • judge ${selectedAutoScore.judgeStatus}`
                               : selectedLegacyScore
                                 ? `Legacy score ${selectedLegacyScore.totalScore}/10`
                                 : "No scoring evidence yet"}
@@ -1926,7 +1928,20 @@ export function PromptPacksWorkbenchPage({
                           <p>
                             {selectedAutoScore
                               ? `State ${selectedAssessment?.scoreState ?? selectedAutoScore.scoreState}`
-                              : "Protocol evidence arrives with V2 auto-score"}
+                              : "Protocol evidence arrives with auto-score"}
+                          </p>
+                        </article>
+                        <article className="mc-pp-metric-card">
+                          <span>Attribution</span>
+                          <strong>
+                            {selectedAutoScore?.scoringSchemaVersion === "v3"
+                              ? formatPromptPackAttribution(selectedAutoScore.attribution.primary)
+                              : "n/a"}
+                          </strong>
+                          <p>
+                            {selectedAutoScore?.scoringSchemaVersion === "v3"
+                              ? `${selectedAutoScore.attribution.confidence} confidence`
+                              : "Available with v3 scoring"}
                           </p>
                         </article>
                       </div>
@@ -1948,6 +1963,15 @@ export function PromptPacksWorkbenchPage({
                               Degraded reasons: {selectedAutoScore.degradedReasons.join(", ")}
                             </p>
                           ) : null}
+                          {selectedAutoScore.scoringSchemaVersion === "v3" &&
+                          selectedAutoScore.attribution.primary !== "not_applicable" ? (
+                            <p className="mc-pp-note">
+                              Failure attribution: {formatPromptPackAttribution(selectedAutoScore.attribution.primary)}
+                              {selectedAutoScore.attribution.evidence.length > 0
+                                ? ` • ${selectedAutoScore.attribution.evidence.join("; ")}`
+                                : ""}
+                            </p>
+                          ) : null}
                           <details className="mc-pp-evidence-details" open>
                             <summary>Score evidence</summary>
                             <div className="mc-pp-table-wrap">
@@ -1962,13 +1986,15 @@ export function PromptPacksWorkbenchPage({
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {PROMPT_PACK_V2_DIMENSION_LABELS.map(([dimension, label]) => (
+                                  {getPromptPackScoreDimensionLabels(
+                                    selectedAutoScore.scoringSchemaVersion ?? "v2",
+                                  ).map(([dimension, label]) => (
                                     <tr key={dimension}>
                                       <td>{label}</td>
-                                      <td>{selectedAutoScore.ruleScores[dimension] ?? "-"}</td>
-                                      <td>{selectedAutoScore.judgeScores?.[dimension] ?? "-"}</td>
-                                      <td>{selectedAutoScore.finalScores[dimension] ?? "-"}</td>
-                                      <td>{selectedAutoScore.disagreement[dimension] ?? "-"}</td>
+                                      <td>{readPromptPackScoreDimension(selectedAutoScore.ruleScores, dimension)}</td>
+                                      <td>{readPromptPackScoreDimension(selectedAutoScore.judgeScores, dimension)}</td>
+                                      <td>{readPromptPackScoreDimension(selectedAutoScore.finalScores, dimension)}</td>
+                                      <td>{readPromptPackScoreDimension(selectedAutoScore.disagreement, dimension)}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -2305,6 +2331,40 @@ const PROMPT_PACK_V2_DIMENSION_LABELS = [
   ["robustness", "Robustness"],
   ["usability", "Usability"],
 ] as const;
+
+const PROMPT_PACK_V3_DIMENSION_LABELS = [
+  ["taskSuccess", "Task success"],
+  ["truthfulness", "Truthfulness"],
+  ["evidenceGrounding", "Evidence grounding"],
+  ["formatAdherence", "Format adherence"],
+  ["operatorUsefulness", "Operator usefulness"],
+  ["toolUseQuality", "Tool use quality"],
+  ["orchestrationQuality", "Orchestration quality"],
+  ["efficiency", "Efficiency"],
+  ["recoveryQuality", "Recovery quality"],
+] as const;
+
+function getPromptPackScoreDimensionLabels(schemaVersion: PromptPackScoringSchemaVersion) {
+  return schemaVersion === "v3" ? PROMPT_PACK_V3_DIMENSION_LABELS : PROMPT_PACK_V2_DIMENSION_LABELS;
+}
+
+function readPromptPackScoreDimension(
+  scores: PromptPackAutoScoreRecord["finalScores"] | PromptPackAutoScoreRecord["ruleScores"] | undefined,
+  dimension: string,
+): string | number {
+  if (!scores) {
+    return "-";
+  }
+  const value = (scores as Record<string, number | undefined>)[dimension];
+  return value ?? "-";
+}
+
+function formatPromptPackAttribution(value: string): string {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
 const DIMENSION_ROWS: Array<{
   key: keyof Pick<ScoreDraft, "taskSuccess" | "honesty" | "executionQuality" | "robustness" | "usability">;

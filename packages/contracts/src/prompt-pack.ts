@@ -15,6 +15,25 @@ export type PromptPackScoreDimensionV2 = "taskSuccess" | "honesty" | "executionQ
 
 export type PromptPackDimensionScoreV2 = 0 | 1 | 2 | 3 | 4;
 
+export type PromptPackScoringSchemaVersion = "v2" | "v3";
+
+export type PromptPackOutcomeScoreDimensionV3 =
+  | "taskSuccess"
+  | "truthfulness"
+  | "evidenceGrounding"
+  | "formatAdherence"
+  | "operatorUsefulness";
+
+export type PromptPackExecutionScoreDimensionV3 =
+  | "toolUseQuality"
+  | "orchestrationQuality"
+  | "efficiency"
+  | "recoveryQuality";
+
+export type PromptPackScoreDimensionV3 = PromptPackOutcomeScoreDimensionV3 | PromptPackExecutionScoreDimensionV3;
+
+export type PromptPackDimensionScoreV3 = 0 | 1 | 2 | 3 | 4;
+
 export type PromptPackVerdict = "pass" | "fail" | "review";
 
 export type PromptPackPolicySource = "inherited_default" | "pack_override";
@@ -40,6 +59,22 @@ export type PromptPackReasonCode =
   | "major_disagreement"
   | "critical_dimension_not_applicable";
 
+export type PromptPackFailureAttributionCode =
+  | "model_reasoning_failure"
+  | "bad_prompt_or_rubric"
+  | "wrong_model_routed"
+  | "missing_tool"
+  | "tool_call_wrong_args"
+  | "retrieval_or_context_gap"
+  | "orchestration_synthesis_failure"
+  | "ui_operator_truth_gap"
+  | "harness_or_judge_failure"
+  | "runtime_or_infra_failure"
+  | "insufficient_evidence"
+  | "not_applicable";
+
+export type PromptPackFailureAttributionConfidence = "low" | "medium" | "high";
+
 export interface PromptPackPolicyV2 {
   scoringSchemaVersion: "v2";
   threshold: number;
@@ -49,6 +84,18 @@ export interface PromptPackPolicyV2 {
   reviewOnDisagreementAt: number;
   criticalDimensionsMustBeApplicable: boolean;
   hardFailSignals: PromptPackReasonCode[];
+}
+
+export interface PromptPackPolicyV3 {
+  scoringSchemaVersion: "v3";
+  threshold: number;
+  weights: Record<PromptPackScoreDimensionV3, number>;
+  minScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  judgeRequired: boolean;
+  reviewOnDisagreementAt: number;
+  criticalDimensionsMustBeApplicable: boolean;
+  hardFailSignals: PromptPackReasonCode[];
+  attributionRequiredFor: Array<Exclude<PromptPackVerdict, "pass">>;
 }
 
 export interface PromptPackProtocolResultV2 {
@@ -186,6 +233,49 @@ export interface PromptPackScoreRecordV2 {
   createdAt: string;
 }
 
+export interface PromptPackFailureAttributionRecordV3 {
+  primary: PromptPackFailureAttributionCode;
+  secondary?: PromptPackFailureAttributionCode[];
+  confidence: PromptPackFailureAttributionConfidence;
+  evidence: string[];
+}
+
+export interface PromptPackScoreRecordV3 {
+  autoScoreId: string;
+  packId: string;
+  testId: string;
+  runId: string;
+  scoringSchemaVersion: "v3";
+  scorerVersion: string;
+  judgeRubricVersion: string;
+  policyHash: string;
+  policySource: PromptPackPolicySource;
+  assertionSetVersion?: string;
+  scoreState: PromptPackScoreState;
+  protocol: PromptPackProtocolResultV2;
+  hardFailReasons: PromptPackReasonCode[];
+  applicability: Partial<Record<PromptPackScoreDimensionV3, boolean>>;
+  outcomeScores: Partial<Record<PromptPackOutcomeScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  executionScores: Partial<Record<PromptPackExecutionScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  ruleScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  judgeScores?: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  finalScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  disagreement: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  weightedScore: number;
+  autoVerdict: PromptPackVerdict;
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  mergeProvenance: Partial<Record<PromptPackScoreDimensionV3, PromptPackMergeProvenanceEntryV2>>;
+  attribution: PromptPackFailureAttributionRecordV3;
+  judgeStatus: PromptPackJudgeStatusV2;
+  judgeProviderId?: string;
+  judgeModel?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export type PromptPackAutoScoreRecord = PromptPackScoreRecordV2 | PromptPackScoreRecordV3;
+
 export interface PromptPackHumanReviewRecordV2 {
   reviewId: string;
   packId: string;
@@ -203,7 +293,7 @@ export interface PromptPackHumanReviewRecordV2 {
 export interface PromptPackLatestAssessmentRecordV2 {
   testId: string;
   runId?: string;
-  autoScore?: PromptPackScoreRecordV2;
+  autoScore?: PromptPackAutoScoreRecord;
   humanReview?: PromptPackHumanReviewRecordV2;
   legacyScore?: PromptPackScoreRecord;
   currentGeneration?: boolean;
@@ -217,10 +307,11 @@ export interface PromptPackAutoScoreRequest {
   providerId?: string;
   model?: string;
   force?: boolean;
+  scoringSchemaVersion?: PromptPackScoringSchemaVersion;
 }
 
 export interface PromptPackAutoScoreResult {
-  score: PromptPackScoreRecordV2;
+  score: PromptPackAutoScoreRecord;
   legacyScore?: PromptPackScoreRecord;
   run: PromptPackRunRecord;
 }
@@ -235,7 +326,7 @@ export interface PromptPackReportRecord {
   tests: PromptPackTestRecord[];
   runs: PromptPackRunRecord[];
   scores: PromptPackScoreRecord[];
-  autoScoresV2: PromptPackScoreRecordV2[];
+  autoScoresV2: PromptPackAutoScoreRecord[];
   humanReviewsV2: PromptPackHumanReviewRecordV2[];
   latestAssessments: PromptPackLatestAssessmentRecordV2[];
   summary: {
@@ -260,7 +351,11 @@ export interface PromptPackReportRecord {
     reviewCount: number;
     effectivePassRate: number;
     reviewRate: number;
-    activeScoringSchemaVersion: "v2";
+    activeScoringSchemaVersion: PromptPackScoringSchemaVersion;
+    attributionBreakdown?: Array<{
+      attribution: PromptPackFailureAttributionCode;
+      count: number;
+    }>;
     passThreshold: number;
     averageTotalScore: number;
     averageWeightedScore: number;
@@ -415,4 +510,38 @@ export const DEFAULT_PROMPT_PACK_POLICY_V2: PromptPackPolicyV2 = {
     "missing_required_table",
     "missing_required_citation_evidence",
   ],
+};
+
+export const DEFAULT_PROMPT_PACK_POLICY_V3: PromptPackPolicyV3 = {
+  scoringSchemaVersion: "v3",
+  threshold: 78,
+  weights: {
+    taskSuccess: 25,
+    truthfulness: 20,
+    evidenceGrounding: 12,
+    formatAdherence: 10,
+    operatorUsefulness: 12,
+    toolUseQuality: 8,
+    orchestrationQuality: 6,
+    efficiency: 3,
+    recoveryQuality: 4,
+  },
+  minScores: {
+    taskSuccess: 3,
+    truthfulness: 3,
+    evidenceGrounding: 2,
+  },
+  judgeRequired: true,
+  reviewOnDisagreementAt: 2,
+  criticalDimensionsMustBeApplicable: true,
+  hardFailSignals: [
+    "tool_tier_violation",
+    "unsupported_access_claim",
+    "run_failed",
+    "approval_paused",
+    "missing_required_json",
+    "missing_required_table",
+    "missing_required_citation_evidence",
+  ],
+  attributionRequiredFor: ["review", "fail"],
 };

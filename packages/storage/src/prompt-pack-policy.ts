@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import type {
   PromptPackDimensionScoreV2,
+  PromptPackDimensionScoreV3,
   PromptPackPolicyV2,
+  PromptPackPolicyV3,
   PromptPackReasonCode,
   PromptPackScoreDimensionV2,
+  PromptPackScoreDimensionV3,
 } from "@goatcitadel/contracts";
 
 const PROMPT_PACK_DIMENSIONS: readonly PromptPackScoreDimensionV2[] = [
@@ -12,6 +15,18 @@ const PROMPT_PACK_DIMENSIONS: readonly PromptPackScoreDimensionV2[] = [
   "executionQuality",
   "robustness",
   "usability",
+];
+
+const PROMPT_PACK_V3_DIMENSIONS: readonly PromptPackScoreDimensionV3[] = [
+  "taskSuccess",
+  "truthfulness",
+  "evidenceGrounding",
+  "formatAdherence",
+  "operatorUsefulness",
+  "toolUseQuality",
+  "orchestrationQuality",
+  "efficiency",
+  "recoveryQuality",
 ];
 
 const PROMPT_PACK_REASON_CODES = new Set<PromptPackReasonCode>([
@@ -24,6 +39,8 @@ const PROMPT_PACK_REASON_CODES = new Set<PromptPackReasonCode>([
   "missing_required_citation_evidence",
   "self_reported_incomplete",
   "off_target_meta_analysis",
+  "judge_fallback",
+  "judge_schema_repair",
   "judge_invalid",
   "judge_timeout",
   "major_disagreement",
@@ -40,6 +57,18 @@ const PROMPT_PACK_POLICY_V2_NORMALIZED_KEYS = {
   criticalDimensionsMustBeApplicable: true,
   hardFailSignals: true,
 } satisfies Record<keyof PromptPackPolicyV2, true>;
+
+const PROMPT_PACK_POLICY_V3_NORMALIZED_KEYS = {
+  scoringSchemaVersion: true,
+  threshold: true,
+  weights: true,
+  minScores: true,
+  judgeRequired: true,
+  reviewOnDisagreementAt: true,
+  criticalDimensionsMustBeApplicable: true,
+  hardFailSignals: true,
+  attributionRequiredFor: true,
+} satisfies Record<keyof PromptPackPolicyV3, true>;
 
 export function parsePromptPackPolicyV2(raw?: string | null): PromptPackPolicyV2 | undefined {
   if (!raw) {
@@ -88,10 +117,56 @@ export function hashPromptPackPolicyV2(policy: PromptPackPolicyV2): string {
   return createHash("sha256").update(stringifyPromptPackPolicyV2(policy)).digest("hex");
 }
 
-function normalizeDimensionNumberRecord(
-  value: unknown,
-  fieldName: string,
-): Record<PromptPackScoreDimensionV2, number> {
+export function parsePromptPackPolicyV3(raw?: string | null): PromptPackPolicyV3 | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return normalizePromptPackPolicyV3(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+export function normalizePromptPackPolicyV3(value: unknown): PromptPackPolicyV3 {
+  if (!isRecord(value) || value.scoringSchemaVersion !== "v3") {
+    throw new Error("Prompt-pack policy must be a v3 object.");
+  }
+  const threshold = readFiniteNumber(value.threshold, "threshold");
+  const reviewOnDisagreementAt = readFiniteNumber(value.reviewOnDisagreementAt, "reviewOnDisagreementAt");
+  const judgeRequired = readBoolean(value.judgeRequired, "judgeRequired");
+  const criticalDimensionsMustBeApplicable = readBoolean(
+    value.criticalDimensionsMustBeApplicable,
+    "criticalDimensionsMustBeApplicable",
+  );
+  const weights = normalizeDimensionNumberRecordV3(value.weights, "weights");
+  const minScores = normalizeDimensionScoreRecordV3(value.minScores);
+  const hardFailSignals = normalizeReasonCodes(value.hardFailSignals);
+  const attributionRequiredFor = normalizeAttributionRequiredFor(value.attributionRequiredFor);
+  void PROMPT_PACK_POLICY_V3_NORMALIZED_KEYS;
+
+  return {
+    scoringSchemaVersion: "v3",
+    threshold,
+    weights,
+    minScores,
+    judgeRequired,
+    reviewOnDisagreementAt,
+    criticalDimensionsMustBeApplicable,
+    hardFailSignals,
+    attributionRequiredFor,
+  };
+}
+
+export function stringifyPromptPackPolicyV3(policy: PromptPackPolicyV3): string {
+  return JSON.stringify(normalizePromptPackPolicyV3(policy));
+}
+
+export function hashPromptPackPolicyV3(policy: PromptPackPolicyV3): string {
+  return createHash("sha256").update(stringifyPromptPackPolicyV3(policy)).digest("hex");
+}
+
+function normalizeDimensionNumberRecord(value: unknown, fieldName: string): Record<PromptPackScoreDimensionV2, number> {
   if (!isRecord(value)) {
     throw new Error(`Prompt-pack policy ${fieldName} must be an object.`);
   }
@@ -102,6 +177,20 @@ function normalizeDimensionNumberRecord(
     robustness: readFiniteNumber(value.robustness, `${fieldName}.robustness`),
     usability: readFiniteNumber(value.usability, `${fieldName}.usability`),
   };
+}
+
+function normalizeDimensionNumberRecordV3(
+  value: unknown,
+  fieldName: string,
+): Record<PromptPackScoreDimensionV3, number> {
+  if (!isRecord(value)) {
+    throw new Error(`Prompt-pack policy ${fieldName} must be an object.`);
+  }
+  const normalized = {} as Record<PromptPackScoreDimensionV3, number>;
+  for (const dimension of PROMPT_PACK_V3_DIMENSIONS) {
+    normalized[dimension] = readFiniteNumber(value[dimension], `${fieldName}.${dimension}`);
+  }
+  return normalized;
 }
 
 function normalizeDimensionScoreRecord(
@@ -122,6 +211,38 @@ function normalizeDimensionScoreRecord(
     normalized[dimension] = readDimensionScore(rawScore, `minScores.${dimension}`);
   }
   return normalized;
+}
+
+function normalizeDimensionScoreRecordV3(
+  value: unknown,
+): Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    throw new Error("Prompt-pack policy minScores must be an object.");
+  }
+  const normalized: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {};
+  for (const dimension of PROMPT_PACK_V3_DIMENSIONS) {
+    const rawScore = value[dimension];
+    if (rawScore === undefined || rawScore === null) {
+      continue;
+    }
+    normalized[dimension] = readDimensionScore(rawScore, `minScores.${dimension}`) as PromptPackDimensionScoreV3;
+  }
+  return normalized;
+}
+
+function normalizeAttributionRequiredFor(value: unknown): Array<"review" | "fail"> {
+  if (!Array.isArray(value)) {
+    throw new Error("Prompt-pack policy attributionRequiredFor must be an array.");
+  }
+  return value.map((entry, index) => {
+    if (entry !== "review" && entry !== "fail") {
+      throw new Error(`Prompt-pack policy attributionRequiredFor[${index}] is invalid.`);
+    }
+    return entry;
+  });
 }
 
 function normalizeReasonCodes(value: unknown): PromptPackReasonCode[] {

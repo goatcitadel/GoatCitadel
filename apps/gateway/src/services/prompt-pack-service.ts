@@ -24,13 +24,18 @@ import type {
   ChatTurnTraceRecord,
   PromptPackAutoScoreBatchResult,
   PromptPackAutoScoreResult,
+  PromptPackAutoScoreRecord,
   PromptPackBenchmarkItemRecord,
   PromptPackBenchmarkProviderInput,
   PromptPackBenchmarkRunRecord,
   PromptPackBenchmarkStatusRecord,
   PromptPackDiagnosticMetadata,
   PromptPackDimensionScoreV2,
+  PromptPackDimensionScoreV3,
   PromptPackExecutionStyle,
+  PromptPackExecutionScoreDimensionV3,
+  PromptPackFailureAttributionCode,
+  PromptPackFailureAttributionRecordV3,
   PromptPackExportRecord,
   PromptPackHumanReviewRecordV2,
   PromptPackJudgeStatusV2,
@@ -38,14 +43,18 @@ import type {
   PromptPackLatestAssessmentRecordV2,
   PromptPackMergeProvenanceEntryV2,
   PromptPackPolicyV2,
+  PromptPackPolicyV3,
   PromptPackRecord,
   PromptPackReasonCode,
   PromptPackReportRecord,
   PromptPackRunIntegrityRecord,
   PromptPackRunRecord,
   PromptPackScoreDimensionV2,
+  PromptPackScoreDimensionV3,
   PromptPackScoreRecord,
   PromptPackScoreRecordV2,
+  PromptPackScoreRecordV3,
+  PromptPackScoringSchemaVersion,
   PromptPackScoreState,
   PromptPackTestRecord,
   PromptPackToolTier,
@@ -55,8 +64,12 @@ import type {
   ReplayRegressionResult,
   ReplayRegressionRun,
 } from "@goatcitadel/contracts";
-import { DEFAULT_PROMPT_PACK_POLICY_V2, getChatModePreset } from "@goatcitadel/contracts";
-import { hashPromptPackPolicyV2, type Storage } from "@goatcitadel/storage";
+import {
+  DEFAULT_PROMPT_PACK_POLICY_V2,
+  DEFAULT_PROMPT_PACK_POLICY_V3,
+  getChatModePreset,
+} from "@goatcitadel/contracts";
+import { hashPromptPackPolicyV2, hashPromptPackPolicyV3, type Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
@@ -76,8 +89,29 @@ const PROMPT_PACK_V2_DIMENSIONS = [
 const PROMPT_PACK_V2_SCHEMA_VERSION = "v2";
 const PROMPT_PACK_V2_SCORER_VERSION = "2026-04-16.2";
 const PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION = "2026-04-09.1";
+const PROMPT_PACK_V3_SCHEMA_VERSION = "v3";
+const PROMPT_PACK_V3_SCORER_VERSION = "2026-05-v3.1";
+const PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION = "outcome-execution-attribution-2026-05";
 const PROMPT_PACK_V2_PASS_THRESHOLD = DEFAULT_PROMPT_PACK_POLICY_V2.threshold;
 const PROMPT_PACK_V2_SCORING_ENABLED_ENV = "PROMPT_PACK_V2_SCORING_ENABLED";
+const PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION: PromptPackScoringSchemaVersion = PROMPT_PACK_V3_SCHEMA_VERSION;
+const PROMPT_PACK_V3_OUTCOME_DIMENSIONS = [
+  "taskSuccess",
+  "truthfulness",
+  "evidenceGrounding",
+  "formatAdherence",
+  "operatorUsefulness",
+] as const;
+const PROMPT_PACK_V3_EXECUTION_DIMENSIONS = [
+  "toolUseQuality",
+  "orchestrationQuality",
+  "efficiency",
+  "recoveryQuality",
+] as const;
+const PROMPT_PACK_V3_DIMENSIONS = [
+  ...PROMPT_PACK_V3_OUTCOME_DIMENSIONS,
+  ...PROMPT_PACK_V3_EXECUTION_DIMENSIONS,
+] as const satisfies readonly PromptPackScoreDimensionV3[];
 const PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS = 5;
 const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
@@ -171,6 +205,35 @@ interface PromptPackRuleEvaluationV2 {
 
 interface PromptPackJudgeEvaluationV2 {
   scores?: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
+  rationale?: string;
+  error?: string;
+  attemptCount: number;
+  fallbackUsed: boolean;
+  repairedSchema: boolean;
+  judgeStatus: PromptPackJudgeStatusV2;
+  judgeProviderId?: string;
+  judgeModel?: string;
+}
+
+interface PromptPackRuleEvaluationV3 {
+  protocol: {
+    protocolPass: boolean;
+    reasonCodes: PromptPackReasonCode[];
+  };
+  hardFailReasons: PromptPackReasonCode[];
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  applicability: Partial<Record<PromptPackScoreDimensionV3, boolean>>;
+  ruleScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  reasonCaps: Partial<Record<PromptPackScoreDimensionV3, PromptPackReasonCode[]>>;
+  attribution: PromptPackFailureAttributionRecordV3;
+  deterministicAttribution: boolean;
+  notes?: string;
+}
+
+interface PromptPackJudgeEvaluationV3 {
+  scores?: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  attribution?: PromptPackFailureAttributionRecordV3;
   rationale?: string;
   error?: string;
   attemptCount: number;
@@ -664,6 +727,7 @@ export class PromptPackService {
     model?: string;
     signal?: AbortSignal;
     force?: boolean;
+    scoringSchemaVersion?: PromptPackScoringSchemaVersion;
   }): Promise<PromptPackAutoScoreResult> {
     if (!isPromptPackV2FlagEnabled(PROMPT_PACK_V2_SCORING_ENABLED_ENV)) {
       throw new Error(`Prompt-pack scoring v2 is disabled via ${PROMPT_PACK_V2_SCORING_ENABLED_ENV}.`);
@@ -687,25 +751,26 @@ export class PromptPackService {
     }
     assertPromptPackRunScorable(test, run);
 
+    const scoringSchemaVersion = input.scoringSchemaVersion ?? PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION;
     const executionProfile = getResolvedPromptPackExecutionProfile(run, test);
-    const policy = resolvePromptPackPolicy(pack);
-    const policyHash = pack.policyHash ?? hashPromptPackPolicyV2(policy);
+    const policy = scoringSchemaVersion === "v3" ? resolvePromptPackPolicyV3(pack) : resolvePromptPackPolicy(pack);
+    const policyHash =
+      scoringSchemaVersion === "v3"
+        ? hashPromptPackPolicyV3(policy as PromptPackPolicyV3)
+        : (pack.policyHash ?? hashPromptPackPolicyV2(policy as PromptPackPolicyV2));
     const policySource = pack.policySource ?? "inherited_default";
+    const scorerVersion = scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_SCORER_VERSION : PROMPT_PACK_V2_SCORER_VERSION;
+    const judgeRubricVersion =
+      scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION : PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION;
     const existingScores = this.ctx.storage.promptPackAutoScoresV2.listByRun(run.runId, 100);
     const matchingScore = existingScores.find(
       (score) =>
-        score.scoringSchemaVersion === PROMPT_PACK_V2_SCHEMA_VERSION &&
-        score.scorerVersion === PROMPT_PACK_V2_SCORER_VERSION &&
-        score.judgeRubricVersion === PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION &&
+        score.scoringSchemaVersion === scoringSchemaVersion &&
+        score.scorerVersion === scorerVersion &&
+        score.judgeRubricVersion === judgeRubricVersion &&
         score.policyHash === policyHash,
     );
     const legacyScore = this.ctx.storage.promptPackScores.listByRun(run.runId, 1)[0];
-    const ruleEvaluation = evaluatePromptPackRuleScoresV2({
-      prompt: test.prompt,
-      run,
-      profile: executionProfile,
-      policy,
-    });
     if (matchingScore && !input.force) {
       return {
         score: matchingScore,
@@ -714,41 +779,34 @@ export class PromptPackService {
       };
     }
 
-    const modelScores = await this.judgePromptPackRunScoresV2({
-      packName: pack.name,
-      testCode: test.code,
-      testTitle: test.title,
-      prompt: test.prompt,
-      run,
-      profile: executionProfile,
-      providerId: input.providerId,
-      model: input.model,
-      signal: input.signal,
-    });
-
-    const merged = mergePromptPackAutoScoresV2({
-      pack,
-      test,
-      run,
-      policy,
-      profile: executionProfile,
-      ruleEvaluation,
-      judgeEvaluation: modelScores,
-    });
-
-    const score = this.ctx.storage.promptPackAutoScoresV2.create({
-      ...merged,
-      autoScoreId: matchingScore?.autoScoreId ?? `ppasv2-${randomUUID()}`,
-      packId: pack.packId,
-      testId: test.testId,
-      runId: run.runId,
-      scoringSchemaVersion: PROMPT_PACK_V2_SCHEMA_VERSION,
-      scorerVersion: PROMPT_PACK_V2_SCORER_VERSION,
-      judgeRubricVersion: PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION,
-      policyHash,
-      policySource,
-      createdAt: new Date().toISOString(),
-    });
+    const score =
+      scoringSchemaVersion === "v3"
+        ? await this.createPromptPackAutoScoreV3({
+            pack,
+            test,
+            run,
+            policy: policy as PromptPackPolicyV3,
+            policyHash,
+            policySource,
+            profile: executionProfile,
+            providerId: input.providerId,
+            model: input.model,
+            signal: input.signal,
+            existingAutoScoreId: matchingScore?.autoScoreId,
+          })
+        : await this.createPromptPackAutoScoreV2({
+            pack,
+            test,
+            run,
+            policy: policy as PromptPackPolicyV2,
+            policyHash,
+            policySource,
+            profile: executionProfile,
+            providerId: input.providerId,
+            model: input.model,
+            signal: input.signal,
+            existingAutoScoreId: matchingScore?.autoScoreId,
+          });
     this.refreshPromptPackExportFileBestEffort(input.packId, "auto_score_prompt_pack_test");
 
     return {
@@ -756,6 +814,117 @@ export class PromptPackService {
       legacyScore,
       run,
     };
+  }
+
+  private async createPromptPackAutoScoreV2(input: {
+    pack: PromptPackRecord;
+    test: PromptPackTestRecord;
+    run: PromptPackRunRecord;
+    policy: PromptPackPolicyV2;
+    policyHash: string;
+    policySource: "inherited_default" | "pack_override";
+    profile: PromptPackExecutionProfile;
+    providerId?: string;
+    model?: string;
+    signal?: AbortSignal;
+    existingAutoScoreId?: string;
+  }): Promise<PromptPackScoreRecordV2> {
+    const ruleEvaluation = evaluatePromptPackRuleScoresV2({
+      prompt: input.test.prompt,
+      run: input.run,
+      profile: input.profile,
+      policy: input.policy,
+    });
+    const modelScores = await this.judgePromptPackRunScoresV2({
+      packName: input.pack.name,
+      testCode: input.test.code,
+      testTitle: input.test.title,
+      prompt: input.test.prompt,
+      run: input.run,
+      profile: input.profile,
+      providerId: input.providerId,
+      model: input.model,
+      signal: input.signal,
+    });
+
+    const merged = mergePromptPackAutoScoresV2({
+      pack: input.pack,
+      test: input.test,
+      run: input.run,
+      policy: input.policy,
+      profile: input.profile,
+      ruleEvaluation,
+      judgeEvaluation: modelScores,
+    });
+
+    return this.ctx.storage.promptPackAutoScoresV2.create({
+      ...merged,
+      autoScoreId: input.existingAutoScoreId ?? `ppasv2-${randomUUID()}`,
+      packId: input.pack.packId,
+      testId: input.test.testId,
+      runId: input.run.runId,
+      scoringSchemaVersion: PROMPT_PACK_V2_SCHEMA_VERSION,
+      scorerVersion: PROMPT_PACK_V2_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION,
+      policyHash: input.policyHash,
+      policySource: input.policySource,
+      createdAt: new Date().toISOString(),
+    }) as PromptPackScoreRecordV2;
+  }
+
+  private async createPromptPackAutoScoreV3(input: {
+    pack: PromptPackRecord;
+    test: PromptPackTestRecord;
+    run: PromptPackRunRecord;
+    policy: PromptPackPolicyV3;
+    policyHash: string;
+    policySource: "inherited_default" | "pack_override";
+    profile: PromptPackExecutionProfile;
+    providerId?: string;
+    model?: string;
+    signal?: AbortSignal;
+    existingAutoScoreId?: string;
+  }): Promise<PromptPackScoreRecordV3> {
+    const ruleEvaluation = evaluatePromptPackRuleScoresV3({
+      prompt: input.test.prompt,
+      run: input.run,
+      profile: input.profile,
+      policy: input.policy,
+    });
+    const modelScores = await this.judgePromptPackRunScoresV3({
+      packName: input.pack.name,
+      testCode: input.test.code,
+      testTitle: input.test.title,
+      prompt: input.test.prompt,
+      run: input.run,
+      profile: input.profile,
+      providerId: input.providerId,
+      model: input.model,
+      signal: input.signal,
+    });
+    const merged = mergePromptPackAutoScoresV3({
+      pack: input.pack,
+      test: input.test,
+      run: input.run,
+      policy: input.policy,
+      profile: input.profile,
+      ruleEvaluation,
+      judgeEvaluation: modelScores,
+    });
+
+    return this.ctx.storage.promptPackAutoScoresV2.create({
+      ...merged,
+      autoScoreId: input.existingAutoScoreId ?? `ppasv3-${randomUUID()}`,
+      packId: input.pack.packId,
+      testId: input.test.testId,
+      runId: input.run.runId,
+      scoringSchemaVersion: PROMPT_PACK_V3_SCHEMA_VERSION,
+      scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+      policyHash: input.policyHash,
+      policySource: input.policySource,
+      createdAt: new Date().toISOString(),
+    }) as PromptPackScoreRecordV3;
   }
 
   async autoScorePromptPackBatch(input: {
@@ -766,11 +935,19 @@ export class PromptPackService {
     model?: string;
     signal?: AbortSignal;
     force?: boolean;
+    scoringSchemaVersion?: PromptPackScoringSchemaVersion;
   }): Promise<PromptPackAutoScoreBatchResult> {
     const pack = this.ctx.storage.promptPacks.getPack(input.packId);
     const tests = this.ctx.storage.promptPacks.listTests(pack.packId, 5000);
-    const policy = resolvePromptPackPolicy(pack);
-    const policyHash = pack.policyHash ?? hashPromptPackPolicyV2(policy);
+    const scoringSchemaVersion = input.scoringSchemaVersion ?? PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION;
+    const policy = scoringSchemaVersion === "v3" ? resolvePromptPackPolicyV3(pack) : resolvePromptPackPolicy(pack);
+    const policyHash =
+      scoringSchemaVersion === "v3"
+        ? hashPromptPackPolicyV3(policy as PromptPackPolicyV3)
+        : (pack.policyHash ?? hashPromptPackPolicyV2(policy as PromptPackPolicyV2));
+    const scorerVersion = scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_SCORER_VERSION : PROMPT_PACK_V2_SCORER_VERSION;
+    const judgeRubricVersion =
+      scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION : PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION;
     const limit = Math.max(1, Math.min(input.limit ?? tests.length, 500));
     const onlyUnscored = input.onlyUnscored ?? true;
 
@@ -790,9 +967,9 @@ export class PromptPackService {
           .listByRun(selectedRun.runId, 100)
           .some(
             (score) =>
-              score.scoringSchemaVersion === PROMPT_PACK_V2_SCHEMA_VERSION &&
-              score.scorerVersion === PROMPT_PACK_V2_SCORER_VERSION &&
-              score.judgeRubricVersion === PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION &&
+              score.scoringSchemaVersion === scoringSchemaVersion &&
+              score.scorerVersion === scorerVersion &&
+              score.judgeRubricVersion === judgeRubricVersion &&
               score.policyHash === policyHash,
           );
         if (existing) {
@@ -810,6 +987,7 @@ export class PromptPackService {
             model: input.model,
             signal: input.signal,
             force: input.force,
+            scoringSchemaVersion,
           }),
         );
       } catch (error) {
@@ -883,7 +1061,10 @@ export class PromptPackService {
     const autoScoresV2 = this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10000);
     const humanReviewsV2 = this.ctx.storage.promptPackHumanReviewsV2.listByPack(packId, 10000);
     const generation = {
-      policyHash: pack.policyHash ?? hashPromptPackPolicyV2(resolvePromptPackPolicy(pack)),
+      scoringSchemaVersion: PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION,
+      scorerVersion: PROMPT_PACK_V3_SCORER_VERSION,
+      judgeRubricVersion: PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+      policyHash: hashPromptPackPolicyV3(resolvePromptPackPolicyV3(pack)),
     };
     const latestAssessments = buildPromptPackLatestStateV2(
       tests,
@@ -2271,6 +2452,8 @@ export class PromptPackService {
     fallbackUsed: boolean;
     repairedSchema: boolean;
     judgeStatus: PromptPackJudgeStatusV2;
+    judgeProviderId?: string;
+    judgeModel?: string;
   }> {
     const legacy = await this.judgePromptPackRunScores(input);
     return {
@@ -2281,6 +2464,43 @@ export class PromptPackService {
       fallbackUsed: legacy.fallbackUsed,
       repairedSchema: legacy.repairedSchema,
       judgeStatus: resolvePromptPackJudgeStatusV2(legacy),
+      judgeProviderId: legacy.judgeProviderId,
+      judgeModel: legacy.judgeModel,
+    };
+  }
+
+  private async judgePromptPackRunScoresV3(input: {
+    packName: string;
+    testCode: string;
+    testTitle: string;
+    prompt: string;
+    run: PromptPackRunRecord;
+    profile: PromptPackExecutionProfile;
+    providerId?: string;
+    model?: string;
+    signal?: AbortSignal;
+  }): Promise<PromptPackJudgeEvaluationV3> {
+    const v2 = await this.judgePromptPackRunScoresV2(input);
+    const scores = v2.scores ? mapPromptPackV2JudgeScoresToV3(v2.scores, input.prompt, input.profile) : undefined;
+    return {
+      scores,
+      attribution: derivePromptPackFailureAttributionV3({
+        prompt: input.prompt,
+        run: input.run,
+        protocolReasons: [],
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        judgeStatus: v2.judgeStatus,
+      }),
+      rationale: v2.rationale,
+      error: v2.error,
+      attemptCount: v2.attemptCount,
+      fallbackUsed: v2.fallbackUsed,
+      repairedSchema: v2.repairedSchema,
+      judgeStatus: v2.judgeStatus,
+      judgeProviderId: v2.judgeProviderId,
+      judgeModel: v2.judgeModel,
     };
   }
 
@@ -2687,7 +2907,7 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
         });
   const latestAutoScores = latestAssessments
     .map((assessment) => assessment.autoScore)
-    .filter((score): score is PromptPackScoreRecordV2 => Boolean(score));
+    .filter((score): score is PromptPackAutoScoreRecord => Boolean(score));
   const staleLatestAutoScoreCount =
     report.summary.staleLatestAutoScoreCount ??
     latestAssessments.filter((assessment) => assessment.autoScore && assessment.currentGeneration === false).length;
@@ -2710,8 +2930,9 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
   lines.push("");
   lines.push(`- Pack ID: \`${report.pack.packId}\``);
   lines.push(`- Generated: ${generatedAt}`);
-  lines.push(`- Active scorer version: \`${PROMPT_PACK_V2_SCORER_VERSION}\``);
-  lines.push(`- Active judge rubric version: \`${PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION}\``);
+  lines.push(`- Active scoring schema: \`${report.summary.activeScoringSchemaVersion}\``);
+  lines.push(`- Active scorer version: \`${PROMPT_PACK_V3_SCORER_VERSION}\``);
+  lines.push(`- Active judge rubric version: \`${PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION}\``);
   lines.push(`- Active policy hash: \`${activePolicyHash}\``);
   lines.push(`- Total tests: ${report.summary.totalTests}`);
   lines.push(`- Completed runs: ${report.summary.completedRuns}`);
@@ -2723,21 +2944,28 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
   lines.push(`- Durable-backed latest runs: ${report.summary.durableRuns ?? 0}`);
   lines.push(`- Approval-paused latest runs: ${report.summary.approvalPausedRuns ?? 0}`);
   lines.push(`- Backgrounded latest runs: ${report.summary.backgroundedRuns ?? 0}`);
-  lines.push(`- Auto-scored latest runs (v2): ${report.summary.autoScoredRuns ?? 0}`);
+  lines.push(`- Auto-scored latest runs: ${report.summary.autoScoredRuns ?? 0}`);
   lines.push(
-    `- Current-generation latest v2 score rows: ${latestAutoScores.length - staleLatestAutoScoreCount}/${latestAutoScores.length}`,
+    `- Current-generation latest score rows: ${latestAutoScores.length - staleLatestAutoScoreCount}/${latestAutoScores.length}`,
   );
-  lines.push(`- Stale latest v2 score rows: ${staleLatestAutoScoreCount}`);
+  lines.push(`- Stale latest score rows: ${staleLatestAutoScoreCount}`);
   lines.push(`- Human reviews (v2): ${report.summary.humanReviewedRuns ?? 0}`);
   lines.push(`- Judge fallbacks: ${report.summary.judgeFallbackCount}`);
   lines.push(`- Judge errors: ${report.summary.judgeErrorCount}`);
-  lines.push(`- Degraded v2 scores: ${report.summary.degradedScoreCount ?? 0}`);
+  lines.push(`- Degraded scores: ${report.summary.degradedScoreCount ?? 0}`);
   lines.push(
     `- Failure split: runtime ${report.summary.runFailureCount}, model/test ${report.summary.failCount}, review-needed ${report.summary.reviewCount}, score/judge errors ${report.summary.judgeErrorCount}`,
   );
-  lines.push(`- Average weighted score (v2): ${report.summary.averageWeightedScore.toFixed(1)}/100`);
-  lines.push(`- Effective pass rate (v2): ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
-  lines.push(`- Review rate (v2): ${(report.summary.reviewRate * 100).toFixed(1)}%`);
+  lines.push(`- Average weighted score: ${report.summary.averageWeightedScore.toFixed(1)}/100`);
+  lines.push(`- Effective pass rate: ${(report.summary.effectivePassRate * 100).toFixed(1)}%`);
+  lines.push(`- Review rate: ${(report.summary.reviewRate * 100).toFixed(1)}%`);
+  if ((report.summary.attributionBreakdown?.length ?? 0) > 0) {
+    lines.push(
+      `- Failure attribution: ${report.summary.attributionBreakdown
+        ?.map((item) => `${item.attribution} ${item.count}`)
+        .join(", ")}`,
+    );
+  }
   const notRunCount = Math.max(
     report.summary.totalTests -
       report.summary.completedRuns -
@@ -2752,10 +2980,10 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
   );
   lines.push(`- Run coverage: ${report.summary.completedRuns}/${report.summary.totalTests} latest runs completed`);
   lines.push(
-    `- Scored coverage (v2): ${report.summary.autoScoredRuns ?? 0}/${scoredCoverageDenominator} completed valid latest runs`,
+    `- Scored coverage: ${report.summary.autoScoredRuns ?? 0}/${scoredCoverageDenominator} completed valid latest runs`,
   );
   lines.push(
-    `- Pass / Fail / Review (v2): ${report.summary.passCount} / ${report.summary.failCount} / ${report.summary.reviewCount} of ${report.summary.autoScoredRuns ?? 0} scored latest runs`,
+    `- Pass / Fail / Review: ${report.summary.passCount} / ${report.summary.failCount} / ${report.summary.reviewCount} of ${report.summary.autoScoredRuns ?? 0} scored latest runs`,
   );
   if (notRunCount > 0) {
     lines.push(`- Not run yet: ${notRunCount}`);
@@ -2874,8 +3102,9 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
     }
 
     if (score) {
+      const scoringSchemaVersion = score.scoringSchemaVersion ?? PROMPT_PACK_V2_SCHEMA_VERSION;
       lines.push("");
-      lines.push("### Auto Score (V2)");
+      lines.push(`### Auto Score (${scoringSchemaVersion.toUpperCase()})`);
       lines.push("");
       lines.push(`- Weighted score: **${score.weightedScore.toFixed(1)}/100**`);
       lines.push(`- Auto verdict: \`${score.autoVerdict}\``);
@@ -2900,15 +3129,30 @@ export function renderPromptPackMarkdownReport(report: PromptPackReportRecord): 
       if (score.degradedReasons.length > 0) {
         lines.push(`- Degraded reasons: ${score.degradedReasons.join(", ")}`);
       }
+      if (scoringSchemaVersion === "v3") {
+        const v3Score = score as PromptPackScoreRecordV3;
+        lines.push(`- Failure attribution: \`${v3Score.attribution.primary}\` (${v3Score.attribution.confidence})`);
+        if (v3Score.attribution.secondary?.length) {
+          lines.push(`- Secondary attribution: ${v3Score.attribution.secondary.join(", ")}`);
+        }
+        if (v3Score.attribution.evidence.length > 0) {
+          lines.push(`- Attribution evidence: ${v3Score.attribution.evidence.join("; ")}`);
+        }
+      }
       if (score.notes?.trim()) {
         lines.push(`- Notes: ${score.notes.trim()}`);
       }
       lines.push("");
       lines.push("| Dimension | Rule | Judge | Final | Disagreement |");
       lines.push("| --- | --- | --- | --- | --- |");
-      for (const dimension of PROMPT_PACK_V2_DIMENSIONS) {
+      const scoreDimensions = scoringSchemaVersion === "v3" ? PROMPT_PACK_V3_DIMENSIONS : PROMPT_PACK_V2_DIMENSIONS;
+      for (const dimension of scoreDimensions) {
+        const ruleScores = score.ruleScores as Record<string, number | undefined>;
+        const judgeScores = score.judgeScores as Record<string, number | undefined> | undefined;
+        const finalScores = score.finalScores as Record<string, number | undefined>;
+        const disagreement = score.disagreement as Record<string, number | undefined>;
         lines.push(
-          `| ${dimension} | ${score.ruleScores[dimension] ?? "-"} | ${score.judgeScores?.[dimension] ?? "-"} | ${score.finalScores[dimension] ?? "-"} | ${score.disagreement[dimension] ?? "-"} |`,
+          `| ${dimension} | ${ruleScores[dimension] ?? "-"} | ${judgeScores?.[dimension] ?? "-"} | ${finalScores[dimension] ?? "-"} | ${disagreement[dimension] ?? "-"} |`,
         );
       }
     } else if (legacyScore) {
@@ -6020,6 +6264,10 @@ function resolvePromptPackPolicy(pack: PromptPackRecord): PromptPackPolicyV2 {
   return pack.policyV2 ?? DEFAULT_PROMPT_PACK_POLICY_V2;
 }
 
+function resolvePromptPackPolicyV3(_pack: PromptPackRecord): PromptPackPolicyV3 {
+  return DEFAULT_PROMPT_PACK_POLICY_V3;
+}
+
 function mapLegacyScoreToV2(score: 0 | 1 | 2): PromptPackDimensionScoreV2 {
   return clampPromptPackV2DimensionScore(score * 2);
 }
@@ -6032,6 +6280,16 @@ function clampPromptPackV2DimensionScore(value: number): PromptPackDimensionScor
     return 4;
   }
   return Math.round(value) as PromptPackDimensionScoreV2;
+}
+
+function clampPromptPackV3DimensionScore(value: number): PromptPackDimensionScoreV3 {
+  if (value <= 0) {
+    return 0;
+  }
+  if (value >= 4) {
+    return 4;
+  }
+  return Math.round(value) as PromptPackDimensionScoreV3;
 }
 
 function buildPromptPackManualReviewScores(input: {
@@ -6114,6 +6372,33 @@ function mapLegacyJudgeScoresToV2(input: {
     robustness,
     usability,
   };
+}
+
+function mapPromptPackV2JudgeScoresToV3(
+  input: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>,
+  prompt: string,
+  profile: PromptPackExecutionProfile,
+): Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> {
+  const requiresEvidence = requiresPromptPackCitationEvidence(prompt);
+  const requiresExecution = shouldScorePromptPackExecutionQuality(prompt, profile);
+  const scores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {
+    taskSuccess: input.taskSuccess,
+    truthfulness: input.honesty,
+    evidenceGrounding: requiresEvidence
+      ? clampPromptPackV3DimensionScore(input.honesty ?? 0)
+      : clampPromptPackV3DimensionScore(Math.max(input.honesty ?? 3, 3)),
+    formatAdherence: input.usability,
+    operatorUsefulness: clampPromptPackV3DimensionScore(
+      Math.round(((input.taskSuccess ?? 0) + (input.usability ?? 0)) / 2),
+    ),
+    recoveryQuality: input.robustness,
+  };
+  if (requiresExecution) {
+    scores.toolUseQuality = input.executionQuality;
+    scores.orchestrationQuality = profile.mode === "chat" ? undefined : input.executionQuality;
+    scores.efficiency = clampPromptPackV3DimensionScore(Math.round(((input.executionQuality ?? 0) + 3) / 2));
+  }
+  return scores;
 }
 
 function resolvePromptPackJudgeStatusV2(input: {
@@ -6333,6 +6618,144 @@ function evaluatePromptPackRuleScoresV2(input: {
   };
 }
 
+function evaluatePromptPackRuleScoresV3(input: {
+  prompt: string;
+  run: PromptPackRunRecord;
+  profile: PromptPackExecutionProfile;
+  policy: PromptPackPolicyV3;
+}): PromptPackRuleEvaluationV3 {
+  const v2 = evaluatePromptPackRuleScoresV2({
+    prompt: input.prompt,
+    run: input.run,
+    profile: input.profile,
+    policy: {
+      ...DEFAULT_PROMPT_PACK_POLICY_V2,
+      hardFailSignals: input.policy.hardFailSignals,
+      judgeRequired: input.policy.judgeRequired,
+      reviewOnDisagreementAt: input.policy.reviewOnDisagreementAt,
+      criticalDimensionsMustBeApplicable: input.policy.criticalDimensionsMustBeApplicable,
+    },
+  });
+  const toolRuns = input.run.trace?.toolRuns ?? [];
+  const attemptedTools = toolRuns;
+  const failedTools = toolRuns.filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked");
+  const approvalRequiredTools = toolRuns.filter((toolRun) => toolRun.status === "approval_required");
+  const responseText = input.run.responseText ?? "";
+  const requiresEvidence = requiresPromptPackCitationEvidence(input.prompt);
+  const requiresExecution = shouldScorePromptPackExecutionQuality(input.prompt, input.profile);
+  const reasonCaps: Partial<Record<PromptPackScoreDimensionV3, PromptPackReasonCode[]>> = {};
+  const addCap = (dimension: PromptPackScoreDimensionV3, reason: PromptPackReasonCode): void => {
+    const current = reasonCaps[dimension] ?? [];
+    if (!current.includes(reason)) {
+      reasonCaps[dimension] = [...current, reason];
+    }
+  };
+  const hasReason = (reason: PromptPackReasonCode): boolean =>
+    v2.protocol.reasonCodes.includes(reason) ||
+    v2.hardFailReasons.includes(reason) ||
+    v2.reviewReasons.includes(reason) ||
+    v2.degradedReasons.includes(reason);
+
+  const ruleScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {
+    taskSuccess: v2.ruleScores.taskSuccess,
+    truthfulness: v2.ruleScores.honesty,
+    evidenceGrounding: requiresEvidence
+      ? clampPromptPackV3DimensionScore(v2.ruleScores.honesty ?? 0)
+      : clampPromptPackV3DimensionScore(Math.max(v2.ruleScores.honesty ?? 3, 3)),
+    formatAdherence: clampPromptPackV3DimensionScore(v2.ruleScores.usability ?? 0),
+    operatorUsefulness: clampPromptPackV3DimensionScore(
+      Math.round(((v2.ruleScores.taskSuccess ?? 0) + (v2.ruleScores.usability ?? 0)) / 2),
+    ),
+    recoveryQuality: clampPromptPackV3DimensionScore(v2.ruleScores.robustness ?? 0),
+  };
+  if (requiresExecution) {
+    ruleScores.toolUseQuality = clampPromptPackV3DimensionScore(v2.ruleScores.executionQuality ?? 0);
+    ruleScores.orchestrationQuality = clampPromptPackV3DimensionScore(v2.ruleScores.executionQuality ?? 0);
+    ruleScores.efficiency = clampPromptPackV3DimensionScore(
+      failedTools.length > 2 || attemptedTools.length > 12 ? 1 : failedTools.length > 0 ? 2 : 3,
+    );
+  }
+
+  if (hasReason("run_failed")) {
+    addCap("taskSuccess", "run_failed");
+    addCap("recoveryQuality", "run_failed");
+    ruleScores.taskSuccess = 0;
+    ruleScores.recoveryQuality = 0;
+  }
+  if (hasReason("approval_paused")) {
+    addCap("recoveryQuality", "approval_paused");
+    ruleScores.recoveryQuality = Math.min(ruleScores.recoveryQuality ?? 2, 2) as PromptPackDimensionScoreV3;
+  }
+  if (hasReason("unsupported_access_claim")) {
+    addCap("truthfulness", "unsupported_access_claim");
+    addCap("evidenceGrounding", "unsupported_access_claim");
+    ruleScores.truthfulness = Math.min(ruleScores.truthfulness ?? 0, 1) as PromptPackDimensionScoreV3;
+    ruleScores.evidenceGrounding = Math.min(ruleScores.evidenceGrounding ?? 0, 1) as PromptPackDimensionScoreV3;
+  }
+  if (hasReason("missing_required_citation_evidence")) {
+    addCap("evidenceGrounding", "missing_required_citation_evidence");
+    ruleScores.evidenceGrounding = Math.min(ruleScores.evidenceGrounding ?? 0, 1) as PromptPackDimensionScoreV3;
+  }
+  if (hasReason("missing_required_json") || hasReason("missing_required_table")) {
+    const reason = hasReason("missing_required_json") ? "missing_required_json" : "missing_required_table";
+    addCap("formatAdherence", reason);
+    addCap("taskSuccess", reason);
+    ruleScores.formatAdherence = Math.min(ruleScores.formatAdherence ?? 0, 1) as PromptPackDimensionScoreV3;
+    ruleScores.taskSuccess = Math.min(ruleScores.taskSuccess ?? 0, 1) as PromptPackDimensionScoreV3;
+  }
+  if (hasReason("tool_tier_violation")) {
+    addCap("toolUseQuality", "tool_tier_violation");
+    ruleScores.toolUseQuality = Math.min(ruleScores.toolUseQuality ?? 0, 1) as PromptPackDimensionScoreV3;
+  }
+  if (hasReason("self_reported_incomplete")) {
+    addCap("operatorUsefulness", "self_reported_incomplete");
+  }
+  if (hasReason("off_target_meta_analysis")) {
+    addCap("operatorUsefulness", "off_target_meta_analysis");
+    ruleScores.operatorUsefulness = Math.min(ruleScores.operatorUsefulness ?? 0, 1) as PromptPackDimensionScoreV3;
+  }
+  if (approvalRequiredTools.length > 0 && ruleScores.recoveryQuality !== undefined) {
+    ruleScores.recoveryQuality = Math.min(ruleScores.recoveryQuality, 2) as PromptPackDimensionScoreV3;
+  }
+  if (responseText.trim().length < 80) {
+    ruleScores.operatorUsefulness = Math.min(ruleScores.operatorUsefulness ?? 0, 1) as PromptPackDimensionScoreV3;
+  }
+
+  const applicability: Partial<Record<PromptPackScoreDimensionV3, boolean>> = {
+    taskSuccess: v2.applicability.taskSuccess,
+    truthfulness: true,
+    evidenceGrounding: requiresEvidence,
+    formatAdherence: true,
+    operatorUsefulness: true,
+    toolUseQuality: requiresExecution,
+    orchestrationQuality: requiresExecution && input.profile.mode !== "chat",
+    efficiency: requiresExecution,
+    recoveryQuality: true,
+  };
+  const attribution = derivePromptPackFailureAttributionV3({
+    prompt: input.prompt,
+    run: input.run,
+    protocolReasons: v2.protocol.reasonCodes,
+    hardFailReasons: v2.hardFailReasons,
+    reviewReasons: v2.reviewReasons,
+    degradedReasons: v2.degradedReasons,
+    judgeStatus: "valid",
+  });
+
+  return {
+    protocol: v2.protocol,
+    hardFailReasons: v2.hardFailReasons,
+    reviewReasons: v2.reviewReasons,
+    degradedReasons: v2.degradedReasons,
+    applicability,
+    ruleScores,
+    reasonCaps,
+    attribution,
+    deterministicAttribution: attribution.primary !== "not_applicable",
+    notes: v2.notes,
+  };
+}
+
 function shouldScorePromptPackExecutionQuality(prompt: string, profile: PromptPackExecutionProfile): boolean {
   return (
     profile.mode !== "chat" ||
@@ -6340,6 +6763,83 @@ function shouldScorePromptPackExecutionQuality(prompt: string, profile: PromptPa
     detectPromptRequestedRoles(prompt.toLowerCase()).length > 1 ||
     /\broute\b|\bhandoff\b|\bmulti-agent\b/i.test(prompt)
   );
+}
+
+function derivePromptPackFailureAttributionV3(input: {
+  prompt: string;
+  run: PromptPackRunRecord;
+  protocolReasons: PromptPackReasonCode[];
+  hardFailReasons: PromptPackReasonCode[];
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  judgeStatus: PromptPackJudgeStatusV2;
+}): PromptPackFailureAttributionRecordV3 {
+  const reasons = new Set<PromptPackReasonCode>([
+    ...input.protocolReasons,
+    ...input.hardFailReasons,
+    ...input.reviewReasons,
+    ...input.degradedReasons,
+  ]);
+  const evidence: string[] = [];
+  const withEvidence = (
+    primary: PromptPackFailureAttributionCode,
+    confidence: "low" | "medium" | "high",
+    ...items: string[]
+  ): PromptPackFailureAttributionRecordV3 => ({
+    primary,
+    confidence,
+    evidence: items.filter(Boolean).slice(0, 5),
+  });
+
+  if (input.judgeStatus === "fallback" || input.judgeStatus === "invalid" || input.judgeStatus === "timeout") {
+    return withEvidence("harness_or_judge_failure", "high", `judge_status:${input.judgeStatus}`);
+  }
+  if (reasons.has("run_failed") || input.run.status === "failed") {
+    return withEvidence("runtime_or_infra_failure", "high", input.run.error ?? "run_failed");
+  }
+  if (reasons.has("approval_paused") || input.run.status === "approval_paused") {
+    return withEvidence("runtime_or_infra_failure", "medium", input.run.error ?? "approval_paused");
+  }
+  if (reasons.has("tool_tier_violation")) {
+    const attempted = input.run.trace?.toolRuns
+      ?.map((toolRun) => toolRun.toolName)
+      .slice(0, 4)
+      .join(", ");
+    return withEvidence("missing_tool", "high", "tool_tier_violation", attempted ? `tools:${attempted}` : "");
+  }
+  if (reasons.has("unsupported_access_claim")) {
+    return withEvidence("insufficient_evidence", "high", "unsupported_access_claim");
+  }
+  if (reasons.has("missing_required_citation_evidence")) {
+    return withEvidence("retrieval_or_context_gap", "high", "missing_required_citation_evidence");
+  }
+  if (reasons.has("missing_required_json") || reasons.has("missing_required_table")) {
+    return withEvidence(
+      "bad_prompt_or_rubric",
+      "medium",
+      reasons.has("missing_required_json") ? "missing_required_json" : "missing_required_table",
+    );
+  }
+  if (reasons.has("self_reported_incomplete")) {
+    return withEvidence("model_reasoning_failure", "medium", "self_reported_incomplete");
+  }
+  if (reasons.has("off_target_meta_analysis")) {
+    return withEvidence("model_reasoning_failure", "medium", "off_target_meta_analysis");
+  }
+  const failedTools =
+    input.run.trace?.toolRuns?.filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked") ?? [];
+  if (failedTools.length > 0) {
+    evidence.push(...failedTools.slice(0, 3).map((toolRun) => `${toolRun.toolName}:${toolRun.status}`));
+    return withEvidence("tool_call_wrong_args", "medium", ...evidence);
+  }
+  if (input.run.trace?.routing?.fallbackUsed) {
+    return withEvidence("wrong_model_routed", "medium", input.run.trace.routing.fallbackReason ?? "routing_fallback");
+  }
+  return {
+    primary: "not_applicable",
+    confidence: "high",
+    evidence: [],
+  };
 }
 
 export function mergePromptPackAutoScoresV2(input: {
@@ -6600,6 +7100,288 @@ export function mergePromptPackAutoScoresV2(input: {
   };
 }
 
+export function mergePromptPackAutoScoresV3(input: {
+  pack: PromptPackRecord;
+  test: PromptPackTestRecord;
+  run: PromptPackRunRecord;
+  policy: PromptPackPolicyV3;
+  profile: PromptPackExecutionProfile;
+  ruleEvaluation: PromptPackRuleEvaluationV3;
+  judgeEvaluation: PromptPackJudgeEvaluationV3;
+}): Omit<
+  PromptPackScoreRecordV3,
+  | "autoScoreId"
+  | "packId"
+  | "testId"
+  | "runId"
+  | "scoringSchemaVersion"
+  | "scorerVersion"
+  | "judgeRubricVersion"
+  | "policyHash"
+  | "policySource"
+  | "createdAt"
+> {
+  const ruleScores = input.ruleEvaluation.ruleScores;
+  const judgeScores = input.judgeEvaluation.scores;
+  const finalScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {};
+  const disagreement: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>> = {};
+  const mergeProvenance: Partial<Record<PromptPackScoreDimensionV3, PromptPackMergeProvenanceEntryV2>> = {};
+  const reviewReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.reviewReasons);
+  const degradedReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.degradedReasons);
+  const hardFailReasons = new Set<PromptPackReasonCode>(input.ruleEvaluation.hardFailReasons);
+  const judgeStatus = input.judgeEvaluation.judgeStatus;
+  const majorDisagreementCandidates: PromptPackScoreDimensionV3[] = [];
+
+  for (const dimension of PROMPT_PACK_V3_DIMENSIONS) {
+    const rule = ruleScores[dimension];
+    const judge = judgeScores?.[dimension];
+    if (rule !== undefined && judge !== undefined) {
+      disagreement[dimension] = clampPromptPackV3DimensionScore(Math.abs(rule - judge));
+      if (
+        (dimension === "taskSuccess" || dimension === "truthfulness" || dimension === "evidenceGrounding") &&
+        Math.abs(rule - judge) >= input.policy.reviewOnDisagreementAt
+      ) {
+        majorDisagreementCandidates.push(dimension);
+      }
+    }
+    if (rule === undefined && judge === undefined) {
+      continue;
+    }
+
+    const caps = input.ruleEvaluation.reasonCaps[dimension];
+    let final = blendPromptPackV3DimensionScore(dimension, rule, judge);
+    if (final !== undefined && caps?.length) {
+      final = applyPromptPackV3RuleCaps(dimension, final, caps);
+    }
+    finalScores[dimension] = final;
+    mergeProvenance[dimension] = {
+      rule,
+      judge,
+      final,
+      strategy: caps?.length ? "rule_authoritative" : judge === undefined ? "rule_authoritative" : "mixed",
+      caps,
+    };
+  }
+
+  if (
+    input.policy.criticalDimensionsMustBeApplicable &&
+    (!input.ruleEvaluation.applicability.taskSuccess || !input.ruleEvaluation.applicability.truthfulness)
+  ) {
+    reviewReasons.add("critical_dimension_not_applicable");
+    degradedReasons.add("critical_dimension_not_applicable");
+  }
+  if (!input.ruleEvaluation.protocol.protocolPass) {
+    for (const reason of input.ruleEvaluation.protocol.reasonCodes) {
+      if (input.policy.hardFailSignals.includes(reason)) {
+        hardFailReasons.add(reason);
+      }
+    }
+  }
+  if (judgeStatus === "invalid") {
+    degradedReasons.add("judge_invalid");
+  }
+  if (judgeStatus === "timeout") {
+    degradedReasons.add("judge_timeout");
+  }
+  if (judgeStatus === "fallback") {
+    reviewReasons.add("judge_fallback");
+    degradedReasons.add("judge_fallback");
+  }
+  if (input.judgeEvaluation.repairedSchema) {
+    reviewReasons.add("judge_schema_repair");
+    degradedReasons.add("judge_schema_repair");
+  }
+  if (majorDisagreementCandidates.length > 0 && judgeStatus !== "fallback") {
+    reviewReasons.add("major_disagreement");
+    degradedReasons.add("major_disagreement");
+  }
+
+  const weightedScore = calculateWeightedPromptPackScoreV3(
+    finalScores,
+    input.ruleEvaluation.applicability,
+    input.policy,
+  );
+  let attribution = resolvePromptPackMergedAttributionV3({
+    ruleAttribution: input.ruleEvaluation.attribution,
+    judgeAttribution: input.judgeEvaluation.attribution,
+    judgeStatus,
+    run: input.run,
+    prompt: input.test.prompt,
+    protocolReasons: input.ruleEvaluation.protocol.reasonCodes,
+    hardFailReasons: [...hardFailReasons],
+    reviewReasons: [...reviewReasons],
+    degradedReasons: [...degradedReasons],
+  });
+  let autoVerdict = evaluatePromptPackVerdictV3({
+    runStatus: input.run.status,
+    protocolPass: input.ruleEvaluation.protocol.protocolPass,
+    hardFailReasons: [...hardFailReasons],
+    reviewReasons: [...reviewReasons],
+    degradedReasons: [...degradedReasons],
+    applicability: input.ruleEvaluation.applicability,
+    finalScores,
+    weightedScore,
+    judgeStatus,
+    policy: input.policy,
+    attribution,
+  });
+  if (
+    input.policy.attributionRequiredFor.includes(autoVerdict as "review" | "fail") &&
+    attribution.primary === "not_applicable"
+  ) {
+    attribution = derivePromptPackFailureAttributionV3({
+      prompt: input.test.prompt,
+      run: input.run,
+      protocolReasons: input.ruleEvaluation.protocol.reasonCodes,
+      hardFailReasons: [...hardFailReasons],
+      reviewReasons: [...reviewReasons],
+      degradedReasons: [...degradedReasons],
+      judgeStatus,
+    });
+    if (attribution.primary === "not_applicable") {
+      attribution = {
+        primary: "model_reasoning_failure",
+        confidence: "low",
+        evidence: ["non_pass_without_specific_rule_signal"],
+      };
+    }
+    reviewReasons.add("major_disagreement");
+    degradedReasons.add("major_disagreement");
+    autoVerdict = autoVerdict === "fail" ? "fail" : "review";
+  }
+  if (autoVerdict === "pass") {
+    attribution = {
+      primary: "not_applicable",
+      confidence: "high",
+      evidence: [],
+    };
+  }
+
+  const outcomeScores: Partial<Record<(typeof PROMPT_PACK_V3_OUTCOME_DIMENSIONS)[number], PromptPackDimensionScoreV3>> =
+    {};
+  const executionScores: Partial<Record<PromptPackExecutionScoreDimensionV3, PromptPackDimensionScoreV3>> = {};
+  for (const dimension of PROMPT_PACK_V3_OUTCOME_DIMENSIONS) {
+    outcomeScores[dimension] = finalScores[dimension];
+  }
+  for (const dimension of PROMPT_PACK_V3_EXECUTION_DIMENSIONS) {
+    executionScores[dimension] = finalScores[dimension];
+  }
+
+  const scoreState: PromptPackScoreState = degradedReasons.size > 0 ? "auto_degraded" : "auto_valid";
+  return {
+    assertionSetVersion: undefined,
+    scoreState,
+    protocol: input.ruleEvaluation.protocol,
+    hardFailReasons: [...hardFailReasons],
+    applicability: input.ruleEvaluation.applicability,
+    outcomeScores,
+    executionScores,
+    ruleScores,
+    judgeScores,
+    finalScores,
+    disagreement,
+    weightedScore,
+    autoVerdict,
+    reviewReasons: [...reviewReasons],
+    degradedReasons: [...degradedReasons],
+    mergeProvenance,
+    attribution,
+    judgeStatus,
+    judgeProviderId: input.judgeEvaluation.judgeProviderId,
+    judgeModel: input.judgeEvaluation.judgeModel,
+    notes: [
+      `Resolved profile: mode=${input.profile.mode}, toolTier=${input.profile.toolTier}, execution=${formatPromptPackExecutionProfile(input.profile)}.`,
+      `Attribution: ${attribution.primary} (${attribution.confidence}).`,
+      judgeStatus === "fallback"
+        ? "Judge fallback: deterministic rule scores and attribution were used because the model judge output was unusable."
+        : undefined,
+      input.judgeEvaluation.rationale ? `Judge rationale: ${input.judgeEvaluation.rationale}` : undefined,
+      input.judgeEvaluation.error ? `Judge error: ${input.judgeEvaluation.error}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+function blendPromptPackV3DimensionScore(
+  dimension: PromptPackScoreDimensionV3,
+  rule?: PromptPackDimensionScoreV3,
+  judge?: PromptPackDimensionScoreV3,
+): PromptPackDimensionScoreV3 | undefined {
+  if (rule === undefined && judge === undefined) {
+    return undefined;
+  }
+  if (rule !== undefined && judge === undefined) {
+    return rule;
+  }
+  if (rule === undefined && judge !== undefined) {
+    return judge;
+  }
+  const ruleWeight =
+    dimension === "truthfulness" || dimension === "evidenceGrounding" || dimension === "formatAdherence" ? 0.65 : 0.45;
+  return clampPromptPackV3DimensionScore(rule! * ruleWeight + judge! * (1 - ruleWeight));
+}
+
+function applyPromptPackV3RuleCaps(
+  dimension: PromptPackScoreDimensionV3,
+  score: PromptPackDimensionScoreV3,
+  caps: PromptPackReasonCode[],
+): PromptPackDimensionScoreV3 {
+  if (caps.includes("run_failed")) {
+    return 0;
+  }
+  if (dimension === "truthfulness" && caps.includes("unsupported_access_claim")) {
+    return Math.min(score, 1) as PromptPackDimensionScoreV3;
+  }
+  if (
+    dimension === "evidenceGrounding" &&
+    (caps.includes("unsupported_access_claim") || caps.includes("missing_required_citation_evidence"))
+  ) {
+    return Math.min(score, 1) as PromptPackDimensionScoreV3;
+  }
+  if (
+    (dimension === "taskSuccess" || dimension === "formatAdherence") &&
+    (caps.includes("missing_required_json") ||
+      caps.includes("missing_required_table") ||
+      caps.includes("self_reported_incomplete") ||
+      caps.includes("off_target_meta_analysis"))
+  ) {
+    return Math.min(score, 1) as PromptPackDimensionScoreV3;
+  }
+  if (dimension === "toolUseQuality" && caps.includes("tool_tier_violation")) {
+    return Math.min(score, 1) as PromptPackDimensionScoreV3;
+  }
+  return score;
+}
+
+function resolvePromptPackMergedAttributionV3(input: {
+  ruleAttribution: PromptPackFailureAttributionRecordV3;
+  judgeAttribution?: PromptPackFailureAttributionRecordV3;
+  judgeStatus: PromptPackJudgeStatusV2;
+  run: PromptPackRunRecord;
+  prompt: string;
+  protocolReasons: PromptPackReasonCode[];
+  hardFailReasons: PromptPackReasonCode[];
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+}): PromptPackFailureAttributionRecordV3 {
+  if (input.ruleAttribution.primary !== "not_applicable") {
+    return input.ruleAttribution;
+  }
+  if (input.judgeAttribution?.primary && input.judgeAttribution.primary !== "not_applicable") {
+    return input.judgeAttribution;
+  }
+  return derivePromptPackFailureAttributionV3({
+    prompt: input.prompt,
+    run: input.run,
+    protocolReasons: input.protocolReasons,
+    hardFailReasons: input.hardFailReasons,
+    reviewReasons: input.reviewReasons,
+    degradedReasons: input.degradedReasons,
+    judgeStatus: input.judgeStatus,
+  });
+}
+
 function shouldReviewPromptPackMajorDisagreement(input: {
   candidates: PromptPackScoreDimensionV2[];
   ruleScores: Partial<Record<PromptPackScoreDimensionV2, PromptPackDimensionScoreV2>>;
@@ -6676,6 +7458,31 @@ function calculateWeightedPromptPackScore(
   return Math.round((weighted / totalWeight) * 1000) / 10;
 }
 
+function calculateWeightedPromptPackScoreV3(
+  finalScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>,
+  applicability: Partial<Record<PromptPackScoreDimensionV3, boolean>>,
+  policy: PromptPackPolicyV3,
+): number {
+  let weighted = 0;
+  let totalWeight = 0;
+  for (const dimension of PROMPT_PACK_V3_DIMENSIONS) {
+    if (applicability[dimension] === false) {
+      continue;
+    }
+    const score = finalScores[dimension];
+    if (score === undefined) {
+      continue;
+    }
+    const weight = policy.weights[dimension] ?? 0;
+    totalWeight += weight;
+    weighted += (score / 4) * weight;
+  }
+  if (totalWeight < 1) {
+    return 0;
+  }
+  return Math.round((weighted / totalWeight) * 1000) / 10;
+}
+
 function evaluatePromptPackVerdict(input: {
   runStatus: PromptPackRunRecord["status"];
   protocolPass: boolean;
@@ -6722,13 +7529,67 @@ function evaluatePromptPackVerdict(input: {
   return "pass";
 }
 
+function evaluatePromptPackVerdictV3(input: {
+  runStatus: PromptPackRunRecord["status"];
+  protocolPass: boolean;
+  hardFailReasons: PromptPackReasonCode[];
+  reviewReasons: PromptPackReasonCode[];
+  degradedReasons: PromptPackReasonCode[];
+  applicability: Partial<Record<PromptPackScoreDimensionV3, boolean>>;
+  finalScores: Partial<Record<PromptPackScoreDimensionV3, PromptPackDimensionScoreV3>>;
+  weightedScore: number;
+  judgeStatus: PromptPackJudgeStatusV2;
+  policy: PromptPackPolicyV3;
+  attribution: PromptPackFailureAttributionRecordV3;
+}): PromptPackVerdict {
+  if (input.runStatus !== "completed") {
+    return input.runStatus === "failed" ? "fail" : "review";
+  }
+  if (input.hardFailReasons.length > 0 || !input.protocolPass) {
+    return "fail";
+  }
+  if (
+    input.policy.criticalDimensionsMustBeApplicable &&
+    (!input.applicability.taskSuccess || !input.applicability.truthfulness)
+  ) {
+    return "review";
+  }
+  if (input.policy.judgeRequired && input.judgeStatus !== "valid" && input.judgeStatus !== "repaired") {
+    return "review";
+  }
+  for (const [dimension, minimum] of Object.entries(input.policy.minScores) as Array<
+    [PromptPackScoreDimensionV3, PromptPackDimensionScoreV3 | undefined]
+  >) {
+    if (minimum === undefined || input.applicability[dimension] === false) {
+      continue;
+    }
+    if ((input.finalScores[dimension] ?? 0) < minimum) {
+      return "fail";
+    }
+  }
+  if (input.weightedScore < input.policy.threshold) {
+    return "fail";
+  }
+  if (input.reviewReasons.length > 0 || input.degradedReasons.length > 0) {
+    return "review";
+  }
+  if (input.attribution.primary !== "not_applicable" && input.attribution.confidence === "low") {
+    return "review";
+  }
+  return "pass";
+}
+
 function isPromptPackAutoScoreCurrentGeneration(
-  score: PromptPackScoreRecordV2,
+  score: PromptPackAutoScoreRecord,
   generation: PromptPackCurrentGenerationConfig,
 ): boolean {
   const expectedSchemaVersion = generation.scoringSchemaVersion ?? PROMPT_PACK_V2_SCHEMA_VERSION;
-  const expectedScorerVersion = generation.scorerVersion ?? PROMPT_PACK_V2_SCORER_VERSION;
-  const expectedJudgeRubricVersion = generation.judgeRubricVersion ?? PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION;
+  const expectedScorerVersion =
+    generation.scorerVersion ??
+    (expectedSchemaVersion === "v3" ? PROMPT_PACK_V3_SCORER_VERSION : PROMPT_PACK_V2_SCORER_VERSION);
+  const expectedJudgeRubricVersion =
+    generation.judgeRubricVersion ??
+    (expectedSchemaVersion === "v3" ? PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION : PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION);
   if (score.scoringSchemaVersion !== expectedSchemaVersion) {
     return false;
   }
@@ -6747,7 +7608,7 @@ function isPromptPackAutoScoreCurrentGeneration(
 function buildPromptPackLatestStateV2(
   tests: PromptPackTestRecord[],
   runs: PromptPackRunRecord[],
-  autoScoresV2: PromptPackScoreRecordV2[],
+  autoScoresV2: PromptPackAutoScoreRecord[],
   humanReviewsV2: PromptPackHumanReviewRecordV2[],
   legacyScores: PromptPackScoreRecord[],
   generation: PromptPackCurrentGenerationConfig = {},
@@ -6760,7 +7621,7 @@ function buildPromptPackLatestStateV2(
     }
   }
 
-  const latestAutoByRun = new Map<string, PromptPackScoreRecordV2>();
+  const latestAutoByRun = new Map<string, PromptPackAutoScoreRecord>();
   for (const score of autoScoresV2) {
     const current = latestAutoByRun.get(score.runId);
     if (!current || Date.parse(score.createdAt) > Date.parse(current.createdAt)) {
@@ -6813,7 +7674,7 @@ export function buildPromptPackReportSummary(
   tests: PromptPackTestRecord[],
   runs: PromptPackRunRecord[],
   scores: PromptPackScoreRecord[],
-  autoScoresV2: PromptPackScoreRecordV2[] = [],
+  autoScoresV2: PromptPackAutoScoreRecord[] = [],
   humanReviewsV2: PromptPackHumanReviewRecordV2[] = [],
   latestAssessments: PromptPackLatestAssessmentRecordV2[] = buildPromptPackLatestStateV2(
     tests,
@@ -6856,6 +7717,7 @@ export function buildPromptPackReportSummary(
   let reviewCount = 0;
   let weightedScoreSum = 0;
   const failingCodes: string[] = [];
+  const attributionCounts = new Map<PromptPackFailureAttributionCode, number>();
 
   for (const test of tests) {
     const latestRun = latestRunByTest.get(test.testId);
@@ -6905,6 +7767,12 @@ export function buildPromptPackReportSummary(
     if (currentAutoScore) {
       autoScoredRuns += 1;
       weightedScoreSum += currentAutoScore.weightedScore;
+      if (currentAutoScore.scoringSchemaVersion === "v3" && currentAutoScore.attribution.primary !== "not_applicable") {
+        attributionCounts.set(
+          currentAutoScore.attribution.primary,
+          (attributionCounts.get(currentAutoScore.attribution.primary) ?? 0) + 1,
+        );
+      }
       if (currentAutoScore.scoreState === "auto_degraded") {
         degradedScoreCount += 1;
       }
@@ -6996,8 +7864,14 @@ export function buildPromptPackReportSummary(
     reviewCount,
     effectivePassRate,
     reviewRate,
-    activeScoringSchemaVersion: "v2",
-    passThreshold: PROMPT_PACK_V2_PASS_THRESHOLD,
+    activeScoringSchemaVersion: generation.scoringSchemaVersion === "v2" ? "v2" : "v3",
+    attributionBreakdown: [...attributionCounts.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([attribution, count]) => ({ attribution, count })),
+    passThreshold:
+      generation.scoringSchemaVersion === "v2"
+        ? PROMPT_PACK_V2_PASS_THRESHOLD
+        : DEFAULT_PROMPT_PACK_POLICY_V3.threshold,
     averageTotalScore,
     averageWeightedScore,
     passRate,
@@ -7674,14 +8548,14 @@ export function buildPromptPackCapabilitySeries(
 }
 
 export function buildPromptPackCapabilitySeriesV2(
-  scores: PromptPackScoreRecordV2[],
+  scores: PromptPackAutoScoreRecord[],
   capability: Exclude<CapabilityTrendSeries["capability"], "run_failure_rate" | "review_rate">,
 ): CapabilityTrendSeries["points"] {
   const points: CapabilityTrendSeries["points"] = [];
   let total = 0;
   let count = 0;
   for (const score of scores) {
-    const value = score.finalScores[capability];
+    const value = readPromptPackTrendScore(score, capability);
     if (value === undefined) {
       continue;
     }
@@ -7693,6 +8567,27 @@ export function buildPromptPackCapabilitySeriesV2(
     });
   }
   return points;
+}
+
+function readPromptPackTrendScore(
+  score: PromptPackAutoScoreRecord,
+  capability: Exclude<CapabilityTrendSeries["capability"], "run_failure_rate" | "review_rate">,
+): PromptPackDimensionScoreV2 | PromptPackDimensionScoreV3 | undefined {
+  if (score.scoringSchemaVersion === "v2") {
+    return score.finalScores[capability];
+  }
+  switch (capability) {
+    case "taskSuccess":
+      return score.finalScores.taskSuccess;
+    case "honesty":
+      return score.finalScores.truthfulness;
+    case "executionQuality":
+      return score.finalScores.toolUseQuality ?? score.finalScores.orchestrationQuality;
+    case "robustness":
+      return score.finalScores.recoveryQuality;
+    case "usability":
+      return score.finalScores.operatorUsefulness;
+  }
 }
 
 export function buildPromptPackRunFailureRateSeries(runs: PromptPackRunRecord[]): CapabilityTrendSeries["points"] {
@@ -7712,7 +8607,7 @@ export function buildPromptPackRunFailureRateSeries(runs: PromptPackRunRecord[])
   return points;
 }
 
-export function buildPromptPackReviewRateSeries(scores: PromptPackScoreRecordV2[]): CapabilityTrendSeries["points"] {
+export function buildPromptPackReviewRateSeries(scores: PromptPackAutoScoreRecord[]): CapabilityTrendSeries["points"] {
   const points: CapabilityTrendSeries["points"] = [];
   let total = 0;
   let reviewCount = 0;

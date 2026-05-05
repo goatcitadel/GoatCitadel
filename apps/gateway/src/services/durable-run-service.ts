@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   DurableCheckpointRecord,
+  ContinuationGateDecision,
   DurableDeadLetterRecord,
   DurableDiagnosticsResponse,
   RealtimeEvent,
@@ -15,6 +16,7 @@ import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
+import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 
 export interface DurableRunServiceContext {
   readonly config: GatewayRuntimeConfig;
@@ -73,6 +75,8 @@ export class DurableRunService {
         "executeWorkflow" | "isWorkflowRecoverable" | "markWorkflowUnrecoverable"
       >;
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
+      evaluateContinuationGate?: (run: DurableRunRecord) => ContinuationGateDecision | undefined;
+      recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => void;
     },
   ) {}
 
@@ -675,6 +679,42 @@ export class DurableRunService {
       const run = this.claimNextQueuedRun();
       if (!run) {
         return;
+      }
+      const gateDecision = deps.evaluateContinuationGate?.(run);
+      if (gateDecision && gateDecision.decision !== "continue") {
+        this.ctx.storage.durableRuns.createCheckpoint({
+          runId: run.runId,
+          checkpointKind: "continuation_gate",
+          state: { continuationGate: gateDecision },
+          createdAt: gateDecision.createdAt,
+        });
+        this.recordDurableTimelineEvent(run.runId, "continuation_gate", {
+          decision: gateDecision.decision,
+          reasonCodes: gateDecision.reasonCodes,
+          recommendedAction: gateDecision.recommendedAction,
+        });
+        this.ctx.publishRealtime(
+          "system",
+          "durable",
+          {
+            type: "durable_continuation_gate",
+            runId: run.runId,
+            decision: gateDecision.decision,
+            reasonCodes: gateDecision.reasonCodes,
+            recommendedAction: gateDecision.recommendedAction,
+          },
+          buildDurableRealtimeOptions(run.runId),
+        );
+        deps.recordEvidenceEnvelope?.({
+          eventKind: "continuation_gate",
+          runId: run.runId,
+          metadata: {
+            workflowKey: run.workflowKey,
+            decision: gateDecision.decision,
+            reasonCodes: gateDecision.reasonCodes,
+            recommendedAction: gateDecision.recommendedAction,
+          },
+        });
       }
       try {
         await this.executeWithLeaseHeartbeat(run, ({ signal, controller }) =>

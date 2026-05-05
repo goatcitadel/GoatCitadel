@@ -4,6 +4,7 @@ import type {
   ChatSessionWorkbenchRecord,
   ChatThreadResponse,
   ChatThreadTurnRecord,
+  ContinuationGateDecision,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
 import type { OrchestrationCheckpointRecord } from "@goatcitadel/mission-control-shared/api/types";
@@ -19,6 +20,7 @@ const CHECKPOINT_LABELS: Record<OrchestrationCheckpointRecord["checkpointKind"],
   run_started: "Run started",
   run_paused_for_approval: "Paused for approval",
   run_resumed: "Run resumed",
+  continuation_gate: "Continuation gate",
   phase_approved: "Approval recorded",
   phase_executed: "Phase completed",
   wave_advanced: "Advanced to next wave",
@@ -45,6 +47,13 @@ export interface CoworkViewItem {
   status?: string;
   meta?: string;
   note?: string;
+}
+
+export interface CoworkRunMapNode {
+  id: string;
+  label: string;
+  status: string;
+  meta?: string;
 }
 
 export interface CoworkRunViewModel {
@@ -95,6 +104,22 @@ export interface CoworkRunViewModel {
   outputItems: {
     items: CoworkViewItem[];
     overflow: number;
+  };
+  continuationGate: ContinuationGateDecision;
+  runMap: {
+    objective: string;
+    currentState: string;
+    nextAction: string;
+    planNodes: CoworkRunMapNode[];
+    checkpoints: CoworkViewItem[];
+  };
+  stateGaps: string[];
+  evidenceSummary: {
+    label: string;
+    detail: string;
+    toolCallCount: number;
+    checkpointCount: number;
+    evidenceGapCount: number;
   };
   raw: {
     activeTurn: ChatThreadTurnRecord | null;
@@ -186,6 +211,175 @@ function buildCheckpointMeta(checkpoint: OrchestrationCheckpointRecord): string 
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
+function outputItemsMissingProof(workbenchState?: ChatSessionWorkbenchRecord | null): boolean {
+  return workbenchState ? workbenchState.validationStatus !== "passed" : false;
+}
+
+function readContinuationGateFromCheckpoint(
+  checkpoints: OrchestrationCheckpointRecord[],
+): ContinuationGateDecision | undefined {
+  const gateCheckpoint = [...checkpoints]
+    .reverse()
+    .find((checkpoint) => checkpoint.checkpointKind === "continuation_gate");
+  const candidate = gateCheckpoint?.details.continuationGate;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return undefined;
+  }
+  const record = candidate as Partial<ContinuationGateDecision>;
+  if (
+    typeof record.decision !== "string" ||
+    !["continue", "checkpoint", "throttle", "pause", "stop"].includes(record.decision) ||
+    !record.metrics ||
+    typeof record.metrics !== "object"
+  ) {
+    return undefined;
+  }
+  return {
+    decision: record.decision as ContinuationGateDecision["decision"],
+    reasonCodes: Array.isArray(record.reasonCodes)
+      ? record.reasonCodes.filter((value): value is string => typeof value === "string")
+      : [],
+    summary: typeof record.summary === "string" ? record.summary : `Continuation gate: ${record.decision}.`,
+    metrics: {
+      stepsSinceCheckpoint: Number(record.metrics.stepsSinceCheckpoint ?? 0),
+      toolRunCount: Number(record.metrics.toolRunCount ?? 0),
+      failedToolRunCount: Number(record.metrics.failedToolRunCount ?? 0),
+      retryFailureStreak: Number(record.metrics.retryFailureStreak ?? 0),
+      approvalWait: Boolean(record.metrics.approvalWait),
+      userInputWait: Boolean(record.metrics.userInputWait),
+      elapsedMs: typeof record.metrics.elapsedMs === "number" ? record.metrics.elapsedMs : undefined,
+      tokenTotal: typeof record.metrics.tokenTotal === "number" ? record.metrics.tokenTotal : undefined,
+      costUsd: typeof record.metrics.costUsd === "number" ? record.metrics.costUsd : undefined,
+      evidenceGapCount: Number(record.metrics.evidenceGapCount ?? 0),
+    },
+    recommendedAction:
+      typeof record.recommendedAction === "string"
+        ? record.recommendedAction
+        : "Review the run state before continuing.",
+    createdAt:
+      typeof record.createdAt === "string" ? record.createdAt : (gateCheckpoint?.createdAt ?? new Date().toISOString()),
+  };
+}
+
+function buildDerivedContinuationGate(input: {
+  waitingForApproval: boolean;
+  waitingForUserInput: boolean;
+  failedToolRunCount: number;
+  toolRuns: number;
+  checkpoints: OrchestrationCheckpointRecord[];
+  evidenceGapCount: number;
+  orchestrationError?: string | null;
+  runFailure?: boolean;
+}): ContinuationGateDecision {
+  const metrics = {
+    stepsSinceCheckpoint: countStepsSinceCheckpoint(input.checkpoints),
+    toolRunCount: input.toolRuns,
+    failedToolRunCount: input.failedToolRunCount,
+    retryFailureStreak: input.failedToolRunCount,
+    approvalWait: input.waitingForApproval,
+    userInputWait: input.waitingForUserInput,
+    evidenceGapCount: input.evidenceGapCount,
+  };
+  if (input.waitingForApproval) {
+    return {
+      decision: "pause",
+      reasonCodes: ["approval_wait"],
+      summary: "Continuation paused for approval.",
+      metrics,
+      recommendedAction: "Resolve the approval before continuing.",
+      createdAt: new Date().toISOString(),
+    };
+  }
+  if (input.waitingForUserInput) {
+    return {
+      decision: "pause",
+      reasonCodes: ["user_input_wait"],
+      summary: "Continuation paused for operator input.",
+      metrics,
+      recommendedAction: "Answer the waiting question before continuing.",
+      createdAt: new Date().toISOString(),
+    };
+  }
+  if (input.runFailure || input.failedToolRunCount >= 2) {
+    return {
+      decision: "pause",
+      reasonCodes: ["failure_streak"],
+      summary: "Continuation paused because failures need inspection.",
+      metrics,
+      recommendedAction: "Inspect the failed step before retrying.",
+      createdAt: new Date().toISOString(),
+    };
+  }
+  if (input.orchestrationError || input.evidenceGapCount > 0) {
+    return {
+      decision: "checkpoint",
+      reasonCodes: ["state_gap"],
+      summary: "Checkpoint recommended before continuing.",
+      metrics,
+      recommendedAction: "Refresh or inspect the missing run state before continuing.",
+      createdAt: new Date().toISOString(),
+    };
+  }
+  return {
+    decision: "continue",
+    reasonCodes: [],
+    summary: "Continue gate clear.",
+    metrics,
+    recommendedAction: "Continue the run.",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function countStepsSinceCheckpoint(checkpoints: OrchestrationCheckpointRecord[]): number {
+  const reversed = [...checkpoints].reverse();
+  const checkpointIndex = reversed.findIndex((checkpoint) =>
+    ["continuation_gate", "run_paused_for_approval", "run_resumed"].includes(checkpoint.checkpointKind),
+  );
+  return checkpointIndex < 0 ? checkpoints.length : checkpointIndex;
+}
+
+function buildPlanNodes(input: {
+  activePlanSteps: ChatExecutionPlanRecord["steps"];
+  roleSteps: NonNullable<ChatOrchestrationSummary>["steps"];
+  delegationSteps: ActiveChatDelegationRun["steps"];
+  planState: string;
+}): CoworkRunMapNode[] {
+  const fromPlan = input.activePlanSteps.map((step) => ({
+    id: step.stepId,
+    label: step.objective,
+    status: humanizeStatus(step.status),
+    meta: step.delegatedRole,
+  }));
+  if (fromPlan.length > 0) {
+    return fromPlan.slice(0, 8);
+  }
+  const fromRoles = input.roleSteps.map((step) => ({
+    id: `role-${step.stepId}`,
+    label: step.role,
+    status: humanizeStatus(step.status),
+    meta: step.model,
+  }));
+  if (fromRoles.length > 0) {
+    return fromRoles.slice(0, 8);
+  }
+  const fromDelegation = input.delegationSteps.map((step) => ({
+    id: `delegation-${step.stepId}`,
+    label: step.role,
+    status: humanizeStatus(step.status),
+    meta: step.childSessionId,
+  }));
+  if (fromDelegation.length > 0) {
+    return fromDelegation.slice(0, 8);
+  }
+  return [
+    { id: "plan", label: "Plan", status: humanizeStatus(input.planState) },
+    { id: "research", label: "Research", status: "pending" },
+    { id: "patch", label: "Patch", status: "pending" },
+    { id: "qa", label: "QA", status: "pending" },
+    { id: "ship", label: "Ship", status: "pending" },
+  ];
+}
+
 export function resolveActiveWorkflowTurn(thread: ChatThreadResponse | null): ChatThreadTurnRecord | null {
   if (!thread?.turns.length) {
     return null;
@@ -230,6 +424,7 @@ export function deriveCoworkRunViewModel(input: {
   const waitingForUserInput = currentTrace?.status === "waiting_for_user_input";
   const worktreeState = orchestrationRun?.worktreeStatus ?? workbenchState?.worktreeStatus ?? "off";
   const toolRuns = currentTrace?.toolRuns.length ?? 0;
+  const failedToolRunCount = currentTrace?.toolRuns.filter((run) => run.status === "failed").length ?? 0;
   const planState = orchestrationRun?.status ?? orchestration?.status ?? currentTrace?.status ?? "idle";
   const executionState = formatExecutionState(orchestrationRun?.executionState);
   const selectionLabel = describeSelectionState({ selectedTurn, activeTurn });
@@ -237,6 +432,18 @@ export function deriveCoworkRunViewModel(input: {
   const runFailureSummary = formatCoworkFriendlyError(orchestrationRun?.lastError ?? currentTrace?.failure?.message);
   const delegationFailure = delegationSteps.find((step) => step.error);
   const delegationFailureSummary = formatCoworkFriendlyError(delegationFailure?.error);
+  const stateGaps = [
+    orchestrationError ? "Run state refresh needs attention" : null,
+    orchestration?.runId && !orchestrationRun ? "Canonical run not loaded" : null,
+    waitingForApproval ? "Approval unresolved" : null,
+    waitingForUserInput ? "Operator answer required" : null,
+    orchestrationRun?.status === "completed" && outputItemsMissingProof(workbenchState)
+      ? "Manual UI proof not attached"
+      : null,
+  ].filter((value): value is string => Boolean(value));
+  const evidenceGapCount = stateGaps.filter((gap) =>
+    ["Run state refresh needs attention", "Canonical run not loaded", "Manual UI proof not attached"].includes(gap),
+  ).length;
 
   const blockers = [
     waitingForUserInput
@@ -474,6 +681,45 @@ export function deriveCoworkRunViewModel(input: {
     ],
     MAX_VISIBLE_OUTPUT_ITEMS,
   );
+  const continuationGate =
+    readContinuationGateFromCheckpoint(orchestrationCheckpoints) ??
+    buildDerivedContinuationGate({
+      waitingForApproval,
+      waitingForUserInput,
+      failedToolRunCount,
+      toolRuns,
+      checkpoints: orchestrationCheckpoints,
+      evidenceGapCount,
+      orchestrationError,
+      runFailure: Boolean(runFailureSummary),
+    });
+  const checkpointItems = [...orchestrationCheckpoints]
+    .reverse()
+    .slice(0, 8)
+    .map((checkpoint) => ({
+      id: checkpoint.checkpointId,
+      title: CHECKPOINT_LABELS[checkpoint.checkpointKind] ?? humanizeStatus(checkpoint.checkpointKind),
+      meta: checkpoint.createdAt,
+      note: buildCheckpointMeta(checkpoint),
+    }));
+  const planNodes = buildPlanNodes({
+    activePlanSteps,
+    roleSteps,
+    delegationSteps,
+    planState,
+  });
+  const evidenceSummary = {
+    label:
+      continuationGate.decision === "continue" ? "Evidence: current" : `Evidence: ${continuationGate.decision} gate`,
+    detail: [
+      `${toolRuns} tool call${toolRuns === 1 ? "" : "s"}`,
+      `${orchestrationCheckpoints.length} checkpoint${orchestrationCheckpoints.length === 1 ? "" : "s"}`,
+      evidenceGapCount > 0 ? `${evidenceGapCount} state gap${evidenceGapCount === 1 ? "" : "s"}` : "no state gaps",
+    ].join(" · "),
+    toolCallCount: toolRuns,
+    checkpointCount: orchestrationCheckpoints.length,
+    evidenceGapCount,
+  };
 
   return {
     empty,
@@ -506,6 +752,20 @@ export function deriveCoworkRunViewModel(input: {
     roleItems,
     timelineItems,
     outputItems,
+    continuationGate,
+    runMap: {
+      objective:
+        normalizeSummary(executionPlan?.objective, 120) ??
+        normalizeSummary(orchestration?.objective, 120) ??
+        normalizeSummary(activeTurn?.userMessage.content, 120) ??
+        "Cowork objective",
+      currentState: nowTitle,
+      nextAction: nextAction?.label ?? "Review run details",
+      planNodes,
+      checkpoints: checkpointItems,
+    },
+    stateGaps,
+    evidenceSummary,
     raw: {
       activeTurn,
       selectedTurn,

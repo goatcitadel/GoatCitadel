@@ -47,6 +47,8 @@ import {
 } from "./integration-channel-service.js";
 import { IntegrationDiagnosticsService } from "./integration-diagnostics-service.js";
 import { KnowledgeFacadeService } from "./memory-facade-service.js";
+import { SkillEvaluationService } from "./skill-evaluation-service.js";
+import { WorkflowRecipeService } from "./workflow-recipe-service.js";
 import * as channelSetupService from "./channel-setup-service.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatCommandService from "./chat-command-service.js";
@@ -451,6 +453,22 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     updatePersonality: (id, input) => gateway.personalityCatalogService.updatePersonality(id, input),
     updateSettings: (input) => settingsAuthService.updateSettings(settingsRuntimeDeps, input),
   };
+  const skillEvaluation = new SkillEvaluationService({
+    storage: gateway.storage,
+    listSkills: () => gateway.listSkills(),
+    createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
+    recordSkillEvaluationSignal: (input) => gateway.improvementService.recordSkillEvaluationSignal(input),
+  });
+  const workflowRecipes = new WorkflowRecipeService({
+    listSkills: () => gateway.listSkills(),
+    listToolNames: () => {
+      const catalog = gateway.policyEngine?.listCatalog?.() ?? [];
+      return catalog.map((entry: { name?: string; toolName?: string; id?: string }) =>
+        String(entry.name ?? entry.toolName ?? entry.id ?? ""),
+      );
+    },
+    createOrchestrationPlan: (plan) => gateway.createOrchestrationPlan(plan),
+  });
 
   return createGatewayRouteServices({
     chatMessages,
@@ -686,6 +704,9 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     obsidian,
     orchestration: {
       createOrchestrationPlan: (plan) => gateway.createOrchestrationPlan(plan),
+      createPlanFromRecipe: (input) => workflowRecipes.createPlanFromRecipe(input),
+      listRecipeTemplates: () => ({ items: workflowRecipes.listTemplates() }),
+      previewRecipe: (input) => workflowRecipes.previewRecipe(input),
       runOrchestrationPlan: (planId) => gateway.runOrchestrationPlan(planId),
       approvePhase: (runId, phaseId, approvedBy, costIncrementUsd) =>
         gateway.approvePhase(runId, phaseId, approvedBy, costIncrementUsd),
@@ -740,11 +761,16 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
       installSkillImport: (input) => gateway.installSkillImport(input),
       isBankrBuiltinEnabled: () => gateway.isFeatureEnabled("bankrBuiltinEnabled"),
       listBankrActionAudit: (limit, cursor) => gateway.listBankrActionAudit(limit, cursor),
+      listSkillEvaluationRuns: (skillId) => ({ items: skillEvaluation.listSkillEvaluationRuns(skillId) }),
       listSkillImportHistory: (limit) => gateway.listSkillImportHistory(limit),
       listSkillSources: (query, limit) => gateway.listSkillSources(query, limit),
       listSkills: () => gateway.listSkills(),
       lookupSkillSources: (queryOrUrl, limit) => gateway.lookupSkillSources(queryOrUrl, limit),
+      previewSkillEvaluation: (skillId, input) => ({ run: skillEvaluation.previewSkillEvaluation(skillId, input) }),
       previewBankrAction: (input) => gateway.previewBankrAction(input),
+      runSkillEvaluation: (skillId, input) => skillEvaluation.runSkillEvaluation(skillId, input),
+      getSkillEvaluationRun: (runId) => skillEvaluation.getSkillEvaluationRun(runId),
+      createSkillEvaluationProposal: (runId) => skillEvaluation.createSkillEvaluationProposal(runId),
       reloadSkills: () => gateway.reloadSkills(),
       resolveSkillActivation: (input) => gateway.resolveSkillActivation(input),
       setSkillState: (skillId, state, note) => gateway.setSkillState(skillId, state, note),

@@ -57,6 +57,7 @@ const promptPackAutoScoreBodySchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional(),
   force: z.boolean().optional(),
+  scoringSchemaVersion: z.enum(["v2", "v3"]).optional(),
 });
 
 const promptPackAutoScoreBatchBodySchema = z.object({
@@ -65,6 +66,7 @@ const promptPackAutoScoreBatchBodySchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional(),
   force: z.boolean().optional(),
+  scoringSchemaVersion: z.enum(["v2", "v3"]).optional(),
 });
 
 const promptPackExportBodySchema = z.object({
@@ -271,6 +273,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
           providerId: body.data.providerId,
           model: body.data.model,
           force: body.data.force,
+          scoringSchemaVersion: body.data.scoringSchemaVersion,
         }),
       );
     } catch (error) {
@@ -298,6 +301,7 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
           providerId: body.data.providerId,
           model: body.data.model,
           force: body.data.force,
+          scoringSchemaVersion: body.data.scoringSchemaVersion,
         }),
       );
     } catch (error) {

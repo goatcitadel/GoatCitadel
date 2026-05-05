@@ -730,6 +730,16 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 74,
+    name: "runtime_evidence_envelopes",
+    up: createRuntimeEvidenceEnvelopeSchema,
+  },
+  {
+    version: 75,
+    name: "skill_evaluation_runs",
+    up: createSkillEvaluationRunsSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -4756,6 +4766,64 @@ function createChatGeneratedArtifactsAndThreadKnowledgeSchema(db: DatabaseSync):
       ON chat_thread_knowledge_attachments(session_id, retrieval_mode, ingest_status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_thread_knowledge_attachments_document
       ON chat_thread_knowledge_attachments(document_id, updated_at DESC);
+  `);
+}
+
+function createRuntimeEvidenceEnvelopeSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS runtime_evidence_envelopes (
+      envelope_id TEXT PRIMARY KEY,
+      event_kind TEXT NOT NULL,
+      session_id TEXT,
+      turn_id TEXT,
+      run_id TEXT,
+      approval_id TEXT,
+      content_hash TEXT NOT NULL,
+      previous_envelope_hash TEXT,
+      payload_hash TEXT NOT NULL,
+      tool_call_hashes_json TEXT NOT NULL DEFAULT '[]',
+      memory_lineage_json TEXT NOT NULL DEFAULT '[]',
+      policy_hash TEXT,
+      signature_status TEXT NOT NULL,
+      signature TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_runtime_evidence_session_created
+      ON runtime_evidence_envelopes(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_runtime_evidence_turn_created
+      ON runtime_evidence_envelopes(turn_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_runtime_evidence_run_created
+      ON runtime_evidence_envelopes(run_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_runtime_evidence_kind_created
+      ON runtime_evidence_envelopes(event_kind, created_at DESC);
+  `);
+}
+
+function createSkillEvaluationRunsSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skill_evaluation_runs (
+      run_id TEXT PRIMARY KEY,
+      skill_id TEXT NOT NULL,
+      skill_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      target_pass_rate REAL NOT NULL,
+      max_rounds INTEGER NOT NULL,
+      accepted INTEGER NOT NULL DEFAULT 0,
+      improvement_delta REAL NOT NULL DEFAULT 0,
+      proposal_id TEXT,
+      improvement_candidate_id TEXT,
+      ledger_signal_id TEXT,
+      record_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_skill_evaluation_runs_skill_updated
+      ON skill_evaluation_runs(skill_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_skill_evaluation_runs_status_updated
+      ON skill_evaluation_runs(status, updated_at DESC);
   `);
 }
 

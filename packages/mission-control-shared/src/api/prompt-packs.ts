@@ -91,6 +91,7 @@ export async function autoScorePromptPackTest(
     providerId?: string;
     model?: string;
     force?: boolean;
+    scoringSchemaVersion?: "v2" | "v3";
   },
 ): Promise<PromptPackAutoScoreResult> {
   return request<PromptPackAutoScoreResult>(
@@ -119,6 +120,7 @@ export async function autoScorePromptPackBatch(
     providerId?: string;
     model?: string;
     force?: boolean;
+    scoringSchemaVersion?: "v2" | "v3";
   },
 ): Promise<PromptPackAutoScoreBatchResult> {
   return request<PromptPackAutoScoreBatchResult>(`/api/v1/prompt-packs/${encodeURIComponent(packId)}/auto-score`, {

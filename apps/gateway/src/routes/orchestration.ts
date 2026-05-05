@@ -38,9 +38,46 @@ const planSchema = z.object({
     .min(1),
 });
 
+const recipeBodySchema = z
+  .object({
+    source: z.string().min(1).optional(),
+    recipe: z.unknown().optional(),
+  })
+  .refine((value) => value.source !== undefined || value.recipe !== undefined, {
+    message: "Provide source or recipe.",
+  });
+
 export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const orchestration = fastify.services.orchestration;
+
+  fastify.get("/api/v1/orchestration/recipes/templates", operatorOnly, async (_request, reply) => {
+    return reply.send(orchestration.listRecipeTemplates());
+  });
+
+  fastify.post("/api/v1/orchestration/recipes/preview", operatorOnly, async (request, reply) => {
+    const parsed = recipeBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(orchestration.previewRecipe(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/orchestration/recipes/plans", operatorOnly, async (request, reply) => {
+    const parsed = recipeBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(await orchestration.createPlanFromRecipe(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
 
   fastify.post("/api/v1/orchestration/plans", operatorOnly, async (request, reply) => {
     const parsed = planSchema.safeParse(request.body);

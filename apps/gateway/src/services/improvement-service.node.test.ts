@@ -240,6 +240,31 @@ describe("ImprovementService ledger lifecycle", () => {
 
     assert.equal(harness.service.listImprovementCandidates(20).length, 0);
   });
+
+  it("records skill revision candidates as proposal-gated ledger evidence", async () => {
+    const harness = createHarness();
+    const result = harness.service.recordSkillEvaluationSignal({
+      skillId: "planning",
+      skillName: "Planning",
+      runId: "skill-eval-1",
+      accepted: true,
+      passRate: 1,
+      improvementDelta: 0.4,
+      summary: "Improved instruction criteria coverage.",
+    });
+
+    assert.ok(result?.signal);
+    assert.ok(result.candidate);
+    assert.equal(result.candidate.kind, "skill_revision");
+    const detail = harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
+    assert.equal(detail.candidate.status, "ready_for_approval");
+    assert.equal(detail.latestEvaluation?.evaluatorKind, "skill_eval_scorecard");
+    assert.equal(detail.currentRevision?.candidateRef.refType, "skill_evaluation_run");
+    await assert.rejects(
+      () => harness.service.requestImprovementActivation(result.candidate!.candidateId, "operator-1"),
+      /capability proposals/,
+    );
+  });
 });
 
 function createHarness(): Harness {

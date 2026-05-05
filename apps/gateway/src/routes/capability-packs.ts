@@ -1,0 +1,56 @@
+import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
+import { withRouteAccess } from "./route-access.js";
+
+const paramsSchema = z.object({
+  packId: z.string().trim().min(1),
+});
+
+const installSchema = z.object({
+  actorId: z.string().trim().min(1).optional(),
+});
+
+export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
+  const operatorOnly = withRouteAccess(fastify, "operator");
+
+  fastify.get("/api/v1/capability-packs", operatorOnly, async (_request, reply) => {
+    return reply.send({ items: fastify.gatewayRuntime.capabilityPackService.listPacks() });
+  });
+
+  fastify.get("/api/v1/capability-packs/:packId/preview", operatorOnly, async (request, reply) => {
+    const parsed = paramsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.gatewayRuntime.capabilityPackService.previewPack(parsed.data.packId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/capability-packs/:packId/install", operatorOnly, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const body = installSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      const actorId =
+        body.data.actorId ??
+        (typeof request.authActorId === "string" && request.authActorId.trim()
+          ? request.authActorId.trim()
+          : undefined);
+      return reply
+        .code(201)
+        .send(fastify.gatewayRuntime.capabilityPackService.installPack(params.data.packId, { actorId }));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+};

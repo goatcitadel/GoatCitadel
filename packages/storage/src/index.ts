@@ -80,9 +80,11 @@ import { CapabilityCatalogSnapshotRepository } from "./capability-catalog-snapsh
 import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
 import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
+import { SkillEvaluationRunRepository } from "./skill-evaluation-run-repo.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
+import { EvidenceEnvelopeRepository } from "./evidence-envelope-repo.js";
 
 export interface StorageOptions extends Partial<SqliteOptions> {
   transcriptsDir: string;
@@ -178,9 +180,11 @@ export class Storage {
   public readonly candidateSkillVersions: CandidateSkillVersionRepository;
   public readonly capabilityProposals: CapabilityProposalRepository;
   public readonly capabilityProposalEvents: CapabilityProposalEventRepository;
+  public readonly skillEvaluationRuns: SkillEvaluationRunRepository;
   public readonly codeModeRuns: CodeModeRunRepository;
   public readonly durableRunEvents: DurableRunEventRepository;
   public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
+  public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
 
   public constructor(options: StorageOptions) {
     this.db =
@@ -270,9 +274,11 @@ export class Storage {
     this.candidateSkillVersions = new CandidateSkillVersionRepository(this.db);
     this.capabilityProposals = new CapabilityProposalRepository(this.db);
     this.capabilityProposalEvents = new CapabilityProposalEventRepository(this.db);
+    this.skillEvaluationRuns = new SkillEvaluationRunRepository(this.db);
     this.codeModeRuns = new CodeModeRunRepository(this.db);
     this.durableRunEvents = new DurableRunEventRepository(this.db);
     this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
+    this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
   }
 
   public close(): void {
@@ -568,4 +574,5 @@ export * from "./transcript-outbox-repo.js";
 export * from "./realtime-stream-lease-repo.js";
 export * from "./durable-run-event-repo.js";
 export * from "./chat-reflection-attempt-repo.js";
+export * from "./skill-evaluation-run-repo.js";
 export * from "./postgres/index.js";

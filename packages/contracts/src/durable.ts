@@ -125,7 +125,8 @@ export interface DurableCheckpointRecord {
     | "run_resumed"
     | "run_completed"
     | "run_failed"
-    | "manual_replay_requested";
+    | "manual_replay_requested"
+    | "continuation_gate";
   state: Record<string, unknown>;
   createdAt: string;
 }
@@ -182,6 +183,7 @@ export interface DurableRunTimelineEvent {
     | "run_cancelled"
     | "run_completed"
     | "run_failed"
+    | "continuation_gate"
     | "run_dead_lettered"
     | "worker_event_loop_lag"
     | "dead_letter_recovered";

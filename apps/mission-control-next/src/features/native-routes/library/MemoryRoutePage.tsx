@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { BrainCircuit, RefreshCw } from "lucide-react";
+import { BrainCircuit, RefreshCw, ShieldCheck } from "lucide-react";
+import type { EvidenceEnvelope } from "@goatcitadel/contracts";
+import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import {
   describeQmdImpact,
@@ -23,6 +25,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     content: "",
     pinned: false,
     ttlOverrideSeconds: "",
+  });
+  const [evidence, setEvidence] = useState<{
+    loading: boolean;
+    error: string | null;
+    items: EvidenceEnvelope[];
+  }>({
+    loading: true,
+    error: null,
+    items: [],
   });
 
   useEffect(() => {
@@ -64,6 +75,26 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryAdminTruthUnknown = memoryAdminState === "unknown";
   const memoryCanMutate = memoryAdminState === "enabled";
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
+  const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
+
+  useEffect(() => {
+    let cancelled = false;
+    setEvidence((current) => ({ ...current, loading: true, error: null }));
+    void fetchEvidenceEnvelopes({ limit: 12 })
+      .then((result) => {
+        if (!cancelled) {
+          setEvidence({ loading: false, error: null, items: result.items });
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setEvidence({ loading: false, error: error.message, items: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspaceId]);
 
   return (
     <NativePageFrame
@@ -291,6 +322,62 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           ) : (
             <p className="mc-next-directory-empty">Select a memory item to inspect it.</p>
           )}
+        </NativeCard>
+        <NativeCard
+          title="Evidence and write gate"
+          subtitle="Recent runtime envelopes and memory-write decisions without exposing secret payloads."
+          stats={[
+            { label: "Envelopes", value: String(evidence.items.length) },
+            { label: "Memory writes", value: String(memoryWriteEnvelopes.length) },
+          ]}
+        >
+          <div className="mc-next-approvals-risk-strip">
+            <StatusChip tone={evidence.error ? "warning" : "success"}>
+              {evidence.error ? "partial" : evidence.loading ? "loading" : "loaded"}
+            </StatusChip>
+            <StatusChip tone="muted">
+              {evidence.items.filter((item) => item.signatureStatus === "unsigned_local").length} unsigned local
+            </StatusChip>
+            <StatusChip tone="success">
+              {evidence.items.filter((item) => item.signatureStatus === "signed_hmac").length} signed
+            </StatusChip>
+          </div>
+          <SectionTruthNotice message={evidence.error ? `Evidence envelopes unavailable: ${evidence.error}` : null} />
+          {memoryWriteEnvelopes.length > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memoryWriteEnvelopes.slice(0, 6).map((item) => {
+                const decision = readMemoryWriteDecision(item);
+                return (
+                  <li key={item.envelopeId}>
+                    <strong>{decision}</strong>
+                    {" · "}
+                    {formatShortDateTime(item.createdAt)}
+                    {" · "}
+                    {shortId(item.contentHash)}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="mc-next-directory-empty">
+              {evidence.loading ? "Loading evidence envelopes." : "No memory write-gate envelopes recorded yet."}
+            </p>
+          )}
+          <div className="mc-next-runtime-actions">
+            <button
+              type="button"
+              className="gc-button subtle"
+              onClick={() => {
+                setEvidence((current) => ({ ...current, loading: true, error: null }));
+                void fetchEvidenceEnvelopes({ limit: 12 })
+                  .then((result) => setEvidence({ loading: false, error: null, items: result.items }))
+                  .catch((error: Error) => setEvidence({ loading: false, error: error.message, items: [] }));
+              }}
+            >
+              <ShieldCheck className="h-4 w-4" />
+              Refresh evidence
+            </button>
+          </div>
         </NativeCard>
       </NativeGrid>
       <NativeGrid>
@@ -610,6 +697,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       </NativeGrid>
     </NativePageFrame>
   );
+}
+
+function readMemoryWriteDecision(envelope: EvidenceEnvelope): string {
+  const decision = envelope.metadata.decision;
+  if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
+    return envelope.signatureStatus;
+  }
+  const value = (decision as { decision?: unknown }).decision;
+  return typeof value === "string" ? value : envelope.signatureStatus;
 }
 
 function SectionTruthNotice({ message }: { message: string | null | undefined }) {

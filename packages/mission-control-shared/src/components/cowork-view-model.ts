@@ -4,6 +4,7 @@ import type {
   ChatSessionWorkbenchRecord,
   ChatThreadResponse,
   ChatThreadTurnRecord,
+  ContinuationGateDecision,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
 import type { OrchestrationCheckpointRecord } from "../api/types";
@@ -19,6 +20,7 @@ const CHECKPOINT_LABELS: Record<OrchestrationCheckpointRecord["checkpointKind"],
   run_started: "Run started",
   run_paused_for_approval: "Paused for approval",
   run_resumed: "Run resumed",
+  continuation_gate: "Continuation gate",
   phase_approved: "Approval recorded",
   phase_executed: "Phase completed",
   wave_advanced: "Advanced to next wave",
@@ -45,6 +47,13 @@ export interface CoworkViewItem {
   status?: string;
   meta?: string;
   note?: string;
+}
+
+export interface CoworkRunMapNode {
+  id: string;
+  label: string;
+  status: string;
+  meta?: string;
 }
 
 export interface CoworkRunViewModel {
@@ -95,6 +104,22 @@ export interface CoworkRunViewModel {
   outputItems: {
     items: CoworkViewItem[];
     overflow: number;
+  };
+  continuationGate: ContinuationGateDecision;
+  runMap: {
+    objective: string;
+    currentState: string;
+    nextAction: string;
+    planNodes: CoworkRunMapNode[];
+    checkpoints: CoworkViewItem[];
+  };
+  stateGaps: string[];
+  evidenceSummary: {
+    label: string;
+    detail: string;
+    toolCallCount: number;
+    checkpointCount: number;
+    evidenceGapCount: number;
   };
   raw: {
     activeTurn: ChatThreadTurnRecord | null;
@@ -230,6 +255,7 @@ export function deriveCoworkRunViewModel(input: {
   const waitingForUserInput = currentTrace?.status === "waiting_for_user_input";
   const worktreeState = orchestrationRun?.worktreeStatus ?? workbenchState?.worktreeStatus ?? "off";
   const toolRuns = currentTrace?.toolRuns.length ?? 0;
+  const failedToolRunCount = currentTrace?.toolRuns.filter((run) => run.status === "failed").length ?? 0;
   const planState = orchestrationRun?.status ?? orchestration?.status ?? currentTrace?.status ?? "idle";
   const executionState = formatExecutionState(orchestrationRun?.executionState);
   const selectionLabel = describeSelectionState({ selectedTurn, activeTurn });
@@ -474,6 +500,93 @@ export function deriveCoworkRunViewModel(input: {
     ],
     MAX_VISIBLE_OUTPUT_ITEMS,
   );
+  const stateGaps = [
+    orchestrationError ? "Run state refresh needs attention" : null,
+    orchestration?.runId && !orchestrationRun ? "Canonical run not loaded" : null,
+    waitingForApproval ? "Approval unresolved" : null,
+    waitingForUserInput ? "Operator answer required" : null,
+    orchestrationRun?.status === "completed" && workbenchState && workbenchState.validationStatus !== "passed"
+      ? "Manual UI proof not attached"
+      : null,
+  ].filter((value): value is string => Boolean(value));
+  const evidenceGapCount = stateGaps.filter((gap) =>
+    ["Run state refresh needs attention", "Canonical run not loaded", "Manual UI proof not attached"].includes(gap),
+  ).length;
+  const gateDecision: ContinuationGateDecision["decision"] =
+    waitingForApproval || waitingForUserInput || runFailureSummary || failedToolRunCount >= 2
+      ? "pause"
+      : evidenceGapCount > 0
+        ? "checkpoint"
+        : "continue";
+  const continuationGate: ContinuationGateDecision = {
+    decision: gateDecision,
+    reasonCodes:
+      gateDecision === "pause"
+        ? waitingForApproval
+          ? ["approval_wait"]
+          : waitingForUserInput
+            ? ["user_input_wait"]
+            : ["failure_streak"]
+        : gateDecision === "checkpoint"
+          ? ["state_gap"]
+          : [],
+    summary:
+      gateDecision === "continue"
+        ? "Continue gate clear."
+        : gateDecision === "checkpoint"
+          ? "Checkpoint recommended before continuing."
+          : "Continuation paused for operator review.",
+    metrics: {
+      stepsSinceCheckpoint: orchestrationCheckpoints.length,
+      toolRunCount: toolRuns,
+      failedToolRunCount,
+      retryFailureStreak: failedToolRunCount,
+      approvalWait: waitingForApproval,
+      userInputWait: waitingForUserInput,
+      evidenceGapCount,
+    },
+    recommendedAction:
+      gateDecision === "continue"
+        ? "Continue the run."
+        : gateDecision === "checkpoint"
+          ? "Refresh or inspect the missing run state before continuing."
+          : "Resolve the blocker before continuing.",
+    createdAt:
+      orchestrationCheckpoints.at(-1)?.createdAt ?? currentTrace?.startedAt ?? orchestrationRun?.startedAt ?? "",
+  };
+  const planNodes: CoworkRunMapNode[] =
+    activePlanSteps.length > 0
+      ? activePlanSteps.slice(0, 8).map((step) => ({
+          id: step.stepId,
+          label: step.objective,
+          status: humanizeStatus(step.status),
+          meta: step.delegatedRole,
+        }))
+      : roleSteps.length > 0
+        ? roleSteps.slice(0, 8).map((step) => ({
+            id: `role-${step.stepId}`,
+            label: step.label ?? step.role,
+            status: humanizeStatus(step.status),
+            meta: step.model,
+          }))
+        : [
+            { id: "plan", label: "Plan", status: humanizeStatus(planState) },
+            { id: "research", label: "Research", status: "pending" },
+            { id: "patch", label: "Patch", status: "pending" },
+            { id: "qa", label: "QA", status: "pending" },
+            { id: "ship", label: "Ship", status: "pending" },
+          ];
+  const evidenceSummary = {
+    label: gateDecision === "continue" ? "Evidence: current" : `Evidence: ${gateDecision} gate`,
+    detail: [
+      `${toolRuns} tool call${toolRuns === 1 ? "" : "s"}`,
+      `${orchestrationCheckpoints.length} checkpoint${orchestrationCheckpoints.length === 1 ? "" : "s"}`,
+      evidenceGapCount > 0 ? `${evidenceGapCount} state gap${evidenceGapCount === 1 ? "" : "s"}` : "no state gaps",
+    ].join(" · "),
+    toolCallCount: toolRuns,
+    checkpointCount: orchestrationCheckpoints.length,
+    evidenceGapCount,
+  };
 
   return {
     empty,
@@ -506,6 +619,20 @@ export function deriveCoworkRunViewModel(input: {
     roleItems,
     timelineItems,
     outputItems,
+    continuationGate,
+    runMap: {
+      objective:
+        normalizeSummary(executionPlan?.objective, 120) ??
+        normalizeSummary(orchestration?.objective, 120) ??
+        normalizeSummary(activeTurn?.userMessage.content, 120) ??
+        "Cowork objective",
+      currentState: nowTitle,
+      nextAction: nextAction?.label ?? "Review run details",
+      planNodes,
+      checkpoints: timelineItems.items.slice(0, 8),
+    },
+    stateGaps,
+    evidenceSummary,
     raw: {
       activeTurn,
       selectedTurn,

@@ -1,8 +1,10 @@
 import type { Dispatch, SetStateAction } from "react";
 import type {
+  PromptPackAutoScoreRecord,
   PromptPackLatestAssessmentRecordV2,
   PromptPackRunRecord,
   PromptPackTestRecord,
+  PromptPackScoringSchemaVersion,
 } from "@goatcitadel/contracts";
 import { ActionButton } from "../../components/ActionButton";
 import { GCSelect } from "../../components/ui";
@@ -479,15 +481,17 @@ export function PromptLabWorkspace(props: PromptLabWorkspaceProps) {
                           </tr>
                         </thead>
                         <tbody>
-                          {PROMPT_PACK_V2_DIMENSION_LABELS.map(([dimension, label]) => (
-                            <tr key={dimension}>
-                              <td>{label}</td>
-                              <td>{selectedAutoScore.ruleScores[dimension] ?? "-"}</td>
-                              <td>{selectedAutoScore.judgeScores?.[dimension] ?? "-"}</td>
-                              <td>{selectedAutoScore.finalScores[dimension] ?? "-"}</td>
-                              <td>{selectedAutoScore.disagreement[dimension] ?? "-"}</td>
-                            </tr>
-                          ))}
+                          {getPromptPackScoreDimensionLabels(selectedAutoScore.scoringSchemaVersion ?? "v2").map(
+                            ([dimension, label]) => (
+                              <tr key={dimension}>
+                                <td>{label}</td>
+                                <td>{readPromptPackScoreDimension(selectedAutoScore.ruleScores, dimension)}</td>
+                                <td>{readPromptPackScoreDimension(selectedAutoScore.judgeScores, dimension)}</td>
+                                <td>{readPromptPackScoreDimension(selectedAutoScore.finalScores, dimension)}</td>
+                                <td>{readPromptPackScoreDimension(selectedAutoScore.disagreement, dimension)}</td>
+                              </tr>
+                            ),
+                          )}
                         </tbody>
                       </table>
                     </details>
@@ -658,6 +662,33 @@ const PROMPT_PACK_V2_DIMENSION_LABELS = [
   ["robustness", "Robustness"],
   ["usability", "Usability"],
 ] as const;
+
+const PROMPT_PACK_V3_DIMENSION_LABELS = [
+  ["taskSuccess", "Task success"],
+  ["truthfulness", "Truthfulness"],
+  ["evidenceGrounding", "Evidence grounding"],
+  ["formatAdherence", "Format adherence"],
+  ["operatorUsefulness", "Operator usefulness"],
+  ["toolUseQuality", "Tool use quality"],
+  ["orchestrationQuality", "Orchestration quality"],
+  ["efficiency", "Efficiency"],
+  ["recoveryQuality", "Recovery quality"],
+] as const;
+
+function getPromptPackScoreDimensionLabels(schemaVersion: PromptPackScoringSchemaVersion) {
+  return schemaVersion === "v3" ? PROMPT_PACK_V3_DIMENSION_LABELS : PROMPT_PACK_V2_DIMENSION_LABELS;
+}
+
+function readPromptPackScoreDimension(
+  scores: PromptPackAutoScoreRecord["finalScores"] | PromptPackAutoScoreRecord["ruleScores"] | undefined,
+  dimension: string,
+): string | number {
+  if (!scores) {
+    return "-";
+  }
+  const value = (scores as Record<string, number | undefined>)[dimension];
+  return value ?? "-";
+}
 
 const DIMENSION_ROWS: Array<{
   key: keyof Pick<ScoreDraft, "taskSuccess" | "honesty" | "executionQuality" | "robustness" | "usability">;

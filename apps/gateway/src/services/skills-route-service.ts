@@ -3,6 +3,13 @@ import type {
   BankrActionPreviewRequest,
   BankrActionPreviewResponse,
   BankrSafetyPolicy,
+  SkillEvaluationListResponse,
+  SkillEvaluationPreviewRequest,
+  SkillEvaluationPreviewResponse,
+  SkillEvaluationProposalResponse,
+  SkillEvaluationRunRecord,
+  SkillEvaluationRunRequest,
+  SkillEvaluationRunResponse,
   SkillActivationDecision,
   SkillActivationPolicy,
   SkillImportHistoryRecord,
@@ -38,10 +45,15 @@ export interface SkillsRoutePort {
   isBankrBuiltinEnabled(): boolean;
   listBankrActionAudit(limit?: number, cursor?: string): BankrActionAuditRecord[];
   listSkillImportHistory(limit?: number): SkillImportHistoryRecord[];
+  listSkillEvaluationRuns(skillId: string): SkillEvaluationListResponse;
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
   listSkills(): SkillListItem[];
   lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
+  previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest): SkillEvaluationPreviewResponse;
   previewBankrAction(input: BankrActionPreviewRequest): BankrActionPreviewResponse;
+  runSkillEvaluation(skillId: string, input: SkillEvaluationRunRequest): SkillEvaluationRunResponse;
+  getSkillEvaluationRun(runId: string): SkillEvaluationRunRecord;
+  createSkillEvaluationProposal(runId: string): SkillEvaluationProposalResponse;
   reloadSkills(): Promise<SkillListItem[]>;
   resolveSkillActivation(input: SkillResolveInput): SkillActivationDecision;
   setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord;
@@ -91,6 +103,26 @@ export class SkillsRouteService {
 
   public listSkillImportHistory(limit?: number) {
     return this.skills.listSkillImportHistory(limit);
+  }
+
+  public previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest) {
+    return this.skills.previewSkillEvaluation(skillId, input);
+  }
+
+  public runSkillEvaluation(skillId: string, input: SkillEvaluationRunRequest) {
+    return this.skills.runSkillEvaluation(skillId, input);
+  }
+
+  public listSkillEvaluationRuns(skillId: string) {
+    return this.skills.listSkillEvaluationRuns(skillId);
+  }
+
+  public getSkillEvaluationRun(runId: string) {
+    return this.skills.getSkillEvaluationRun(runId);
+  }
+
+  public createSkillEvaluationProposal(runId: string) {
+    return this.skills.createSkillEvaluationProposal(runId);
   }
 
   public resolveSkillActivation(input: SkillResolveInput) {

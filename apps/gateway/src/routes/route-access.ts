@@ -54,6 +54,8 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/tools", accessClass: "operator" },
   { prefix: "/api/v1/mcp", accessClass: "operator" },
   { prefix: "/api/v1/addons", accessClass: "operator" },
+  { prefix: "/api/v1/capability-packs", accessClass: "operator" },
+  { prefix: "/api/v1/evidence", accessClass: "operator" },
   { prefix: "/api/v1/capabilities", accessClass: "operator" },
   { prefix: "/api/v1/code-mode", accessClass: "operator" },
   { prefix: "/api/v1/dev/diagnostics/stream", accessClass: "sse-read" },

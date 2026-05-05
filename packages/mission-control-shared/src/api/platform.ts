@@ -7,8 +7,13 @@ import type {
   AddonUninstallResponse,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
+  CapabilityPackInstallResult,
+  CapabilityPackManifest,
+  CapabilityPackPreview,
   ChangeRiskEvaluationResponse,
   CreateAssemblyRunInput,
+  EvidenceEnvelope,
+  EvidenceEnvelopeListQuery,
   LlmModelDiscoverySource,
   LlmProviderConfig,
   LlmProviderRequestConfig,
@@ -164,6 +169,44 @@ export async function uninstallAddon(addonId: string): Promise<AddonUninstallRes
   return request<AddonUninstallResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/uninstall`, {
     method: "DELETE",
   });
+}
+
+export async function fetchCapabilityPacks(): Promise<{ items: CapabilityPackManifest[] }> {
+  return request<{ items: CapabilityPackManifest[] }>("/api/v1/capability-packs");
+}
+
+export async function fetchCapabilityPackPreview(packId: string): Promise<CapabilityPackPreview> {
+  return request<CapabilityPackPreview>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/preview`);
+}
+
+export async function installCapabilityPack(
+  packId: string,
+  input: { actorId?: string } = {},
+): Promise<CapabilityPackInstallResult> {
+  return request<CapabilityPackInstallResult>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/install`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchEvidenceEnvelopes(
+  query: EvidenceEnvelopeListQuery = {},
+): Promise<{ items: EvidenceEnvelope[] }> {
+  const params = new URLSearchParams();
+  if (query.sessionId) {
+    params.set("sessionId", query.sessionId);
+  }
+  if (query.turnId) {
+    params.set("turnId", query.turnId);
+  }
+  if (query.runId) {
+    params.set("runId", query.runId);
+  }
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<{ items: EvidenceEnvelope[] }>(`/api/v1/evidence/envelopes${suffix}`);
 }
 
 export async function fetchOrchestrationRunContext(runId: string): Promise<{ items: MemoryContextPack[] }> {

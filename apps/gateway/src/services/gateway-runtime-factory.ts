@@ -2,10 +2,18 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
+import type { CapabilityPackService } from "./capability-pack-service.js";
+import type { ContinuationGateService } from "./continuation-gate-service.js";
+import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import type { MemoryWriteGateService } from "./memory-write-gate-service.js";
 
 export interface GatewayRuntimePort {
   readonly storage: Storage;
   readonly routeServices: GatewayRouteServices;
+  readonly capabilityPackService: CapabilityPackService;
+  readonly continuationGateService: ContinuationGateService;
+  readonly evidenceEnvelopeService: EvidenceEnvelopeService;
+  readonly memoryWriteGateService: MemoryWriteGateService;
   attachDevDiagnosticsLogger(logger: {
     debug: (...args: unknown[]) => void;
     info: (...args: unknown[]) => void;

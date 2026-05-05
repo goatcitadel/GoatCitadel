@@ -433,6 +433,10 @@ import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
+import { CapabilityPackService } from "./capability-pack-service.js";
+import { ContinuationGateService } from "./continuation-gate-service.js";
+import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 import {
   ChatTurnExecutionRegistry,
   type ActiveChatTurnExecution,
@@ -737,6 +741,10 @@ export class GatewayService {
   private readonly improvementService: ImprovementService;
   private readonly memoryMaintenanceService: MemoryMaintenanceService;
   public readonly memoryLifecycleService: MemoryLifecycleService;
+  public readonly evidenceEnvelopeService: EvidenceEnvelopeService;
+  public readonly continuationGateService: ContinuationGateService;
+  public readonly capabilityPackService: CapabilityPackService;
+  public readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
   private readonly backupRetentionService: BackupRetentionService;
@@ -771,6 +779,25 @@ export class GatewayService {
       storage: this.storage,
       getGatewayNodeId: () => this.config.assistant.mesh.nodeId,
     });
+    this.evidenceEnvelopeService = new EvidenceEnvelopeService({
+      storage: this.storage,
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
+    this.continuationGateService = new ContinuationGateService({
+      storage: this.storage,
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
+    this.capabilityPackService = new CapabilityPackService({
+      evidenceEnvelopeService: this.evidenceEnvelopeService,
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
+    this.memoryWriteGateService = new MemoryWriteGateService();
     this.enforceDurableExecutionBaseline();
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
     this.devDiagnostics = new GatewayDevDiagnosticsService(
@@ -1010,6 +1037,8 @@ export class GatewayService {
           message,
         });
       },
+      evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
+      recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input) => this.durableRunService.createDurableRun(input),
@@ -1148,6 +1177,22 @@ export class GatewayService {
       invokeMcpRuntimeTool: (server, input) => invokeMcpRuntimeTool(server, input),
       resolveApprovalWithRemoteTokenId: (input) => this.resolveApprovalWithRemoteTokenId(input),
       applyMcpRedaction: (output, mode) => applyMcpRedaction(output, mode),
+      recordEvidenceEnvelope: (input) => {
+        try {
+          this.evidenceEnvelopeService.createEnvelope(input);
+        } catch (error) {
+          this.recordDevDiagnostic({
+            level: "warn",
+            category: "evidence",
+            event: "evidence.envelope.failed",
+            message: "Failed to record runtime evidence envelope",
+            context: {
+              eventKind: input.eventKind,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      },
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.runtimeLifecycleReadService = new RuntimeLifecycleReadService({
@@ -1206,6 +1251,8 @@ export class GatewayService {
         writeJailRoots: config.toolPolicy.sandbox.writeJailRoots,
         normalizeRelativePath: (relativePath) => this.normalizeRelativePath(relativePath),
       },
+      writeGate: this.memoryWriteGateService,
+      evidence: this.evidenceEnvelopeService,
       resolveLearnedMemoryPolicy: (sessionId) => {
         if (this.isReplayScratchSession(sessionId)) {
           return {
@@ -3127,6 +3174,24 @@ export class GatewayService {
       return;
     }
     this.storage.systemSettings.set(settingKey, next);
+  }
+
+  private evaluateDurableContinuationGate(run: DurableRunRecord) {
+    const checkpoints = this.storage.durableRuns.listCheckpoints(run.runId, 2_000);
+    let stepsSinceCheckpoint = 0;
+    for (let index = checkpoints.length - 1; index >= 0; index -= 1) {
+      if (checkpoints[index]?.checkpointKind === "continuation_gate") {
+        break;
+      }
+      stepsSinceCheckpoint += 1;
+    }
+    return this.continuationGateService.evaluate({
+      metrics: {
+        stepsSinceCheckpoint,
+        approvalWait: run.status === "waiting",
+      },
+      checkpointIntervalSteps: 25,
+    });
   }
 
   public getDurableDiagnostics(): DurableDiagnosticsResponse {

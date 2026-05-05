@@ -110,7 +110,11 @@ const IMPROVEMENT_SIGNAL_ORIGINS = new Set<ImprovementSignalOrigin>([
 const IMPROVEMENT_SIGNAL_CLASSES = new Set<ImprovementSignalClass>(["runtime", "approval", "evaluation"]);
 const IMPROVEMENT_SIGNAL_OUTCOMES = new Set<ImprovementSignalOutcome>(["positive", "negative", "neutral"]);
 const IMPROVEMENT_SIGNAL_SEVERITIES = new Set<ImprovementSignalSeverity>(["low", "medium", "high"]);
-const IMPROVEMENT_CANDIDATE_KINDS = new Set<ImprovementCandidateKind>(["repair_policy", "routing_policy"]);
+const IMPROVEMENT_CANDIDATE_KINDS = new Set<ImprovementCandidateKind>([
+  "repair_policy",
+  "routing_policy",
+  "skill_revision",
+]);
 const IMPROVEMENT_CANDIDATE_OPEN_STATUSES = new Set<ImprovementCandidateStatus>([
   "proposed",
   "evaluating",
@@ -1166,10 +1170,96 @@ export class ImprovementService {
     });
   }
 
+  recordSkillEvaluationSignal(input: {
+    skillId: string;
+    skillName: string;
+    runId: string;
+    proposalId?: string;
+    accepted: boolean;
+    passRate: number;
+    improvementDelta: number;
+    summary: string;
+  }): { signal?: ImprovementSignalRecord; candidate?: ImprovementCandidateRecord } | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.ctx.normalizeWorkspaceId(undefined);
+    const targetKey = `skill:${input.skillId}`;
+    const signal = this.recordImprovementSignal({
+      sourceService: "skill_evaluation",
+      sourceType: "skill_evaluation_run",
+      sourceId: input.runId,
+      sourceEventId: input.proposalId ?? input.runId,
+      idempotencyKey: `skill-evaluation:${input.runId}:${input.proposalId ?? "run"}`,
+      workspaceId,
+      origin: "evaluation",
+      signalClass: "evaluation",
+      signalKind: "skill_revision_evaluated",
+      outcome: input.accepted ? "positive" : "neutral",
+      severity: input.accepted ? "low" : "medium",
+      fingerprint: buildImprovementFingerprint([workspaceId, "skill_revision", input.skillId]),
+      capabilityId: input.skillId,
+      scoreDelta: input.improvementDelta,
+      evidenceRefs: [
+        {
+          refType: "skill_evaluation_run",
+          refId: input.runId,
+        },
+        ...(input.proposalId
+          ? [
+              {
+                refType: "capability_proposal" as const,
+                refId: input.proposalId,
+              },
+            ]
+          : []),
+      ],
+      metadata: {
+        kind: "skill_revision",
+        skillId: input.skillId,
+        skillName: input.skillName,
+        targetKey,
+        proposalId: input.proposalId,
+        passRate: input.passRate,
+        improvementDelta: input.improvementDelta,
+        title: `Skill revision candidate: ${input.skillName}`,
+        summary: input.summary,
+      },
+    });
+    if (!signal) {
+      return undefined;
+    }
+    const candidate = toImprovementCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_candidates
+          WHERE workspace_id = @workspaceId
+            AND kind = 'skill_revision'
+            AND fingerprint = @fingerprint
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `,
+        )
+        .get({
+          workspaceId,
+          fingerprint: signal.fingerprint,
+        }),
+    );
+    return {
+      signal,
+      candidate: candidate ? mapImprovementCandidateRow(candidate) : undefined,
+    };
+  }
+
   async requestImprovementActivation(candidateId: string, actorId = "operator"): Promise<ImprovementActivationRecord> {
     this.ctx.requireFeatureEnabled("improvementActivationV1Enabled");
     this.ensureImprovementLedgerTables();
     const candidate = this.readImprovementCandidate(candidateId);
+    if (candidate.kind === "skill_revision") {
+      throw new Error("Skill revision candidates activate through capability proposals, not direct ledger activation.");
+    }
     const revision = this.readCurrentRevision(candidateId);
     const evaluation = this.readLatestEvaluation(candidateId);
     if (!revision || !evaluation) {
@@ -2581,7 +2671,8 @@ export class ImprovementService {
     }
 
     const shouldCreateImmediately =
-      signal.signalClass === "evaluation" && signal.outcome === "negative" && signal.severity === "high";
+      (signal.signalClass === "evaluation" && signal.outcome === "negative" && signal.severity === "high") ||
+      (signal.signalKind === "skill_revision_evaluated" && signal.outcome === "positive");
     if (!shouldCreateImmediately && !this.isSynthesisThresholdMet(signal, kind)) {
       return;
     }
@@ -2705,6 +2796,9 @@ export class ImprovementService {
     ) {
       return "routing_policy";
     }
+    if (signal.signalKind === "skill_revision_evaluated") {
+      return "skill_revision";
+    }
     return undefined;
   }
 
@@ -2755,6 +2849,9 @@ export class ImprovementService {
         .filter(Boolean)
         .join(":");
     }
+    if (kind === "skill_revision") {
+      return asOptionalString(metadata.targetKey) ?? `skill:${signal.capabilityId ?? signal.sourceId}`;
+    }
     return (
       asOptionalString(metadata.targetKey) ??
       [asOptionalString(metadata.packId), asOptionalString(metadata.causeClass)].filter(Boolean).join(":")
@@ -2770,6 +2867,11 @@ export class ImprovementService {
         asOptionalString(metadata.failureClass),
         asOptionalString(metadata.operationPhase),
       ]
+        .filter(Boolean)
+        .join(" ");
+    }
+    if (kind === "skill_revision") {
+      return ["Skill revision candidate", asOptionalString(metadata.skillName) ?? signal.capabilityId]
         .filter(Boolean)
         .join(" ");
     }
@@ -2793,15 +2895,29 @@ export class ImprovementService {
             failureClass: asOptionalString(metadata.failureClass),
             operationPhase: asOptionalString(metadata.operationPhase),
           }
-        : {
-            strategy: "route_rebalance",
-            targetKey: asOptionalString(metadata.targetKey) ?? candidate.targetKey,
-            causeClass: asOptionalString(metadata.causeClass),
-            providerId: asOptionalString(metadata.providerId),
-            model: asOptionalString(metadata.model),
-          };
+        : candidate.kind === "skill_revision"
+          ? {
+              strategy: "skill_instruction_revision",
+              skillId: asOptionalString(metadata.skillId) ?? signal.capabilityId,
+              skillName: asOptionalString(metadata.skillName),
+              evaluationRunId: signal.sourceId,
+              proposalId: asOptionalString(metadata.proposalId),
+              targetKey: asOptionalString(metadata.targetKey) ?? candidate.targetKey,
+            }
+          : {
+              strategy: "route_rebalance",
+              targetKey: asOptionalString(metadata.targetKey) ?? candidate.targetKey,
+              causeClass: asOptionalString(metadata.causeClass),
+              providerId: asOptionalString(metadata.providerId),
+              model: asOptionalString(metadata.model),
+            };
     return {
-      refType: candidate.kind === "repair_policy" ? "repair_candidate" : "artifact_manifest",
+      refType:
+        candidate.kind === "repair_policy"
+          ? "repair_candidate"
+          : candidate.kind === "skill_revision"
+            ? "skill_evaluation_run"
+            : "artifact_manifest",
       refId: `${candidate.kind}:${candidate.targetKey}`,
       metadata: {
         workspaceId: candidate.workspaceId,
@@ -2882,7 +2998,11 @@ export class ImprovementService {
     this.updateCandidateStatus(candidateId, "evaluating", "system", "system");
     const supportingSignals = this.listSignalsForCandidate(candidateId);
     const evaluatorKind: ImprovementEvaluationKind =
-      candidate.kind === "repair_policy" ? "repair_replay_validation" : "prompt_lab_regression";
+      candidate.kind === "repair_policy"
+        ? "repair_replay_validation"
+        : candidate.kind === "skill_revision"
+          ? "skill_eval_scorecard"
+          : "prompt_lab_regression";
     const metrics: Record<string, number> = {
       supportingSignalCount: candidate.supportingSignalCount,
       negativeSignalCount: candidate.negativeSignalCount,
@@ -2927,13 +3047,20 @@ export class ImprovementService {
                 refType: "prompt_pack",
                 refId: candidate.targetKey,
               } satisfies ImprovementRef)
-            : null,
+            : candidate.kind === "skill_revision"
+              ? JSON.stringify({
+                  refType: "skill_evaluation_run",
+                  refId: latestSignal?.sourceId ?? candidate.targetKey,
+                } satisfies ImprovementRef)
+              : null,
         changeHash: revision.changeHash,
         metricsJson: JSON.stringify(metrics),
         resultSummary:
           candidate.kind === "repair_policy"
             ? "Repair policy candidate passed bounded replay validation."
-            : "Routing policy candidate passed Prompt Lab regression validation.",
+            : candidate.kind === "skill_revision"
+              ? "Skill revision candidate passed bounded skill evaluation."
+              : "Routing policy candidate passed Prompt Lab regression validation.",
         createdAt: now,
         completedAt: now,
       });

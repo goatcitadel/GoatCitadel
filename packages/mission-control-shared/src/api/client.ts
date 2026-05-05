@@ -559,6 +559,11 @@ export {
   recoverDurableDeadLetter,
 } from "./durable.js";
 export {
+  createWorkflowRecipePlan,
+  fetchWorkflowRecipeTemplates,
+  previewWorkflowRecipe,
+} from "./orchestration-recipes.js";
+export {
   completeOnboarding,
   bootstrapOnboarding,
   createPersonality,
@@ -575,6 +580,9 @@ export {
 } from "./settings.js";
 export {
   bulkUpdateSkillState,
+  createSkillEvaluationProposal,
+  fetchSkillEvaluationRun,
+  fetchSkillEvaluations,
   fetchSkillActivationPolicies,
   fetchSkillImportHistory,
   fetchSkillLookup,
@@ -582,7 +590,9 @@ export {
   fetchSkillSources,
   installSkillImport,
   patchSkillActivationPolicies,
+  previewSkillEvaluation,
   reloadSkills,
+  runSkillEvaluation,
   updateSkillState,
   validateSkillImport,
 } from "./skills.js";
@@ -624,6 +634,8 @@ export {
   deleteProviderSecret,
   evaluateUiChangeRisk,
   cancelLlamaCppHuggingFaceDownload,
+  fetchCapabilityPackPreview,
+  fetchCapabilityPacks,
   fetchAddonStatus,
   fetchAddonsCatalog,
   fetchAssemblyReputations,
@@ -652,6 +664,8 @@ export {
   fetchOrchestrationRunContext,
   fetchProviderSecretStatus,
   generateLlmImage,
+  fetchEvidenceEnvelopes,
+  installCapabilityPack,
   installAddon,
   launchAddon,
   previewLlmModels,

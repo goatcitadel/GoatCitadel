@@ -16,15 +16,24 @@ import {
   Workflow,
 } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
-import type { ChatGeneratedArtifactRecord, SkillListItem } from "@goatcitadel/contracts";
+import type {
+  CapabilityProposalDetailRecord,
+  ChatGeneratedArtifactRecord,
+  SkillEvaluationCriterionDraft,
+  SkillEvaluationRunRecord,
+  SkillEvaluationScenarioDraft,
+  SkillListItem,
+} from "@goatcitadel/contracts";
 import {
   addTaskDeliverable,
   archiveAgentProfile,
   createTask,
   createAgentProfile,
+  createSkillEvaluationProposal,
   createFileFromTemplate,
   deleteTask,
   fetchAgents,
+  fetchCapabilityProposal,
   fetchChatGeneratedArtifacts,
   fetchFileTemplates,
   fetchFilesList,
@@ -33,15 +42,18 @@ import {
   fetchMemoryQmdStats,
   fetchOperators,
   fetchSkillActivationPolicies,
+  fetchSkillEvaluations,
   fetchSkillImportHistory,
   fetchSkillSources,
   fetchSkills,
   fetchTasksByView,
   fetchTaskDeliverables,
   downloadFile,
+  previewSkillEvaluation,
   reloadSkills,
   restoreTask,
   restoreAgentProfile,
+  runSkillEvaluation,
   updateTask,
   updateAgentProfile,
   updateSkillState,
@@ -1139,6 +1151,7 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
                     Disable
                   </button>
                 </LibraryButtonRow>
+                <SkillEvaluationWorkbench skill={selectedSkill} onNotice={setNotice} />
               </>
             ) : (
               <LibraryEmptyState label="Select a skill to inspect it." />
@@ -1197,6 +1210,259 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
         </div>
       </div>
     </LibrarySectionShell>
+  );
+}
+
+function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; onNotice: (notice: Notice) => void }) {
+  const [runs, setRuns] = useState<SkillEvaluationRunRecord[]>([]);
+  const [activeRun, setActiveRun] = useState<SkillEvaluationRunRecord | null>(null);
+  const [proposalDetail, setProposalDetail] = useState<CapabilityProposalDetailRecord | null>(null);
+  const [scenarioDraft, setScenarioDraft] = useState("");
+  const [criteriaDraft, setCriteriaDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadRuns = useCallback(async () => {
+    try {
+      const response = await fetchSkillEvaluations(skill.skillId);
+      setRuns(response.items);
+      setActiveRun((current) =>
+        current && response.items.some((item) => item.runId === current.runId)
+          ? (response.items.find((item) => item.runId === current.runId) ?? current)
+          : (response.items[0] ?? null),
+      );
+    } catch (runError) {
+      setError(getErrorMessage(runError));
+    }
+  }, [skill.skillId]);
+
+  useEffect(() => {
+    setRuns([]);
+    setActiveRun(null);
+    setProposalDetail(null);
+    setScenarioDraft("");
+    setCriteriaDraft("");
+    setError(null);
+    void loadRuns();
+  }, [loadRuns]);
+
+  useEffect(() => {
+    if (!activeRun) {
+      return;
+    }
+    setScenarioDraft(serializeScenarioDrafts(activeRun.scenarios));
+    setCriteriaDraft(serializeCriterionDrafts(activeRun.criteria));
+  }, [activeRun]);
+
+  const runAction = async (action: () => Promise<SkillEvaluationRunRecord>, successMessage: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const run = await action();
+      setActiveRun(run);
+      await loadRuns();
+      onNotice({ tone: "success", message: successMessage });
+    } catch (actionError) {
+      setError(getErrorMessage(actionError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleGenerateScenarios = () =>
+    runAction(async () => (await previewSkillEvaluation(skill.skillId)).run, "Generated evaluation scenarios.");
+
+  const handleRunBaseline = () =>
+    runAction(
+      async () =>
+        (
+          await previewSkillEvaluation(skill.skillId, {
+            scenarios: parseScenarioDrafts(scenarioDraft),
+            criteria: parseCriterionDrafts(criteriaDraft),
+          })
+        ).run,
+      "Baseline preview completed.",
+    );
+
+  const handleRunImprovement = () =>
+    runAction(
+      async () =>
+        (
+          await runSkillEvaluation(skill.skillId, {
+            scenarios: parseScenarioDrafts(scenarioDraft),
+            criteria: parseCriterionDrafts(criteriaDraft),
+          })
+        ).run,
+      "Skill improvement run stored.",
+    );
+
+  const handleCreateProposal = async () => {
+    if (!activeRun) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await createSkillEvaluationProposal(activeRun.runId);
+      setActiveRun(response.run);
+      setProposalDetail({ proposal: response.proposal, events: [], candidate: undefined });
+      await loadRuns();
+      onNotice({ tone: "success", message: `Proposal created: ${response.proposal.proposalId}` });
+    } catch (proposalError) {
+      setError(getErrorMessage(proposalError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleOpenProposal = async () => {
+    const proposalId = activeRun?.proposalId;
+    if (!proposalId) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setProposalDetail(await fetchCapabilityProposal(proposalId));
+    } catch (proposalError) {
+      setError(getErrorMessage(proposalError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const baselineRate = activeRun ? formatPercent(activeRun.baselineResult.score.passRate) : "n/a";
+  const candidateRate = activeRun?.candidateResult ? formatPercent(activeRun.candidateResult.score.passRate) : "n/a";
+
+  return (
+    <div className="mc-next-settings-stack">
+      <LibraryMetricGrid
+        items={[
+          { label: "Baseline", value: baselineRate, meta: activeRun ? "Instruction behavior score" : "No run yet" },
+          {
+            label: "Candidate",
+            value: candidateRate,
+            meta: activeRun?.accepted ? `+${formatPercent(activeRun.improvementDelta)}` : "Proposal gated",
+          },
+          {
+            label: "Proposal",
+            value: activeRun?.proposalId ? "Created" : activeRun?.accepted ? "Ready" : "None",
+            meta: activeRun?.proposalId ?? "Review before activation",
+          },
+          { label: "Truth", value: "No scripts", meta: "No direct skill file writes" },
+        ]}
+      />
+      {error ? <LibraryNotice notice={{ tone: "error", message: error }} /> : null}
+      <LibraryFieldGrid>
+        <LibraryField label="Scenarios" span={2}>
+          <textarea
+            className="mc-next-settings-textarea"
+            value={scenarioDraft}
+            onChange={(event) => setScenarioDraft(event.target.value)}
+            rows={5}
+            placeholder="Title | Prompt | Expected outcome"
+          />
+        </LibraryField>
+        <LibraryField label="Criteria" span={2}>
+          <textarea
+            className="mc-next-settings-textarea"
+            value={criteriaDraft}
+            onChange={(event) => setCriteriaDraft(event.target.value)}
+            rows={5}
+            placeholder="Label | Description | required, terms"
+          />
+        </LibraryField>
+      </LibraryFieldGrid>
+      <LibraryButtonRow>
+        <button type="button" className="mc-next-settings-filter" disabled={busy} onClick={handleGenerateScenarios}>
+          <Sparkles className="h-4 w-4" />
+          Generate scenarios
+        </button>
+        <button type="button" className="mc-next-settings-filter" disabled={busy} onClick={handleRunBaseline}>
+          <RefreshCw className="h-4 w-4" />
+          Run baseline
+        </button>
+        <button type="button" className="mc-next-settings-filter" disabled={busy} onClick={handleRunImprovement}>
+          <Save className="h-4 w-4" />
+          Run improvement
+        </button>
+        <button
+          type="button"
+          className="mc-next-settings-filter"
+          disabled={busy || !activeRun?.accepted || Boolean(activeRun.proposalId)}
+          onClick={() => void handleCreateProposal()}
+        >
+          <Plus className="h-4 w-4" />
+          Create proposal
+        </button>
+        <button
+          type="button"
+          className="mc-next-settings-filter"
+          disabled={busy || !activeRun?.proposalId}
+          onClick={() => void handleOpenProposal()}
+        >
+          <FileText className="h-4 w-4" />
+          Open proposal
+        </button>
+      </LibraryButtonRow>
+      {activeRun ? (
+        <>
+          <LibraryCodeBlock label="Mutation diff">
+            {activeRun.mutation
+              ? truncateText(activeRun.mutation.patchPreview, 1600)
+              : "No candidate mutation has been generated yet."}
+          </LibraryCodeBlock>
+          <LibraryCodeBlock label="Evidence">
+            {JSON.stringify(
+              {
+                runId: activeRun.runId,
+                status: activeRun.status,
+                targetPassRate: activeRun.targetPassRate,
+                accepted: activeRun.accepted,
+                operatorTruth: activeRun.operatorTruth,
+                ledgerSignalId: activeRun.ledgerSignalId,
+                improvementCandidateId: activeRun.improvementCandidateId,
+                proposalId: activeRun.proposalId,
+                warnings: activeRun.warnings,
+              },
+              null,
+              2,
+            )}
+          </LibraryCodeBlock>
+        </>
+      ) : (
+        <LibraryEmptyState label="No skill evaluation run is selected." />
+      )}
+      {proposalDetail ? (
+        <LibraryCodeBlock label="Proposal">
+          {JSON.stringify(
+            {
+              proposalId: proposalDetail.proposal.proposalId,
+              status: proposalDetail.proposal.status,
+              title: proposalDetail.proposal.title,
+              summary: proposalDetail.proposal.summary,
+              activationTargetId: proposalDetail.proposal.activationTargetId,
+              events: proposalDetail.events.length,
+            },
+            null,
+            2,
+          )}
+        </LibraryCodeBlock>
+      ) : null}
+      <LibraryActionList
+        items={runs.slice(0, 5).map((run) => ({
+          id: run.runId,
+          label: `${formatPercent(run.baselineResult.score.passRate)} → ${
+            run.candidateResult ? formatPercent(run.candidateResult.score.passRate) : "n/a"
+          }`,
+          description: run.mutation?.summary ?? "Baseline only",
+          meta: `${run.status} · ${formatDateTime(run.updatedAt)}`,
+          actionLabel: activeRun?.runId === run.runId ? "Selected" : "Open",
+          onClick: () => setActiveRun(run),
+        }))}
+        emptyLabel="No stored skill evaluations yet."
+      />
+    </div>
   );
 }
 
@@ -2050,6 +2316,65 @@ function splitCommaList(value: string) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function serializeScenarioDrafts(items: SkillEvaluationRunRecord["scenarios"]) {
+  return items.map((item) => `${item.title} | ${item.prompt} | ${item.expectedOutcome}`).join("\n");
+}
+
+function serializeCriterionDrafts(items: SkillEvaluationRunRecord["criteria"]) {
+  return items
+    .map((item) => `${item.label} | ${item.description} | ${(item.requiredTerms ?? []).join(", ")}`)
+    .join("\n");
+}
+
+function parseScenarioDrafts(value: string): SkillEvaluationScenarioDraft[] | undefined {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    return undefined;
+  }
+  return lines.map((line, index) => {
+    const [title, prompt, expectedOutcome] = line.split("|").map((part) => part.trim());
+    if (!title || !prompt || !expectedOutcome) {
+      throw new Error(`Scenario line ${index + 1} needs title, prompt, and expected outcome.`);
+    }
+    return {
+      title,
+      prompt,
+      expectedOutcome,
+    };
+  });
+}
+
+function parseCriterionDrafts(value: string): SkillEvaluationCriterionDraft[] | undefined {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    return undefined;
+  }
+  return lines.map((line, index) => {
+    const [label, description, terms] = line.split("|").map((part) => part.trim());
+    if (!label || !description) {
+      throw new Error(`Criterion line ${index + 1} needs label and description.`);
+    }
+    return {
+      label,
+      description,
+      requiredTerms: terms ? splitCommaList(terms) : undefined,
+    };
+  });
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return "n/a";
+  }
+  return `${Math.round(value * 100)}%`;
 }
 
 function truncateText(value: string, limit: number) {

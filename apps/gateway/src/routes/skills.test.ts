@@ -121,4 +121,108 @@ describe("skills routes bankr migration", () => {
       },
     });
   });
+
+  it("previews and stores skill evaluation runs through the skill route service", async () => {
+    const previewSkillEvaluation = vi.fn(() => ({
+      run: {
+        runId: "skill-eval-1",
+        skillId: "skill-1",
+        skillName: "Skill",
+        status: "preview",
+        createdAt: "2026-05-04T00:00:00.000Z",
+        updatedAt: "2026-05-04T00:00:00.000Z",
+        scenarios: [],
+        criteria: [],
+        baselineResult: { score: { total: 0, passed: 0, passRate: 0 }, scenarioResults: [], instructionHash: "" },
+        accepted: false,
+        improvementDelta: 0,
+        targetPassRate: 0.85,
+        maxRounds: 3,
+        warnings: [],
+        operatorTruth: { executesScripts: false, writesSkillFile: false, proposalOnly: true },
+      },
+    }));
+    const runSkillEvaluation = vi.fn(() => ({
+      run: {
+        runId: "skill-eval-2",
+        skillId: "skill-1",
+        skillName: "Skill",
+        status: "completed",
+        createdAt: "2026-05-04T00:00:00.000Z",
+        updatedAt: "2026-05-04T00:00:00.000Z",
+        scenarios: [],
+        criteria: [],
+        baselineResult: { score: { total: 1, passed: 0, passRate: 0 }, scenarioResults: [], instructionHash: "" },
+        candidateResult: { score: { total: 1, passed: 1, passRate: 1 }, scenarioResults: [], instructionHash: "" },
+        accepted: true,
+        improvementDelta: 1,
+        targetPassRate: 0.85,
+        maxRounds: 3,
+        warnings: [],
+        operatorTruth: { executesScripts: false, writesSkillFile: false, proposalOnly: true },
+      },
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      skills: {
+        isBankrBuiltinEnabled: vi.fn(() => true),
+        getBankrOptionalMigrationMessage: vi.fn(() => ""),
+        previewSkillEvaluation,
+        runSkillEvaluation,
+      },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/skill-1/evaluations/preview",
+      payload: {
+        scenarios: [{ title: "A", prompt: "B", expectedOutcome: "C" }],
+        criteria: [{ label: "Pass", description: "Must pass" }],
+      },
+    });
+    const run = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/skill-1/evaluations/run",
+      payload: {},
+    });
+
+    expect(preview.statusCode).toBe(200);
+    expect(previewSkillEvaluation).toHaveBeenCalledWith(
+      "skill-1",
+      expect.objectContaining({
+        scenarios: [{ title: "A", prompt: "B", expectedOutcome: "C" }],
+      }),
+    );
+    expect(run.statusCode).toBe(201);
+    expect(runSkillEvaluation).toHaveBeenCalledWith("skill-1", {});
+    expect(run.json().run).toMatchObject({ status: "completed", accepted: true });
+  });
+
+  it("creates skill evaluation proposals from accepted runs", async () => {
+    const createSkillEvaluationProposal = vi.fn(() => ({
+      run: { runId: "skill-eval-1", status: "proposal_created" },
+      proposal: { proposalId: "proposal-1", status: "proposed" },
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      skills: {
+        isBankrBuiltinEnabled: vi.fn(() => true),
+        getBankrOptionalMigrationMessage: vi.fn(() => ""),
+        createSkillEvaluationProposal,
+      },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/evaluations/skill-eval-1/proposal",
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createSkillEvaluationProposal).toHaveBeenCalledWith("skill-eval-1");
+    expect(response.json()).toMatchObject({ proposal: { proposalId: "proposal-1" } });
+  });
 });

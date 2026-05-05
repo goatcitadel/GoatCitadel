@@ -1,5 +1,11 @@
 import type {
   SkillActivationPolicy,
+  SkillEvaluationListResponse,
+  SkillEvaluationPreviewRequest,
+  SkillEvaluationPreviewResponse,
+  SkillEvaluationProposalResponse,
+  SkillEvaluationRunRequest,
+  SkillEvaluationRunResponse,
   SkillImportHistoryRecord,
   SkillImportSourceType,
   SkillImportValidationResult,
@@ -81,6 +87,41 @@ export async function installSkillImport(input: {
 export async function fetchSkillImportHistory(limit = 100): Promise<{ items: SkillImportHistoryRecord[] }> {
   const boundedLimit = Math.max(1, Math.min(limit, 300));
   return request<{ items: SkillImportHistoryRecord[] }>(`/api/v1/skills/import/history?limit=${boundedLimit}`);
+}
+
+export async function previewSkillEvaluation(
+  skillId: string,
+  input: SkillEvaluationPreviewRequest = {},
+): Promise<SkillEvaluationPreviewResponse> {
+  return request<SkillEvaluationPreviewResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}/evaluations/preview`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function runSkillEvaluation(
+  skillId: string,
+  input: SkillEvaluationRunRequest = {},
+): Promise<SkillEvaluationRunResponse> {
+  return request<SkillEvaluationRunResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}/evaluations/run`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchSkillEvaluations(skillId: string): Promise<SkillEvaluationListResponse> {
+  return request<SkillEvaluationListResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}/evaluations`);
+}
+
+export async function fetchSkillEvaluationRun(runId: string): Promise<SkillEvaluationPreviewResponse["run"]> {
+  return request<SkillEvaluationPreviewResponse["run"]>(`/api/v1/skills/evaluations/${encodeURIComponent(runId)}`);
+}
+
+export async function createSkillEvaluationProposal(runId: string): Promise<SkillEvaluationProposalResponse> {
+  return request<SkillEvaluationProposalResponse>(`/api/v1/skills/evaluations/${encodeURIComponent(runId)}/proposal`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function updateSkillState(

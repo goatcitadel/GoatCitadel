@@ -1,0 +1,214 @@
+import type {
+  CapabilityPackInstallResult,
+  CapabilityPackManifest,
+  CapabilityPackPreview,
+} from "@goatcitadel/contracts";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
+import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+
+export interface CapabilityPackInstallInput {
+  actorId?: string;
+}
+
+export interface CapabilityPackServiceDependencies {
+  evidenceEnvelopeService: EvidenceEnvelopeService;
+  publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+}
+
+const BUNDLED_PACKS: CapabilityPackManifest[] = [
+  {
+    packId: "browser-qa-operator",
+    name: "Browser QA Operator Pack",
+    description: "Review-first browser QA support for Cowork and Code runs.",
+    version: "1.0.0",
+    trustTier: "restricted",
+    tags: ["qa", "browser", "cowork"],
+    assets: [
+      {
+        kind: "mcp_template",
+        id: "playwright",
+        label: "Playwright Browser MCP",
+        description: "Bundled MCP template for operator-approved browser automation.",
+        runtimeSupport: hasMcpTemplate("playwright") ? "available" : "unsupported",
+        installMode: "disabled",
+        warnings: ["External tool server stays disabled until the operator validates and enables it."],
+      },
+      {
+        kind: "skill",
+        id: "browser-qa-operator",
+        label: "Browser QA workflow skill",
+        description: "Skill scaffold for browser proof, screenshots, and UI regression checks.",
+        runtimeSupport: "requires_configuration",
+        installMode: "disabled",
+      },
+      {
+        kind: "runtime_preset",
+        id: "cowork-run-map-browser-proof",
+        label: "Run Map browser-proof preset",
+        runtimeSupport: "available",
+        installMode: "review_required",
+      },
+    ],
+    policyDefaults: {
+      requireFirstUseApproval: true,
+      memoryWriteAuthority: "agent_proposals",
+      redactionMode: "basic",
+      autoRunEnabled: false,
+    },
+    provenance: {
+      source: "bundled",
+      publisher: "GoatCitadel",
+      reference: "capability-packs/browser-qa-operator@1.0.0",
+    },
+    installWarnings: ["Pack installation does not auto-run browser tooling or enable external MCP servers."],
+  },
+  {
+    packId: "cowork-reliability",
+    name: "Cowork Reliability Pack",
+    description: "Continuation gate, checkpoint, evidence, and run-map defaults for long Cowork runs.",
+    version: "1.0.0",
+    trustTier: "trusted",
+    tags: ["cowork", "reliability", "evidence"],
+    assets: [
+      {
+        kind: "runtime_preset",
+        id: "continuation-gate-v1",
+        label: "Continuation gate defaults",
+        runtimeSupport: "available",
+        installMode: "review_required",
+      },
+      {
+        kind: "runtime_preset",
+        id: "runtime-evidence-envelopes",
+        label: "Runtime evidence envelopes",
+        runtimeSupport: "available",
+        installMode: "review_required",
+      },
+    ],
+    policyDefaults: {
+      requireFirstUseApproval: false,
+      memoryWriteAuthority: "trusted_lifecycle_only",
+      redactionMode: "basic",
+      autoRunEnabled: false,
+    },
+    provenance: {
+      source: "bundled",
+      publisher: "GoatCitadel",
+      reference: "capability-packs/cowork-reliability@1.0.0",
+    },
+    installWarnings: ["Review-required presets preserve the current runtime policy until explicitly enabled."],
+  },
+  {
+    packId: "memory-governance",
+    name: "Memory Governance Pack",
+    description: "Memory write-gate defaults and evidence visibility for memory admin review.",
+    version: "1.0.0",
+    trustTier: "trusted",
+    tags: ["memory", "trust", "admin"],
+    assets: [
+      {
+        kind: "runtime_preset",
+        id: "memory-write-gate-v1",
+        label: "Memory write gate",
+        runtimeSupport: "available",
+        installMode: "review_required",
+      },
+      {
+        kind: "runtime_preset",
+        id: "memory-evidence-admin",
+        label: "Memory evidence admin panel",
+        runtimeSupport: "available",
+        installMode: "review_required",
+      },
+    ],
+    policyDefaults: {
+      requireFirstUseApproval: false,
+      memoryWriteAuthority: "agent_proposals",
+      redactionMode: "strict",
+      autoRunEnabled: false,
+    },
+    provenance: {
+      source: "bundled",
+      publisher: "GoatCitadel",
+      reference: "capability-packs/memory-governance@1.0.0",
+    },
+    installWarnings: ["Agent and external memory writes stay proposals unless policy explicitly allows persistence."],
+  },
+];
+
+export class CapabilityPackService {
+  public constructor(private readonly deps: CapabilityPackServiceDependencies) {}
+
+  public listPacks(): CapabilityPackManifest[] {
+    return BUNDLED_PACKS.map((pack) => structuredClone(pack));
+  }
+
+  public previewPack(packId: string): CapabilityPackPreview {
+    const manifest = this.requirePack(packId);
+    const unsupportedAssets = manifest.assets.filter((asset) => asset.runtimeSupport === "unsupported");
+    const installPlan = manifest.assets.map((asset) => ({
+      assetId: asset.id,
+      kind: asset.kind,
+      outcome: asset.runtimeSupport === "unsupported" ? ("unsupported" as const) : asset.installMode,
+      reason:
+        asset.runtimeSupport === "unsupported"
+          ? "Runtime support is not available in this build."
+          : asset.installMode === "enabled"
+            ? "Asset can be enabled immediately by local policy."
+            : asset.installMode === "disabled"
+              ? "Asset is staged disabled for operator review."
+              : "Asset requires explicit operator review before enablement.",
+    }));
+    return {
+      manifest,
+      unsupportedAssets,
+      installPlan,
+      policyChanges: manifest.policyDefaults,
+      reviewRequired:
+        unsupportedAssets.length > 0 ||
+        installPlan.some((item) => item.outcome === "review_required" || item.outcome === "disabled"),
+    };
+  }
+
+  public installPack(packId: string, input: CapabilityPackInstallInput = {}): CapabilityPackInstallResult {
+    const preview = this.previewPack(packId);
+    const actorId = input.actorId?.trim() || "operator";
+    const envelope = this.deps.evidenceEnvelopeService.createEnvelope({
+      eventKind: "capability_pack_install",
+      metadata: {
+        packId,
+        actorId,
+        trustTier: preview.manifest.trustTier,
+        installPlan: preview.installPlan,
+        provenance: preview.manifest.provenance,
+      },
+    });
+    const result: CapabilityPackInstallResult = {
+      packId,
+      actorId,
+      installedAt: envelope.createdAt,
+      preview,
+      stagedAssets: preview.installPlan,
+      evidenceEnvelopeId: envelope.envelopeId,
+    };
+    this.deps.publishRealtime?.("capability_pack_installed", "settings", {
+      packId,
+      actorId,
+      evidenceEnvelopeId: envelope.envelopeId,
+      stagedAssets: result.stagedAssets,
+    });
+    return result;
+  }
+
+  private requirePack(packId: string): CapabilityPackManifest {
+    const pack = BUNDLED_PACKS.find((item) => item.packId === packId);
+    if (!pack) {
+      throw new Error(`Unknown capability pack: ${packId}`);
+    }
+    return structuredClone(pack);
+  }
+}
+
+function hasMcpTemplate(templateId: string): boolean {
+  return MCP_SERVER_TEMPLATES.some((template) => template.templateId === templateId);
+}

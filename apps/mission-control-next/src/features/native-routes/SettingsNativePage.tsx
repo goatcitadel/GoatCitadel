@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- SettingsNativePage intentionally keeps the new settings routes in one editable module while the product surface is still settling. */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { providerTemplates } from "@goatcitadel/contracts";
+import { providerTemplates, type CapabilityPackPreview } from "@goatcitadel/contracts";
 import {
   AlertTriangle,
   Cable,
@@ -58,6 +58,8 @@ import {
   disconnectMcpServer,
   fetchAddonStatus,
   fetchAddonsCatalog,
+  fetchCapabilityPackPreview,
+  fetchCapabilityPacks,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
   discoverTelegramTargets,
@@ -88,6 +90,7 @@ import {
   fetchWorkspaces,
   finalizeChannelSetupDraft,
   installAddon,
+  installCapabilityPack,
   installVoiceRuntime,
   invokeIntegrationConnectionAction,
   launchAddon,
@@ -4865,20 +4868,28 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
 
 function AddonsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, installed] = await Promise.all([
+    const [catalog, installed, capabilityPacks] = await Promise.all([
       nativeLoad("Add-on catalog", fetchAddonsCatalog(), { items: [] }),
       nativeLoad("Installed add-ons", fetchInstalledAddons(), { items: [] }),
+      nativeLoad("Capability packs", fetchCapabilityPacks(), { items: [] }),
     ]);
     return {
-      issues: nativeLoadIssues([catalog, installed]),
+      issues: nativeLoadIssues([catalog, installed, capabilityPacks]),
       catalog: catalog.data.items,
       installed: installed.data.items,
+      capabilityPacks: capabilityPacks.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedAddonId, setSelectedAddonId] = useState("");
+  const [selectedPackId, setSelectedPackId] = useState("");
   const [status, setStatus] = useState<LoadState<Awaited<ReturnType<typeof fetchAddonStatus>>>>({
+    loading: false,
+    error: null,
+    data: null,
+  });
+  const [packPreview, setPackPreview] = useState<LoadState<CapabilityPackPreview>>({
     loading: false,
     error: null,
     data: null,
@@ -4889,6 +4900,8 @@ function AddonsSection(_props: SettingsSectionProps) {
     [data?.installed],
   );
   const selectedAddon = data?.catalog.find((item) => item.addonId === selectedAddonId) ?? data?.catalog[0] ?? null;
+  const selectedPack =
+    data?.capabilityPacks.find((item) => item.packId === selectedPackId) ?? data?.capabilityPacks[0] ?? null;
 
   useEffect(() => {
     if (!data?.catalog.length) {
@@ -4922,6 +4935,41 @@ function AddonsSection(_props: SettingsSectionProps) {
       cancelled = true;
     };
   }, [selectedAddon]);
+
+  useEffect(() => {
+    if (!data?.capabilityPacks.length) {
+      setSelectedPackId("");
+      return;
+    }
+    setSelectedPackId((current) =>
+      current && data.capabilityPacks.some((item) => item.packId === current)
+        ? current
+        : data.capabilityPacks[0]?.packId || "",
+    );
+  }, [data?.capabilityPacks]);
+
+  useEffect(() => {
+    if (!selectedPack) {
+      setPackPreview({ loading: false, error: null, data: null });
+      return;
+    }
+    let cancelled = false;
+    setPackPreview({ loading: true, error: null, data: null });
+    void fetchCapabilityPackPreview(selectedPack.packId)
+      .then((result) => {
+        if (!cancelled) {
+          setPackPreview({ loading: false, error: null, data: result });
+        }
+      })
+      .catch((loadError: Error) => {
+        if (!cancelled) {
+          setPackPreview({ loading: false, error: loadError.message, data: null });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPack]);
 
   const runAddonAction = async (operation: () => Promise<unknown>, successMessage: string) => {
     try {
@@ -5077,6 +5125,91 @@ function AddonsSection(_props: SettingsSectionProps) {
               </>
             ) : (
               <SettingsEmptyState label="Choose an add-on from the catalog." />
+            )}
+          </SettingsPanel>
+          <SettingsPanel
+            title="Capability packs"
+            subtitle="Bundled review-first packs over skills, add-ons, MCP templates, plugins, and runtime presets."
+            stats={[
+              { label: "Packs", value: String(data.capabilityPacks.length) },
+              { label: "Selected", value: selectedPack?.trustTier ?? "none" },
+            ]}
+          >
+            <SettingsSelectableList
+              items={data.capabilityPacks.map((item) => ({
+                id: item.packId,
+                title: item.name,
+                meta: item.trustTier,
+                body: `${item.version} · ${item.assets.length} assets · ${item.tags.join(", ")}`,
+              }))}
+              selectedId={selectedPackId}
+              onSelect={setSelectedPackId}
+              emptyLabel="No bundled capability packs are available."
+            />
+            {selectedPack ? (
+              <>
+                <SettingsCodeBlock label="Pack preview">{selectedPack.description}</SettingsCodeBlock>
+                {packPreview.error ? (
+                  <SettingsEmptyState label={`Preview failed: ${packPreview.error}`} />
+                ) : packPreview.data ? (
+                  <>
+                    <SettingsMetricGrid
+                      items={[
+                        { label: "Trust", value: packPreview.data.manifest.trustTier, meta: "local bundled manifest" },
+                        {
+                          label: "Review",
+                          value: packPreview.data.reviewRequired ? "required" : "not required",
+                          meta: packPreview.data.policyChanges.redactionMode,
+                        },
+                        {
+                          label: "Unsupported",
+                          value: String(packPreview.data.unsupportedAssets.length),
+                          meta: "runtime support check",
+                        },
+                      ]}
+                    />
+                    <SettingsActionList
+                      items={packPreview.data.installPlan.map((item) => ({
+                        label: `${item.kind}: ${item.assetId}`,
+                        description: item.reason,
+                        meta: item.outcome,
+                      }))}
+                      emptyLabel="No installable assets in this pack."
+                    />
+                    <SettingsActionList
+                      items={packPreview.data.manifest.installWarnings.map((warning, index) => ({
+                        id: `${packPreview.data?.manifest.packId}-warning-${index}`,
+                        label: "Warning",
+                        description: warning,
+                        meta: "review",
+                      }))}
+                      emptyLabel="No warnings for this pack."
+                    />
+                    <SettingsButtonRow>
+                      <button
+                        type="button"
+                        className="mc-next-button"
+                        disabled={packPreview.loading}
+                        onClick={() =>
+                          void runAddonAction(
+                            () => installCapabilityPack(selectedPack.packId, { actorId: "operator" }),
+                            `${selectedPack.name} staged for review.`,
+                          )
+                        }
+                      >
+                        <ShieldCheck size={16} />
+                        Install disabled
+                      </button>
+                    </SettingsButtonRow>
+                  </>
+                ) : (
+                  <SettingsEmptyState
+                    label={packPreview.loading ? "Loading pack preview..." : "Preview unavailable."}
+                  />
+                )}
+              </>
+            ) : (
+              <SettingsEmptyState label="Choose a capability pack to preview." />
             )}
           </SettingsPanel>
         </SettingsGrid>

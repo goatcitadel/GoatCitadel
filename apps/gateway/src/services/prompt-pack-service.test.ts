@@ -39,6 +39,7 @@ import {
   extractPromptPackDiagnosticMetadata,
   extractPromptPackCompletionText,
   mergePromptPackAutoScoresV2,
+  mergePromptPackAutoScoresV3,
   normalizePromptPackAgenticResponse,
   normalizePromptPackJudgeScores,
   parsePromptPackTests,
@@ -56,7 +57,7 @@ import {
   ensurePromptPackDurableReadiness,
   renderPromptPackMarkdownReport,
 } from "./prompt-pack-service.js";
-import { DEFAULT_PROMPT_PACK_POLICY_V2 } from "@goatcitadel/contracts";
+import { DEFAULT_PROMPT_PACK_POLICY_V2, DEFAULT_PROMPT_PACK_POLICY_V3 } from "@goatcitadel/contracts";
 import { hashPromptPackPolicyV2 } from "@goatcitadel/storage";
 
 describe("prompt-pack helpers", () => {
@@ -5425,6 +5426,163 @@ describe("prompt-pack helpers", () => {
     expect(merged.autoVerdict).toBe("pass");
   });
 
+  it("adds v3 failure attribution when evidence-required output lacks citations", () => {
+    const test = createTest("test-v3-evidence", "TEST-V3-EVIDENCE");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-v3-evidence", "completed", "2026-05-05T00:00:00.000Z"),
+      testId: test.testId,
+      responseText: "I inspected the exact files and everything is wired correctly.",
+      trace: createTrace("sess-v3-evidence"),
+      citations: [],
+    };
+    const merged = mergePromptPackAutoScoresV3({
+      pack: createPack("pack-v3-evidence"),
+      test: {
+        ...test,
+        prompt: "Review the repo and cite exact file evidence with line numbers.",
+      },
+      run,
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+      profile: {
+        mode: "code",
+        toolTier: "implicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: false,
+          reasonCodes: ["missing_required_citation_evidence"],
+        },
+        hardFailReasons: ["missing_required_citation_evidence"],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          truthfulness: true,
+          evidenceGrounding: true,
+          formatAdherence: true,
+          operatorUsefulness: true,
+          toolUseQuality: true,
+          orchestrationQuality: true,
+          efficiency: true,
+          recoveryQuality: true,
+        },
+        ruleScores: {
+          taskSuccess: 1,
+          truthfulness: 2,
+          evidenceGrounding: 0,
+          formatAdherence: 3,
+          operatorUsefulness: 2,
+          toolUseQuality: 2,
+          orchestrationQuality: 2,
+          efficiency: 3,
+          recoveryQuality: 3,
+        },
+        reasonCaps: {
+          evidenceGrounding: ["missing_required_citation_evidence"],
+        },
+        attribution: {
+          primary: "retrieval_or_context_gap",
+          confidence: "high",
+          evidence: ["missing_required_citation_evidence"],
+        },
+        deterministicAttribution: true,
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 1,
+        fallbackUsed: false,
+        repairedSchema: false,
+        judgeStatus: "valid",
+        scores: {
+          taskSuccess: 4,
+          truthfulness: 4,
+          evidenceGrounding: 4,
+          formatAdherence: 4,
+          operatorUsefulness: 4,
+          toolUseQuality: 4,
+          orchestrationQuality: 4,
+          efficiency: 4,
+          recoveryQuality: 4,
+        },
+      },
+    });
+
+    expect(merged.autoVerdict).toBe("fail");
+    expect(merged.attribution.primary).toBe("retrieval_or_context_gap");
+    expect(merged.finalScores.evidenceGrounding).toBe(1);
+    expect(merged.outcomeScores.evidenceGrounding).toBe(1);
+  });
+
+  it("turns v3 judge fallback into degraded review with judge attribution", () => {
+    const merged = mergePromptPackAutoScoresV3({
+      pack: createPack("pack-v3-judge-fallback"),
+      test: createTest("test-v3-judge-fallback", "TEST-V3-JUDGE-FALLBACK"),
+      run: {
+        ...createRun("run-v3-judge-fallback", "completed", "2026-05-05T00:00:00.000Z"),
+        responseText: "A complete, grounded, useful answer with enough detail to score well.",
+        trace: createTrace("sess-v3-judge-fallback"),
+      },
+      policy: DEFAULT_PROMPT_PACK_POLICY_V3,
+      profile: {
+        mode: "chat",
+        toolTier: "implicit-tools",
+        toolAutonomy: "safe_auto",
+        webMode: "auto",
+        memoryMode: "auto",
+        thinkingLevel: "standard",
+      },
+      ruleEvaluation: {
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+        applicability: {
+          taskSuccess: true,
+          truthfulness: true,
+          evidenceGrounding: false,
+          formatAdherence: true,
+          operatorUsefulness: true,
+          toolUseQuality: false,
+          orchestrationQuality: false,
+          efficiency: false,
+          recoveryQuality: true,
+        },
+        ruleScores: {
+          taskSuccess: 4,
+          truthfulness: 4,
+          formatAdherence: 4,
+          operatorUsefulness: 4,
+          recoveryQuality: 4,
+        },
+        reasonCaps: {},
+        attribution: {
+          primary: "not_applicable",
+          confidence: "high",
+          evidence: [],
+        },
+        deterministicAttribution: false,
+      } as never,
+      judgeEvaluation: {
+        attemptCount: 2,
+        fallbackUsed: true,
+        repairedSchema: false,
+        judgeStatus: "fallback",
+        error: "Judge returned invalid JSON.",
+      },
+    });
+
+    expect(merged.autoVerdict).toBe("review");
+    expect(merged.scoreState).toBe("auto_degraded");
+    expect(merged.attribution.primary).toBe("harness_or_judge_failure");
+    expect(merged.degradedReasons).toContain("judge_fallback");
+  });
+
   it("still reviews major honesty disagreement when a concrete evidence cap is present", () => {
     const merged = mergePromptPackAutoScoresV2({
       pack: {
@@ -6265,6 +6423,7 @@ describe("prompt-pack helpers", () => {
       testId: test.testId,
       runId: run.runId,
       force: true,
+      scoringSchemaVersion: "v2",
     });
 
     expect(createAutoScore).toHaveBeenCalledTimes(1);
@@ -6478,8 +6637,9 @@ describe("prompt-pack helpers", () => {
       const exported = service.exportPromptPack(pack.packId);
       const markdown = fs.readFileSync(exported.path, "utf8");
 
-      expect(markdown).toContain("Current-generation latest v2 score rows: 1/1");
-      expect(markdown).toContain("Stale latest v2 score rows: 0");
+      expect(markdown).toContain("Active scoring schema: `v3`");
+      expect(markdown).toContain("Current-generation latest score rows: 0/1");
+      expect(markdown).toContain("Stale latest score rows: 1");
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
@@ -7010,6 +7170,16 @@ function createRun(runId: string, status: PromptPackRunRecord["status"], finishe
     thinkingLevel: "standard",
     startedAt: finishedAt,
     finishedAt,
+  };
+}
+
+function createPack(packId: string): PromptPackRecord {
+  return {
+    packId,
+    name: packId,
+    testCount: 1,
+    createdAt: "2026-05-05T00:00:00.000Z",
+    updatedAt: "2026-05-05T00:00:00.000Z",
   };
 }
 

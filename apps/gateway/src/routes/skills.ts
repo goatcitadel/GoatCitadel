@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { sendRouteError } from "./_error-handler.js";
 
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const skills = fastify.services.skills;
@@ -84,6 +85,28 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     limit: z.coerce.number().int().min(1).max(300).optional(),
   });
 
+  const skillEvaluationScenarioSchema = z.object({
+    scenarioId: z.string().trim().min(1).optional(),
+    title: z.string().trim().min(1),
+    prompt: z.string().trim().min(1),
+    expectedOutcome: z.string().trim().min(1),
+    tags: z.array(z.string().trim().min(1)).optional(),
+  });
+
+  const skillEvaluationCriterionSchema = z.object({
+    criterionId: z.string().trim().min(1).optional(),
+    label: z.string().trim().min(1),
+    description: z.string().trim().min(1),
+    requiredTerms: z.array(z.string().trim().min(1)).optional(),
+  });
+
+  const skillEvaluationBodySchema = z.object({
+    scenarios: z.array(skillEvaluationScenarioSchema).min(1).max(8).optional(),
+    criteria: z.array(skillEvaluationCriterionSchema).min(1).max(8).optional(),
+    maxRounds: z.number().int().min(1).max(3).optional(),
+    targetPassRate: z.number().min(0).max(1).optional(),
+  });
+
   fastify.get("/api/v1/skills", async (_request, reply) => {
     return reply.send({ items: skills.listSkills() });
   });
@@ -145,6 +168,78 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({
       items: skills.listSkillImportHistory(parsed.data.limit),
     });
+  });
+
+  fastify.get("/api/v1/skills/evaluations/:runId", async (request, reply) => {
+    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(skills.getSkillEvaluationRun(params.data.runId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/evaluations/:runId/proposal", async (request, reply) => {
+    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(skills.createSkillEvaluationProposal(params.data.runId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/:skillId/evaluations/preview", async (request, reply) => {
+    const params = skillParamsSchema.safeParse(request.params);
+    const body = skillEvaluationBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(skills.previewSkillEvaluation(params.data.skillId, body.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/:skillId/evaluations/run", async (request, reply) => {
+    const params = skillParamsSchema.safeParse(request.params);
+    const body = skillEvaluationBodySchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.code(201).send(skills.runSkillEvaluation(params.data.skillId, body.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/skills/:skillId/evaluations", async (request, reply) => {
+    const params = skillParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(skills.listSkillEvaluationRuns(params.data.skillId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.post("/api/v1/skills/resolve-activation", async (request, reply) => {

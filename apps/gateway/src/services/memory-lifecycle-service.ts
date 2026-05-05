@@ -6,6 +6,7 @@ import type {
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
+  MemoryWriteAuthority,
   MemoryChangeEvent,
   MemoryContextComposeRequest,
   MemoryContextPack,
@@ -28,6 +29,8 @@ import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { normalizeMemoryForgetCriteria } from "./security-utils.js";
+import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 
 export interface MemoryFileEntry {
   relativePath: string;
@@ -56,6 +59,8 @@ export interface MemoryLifecycleDependencies {
     writeJailRoots: string[];
     normalizeRelativePath(relativePath: string): string;
   };
+  readonly writeGate?: MemoryWriteGateService;
+  readonly evidence?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
 }
 
@@ -557,6 +562,31 @@ export class MemoryLifecycleService {
     const policy = this.deps.resolveLearnedMemoryPolicy(sessionId);
     if (!policy.allowWrite) {
       return;
+    }
+    if (this.deps.writeGate) {
+      const authority: MemoryWriteAuthority = source.role === "user" ? "operator" : "agent_proposed";
+      const existingClaims = this.deps.learned
+        .listChatSessionLearnedMemory(sessionId, 200)
+        .items.map((item) => item.content);
+      const gateDecision = this.deps.writeGate.evaluate({
+        authority,
+        content,
+        existingClaims,
+      });
+      this.deps.evidence?.createEnvelope({
+        eventKind: "memory_write",
+        sessionId,
+        memoryLineage: [source.sourceRef],
+        metadata: {
+          decision: gateDecision,
+          sourceRole: source.role,
+          sourceRef: source.sourceRef,
+          claimPreview: gateDecision.redactionStatus === "blocked_secret" ? "[redacted]" : content.slice(0, 240),
+        },
+      });
+      if (gateDecision.decision !== "allowed") {
+        return;
+      }
     }
     this.deps.learned.extractAndPersistLearnedMemory(sessionId, content, source);
   }
