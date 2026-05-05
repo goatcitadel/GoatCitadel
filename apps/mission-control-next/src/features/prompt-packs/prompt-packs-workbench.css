@@ -186,6 +186,15 @@
 .mc-pp-sidebar {
   display: grid;
   gap: 0.9rem;
+  align-content: start;
+  align-self: start;
+  position: sticky;
+  top: 0.75rem;
+  max-height: calc(100dvh - 7rem);
+  overflow: auto;
+  padding-right: 0.1rem;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .mc-pp-panel,
@@ -297,6 +306,14 @@
   max-width: 100%;
 }
 
+.mc-pp-pack-list {
+  max-height: clamp(13rem, 24dvh, 20rem);
+  overflow: auto;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
 .mc-pp-panel > *,
 .mc-pp-surface > *,
 .mc-pp-pack-list > *,
@@ -306,9 +323,7 @@
 }
 
 .mc-prompt-packs[data-variant="ops"] .mc-pp-pack-list {
-  max-height: 25rem;
-  overflow: auto;
-  padding-right: 0.15rem;
+  max-height: clamp(12rem, 30dvh, 25rem);
 }
 
 .mc-pp-pack-item,
@@ -470,6 +485,21 @@
   gap: 0.6rem;
   align-items: start;
   padding: 0.64rem;
+}
+
+.mc-pp-tests-column {
+  align-content: start;
+  align-self: start;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  max-height: min(52rem, calc(100dvh - 7rem));
+}
+
+.mc-pp-test-list {
+  max-height: clamp(22rem, calc(100dvh - 17rem), 42rem);
+  overflow: auto;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .mc-pp-test-select {
@@ -916,12 +946,33 @@
     display: grid;
   }
 
+  .mc-pp-sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+    scrollbar-gutter: auto;
+  }
+
+  .mc-pp-tests-column {
+    max-height: none;
+  }
+
+  .mc-pp-pack-list {
+    max-height: min(20rem, 42dvh);
+  }
+
+  .mc-pp-test-list {
+    max-height: min(34rem, 62dvh);
+  }
+
   .mc-pp-test-row {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .mc-pp-run-button {
     width: 100%;
+    justify-self: stretch;
   }
 }
 

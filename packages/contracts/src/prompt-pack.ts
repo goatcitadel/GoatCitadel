@@ -478,10 +478,18 @@ export interface CapabilityTrendSeries {
 
 export interface PromptPackExportRecord {
   packId: string;
+  /** Stable current report path, kept for backward-compatible export consumers. */
   path: string;
   exists: boolean;
   sizeBytes: number;
   updatedAt?: string;
+  latestPath?: string;
+  archiveDir?: string;
+  latestSnapshotPath?: string;
+  latestSnapshotExists?: boolean;
+  latestSnapshotSizeBytes?: number;
+  latestSnapshotUpdatedAt?: string;
+  snapshotCount?: number;
 }
 
 export const DEFAULT_PROMPT_PACK_POLICY_V2: PromptPackPolicyV2 = {

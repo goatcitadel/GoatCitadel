@@ -4,6 +4,7 @@ import type {
   PromptPackAutoScoreRecord,
   PromptPackBenchmarkStatusRecord,
   PromptPackExecutionStyle,
+  PromptPackExportRecord,
   PromptPackScoringSchemaVersion,
   PromptPackLatestAssessmentRecordV2,
   PromptPackReportRecord,
@@ -90,6 +91,8 @@ export function PromptPacksWorkbenchPage({
   const v2UiEnabled = isPromptPackV2UiEnabled();
   const hasLoadedOnceRef = useRef(false);
   const selectedPackIdRef = useRef<string | null>(null);
+  const exportedBenchmarkRunIdsRef = useRef<Set<string>>(new Set());
+  const exportedRegressionRunIdsRef = useRef<Set<string>>(new Set());
   const [initialLoading, setInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFallbackRefreshing, setIsFallbackRefreshing] = useState(false);
@@ -133,13 +136,7 @@ export function PromptPacksWorkbenchPage({
     ReturnType<typeof fetchPromptPackReplayRegressionStatus>
   > | null>(null);
   const [trendSeries, setTrendSeries] = useState<Awaited<ReturnType<typeof fetchPromptPackTrends>>["items"]>([]);
-  const [exportInfo, setExportInfo] = useState<{
-    packId: string;
-    path: string;
-    exists: boolean;
-    sizeBytes: number;
-    updatedAt?: string;
-  } | null>(null);
+  const [exportInfo, setExportInfo] = useState<PromptPackExportRecord | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("prompt");
   const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
 
@@ -311,6 +308,7 @@ export function PromptPacksWorkbenchPage({
     }
     return new URL(selectedRunHref, window.location.origin).toString();
   }, [selectedRunHref]);
+  const latestSavedLogPath = exportInfo?.latestSnapshotPath ?? exportInfo?.path ?? "";
   const passThreshold = report?.summary.passThreshold ?? PROMPT_PACK_PASS_THRESHOLD;
   const selectedPlaceholders = useMemo(
     () => (selectedTest ? extractPromptPlaceholders(selectedTest.prompt) : []),
@@ -508,6 +506,12 @@ export function PromptPacksWorkbenchPage({
     [executionStyle, placeholderValues, selectedRunModel],
   );
 
+  const savePromptPackSnapshot = useCallback(async (packId: string): Promise<PromptPackExportRecord> => {
+    const info = await exportPromptPackReport(packId);
+    setExportInfo(info);
+    return info;
+  }, []);
+
   const runOne = useCallback(
     async (test: PromptPackTestRecord, mode: ActiveRunState["mode"] = "single") => {
       if (!selectedPackId) {
@@ -526,6 +530,8 @@ export function PromptPacksWorkbenchPage({
         const run = await runPromptPackTest(selectedPackId, test.testId, input);
         let autoScoreSummary = "";
         let autoScoreError: string | null = null;
+        let savedLogPath = "";
+        let exportError: string | null = null;
         if (autoScoreOnRun && run.status === "completed") {
           try {
             const auto = await autoScorePromptPackTest(selectedPackId, test.testId, {
@@ -536,16 +542,25 @@ export function PromptPacksWorkbenchPage({
             autoScoreError = (err as Error).message;
           }
         }
+        try {
+          const exportRecord = await savePromptPackSnapshot(selectedPackId);
+          savedLogPath = exportRecord.latestSnapshotPath ?? exportRecord.path;
+        } catch (err) {
+          exportError = (err as Error).message;
+        }
         await loadPack(selectedPackId);
         setSelectedTestId(test.testId);
         setDetailTab(run.status === "completed" ? "output" : "assessment");
         if (run.status === "failed") {
           setError(`Ran ${test.code}, but it failed: ${run.error ?? "Unknown error"}`);
         } else if (autoScoreError) {
-          setSuccess(`Ran ${test.code}.`);
+          setSuccess(`Ran ${test.code}.${savedLogPath ? ` Saved log to ${savedLogPath}.` : ""}`);
           setError(`Ran ${test.code}, but auto-score failed: ${autoScoreError}`);
-        } else {
+        } else if (exportError) {
           setSuccess(`Ran ${test.code}.${autoScoreSummary}`);
+          setError(`Ran ${test.code}, but saving the run log failed: ${exportError}`);
+        } else {
+          setSuccess(`Ran ${test.code}.${autoScoreSummary}${savedLogPath ? ` Saved log to ${savedLogPath}.` : ""}`);
         }
       } catch (err) {
         setError((err as Error).message);
@@ -553,21 +568,34 @@ export function PromptPacksWorkbenchPage({
         setActiveRun(null);
       }
     },
-    [autoScoreOnRun, buildRunInput, loadPack, selectedPackId],
+    [autoScoreOnRun, buildRunInput, loadPack, savePromptPackSnapshot, selectedPackId],
   );
 
   const loadBenchmarkStatus = useCallback(
     async (runId: string) => {
       const status = await fetchPromptPackBenchmark(runId);
       setBenchmarkStatus(status);
-      if (status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled") {
+      const terminal =
+        status.run.status === "completed" || status.run.status === "failed" || status.run.status === "cancelled";
+      if (terminal) {
         setBenchmarkPending(false);
         await loadPack(status.run.packId);
+        if (!exportedBenchmarkRunIdsRef.current.has(status.run.benchmarkRunId)) {
+          exportedBenchmarkRunIdsRef.current.add(status.run.benchmarkRunId);
+          try {
+            const exportRecord = await savePromptPackSnapshot(status.run.packId);
+            setSuccess(
+              `Benchmark ${status.run.status}: ${status.run.benchmarkRunId}. Saved log to ${exportRecord.latestSnapshotPath ?? exportRecord.path}.`,
+            );
+          } catch (err) {
+            setError(`Benchmark ${status.run.status}, but saving the run log failed: ${(err as Error).message}`);
+          }
+        }
       } else {
         setBenchmarkPending(true);
       }
     },
-    [loadPack],
+    [loadPack, savePromptPackSnapshot],
   );
 
   const runAll = useCallback(async () => {
@@ -636,15 +664,14 @@ export function PromptPacksWorkbenchPage({
     setExporting(true);
     setError(null);
     try {
-      const info = await exportPromptPackReport(selectedPackId);
-      setExportInfo(info);
-      setSuccess(`Exported report to ${info.path}`);
+      const info = await savePromptPackSnapshot(selectedPackId);
+      setSuccess(`Saved prompt-pack log to ${info.latestSnapshotPath ?? info.path}`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setExporting(false);
     }
-  }, [selectedPackId]);
+  }, [savePromptPackSnapshot, selectedPackId]);
 
   const confirmResetPack = useCallback(async () => {
     if (!selectedPackId) {
@@ -672,16 +699,16 @@ export function PromptPacksWorkbenchPage({
   }, [loadPack, resetClearRuns, resetClearScores, selectedPackId]);
 
   const copyExportPath = useCallback(async () => {
-    if (!exportInfo?.path) {
+    if (!latestSavedLogPath) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(exportInfo.path);
-      setSuccess("Copied export path.");
+      await navigator.clipboard.writeText(latestSavedLogPath);
+      setSuccess("Copied saved log path.");
     } catch {
-      setError("Failed to copy export path.");
+      setError("Failed to copy saved log path.");
     }
-  }, [exportInfo?.path]);
+  }, [latestSavedLogPath]);
 
   const openSelectedRun = useCallback(() => {
     if (!selectedRunRoute || !navigate) {
@@ -804,13 +831,29 @@ export function PromptPacksWorkbenchPage({
     setTrendSeries(response.items);
   }, []);
 
-  const loadRegressionStatus = useCallback(async (runId: string) => {
-    const status = await fetchPromptPackReplayRegressionStatus(runId);
-    setRegressionStatus(status);
-    if (status.run.status !== "queued" && status.run.status !== "running") {
-      setRegressionPending(false);
-    }
-  }, []);
+  const loadRegressionStatus = useCallback(
+    async (runId: string) => {
+      const status = await fetchPromptPackReplayRegressionStatus(runId);
+      setRegressionStatus(status);
+      if (status.run.status !== "queued" && status.run.status !== "running") {
+        setRegressionPending(false);
+        if (selectedPackId && !exportedRegressionRunIdsRef.current.has(status.run.regressionRunId)) {
+          exportedRegressionRunIdsRef.current.add(status.run.regressionRunId);
+          try {
+            const exportRecord = await savePromptPackSnapshot(selectedPackId);
+            setSuccess(
+              `Replay regression ${status.run.status}: ${status.run.regressionRunId}. Saved log to ${exportRecord.latestSnapshotPath ?? exportRecord.path}.`,
+            );
+          } catch (err) {
+            setError(
+              `Replay regression ${status.run.status}, but saving the run log failed: ${(err as Error).message}`,
+            );
+          }
+        }
+      }
+    },
+    [savePromptPackSnapshot, selectedPackId],
+  );
 
   const runRegression = useCallback(async () => {
     if (!selectedPackId) {
@@ -1122,38 +1165,6 @@ export function PromptPacksWorkbenchPage({
             </div>
           </section>
 
-          {!isOpsVariant ? (
-            <details className="mc-pp-panel mc-pp-panel-collapsible">
-              <summary>
-                <div>
-                  <h4>Import a new pack</h4>
-                  <p>Open only when you want to paste fresh prompt-pack markdown into the workspace.</p>
-                </div>
-                <Upload size={16} />
-              </summary>
-              <label className="mc-pp-field">
-                <span>Prompt-pack markdown</span>
-                <textarea
-                  rows={7}
-                  placeholder="Paste prompt-pack markdown here..."
-                  value={importText}
-                  onChange={(event) => setImportText(event.target.value)}
-                />
-              </label>
-              <div className="mc-pp-inline-actions">
-                <button
-                  type="button"
-                  className="mc-next-button"
-                  onClick={() => void handleImport()}
-                  disabled={importing}
-                >
-                  {importing ? <LoaderCircle size={16} className="mc-spin" /> : <Upload size={16} />}
-                  Import pack
-                </button>
-              </div>
-            </details>
-          ) : null}
-
           {isOpsVariant ? (
             <details className="mc-pp-panel mc-pp-panel-collapsible">
               <summary>
@@ -1431,10 +1442,10 @@ export function PromptPacksWorkbenchPage({
                   type="button"
                   className="mc-next-button mc-next-button-ghost"
                   onClick={() => void copyExportPath()}
-                  disabled={!exportInfo?.path}
+                  disabled={!latestSavedLogPath}
                 >
                   <ClipboardCopy size={16} />
-                  Copy path
+                  Copy saved log path
                 </button>
               </div>
               <div className="mc-pp-reset-box">
@@ -1500,6 +1511,38 @@ export function PromptPacksWorkbenchPage({
               ) : null}
             </div>
           </details>
+
+          {!isOpsVariant ? (
+            <details className="mc-pp-panel mc-pp-panel-collapsible">
+              <summary>
+                <div>
+                  <h4>Import a new pack</h4>
+                  <p>Open only when you want to paste fresh prompt-pack markdown into the workspace.</p>
+                </div>
+                <Upload size={16} />
+              </summary>
+              <label className="mc-pp-field">
+                <span>Prompt-pack markdown</span>
+                <textarea
+                  rows={7}
+                  placeholder="Paste prompt-pack markdown here..."
+                  value={importText}
+                  onChange={(event) => setImportText(event.target.value)}
+                />
+              </label>
+              <div className="mc-pp-inline-actions">
+                <button
+                  type="button"
+                  className="mc-next-button"
+                  onClick={() => void handleImport()}
+                  disabled={importing}
+                >
+                  {importing ? <LoaderCircle size={16} className="mc-spin" /> : <Upload size={16} />}
+                  Import pack
+                </button>
+              </div>
+            </details>
+          ) : null}
         </aside>
 
         <section className="mc-pp-tests-column">

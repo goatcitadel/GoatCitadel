@@ -220,6 +220,7 @@
       "readAccessMode": "approval_required",
       "networkAllowlist": [
         "discord.com",
+        "chatgpt.com",
         "api.openai.com",
         "api.anthropic.com",
         "generativelanguage.googleapis.com",
@@ -232,6 +233,10 @@
         "api.moonshot.ai",
         "api.perplexity.ai",
         "router.huggingface.co",
+        "duckduckgo.com",
+        "lite.duckduckgo.com",
+        "www.bing.com",
+        "www.google.com",
         "127.0.0.1",
         "localhost"
       ],

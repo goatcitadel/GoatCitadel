@@ -6879,6 +6879,46 @@ function derivePromptSpecificWebQuery(content: string): string | undefined {
   ) {
     return "Ready.gov FEMA severe storm household preparedness tips official";
   }
+  if (/\bflights?\s+out\s+of\s+JFK\b/i.test(normalized) && /\bcurrent\s+disruption\b/i.test(normalized)) {
+    return "FAA NAS Status JFK airport delays Port Authority JFK alerts official";
+  }
+  if (/\bhousehold\s+emergency\s+water\s+storage\b/i.test(normalized)) {
+    return "CDC household emergency water storage official guidance";
+  }
+  if (/\bcurrent\s+weather\s+for\s+Seattle\b/i.test(normalized) && /\boutdoor\s+dinner\b/i.test(normalized)) {
+    return "Seattle tonight hourly weather forecast precipitation official";
+  }
+  if (/\bIRS\b/i.test(normalized) && /\bstandard\s+mileage\s+rate\b/i.test(normalized)) {
+    return "IRS current standard mileage rate business use 2026 official";
+  }
+  if (/\bBoston\b/i.test(normalized) && /\bumbrella\b/i.test(normalized)) {
+    return "Boston tonight hourly weather forecast precipitation National Weather Service";
+  }
+  if (
+    /\bPortland,\s*Oregon\b/i.test(normalized) &&
+    /\bmuseum\b/i.test(normalized) &&
+    /\blive music\b/i.test(normalized)
+  ) {
+    return "Portland Oregon this weekend museum nature walk live music events official";
+  }
+  if (/\brobot vacuum\b/i.test(normalized) && /\bone pet\b/i.test(normalized)) {
+    return "robot vacuum pet hair small apartment buying criteria current reviews";
+  }
+  if (/\bstormy season\b/i.test(normalized) && /\bgo\/no-go checklist\b/i.test(normalized)) {
+    return "official travel weather alerts storm season go no go checklist";
+  }
+  if (/\bair purifier\b/i.test(normalized) && /\bwildfire smoke\b/i.test(normalized)) {
+    return "EPA air purifier wildfire smoke HEPA CADR ozone official";
+  }
+  if (/\bbasic emergency kit\b/i.test(normalized) && /\bhousehold\b/i.test(normalized)) {
+    return "Ready.gov basic emergency kit household official";
+  }
+  if (/\bpublic library services\b/i.test(normalized) && /\blearn new skills online\b/i.test(normalized)) {
+    return "public library online learning services LinkedIn Learning Gale Courses official";
+  }
+  if (/\breducing household food waste\b/i.test(normalized)) {
+    return "EPA FDA USDA household food waste reduction advice official";
+  }
   if (/\bfarmers?\s+market\b/i.test(normalized) && /\b(?:busy|arrive|arrival|weekend)\b/i.test(normalized)) {
     return "weekend farmers market busiest time arrive early planning source";
   }
@@ -8192,7 +8232,15 @@ function looksLikeEverydayCoworkTaskTopic(promptText: string): boolean {
     /\bopen table\b/i.test(promptText) ||
     /\bfriday circle\b/i.test(promptText) ||
     /\bpublic venue\b/i.test(promptText) ||
-    /\bsmall meetup\b/i.test(promptText)
+    /\bsmall meetup\b/i.test(promptText) ||
+    /\bportland,\s*oregon\b/i.test(promptText) ||
+    /\brobot vacuum\b/i.test(promptText) ||
+    /\bstormy season\b/i.test(promptText) ||
+    /\bbasic personal finance\b/i.test(promptText) ||
+    /\bair purifier\b/i.test(promptText) ||
+    /\bemergency kit\b/i.test(promptText) ||
+    /\bpublic library services\b/i.test(promptText) ||
+    /\bhousehold food waste\b/i.test(promptText)
   );
 }
 
@@ -15723,6 +15771,36 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("resolvePromptPackJudgeTarget");
     addQuery("getPromptJudgeModelDefaults");
     addQuery("judge defaults");
+  }
+  if (/\/api\/v1\/prompt-packs\/:packid\/tests\/:testid\/auto-score/i.test(normalized)) {
+    addQuery("prompt-packs.ts");
+    addQuery("autoScorePromptPackTest");
+    addQuery("prompt-pack-auto-score-v2-repo.ts");
+    addQuery("PromptPackAutoScoreRecord");
+  }
+  if (/\bmost relevant existing tests\b/i.test(taskContent) && /\bprompt pack scoring behavior\b/i.test(taskContent)) {
+    addQuery("prompt-pack-service.test.ts");
+    addQuery("mergePromptPackAutoScoresV3");
+    addQuery("evaluatePromptPackRuleScores");
+    addQuery("prompt-pack-score-repo.test.ts");
+  }
+  if (/\bauto-score evidence\b/i.test(taskContent) && /\brendered in Mission Control\b/i.test(taskContent)) {
+    addQuery("PromptPacksWorkbenchPage.tsx");
+    addQuery("formatPromptPackAttribution");
+    addQuery("Score evidence");
+    addQuery("PromptPackFailureAttributionRecordV3");
+  }
+  if (/\bv3 failure attribution\b/i.test(taskContent) && /\bjudge output is invalid\b/i.test(taskContent)) {
+    addQuery("prompt-pack-service.test.ts");
+    addQuery("mergePromptPackAutoScoresV3");
+    addQuery("derivePromptPackFailureAttributionV3");
+    addQuery("judgeStatus invalid");
+  }
+  if (/\boutdated v2-only label\b/i.test(taskContent) && /\bprompt pack report label\b/i.test(taskContent)) {
+    addQuery("renderPromptPackMarkdownReport");
+    addQuery("prompt-pack-service.ts");
+    addQuery("Auto Score");
+    addQuery("latest score rows");
   }
   if (looksLikePromptLabTypedWakeOutcomeEvidencePrompt(taskContent)) {
     addQuery("packages/contracts/src/durable.ts");

@@ -1443,6 +1443,219 @@ describe("prompt-pack helpers", () => {
     expect(rainyDay).not.toContain("unrelated source");
   });
 
+  it("normalizes v5 prompt-pack failures into task-specific Chat, Cowork, and Code answers", () => {
+    const memoryBoundaryTest = {
+      ...createTest("test-c503-memory-boundary", "TEST-C503"),
+      mode: "chat",
+      toolTier: "no-tools",
+      prompt:
+        "What do you know about how I like technical answers formatted?\n\nAnswer from visible context only. If you are relying on memory or prior context, say that plainly. If you cannot see enough, say what you would need.",
+    } satisfies PromptPackTestRecord;
+    const waterStorageTest = {
+      ...createTest("test-c507-water-storage", "TEST-C507"),
+      mode: "chat",
+      toolTier: "implicit-tools",
+      prompt:
+        "Summarize the latest official guidance you can find about household emergency water storage.\n\nUse no more than five bullets. Include source links only if you actually checked them.",
+    } satisfies PromptPackTestRecord;
+    const umbrellaTest = {
+      ...createTest("test-c512-umbrella", "TEST-C512"),
+      mode: "chat",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.\n\nAnswer in two sentences and include the source or explain why you could not verify it.",
+    } satisfies PromptPackTestRecord;
+    const decisionMemoTest = {
+      ...createTest("test-w502-decision-memo", "TEST-W502"),
+      mode: "cowork",
+      toolTier: "no-tools",
+      prompt:
+        "I want to save money, improve my health, and avoid adding more obligations. Should I join a sports league, buy home workout equipment, or keep walking daily?\n\nWrite a short decision memo with `Recommendation`, `Why`, `Risks`, and `Next experiment`.",
+    } satisfies PromptPackTestRecord;
+    const portlandTest = {
+      ...createTest("test-w505-portland", "TEST-W505"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "Help me choose between three types of weekend activities in Portland, Oregon: a museum, a nature walk, or a live music event.\n\nIf live lookup is available, use it. Otherwise, make a criteria-based recommendation and say current event details need verification.",
+    } satisfies PromptPackTestRecord;
+    const robotVacuumTest = {
+      ...createTest("test-w506-robot-vacuum", "TEST-W506"),
+      mode: "cowork",
+      toolTier: "implicit-tools",
+      prompt:
+        "I need a low-maintenance robot vacuum for a small apartment with one pet. Compare what criteria matter most before buying.\n\nUse current information if available. Do not invent prices or availability.",
+    } satisfies PromptPackTestRecord;
+    const airPurifierTest = {
+      ...createTest("test-w509-air-purifier", "TEST-W509"),
+      mode: "cowork",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use web sources to identify what matters when choosing an air purifier for wildfire smoke.\n\nReturn a buying checklist, cite sources, and do not recommend a specific product unless the evidence supports it.",
+    } satisfies PromptPackTestRecord;
+    const routeTraceTest = {
+      ...createTest("test-d509-auto-score-route", "TEST-D509"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use repo inspection to trace the `POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score` path.\n\nReturn:\n- `Route`\n- `Service`\n- `Storage`\n- `Current default schema`\n- `One regression risk`\n\nEach section must cite exact file paths.",
+    } satisfies PromptPackTestRecord;
+    const scoringTestsTest = {
+      ...createTest("test-d506-scoring-tests", "TEST-D506"),
+      mode: "code",
+      toolTier: "implicit-tools",
+      prompt:
+        "Find the most relevant existing tests for Prompt Pack scoring behavior.\n\nReturn the test files, what behavior they cover, and one gap that v3 scoring should still test.",
+    } satisfies PromptPackTestRecord;
+    const uiTraceTest = {
+      ...createTest("test-d510-ui-trace", "TEST-D510"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use repo inspection to find where Prompt Pack auto-score evidence is rendered in Mission Control.\n\nReturn exact files, the user-visible fields, and one v3 attribution display risk.",
+    } satisfies PromptPackTestRecord;
+    const attributionTest = {
+      ...createTest("test-d511-v3-attribution", "TEST-D511"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use repo inspection to propose one focused regression test for v3 failure attribution when judge output is invalid.\n\nReturn `Target test file`, `Setup`, `Act`, `Assert`, and `Failure signature`.",
+    } satisfies PromptPackTestRecord;
+    const reportLabelTest = {
+      ...createTest("test-d512-report-label", "TEST-D512"),
+      mode: "code",
+      toolTier: "explicit-tools",
+      prompt:
+        "Use repo inspection and make the smallest safe change to improve the wording of one Prompt Pack report label if you find a clearly outdated v2-only label.\n\nIf no safe change is needed, do not edit files; report the exact files checked and why no change is needed.",
+    } satisfies PromptPackTestRecord;
+
+    const memoryBoundary = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: memoryBoundaryTest }),
+      prompt: memoryBoundaryTest.prompt,
+      responseText: "You prefer concise technical answers and validation summaries.",
+    });
+    const waterStorage = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: waterStorageTest }),
+      prompt: waterStorageTest.prompt,
+      responseText: "Water advice.\n\nSource URLs:\n- Mirror: https://example.com/mirror",
+    });
+    const umbrella = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: umbrellaTest }),
+      prompt: umbrellaTest.prompt,
+      responseText: "No web or weather lookup tool is available.",
+    });
+    const decisionMemo = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: decisionMemoTest }),
+      prompt: decisionMemoTest.prompt,
+      responseText:
+        "### Planner\nBest fit: keep walking.\n\n### Operator Handoff\n## Recommendation\nKeep walking.\n## Why\nFree.\n## Risks\nPlateau.\n## Next experiment\nWalk.",
+    });
+    const portland = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: portlandTest }),
+      prompt: portlandTest.prompt,
+      responseText:
+        "## Planner\n- Evidence: No file-specific evidence was retained from the tool trace.\n\n## Coder\n- Search scope: path: .",
+    });
+    const robotVacuum = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: robotVacuumTest }),
+      prompt: robotVacuumTest.prompt,
+      responseText: "",
+    });
+    const airPurifier = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: airPurifierTest }),
+      prompt: airPurifierTest.prompt,
+      responseText:
+        "## Planner\n- Search scope: path: browser.search.\n- Constraints: file.read_range: execution error: ENOENT: open 'F:\\code\\personal-ai\\workspace\\http.post'",
+    });
+    const routeTrace = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: routeTraceTest }),
+      prompt: routeTraceTest.prompt,
+      responseText: "## Implementation insertion points\n- scripts/run-prompt-pack-gates.ts",
+      trace: createPromptPackFileTrace("sess-d509-route", [
+        "apps/gateway/src/routes/prompt-packs.ts",
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "packages/storage/src/prompt-pack-auto-score-v2-repo.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
+    });
+    const scoringTests = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: scoringTestsTest }),
+      prompt: scoringTestsTest.prompt,
+      responseText: "## Findings\nExact assertions were not visible in the captured content.",
+      trace: createPromptPackFileTrace("sess-d506-scoring-tests", [
+        "apps/gateway/src/services/prompt-pack-service.test.ts",
+        "packages/storage/src/prompt-pack-score-repo.test.ts",
+        "packages/storage/src/prompt-pack-repo.test.ts",
+        "packages/storage/src/prompt-pack-run-repo.test.ts",
+      ]),
+    });
+    const uiTrace = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: uiTraceTest }),
+      prompt: uiTraceTest.prompt,
+      responseText: "## Findings\n`apps/mission-control/src/pages/PromptLabPage.tsx` renders auto score.",
+      trace: createPromptPackFileTrace("sess-d510-ui-trace", [
+        "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
+        "packages/contracts/src/prompt-pack.ts",
+      ]),
+    });
+    const attribution = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: attributionTest }),
+      prompt: attributionTest.prompt,
+      responseText: "## Observed Route and Service Chain\n- `apps/gateway/src/routes/memory.ts`",
+      trace: createPromptPackFileTrace("sess-d511-attribution", [
+        "apps/gateway/src/services/prompt-pack-service.test.ts",
+        "apps/gateway/src/services/prompt-pack-service.ts",
+      ]),
+    });
+    const reportLabel = normalizePromptPackAgenticResponse({
+      profile: resolvePromptPackExecutionProfile({ test: reportLabelTest }),
+      prompt: reportLabelTest.prompt,
+      responseText: "## Observed Route and Service Chain\n- `apps/gateway/src/routes/memory.ts`",
+      trace: createPromptPackFileTrace("sess-d512-report-label", [
+        "apps/gateway/src/services/prompt-pack-service.ts",
+        "apps/gateway/src/services/prompt-pack-service.test.ts",
+      ]),
+    });
+
+    expect(memoryBoundary).toContain("cannot know your durable formatting preferences");
+    expect(memoryBoundary).toContain("I am not using memory or prior context");
+    expect(waterStorage.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(5);
+    expect(waterStorage).toContain("cdc.gov/water-emergency");
+    expect(waterStorage).not.toContain("Source URLs");
+    expect(umbrella).toContain("source not verified in this run");
+    expect(umbrella).not.toMatch(/no web or weather lookup tool is available/i);
+    expect(decisionMemo).toMatch(/^## Recommendation/);
+    expect(decisionMemo).toContain("## Next experiment");
+    expect(decisionMemo).not.toContain("Planner");
+    expect(portland).toContain("Default recommendation");
+    expect(portland).toContain("current exhibitions");
+    expect(portland).not.toContain("Coder");
+    expect(robotVacuum).toContain("pet-hair pickup");
+    expect(robotVacuum).not.toContain("$");
+    expect(airPurifier).toContain("EPA");
+    expect(airPurifier).toContain("Buying Checklist");
+    expect(airPurifier).not.toContain("workspace\\http.post");
+    expect(routeTrace).toContain("## Route");
+    expect(routeTrace).toContain("POST /api/v1/prompt-packs/:packId/tests/:testId/auto-score");
+    expect(routeTrace).toContain("PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION");
+    expect(routeTrace).not.toContain("run-prompt-pack-gates.ts");
+    expect(scoringTests).toContain("apps/gateway/src/services/prompt-pack-service.test.ts");
+    expect(scoringTests).toContain("mergePromptPackAutoScoresV3");
+    expect(scoringTests).toContain("invalid judge output cannot erase v3 failure attribution");
+    expect(uiTrace).toContain("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
+    expect(uiTrace).toContain("score evidence");
+    expect(uiTrace).toContain("v3 attribution display risk");
+    expect(uiTrace).not.toContain("apps/mission-control/src/pages/PromptLabPage.tsx");
+    expect(attribution).toContain("Target test file");
+    expect(attribution).toContain("mergePromptPackAutoScoresV3");
+    expect(attribution).toContain("Failure signature");
+    expect(attribution).not.toContain("routes/memory.ts");
+    expect(reportLabel).toContain("latest score rows");
+    expect(reportLabel).toContain("Exact files checked");
+    expect(reportLabel).not.toContain("routes/memory.ts");
+  });
+
   it("normalizes Code validation recommendation rows with concrete dry-run commands", () => {
     const validationTest = {
       ...createTest("test-code-smallest-validation", "TEST-D411"),
@@ -2778,6 +2991,70 @@ describe("prompt-pack helpers", () => {
       orchestrationParallelism: "sequential",
       toolAutonomy: "safe_auto",
     });
+
+    const robotVacuumCoworkPrompt =
+      "I need a low-maintenance robot vacuum for a small apartment with one pet. Compare what criteria matter most before buying.\n\nUse current information if available. Do not invent prices or availability.";
+    const robotVacuumCoworkProfile = resolvePromptPackExecutionProfile({
+      test: {
+        testId: "test-v5-robot-vacuum-cowork",
+        packId: "pack-1",
+        code: "TEST-W506",
+        title: "Cowork Robot Vacuum",
+        prompt: robotVacuumCoworkPrompt,
+        orderIndex: 5,
+        mode: "cowork",
+        toolTier: "implicit-tools",
+        createdAt: "2026-05-05T00:00:00.000Z",
+      },
+    });
+    expect(
+      buildPromptPackSessionPrefsOverride(robotVacuumCoworkProfile, robotVacuumCoworkPrompt, "agentic_surface"),
+    ).toMatchObject({
+      mode: "cowork",
+      orchestrationEnabled: false,
+      orchestrationVisibility: "explicit",
+      orchestrationParallelism: "sequential",
+      toolAutonomy: "safe_auto",
+    });
+
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        resolvePromptPackExecutionProfile({
+          test: {
+            testId: "test-v5-memory-chat",
+            packId: "pack-1",
+            code: "TEST-C510",
+            title: "Chat Memory",
+            prompt:
+              "Use available memory/context to tell me whether I have previously preferred concise or detailed project reviews.",
+            orderIndex: 6,
+            mode: "chat",
+            toolTier: "explicit-tools",
+            createdAt: "2026-05-05T00:00:00.000Z",
+          },
+        }),
+        "Use available memory/context to tell me whether I have previously preferred concise or detailed project reviews.",
+      ),
+    ).toEqual(expect.arrayContaining(["memory.search", "memory.read"]));
+    expect(
+      buildPromptPackSessionToolAllowlist(
+        resolvePromptPackExecutionProfile({
+          test: {
+            testId: "test-v5-live-weather-chat",
+            packId: "pack-1",
+            code: "TEST-C512",
+            title: "Chat Live Weather",
+            prompt:
+              "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.",
+            orderIndex: 7,
+            mode: "chat",
+            toolTier: "explicit-tools",
+            createdAt: "2026-05-05T00:00:00.000Z",
+          },
+        }),
+        "Use live information if available to recommend whether I should bring an umbrella for a walk in Boston this evening.",
+      ),
+    ).toEqual(expect.arrayContaining(["browser.search", "browser.navigate", "browser.extract"]));
   });
 
   it("resumes stale benchmark runs when status is requested", () => {
@@ -6645,6 +6922,148 @@ describe("prompt-pack helpers", () => {
     }
   });
 
+  it("creates immutable prompt-pack snapshots while preserving the latest export", () => {
+    const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-snapshots-${randomUUID()}`);
+    try {
+      const pack = {
+        ...createPack("pack-snapshot"),
+        name: "goatcitadel_prompt_pack_v5_overall",
+      };
+      const test = {
+        ...createTest("test-snapshot", "TEST-SNAPSHOT"),
+        packId: pack.packId,
+      };
+      const run: PromptPackRunRecord = {
+        ...createRun("run-snapshot", "completed", "2026-05-05T21:14:08.000Z"),
+        packId: pack.packId,
+        testId: test.testId,
+        providerId: "openai",
+        model: "gpt-5.4",
+        executionStyle: "single_turn_harness",
+        responseText: "Snapshot export answer.",
+        trace: createTrace("sess-snapshot"),
+      };
+      const service = createPromptPackExportService({ rootDir, pack, tests: [test], runs: [run] });
+
+      const first = service.exportPromptPack(pack.packId);
+      const second = service.exportPromptPack(pack.packId);
+
+      expect(first.path).toMatch(/goatcitadel_prompt_pack_v5_overall-pack-snapshot-latest\.md$/);
+      expect(fs.existsSync(first.path)).toBe(true);
+      expect(first.latestSnapshotPath).toMatch(
+        /goatcitadel_prompt_pack_v5_overall_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}Z_openai_gpt-5\.4_harness(?:-\d+)?\.md$/,
+      );
+      expect(second.latestSnapshotPath).toBeTruthy();
+      expect(second.latestSnapshotPath).not.toBe(first.latestSnapshotPath);
+      expect(second.snapshotCount).toBe(2);
+      expect(fs.readFileSync(second.latestSnapshotPath ?? "", "utf8")).toContain("- Export execution style: `harness`");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps immutable snapshots when prompt-pack reset clears current runs", () => {
+    const rootDir = path.join(os.tmpdir(), `goatcitadel-prompt-pack-reset-${randomUUID()}`);
+    try {
+      const pack = createPack("pack-reset-snapshot");
+      const test = {
+        ...createTest("test-reset-snapshot", "TEST-RESET-SNAPSHOT"),
+        packId: pack.packId,
+      };
+      const run: PromptPackRunRecord = {
+        ...createRun("run-reset-snapshot", "completed", "2026-05-05T21:14:08.000Z"),
+        packId: pack.packId,
+        testId: test.testId,
+        providerId: "openai",
+        model: "gpt-5.4",
+        executionStyle: "agentic_surface",
+        responseText: "Reset preservation answer.",
+        trace: createTrace("sess-reset-snapshot"),
+      };
+      const service = createPromptPackExportService({ rootDir, pack, tests: [test], runs: [run] });
+      const exported = service.exportPromptPack(pack.packId);
+      const snapshotPath = exported.latestSnapshotPath ?? "";
+
+      const reset = service.resetPromptPackRunsAndScores(pack.packId, { clearRuns: true, clearScores: true });
+
+      expect(fs.existsSync(exported.path)).toBe(false);
+      expect(fs.existsSync(snapshotPath)).toBe(true);
+      expect(reset.export.latestSnapshotPath).toBe(snapshotPath);
+      expect(reset.export.snapshotCount).toBe(1);
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders enriched trace details without dumping unbounded tool output", () => {
+    const pack = createPack("pack-trace-report");
+    const test = {
+      ...createTest("test-trace-report", "TEST-TRACE-REPORT"),
+      packId: pack.packId,
+    };
+    const longContent = "x".repeat(1200);
+    const run: PromptPackRunRecord = {
+      ...createRun("run-trace-report", "completed", "2026-05-05T21:14:08.000Z"),
+      packId: pack.packId,
+      testId: test.testId,
+      providerId: "openai",
+      model: "gpt-5.4",
+      executionStyle: "agentic_surface",
+      responseText: "Trace report answer.",
+      trace: createTrace("sess-trace-report", {
+        model: "gpt-5.4",
+        routing: {
+          primaryProviderId: "openai",
+          primaryModel: "gpt-5.4",
+          effectiveProviderId: "openai",
+          effectiveModel: "gpt-5.4",
+          fallbackUsed: true,
+          fallbackProviderId: "openrouter",
+          fallbackModel: "openai/gpt-5.4",
+          fallbackReason: "primary_timeout",
+        },
+        toolRuns: [
+          {
+            toolRunId: "tool-trace-report-1",
+            turnId: "turn-sess-trace-report",
+            sessionId: "sess-trace-report",
+            toolName: "file.read_range",
+            status: "executed",
+            args: { path: "apps/gateway/src/services/prompt-pack-service.ts", startLine: 1, endLine: 50 },
+            result: {
+              path: "apps/gateway/src/services/prompt-pack-service.ts",
+              contentText: longContent,
+              artifactId: "artifact-1",
+              artifactPath: "artifacts/tool-output/tool-1.txt",
+              originalByteLength: longContent.length,
+            },
+            startedAt: "2026-05-05T21:14:08.000Z",
+            finishedAt: "2026-05-05T21:14:08.250Z",
+          },
+        ],
+      }),
+    };
+
+    const markdown = renderPromptPackMarkdownReport({
+      pack,
+      tests: [test],
+      runs: [run],
+      scores: [],
+      autoScoresV2: [],
+      humanReviewsV2: [],
+      latestAssessments: [],
+      summary: buildPromptPackReportSummary([test], [run], [], [], []),
+    });
+
+    expect(markdown).toContain("- Export execution style: `agentic`");
+    expect(markdown).toContain("- Requested provider/model: `openai / gpt-5.4`");
+    expect(markdown).toContain("- Effective provider/model: `openai / gpt-5.4`");
+    expect(markdown).toContain("- Fallback reason: primary_timeout");
+    expect(markdown).toContain("artifact-1 at artifacts/tool-output/tool-1.txt");
+    expect(markdown).toContain("[truncated]");
+    expect(markdown).not.toContain(longContent);
+  });
+
   it("continues batch auto-scoring after a per-test failure and prefers completed runs", async () => {
     const firstTest = createTest("test-batch-1", "TEST-BATCH-01");
     const secondTest = createTest("test-batch-2", "TEST-BATCH-02");
@@ -7171,6 +7590,62 @@ function createRun(runId: string, status: PromptPackRunRecord["status"], finishe
     startedAt: finishedAt,
     finishedAt,
   };
+}
+
+function createPromptPackExportService(input: {
+  rootDir: string;
+  pack: PromptPackRecord;
+  tests: PromptPackTestRecord[];
+  runs: PromptPackRunRecord[];
+}): PromptPackService {
+  return new PromptPackService(
+    {
+      storage: {
+        promptPacks: {
+          getPack: () => input.pack,
+          listTests: () => input.tests,
+        },
+        promptPackRuns: {
+          listByPack: () => input.runs,
+          deleteByPack: () => input.runs.length,
+        },
+        promptPackScores: {
+          listByPack: () => [],
+          deleteByPack: () => 0,
+        },
+        promptPackAutoScoresV2: {
+          listByPack: () => [],
+          deleteByPack: () => 0,
+        },
+        promptPackHumanReviewsV2: {
+          listByPack: () => [],
+          deleteByPack: () => 0,
+        },
+      },
+      gatewaySql: {
+        runImmediateTransaction: (fn: () => void) => fn(),
+      },
+      config: {
+        rootDir: input.rootDir,
+        assistant: {
+          workspaceDir: ".",
+          durable: {
+            enabled: true,
+            executionEnabled: true,
+            chatAutoPromoteEnabled: true,
+          },
+        },
+      },
+    } as never,
+    {
+      createChatSession: vi.fn(),
+      agentSendChatMessage: vi.fn(),
+      createChatCompletion: vi.fn(),
+      getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+      getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+      backgroundTasks: new Set(),
+    },
+  );
 }
 
 function createPack(packId: string): PromptPackRecord {
