@@ -1109,6 +1109,13 @@
   display: none;
 }
 
+:root[data-visual-regression="true"],
+:root[data-visual-regression="true"] * {
+  font-kerning: none;
+  font-variant-ligatures: none;
+  text-rendering: geometricPrecision;
+}
+
 .notification-item {
   display: flex;
   justify-content: space-between;

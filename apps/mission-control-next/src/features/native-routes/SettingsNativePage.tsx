@@ -172,6 +172,8 @@ type NativeLoadResult<T> = {
 
 const TOOL_APPROVAL_MODE_OPTIONS: ToolApprovalMode[] = ["approve_all", "approve_risky", "bypass"];
 const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
+const VISUAL_REGRESSION_MODE =
+  (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
 const PERSONALITY_CATEGORY_OPTIONS: PersonalityPresetCategory[] = [
   "core",
   "critical",
@@ -2487,6 +2489,67 @@ function RuntimeSection(_props: SettingsSectionProps) {
         ? nativeLoad("NPU models", fetchNpuModels(), { items: [] })
         : Promise.resolve({ data: { items: [] }, issue: null }),
     ]);
+    if (VISUAL_REGRESSION_MODE) {
+      return {
+        settings: {
+          ...settings,
+          llamaCpp: {
+            ...settings.llamaCpp,
+            baseUrl: "http://127.0.0.1:8080/v1",
+            command: "llama-server",
+            modelsRootPath: "",
+            modelPath: "",
+            status: {
+              ...settings.llamaCpp.status,
+              desiredState: "stopped" as const,
+              processState: "stopped" as const,
+              healthy: false,
+              activeModelId: undefined,
+              command: "llama-server",
+              modelPath: undefined,
+              lastError: undefined,
+            },
+          },
+          npu: {
+            ...settings.npu,
+            status: {
+              ...settings.npu.status,
+              desiredState: "stopped" as const,
+              processState: "stopped" as const,
+              healthy: false,
+              activeModelId: undefined,
+              lastError: undefined,
+            },
+          },
+        },
+        issues: [],
+        daemon: {
+          running: true,
+          pid: 0,
+          uptimeSeconds: 0,
+          host: "verification-host",
+          state: "running" as const,
+          supported: true,
+          controllable: false,
+          controlMessage: "Visual regression fixture",
+        },
+        voiceRuntime: {
+          provider: "whisper.cpp" as const,
+          source: "managed" as const,
+          readiness: "missing" as const,
+          binaryReady: false,
+          ffmpegReady: false,
+          selectedModelId: undefined,
+          selectedModelPath: undefined,
+          installedModels: [],
+          catalog: [],
+          lastError: undefined,
+        },
+        llamaModels: [],
+        llamaModelsWarning: undefined,
+        npuModels: [],
+      };
+    }
     return {
       settings,
       issues: nativeLoadIssues([daemon, voiceRuntime, llamaModels, npuModels]),
