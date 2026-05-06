@@ -740,6 +740,30 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "skill_evaluation_runs",
     up: createSkillEvaluationRunsSchema,
   },
+  {
+    version: 76,
+    name: "agentic_runtime_task_metadata",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "task_subagent_sessions", "metadata_json", "TEXT");
+      if (tableExists(db, "tasks")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_tasks_workspace_status_updated
+            ON tasks(workspace_id, status, updated_at DESC);
+        `);
+      }
+      if (tableExists(db, "task_subagent_sessions")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_task_subagent_sessions_agent_status_updated
+            ON task_subagent_sessions(agent_session_id, status, updated_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    version: 77,
+    name: "comms_delivery_runtime_metadata",
+    up: migrateCommsDeliveryRuntimeMetadata,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1040,6 +1064,7 @@ function createBaseSchema(db: DatabaseSync): void {
       agent_session_id TEXT NOT NULL UNIQUE,
       agent_name TEXT,
       status TEXT NOT NULL,
+      metadata_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       ended_at TEXT,
@@ -1793,9 +1818,19 @@ function createNativeToolsExpansionSchema(db: DatabaseSync): void {
       channel_key TEXT NOT NULL,
       target TEXT NOT NULL,
       payload_hash TEXT NOT NULL,
+      payload_json TEXT,
       status TEXT NOT NULL,
+      delivery_status TEXT,
+      idempotency_key TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 3,
+      next_attempt_at TEXT,
+      stale_after_ms INTEGER,
+      base_backoff_ms INTEGER,
+      max_backoff_ms INTEGER,
       provider_msg_id TEXT,
       error TEXT,
+      stale_reason TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1804,7 +1839,42 @@ function createNativeToolsExpansionSchema(db: DatabaseSync): void {
       ON comms_deliveries(connection_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_comms_deliveries_channel_time
       ON comms_deliveries(channel_key, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_deliveries_idempotency
+      ON comms_deliveries(idempotency_key)
+      WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_comms_deliveries_due
+      ON comms_deliveries(status, next_attempt_at, created_at);
   `);
+}
+
+function migrateCommsDeliveryRuntimeMetadata(db: DatabaseSync): void {
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "payload_json", "TEXT");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "delivery_status", "TEXT");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "idempotency_key", "TEXT");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "attempts", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "max_attempts", "INTEGER NOT NULL DEFAULT 3");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "next_attempt_at", "TEXT");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "stale_after_ms", "INTEGER");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "base_backoff_ms", "INTEGER");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "max_backoff_ms", "INTEGER");
+  addColumnIfMissingIfTableExists(db, "comms_deliveries", "stale_reason", "TEXT");
+  if (tableExists(db, "comms_deliveries")) {
+    db.exec(`
+      UPDATE comms_deliveries
+      SET delivery_status = CASE status
+        WHEN 'sent' THEN 'sent'
+        WHEN 'failed' THEN COALESCE(NULLIF(delivery_status, ''), 'degraded')
+        ELSE COALESCE(NULLIF(delivery_status, ''), 'retrying')
+      END
+      WHERE delivery_status IS NULL OR TRIM(delivery_status) = '';
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_deliveries_idempotency
+        ON comms_deliveries(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_comms_deliveries_due
+        ON comms_deliveries(status, next_attempt_at, created_at);
+    `);
+  }
 }
 
 function createChatWorkspaceSchema(db: DatabaseSync): void {

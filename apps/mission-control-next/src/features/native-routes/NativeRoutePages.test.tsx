@@ -47,6 +47,159 @@ const mocks = vi.hoisted(() => ({
   })),
   deleteTask: vi.fn(async () => ({ deleted: true, taskId: "task-1", mode: "soft" })),
   restoreTask: vi.fn(async () => ({ restored: true, taskId: "task-1" })),
+  fetchSkillActivationPolicies: vi.fn(async () => ({
+    policies: [],
+    guardedAutoThreshold: 0.9,
+    requireFirstUseConfirmation: true,
+  })),
+  fetchSkillImportHistory: vi.fn(async () => ({ items: [] })),
+  fetchSkillSources: vi.fn(async () => ({ items: [] })),
+  fetchSkills: vi.fn(async () => ({
+    items: [
+      {
+        skillId: "skill-safe-improvement",
+        name: "Safe improvement",
+        state: "enabled",
+        callable: true,
+        source: "bundled",
+        requires: [],
+        declaredTools: [],
+        instructionBody: "Review evidence before changing skills.",
+        dir: "skills/safe-improvement",
+      },
+    ],
+  })),
+  fetchSkillEvaluations: vi.fn(async () => ({
+    items: [
+      {
+        runId: "eval-1",
+        skillId: "skill-safe-improvement",
+        skillName: "Safe improvement",
+        status: "proposal_created",
+        targetPassRate: 0.8,
+        baselineResult: { score: { passRate: 0.5 } },
+        candidateResult: { score: { passRate: 0.8 } },
+        improvementDelta: 0.3,
+        accepted: true,
+        scenarios: [],
+        criteria: [],
+        mutation: { summary: "Tighten evidence review.", patchPreview: "- old\n+ new" },
+        operatorTruth: "Review-first.",
+        improvementCandidateId: "candidate-review-1",
+        proposalId: "proposal-1",
+        updatedAt: "2026-05-02T19:00:00.000Z",
+      },
+    ],
+  })),
+  fetchCapabilityProposal: vi.fn(async () => ({
+    proposal: {
+      proposalId: "proposal-1",
+      proposalKind: "skill",
+      status: "approved",
+      title: "Review skill revision",
+      summary: "Proposal summary.",
+      candidateId: "candidate-review-1",
+      activationTargetId: "skill-safe-improvement",
+      payload: {
+        observedIssue: "Repeated failures need skill maintenance.",
+        proposedChange: "Rewrite the skill evidence step.",
+        evidenceRefs: [{ refType: "skill_evaluation_run", refId: "eval-1" }],
+      },
+      createdAt: "2026-05-02T19:00:00.000Z",
+      updatedAt: "2026-05-02T19:00:00.000Z",
+    },
+    events: [],
+  })),
+  fetchCuratorReviewItem: vi.fn(async () => ({
+    candidate: {
+      candidateId: "candidate-review-1",
+      workspaceId: "default",
+      kind: "skill_revision",
+      status: "approved",
+      targetKey: "skill-safe-improvement",
+      fingerprint: "fp",
+      summary: "Skill proposal summary.",
+      currentRevisionId: "rev-1",
+      supportingSignalCount: 2,
+      negativeSignalCount: 1,
+      createdAt: "2026-05-02T19:00:00.000Z",
+      updatedAt: "2026-05-02T19:00:00.000Z",
+    },
+    currentRevision: {
+      revisionId: "rev-1",
+      candidateId: "candidate-review-1",
+      candidateRef: { refType: "skill", refId: "skill-safe-improvement" },
+      changeHash: "hash-1",
+      createdAt: "2026-05-02T19:00:00.000Z",
+      createdByActorId: "system",
+      createdByActorType: "system",
+    },
+    evidence: [{ refType: "skill_evaluation_run", refId: "eval-1" }],
+    risk: "medium",
+    rollbackRef: "snapshot-1",
+    observedIssue: "Repeated failures need skill maintenance.",
+    proposedChange: "Rewrite the skill evidence step.",
+    callableImpact: "narrows",
+    approvalRequired: true,
+    mutationApplied: false,
+    runtimeProvenCallable: true,
+    corruptionStatus: "clean",
+    actionStatuses: {
+      validate: "ready",
+      approve: "ready",
+      reject: "ready",
+      snooze: "ready",
+      activate: "blocked",
+      promote: "blocked",
+    },
+    disabledReasons: {
+      activate: "Skill revisions promote through capability proposals.",
+      promote: "Capability proposal promotion is approval-gated and not applied silently.",
+    },
+  })),
+  validateImprovementCandidate: vi.fn(async () => ({
+    action: "validate",
+    status: "validated",
+    review: {
+      candidate: {
+        candidateId: "candidate-review-1",
+        workspaceId: "default",
+        kind: "skill_revision",
+        status: "approved",
+        targetKey: "skill-safe-improvement",
+        fingerprint: "fp",
+        summary: "Skill proposal summary.",
+        currentRevisionId: "rev-1",
+        supportingSignalCount: 2,
+        negativeSignalCount: 1,
+        createdAt: "2026-05-02T19:00:00.000Z",
+        updatedAt: "2026-05-02T19:00:00.000Z",
+      },
+      evidence: [{ refType: "skill_evaluation_run", refId: "eval-1" }],
+      risk: "medium",
+      rollbackRef: "snapshot-1",
+      observedIssue: "Repeated failures need skill maintenance.",
+      proposedChange: "Rewrite the skill evidence step.",
+      callableImpact: "narrows",
+      approvalRequired: true,
+      mutationApplied: false,
+      runtimeProvenCallable: true,
+      corruptionStatus: "clean",
+      actionStatuses: {
+        validate: "ready",
+        approve: "ready",
+        reject: "ready",
+        snooze: "ready",
+        activate: "blocked",
+        promote: "blocked",
+      },
+      disabledReasons: {
+        activate: "Skill revisions promote through capability proposals.",
+        promote: "Capability proposal promotion is approval-gated and not applied silently.",
+      },
+    },
+    mutationApplied: false,
+  })),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
@@ -63,6 +216,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchTasksByView: mocks.fetchTasksByView,
     restoreTask: mocks.restoreTask,
     updateTask: mocks.updateTask,
+    fetchCapabilityProposal: mocks.fetchCapabilityProposal,
+    fetchCuratorReviewItem: mocks.fetchCuratorReviewItem,
+    fetchSkillActivationPolicies: mocks.fetchSkillActivationPolicies,
+    fetchSkillEvaluations: mocks.fetchSkillEvaluations,
+    fetchSkillImportHistory: mocks.fetchSkillImportHistory,
+    fetchSkills: mocks.fetchSkills,
+    fetchSkillSources: mocks.fetchSkillSources,
+    validateImprovementCandidate: mocks.validateImprovementCandidate,
   };
 });
 
@@ -149,10 +310,56 @@ describe("NativeRoutePages Cowork task board", () => {
   });
 });
 
+describe("NativeRoutePages proposal trust review", () => {
+  it("shows proposal trust details and keeps mutation truth visible", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderLibrarySkills();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Open proposal").props.onClick();
+    });
+
+    expect(mocks.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-1");
+    expect(mocks.fetchCuratorReviewItem).toHaveBeenCalledWith("candidate-review-1");
+    expect(collectText(renderer!.root)).toContain("Repeated failures need skill maintenance.");
+    expect(collectText(renderer!.root)).toContain("Mutation applied");
+    expect(collectText(renderer!.root)).toContain("false");
+    expect(collectText(renderer!.root)).toContain("Callable impact");
+    expect(collectText(renderer!.root)).toContain("narrows");
+
+    const promote = findButton(renderer!.root, "Promote");
+    expect(promote.props.disabled).toBe(true);
+    expect(String(promote.props.title)).toContain("approval-gated");
+
+    await act(async () => {
+      findButton(renderer!.root, "Validate").props.onClick();
+    });
+    expect(mocks.validateImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-review-1",
+      expect.objectContaining({ reason: expect.stringContaining("validate") }),
+    );
+  });
+});
+
 function renderCoworkTasks(): ReactTestRenderer {
   return create(
     <NativeRoutePages
       route={{ area: "cowork", section: "tasks", theme: "ops" } as any}
+      activeWorkspaceId="default"
+      activeWorkspaceName="Default"
+      pendingApprovals={0}
+      navigate={vi.fn()}
+      setActiveWorkspaceId={vi.fn()}
+    />,
+  );
+}
+
+function renderLibrarySkills(): ReactTestRenderer {
+  return create(
+    <NativeRoutePages
+      route={{ area: "library", section: "skills", theme: "ops" } as any}
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       pendingApprovals={0}

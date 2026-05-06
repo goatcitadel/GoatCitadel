@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import type { ChannelDeliveryRuntimeRecord } from "../services/channel-delivery-runtime-service.js";
 
 const channelAttachmentSchema = z.object({
   url: z.string().url().optional(),
@@ -87,6 +88,11 @@ const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
 });
 
+const deliveriesQuerySchema = z.object({
+  connectionId: z.string().uuid().optional(),
+  limit: z.coerce.number().int().positive().max(200).default(50),
+});
+
 const gmailReadSchema = z.object({
   connectionId: z.string().uuid(),
   query: z.string().optional(),
@@ -135,12 +141,46 @@ const calendarCreateSchema = z.object({
 });
 
 export const commsRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/comms/deliveries", async (request, reply) => {
+    const parsed = deliveriesQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const deliveryRecords = fastify.services.comms.listChannelDeliveryRuntime() as ChannelDeliveryRuntimeRecord[];
+    const deliveries = deliveryRecords
+      .filter((record) => !parsed.data.connectionId || record.connectionId === parsed.data.connectionId)
+      .slice(0, parsed.data.limit)
+      .map((record) => ({
+        deliveryId: record.deliveryId,
+        connectionId: record.connectionId,
+        channelKey: record.channelKey,
+        target: record.target,
+        status: record.status,
+        deliveryStatus: record.deliveryStatus,
+        attempts: record.attempts,
+        maxAttempts: record.maxAttempts,
+        nextAttemptAt: record.nextAttemptAt,
+        staleReason: record.staleReason,
+        providerMessageId: record.providerMessageId,
+        error: record.error,
+        fallbackReason: record.fallbackReason,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      }));
+    return reply.send({ deliveries, count: deliveries.length });
+  });
+
   fastify.post("/api/v1/comms/send", async (request, reply) => {
     const parsed = channelSendSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsSend(parsed.data));
+    return reply.send(
+      await fastify.services.comms.commsSend({
+        ...parsed.data,
+        idempotencyKey: request.idempotencyKey,
+      } as never),
+    );
   });
 
   fastify.post("/api/v1/comms/reply", async (request, reply) => {
@@ -148,7 +188,12 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(await fastify.services.comms.commsReply(parsed.data));
+    return reply.send(
+      await fastify.services.comms.commsReply({
+        ...parsed.data,
+        idempotencyKey: request.idempotencyKey,
+      } as never),
+    );
   });
 
   fastify.post("/api/v1/comms/react", async (request, reply) => {

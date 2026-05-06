@@ -3,6 +3,14 @@ import path from "node:path";
 import { generateVerificationReview, loadManifestForReview } from "./lib/review.mjs";
 import {
   runArchitectureMetricsLane,
+  runAgenticChannelsRuntimeLane,
+  runAgenticContractsLane,
+  runAgenticGovernanceLane,
+  runAgenticHarnessAvailabilityLane,
+  runAgenticHarnessesLane,
+  runAgenticPluginsMarketplaceLane,
+  runAgenticSelfImprovementTrustLane,
+  runAgenticWorkbenchLoopLane,
   runAuthMatrixLane,
   runApiCompatibilityLane,
   runBackupRoundtripLane,
@@ -52,6 +60,15 @@ const VALID_LANES = new Set([
   "realtime-truth",
   "architecture-metrics",
   "code-mode-sandbox",
+  "agentic-contracts",
+  "agentic-governance",
+  "agentic-harnesses",
+  "agentic-workbench-loop",
+  "agentic-channels-runtime",
+  "agentic-harness-availability",
+  "agentic-plugins-marketplace",
+  "agentic-self-improvement-trust",
+  "agentic-parity",
   "review",
   "all",
 ]);
@@ -132,9 +149,32 @@ async function main() {
       await runArchitectureMetricsLane(context, { profile });
     } else if (lane === "code-mode-sandbox") {
       await runCodeModeSandboxRequiredLane(context, { profile });
+    } else if (lane === "agentic-contracts") {
+      await runAgenticContractsLane(context, { profile });
+    } else if (lane === "agentic-governance") {
+      await runAgenticGovernanceLane(context, { profile });
+    } else if (lane === "agentic-harnesses") {
+      await runAgenticHarnessesLane(context, { profile });
+    } else if (lane === "agentic-workbench-loop") {
+      await runAgenticWorkbenchLoopLane(context, { profile });
+    } else if (lane === "agentic-channels-runtime") {
+      await runAgenticChannelsRuntimeLane(context, { profile });
+    } else if (lane === "agentic-harness-availability") {
+      await runAgenticHarnessAvailabilityLane(context, { profile });
+    } else if (lane === "agentic-plugins-marketplace") {
+      await runAgenticPluginsMarketplaceLane(context, { profile });
+    } else if (lane === "agentic-self-improvement-trust") {
+      await runAgenticSelfImprovementTrustLane(context, { profile });
+    } else if (lane === "agentic-parity") {
+      await runAgenticContractsLane(context, { profile });
+      await runAgenticGovernanceLane(context, { profile });
+      await runAgenticHarnessesLane(context, { profile });
     } else if (lane === "all") {
       await runFastLane(context);
       await runCodeModeSandboxRequiredLane(context, { profile });
+      await runAgenticContractsLane(context, { profile });
+      await runAgenticGovernanceLane(context, { profile });
+      await runAgenticHarnessesLane(context, { profile });
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });
@@ -204,6 +244,15 @@ function shouldGenerateReview(lane) {
     lane === "realtime-truth" ||
     lane === "architecture-metrics" ||
     lane === "code-mode-sandbox" ||
+    lane === "agentic-contracts" ||
+    lane === "agentic-governance" ||
+    lane === "agentic-harnesses" ||
+    lane === "agentic-workbench-loop" ||
+    lane === "agentic-channels-runtime" ||
+    lane === "agentic-harness-availability" ||
+    lane === "agentic-plugins-marketplace" ||
+    lane === "agentic-self-improvement-trust" ||
+    lane === "agentic-parity" ||
     lane === "all" ||
     lane === "soak"
   );

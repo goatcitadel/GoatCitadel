@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
+  AgenticTaskContext,
   TaskCreateInput,
   TaskProactiveContext,
   TaskRecord,
@@ -111,7 +112,7 @@ export class TaskRepository {
       assignedAgentId: input.assignedAgentId ?? null,
       createdBy: input.createdBy ?? null,
       dueAt: input.dueAt ?? null,
-      metadataJson: serializeTaskMetadata(input.proactiveContext),
+      metadataJson: serializeTaskMetadata(input.proactiveContext, input.agenticContext),
       createdAt: now,
       updatedAt: now,
     });
@@ -173,9 +174,8 @@ export class TaskRepository {
 
   public update(taskId: string, input: TaskUpdateInput, now = new Date().toISOString()): TaskRecord {
     const current = this.get(taskId);
-    const nextAssignedAgentId = input.assignedAgentId === undefined
-      ? current.assignedAgentId ?? null
-      : input.assignedAgentId;
+    const nextAssignedAgentId =
+      input.assignedAgentId === undefined ? (current.assignedAgentId ?? null) : input.assignedAgentId;
 
     this.updateStmt.run({
       taskId,
@@ -185,9 +185,13 @@ export class TaskRepository {
       priority: input.priority ?? current.priority,
       assignedAgentId: nextAssignedAgentId,
       dueAt: input.dueAt ?? current.dueAt ?? null,
-      metadataJson: input.proactiveContext === undefined
-        ? serializeTaskMetadata(current.proactiveContext)
-        : serializeTaskMetadata(input.proactiveContext ?? undefined),
+      metadataJson:
+        input.proactiveContext === undefined && input.agenticContext === undefined
+          ? serializeTaskMetadata(current.proactiveContext, current.agenticContext)
+          : serializeTaskMetadata(
+              input.proactiveContext === undefined ? current.proactiveContext : (input.proactiveContext ?? undefined),
+              input.agenticContext === undefined ? current.agenticContext : (input.agenticContext ?? undefined),
+            ),
       deletedAt: current.deletedAt ?? null,
       deletedBy: current.deletedBy ?? null,
       deleteReason: current.deleteReason ?? null,
@@ -196,7 +200,12 @@ export class TaskRepository {
     return this.get(taskId);
   }
 
-  public softDelete(taskId: string, deletedBy?: string, deleteReason?: string, now = new Date().toISOString()): boolean {
+  public softDelete(
+    taskId: string,
+    deletedBy?: string,
+    deleteReason?: string,
+    now = new Date().toISOString(),
+  ): boolean {
     const before = this.find(taskId);
     if (!before || before.deletedAt) {
       return false;
@@ -233,13 +242,19 @@ export class TaskRepository {
   }
 
   public statusCounts(): TaskStatusCount[] {
-    const rows = toTaskStatusCountRows(this.db.prepare(`
+    const rows = toTaskStatusCountRows(
+      this.db
+        .prepare(
+          `
       SELECT status, COUNT(*) AS count
       FROM tasks
       WHERE deleted_at IS NULL
       GROUP BY status
       ORDER BY status ASC
-    `).all());
+    `,
+        )
+        .all(),
+    );
     return rows.map((row) => ({
       status: row.status,
       count: Number(row.count ?? 0),
@@ -247,16 +262,22 @@ export class TaskRepository {
   }
 
   public statusCountsByWorkspace(workspaceId: string): TaskStatusCount[] {
-    const rows = toTaskStatusCountRows(this.db.prepare(`
+    const rows = toTaskStatusCountRows(
+      this.db
+        .prepare(
+          `
       SELECT status, COUNT(*) AS count
       FROM tasks
       WHERE deleted_at IS NULL
         AND workspace_id = @workspaceId
       GROUP BY status
       ORDER BY status ASC
-    `).all({
-      workspaceId: sanitizeWorkspaceId(workspaceId),
-    }));
+    `,
+        )
+        .all({
+          workspaceId: sanitizeWorkspaceId(workspaceId),
+        }),
+    );
     return rows.map((row) => ({
       status: row.status,
       count: Number(row.count ?? 0),
@@ -265,7 +286,10 @@ export class TaskRepository {
 }
 
 function mapTaskRow(row: TaskRow): TaskRecord {
-  const metadata = safeJsonParse<{ proactiveContext?: TaskProactiveContext | null }>(row.metadata_json, {});
+  const metadata = safeJsonParse<{
+    proactiveContext?: TaskProactiveContext | null;
+    agenticContext?: AgenticTaskContext | null;
+  }>(row.metadata_json, {});
   return {
     taskId: row.task_id,
     workspaceId: row.workspace_id,
@@ -277,6 +301,7 @@ function mapTaskRow(row: TaskRow): TaskRecord {
     createdBy: row.created_by ?? undefined,
     dueAt: row.due_at ?? undefined,
     proactiveContext: metadata.proactiveContext ?? undefined,
+    agenticContext: metadata.agenticContext ?? undefined,
     deletedAt: row.deleted_at ?? undefined,
     deletedBy: row.deleted_by ?? undefined,
     deleteReason: row.delete_reason ?? undefined,
@@ -323,11 +348,17 @@ function sanitizeWorkspaceId(value: string): string {
   return trimmed;
 }
 
-function serializeTaskMetadata(proactiveContext?: TaskProactiveContext): string | null {
-  if (!proactiveContext) {
+function serializeTaskMetadata(
+  proactiveContext?: TaskProactiveContext,
+  agenticContext?: AgenticTaskContext,
+): string | null {
+  if (!proactiveContext && !agenticContext) {
     return null;
   }
-  return JSON.stringify({ proactiveContext });
+  return JSON.stringify({
+    ...(proactiveContext ? { proactiveContext } : {}),
+    ...(agenticContext ? { agenticContext } : {}),
+  });
 }
 
 function toTaskRow(value: unknown): TaskRow | undefined {
@@ -340,33 +371,34 @@ function toTaskRows(value: unknown): TaskRow[] {
 
 function toTaskStatusCountRows(value: unknown): Array<{ status: string; count: number }> {
   return Array.isArray(value)
-    ? value.filter((row): row is { status: string; count: number } => (
-      isRecord(row) && typeof row.status === "string" && typeof row.count === "number"
-    ))
+    ? value.filter(
+        (row): row is { status: string; count: number } =>
+          isRecord(row) && typeof row.status === "string" && typeof row.count === "number",
+      )
     : [];
 }
 
 function isTaskRow(value: unknown): value is TaskRow {
-  return isRecord(value)
-    && typeof value.task_id === "string"
-    && typeof value.workspace_id === "string"
-    && typeof value.title === "string"
-    && (typeof value.description === "string" || value.description === null)
-    && typeof value.status === "string"
-    && typeof value.priority === "string"
-    && (typeof value.assigned_agent_id === "string" || value.assigned_agent_id === null)
-    && (typeof value.created_by === "string" || value.created_by === null)
-    && (typeof value.due_at === "string" || value.due_at === null)
-    && (typeof value.metadata_json === "string" || value.metadata_json === null)
-    && (typeof value.deleted_at === "string" || value.deleted_at === null)
-    && (typeof value.deleted_by === "string" || value.deleted_by === null)
-    && (typeof value.delete_reason === "string" || value.delete_reason === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    isRecord(value) &&
+    typeof value.task_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    typeof value.title === "string" &&
+    (typeof value.description === "string" || value.description === null) &&
+    typeof value.status === "string" &&
+    typeof value.priority === "string" &&
+    (typeof value.assigned_agent_id === "string" || value.assigned_agent_id === null) &&
+    (typeof value.created_by === "string" || value.created_by === null) &&
+    (typeof value.due_at === "string" || value.due_at === null) &&
+    (typeof value.metadata_json === "string" || value.metadata_json === null) &&
+    (typeof value.deleted_at === "string" || value.deleted_at === null) &&
+    (typeof value.deleted_by === "string" || value.deleted_by === null) &&
+    (typeof value.delete_reason === "string" || value.delete_reason === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

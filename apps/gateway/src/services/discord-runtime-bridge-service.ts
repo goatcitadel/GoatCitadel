@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
-import type { ChatSessionPrefsRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ApprovalResolveInput, ChatSessionPrefsRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ApprovalResolveResult } from "./approval-types.js";
+import { normalizeChannelCommandInput } from "./channel-command-contract.js";
 
 const DEFAULT_DISCORD_WORKSPACE_ID = "default";
 const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
@@ -86,6 +88,11 @@ export interface DiscordRuntimeBridgeHost {
     context?: Record<string, unknown>;
   }): void;
   requireChatSession(sessionId: string): ChatSessionRecord;
+  resolveApprovalWithRemoteToken(input: {
+    token: string;
+    decision: ApprovalResolveInput["decision"];
+    resolvedBy?: string;
+  }): Promise<ApprovalResolveResult>;
   respondToExistingChatMessage(sessionId: string, sourceMessageId: string): Promise<unknown>;
   setChatSessionBinding(input: {
     sessionId: string;
@@ -245,8 +252,9 @@ export async function handleDiscordRuntimeSlashCommand(
   if (!commandText.startsWith("/")) {
     return "Command must start with '/'.";
   }
-  if (/^\/new(?:\s|$)/i.test(commandText)) {
-    const title = commandText.replace(/^\/new/i, "").trim();
+  const normalizedCommand = normalizeChannelCommandInput(commandText, { platform: "discord" });
+  if (normalizedCommand.name === "new") {
+    const title = normalizedCommand.argText;
     const session = startNewDiscordRouteSession(host, {
       connectionId: input.connectionId,
       target: input.target,
@@ -259,6 +267,22 @@ export async function handleDiscordRuntimeSlashCommand(
     return title
       ? `Started a new session: ${title} (${session.sessionId.slice(-6)}).`
       : `Started a new session (${session.sessionId.slice(-6)}).`;
+  }
+  if (
+    (normalizedCommand.name === "approve" || normalizedCommand.name === "deny") &&
+    normalizedCommand.approvalDecision
+  ) {
+    if (!normalizedCommand.approvalToken) {
+      return `Use ${normalizedCommand.command} <action-token> from an approval message.`;
+    }
+    const result = await host.resolveApprovalWithRemoteToken({
+      token: normalizedCommand.approvalToken,
+      decision: normalizedCommand.approvalDecision,
+      resolvedBy: `discord:${input.actorId}`,
+    });
+    return normalizedCommand.approvalDecision === "approve"
+      ? `Approved ${result.approval.approvalId}. GoatCitadel will resume any waiting work it can safely resume.`
+      : `Rejected ${result.approval.approvalId}. GoatCitadel will keep the requested action blocked.`;
   }
 
   const session = ensureDiscordChatSession(host, {

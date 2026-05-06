@@ -289,6 +289,7 @@ export type ImprovementEvidenceRefType =
   | "prompt_pack_benchmark"
   | "decision_replay_run"
   | "repair_candidate"
+  | "agentic_diagnostic"
   | "skill_evaluation_run"
   | "capability_proposal"
   | "artifact_manifest";
@@ -467,4 +468,45 @@ export interface ImprovementCandidateDetailResponse {
   latestEvaluation?: ImprovementEvaluationRecord;
   latestActivation?: ImprovementActivationRecord;
   attemptManifestSummary: ImprovementAttemptManifestSummary[];
+}
+
+export type ImprovementCandidateLifecycleAction = "validate" | "approve" | "reject" | "snooze" | "activate" | "promote";
+
+export interface CuratorReviewItem {
+  candidate: ImprovementCandidateRecord;
+  currentRevision?: ImprovementCandidateRevisionRecord;
+  latestEvaluation?: ImprovementEvaluationRecord;
+  latestActivation?: ImprovementActivationRecord;
+  evidence: ImprovementEvidenceRef[];
+  risk: "low" | "medium" | "high";
+  rollbackRef?: string;
+  observedIssue?: string;
+  proposedChange?: string;
+  callableImpact: "none" | "narrows" | "widens_after_approval";
+  approvalRequired: boolean;
+  mutationApplied: boolean;
+  runtimeProvenCallable: boolean;
+  corruptionStatus: "clean" | "corrupt" | "quarantined";
+  actionStatuses: Record<ImprovementCandidateLifecycleAction, "ready" | "blocked">;
+  disabledReasons: Partial<Record<ImprovementCandidateLifecycleAction, string>>;
+}
+
+export interface CuratorReviewResponse {
+  generatedAt: string;
+  items: CuratorReviewItem[];
+}
+
+export interface ImprovementCandidateLifecycleInput {
+  actorId?: string;
+  reason?: string;
+  snoozeUntil?: string;
+}
+
+export interface ImprovementCandidateLifecycleResult {
+  action: ImprovementCandidateLifecycleAction;
+  status: "validated" | "approved" | "rejected" | "snoozed" | "approval_pending" | "blocked";
+  review: CuratorReviewItem;
+  activation?: ImprovementActivationRecord;
+  approvalId?: string;
+  mutationApplied: boolean;
 }

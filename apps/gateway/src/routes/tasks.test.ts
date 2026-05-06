@@ -94,6 +94,53 @@ describe("tasks routes", () => {
       activityType: "comment",
     });
   });
+
+  it("exposes normalized agentic runtime availability", async () => {
+    app = buildApp({});
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/agentic/availability",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      harnesses: expect.any(Array),
+      providers: [expect.objectContaining({ runtimeId: "provider-openai", status: "not_configured" })],
+      plugins: [expect.objectContaining({ runtimeId: "plugin-corrupt", status: "unavailable" })],
+      channels: [expect.objectContaining({ capabilityId: "channel:telegram", status: "callable", callable: true })],
+    });
+    expect(response.json().items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          capabilityId: "provider:provider-openai",
+          status: "not_configured",
+          callable: false,
+        }),
+        expect.objectContaining({ capabilityId: "plugin:plugin-corrupt", status: "unavailable", callable: false }),
+      ]),
+    );
+  });
+
+  it("rejects malformed subagent metadata instead of persisting arbitrary payloads", async () => {
+    const registerTaskSubagent = vi.fn();
+
+    app = buildApp({ registerTaskSubagent });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/subagents",
+      payload: {
+        agentSessionId: "agent-session-1",
+        metadata: "not-object",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(registerTaskSubagent).not.toHaveBeenCalled();
+  });
 });
 
 function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
@@ -115,6 +162,60 @@ function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
       updateTask: vi.fn(),
       updateTaskSubagent: vi.fn(),
       ...taskOverrides,
+    },
+    llm: {
+      listLlmProviders: vi.fn(() => [
+        {
+          providerId: "provider-openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.1",
+          hasApiKey: false,
+          apiKeySource: "none",
+        },
+      ]),
+    },
+    integrations: {
+      listIntegrationPlugins: vi.fn(() => [
+        {
+          pluginId: "plugin-corrupt",
+          label: "Corrupt Plugin",
+          version: "1.0.0",
+          enabled: true,
+          installedAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+          capabilities: ["channel.send"],
+          integrityStatus: "mismatch",
+        },
+      ]),
+      listIntegrationCatalog: vi.fn(() => [
+        {
+          catalogId: "channel.telegram",
+          kind: "channel",
+          key: "telegram",
+          label: "Telegram",
+          description: "Telegram",
+          maturity: "native",
+          runtimeAvailability: "runnable",
+          authMethods: ["token"],
+          capabilities: ["channel.send"],
+        },
+      ]),
+      listIntegrationConnections: vi.fn(() => [
+        {
+          connectionId: "conn-telegram",
+          catalogId: "channel.telegram",
+          kind: "channel",
+          key: "telegram",
+          label: "Telegram",
+          enabled: true,
+          status: "connected",
+          config: {},
+          createdAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+        },
+      ]),
     },
   } as never);
   return next;

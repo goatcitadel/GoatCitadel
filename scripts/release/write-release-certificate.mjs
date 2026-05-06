@@ -7,6 +7,45 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
 
+const RELEASE_PROOF_WORKFLOW_FILE = "verification-1-0-release-proof.yml";
+const RELEASE_PROOF_COVERED_LANES = [
+  "verify:fast",
+  "verify:runtime:truth",
+  "verify:auth:matrix",
+  "verify:ui:parity",
+  "verify:memory:truth",
+  "verify:realtime:truth",
+  "verify:architecture:metrics",
+  "verify:operator:proof",
+  "verify:durable:recovery",
+  "verify:surface:regression",
+  "verify:visual:regression",
+  "verify:backup:roundtrip",
+  "verify:catalog:parity",
+  "verify:api:compat",
+];
+const RELEASE_PROOF_COVERED_LANE_NAMES = new Set(RELEASE_PROOF_COVERED_LANES);
+const REQUIRED_LANE_SPECS = [
+  { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
+  { name: "verify:runtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:auth:matrix", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:ui:parity", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:memory:truth", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:realtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:architecture:metrics", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:operator:proof", workflowFile: "verification-operator-proof.yml", required: true },
+  { name: "verify:durable:recovery", workflowFile: "verification-durable-recovery.yml", required: true },
+  { name: "verify:surface:regression", workflowFile: "verification-surface-regression.yml", required: true },
+  { name: "verify:visual:regression", workflowFile: "verification-visual-regression.yml", required: true },
+  { name: "verify:backup:roundtrip", workflowFile: "verification-backup-roundtrip.yml", required: true },
+  { name: "verify:catalog:parity", workflowFile: "verification-catalog-parity.yml", required: true },
+  { name: "verify:api:compat", workflowFile: "verification-api-compat.yml", required: true },
+  { name: "security:trivy", workflowFile: "security-trivy.yml", required: true },
+].map((spec) => ({
+  ...spec,
+  releaseProofCovered: RELEASE_PROOF_COVERED_LANE_NAMES.has(spec.name),
+}));
+
 const args = parseArgs(process.argv.slice(2));
 const version = normalizeVersion(args.version);
 const tagName = args.tag ?? process.env.GITHUB_REF_NAME ?? `v${version}`;
@@ -48,6 +87,11 @@ const certificate = {
         : null,
   },
   requiredLanes,
+  releaseProofCoverage: {
+    workflowFile: RELEASE_PROOF_WORKFLOW_FILE,
+    coveredLanes: RELEASE_PROOF_COVERED_LANES,
+    directOnlyLanes: REQUIRED_LANE_SPECS.filter((lane) => !lane.releaseProofCovered).map((lane) => lane.name),
+  },
   trivyStatus: requiredLanes.find((lane) => lane.name === "security:trivy")?.status ?? "missing",
   acceptedFailures: [],
   releaseAssets,
@@ -123,38 +167,26 @@ function normalizeVersion(value) {
 }
 
 async function resolveRequiredLanes({ commit, repository }) {
-  const releaseProofWorkflowFile = "verification-1-0-release-proof.yml";
-  const laneSpecs = [
-    { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
-    { name: "verify:runtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
-    { name: "verify:auth:matrix", workflowFile: "verification-truth-lanes.yml", required: true },
-    { name: "verify:memory:truth", workflowFile: "verification-truth-lanes.yml", required: true },
-    { name: "verify:realtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
-    { name: "verify:architecture:metrics", workflowFile: "verification-truth-lanes.yml", required: true },
-    { name: "verify:operator:proof", workflowFile: "verification-operator-proof.yml", required: true },
-    { name: "verify:durable:recovery", workflowFile: "verification-durable-recovery.yml", required: true },
-    { name: "verify:surface:regression", workflowFile: "verification-surface-regression.yml", required: true },
-    { name: "verify:visual:regression", workflowFile: "verification-visual-regression.yml", required: true },
-    { name: "verify:backup:roundtrip", workflowFile: "verification-backup-roundtrip.yml", required: true },
-    { name: "verify:catalog:parity", workflowFile: "verification-catalog-parity.yml", required: true },
-    { name: "verify:api:compat", workflowFile: "verification-api-compat.yml", required: true },
-    { name: "security:trivy", workflowFile: "security-trivy.yml", required: true },
-  ];
-
-  const releaseProofRun = await fetchLatestWorkflowRun({ repository, commit, workflowFile: releaseProofWorkflowFile });
+  const releaseProofRun = await fetchLatestWorkflowRun({
+    repository,
+    commit,
+    workflowFile: RELEASE_PROOF_WORKFLOW_FILE,
+  });
 
   return Promise.all(
-    laneSpecs.map(async (spec) => {
+    REQUIRED_LANE_SPECS.map(async (spec) => {
       const run = await fetchLatestWorkflowRun({ repository, commit, workflowFile: spec.workflowFile });
-      const effectiveRun = run.status === "success" || releaseProofRun.status !== "success" ? run : releaseProofRun;
+      const useReleaseProof =
+        spec.releaseProofCovered === true && run.status !== "success" && releaseProofRun.status === "success";
+      const effectiveRun = useReleaseProof ? releaseProofRun : run;
       return {
         ...spec,
         status: effectiveRun.status,
         conclusion: effectiveRun.conclusion,
         workflowRunUrl: effectiveRun.html_url,
         workflowRunId: effectiveRun.id,
-        proofWorkflowFile: effectiveRun === releaseProofRun ? releaseProofWorkflowFile : spec.workflowFile,
-        proofSource: effectiveRun === releaseProofRun ? "release-proof" : "lane-workflow",
+        proofWorkflowFile: useReleaseProof ? RELEASE_PROOF_WORKFLOW_FILE : spec.workflowFile,
+        proofSource: useReleaseProof ? "release-proof" : "lane-workflow",
         checkedAt: new Date().toISOString(),
       };
     }),

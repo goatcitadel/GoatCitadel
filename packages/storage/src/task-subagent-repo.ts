@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
+  AgenticSubagentMetadata,
   TaskSubagentCreateInput,
   TaskSubagentSession,
   TaskSubagentUpdateInput,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { safeJsonParse } from "./safe-json.js";
 
 interface TaskSubagentRow {
   subagent_session_id: string;
@@ -13,6 +15,7 @@ interface TaskSubagentRow {
   agent_session_id: string;
   agent_name: string | null;
   status: TaskSubagentSession["status"];
+  metadata_json: string | null;
   created_at: string;
   updated_at: string;
   ended_at: string | null;
@@ -30,10 +33,10 @@ export class TaskSubagentRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO task_subagent_sessions (
         subagent_session_id, task_id, agent_session_id, agent_name,
-        status, created_at, updated_at, ended_at
+        status, metadata_json, created_at, updated_at, ended_at
       ) VALUES (
         @subagentSessionId, @taskId, @agentSessionId, @agentName,
-        @status, @createdAt, @updatedAt, @endedAt
+        @status, @metadataJson, @createdAt, @updatedAt, @endedAt
       )
     `);
 
@@ -50,22 +53,19 @@ export class TaskSubagentRepository {
       LIMIT ?
     `);
 
-    this.getByAgentSessionStmt = db.prepare(
-      "SELECT * FROM task_subagent_sessions WHERE agent_session_id = ?",
-    );
+    this.getByAgentSessionStmt = db.prepare("SELECT * FROM task_subagent_sessions WHERE agent_session_id = ?");
 
     this.updateByAgentSessionStmt = db.prepare(`
       UPDATE task_subagent_sessions
       SET
         status = @status,
+        metadata_json = @metadataJson,
         ended_at = @endedAt,
         updated_at = @updatedAt
       WHERE agent_session_id = @agentSessionId
     `);
 
-    this.countActiveStmt = db.prepare(
-      "SELECT COUNT(*) AS count FROM task_subagent_sessions WHERE status = 'active'",
-    );
+    this.countActiveStmt = db.prepare("SELECT COUNT(*) AS count FROM task_subagent_sessions WHERE status = 'active'");
   }
 
   public create(taskId: string, input: TaskSubagentCreateInput, now = new Date().toISOString()): TaskSubagentSession {
@@ -76,6 +76,7 @@ export class TaskSubagentRepository {
       agentSessionId: input.agentSessionId,
       agentName: input.agentName ?? null,
       status: "active",
+      metadataJson: serializeSubagentMetadata(input.metadata),
       createdAt: now,
       updatedAt: now,
       endedAt: null,
@@ -119,6 +120,10 @@ export class TaskSubagentRepository {
     this.updateByAgentSessionStmt.run({
       agentSessionId,
       status: input.status ?? current.status,
+      metadataJson:
+        input.metadata === undefined
+          ? serializeSubagentMetadata(current.metadata)
+          : serializeSubagentMetadata(input.metadata ?? undefined),
       endedAt: input.endedAt ?? current.endedAt ?? null,
       updatedAt: now,
     });
@@ -132,16 +137,22 @@ export class TaskSubagentRepository {
 }
 
 function mapSubagentRow(row: TaskSubagentRow): TaskSubagentSession {
+  const metadata = safeJsonParse<AgenticSubagentMetadata | null>(row.metadata_json, null) ?? undefined;
   return {
     subagentSessionId: row.subagent_session_id,
     taskId: row.task_id,
     agentSessionId: row.agent_session_id,
     agentName: row.agent_name ?? undefined,
     status: row.status,
+    metadata,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     endedAt: row.ended_at ?? undefined,
   };
+}
+
+function serializeSubagentMetadata(metadata?: AgenticSubagentMetadata): string | null {
+  return metadata ? JSON.stringify(metadata) : null;
 }
 
 function toTaskSubagentRow(value: unknown): TaskSubagentRow | undefined {
@@ -153,19 +164,20 @@ function toTaskSubagentRows(value: unknown): TaskSubagentRow[] {
 }
 
 function isTaskSubagentRow(value: unknown): value is TaskSubagentRow {
-  return isRecord(value)
-    && typeof value.subagent_session_id === "string"
-    && typeof value.task_id === "string"
-    && typeof value.agent_session_id === "string"
-    && (typeof value.agent_name === "string" || value.agent_name === null)
-    && typeof value.status === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && (typeof value.ended_at === "string" || value.ended_at === null);
+  return (
+    isRecord(value) &&
+    typeof value.subagent_session_id === "string" &&
+    typeof value.task_id === "string" &&
+    typeof value.agent_session_id === "string" &&
+    (typeof value.agent_name === "string" || value.agent_name === null) &&
+    typeof value.status === "string" &&
+    (typeof value.metadata_json === "string" || value.metadata_json === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    (typeof value.ended_at === "string" || value.ended_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

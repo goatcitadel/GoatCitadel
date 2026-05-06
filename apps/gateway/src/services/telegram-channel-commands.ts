@@ -1,5 +1,9 @@
 import type { IntegrationConnection, PersonalityCatalogResponse } from "@goatcitadel/contracts";
-import { DEFAULT_CHANNEL_TOOLSET_POSTURE, SHARED_CHANNEL_COMMANDS } from "./channel-command-contract.js";
+import {
+  DEFAULT_CHANNEL_TOOLSET_POSTURE,
+  SHARED_CHANNEL_COMMANDS,
+  normalizeChannelCommandInput,
+} from "./channel-command-contract.js";
 import {
   buildPersonalityOverlay,
   getPersonalityPreset,
@@ -48,33 +52,19 @@ export interface TelegramWebhookSendMessage {
   };
 }
 
-const COMMANDS = [
-  "/start",
-  "/status",
-  "/sethome",
-  "/new",
-  "/skills",
-  "/skill",
-  "/tools",
-  "/personality",
-  "/stop",
-  "/approve",
-  "/deny",
-];
-
 export async function handleTelegramChannelCommand(context: TelegramCommandContext): Promise<TelegramCommandResult> {
-  const [rawCommand, ...args] = context.content.trim().split(/\s+/);
-  const command = rawCommand ? rawCommand.split("@", 1)[0]?.toLowerCase() : undefined;
-  if (!command || !COMMANDS.includes(command)) {
+  const normalized = normalizeChannelCommandInput(context.content, { platform: "telegram" });
+  if (!normalized.handled || !normalized.command || !normalized.name) {
     return { handled: false };
   }
+  const command = normalized.command;
 
-  switch (command) {
-    case "/start":
+  switch (normalized.name) {
+    case "start":
       return respond(command, context, renderStart(context));
-    case "/status":
+    case "status":
       return respond(command, context, renderStatus(context));
-    case "/sethome":
+    case "sethome":
       return {
         handled: true,
         command,
@@ -92,7 +82,7 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
           ].join("\n"),
         ),
       };
-    case "/new":
+    case "new":
       return {
         handled: true,
         command,
@@ -107,20 +97,24 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
           "New Telegram channel session started. The next normal message in this chat will route to a fresh GoatCitadel session.",
         ),
       };
-    case "/skills":
+    case "skills":
       return respond(command, context, renderSkills(context));
-    case "/skill":
-      return respond(command, context, renderSkill(args.join(" "), context));
-    case "/tools":
+    case "skill":
+      return respond(command, context, renderSkill(normalized.argText, context));
+    case "tools":
       return respond(command, context, renderTools());
-    case "/personality":
-      return handlePersonalityCommand(args.join(" "), context);
-    case "/stop":
+    case "personality":
+      return handlePersonalityCommand(normalized.argText, context);
+    case "stop":
       return handleStopCommand(command, context);
-    case "/approve":
-      return handleApprovalFallbackCommand(command, args.join(" "), context, "approve");
-    case "/deny":
-      return handleApprovalFallbackCommand(command, args.join(" "), context, "reject");
+    case "approve":
+    case "deny":
+      return handleApprovalFallbackCommand(
+        command,
+        normalized.approvalToken,
+        context,
+        normalized.approvalDecision ?? "reject",
+      );
     default:
       return { handled: false };
   }
@@ -288,19 +282,18 @@ function renderTools(): string {
 
 async function handleApprovalFallbackCommand(
   command: string,
-  token: string,
+  token: string | undefined,
   context: TelegramCommandContext,
   decision: "approve" | "reject",
 ): Promise<TelegramCommandResult> {
-  const normalizedToken = token.trim();
-  if (!normalizedToken) {
+  if (!token) {
     return respond(command, context, `Use ${command} <action-token> from an approval message.`);
   }
   if (!context.resolveApprovalToken) {
     return respond(command, context, "Approval resolution is not available on this Telegram route yet.");
   }
   try {
-    const result = await context.resolveApprovalToken(normalizedToken, decision);
+    const result = await context.resolveApprovalToken(token, decision);
     return respond(
       command,
       context,

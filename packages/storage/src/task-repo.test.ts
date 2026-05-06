@@ -102,7 +102,10 @@ describe("task repositories", () => {
     assert.equal(softDeleted, true);
 
     const active = repos.tasks.list({ limit: 20, view: "active" });
-    assert.equal(active.find((item) => item.taskId === task.taskId), undefined);
+    assert.equal(
+      active.find((item) => item.taskId === task.taskId),
+      undefined,
+    );
 
     const trash = repos.tasks.list({ limit: 20, view: "trash" });
     assert.equal(trash.find((item) => item.taskId === task.taskId)?.deletedBy, "tester");
@@ -150,5 +153,72 @@ describe("task repositories", () => {
 
     const cleared = repos.tasks.update(task.taskId, { proactiveContext: null });
     assert.equal(cleared.proactiveContext, undefined);
+  });
+
+  it("round-trips agentic task context and subagent metadata", () => {
+    const repos = createRepos();
+    const task = repos.tasks.create({
+      title: "Coordinate cowork run",
+      status: "in_progress",
+      agenticContext: {
+        boardId: "cowork:default",
+        runId: "run-1",
+        childRunIds: ["run-1:researcher"],
+        parentSessionId: "sess-1",
+        surface: "cowork",
+        status: "running",
+        contextMode: "fork",
+        workspaceScope: { kind: "session" },
+        maxSpawn: 4,
+      },
+    });
+
+    assert.equal(task.agenticContext?.runId, "run-1");
+    assert.equal(task.agenticContext?.workspaceScope?.kind, "session");
+
+    const subagent = repos.subagents.create(task.taskId, {
+      agentSessionId: "agent:main:subagent:researcher",
+      agentName: "researcher",
+      metadata: {
+        runId: "run-1:researcher",
+        parentRunId: "run-1",
+        profileId: "researcher",
+        contextMode: "isolated",
+        heartbeatAt: "2026-05-05T12:00:00.000Z",
+      },
+    });
+    assert.equal(subagent.metadata?.parentRunId, "run-1");
+
+    const completed = repos.subagents.updateByAgentSessionId("agent:main:subagent:researcher", {
+      status: "completed",
+      metadata: {
+        ...subagent.metadata,
+        heartbeatAt: "2026-05-05T12:05:00.000Z",
+        handoffEvidence: {
+          summary: "Research complete",
+          artifactRefs: ["delegation-step:researcher"],
+          createdAt: "2026-05-05T12:05:00.000Z",
+        },
+      },
+    });
+    assert.equal(completed.metadata?.handoffEvidence?.summary, "Research complete");
+
+    const patched = repos.tasks.update(task.taskId, {
+      agenticContext: {
+        ...task.agenticContext,
+        status: "completed",
+        handoffEvidence: [
+          {
+            summary: "Run complete",
+            createdAt: "2026-05-05T12:06:00.000Z",
+          },
+        ],
+      },
+    });
+    assert.equal(patched.agenticContext?.status, "completed");
+    assert.equal(patched.agenticContext?.handoffEvidence?.[0]?.summary, "Run complete");
+
+    const cleared = repos.tasks.update(task.taskId, { agenticContext: null });
+    assert.equal(cleared.agenticContext, undefined);
   });
 });

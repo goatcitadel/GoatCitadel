@@ -1,12 +1,4 @@
-export type TaskStatus =
-  | "planning"
-  | "inbox"
-  | "assigned"
-  | "in_progress"
-  | "testing"
-  | "review"
-  | "done"
-  | "blocked";
+export type TaskStatus = "planning" | "inbox" | "assigned" | "in_progress" | "testing" | "review" | "done" | "blocked";
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 
@@ -32,6 +24,7 @@ export interface TaskRecord {
   createdBy?: string;
   dueAt?: string;
   proactiveContext?: TaskProactiveContext;
+  agenticContext?: import("./agentic-runtime.js").AgenticTaskContext;
   deletedAt?: string;
   deletedBy?: string;
   deleteReason?: string;
@@ -49,6 +42,7 @@ export interface TaskCreateInput {
   createdBy?: string;
   dueAt?: string;
   proactiveContext?: TaskProactiveContext;
+  agenticContext?: import("./agentic-runtime.js").AgenticTaskContext;
 }
 
 export interface TaskUpdateInput {
@@ -59,6 +53,7 @@ export interface TaskUpdateInput {
   assignedAgentId?: string | null;
   dueAt?: string;
   proactiveContext?: TaskProactiveContext | null;
+  agenticContext?: import("./agentic-runtime.js").AgenticTaskContext | null;
 }
 
 export type TaskActivityType =
@@ -67,7 +62,12 @@ export type TaskActivityType =
   | "completed"
   | "file_created"
   | "status_changed"
-  | "comment";
+  | "comment"
+  | "diagnostic"
+  | "heartbeat"
+  | "control"
+  | "handoff"
+  | "delivery";
 
 export interface TaskActivityRecord {
   activityId: string;
@@ -105,7 +105,7 @@ export interface TaskDeliverableCreateInput {
   description?: string;
 }
 
-export type SubagentSessionStatus = "active" | "completed" | "failed" | "killed";
+export type SubagentSessionStatus = "active" | "paused" | "completed" | "failed" | "killed" | "stale";
 
 export interface TaskSubagentSession {
   subagentSessionId: string;
@@ -113,6 +113,7 @@ export interface TaskSubagentSession {
   agentSessionId: string;
   agentName?: string;
   status: SubagentSessionStatus;
+  metadata?: import("./agentic-runtime.js").AgenticSubagentMetadata;
   createdAt: string;
   updatedAt: string;
   endedAt?: string;
@@ -121,9 +122,11 @@ export interface TaskSubagentSession {
 export interface TaskSubagentCreateInput {
   agentSessionId: string;
   agentName?: string;
+  metadata?: import("./agentic-runtime.js").AgenticSubagentMetadata;
 }
 
 export interface TaskSubagentUpdateInput {
   status?: SubagentSessionStatus;
+  metadata?: import("./agentic-runtime.js").AgenticSubagentMetadata | null;
   endedAt?: string;
 }

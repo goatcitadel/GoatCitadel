@@ -58,7 +58,7 @@ import {
   renderPromptPackMarkdownReport,
 } from "./prompt-pack-service.js";
 import { DEFAULT_PROMPT_PACK_POLICY_V2, DEFAULT_PROMPT_PACK_POLICY_V3 } from "@goatcitadel/contracts";
-import { hashPromptPackPolicyV2 } from "@goatcitadel/storage";
+import { hashPromptPackPolicyV2, hashPromptPackPolicyV3 } from "@goatcitadel/storage";
 
 describe("prompt-pack helpers", () => {
   it("finds prompt-pack project bindings and prefers the jailed fixture workspace path", () => {
@@ -542,6 +542,236 @@ describe("prompt-pack helpers", () => {
         model: "runner-model",
       }),
     );
+  });
+
+  it("stores raw prompt-pack output separately from harness-derived normalization", async () => {
+    const patchRun = vi.fn((_runId: string, patch: Record<string, unknown>) => ({
+      ...createRun("run-raw-derived", String(patch.status ?? "completed"), "2026-03-14T00:00:00.000Z"),
+      testId: "test-raw-derived",
+      responseText: patch.responseText,
+      derivedResponseText: patch.derivedResponseText,
+      derivedResponseSignals: patch.derivedResponseSignals,
+      trace: patch.trace,
+      citations: patch.citations,
+      integrity: patch.integrity,
+      error: patch.error,
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () =>
+              ({
+                testId: "test-raw-derived",
+                packId: "pack-1",
+                code: "TEST-RAW-DERIVED",
+                title: "Raw derived split",
+                prompt: "Use web sources to answer: household emergency water storage.",
+                orderIndex: 0,
+                mode: "chat",
+                toolTier: "explicit-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              }) satisfies PromptPackTestRecord,
+          },
+          promptPackRuns: {
+            create: vi.fn(),
+            patch: patchRun,
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-raw-derived" })),
+        agentSendChatMessage: vi.fn(async () => ({
+          sessionId: "sess-raw-derived",
+          turnId: "turn-raw-derived",
+          userMessage: {
+            messageId: "user-raw-derived",
+            sessionId: "sess-raw-derived",
+            role: "user",
+            actorType: "user",
+            actorId: "user",
+            content: "household emergency water storage",
+            timestamp: "2026-03-14T00:00:00.000Z",
+          },
+          assistantMessage: {
+            messageId: "assistant-raw-derived",
+            sessionId: "sess-raw-derived",
+            role: "assistant",
+            actorType: "agent",
+            actorId: "assistant",
+            content: "Raw model answer that should remain raw.",
+            timestamp: "2026-03-14T00:00:01.000Z",
+          },
+          transport: "llm",
+          trace: createTrace("sess-raw-derived"),
+          citations: [],
+          routing: {},
+        })),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const run = await service.runPromptPackTest("pack-1", "test-raw-derived");
+
+    expect(run.responseText).toBe("Raw model answer that should remain raw.");
+    expect(run.derivedResponseText).toContain("Store at least 1 gallon of water per person per day");
+    expect(run.derivedResponseSignals).toContain("prompt_pack_harness_normalization");
+    expect(run.integrity?.responseChecksumSha256).toHaveLength(64);
+  });
+
+  it("hydrates retained tool rows before persisting prompt-pack run evidence", async () => {
+    const patchRun = vi.fn((_runId: string, patch: Record<string, unknown>) => ({
+      ...createRun("run-hydrated-tools", String(patch.status ?? "completed"), "2026-03-14T00:00:00.000Z"),
+      testId: "test-hydrated-tools",
+      responseText: patch.responseText,
+      trace: patch.trace,
+      citations: patch.citations,
+      integrity: patch.integrity,
+      error: patch.error,
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () =>
+              ({
+                testId: "test-hydrated-tools",
+                packId: "pack-1",
+                code: "TEST-HYDRATED-TOOLS",
+                title: "Hydrated tool rows",
+                prompt: "Use browser.search and summarize the result.",
+                orderIndex: 0,
+                mode: "chat",
+                toolTier: "explicit-tools",
+                createdAt: "2026-03-14T00:00:00.000Z",
+              }) satisfies PromptPackTestRecord,
+          },
+          promptPackRuns: {
+            create: vi.fn(),
+            patch: patchRun,
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            all: () => [
+              {
+                tool_run_id: "tool-hydrated",
+                turn_id: "turn-hydrated-tools",
+                session_id: "sess-hydrated-tools",
+                tool_name: "browser.search",
+                status: "blocked",
+                approval_id: null,
+                args_json: JSON.stringify({ query: "official source" }),
+                result_json: null,
+                reused: null,
+                reused_from_tool_run_id: null,
+                reuse_reason: null,
+                error: "blocked by policy",
+                failure_guidance: "tool unavailable",
+                started_at: "2026-03-14T00:00:00.000Z",
+                finished_at: "2026-03-14T00:00:00.100Z",
+              },
+            ],
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-hydrated-tools" })),
+        agentSendChatMessage: vi.fn(async () => ({
+          sessionId: "sess-hydrated-tools",
+          turnId: "turn-hydrated-tools",
+          userMessage: {
+            messageId: "user-hydrated-tools",
+            sessionId: "sess-hydrated-tools",
+            role: "user",
+            actorType: "user",
+            actorId: "user",
+            content: "Use browser.search",
+            timestamp: "2026-03-14T00:00:00.000Z",
+          },
+          assistantMessage: {
+            messageId: "assistant-hydrated-tools",
+            sessionId: "sess-hydrated-tools",
+            role: "assistant",
+            actorType: "agent",
+            actorId: "assistant",
+            content: "browser.search was blocked by policy, so I cannot claim page contents.",
+            timestamp: "2026-03-14T00:00:01.000Z",
+          },
+          transport: "llm",
+          trace: createTrace("sess-hydrated-tools", { toolRuns: [] }),
+          citations: [],
+          routing: {},
+        })),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const run = await service.runPromptPackTest("pack-1", "test-hydrated-tools");
+
+    expect(run.trace?.toolRuns).toEqual([
+      expect.objectContaining({
+        toolRunId: "tool-hydrated",
+        toolName: "browser.search",
+        status: "blocked",
+        error: "blocked by policy",
+        failureGuidance: "tool unavailable",
+      }),
+    ]);
   });
 
   it("preserves the real env prompt-pack source label", async () => {
@@ -2547,7 +2777,7 @@ describe("prompt-pack helpers", () => {
     expect(evaluation.signals).not.toContain("missing_required_tool_usage");
   });
 
-  it("treats blocked explicit-tool attempts as attempted usage", () => {
+  it("hard-fails blocked explicit-tool attempts when no required tool executes", () => {
     const test: PromptPackTestRecord = {
       testId: "test-explicit-attempted",
       packId: "pack-1",
@@ -2608,9 +2838,86 @@ describe("prompt-pack helpers", () => {
       },
     });
 
-    expect(evaluation.scores.routingScore).toBe(1);
+    expect(evaluation.scores.routingScore).toBe(0);
+    expect(evaluation.scores.robustnessScore).toBe(0);
     expect(evaluation.signals).toContain("required_tool_usage_attempted");
-    expect(evaluation.signals).not.toContain("missing_required_tool_usage");
+    expect(evaluation.signals).toContain("missing_required_tool_usage");
+    expect(evaluation.signals).toContain("missing_required_tool:browser.navigate");
+  });
+
+  it("hard-fails explicit memory prompts when no memory tool executes", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-explicit-memory-missing",
+      packId: "pack-1",
+      code: "TEST-MEM-MISSING",
+      title: "Explicit memory missing",
+      prompt: "Use available memory/context to summarize how I like technical answers formatted.",
+      orderIndex: 0,
+      mode: "chat",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        ...createRun("run-memory-missing", "completed", "2026-03-14T00:00:00.000Z"),
+        testId: test.testId,
+        mode: "chat",
+        toolTier: "explicit-tools",
+        responseText: "From the visible prompt alone, I cannot know your durable formatting preferences.",
+        trace: createTrace("sess-memory-missing", { toolRuns: [] }),
+      },
+    });
+
+    expect(evaluation.scores.routingScore).toBe(0);
+    expect(evaluation.scores.robustnessScore).toBe(0);
+    expect(evaluation.signals).toContain("missing_required_tool_usage");
+    expect(evaluation.signals).toContain("missing_required_tool:memory tool");
+  });
+
+  it("hard-fails explicit code prompts when only the wrong tool family executes", () => {
+    const test: PromptPackTestRecord = {
+      testId: "test-explicit-code-wrong-tool",
+      packId: "pack-1",
+      code: "TEST-CODE-MISSING",
+      title: "Explicit code missing",
+      prompt: "Use file/code tools to inspect the repo and cite the exact files used.",
+      orderIndex: 0,
+      mode: "code",
+      toolTier: "explicit-tools",
+      createdAt: "2026-03-14T00:00:00.000Z",
+    };
+    const profile = resolvePromptPackExecutionProfile({ test });
+    const evaluation = evaluatePromptPackRuleScores({
+      prompt: test.prompt,
+      profile,
+      run: {
+        ...createRun("run-code-wrong-tool", "completed", "2026-03-14T00:00:00.000Z"),
+        testId: test.testId,
+        mode: "code",
+        toolTier: "explicit-tools",
+        responseText: "I inspected the repo and found the issue.",
+        trace: createTrace("sess-code-wrong-tool", {
+          toolRuns: [
+            {
+              toolRunId: "tool-web",
+              turnId: "turn-sess-code-wrong-tool",
+              sessionId: "sess-code-wrong-tool",
+              toolName: "browser.search",
+              status: "executed",
+              startedAt: "2026-03-14T00:00:00.000Z",
+              finishedAt: "2026-03-14T00:00:00.500Z",
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(evaluation.scores.routingScore).toBe(0);
+    expect(evaluation.signals).toContain("missing_required_tool_usage");
+    expect(evaluation.signals).toContain("missing_required_tool:file/code tool");
   });
 
   it("penalizes self-reported partial outputs even when tools executed", () => {
@@ -2752,7 +3059,8 @@ describe("prompt-pack helpers", () => {
     });
 
     expect(evaluation.signals).not.toContain("self_reported_incomplete_output");
-    expect(evaluation.scores.robustnessScore).toBe(2);
+    expect(evaluation.scores.robustnessScore).toBe(0);
+    expect(evaluation.signals).toContain("missing_required_tool_usage");
   });
 
   it("builds deterministic session overrides for prompt-pack runs", () => {
@@ -5118,6 +5426,31 @@ describe("prompt-pack helpers", () => {
     expect(integrity.responseChecksumSha256).toHaveLength(64);
   });
 
+  it("marks durable and trace failures invalid even when assistant output exists", () => {
+    const integrity = evaluatePromptPackRunIntegrity({
+      prompt: "Answer from available runtime evidence.",
+      responseText: "Partial answer before runtime failure.",
+      trace: createTrace("sess-integrity-runtime-failed", {
+        status: "failed",
+        durable: {
+          runId: "durable-failed",
+          status: "failed",
+          checkpointKind: "run_failed",
+        },
+        failure: {
+          failureClass: "tool_failed",
+          message: "Tool runner crashed.",
+          retryable: false,
+        },
+      }),
+    });
+
+    expect(integrity.validationStatus).toBe("invalid");
+    expect(integrity.signals).toContain("run_failed");
+    expect(integrity.signals).toContain("durable_failed");
+    expect(integrity.signals).toContain("trace_failure");
+  });
+
   it("does not mark complete prompt-pack outputs invalid solely for finish_reason_length", () => {
     const integrity = evaluatePromptPackRunIntegrity({
       prompt: "Keep exactly these sections in order: Product, Ops, Researcher. Keep the whole answer under 220 words.",
@@ -6005,6 +6338,54 @@ describe("prompt-pack helpers", () => {
     expect(markdown).toContain("| Expected tool families | Actual tool families | Count | Platform signal | Tests |");
   });
 
+  it("counts invalid runtime-integrity rows as runtime failures instead of model/test failures", () => {
+    const pack = createPack("pack-invalid-runtime-summary");
+    const test = createTest("test-invalid-runtime-summary", "TEST-RUNTIME-INVALID");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-invalid-runtime-summary", "completed", "2026-05-05T00:00:00.000Z"),
+      testId: test.testId,
+      responseText: "Partial output before the durable runner failed.",
+      trace: createTrace("sess-invalid-runtime-summary", {
+        status: "failed",
+        durable: {
+          runId: "durable-invalid-runtime",
+          status: "failed",
+          checkpointKind: "run_failed",
+        },
+        failure: {
+          failureClass: "tool_failed",
+          message: "Durable runner failed.",
+          retryable: false,
+        },
+      }),
+      integrity: {
+        validationStatus: "invalid",
+        signals: ["run_failed", "durable_failed", "trace_failure"],
+      },
+    };
+
+    const summary = buildPromptPackReportSummary([test], [run], [], [], [], [], {
+      scoringSchemaVersion: "v3",
+      policyHash: hashPromptPackPolicyV3(DEFAULT_PROMPT_PACK_POLICY_V3),
+    });
+    const markdown = renderPromptPackMarkdownReport({
+      pack,
+      tests: [test],
+      runs: [run],
+      scores: [],
+      autoScoresV2: [],
+      humanReviewsV2: [],
+      latestAssessments: [],
+      summary,
+    } as never);
+
+    expect(summary.invalidLatestRuns).toBe(1);
+    expect(summary.runFailureCount).toBe(1);
+    expect(summary.failCount).toBe(0);
+    expect(markdown).toContain("- Invalid latest runs: 1");
+    expect(markdown).toContain("- Failure split: runtime 1, model/test 0, review-needed 0, score/judge errors 0");
+  });
+
   it("keeps fail precedence when a score-driven failure overlaps with review signals", () => {
     const merged = mergePromptPackAutoScoresV2({
       pack: {
@@ -6477,6 +6858,11 @@ describe("prompt-pack helpers", () => {
       [],
       [passScore, degradedReviewScore],
       [overrideReview],
+      [],
+      {
+        scoringSchemaVersion: "v2",
+        policyHash: "policy-hash",
+      },
     );
 
     expect(summary.autoScoredRuns).toBe(2);
@@ -6550,7 +6936,10 @@ describe("prompt-pack helpers", () => {
       createdAt: "2026-03-16T00:31:00.000Z",
     };
 
-    const summary = buildPromptPackReportSummary(tests, runs, [], [fallbackScore], []);
+    const summary = buildPromptPackReportSummary(tests, runs, [], [fallbackScore], [], [], {
+      scoringSchemaVersion: "v2",
+      policyHash: "policy-hash",
+    });
 
     expect(summary.judgeFallbackCount).toBe(1);
     expect(summary.judgeErrorCount).toBe(0);

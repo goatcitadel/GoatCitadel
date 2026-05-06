@@ -139,6 +139,7 @@ function createDelegationHarness() {
     appendTaskActivity: vi.fn(),
     appendTaskDeliverable: vi.fn(),
     updateTask: vi.fn(),
+    updateTaskAgenticContext: vi.fn(),
     registerTaskSubagent: vi.fn(),
     updateTaskSubagent: vi.fn(),
   };
@@ -234,6 +235,7 @@ function createDelegationHarness() {
         createTask: ReturnType<typeof vi.fn>;
         registerTaskSubagent: ReturnType<typeof vi.fn>;
         updateTask: ReturnType<typeof vi.fn>;
+        updateTaskAgenticContext: ReturnType<typeof vi.fn>;
         updateTaskSubagent: ReturnType<typeof vi.fn>;
       };
     },
@@ -275,6 +277,11 @@ describe("GatewayService.runChatDelegation", () => {
       expect.objectContaining({
         agentSessionId: "delegate-session-1",
         agentName: "architect",
+        metadata: expect.objectContaining({
+          parentRunId: result.runId,
+          profileId: "architect",
+          contextMode: "isolated",
+        }),
       }),
     );
     expect(gateway.inheritDelegatedSessionToolGrants).toHaveBeenCalledWith("sess-1", "delegate-session-1");
@@ -411,5 +418,12 @@ describe("GatewayService.runChatDelegation", () => {
       expect.objectContaining({ status: "partial" }),
     );
     expect(gateway.taskLifecycleService.updateTask).toHaveBeenCalledWith("task-1", { status: "blocked" });
+    expect(gateway.taskLifecycleService.updateTaskAgenticContext).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        status: "failed",
+        failureClass: "missing_handoff",
+      }),
+    );
   });
 });

@@ -1,5 +1,31 @@
 import type { ChannelCommandDefinition, ChannelToolsetPosture } from "@goatcitadel/contracts";
 
+export type NormalizedChannelCommandName =
+  | "start"
+  | "status"
+  | "sethome"
+  | "new"
+  | "skills"
+  | "skill"
+  | "tools"
+  | "personality"
+  | "stop"
+  | "approve"
+  | "deny"
+  | "run";
+
+export interface NormalizedChannelCommand {
+  handled: boolean;
+  command?: `/${NormalizedChannelCommandName}`;
+  name?: NormalizedChannelCommandName;
+  args: string[];
+  argText: string;
+  commandText: string;
+  approvalToken?: string;
+  approvalDecision?: "approve" | "reject";
+  runDetailId?: string;
+}
+
 export const SHARED_CHANNEL_COMMANDS: ChannelCommandDefinition[] = [
   command("start", "Pairing and help entrypoint.", { platforms: ["telegram"], bypassesActiveRunGuard: true }),
   command("status", "Show connection, home channel, tool, trust, and personality state.", {
@@ -35,13 +61,18 @@ export const SHARED_CHANNEL_COMMANDS: ChannelCommandDefinition[] = [
     bypassesActiveRunGuard: true,
   }),
   command("approve", "Approve a pending remote approval token.", {
-    argsHint: "<token-id>",
-    platforms: ["telegram"],
+    argsHint: "<action-token>",
+    platforms: ["telegram", "discord"],
     bypassesActiveRunGuard: true,
   }),
   command("deny", "Reject a pending remote approval token.", {
-    argsHint: "<token-id>",
-    platforms: ["telegram"],
+    argsHint: "<action-token>",
+    platforms: ["telegram", "discord"],
+    bypassesActiveRunGuard: true,
+  }),
+  command("run", "Run a named workflow or inspect run details.", {
+    argsHint: "research <query>|details <run-id>",
+    platforms: ["discord"],
     bypassesActiveRunGuard: true,
   }),
 ];
@@ -109,6 +140,60 @@ export const DEFAULT_CHANNEL_TOOLSET_POSTURE: ChannelToolsetPosture[] = [
 export function findSharedChannelCommand(name: string): ChannelCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase().replace(/^\//, "");
   return SHARED_CHANNEL_COMMANDS.find((item) => item.name === normalized || item.aliases.includes(normalized));
+}
+
+export function normalizeChannelCommandInput(
+  input: string,
+  options: {
+    platform?: string;
+  } = {},
+): NormalizedChannelCommand {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("/")) {
+    return emptyNormalizedCommand(trimmed);
+  }
+  const [rawCommand = "", ...args] = trimmed.split(/\s+/g).filter(Boolean);
+  const requestedName = rawCommand.replace(/^\//, "").split("@", 1)[0]?.trim().toLowerCase();
+  if (!requestedName) {
+    return emptyNormalizedCommand(trimmed);
+  }
+  const definition = findSharedChannelCommand(requestedName);
+  if (!definition || (options.platform && !definition.platforms.includes(options.platform))) {
+    return emptyNormalizedCommand(trimmed);
+  }
+  const name = definition.name as NormalizedChannelCommandName;
+  const command = `/${name}` as const;
+  const argText = args.join(" ").trim();
+  const normalized: NormalizedChannelCommand = {
+    handled: true,
+    command,
+    name,
+    args,
+    argText,
+    commandText: [command, argText].filter(Boolean).join(" "),
+  };
+  if (name === "approve" || name === "deny") {
+    normalized.approvalDecision = name === "approve" ? "approve" : "reject";
+    normalized.approvalToken = normalizeChannelApprovalToken(argText);
+  }
+  if (name === "run" && args[0]?.toLowerCase() === "details") {
+    normalized.runDetailId = args.slice(1).join(" ").trim() || undefined;
+  }
+  return normalized;
+}
+
+export function normalizeChannelApprovalToken(input: string): string | undefined {
+  const token = input.trim();
+  return token.length > 0 ? token : undefined;
+}
+
+function emptyNormalizedCommand(commandText: string): NormalizedChannelCommand {
+  return {
+    handled: false,
+    args: [],
+    argText: "",
+    commandText,
+  };
 }
 
 function command(

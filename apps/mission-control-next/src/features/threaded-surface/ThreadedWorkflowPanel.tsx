@@ -1,5 +1,8 @@
+/* eslint-disable max-lines */
 import { useEffect, useMemo, useState } from "react";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
+import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
@@ -7,6 +10,10 @@ import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/compo
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 
 type WorkbenchPaneId = "files" | "selected-diff" | "repo-diff" | "output" | "snippets" | "artifact";
+
+type AgenticControlItem = NonNullable<
+  Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>["props"]["viewModel"]["agenticRuntime"]
+>["controls"][number];
 
 function CodeSourceChooser({
   availableProjects,
@@ -195,8 +202,18 @@ function CodeSourceChooser({
 }
 
 function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }> }) {
-  const { viewModel, onRetryTurn, onStopTurn, onOpenTasks, onOpenDetails, onFocusComposer, onRefreshRunState } =
-    panel.props;
+  const {
+    viewModel,
+    onRetryTurn,
+    onStopTurn,
+    onOpenTasks,
+    onOpenDetails,
+    onFocusComposer,
+    onRefreshRunState,
+    onAgenticControl,
+    agenticControlPending,
+    agenticControlStatus,
+  } = panel.props;
   const [activeTab, setActiveTab] = useState<"plan" | "run-map" | "timeline" | "actions">("plan");
 
   return (
@@ -357,6 +374,15 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
           ))}
         </section>
       ) : null}
+
+      {viewModel.agenticRuntime ? (
+        <AgenticRuntimePanel
+          viewModel={viewModel}
+          onAgenticControl={onAgenticControl}
+          agenticControlPending={agenticControlPending}
+          agenticControlStatus={agenticControlStatus}
+        />
+      ) : null}
     </section>
   );
 }
@@ -439,6 +465,88 @@ function RunMapPanel({
   );
 }
 
+function AgenticRuntimePanel({
+  viewModel,
+  onAgenticControl,
+  agenticControlPending,
+  agenticControlStatus,
+}: {
+  viewModel: Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>["props"]["viewModel"];
+  onAgenticControl?: Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>["props"]["onAgenticControl"];
+  agenticControlPending?: string | null;
+  agenticControlStatus?: string | null;
+}) {
+  const runtime = viewModel.agenticRuntime;
+  if (!runtime) {
+    return null;
+  }
+  return (
+    <section className="mc-next-cowork-run-map">
+      <div className="mc-next-cowork-run-map-head">
+        <div>
+          <p className="mc-next-panel-kicker">Agentic runtime</p>
+          <h5>{runtime.nodeCount} runtime nodes</h5>
+          <p>
+            Run {runtime.runId} · {runtime.edgeCount} links · generated {runtime.generatedAt}
+          </p>
+        </div>
+      </div>
+      <div className="mc-next-cowork-run-map-grid">
+        <PanelList
+          title="Run tree"
+          items={runtime.treeNodes.map((node) => ({
+            id: node.id,
+            title: node.label,
+            status: node.status,
+            meta: node.meta,
+          }))}
+          emptyCopy="No runtime tree nodes are loaded."
+        />
+        <PanelList title="Diagnostics" items={runtime.diagnostics} emptyCopy="No diagnostics are active." />
+        <AgenticRuntimeVisibilityPanel surface="cowork" className="mc-next-panel-list" deliveryLimit={8} />
+        <section className="mc-next-panel-list">
+          <p className="mc-next-panel-kicker">Controls</p>
+          <p>
+            State-only controls record durable operator intent. They do not live-pause or terminate an executor unless a
+            running executor separately honors that recorded intent.
+          </p>
+          {agenticControlStatus ? <p>{agenticControlStatus}</p> : null}
+          {runtime.controls.length > 0 ? (
+            <ul>
+              {runtime.controls.map((control) => {
+                const controlCopy = describeAgenticControlCopy(control);
+                return (
+                  <li key={control.id}>
+                    <div className="mc-next-panel-list-head">
+                      <strong>{control.title}</strong>
+                      {control.status ? <span>{control.status}</span> : null}
+                    </div>
+                    {control.meta ? <p>{control.meta}</p> : null}
+                    {control.note ? <p>{control.note}</p> : null}
+                    {controlCopy.intentNote ? <p>{controlCopy.intentNote}</p> : null}
+                    {onAgenticControl ? (
+                      <button
+                        type="button"
+                        className="mc-next-panel-button"
+                        disabled={!control.enabled || agenticControlPending === control.action}
+                        onClick={() => onAgenticControl(control)}
+                      >
+                        {agenticControlPending === control.action ? "Recording..." : controlCopy.buttonLabel}
+                      </button>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p>No runtime controls are available.</p>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function PanelList({
   title,
   items,
@@ -481,6 +589,42 @@ function extractCodeBlocks(content: string): Array<{ id: string; language: strin
     .filter((block) => block.content.length > 0);
 }
 
+function isPendingPatchBlock(block: { language: string; content: string }): boolean {
+  const language = block.language.trim().toLowerCase();
+  const content = block.content.trim();
+  return (
+    (language === "diff" || language === "patch") &&
+    (content.startsWith("diff --git ") || /^---\s+\S+/m.test(content)) &&
+    /^\+\+\+\s+\S+/m.test(content)
+  );
+}
+
+function validationStatusTone(status?: string | null): "success" | "warning" | "critical" {
+  if (status === "passed") {
+    return "success";
+  }
+  if (status === "failed") {
+    return "critical";
+  }
+  return "warning";
+}
+
+function describeAgenticControlCopy(control: AgenticControlItem): { buttonLabel: string; intentNote?: string } {
+  if (control.runtimeEffect !== "state_only") {
+    return { buttonLabel: control.title };
+  }
+  const actionLabel =
+    control.action === "pause"
+      ? "Record pause intent"
+      : control.action === "kill_child"
+        ? "Record kill intent"
+        : `Record ${control.title.toLowerCase()} intent`;
+  return {
+    buttonLabel: actionLabel,
+    intentNote: "State-only: records intent in GoatCitadel state; it is not a live pause or kill signal by itself.",
+  };
+}
+
 function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPanel, { kind: "code" }> }) {
   const {
     selectedTurn,
@@ -513,6 +657,11 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     onRefresh,
     onSaveFile,
     onDiscardDraft,
+    onRunValidationCommand,
+    onApplyPatch,
+    onExportPatch,
+    onRevertFile,
+    onRevertAll,
     onRunHelperSnippet,
   } = panel.props;
   const codeBlocks = useMemo(
@@ -523,6 +672,32 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
   const [activePane, setActivePane] = useState<WorkbenchPaneId>("files");
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
+  const [validationCommand, setValidationCommand] = useState("pnpm test");
+  const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
+  const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
+  const hasPatchDiff = Boolean(diff?.diff.trim());
+  const activeBlock = codeBlocks[activeBlockIndex] ?? null;
+  const activePatchBlock = activeBlock && isPendingPatchBlock(activeBlock) ? activeBlock : null;
+  const draftConflictReason = hasDirtyDraft ? "Save or discard the file draft before running repo operations." : null;
+  const worktreeBlockedReason = !readyForRepoOps ? "Create a ready worktree before running repo operations." : null;
+  const applyBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (!activePatchBlock
+      ? "Apply requires a separate pending patch. Select a diff or patch snippet before applying it."
+      : null);
+  const exportBlockedReason =
+    worktreeBlockedReason ?? draftConflictReason ?? (!hasPatchDiff ? "No worktree diff is ready to export." : null);
+  const validationBlockedReason = worktreeBlockedReason ?? draftConflictReason;
+  const selectedRevertBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (!selectedFile ? "Select a changed file before reverting it." : null) ??
+    (!selectedFile?.changed ? "The selected file has no worktree changes." : null);
+  const allRevertBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (changedFiles.length === 0 ? "No worktree changes to revert." : null);
 
   useEffect(() => {
     setActiveBlockIndex(0);
@@ -565,7 +740,30 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
 
   const activeDraft = draftContent ?? selectedFile?.content ?? "";
   const currentLanguage = selectedFile?.language ?? selectedFileDiff?.language ?? "plaintext";
-  const activeBlock = codeBlocks[activeBlockIndex] ?? null;
+
+  const requestFileSelection = (relativePath: string) => {
+    if (!relativePath || relativePath === selectedFile?.path) {
+      return;
+    }
+    if (hasDirtyDraft) {
+      setPendingFilePath(relativePath);
+      return;
+    }
+    onSelectFile(relativePath);
+  };
+
+  const runValidationFromInput = () => {
+    if (!onRunValidationCommand || validationBlockedReason || busy) {
+      return;
+    }
+    const tokens = validationCommand.trim().split(/\s+/).filter(Boolean);
+    const [command, ...args] = tokens;
+    if (!command) {
+      return;
+    }
+    onRunValidationCommand({ command, args });
+    setActivePane("output");
+  };
 
   return (
     <section className="mc-next-workbench-panel">
@@ -587,6 +785,9 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
           </StatusChip>
           <StatusChip tone={readyForRepoOps ? "success" : "warning"}>
             {workbenchState?.worktreeStatus ?? "uninitialized"}
+          </StatusChip>
+          <StatusChip tone={validationStatusTone(workbenchState?.validationStatus)}>
+            Validation: {workbenchState?.validationStatus ?? "idle"}
           </StatusChip>
           {hasDirtyDraft ? <StatusChip tone="warning">Unsaved changes</StatusChip> : null}
         </div>
@@ -615,6 +816,68 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
         >
           Create worktree
         </button>
+        <input
+          className="mc-next-workbench-command-input"
+          value={validationCommand}
+          onChange={(event) => setValidationCommand(event.target.value)}
+          disabled={busy}
+          aria-label="Validation command"
+        />
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={runValidationFromInput}
+          disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
+          title={
+            validationBlockedReason ?? (!onRunValidationCommand ? "Validation backend is unavailable." : undefined)
+          }
+        >
+          Test
+        </button>
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={() => {
+            if (activePatchBlock) {
+              onApplyPatch?.(activePatchBlock.content);
+              setActivePane("output");
+            }
+          }}
+          disabled={busy || Boolean(applyBlockedReason) || !onApplyPatch}
+          title={applyBlockedReason ?? (!onApplyPatch ? "Patch apply backend is unavailable." : undefined)}
+        >
+          Apply
+        </button>
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={() => {
+            onExportPatch?.();
+            setActivePane("output");
+          }}
+          disabled={busy || Boolean(exportBlockedReason) || !onExportPatch}
+          title={exportBlockedReason ?? (!onExportPatch ? "Patch export backend is unavailable." : undefined)}
+        >
+          Export
+        </button>
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={() => onRevertFile?.(selectedFile?.path)}
+          disabled={busy || Boolean(selectedRevertBlockedReason) || !onRevertFile}
+          title={selectedRevertBlockedReason ?? (!onRevertFile ? "File revert backend is unavailable." : undefined)}
+        >
+          Revert file
+        </button>
+        <button
+          type="button"
+          className="mc-next-panel-button"
+          onClick={() => setConfirmRevertAllOpen(true)}
+          disabled={busy || Boolean(allRevertBlockedReason) || !onRevertAll}
+          title={allRevertBlockedReason ?? (!onRevertAll ? "Revert backend is unavailable." : undefined)}
+        >
+          Revert all
+        </button>
       </div>
 
       {error ? <div className="mc-next-panel-banner warning">{error}</div> : null}
@@ -642,7 +905,7 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
               selectedPath={selectedFile?.path}
               expandedPaths={expandedPaths ?? []}
               onExpandedPathsChange={onExpandedPathsChange}
-              onSelectFile={onSelectFile}
+              onSelectFile={requestFileSelection}
             />
           ) : (
             <p className="mc-next-workbench-empty">No repo files are ready to inspect yet.</p>
@@ -812,7 +1075,45 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
             ) : null
           ) : null}
         </section>
+        <aside className="mc-next-workbench-sidebar">
+          <AgenticRuntimeVisibilityPanel surface="code" className="mc-next-panel-list" deliveryLimit={3} />
+        </aside>
       </div>
+      <ConfirmModal
+        open={Boolean(pendingFilePath)}
+        title="Discard unsaved file changes?"
+        message="Switching files will discard the unsaved editor changes in the current workbench file."
+        confirmLabel="Discard and switch"
+        danger
+        pending={saving}
+        cancelDisabled={saving}
+        disableDismiss={saving}
+        onCancel={() => setPendingFilePath(null)}
+        onConfirm={() => {
+          if (!pendingFilePath) {
+            return;
+          }
+          onDiscardDraft();
+          onSelectFile(pendingFilePath);
+          setPendingFilePath(null);
+        }}
+      />
+      <ConfirmModal
+        open={confirmRevertAllOpen}
+        title="Revert all worktree changes?"
+        message="This will discard every visible worktree change in this session. Review the repo diff before confirming."
+        confirmLabel="Revert all changes"
+        danger
+        pending={busy}
+        cancelDisabled={busy}
+        disableDismiss={busy}
+        onCancel={() => setConfirmRevertAllOpen(false)}
+        onConfirm={() => {
+          onRevertAll?.();
+          setActivePane("output");
+          setConfirmRevertAllOpen(false);
+        }}
+      />
     </section>
   );
 }

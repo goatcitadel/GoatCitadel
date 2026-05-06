@@ -20,6 +20,7 @@ import type {
   DiscordRuntimeStatus,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
+import { normalizeChannelApprovalToken } from "./channel-command-contract.js";
 
 const log = logger.child("discord-runtime-service");
 
@@ -980,10 +981,14 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
   switch (interaction.commandName) {
     case "help":
       return "/help";
+    case "status":
+      return "/status";
     case "new": {
       const title = interaction.options.getString("title");
       return title ? `/new ${title}` : "/new";
     }
+    case "sethome":
+      return "/sethome";
     case "mode":
       return `/mode ${interaction.options.getString("mode", true)}`;
     case "plan": {
@@ -1059,15 +1064,44 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
       return `/project ${interaction.options.getString("project_id", true)}`;
     case "attach":
       return `/attach ${interaction.options.getString("attachment_id", true)}`;
-    case "run":
+    case "tools":
+      return "/tools";
+    case "personality": {
+      const requested = interaction.options.getString("name");
+      return requested ? `/personality ${requested}` : "/personality";
+    }
+    case "stop":
+      return "/stop";
+    case "run": {
+      const subcommand = readDiscordSubcommand(interaction);
+      if (subcommand === "details") {
+        return `/run details ${interaction.options.getString("run_id", true)}`;
+      }
       return `/run research ${interaction.options.getString("query", true)}`;
+    }
     case "approve":
-      return `/approve ${interaction.options.getString("approval_id", true)}`;
+      return `/approve ${readDiscordApprovalToken(interaction)}`;
     case "deny":
-      return `/deny ${interaction.options.getString("approval_id", true)}`;
+      return `/deny ${readDiscordApprovalToken(interaction)}`;
     default:
       return `/${interaction.commandName}`;
   }
+}
+
+function readDiscordSubcommand(interaction: ChatInputCommandInteraction): string | undefined {
+  try {
+    return interaction.options.getSubcommand(false) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readDiscordApprovalToken(interaction: ChatInputCommandInteraction): string {
+  const actionToken =
+    interaction.options.getString("action_token") ??
+    interaction.options.getString("approval_token") ??
+    interaction.options.getString("approval_id");
+  return normalizeChannelApprovalToken(actionToken ?? "") ?? "";
 }
 
 function getErrorMessage(error: unknown): string {
@@ -1079,10 +1113,14 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
 
   return [
     new SlashCommandBuilder().setName("help").setDescription("Show GoatCitadel chat commands."),
+    new SlashCommandBuilder().setName("status").setDescription("Show GoatCitadel channel status."),
     new SlashCommandBuilder()
       .setName("new")
       .setDescription("Start a fresh GoatCitadel session for this Discord route.")
       .addStringOption((option) => option.setName("title").setDescription("Optional session title.")),
+    new SlashCommandBuilder()
+      .setName("sethome")
+      .setDescription("Set the current Discord channel or DM as the home delivery target."),
     new SlashCommandBuilder()
       .setName("mode")
       .setDescription("Switch the active GoatCitadel session mode.")
@@ -1325,17 +1363,38 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       .setName("attach")
       .setDescription("Reference an attachment id in the next send.")
       .addStringOption((option) => option.setName("attachment_id").setDescription("Attachment id.").setRequired(true)),
+    new SlashCommandBuilder().setName("tools").setDescription("Show channel tool posture and approval policy."),
+    new SlashCommandBuilder()
+      .setName("personality")
+      .setDescription("Show or set the channel personality.")
+      .addStringOption((option) => option.setName("name").setDescription("Personality id, or none.")),
+    new SlashCommandBuilder().setName("stop").setDescription("Stop the active channel run where supported."),
     new SlashCommandBuilder()
       .setName("run")
       .setDescription("Run a named chat workflow.")
-      .addStringOption((option) => option.setName("query").setDescription("Research query.").setRequired(true)),
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("research")
+          .setDescription("Run quick research.")
+          .addStringOption((option) => option.setName("query").setDescription("Research query.").setRequired(true)),
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName("details")
+          .setDescription("Show details for a run id.")
+          .addStringOption((option) => option.setName("run_id").setDescription("Run id.").setRequired(true)),
+      ),
     new SlashCommandBuilder()
       .setName("approve")
       .setDescription("Approve a pending inline tool request.")
-      .addStringOption((option) => option.setName("approval_id").setDescription("Approval id.").setRequired(true)),
+      .addStringOption((option) =>
+        option.setName("action_token").setDescription("Remote approval action token.").setRequired(true),
+      ),
     new SlashCommandBuilder()
       .setName("deny")
       .setDescription("Deny a pending inline tool request.")
-      .addStringOption((option) => option.setName("approval_id").setDescription("Approval id.").setRequired(true)),
+      .addStringOption((option) =>
+        option.setName("action_token").setDescription("Remote approval action token.").setRequired(true),
+      ),
   ].map((builder) => builder.toJSON());
 }

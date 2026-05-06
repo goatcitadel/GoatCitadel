@@ -5,6 +5,9 @@ import type {
   ChatThreadResponse,
   ChatThreadTurnRecord,
   ContinuationGateDecision,
+  AgenticControlAction,
+  AgenticControlResponse,
+  AgenticRunTreeResponse,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
 import type { OrchestrationCheckpointRecord } from "@goatcitadel/mission-control-shared/api/types";
@@ -54,6 +57,23 @@ export interface CoworkRunMapNode {
   label: string;
   status: string;
   meta?: string;
+}
+
+export interface CoworkAgenticControlItem extends CoworkViewItem {
+  action: AgenticControlAction;
+  enabled: boolean;
+  requiresApproval?: boolean;
+  runtimeEffect?: AgenticControlResponse["runtimeEffect"];
+}
+
+export interface CoworkAgenticRuntimeSummary {
+  runId: string;
+  generatedAt: string;
+  nodeCount: number;
+  edgeCount: number;
+  diagnostics: CoworkViewItem[];
+  controls: CoworkAgenticControlItem[];
+  treeNodes: CoworkRunMapNode[];
 }
 
 export interface CoworkRunViewModel {
@@ -121,6 +141,7 @@ export interface CoworkRunViewModel {
     checkpointCount: number;
     evidenceGapCount: number;
   };
+  agenticRuntime?: CoworkAgenticRuntimeSummary;
   raw: {
     activeTurn: ChatThreadTurnRecord | null;
     selectedTurn: ChatThreadTurnRecord | null;
@@ -131,6 +152,7 @@ export interface CoworkRunViewModel {
     delegationRun?: ActiveChatDelegationRun | null;
     workbenchState?: ChatSessionWorkbenchRecord | null;
     orchestrationError?: string | null;
+    agenticRunTree?: AgenticRunTreeResponse | null;
   };
 }
 
@@ -209,6 +231,50 @@ function buildCheckpointMeta(checkpoint: OrchestrationCheckpointRecord): string 
     (value): value is string => Boolean(value),
   );
   return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function buildAgenticRuntimeSummary(
+  agenticRunTree?: AgenticRunTreeResponse | null,
+): CoworkAgenticRuntimeSummary | undefined {
+  if (!agenticRunTree) {
+    return undefined;
+  }
+  return {
+    runId: agenticRunTree.runId,
+    generatedAt: agenticRunTree.generatedAt,
+    nodeCount: agenticRunTree.nodes.length,
+    edgeCount: agenticRunTree.edges.length,
+    diagnostics: agenticRunTree.diagnostics.slice(0, 3).map((diagnostic) => ({
+      id: diagnostic.signalId,
+      title: diagnostic.title,
+      status: diagnostic.severity,
+      meta: diagnostic.code.replaceAll("_", " "),
+      note: normalizeSummary(diagnostic.summary, 120),
+    })),
+    controls: agenticRunTree.controls.slice(0, 4).map((control) => ({
+      id: control.action,
+      title: control.label,
+      action: control.action,
+      enabled: control.enabled,
+      requiresApproval: control.requiresApproval,
+      runtimeEffect: control.runtimeEffect,
+      status: control.enabled ? "available" : "disabled",
+      meta:
+        [
+          control.runtimeEffect ? control.runtimeEffect.replaceAll("_", " ") : undefined,
+          control.requiresApproval ? "approval required" : undefined,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .join(" · ") || undefined,
+      note: control.reason,
+    })),
+    treeNodes: agenticRunTree.nodes.slice(0, 8).map((node) => ({
+      id: node.id,
+      label: node.label,
+      status: humanizeStatus(node.status),
+      meta: node.kind,
+    })),
+  };
 }
 
 function outputItemsMissingProof(workbenchState?: ChatSessionWorkbenchRecord | null): boolean {
@@ -400,6 +466,7 @@ export function deriveCoworkRunViewModel(input: {
   activeTurn?: ChatThreadTurnRecord | null;
   selectedTurn?: ChatThreadTurnRecord | null;
   workbenchState?: ChatSessionWorkbenchRecord | null;
+  agenticRunTree?: AgenticRunTreeResponse | null;
 }): CoworkRunViewModel {
   const {
     items,
@@ -413,6 +480,7 @@ export function deriveCoworkRunViewModel(input: {
     activeTurn = null,
     selectedTurn = null,
     workbenchState = null,
+    agenticRunTree = null,
   } = input;
 
   const activePlanSteps = executionPlan?.steps ?? [];
@@ -720,6 +788,7 @@ export function deriveCoworkRunViewModel(input: {
     checkpointCount: orchestrationCheckpoints.length,
     evidenceGapCount,
   };
+  const agenticRuntime = buildAgenticRuntimeSummary(agenticRunTree);
 
   return {
     empty,
@@ -766,6 +835,7 @@ export function deriveCoworkRunViewModel(input: {
     },
     stateGaps,
     evidenceSummary,
+    agenticRuntime,
     raw: {
       activeTurn,
       selectedTurn,
@@ -776,6 +846,7 @@ export function deriveCoworkRunViewModel(input: {
       delegationRun,
       workbenchState,
       orchestrationError,
+      agenticRunTree,
     },
   };
 }

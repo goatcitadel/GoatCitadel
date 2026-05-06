@@ -281,10 +281,134 @@ describe("chat routes additional coverage", () => {
       helperRuns: [],
       output: "No validation output yet.",
     }));
+    const runChatSessionWorkbenchCommand = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "passed",
+        outputArtifactId: "workbench-command:run-1",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:03:00.000Z",
+      },
+      run: {
+        commandRunId: "workbench-command:run-1",
+        sessionId: "sess-1",
+        worktreePath: "./.worktrees/sess-1",
+        command: "pnpm",
+        args: ["test"],
+        status: "passed",
+        exitCode: 0,
+        timedOut: false,
+        startedAt: "2026-04-10T00:03:00.000Z",
+        completedAt: "2026-04-10T00:03:01.000Z",
+        stdoutPreview: "ok",
+        validationStatus: "passed",
+        cwd: "./.worktrees/sess-1",
+        durationMs: 1000,
+        stdoutBytes: 2,
+        stderrBytes: 0,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      },
+    }));
+    const applyChatSessionWorkbenchPatch = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "passed",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:04:00.000Z",
+      },
+      applied: true,
+      checkOnly: false,
+      changedFiles: ["index.ts"],
+      output: {
+        state: {
+          sessionId: "sess-1",
+          projectId: "proj-1",
+          worktreeStatus: "ready",
+          validationStatus: "passed",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:04:00.000Z",
+        },
+        helperRuns: [],
+        output: "git apply · passed",
+      },
+    }));
+    const exportChatSessionWorkbenchPatch = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:04:00.000Z",
+      },
+      patch: "diff --git a/index.ts b/index.ts\n",
+      changedFiles: ["index.ts"],
+      summary: {
+        changedFiles: 1,
+        additions: 1,
+        deletions: 1,
+      },
+      generatedAt: "2026-04-10T00:04:00.000Z",
+    }));
+    const revertChatSessionWorkbenchFile = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:04:00.000Z",
+      },
+      revertedFiles: ["index.ts"],
+      changedFiles: [],
+      output: {
+        state: {
+          sessionId: "sess-1",
+          projectId: "proj-1",
+          worktreeStatus: "ready",
+          validationStatus: "idle",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:04:00.000Z",
+        },
+        helperRuns: [],
+        output: "Reverted index.ts.",
+      },
+    }));
+    const revertChatSessionWorkbenchChanges = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "idle",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:04:00.000Z",
+      },
+      revertedFiles: ["index.ts"],
+      changedFiles: [],
+      output: {
+        state: {
+          sessionId: "sess-1",
+          projectId: "proj-1",
+          worktreeStatus: "ready",
+          validationStatus: "idle",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:04:00.000Z",
+        },
+        helperRuns: [],
+        output: "Reverted 1 file change(s).",
+      },
+    }));
 
     app = Fastify();
     app.decorate("services", {
       chatSessions: {
+        applyChatSessionWorkbenchPatch,
+        exportChatSessionWorkbenchPatch,
         getChatSessionWorkbench,
         createChatSessionWorkbenchWorktree,
         getChatSessionWorkbenchTree,
@@ -293,6 +417,9 @@ describe("chat routes additional coverage", () => {
         getChatSessionWorkbenchFileDiff,
         getChatSessionWorkbenchDiff,
         getChatSessionWorkbenchOutput,
+        revertChatSessionWorkbenchChanges,
+        revertChatSessionWorkbenchFile,
+        runChatSessionWorkbenchCommand,
       },
     } as never);
     await app.register(chatRoutes);
@@ -370,6 +497,71 @@ describe("chat routes additional coverage", () => {
     expect(outputResponse.json()).toMatchObject({
       output: "No validation output yet.",
     });
+
+    const commandResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/workbench/command",
+      payload: {
+        command: "pnpm",
+        args: ["test"],
+        timeoutMs: 30_000,
+      },
+    });
+    expect(commandResponse.statusCode).toBe(200);
+    expect(commandResponse.json()).toMatchObject({
+      run: {
+        command: "pnpm",
+        args: ["test"],
+        status: "passed",
+        exitCode: 0,
+      },
+      state: {
+        validationStatus: "passed",
+      },
+    });
+    expect(runChatSessionWorkbenchCommand).toHaveBeenCalledWith("sess-1", {
+      command: "pnpm",
+      args: ["test"],
+      timeoutMs: 30_000,
+    });
+
+    const patchApplyResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/workbench/patch/apply",
+      payload: {
+        patch: "diff --git a/index.ts b/index.ts\n",
+      },
+    });
+    expect(patchApplyResponse.statusCode).toBe(200);
+    expect(applyChatSessionWorkbenchPatch).toHaveBeenCalledWith("sess-1", {
+      patch: "diff --git a/index.ts b/index.ts\n",
+    });
+
+    const patchExportResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/workbench/patch/export",
+    });
+    expect(patchExportResponse.statusCode).toBe(200);
+    expect(patchExportResponse.json()).toMatchObject({
+      changedFiles: ["index.ts"],
+      summary: { changedFiles: 1 },
+    });
+    expect(exportChatSessionWorkbenchPatch).toHaveBeenCalledWith("sess-1");
+
+    const revertFileResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/workbench/revert-file",
+      payload: { path: "index.ts" },
+    });
+    expect(revertFileResponse.statusCode).toBe(200);
+    expect(revertChatSessionWorkbenchFile).toHaveBeenCalledWith("sess-1", { path: "index.ts" });
+
+    const revertAllResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/workbench/revert-all",
+    });
+    expect(revertAllResponse.statusCode).toBe(200);
+    expect(revertChatSessionWorkbenchChanges).toHaveBeenCalledWith("sess-1");
   });
 
   it("deletes chat sessions through the gateway", async () => {

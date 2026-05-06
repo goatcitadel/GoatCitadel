@@ -195,6 +195,131 @@ describe("comms routes", () => {
     );
   });
 
+  it("lists channel delivery runtime records with retry and stale state visible", async () => {
+    const listChannelDeliveryRuntime = vi.fn(() => [
+      {
+        deliveryId: "delivery-retry",
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        channelKey: "discord",
+        target: "channel:123",
+        status: "retrying",
+        deliveryStatus: "retrying",
+        attempts: 2,
+        maxAttempts: 3,
+        nextAttemptAt: "2026-05-05T12:00:00.000Z",
+        fallbackReason: "rate limited",
+        createdAt: "2026-05-05T11:00:00.000Z",
+        updatedAt: "2026-05-05T11:30:00.000Z",
+      },
+      {
+        deliveryId: "delivery-stale",
+        connectionId: "22222222-2222-4222-8222-222222222222",
+        channelKey: "telegram",
+        target: "chat:456",
+        status: "stale",
+        deliveryStatus: "degraded",
+        attempts: 0,
+        maxAttempts: 3,
+        staleReason: "Delivery became stale before it could be sent.",
+        error: "stale",
+        fallbackReason: "Delivery became stale before it could be sent.",
+        providerMessageId: "telegram-msg-1",
+        createdAt: "2026-05-05T10:00:00.000Z",
+        updatedAt: "2026-05-05T10:20:00.000Z",
+      },
+    ]);
+    app = Fastify();
+    decorateComms(app, { listChannelDeliveryRuntime });
+    await app.register(commsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/deliveries",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listChannelDeliveryRuntime).toHaveBeenCalledTimes(1);
+    expect(response.json()).toEqual({
+      count: 2,
+      deliveries: [
+        expect.objectContaining({
+          deliveryId: "delivery-retry",
+          status: "retrying",
+          deliveryStatus: "retrying",
+          attempts: 2,
+          maxAttempts: 3,
+          nextAttemptAt: "2026-05-05T12:00:00.000Z",
+          fallbackReason: "rate limited",
+        }),
+        expect.objectContaining({
+          deliveryId: "delivery-stale",
+          status: "stale",
+          deliveryStatus: "degraded",
+          staleReason: "Delivery became stale before it could be sent.",
+          providerMessageId: "telegram-msg-1",
+          error: "stale",
+        }),
+      ],
+    });
+  });
+
+  it("filters channel delivery runtime records by connection id and caps the limit", async () => {
+    const listChannelDeliveryRuntime = vi.fn(() => [
+      {
+        deliveryId: "delivery-one",
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        channelKey: "discord",
+        target: "channel:123",
+        status: "queued",
+        attempts: 0,
+        maxAttempts: 3,
+        createdAt: "2026-05-05T11:00:00.000Z",
+        updatedAt: "2026-05-05T11:00:00.000Z",
+      },
+      {
+        deliveryId: "delivery-two",
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        channelKey: "discord",
+        target: "channel:456",
+        status: "queued",
+        attempts: 0,
+        maxAttempts: 3,
+        createdAt: "2026-05-05T11:01:00.000Z",
+        updatedAt: "2026-05-05T11:01:00.000Z",
+      },
+      {
+        deliveryId: "delivery-other",
+        connectionId: "22222222-2222-4222-8222-222222222222",
+        channelKey: "telegram",
+        target: "chat:456",
+        status: "queued",
+        attempts: 0,
+        maxAttempts: 3,
+        createdAt: "2026-05-05T11:02:00.000Z",
+        updatedAt: "2026-05-05T11:02:00.000Z",
+      },
+    ]);
+    app = Fastify();
+    decorateComms(app, { listChannelDeliveryRuntime });
+    await app.register(commsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/deliveries?connectionId=11111111-1111-4111-8111-111111111111&limit=1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      count: 1,
+      deliveries: [
+        expect.objectContaining({
+          deliveryId: "delivery-one",
+          connectionId: "11111111-1111-4111-8111-111111111111",
+        }),
+      ],
+    });
+  });
+
   it("returns channel capabilities from the gateway", async () => {
     const getIntegrationConnectionChannelCapabilities = vi.fn(() => ({
       channelKey: "discord",

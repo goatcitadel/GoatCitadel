@@ -1,10 +1,25 @@
 import type { FastifyPluginAsync } from "fastify";
+import type { AgenticSubagentMetadata } from "@goatcitadel/contracts";
+import process from "node:process";
 import { z } from "zod";
+import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
+import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const statusSchema = z.enum(["planning", "inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"]);
 
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]);
+const agenticRunStatusSchema = z.enum([
+  "queued",
+  "planning",
+  "running",
+  "approval_required",
+  "paused",
+  "completed",
+  "failed",
+  "cancelled",
+  "stopped_by_limit",
+]);
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(50),
@@ -37,7 +52,19 @@ const updateTaskSchema = z.object({
 
 const createActivitySchema = z.object({
   agentId: z.string().min(1).optional(),
-  activityType: z.enum(["spawned", "updated", "completed", "file_created", "status_changed", "comment"]),
+  activityType: z.enum([
+    "spawned",
+    "updated",
+    "completed",
+    "file_created",
+    "status_changed",
+    "comment",
+    "diagnostic",
+    "heartbeat",
+    "control",
+    "handoff",
+    "delivery",
+  ]),
   message: z.string().min(1),
   metadata: z.record(z.unknown()).optional(),
 });
@@ -49,14 +76,106 @@ const createDeliverableSchema = z.object({
   description: z.string().optional(),
 });
 
+const agenticSubagentMetadataSchema = z
+  .object({
+    runId: z.string().min(1).optional(),
+    parentRunId: z.string().min(1).optional(),
+    profileId: z.string().min(1).optional(),
+    contextMode: z.enum(["isolated", "fork"]).optional(),
+    index: z.number().int().nonnegative().optional(),
+    dependsOnStepIds: z.array(z.string().min(1)).optional(),
+    heartbeatAt: z.string().datetime().optional(),
+    timeoutAt: z.string().datetime().optional(),
+    failureClass: z
+      .enum([
+        "spawn_failure",
+        "timeout",
+        "crash",
+        "stale_worker",
+        "invalid_assignee",
+        "unsafe_transition",
+        "missing_handoff",
+        "missing_artifact",
+        "repeated_tool_loop",
+        "approval_stale",
+        "delivery_failed",
+        "provider_fallback_loop",
+        "other",
+      ])
+      .optional(),
+    diagnostics: z.array(z.record(z.unknown())).optional(),
+    costUsd: z.number().nonnegative().optional(),
+    tokenTotal: z.number().int().nonnegative().optional(),
+    filesTouched: z.array(z.string().min(1)).optional(),
+    handoffEvidence: z.record(z.unknown()).optional(),
+  })
+  .strict()
+  .transform((value) => value as AgenticSubagentMetadata);
+
 const createSubagentSchema = z.object({
   agentSessionId: z.string().min(1),
   agentName: z.string().min(1).optional(),
+  metadata: agenticSubagentMetadataSchema.optional(),
 });
 
 const updateSubagentSchema = z.object({
-  status: z.enum(["active", "completed", "failed", "killed"]).optional(),
+  status: z.enum(["active", "paused", "completed", "failed", "killed", "stale"]).optional(),
+  metadata: agenticSubagentMetadataSchema.nullable().optional(),
   endedAt: z.string().datetime().optional(),
+});
+
+const agenticRunsQuerySchema = z.object({
+  workspaceId: z.string().min(1).optional(),
+  status: agenticRunStatusSchema.optional(),
+  surface: z.enum(["chat", "cowork", "code"]).optional(),
+  sessionId: z.string().min(1).optional(),
+  boardId: z.string().min(1).optional(),
+  parentRunId: z.string().min(1).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const agenticRunParamsSchema = z.object({
+  runId: z.string().min(1),
+});
+
+const agenticControlSchema = z.object({
+  action: z.enum(["pause", "cancel", "retry", "steer", "kill_child", "approve", "reject", "open_child"]),
+  controlId: z.string().min(1).optional(),
+  reason: z.string().optional(),
+  instruction: z.string().optional(),
+  agentSessionId: z.string().optional(),
+  approvalId: z.string().optional(),
+  actorId: z.string().optional(),
+});
+
+const agenticDiagnosticSchema = z.object({
+  code: z.enum([
+    "repeated_tool_result",
+    "post_compaction_loop",
+    "missing_assistant_output",
+    "stale_approval",
+    "child_timeout",
+    "spawn_failure",
+    "worker_crash",
+    "stale_worker",
+    "invalid_assignee_profile",
+    "unsafe_status_transition",
+    "provider_fallback_loop",
+    "dirty_worktree_without_artifact",
+    "missing_claimed_artifact",
+    "missing_claimed_file",
+    "missing_claimed_test",
+    "repeated_phase_failure",
+    "final_delivery_retry",
+  ]),
+  severity: z.enum(["info", "warning", "critical"]),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  evidenceRef: z.string().optional(),
+  signalId: z.string().optional(),
+  createdAt: z.string().datetime().optional(),
+  resolvedAt: z.string().datetime().optional(),
 });
 
 const deleteTaskQuerySchema = z.object({
@@ -73,6 +192,75 @@ const deleteTaskBodySchema = z
   .optional();
 
 export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/agentic/availability", async (_request, reply) => {
+    const generatedAt = new Date().toISOString();
+    try {
+      return reply.send(
+        buildAgenticRuntimeAvailability({
+          generatedAt,
+          harnesses: probeAgenticHarnessAvailability(buildAgenticHarnessProbeOptions(generatedAt)),
+          providers: fastify.services.llm.listLlmProviders(),
+          plugins: fastify.services.integrations.listIntegrationPlugins(),
+          channelCatalog: fastify.services.integrations.listIntegrationCatalog("channel"),
+          channelConnections: fastify.services.integrations.listIntegrationConnections("channel"),
+        }),
+      );
+    } catch (error) {
+      return sendRouteError(reply, error, _request.log);
+    }
+  });
+
+  fastify.get("/api/v1/agentic/runs", async (request, reply) => {
+    const parsed = agenticRunsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(fastify.services.tasks.listAgenticRuns(parsed.data));
+  });
+
+  fastify.get("/api/v1/agentic/runs/:runId/tree", async (request, reply) => {
+    const parsed = agenticRunParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.tasks.getAgenticRunTree(parsed.data.runId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/agentic/runs/:runId/control", async (request, reply) => {
+    const params = agenticRunParamsSchema.safeParse(request.params);
+    const body = agenticControlSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(fastify.services.tasks.invokeAgenticControl(params.data.runId, body.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/tasks/:taskId/agentic/diagnostics", async (request, reply) => {
+    const taskId = (request.params as { taskId: string }).taskId;
+    const parsed = agenticDiagnosticSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(fastify.services.tasks.appendTaskDiagnostic(taskId, parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.get("/api/v1/tasks", async (request, reply) => {
     const parsed = listQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -258,3 +446,45 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function buildAgenticHarnessProbeOptions(generatedAt: string): Parameters<typeof probeAgenticHarnessAvailability>[0] {
+  return {
+    env: process.env,
+    now: () => generatedAt,
+    permissions: {
+      codex_cli: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_CODEX_CLI_APPROVED"),
+      claude_code: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_CLAUDE_CODE_APPROVED"),
+      opencode: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_OPENCODE_APPROVED"),
+      gemini_cli: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_GEMINI_CLI_APPROVED"),
+      acp: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_ACP_APPROVED"),
+      scripted_runner: readBooleanEnv("GOATCITADEL_SCRIPTED_RUNNER_APPROVED"),
+    },
+    sandbox: {
+      required: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_SANDBOX_REQUIRED") ?? true,
+      satisfied: readBooleanEnv("GOATCITADEL_AGENTIC_HARNESS_SANDBOX_SATISFIED") === true,
+      reason: process.env.GOATCITADEL_AGENTIC_HARNESS_SANDBOX_REASON,
+    },
+    policyApprovedToolNames: readCsvEnv("GOATCITADEL_SCRIPTED_RUNNER_APPROVED_TOOLS"),
+  };
+}
+
+function readBooleanEnv(key: string): boolean | undefined {
+  const value = process.env[key]?.trim().toLowerCase();
+  if (!value) {
+    return undefined;
+  }
+  if (["1", "true", "yes", "on"].includes(value)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(value)) {
+    return false;
+  }
+  return undefined;
+}
+
+function readCsvEnv(key: string): string[] {
+  return (process.env[key] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}

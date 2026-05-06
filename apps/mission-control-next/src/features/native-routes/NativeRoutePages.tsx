@@ -26,6 +26,8 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   addTaskDeliverable,
+  activateImprovementCandidate,
+  approveImprovementCandidate,
   archiveAgentProfile,
   createTask,
   createAgentProfile,
@@ -35,6 +37,7 @@ import {
   fetchAgents,
   fetchCapabilityProposal,
   fetchChatGeneratedArtifacts,
+  fetchCuratorReviewItem,
   fetchFileTemplates,
   fetchFilesList,
   fetchImportedAgentCatalog,
@@ -50,13 +53,21 @@ import {
   fetchTaskDeliverables,
   downloadFile,
   previewSkillEvaluation,
+  promoteImprovementCandidate,
   reloadSkills,
+  rejectImprovementCandidate,
   restoreTask,
   restoreAgentProfile,
   runSkillEvaluation,
+  snoozeImprovementCandidate,
   updateTask,
   updateAgentProfile,
   updateSkillState,
+  validateImprovementCandidate,
+} from "@goatcitadel/mission-control-shared/api/client";
+import type {
+  CuratorReviewItem,
+  ImprovementCandidateLifecycleAction,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
@@ -1217,9 +1228,11 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
   const [runs, setRuns] = useState<SkillEvaluationRunRecord[]>([]);
   const [activeRun, setActiveRun] = useState<SkillEvaluationRunRecord | null>(null);
   const [proposalDetail, setProposalDetail] = useState<CapabilityProposalDetailRecord | null>(null);
+  const [curatorReview, setCuratorReview] = useState<CuratorReviewItem | null>(null);
   const [scenarioDraft, setScenarioDraft] = useState("");
   const [criteriaDraft, setCriteriaDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [proposalBusyKey, setProposalBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadRuns = useCallback(async () => {
@@ -1240,6 +1253,7 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
     setRuns([]);
     setActiveRun(null);
     setProposalDetail(null);
+    setCuratorReview(null);
     setScenarioDraft("");
     setCriteriaDraft("");
     setError(null);
@@ -1306,6 +1320,9 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
       const response = await createSkillEvaluationProposal(activeRun.runId);
       setActiveRun(response.run);
       setProposalDetail({ proposal: response.proposal, events: [], candidate: undefined });
+      if (response.run.improvementCandidateId) {
+        setCuratorReview(await fetchCuratorReviewItem(response.run.improvementCandidateId));
+      }
       await loadRuns();
       onNotice({ tone: "success", message: `Proposal created: ${response.proposal.proposalId}` });
     } catch (proposalError) {
@@ -1323,7 +1340,12 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
     setBusy(true);
     setError(null);
     try {
-      setProposalDetail(await fetchCapabilityProposal(proposalId));
+      const detail = await fetchCapabilityProposal(proposalId);
+      setProposalDetail(detail);
+      const candidateId = detail.proposal.candidateId ?? activeRun?.improvementCandidateId;
+      if (candidateId) {
+        setCuratorReview(await fetchCuratorReviewItem(candidateId));
+      }
     } catch (proposalError) {
       setError(getErrorMessage(proposalError));
     } finally {
@@ -1331,8 +1353,65 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
     }
   };
 
+  const handleOpenTrustReview = async () => {
+    const candidateId = activeRun?.improvementCandidateId ?? proposalDetail?.proposal.candidateId;
+    if (!candidateId) {
+      return;
+    }
+    setProposalBusyKey("open-review");
+    setError(null);
+    try {
+      setCuratorReview(await fetchCuratorReviewItem(candidateId));
+    } catch (reviewError) {
+      setError(getErrorMessage(reviewError));
+    } finally {
+      setProposalBusyKey(null);
+    }
+  };
+
+  const handleProposalLifecycleAction = async (action: ImprovementCandidateLifecycleAction) => {
+    const candidateId = curatorReview?.candidate.candidateId ?? activeRun?.improvementCandidateId;
+    if (!candidateId) {
+      return;
+    }
+    setProposalBusyKey(action);
+    setError(null);
+    try {
+      const input =
+        action === "snooze"
+          ? {
+              reason: "Operator snoozed from proposal trust review.",
+              snoozeUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+            }
+          : { reason: `Operator selected ${action} from proposal trust review.` };
+      const result =
+        action === "validate"
+          ? await validateImprovementCandidate(candidateId, input)
+          : action === "approve"
+            ? await approveImprovementCandidate(candidateId, input)
+            : action === "reject"
+              ? await rejectImprovementCandidate(candidateId, input)
+              : action === "snooze"
+                ? await snoozeImprovementCandidate(candidateId, input)
+                : action === "activate"
+                  ? await activateImprovementCandidate(candidateId, input)
+                  : await promoteImprovementCandidate(candidateId, input);
+      setCuratorReview(result.review);
+      await loadRuns();
+      onNotice({
+        tone: result.mutationApplied ? "success" : "info",
+        message: `${action} recorded. Mutation applied: ${result.mutationApplied ? "yes" : "no"}.`,
+      });
+    } catch (actionError) {
+      setError(getErrorMessage(actionError));
+    } finally {
+      setProposalBusyKey(null);
+    }
+  };
+
   const baselineRate = activeRun ? formatPercent(activeRun.baselineResult.score.passRate) : "n/a";
   const candidateRate = activeRun?.candidateResult ? formatPercent(activeRun.candidateResult.score.passRate) : "n/a";
+  const trustReviewCandidateId = activeRun?.improvementCandidateId ?? proposalDetail?.proposal.candidateId;
 
   return (
     <div className="mc-next-settings-stack">
@@ -1404,6 +1483,15 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
           <FileText className="h-4 w-4" />
           Open proposal
         </button>
+        <button
+          type="button"
+          className="mc-next-settings-filter"
+          disabled={Boolean(proposalBusyKey) || !trustReviewCandidateId}
+          onClick={() => void handleOpenTrustReview()}
+        >
+          <Workflow className="h-4 w-4" />
+          Trust review
+        </button>
       </LibraryButtonRow>
       {activeRun ? (
         <>
@@ -1433,21 +1521,13 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
       ) : (
         <LibraryEmptyState label="No skill evaluation run is selected." />
       )}
-      {proposalDetail ? (
-        <LibraryCodeBlock label="Proposal">
-          {JSON.stringify(
-            {
-              proposalId: proposalDetail.proposal.proposalId,
-              status: proposalDetail.proposal.status,
-              title: proposalDetail.proposal.title,
-              summary: proposalDetail.proposal.summary,
-              activationTargetId: proposalDetail.proposal.activationTargetId,
-              events: proposalDetail.events.length,
-            },
-            null,
-            2,
-          )}
-        </LibraryCodeBlock>
+      {proposalDetail || curatorReview ? (
+        <ProposalTrustReviewPanel
+          proposalDetail={proposalDetail}
+          curatorReview={curatorReview}
+          busyKey={proposalBusyKey}
+          onAction={(action) => void handleProposalLifecycleAction(action)}
+        />
       ) : null}
       <LibraryActionList
         items={runs.slice(0, 5).map((run) => ({
@@ -1462,6 +1542,162 @@ function SkillEvaluationWorkbench({ skill, onNotice }: { skill: SkillListItem; o
         }))}
         emptyLabel="No stored skill evaluations yet."
       />
+    </div>
+  );
+}
+
+function ProposalTrustReviewPanel({
+  proposalDetail,
+  curatorReview,
+  busyKey,
+  onAction,
+}: {
+  proposalDetail: CapabilityProposalDetailRecord | null;
+  curatorReview: CuratorReviewItem | null;
+  busyKey: string | null;
+  onAction: (action: ImprovementCandidateLifecycleAction) => void;
+}) {
+  const proposal = proposalDetail?.proposal;
+  const payload = proposal?.payload;
+  const observedIssue =
+    curatorReview?.observedIssue ??
+    readPayloadString(payload, ["observedIssue", "issue", "summary"]) ??
+    proposal?.summary ??
+    "No observed issue was attached to this proposal.";
+  const proposedChange =
+    curatorReview?.proposedChange ??
+    readPayloadString(payload, ["proposedChange", "mutation.summary", "proposalType"]) ??
+    "Review the linked proposal payload before approving any mutation.";
+  const risk = curatorReview?.risk ?? readPayloadString(payload, ["risk"]) ?? "unknown";
+  const callableImpact = curatorReview?.callableImpact ?? readPayloadString(payload, ["callableImpact"]) ?? "unknown";
+  const rollbackRef =
+    curatorReview?.rollbackRef ??
+    curatorReview?.latestActivation?.preActivationSnapshot.refId ??
+    readPayloadString(payload, ["rollbackRef"]) ??
+    "not created";
+  const approvalState = curatorReview?.latestActivation?.approvalId
+    ? `${curatorReview.latestActivation.status} · approval ${curatorReview.latestActivation.approvalId}`
+    : (curatorReview?.candidate.status ?? proposal?.status ?? "not requested");
+  const mutationApplied = Boolean(curatorReview?.mutationApplied);
+  const evidence = curatorReview?.evidence.length ? curatorReview.evidence : readPayloadEvidenceRefs(payload);
+  const actionDisabledReasons = curatorReview?.disabledReasons ?? {};
+  const actionStatuses = curatorReview?.actionStatuses;
+  const actions: ImprovementCandidateLifecycleAction[] = [
+    "validate",
+    "approve",
+    "reject",
+    "snooze",
+    "activate",
+    "promote",
+  ];
+
+  const canRunAction = (action: ImprovementCandidateLifecycleAction) => {
+    if (!curatorReview || busyKey) {
+      return false;
+    }
+    if (actionStatuses?.[action] !== "ready") {
+      return false;
+    }
+    if ((action === "activate" || action === "promote") && curatorReview.candidate.status !== "approved") {
+      return false;
+    }
+    return true;
+  };
+
+  return (
+    <div className="mc-next-settings-stack" data-testid="proposal-trust-review">
+      <LibraryMetricGrid
+        items={[
+          { label: "Approval", value: approvalState, meta: "Review-first lifecycle" },
+          { label: "Mutation applied", value: mutationApplied ? "true" : "false", meta: "No silent mutation" },
+          {
+            label: "Risk",
+            value: risk,
+            meta: curatorReview?.approvalRequired ? "Approval required" : "Review visible",
+          },
+          {
+            label: "Callable impact",
+            value: callableImpact,
+            meta: curatorReview?.corruptionStatus ?? "proposal payload",
+          },
+        ]}
+      />
+      <LibraryCodeBlock label="Observed issue">{observedIssue}</LibraryCodeBlock>
+      <LibraryCodeBlock label="Proposed change">{proposedChange}</LibraryCodeBlock>
+      <LibraryCodeBlock label="Rollback">{rollbackRef}</LibraryCodeBlock>
+      <LibraryActionList
+        items={evidence.slice(0, 8).map((item) => ({
+          id: `${item.refType}:${item.refId}`,
+          label: item.refType,
+          description: item.refId,
+          meta: item.hash ? `hash ${item.hash}` : formatEvidenceMetadata(item.metadata),
+        }))}
+        emptyLabel="No proposal evidence refs are attached yet."
+      />
+      <LibraryButtonRow>
+        {actions.map((action) => {
+          const disabledReason = !curatorReview
+            ? "Open the trust review before running lifecycle actions."
+            : (actionDisabledReasons[action] ??
+              ((action === "activate" || action === "promote") && curatorReview.candidate.status !== "approved"
+                ? "Candidate must be approved before mutation-capable actions."
+                : undefined));
+          const disabled = !canRunAction(action);
+          return (
+            <button
+              key={action}
+              type="button"
+              className="mc-next-settings-filter"
+              disabled={disabled}
+              title={disabled ? disabledReason : undefined}
+              onClick={() => onAction(action)}
+            >
+              {busyKey === action ? "Working..." : formatTaskStatus(action)}
+            </button>
+          );
+        })}
+      </LibraryButtonRow>
+      {curatorReview ? (
+        <LibraryCodeBlock label="Lifecycle truth">
+          {JSON.stringify(
+            {
+              candidateId: curatorReview.candidate.candidateId,
+              status: curatorReview.candidate.status,
+              runtimeProvenCallable: curatorReview.runtimeProvenCallable,
+              corruptionStatus: curatorReview.corruptionStatus,
+              disabledReasons: curatorReview.disabledReasons,
+              latestActivation: curatorReview.latestActivation
+                ? {
+                    activationId: curatorReview.latestActivation.activationId,
+                    status: curatorReview.latestActivation.status,
+                    approvalId: curatorReview.latestActivation.approvalId,
+                    mutationApplied,
+                  }
+                : null,
+            },
+            null,
+            2,
+          )}
+        </LibraryCodeBlock>
+      ) : (
+        <LibraryEmptyState label="Open the trust review to see action guards and lifecycle state." />
+      )}
+      {proposal ? (
+        <LibraryCodeBlock label="Capability proposal">
+          {JSON.stringify(
+            {
+              proposalId: proposal.proposalId,
+              status: proposal.status,
+              title: proposal.title,
+              activationTargetId: proposal.activationTargetId,
+              candidateId: proposal.candidateId,
+              events: proposalDetail?.events.length ?? 0,
+            },
+            null,
+            2,
+          )}
+        </LibraryCodeBlock>
+      ) : null}
     </div>
   );
 }
@@ -2368,6 +2604,70 @@ function parseCriterionDrafts(value: string): SkillEvaluationCriterionDraft[] | 
       requiredTerms: terms ? splitCommaList(terms) : undefined,
     };
   });
+}
+
+function readPayloadString(payload: unknown, paths: string[]): string | undefined {
+  for (const path of paths) {
+    const value = readPayloadPath(payload, path);
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function readPayloadPath(payload: unknown, path: string): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  return path.split(".").reduce<unknown>((current, key) => {
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    return (current as Record<string, unknown>)[key];
+  }, payload);
+}
+
+function readPayloadEvidenceRefs(payload: unknown) {
+  const refs = readPayloadPath(payload, "evidenceRefs");
+  if (!Array.isArray(refs)) {
+    return [];
+  }
+  return refs
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const refType = typeof record.refType === "string" ? record.refType : undefined;
+      const refId = typeof record.refId === "string" ? record.refId : undefined;
+      if (!refType || !refId) {
+        return null;
+      }
+      return {
+        refType,
+        refId,
+        hash: typeof record.hash === "string" ? record.hash : undefined,
+        metadata:
+          record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
+            ? (record.metadata as Record<string, unknown>)
+            : undefined,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
+
+function formatEvidenceMetadata(metadata?: Record<string, unknown>) {
+  if (!metadata) {
+    return undefined;
+  }
+  const entries = Object.entries(metadata)
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${String(value)}`);
+  return entries.length ? entries.join(" · ") : undefined;
 }
 
 function formatPercent(value: number) {

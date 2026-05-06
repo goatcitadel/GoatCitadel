@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
+  AgenticSubagentMetadata,
+  AgenticTaskContext,
   ChatCitationRecord,
   ChatDelegateAcceptRequest,
   ChatDelegateRequest,
@@ -107,18 +109,31 @@ export interface ChatDelegationServiceHost {
       status: "in_progress";
       priority: "normal";
       createdBy: string;
+      agenticContext?: AgenticTaskContext;
     }): { taskId: string };
     appendTaskActivity(
       taskId: string,
-      input: { activityType: "comment"; message: string; agentId?: string; metadata?: Record<string, unknown> },
+      input: {
+        activityType: "comment" | "diagnostic" | "handoff";
+        message: string;
+        agentId?: string;
+        metadata?: Record<string, unknown>;
+      },
     ): unknown;
     appendTaskDeliverable(
       taskId: string,
       input: { deliverableType: "artifact"; title: string; description: string },
     ): unknown;
     updateTask(taskId: string, patch: { status: "review" | "blocked" }): unknown;
-    registerTaskSubagent(taskId: string, input: { agentSessionId: string; agentName: string }): unknown;
-    updateTaskSubagent(agentSessionId: string, patch: { status: "completed" | "failed"; endedAt: string }): unknown;
+    updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): unknown;
+    registerTaskSubagent(
+      taskId: string,
+      input: { agentSessionId: string; agentName: string; metadata?: AgenticSubagentMetadata },
+    ): unknown;
+    updateTaskSubagent(
+      agentSessionId: string,
+      patch: { status: "completed" | "failed"; endedAt: string; metadata?: AgenticSubagentMetadata },
+    ): unknown;
   };
   getSession(sessionId: string): unknown;
   listChatMessages(sessionId: string, limit: number): Promise<Array<{ role: string; content: string }>>;
@@ -176,6 +191,9 @@ export class ChatDelegationService {
       throw new ValidationError({ message: "Code delegation requires a project-bound parent session." });
     }
 
+    const runId = randomUUID();
+    const maxSpawn = mode === "parallel" ? 4 : 1;
+    const childRunIds = delegationSteps.map((step) => `${runId}:${step.stepId}`);
     const task = deps.taskLifecycleService.createTask({
       workspaceId: sessionWorkspaceId,
       title: `Delegation: ${objective.slice(0, 120)}`,
@@ -183,9 +201,28 @@ export class ChatDelegationService {
       status: "in_progress",
       priority: "normal",
       createdBy: "chat",
+      agenticContext: {
+        boardId: `cowork:${sessionWorkspaceId}`,
+        runId,
+        childRunIds,
+        parentSessionId: sessionId,
+        surface: executionMode,
+        status: "running",
+        contextMode: "fork",
+        workspaceScope: {
+          kind: executionMode === "code" ? "worktree" : "session",
+        },
+        providerId,
+        model,
+        maxSpawn,
+        activeChildCount: 0,
+        deliveryState: {
+          status: "not_required",
+          attempts: 0,
+        },
+      },
     });
 
-    const runId = randomUUID();
     deps.storage.chatDelegationRuns.create({
       runId,
       sessionId,
@@ -258,9 +295,20 @@ export class ChatDelegationService {
         reflectionMode: "off",
       });
       const agentSessionId = childSession.sessionId;
+      const childRunId = `${runId}:${step.stepId}`;
+      const childMetadataBase: AgenticSubagentMetadata = {
+        runId: childRunId,
+        parentRunId: runId,
+        profileId: step.role,
+        contextMode: "isolated",
+        index: step.index,
+        dependsOnStepIds: step.dependsOnStepIds,
+        heartbeatAt: startedAt,
+      };
       deps.taskLifecycleService.registerTaskSubagent(task.taskId, {
         agentSessionId,
         agentName: step.role,
+        metadata: childMetadataBase,
       });
 
       const dependencyContext = step.dependsOnStepIds
@@ -330,22 +378,38 @@ export class ChatDelegationService {
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
         await callbacks?.onStep?.(completedStep);
+        const handoffEvidence = !failed
+          ? {
+              summary: output.slice(0, 1000),
+              artifactRefs: [`delegation-step:${step.stepId}`],
+              sourceStepId: step.stepId,
+              createdAt: finishedAt,
+            }
+          : undefined;
         deps.taskLifecycleService.updateTaskSubagent(agentSessionId, {
           status: failed ? "failed" : "completed",
           endedAt: finishedAt,
+          metadata: {
+            ...childMetadataBase,
+            heartbeatAt: finishedAt,
+            failureClass: failed ? "missing_handoff" : undefined,
+            handoffEvidence,
+          },
         });
         deps.taskLifecycleService.appendTaskActivity(task.taskId, {
-          activityType: "comment",
+          activityType: failed ? "diagnostic" : "handoff",
           agentId: step.role,
           message: failed
             ? `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}.`
             : `${step.role} completed delegation step ${step.index + 1}/${delegationSteps.length}.`,
           metadata: {
             runId,
+            childRunId,
             stepId: step.stepId,
             childSessionId: childSession.sessionId,
             childTurnId: response.turnId,
             durableRunId: response.trace?.durable?.runId,
+            handoffEvidence,
           },
         });
         if (!failed) {
@@ -394,12 +458,17 @@ export class ChatDelegationService {
         deps.taskLifecycleService.updateTaskSubagent(agentSessionId, {
           status: "failed",
           endedAt: finishedAt,
+          metadata: {
+            ...childMetadataBase,
+            heartbeatAt: finishedAt,
+            failureClass: "crash",
+          },
         });
         deps.taskLifecycleService.appendTaskActivity(task.taskId, {
-          activityType: "comment",
+          activityType: "diagnostic",
           agentId: step.role,
           message: `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}: ${message}`,
-          metadata: { runId, stepId: step.stepId, error: message },
+          metadata: { runId, childRunId, stepId: step.stepId, error: message },
         });
         return {
           step: failedStep,
@@ -503,6 +572,22 @@ export class ChatDelegationService {
     });
     deps.taskLifecycleService.updateTask(task.taskId, {
       status: completedSteps > 0 && status === "completed" ? "review" : "blocked",
+    });
+    deps.taskLifecycleService.updateTaskAgenticContext(task.taskId, {
+      status: status === "completed" ? "completed" : "failed",
+      activeChildCount: 0,
+      failureClass: status === "completed" ? undefined : "missing_handoff",
+      handoffEvidence: stitchedOutput.trim()
+        ? [
+            {
+              summary: stitchedOutput.slice(0, 1000),
+              artifactRefs: persistedSteps
+                .filter((step) => step.status === "completed")
+                .map((step) => `delegation-step:${step.stepId}`),
+              createdAt: finishedAt,
+            },
+          ]
+        : undefined,
     });
 
     deps.extractAndPersistLearnedMemory(sessionId, objective, {

@@ -598,27 +598,33 @@ export class PromptPackService {
         responseText: rawResponseText,
         trace: effectiveTrace,
       });
-      const effectiveCitations = refreshedTurn.citations ?? response.citations;
-      const derivedResponse = derivePromptPackResponseArtifacts({
-        prompt: promptInput.prompt,
-        rawResponseText: normalizedResponseText,
-        trace: effectiveTrace,
+      const derivedResponse = mergePromptPackDerivedResponseArtifacts({
+        fallback: derivePromptPackResponseArtifacts({
+          prompt: promptInput.prompt,
+          rawResponseText,
+          trace: effectiveTrace,
+        }),
+        normalizedResponseText,
+        rawResponseText,
       });
+      const effectiveCitations = refreshedTurn.citations ?? response.citations;
       const integrity = evaluatePromptPackRunIntegrity({
         prompt: resolvedPrompt.prompt,
-        responseText: normalizedResponseText,
+        responseText: rawResponseText,
         trace: effectiveTrace,
         outputTokenCount: response.assistantMessage?.tokenOutput,
       });
       const traceStatus = effectiveTrace?.status;
-      const missingOutput = normalizedResponseText.length === 0;
-      const failedByTrace = traceStatus === "failed";
+      const durableStatus = effectiveTrace?.durable?.status;
+      const missingOutput = rawResponseText.length === 0;
+      const failedByTrace = traceStatus === "failed" || traceStatus === "cancelled";
+      const failedByDurable = durableStatus === "failed";
       const approvalPending = traceStatus === "waiting_for_approval";
       const userInputPending = traceStatus === "waiting_for_user_input";
       const status: PromptPackRunRecord["status"] =
         approvalPending || userInputPending
           ? "approval_paused"
-          : missingOutput || failedByTrace
+          : missingOutput || failedByTrace || failedByDurable
             ? "failed"
             : "completed";
       const error =
@@ -631,11 +637,13 @@ export class PromptPackService {
                 ? "No assistant output generated."
                 : failedByTrace
                   ? "Assistant turn finished in failed state."
-                  : undefined
+                  : failedByDurable
+                    ? "Durable execution finished in failed state."
+                    : undefined
           : undefined;
       const updated = this.ctx.storage.promptPackRuns.patch(runId, {
         status,
-        responseText: normalizedResponseText || undefined,
+        responseText: rawResponseText || undefined,
         derivedResponseText: derivedResponse.derivedResponseText,
         derivedResponseSignals: derivedResponse.derivedResponseSignals,
         trace: effectiveTrace,
@@ -2726,6 +2734,17 @@ export class PromptPackService {
     const needsRefresh =
       isPromptPackDurableNonTerminal(initialTrace?.durable?.status) || !response.assistantMessage?.content?.trim();
     if (!needsRefresh) {
+      const hydratedToolRuns = this.readPromptPackToolRunsForTurn(turnId);
+      if (response.trace && hydratedToolRuns.length > 0) {
+        return {
+          trace: {
+            ...response.trace,
+            toolRuns: hydratedToolRuns,
+            citations: response.trace.citations ?? response.citations ?? [],
+          },
+          citations: response.trace.citations ?? response.citations,
+        };
+      }
       return {};
     }
 
@@ -2784,6 +2803,7 @@ export class PromptPackService {
       traceRow.citations_json,
       response.trace?.citations ?? response.citations,
     );
+    const hydratedToolRuns = this.readPromptPackToolRunsForTurn(turnId);
     const mergedTrace: ChatTurnTraceRecord | undefined = response.trace
       ? {
           ...response.trace,
@@ -2794,6 +2814,7 @@ export class PromptPackService {
           durable: safeJsonParseDefined(traceRow.durable_json, response.trace.durable),
           citations: citations ?? [],
           failure: safeJsonParseDefined(traceRow.failure_json, response.trace.failure),
+          toolRuns: hydratedToolRuns.length > 0 ? hydratedToolRuns : response.trace.toolRuns,
           finishedAt: traceRow.finished_at ?? response.trace.finishedAt,
         }
       : undefined;
@@ -2817,6 +2838,24 @@ export class PromptPackService {
       citations,
     };
   }
+
+  private readPromptPackToolRunsForTurn(turnId: string): ChatToolRunRecord[] {
+    try {
+      const rows = this.ctx.gatewaySql
+        .prepare(
+          `
+        SELECT *
+        FROM chat_tool_runs
+        WHERE turn_id = ?
+        ORDER BY started_at ASC, tool_run_id ASC
+      `,
+        )
+        .all(turnId);
+      return toPromptPackChatToolRunRows(rows).map(mapPromptPackChatToolRunRow);
+    } catch {
+      return [];
+    }
+  }
 }
 
 // ── free-standing helpers (moved from gateway-service.ts) ────────────
@@ -2839,6 +2878,100 @@ function safeJsonParseDefined<T>(raw: string | null | undefined, fallback: T): T
   } catch {
     return fallback;
   }
+}
+
+function mergePromptPackDerivedResponseArtifacts(input: {
+  fallback: ReturnType<typeof derivePromptPackResponseArtifacts>;
+  normalizedResponseText: string;
+  rawResponseText: string;
+}): ReturnType<typeof derivePromptPackResponseArtifacts> {
+  const normalized = input.normalizedResponseText.trim();
+  const raw = input.rawResponseText.trim();
+  const signals = [...(input.fallback.derivedResponseSignals ?? [])];
+  let derivedResponseText = input.fallback.derivedResponseText;
+
+  if (normalized && normalized !== raw) {
+    derivedResponseText = normalized;
+    if (!signals.includes("prompt_pack_harness_normalization")) {
+      signals.push("prompt_pack_harness_normalization");
+    }
+  }
+
+  return {
+    derivedResponseText,
+    derivedResponseSignals: signals.length > 0 ? signals : undefined,
+  };
+}
+
+interface PromptPackChatToolRunRow {
+  tool_run_id: string;
+  turn_id: string;
+  session_id: string;
+  tool_name: string;
+  status: ChatToolRunRecord["status"];
+  approval_id: string | null;
+  args_json: string | null;
+  result_json: string | null;
+  reused: number | null;
+  reused_from_tool_run_id: string | null;
+  reuse_reason: string | null;
+  error: string | null;
+  failure_guidance: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+function toPromptPackChatToolRunRows(value: unknown): PromptPackChatToolRunRow[] {
+  return Array.isArray(value) ? value.filter(isPromptPackChatToolRunRow) : [];
+}
+
+function isPromptPackChatToolRunRow(value: unknown): value is PromptPackChatToolRunRow {
+  return (
+    isRecord(value) &&
+    typeof value.tool_run_id === "string" &&
+    typeof value.turn_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.tool_name === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.approval_id === "string" || value.approval_id === null) &&
+    (typeof value.args_json === "string" || value.args_json === null) &&
+    (typeof value.result_json === "string" || value.result_json === null) &&
+    (typeof value.reused === "number" || value.reused === null) &&
+    (typeof value.reused_from_tool_run_id === "string" || value.reused_from_tool_run_id === null) &&
+    (typeof value.reuse_reason === "string" || value.reuse_reason === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    (typeof value.failure_guidance === "string" || value.failure_guidance === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
+}
+
+function mapPromptPackChatToolRunRow(row: PromptPackChatToolRunRow): ChatToolRunRecord {
+  return {
+    toolRunId: row.tool_run_id,
+    turnId: row.turn_id,
+    sessionId: row.session_id,
+    toolName: row.tool_name,
+    status: row.status,
+    approvalId: row.approval_id ?? undefined,
+    args: parsePromptPackToolRunRecord(row.args_json),
+    result: parsePromptPackToolRunRecord(row.result_json),
+    reused: row.reused === null ? undefined : row.reused !== 0,
+    reusedFromToolRunId: row.reused_from_tool_run_id ?? undefined,
+    reuseReason: row.reuse_reason ?? undefined,
+    error: row.error ?? undefined,
+    failureGuidance: row.failure_guidance ?? undefined,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? undefined,
+  };
+}
+
+function parsePromptPackToolRunRecord(raw: string | null): Record<string, unknown> | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  return isRecord(parsed) ? parsed : undefined;
 }
 
 function sanitizeFileName(input: string): string {
@@ -3186,12 +3319,17 @@ export function renderPromptPackMarkdownReport(
 ): string {
   const generatedAt = options.generatedAt ?? new Date().toISOString();
   const runs = [...report.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
-  const policy = resolvePromptPackPolicy(report.pack);
-  const activePolicyHash = report.pack.policyHash ?? hashPromptPackPolicyV2(policy);
+  const activeScoringSchemaVersion =
+    report.summary.activeScoringSchemaVersion ?? PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION;
+  const activePolicyHash =
+    activeScoringSchemaVersion === "v2"
+      ? (report.pack.policyHash ?? hashPromptPackPolicyV2(resolvePromptPackPolicy(report.pack)))
+      : hashPromptPackPolicyV3(resolvePromptPackPolicyV3(report.pack));
   const latestAssessments =
     report.latestAssessments.length > 0
       ? report.latestAssessments
       : buildPromptPackLatestStateV2(report.tests, runs, report.autoScoresV2, report.humanReviewsV2, report.scores, {
+          scoringSchemaVersion: activeScoringSchemaVersion,
           policyHash: activePolicyHash,
         });
   const latestAutoScores = latestAssessments
@@ -3213,6 +3351,19 @@ export function renderPromptPackMarkdownReport(
       latestRunByTest.set(assessment.testId, run);
     }
   }
+  const latestRuns = [...latestRunByTest.values()];
+  const blockedToolRuns = latestRuns.reduce(
+    (sum, run) => sum + (run.trace?.toolRuns.filter((toolRun) => toolRun.status === "blocked").length ?? 0),
+    0,
+  );
+  const failedToolRuns = latestRuns.reduce(
+    (sum, run) => sum + (run.trace?.toolRuns.filter((toolRun) => toolRun.status === "failed").length ?? 0),
+    0,
+  );
+  const approvalRequiredToolRuns = latestRuns.reduce(
+    (sum, run) => sum + (run.trace?.toolRuns.filter((toolRun) => toolRun.status === "approval_required").length ?? 0),
+    0,
+  );
 
   const lines: string[] = [];
   lines.push(`# Prompt Pack Report: ${report.pack.name}`);
@@ -3221,9 +3372,13 @@ export function renderPromptPackMarkdownReport(
   lines.push(`- Generated: ${generatedAt}`);
   lines.push(`- Export model lane: \`${formatPromptPackReportProviderModelLabel(report)}\``);
   lines.push(`- Export execution style: \`${formatPromptPackReportExecutionStyleLabel(report)}\``);
-  lines.push(`- Active scoring schema: \`${report.summary.activeScoringSchemaVersion}\``);
-  lines.push(`- Active scorer version: \`${PROMPT_PACK_V3_SCORER_VERSION}\``);
-  lines.push(`- Active judge rubric version: \`${PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION}\``);
+  lines.push(`- Active scoring schema: \`${activeScoringSchemaVersion}\``);
+  lines.push(
+    `- Active scorer version: \`${activeScoringSchemaVersion === "v2" ? PROMPT_PACK_V2_SCORER_VERSION : PROMPT_PACK_V3_SCORER_VERSION}\``,
+  );
+  lines.push(
+    `- Active judge rubric version: \`${activeScoringSchemaVersion === "v2" ? PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION : PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION}\``,
+  );
   lines.push(`- Active policy hash: \`${activePolicyHash}\``);
   lines.push(`- Total tests: ${report.summary.totalTests}`);
   lines.push(`- Completed runs: ${report.summary.completedRuns}`);
@@ -3235,6 +3390,9 @@ export function renderPromptPackMarkdownReport(
   lines.push(`- Durable-backed latest runs: ${report.summary.durableRuns ?? 0}`);
   lines.push(`- Approval-paused latest runs: ${report.summary.approvalPausedRuns ?? 0}`);
   lines.push(`- Backgrounded latest runs: ${report.summary.backgroundedRuns ?? 0}`);
+  lines.push(
+    `- Latest-run tool issues: blocked ${blockedToolRuns}, failed ${failedToolRuns}, approval-required ${approvalRequiredToolRuns}`,
+  );
   lines.push(`- Auto-scored latest runs: ${report.summary.autoScoredRuns ?? 0}`);
   lines.push(
     `- Current-generation latest score rows: ${latestAutoScores.length - staleLatestAutoScoreCount}/${latestAutoScores.length}`,
@@ -5406,11 +5564,20 @@ export function evaluatePromptPackRunIntegrity(input: {
   const completionStatus = input.trace?.completion?.status;
   const finishReason = input.trace?.completion?.finishReason;
   const signals: string[] = [];
+  if (input.trace?.status === "failed" || input.trace?.status === "cancelled") {
+    signals.push("run_failed");
+  }
+  if (input.trace?.durable?.status === "failed") {
+    signals.push("durable_failed");
+  }
+  if (input.trace?.failure?.message) {
+    signals.push("trace_failure");
+  }
 
   if (!responseText) {
     return {
-      validationStatus: "unknown",
-      signals: ["no_assistant_output"],
+      validationStatus: signals.length > 0 ? "invalid" : "unknown",
+      signals: [...signals, "no_assistant_output"],
       completionStatus,
       finishReason,
       outputTokenCount: input.outputTokenCount,
@@ -7535,6 +7702,27 @@ function derivePromptPackFailureAttributionV3(input: {
   if (input.judgeStatus === "fallback" || input.judgeStatus === "invalid" || input.judgeStatus === "timeout") {
     return withEvidence("harness_or_judge_failure", "high", `judge_status:${input.judgeStatus}`);
   }
+  const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run);
+  if (
+    integrity.validationStatus === "invalid" &&
+    integrity.signals.some((signal) =>
+      [
+        "run_failed",
+        "durable_failed",
+        "trace_failure",
+        "completion_truncated",
+        "completion_interrupted",
+        "completion_backgrounded",
+        "finish_reason_length",
+      ].includes(signal),
+    )
+  ) {
+    return withEvidence(
+      "runtime_or_infra_failure",
+      "high",
+      ...integrity.signals.slice(0, 3).map((signal) => `integrity:${signal}`),
+    );
+  }
   if (reasons.has("run_failed") || input.run.status === "failed") {
     return withEvidence("runtime_or_infra_failure", "high", input.run.error ?? "run_failed");
   }
@@ -7571,6 +7759,9 @@ function derivePromptPackFailureAttributionV3(input: {
     input.run.trace?.toolRuns?.filter((toolRun) => toolRun.status === "failed" || toolRun.status === "blocked") ?? [];
   if (failedTools.length > 0) {
     evidence.push(...failedTools.slice(0, 3).map((toolRun) => `${toolRun.toolName}:${toolRun.status}`));
+    if (failedTools.some(isPromptPackMissingOrUnavailableToolRun)) {
+      return withEvidence("missing_tool", "medium", ...evidence);
+    }
     return withEvidence("tool_call_wrong_args", "medium", ...evidence);
   }
   if (input.run.trace?.routing?.fallbackUsed) {
@@ -8324,7 +8515,7 @@ function isPromptPackAutoScoreCurrentGeneration(
   score: PromptPackAutoScoreRecord,
   generation: PromptPackCurrentGenerationConfig,
 ): boolean {
-  const expectedSchemaVersion = generation.scoringSchemaVersion ?? PROMPT_PACK_V2_SCHEMA_VERSION;
+  const expectedSchemaVersion = generation.scoringSchemaVersion ?? PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION;
   const expectedScorerVersion =
     generation.scorerVersion ??
     (expectedSchemaVersion === "v3" ? PROMPT_PACK_V3_SCORER_VERSION : PROMPT_PACK_V2_SCORER_VERSION);
@@ -8479,6 +8670,9 @@ export function buildPromptPackReportSummary(
       completedRuns += 1;
       if (integrity?.validationStatus === "invalid") {
         invalidLatestRuns += 1;
+        if (isPromptPackRuntimeIntegrityFailure(integrity)) {
+          runFailureCount += 1;
+        }
         failingCodes.push(test.code);
         continue;
       }
@@ -8758,6 +8952,75 @@ function shouldUsePromptPackJudgeJsonMode(providerId?: string, model?: string): 
   return true;
 }
 
+function resolvePromptPackRequiredToolExecution(input: {
+  directives: PromptPackToolDirectives;
+  attemptedTools: ChatToolRunRecord[];
+  executedTools: ChatToolRunRecord[];
+}): { required: boolean; satisfied: boolean; missing: string[] } {
+  if (input.directives.suppressesTools) {
+    return { required: false, satisfied: true, missing: [] };
+  }
+  const requirements: Array<{ label: string; predicate: (toolName: string) => boolean }> = [
+    ...input.directives.namedTools.map((toolName) => ({
+      label: toolName,
+      predicate: (candidate: string) => candidate === toolName,
+    })),
+  ];
+  if (input.directives.prefersFileTools) {
+    requirements.push({ label: "file/code tool", predicate: isPromptPackFileEvidenceTool });
+  }
+  if (input.directives.prefersWebTools) {
+    requirements.push({ label: "web/browser tool", predicate: isPromptPackWebEvidenceTool });
+  }
+  if (input.directives.prefersMemoryTools) {
+    requirements.push({ label: "memory tool", predicate: isPromptPackMemoryEvidenceTool });
+  }
+  if (requirements.length === 0) {
+    return { required: false, satisfied: true, missing: [] };
+  }
+
+  const missing = requirements
+    .filter((requirement) => !input.executedTools.some((toolRun) => requirement.predicate(toolRun.toolName)))
+    .map((requirement) => requirement.label);
+  return {
+    required: true,
+    satisfied: missing.length === 0,
+    missing,
+  };
+}
+
+function isPromptPackWebEvidenceTool(toolName: string): boolean {
+  return PROMPT_PACK_WEB_TOOL_NAMES.some((candidate) => toolName === candidate) || toolName === "http.get";
+}
+
+function isPromptPackMemoryEvidenceTool(toolName: string): boolean {
+  return PROMPT_PACK_MEMORY_TOOL_NAMES.some((candidate) => toolName === candidate);
+}
+
+function isPromptPackMissingOrUnavailableToolRun(toolRun: ChatToolRunRecord): boolean {
+  const text = `${toolRun.error ?? ""} ${toolRun.failureGuidance ?? ""}`.toLowerCase();
+  return (
+    toolRun.status === "blocked" ||
+    /\bmissing tool\b|\bnot available\b|\bunavailable\b|\bunknown tool\b|\bunsupported executor\b|\bpermission\b|\bpolicy\b|\bnot callable\b/.test(
+      text,
+    )
+  );
+}
+
+function isPromptPackRuntimeIntegrityFailure(integrity: PromptPackRunIntegrityRecord): boolean {
+  return integrity.signals.some((signal) =>
+    [
+      "run_failed",
+      "durable_failed",
+      "trace_failure",
+      "completion_truncated",
+      "completion_interrupted",
+      "completion_backgrounded",
+      "finish_reason_length",
+    ].includes(signal),
+  );
+}
+
 export function evaluatePromptPackRuleScores(input: {
   prompt: string;
   run: PromptPackRunRecord;
@@ -8967,6 +9230,11 @@ export function evaluatePromptPackRuleScores(input: {
         toolDirectives.prefersFileTools ||
         toolDirectives.prefersWebTools ||
         toolDirectives.prefersMemoryTools);
+    const requiredToolExecution = resolvePromptPackRequiredToolExecution({
+      directives: toolDirectives,
+      attemptedTools,
+      executedTools,
+    });
     if (toolDirectives.suppressesTools && attemptedTools.length > 0) {
       routingScore = 0;
       robustnessScore = 0;
@@ -8975,11 +9243,17 @@ export function evaluatePromptPackRuleScores(input: {
       signals.push("explicit_tools_suppressed_respected");
     } else if (!explicitToolUsageRequired && attemptedTools.length < 1) {
       signals.push("explicit_tools_optional_unused");
-    } else if (attemptedTools.length < 1) {
+    } else if (attemptedTools.length < 1 || !requiredToolExecution.satisfied) {
       routingScore = 0;
       robustnessScore = 0;
       usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;
       signals.push("missing_required_tool_usage");
+      for (const missing of requiredToolExecution.missing) {
+        signals.push(`missing_required_tool:${missing}`);
+      }
+      if (attemptedTools.length > 0) {
+        signals.push("required_tool_usage_attempted");
+      }
     } else if (executedTools.length < 1) {
       routingScore = Math.min(routingScore, 1) as 0 | 1 | 2;
       robustnessScore = Math.min(robustnessScore, 1) as 0 | 1 | 2;
@@ -9016,7 +9290,9 @@ export function evaluatePromptPackRuleScores(input: {
       blockedTools.every((run) => run.toolName === "browser.search") &&
       hasConcreteFileReadEvidence;
     if (failedTools.length > 0 || blockedTools.length > 0) {
-      if (onlyBlockedNonessentialWebSearch) {
+      if (signals.includes("missing_required_tool_usage")) {
+        signals.push("required_tool_execution_missing");
+      } else if (onlyBlockedNonessentialWebSearch) {
         signals.push("nonessential_web_search_block_ignored");
       } else if (mentionsFailureHandling) {
         robustnessScore = clampPromptScore(robustnessScore + 1);

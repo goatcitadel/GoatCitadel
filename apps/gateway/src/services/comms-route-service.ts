@@ -12,6 +12,7 @@ export const commsRouteMethods = [
   "commsUnsend",
   "getIntegrationConnectionChannelCapabilities",
   "getIntegrationConnectionChannelRuntimeStatus",
+  "listChannelDeliveryRuntime",
   "runIntegrationConnectionDiagnostics",
 ] as const;
 
@@ -34,6 +35,7 @@ export function createCommsRoutePort(port: CommsPort): CommsRoutePort {
     getIntegrationConnectionChannelCapabilities: (...args) => port.getIntegrationConnectionChannelCapabilities(...args),
     getIntegrationConnectionChannelRuntimeStatus: (...args) =>
       port.getIntegrationConnectionChannelRuntimeStatus(...args),
+    listChannelDeliveryRuntime: (...args) => port.listChannelDeliveryRuntime(...args),
     runIntegrationConnectionDiagnostics: (...args) => port.runIntegrationConnectionDiagnostics(...args),
   };
 }

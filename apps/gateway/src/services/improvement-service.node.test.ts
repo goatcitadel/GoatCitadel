@@ -265,6 +265,126 @@ describe("ImprovementService ledger lifecycle", () => {
       /capability proposals/,
     );
   });
+
+  it("records agentic diagnostics as idempotent review-first improvement signals", () => {
+    const harness = createHarness();
+    const task = harness.storage.tasks.create({
+      workspaceId: "default",
+      title: "Agentic run with timeout",
+      status: "in_progress",
+      priority: "normal",
+      agenticContext: {
+        runId: "run-agentic-timeout",
+        durableRunId: "durable-agentic-1",
+        parentSessionId: "sess-agentic-1",
+        surface: "cowork",
+        status: "running",
+        failureClass: "timeout",
+        profileId: "researcher",
+      },
+    });
+    const diagnostic = {
+      signalId: "diag-agentic-timeout",
+      code: "child_timeout",
+      severity: "critical",
+      title: "Child agent exceeded timeout",
+      summary: "A child agent is still active after timeout.",
+      evidenceRef: "child-session-1",
+      createdAt: "2026-05-05T12:00:00.000Z",
+    } as const;
+
+    const signal = harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
+    const replay = harness.service.recordAgenticDiagnosticSignal({ task, diagnostic });
+
+    assert.ok(signal);
+    assert.ok(replay);
+    assert.equal(replay.signalId, signal.signalId);
+    assert.equal(signal.sourceService, "task-lifecycle-service");
+    assert.equal(signal.sourceType, "agentic_diagnostic");
+    assert.equal(signal.sourceId, diagnostic.signalId);
+    assert.equal(signal.sourceEventId, `${task.taskId}:${diagnostic.signalId}`);
+    assert.equal(signal.signalKind, "agentic_child_timeout");
+    assert.equal(signal.outcome, "negative");
+    assert.equal(signal.severity, "high");
+    assert.equal(signal.taskId, task.taskId);
+    assert.equal(signal.sessionId, "sess-agentic-1");
+    assert.equal(signal.durableRunId, "durable-agentic-1");
+    assert.equal(signal.evidenceRefs[0]?.refType, "agentic_diagnostic");
+    assert.equal(signal.evidenceRefs[0]?.refId, diagnostic.signalId);
+    assert.equal(signal.metadata?.diagnosticCode, "child_timeout");
+    assert.equal(signal.metadata?.runId, "run-agentic-timeout");
+  });
+
+  it("persists agentic bridge proposals as governed candidates with mutationApplied=false", async () => {
+    const harness = createHarness();
+
+    const [result] = harness.service.recordAgenticImprovementProposals(
+      {
+        missingCapabilities: [
+          {
+            capability: {
+              capabilityId: "provider:anthropic",
+              label: "Anthropic",
+              family: "provider",
+              status: "blocked",
+              callable: false,
+              reasons: ["API key missing"],
+              checkedAt: "2026-05-05T12:00:00.000Z",
+            },
+            requestedBy: "cowork route preflight",
+          },
+        ],
+      },
+      { workspaceId: "default" },
+    );
+
+    assert.ok(result);
+    assert.ok(result.signal);
+    assert.ok(result.candidate);
+    assert.equal(result.candidate.kind, "routing_policy");
+    assert.equal(result.candidate.status, "ready_for_approval");
+    assert.equal(result.signal.signalKind, "agentic_improvement_proposal");
+    assert.equal(result.signal.metadata?.mutationApplied, false);
+
+    const detail = harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
+    assert.equal(detail.currentRevision?.candidateRef.metadata?.mutationApplied, false);
+    assert.equal(
+      (detail.currentRevision?.candidateRef.metadata?.proposedChange as { mutationApplied?: boolean } | undefined)
+        ?.mutationApplied,
+      false,
+    );
+    assert.equal(detail.latestEvaluation?.status, "passed");
+
+    const activation = await harness.service.requestImprovementActivation(result.candidate.candidateId, "operator-1");
+    assert.equal(activation.status, "pending");
+    assert.deepEqual(harness.routingPolicies, {});
+  });
+
+  it("keeps review-first skill drift proposals from mutating through direct activation", async () => {
+    const harness = createHarness();
+
+    const [result] = harness.service.recordAgenticImprovementProposals({
+      skillDrifts: [
+        {
+          skillId: "safe-self-improvement",
+          skillName: "Safe Self Improvement",
+          observedIssue: "The skill does not mention review-first proposal ingestion.",
+          proposedChange: "Add approval-gated proposal language after evaluation.",
+          driftRef: "skills/safe-self-improvement/SKILL.md",
+          severity: "high",
+        },
+      ],
+    });
+
+    assert.ok(result?.candidate);
+    assert.equal(result.candidate.kind, "skill_revision");
+    const detail = harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
+    assert.equal(detail.currentRevision?.candidateRef.metadata?.mutationApplied, false);
+    await assert.rejects(
+      () => harness.service.requestImprovementActivation(result.candidate!.candidateId, "operator-1"),
+      /capability proposals/,
+    );
+  });
 });
 
 function createHarness(): Harness {

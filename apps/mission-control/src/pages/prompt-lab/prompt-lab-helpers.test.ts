@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatModelProviderOption } from "../../components/ChatModelPicker";
-import { resolvePromptLabActiveProvider } from "./prompt-lab-helpers";
+import { classifyTestResultCategory, resolvePromptLabActiveProvider } from "./prompt-lab-helpers";
 
 const PROVIDERS: ChatModelProviderOption[] = [
   {
@@ -40,17 +40,45 @@ describe("resolvePromptLabActiveProvider", () => {
 
   it("falls back to the runtime active provider when openai is unavailable", () => {
     expect(
-      resolvePromptLabActiveProvider(PROVIDERS.filter((provider) => provider.providerId !== "openai"), {
-        runtimeActiveProviderId: "llamacpp",
-      })?.providerId,
+      resolvePromptLabActiveProvider(
+        PROVIDERS.filter((provider) => provider.providerId !== "openai"),
+        {
+          runtimeActiveProviderId: "llamacpp",
+        },
+      )?.providerId,
     ).toBe("llamacpp");
   });
 
   it("falls back to the first provider when neither the preferred nor active provider is available", () => {
     expect(
-      resolvePromptLabActiveProvider(PROVIDERS.filter((provider) => provider.providerId !== "openai"), {
-        runtimeActiveProviderId: "missing",
-      })?.providerId,
+      resolvePromptLabActiveProvider(
+        PROVIDERS.filter((provider) => provider.providerId !== "openai"),
+        {
+          runtimeActiveProviderId: "missing",
+        },
+      )?.providerId,
     ).toBe("llamacpp");
+  });
+});
+
+describe("classifyTestResultCategory", () => {
+  it("classifies completed runs with invalid integrity as run failures", () => {
+    expect(
+      classifyTestResultCategory(
+        {
+          runId: "run-invalid",
+          packId: "pack-1",
+          testId: "test-1",
+          status: "completed",
+          responseText: "Partial output",
+          integrity: {
+            validationStatus: "invalid",
+            signals: ["completion_truncated"],
+          },
+          startedAt: "2026-05-05T00:00:00.000Z",
+        },
+        undefined,
+      ),
+    ).toBe("run_failed");
   });
 });

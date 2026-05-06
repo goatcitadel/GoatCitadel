@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import {
+  handleDiscordRuntimeSlashCommand,
   handleDiscordRuntimeInbound,
   startNewDiscordRouteSession,
   type DiscordRouteSessionRecord,
@@ -91,6 +92,33 @@ function createHost(): DiscordRuntimeBridgeHost & {
       args: [],
       message: "ok",
     })) as DiscordRuntimeBridgeHost["parseChatCommand"],
+    resolveApprovalWithRemoteToken: vi.fn(async () => ({
+      approval: {
+        approvalId: "approval-1",
+        kind: "tool_call",
+        status: "approved",
+        riskLevel: "caution",
+        payload: {},
+        preview: {},
+        explanationStatus: "not_requested",
+        createdAt: "2026-04-08T00:00:00.000Z",
+      },
+      effects: [],
+      replay: {
+        approval: {
+          approvalId: "approval-1",
+          kind: "tool_call",
+          status: "approved",
+          riskLevel: "caution",
+          payload: {},
+          preview: {},
+          explanationStatus: "not_requested",
+          createdAt: "2026-04-08T00:00:00.000Z",
+        },
+        events: [],
+        effects: [],
+      },
+    })) as DiscordRuntimeBridgeHost["resolveApprovalWithRemoteToken"],
     ingestChannelMessage: vi.fn(async () => ({
       accepted: true,
       deduped: false,
@@ -158,6 +186,26 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(host.updateChatSessionPrefs).toHaveBeenCalledTimes(1);
     expect(host.assignChatSessionProject).toHaveBeenCalledWith(session.sessionId, "project-1");
     expect(host.updateSessionMock).toHaveBeenCalledWith(session.sessionId, { title: "Fresh thread" });
+  });
+
+  it("resolves Discord approval commands with remote action token semantics", async () => {
+    const host = createHost();
+
+    const response = await handleDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      commandText: "/approve grat_secret",
+      sourceCommandId: "interaction-1",
+    });
+
+    expect(host.resolveApprovalWithRemoteToken).toHaveBeenCalledWith({
+      token: "grat_secret",
+      decision: "approve",
+      resolvedBy: "discord:user-1",
+    });
+    expect(host.parseChatCommand).not.toHaveBeenCalled();
+    expect(response).toContain("Approved approval-1");
   });
 
   it("records a conflict diagnostic after exhausting reply retries for an inbound discord message", async () => {

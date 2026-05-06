@@ -21,10 +21,17 @@ import type {
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
   ChatSessionWorkbenchDiffResponse,
+  ChatSessionWorkbenchCommandRunRequest,
+  ChatSessionWorkbenchCommandRunResponse,
   ChatSessionWorkbenchFileDiffResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
+  ChatSessionWorkbenchPatchApplyRequest,
+  ChatSessionWorkbenchPatchApplyResponse,
+  ChatSessionWorkbenchPatchExportResponse,
   ChatSessionWorkbenchRecord,
+  ChatSessionWorkbenchRevertFileRequest,
+  ChatSessionWorkbenchRevertResponse,
   ChatSessionWorkbenchSaveFileRequest,
   ChatSessionWorkbenchTreeResponse,
   ChatSessionBulkArchiveResult,
@@ -393,6 +400,65 @@ export async function fetchChatSessionWorkbenchDiff(sessionId: string): Promise<
 export async function fetchChatSessionWorkbenchOutput(sessionId: string): Promise<ChatSessionWorkbenchOutputResponse> {
   return request<ChatSessionWorkbenchOutputResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`,
+  );
+}
+
+export async function runChatSessionWorkbenchCommand(
+  sessionId: string,
+  input: ChatSessionWorkbenchCommandRunRequest,
+): Promise<ChatSessionWorkbenchCommandRunResponse> {
+  return request<ChatSessionWorkbenchCommandRunResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/command`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function applyChatSessionWorkbenchPatch(
+  sessionId: string,
+  input: ChatSessionWorkbenchPatchApplyRequest,
+): Promise<ChatSessionWorkbenchPatchApplyResponse> {
+  return request<ChatSessionWorkbenchPatchApplyResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/patch/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function exportChatSessionWorkbenchPatch(
+  sessionId: string,
+): Promise<ChatSessionWorkbenchPatchExportResponse> {
+  return request<ChatSessionWorkbenchPatchExportResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/patch/export`,
+  );
+}
+
+export async function revertChatSessionWorkbenchFile(
+  sessionId: string,
+  input: ChatSessionWorkbenchRevertFileRequest,
+): Promise<ChatSessionWorkbenchRevertResponse> {
+  return request<ChatSessionWorkbenchRevertResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/revert-file`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function revertChatSessionWorkbenchChanges(
+  sessionId: string,
+): Promise<ChatSessionWorkbenchRevertResponse> {
+  return request<ChatSessionWorkbenchRevertResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/revert-all`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
   );
 }
 

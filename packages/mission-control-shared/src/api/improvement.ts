@@ -1,5 +1,7 @@
 import type {
   CapabilityGapEventRecord,
+  CuratorReviewItem,
+  CuratorReviewResponse,
   DecisionAutoTuneRecord,
   DecisionReplayFindingRecord,
   DecisionReplayItemRecord,
@@ -7,6 +9,9 @@ import type {
   HarnessAuditReportRecord,
   ImprovementActivationRecord,
   ImprovementCandidateDetailResponse,
+  ImprovementCandidateLifecycleAction,
+  ImprovementCandidateLifecycleInput,
+  ImprovementCandidateLifecycleResult,
   ImprovementCandidateRecord,
   ImprovementSignalRecord,
   RepairCandidateRecord,
@@ -15,6 +20,14 @@ import type {
   WeeklyImprovementReportRecord,
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
+
+export type {
+  CuratorReviewItem,
+  CuratorReviewResponse,
+  ImprovementCandidateLifecycleAction,
+  ImprovementCandidateLifecycleInput,
+  ImprovementCandidateLifecycleResult,
+};
 
 export async function fetchImprovementReports(limit = 24): Promise<{ items: WeeklyImprovementReportRecord[] }> {
   return request<{ items: WeeklyImprovementReportRecord[] }>(
@@ -83,6 +96,79 @@ export async function fetchImprovementCandidate(candidateId: string): Promise<Im
   return request<ImprovementCandidateDetailResponse>(
     `/api/v1/improvement/candidates/${encodeURIComponent(candidateId)}`,
   );
+}
+
+export async function fetchCuratorReviewItems(input?: {
+  limit?: number;
+  workspaceId?: string;
+}): Promise<CuratorReviewResponse> {
+  const query = new URLSearchParams({
+    limit: String(Math.max(1, Math.min(input?.limit ?? 100, 300))),
+  });
+  if (input?.workspaceId) {
+    query.set("workspaceId", input.workspaceId);
+  }
+  return request<CuratorReviewResponse>(`/api/v1/improvement/curator-review?${query.toString()}`);
+}
+
+export async function fetchCuratorReviewItem(candidateId: string): Promise<CuratorReviewItem> {
+  return request<CuratorReviewItem>(`/api/v1/improvement/candidates/${encodeURIComponent(candidateId)}/curator-review`);
+}
+
+async function runImprovementCandidateLifecycleAction(
+  candidateId: string,
+  action: ImprovementCandidateLifecycleAction,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return request<ImprovementCandidateLifecycleResult>(
+    `/api/v1/improvement/candidates/${encodeURIComponent(candidateId)}/${action}`,
+    {
+      method: "POST",
+      body: JSON.stringify(input ?? {}),
+    },
+  );
+}
+
+export async function validateImprovementCandidate(
+  candidateId: string,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return runImprovementCandidateLifecycleAction(candidateId, "validate", input);
+}
+
+export async function approveImprovementCandidate(
+  candidateId: string,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return runImprovementCandidateLifecycleAction(candidateId, "approve", input);
+}
+
+export async function rejectImprovementCandidate(
+  candidateId: string,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return runImprovementCandidateLifecycleAction(candidateId, "reject", input);
+}
+
+export async function snoozeImprovementCandidate(
+  candidateId: string,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return runImprovementCandidateLifecycleAction(candidateId, "snooze", input);
+}
+
+export async function activateImprovementCandidate(
+  candidateId: string,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return runImprovementCandidateLifecycleAction(candidateId, "activate", input);
+}
+
+export async function promoteImprovementCandidate(
+  candidateId: string,
+  input?: ImprovementCandidateLifecycleInput,
+): Promise<ImprovementCandidateLifecycleResult> {
+  return runImprovementCandidateLifecycleAction(candidateId, "promote", input);
 }
 
 export async function requestImprovementActivation(candidateId: string): Promise<ImprovementActivationRecord> {

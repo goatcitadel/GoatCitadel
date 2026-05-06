@@ -43,9 +43,7 @@ function createService(overrides: Partial<ConstructorParameters<typeof DiscordRu
   });
 }
 
-function createPairingRecord(
-  overrides: Partial<DiscordPairingRecord> = {},
-): DiscordPairingRecord {
+function createPairingRecord(overrides: Partial<DiscordPairingRecord> = {}): DiscordPairingRecord {
   return {
     pairingId: "pairing_1",
     connectionId: "11111111-1111-1111-1111-111111111111",
@@ -67,9 +65,12 @@ describe("DiscordRuntimeService", () => {
     vi.useFakeTimers();
 
     let resolveInbound: (() => void) | undefined;
-    const onInboundMessage = vi.fn(() => new Promise<void>((resolve) => {
-      resolveInbound = resolve;
-    }));
+    const onInboundMessage = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInbound = resolve;
+        }),
+    );
     const service = new DiscordRuntimeService({
       listConnections: () => [],
       findApprovedPairing: () => undefined,
@@ -120,13 +121,15 @@ describe("DiscordRuntimeService", () => {
 
     expect(react).toHaveBeenCalledWith("👀");
     expect(sendTyping).toHaveBeenCalledTimes(1);
-    expect(onInboundMessage).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "channel_1",
-      actorId: "user_1",
-      content: "hello there",
-      sourceMessageId: "msg_1",
-    }));
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "channel_1",
+        actorId: "user_1",
+        content: "hello there",
+        sourceMessageId: "msg_1",
+      }),
+    );
 
     await vi.advanceTimersByTimeAsync(8_000);
     expect(sendTyping).toHaveBeenCalledTimes(2);
@@ -169,7 +172,7 @@ describe("DiscordRuntimeService", () => {
       commandName: "model",
       id: "interaction_1",
       options: {
-        getString: vi.fn((name: string) => name === "model" ? "gpt-5.4" : null),
+        getString: vi.fn((name: string) => (name === "model" ? "gpt-5.4" : null)),
       },
       deferReply: reply,
       editReply,
@@ -185,13 +188,15 @@ describe("DiscordRuntimeService", () => {
 
     expect(handled).toBe(true);
     expect(reply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(onSlashCommand).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "channel_1",
-      actorId: "user_1",
-      commandText: "/model gpt-5.4",
-      sourceCommandId: "interaction_1",
-    }));
+    expect(onSlashCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "channel_1",
+        actorId: "user_1",
+        commandText: "/model gpt-5.4",
+        sourceCommandId: "interaction_1",
+      }),
+    );
     expect(editReply).toHaveBeenCalledWith({ content: "Mode set to gpt-5.4." });
   });
 
@@ -249,9 +254,10 @@ describe("DiscordRuntimeService", () => {
     const onInboundMessage = vi.fn(async () => undefined);
     const touchPairing = vi.fn();
     const service = createService({
-      findApprovedPairing: () => createPairingRecord({
-        status: "approved",
-      }),
+      findApprovedPairing: () =>
+        createPairingRecord({
+          status: "approved",
+        }),
       touchPairing,
       onInboundMessage,
     });
@@ -284,17 +290,19 @@ describe("DiscordRuntimeService", () => {
     expect(react).toHaveBeenCalledWith("👀");
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(send).not.toHaveBeenCalled();
-    expect(onInboundMessage).toHaveBeenCalledWith(expect.objectContaining({
-      connectionId: "11111111-1111-1111-1111-111111111111",
-      target: "dm_1",
-      actorId: "user_1",
-      content: "hello from dm",
-      sourceMessageId: "msg_dm_1",
-      metadata: expect.objectContaining({
-        dm: true,
-        runtimeMode: "gateway",
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "dm_1",
+        actorId: "user_1",
+        content: "hello from dm",
+        sourceMessageId: "msg_dm_1",
+        metadata: expect.objectContaining({
+          dm: true,
+          runtimeMode: "gateway",
+        }),
       }),
-    }));
+    );
   });
 
   it("routes open Discord DMs inbound without requiring pairing", async () => {
@@ -333,13 +341,15 @@ describe("DiscordRuntimeService", () => {
     expect(handled).toBe(true);
     expect(touchPairing).not.toHaveBeenCalled();
     expect(ensurePendingPairing).not.toHaveBeenCalled();
-    expect(onInboundMessage).toHaveBeenCalledWith(expect.objectContaining({
-      actorId: "user_1",
-      content: "open dm",
-      metadata: expect.objectContaining({
-        dm: true,
+    expect(onInboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user_1",
+        content: "open dm",
+        metadata: expect.objectContaining({
+          dm: true,
+        }),
       }),
-    }));
+    );
   });
 
   it("ignores Discord DMs when inbound DM policy is disabled", async () => {
@@ -407,11 +417,7 @@ describe("DiscordRuntimeService", () => {
     const handled = await (service as any).handleDirectMessage({} as any, createConnection(), message);
 
     expect(handled).toBe(true);
-    expect(ensurePendingPairing).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
-      "user_1",
-      "Goat User",
-    );
+    expect(ensurePendingPairing).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", "user_1", "Goat User");
     expect(react).toHaveBeenCalledWith("👀");
     expect(send).toHaveBeenCalledWith(
       "GoatCitadel pairing required. Ask the operator to approve code `ABC123` for Discord Primary.",
@@ -422,9 +428,10 @@ describe("DiscordRuntimeService", () => {
     const onSlashCommand = vi.fn().mockResolvedValue("Mode set to gpt-5.4.");
     const touchPairing = vi.fn();
     const service = createService({
-      findApprovedPairing: () => createPairingRecord({
-        status: "approved",
-      }),
+      findApprovedPairing: () =>
+        createPairingRecord({
+          status: "approved",
+        }),
       touchPairing,
       onSlashCommand,
     });
@@ -445,7 +452,7 @@ describe("DiscordRuntimeService", () => {
       commandName: "model",
       id: "interaction_dm_1",
       options: {
-        getString: vi.fn((name: string) => name === "model" ? "gpt-5.4" : null),
+        getString: vi.fn((name: string) => (name === "model" ? "gpt-5.4" : null)),
       },
       deferReply,
       editReply,
@@ -458,16 +465,91 @@ describe("DiscordRuntimeService", () => {
     expect(handled).toBe(true);
     expect(touchPairing).toHaveBeenCalledWith("pairing_1");
     expect(deferReply).toHaveBeenCalledWith({ ephemeral: false });
-    expect(onSlashCommand).toHaveBeenCalledWith(expect.objectContaining({
-      actorId: "user_1",
-      target: "dm_1",
-      commandText: "/model gpt-5.4",
-      metadata: expect.objectContaining({
-        dm: true,
-        interaction: true,
+    expect(onSlashCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorId: "user_1",
+        target: "dm_1",
+        commandText: "/model gpt-5.4",
+        metadata: expect.objectContaining({
+          dm: true,
+          interaction: true,
+        }),
       }),
-    }));
+    );
     expect(editReply).toHaveBeenCalledWith({ content: "Mode set to gpt-5.4." });
+  });
+
+  it("normalizes Discord approval slash commands as remote action tokens", async () => {
+    const onSlashCommand = vi.fn().mockResolvedValue("Approved approval-1.");
+    const service = createService({
+      findApprovedPairing: () => createPairingRecord({ status: "approved" }),
+      onSlashCommand,
+    });
+
+    const interaction = {
+      channel: {
+        isDMBased: () => true,
+      },
+      channelId: "dm_1",
+      user: {
+        id: "user_1",
+        username: "goat-user",
+      },
+      commandName: "approve",
+      id: "interaction_approval_1",
+      options: {
+        getString: vi.fn((name: string) => (name === "action_token" ? "grat_secret" : null)),
+      },
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      deferred: false,
+      replied: false,
+    } as any;
+
+    await (service as any).handleDirectCommand({} as any, createConnection(), interaction);
+
+    expect(onSlashCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/approve grat_secret",
+      }),
+    );
+  });
+
+  it("normalizes Discord run details slash commands", async () => {
+    const onSlashCommand = vi.fn().mockResolvedValue("Run details.");
+    const service = createService({
+      findApprovedPairing: () => createPairingRecord({ status: "approved" }),
+      onSlashCommand,
+    });
+
+    const interaction = {
+      channel: {
+        isDMBased: () => true,
+      },
+      channelId: "dm_1",
+      user: {
+        id: "user_1",
+        username: "goat-user",
+      },
+      commandName: "run",
+      id: "interaction_run_details_1",
+      options: {
+        getSubcommand: vi.fn(() => "details"),
+        getString: vi.fn((name: string) => (name === "run_id" ? "durable-run-1" : null)),
+      },
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue(undefined),
+      deferred: false,
+      replied: false,
+    } as any;
+
+    await (service as any).handleDirectCommand({} as any, createConnection(), interaction);
+
+    expect(onSlashCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandText: "/run details durable-run-1",
+      }),
+    );
   });
 
   it("creates a pending pairing for deferred Discord DM slash commands", async () => {
@@ -492,7 +574,7 @@ describe("DiscordRuntimeService", () => {
       commandName: "model",
       id: "interaction_dm_pending",
       options: {
-        getString: vi.fn((name: string) => name === "model" ? "gpt-5.4" : null),
+        getString: vi.fn((name: string) => (name === "model" ? "gpt-5.4" : null)),
       },
       reply,
       editReply,
@@ -503,11 +585,7 @@ describe("DiscordRuntimeService", () => {
     const handled = await (service as any).handleDirectCommand({} as any, createConnection(), interaction);
 
     expect(handled).toBe(true);
-    expect(ensurePendingPairing).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111",
-      "user_1",
-      "Goat User",
-    );
+    expect(ensurePendingPairing).toHaveBeenCalledWith("11111111-1111-1111-1111-111111111111", "user_1", "Goat User");
     expect(reply).not.toHaveBeenCalled();
     expect(editReply).toHaveBeenCalledWith({
       content: "GoatCitadel pairing required. Ask the operator to approve code `ABC123` for Discord Primary.",
@@ -532,7 +610,7 @@ describe("DiscordRuntimeService", () => {
       commandName: "model",
       id: "interaction_dm_disabled",
       options: {
-        getString: vi.fn((name: string) => name === "model" ? "gpt-5.4" : null),
+        getString: vi.fn((name: string) => (name === "model" ? "gpt-5.4" : null)),
       },
       reply: vi.fn().mockResolvedValue(undefined),
       editReply: vi.fn().mockResolvedValue(undefined),
@@ -555,11 +633,7 @@ describe("DiscordRuntimeService", () => {
   it("returns unsupported typing when the Discord runtime is not ready", async () => {
     const service = createService();
 
-    const typing = await service.sendTyping(
-      "11111111-1111-1111-1111-111111111111",
-      "channel_1",
-      3_000,
-    );
+    const typing = await service.sendTyping("11111111-1111-1111-1111-111111111111", "channel_1", 3_000);
 
     expect(typing).toEqual({
       channelKey: "discord",
@@ -585,11 +659,7 @@ describe("DiscordRuntimeService", () => {
       ready: true,
     });
 
-    const typing = await service.sendTyping(
-      "11111111-1111-1111-1111-111111111111",
-      "channel_1",
-      3_000,
-    );
+    const typing = await service.sendTyping("11111111-1111-1111-1111-111111111111", "channel_1", 3_000);
 
     expect(typing).toEqual({
       channelKey: "discord",

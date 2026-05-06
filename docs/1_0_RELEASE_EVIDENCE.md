@@ -126,7 +126,8 @@ Current shell posture for this map:
 - Public release posture is defined in [README.md](../README.md), [CHANGELOG.md](../CHANGELOG.md), and [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md).
 - Governance freshness and implementation-anchor checks live in [scripts/validate-governance-docs.mjs](../scripts/validate-governance-docs.mjs).
 - Tagged release assets are bound to the exact commit, workflow run, required lane statuses, artifact digests, proof ZIP digest, Trivy status, and accepted-failure list by [scripts/release/write-release-certificate.mjs](../scripts/release/write-release-certificate.mjs).
-- The release certificate accepts either the direct exact-SHA lane workflow result or a successful exact-SHA umbrella 1.0 proof workflow result for each required lane, and fails with the missing, unavailable, or failed lane list when proof is stale.
+- Required certificate lanes include `verify:ui:parity`, mapped to the `verification-truth-lanes.yml` workflow and covered by the umbrella `verification-1-0-release-proof.yml` matrix.
+- The release certificate accepts either the direct exact-SHA lane workflow result or a successful exact-SHA umbrella 1.0 proof workflow result only for lanes explicitly listed in `releaseProofCoverage.coveredLanes`, and fails with the missing, unavailable, or failed lane list when proof is stale. Direct-only lanes such as `security:trivy` must be green in their own workflow and cannot be masked by umbrella fallback.
 
 ## Closeout Validation Evidence
 

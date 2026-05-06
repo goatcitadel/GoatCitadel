@@ -8,13 +8,18 @@ import type {
   ChatSessionWorkbenchTreeResponse,
 } from "@goatcitadel/contracts";
 import {
+  applyChatSessionWorkbenchPatch,
   createChatSessionWorkbenchWorktree,
+  exportChatSessionWorkbenchPatch,
   fetchChatSessionWorkbench,
   fetchChatSessionWorkbenchDiff,
   fetchChatSessionWorkbenchFile,
   fetchChatSessionWorkbenchFileDiff,
   fetchChatSessionWorkbenchOutput,
   fetchChatSessionWorkbenchTree,
+  revertChatSessionWorkbenchChanges,
+  revertChatSessionWorkbenchFile,
+  runChatSessionWorkbenchCommand,
   saveChatSessionWorkbenchFile,
 } from "@goatcitadel/mission-control-shared/api/chat";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
@@ -444,6 +449,167 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     setError(null);
   }, []);
 
+  const runValidationCommand = useCallback(
+    async (input: { command: string; args?: string[]; timeoutMs?: number }) => {
+      if (!sessionId) {
+        return false;
+      }
+      const requestSessionId = sessionId;
+      setBusy(true);
+      try {
+        const response = await runChatSessionWorkbenchCommand(requestSessionId, input);
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+        setState(response.state);
+        setError(null);
+        await refresh();
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+        setOutput(response.output);
+        return true;
+      } catch (cause) {
+        if (isCurrentSession(requestSessionId)) {
+          setError(cause instanceof Error ? cause.message : "Unable to run workbench validation.");
+        }
+        return false;
+      } finally {
+        if (isCurrentSession(requestSessionId)) {
+          setBusy(false);
+        }
+      }
+    },
+    [isCurrentSession, refresh, sessionId],
+  );
+
+  const applyPatch = useCallback(
+    async (patch?: string) => {
+      if (!sessionId || !patch?.trim()) {
+        return false;
+      }
+      const requestSessionId = sessionId;
+      setBusy(true);
+      try {
+        const response = await applyChatSessionWorkbenchPatch(requestSessionId, { patch });
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+        setState(response.state);
+        setError(null);
+        await refresh();
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+        setOutput(response.output);
+        return response.applied;
+      } catch (cause) {
+        if (isCurrentSession(requestSessionId)) {
+          setError(cause instanceof Error ? cause.message : "Unable to apply the workbench patch.");
+        }
+        return false;
+      } finally {
+        if (isCurrentSession(requestSessionId)) {
+          setBusy(false);
+        }
+      }
+    },
+    [isCurrentSession, refresh, sessionId],
+  );
+
+  const exportPatch = useCallback(async () => {
+    if (!sessionId) {
+      return null;
+    }
+    const requestSessionId = sessionId;
+    setBusy(true);
+    try {
+      const response = await exportChatSessionWorkbenchPatch(requestSessionId);
+      if (!isCurrentSession(requestSessionId)) {
+        return null;
+      }
+      setState(response.state);
+      setError(null);
+      await refresh();
+      return response;
+    } catch (cause) {
+      if (isCurrentSession(requestSessionId)) {
+        setError(cause instanceof Error ? cause.message : "Unable to export the workbench patch.");
+      }
+      return null;
+    } finally {
+      if (isCurrentSession(requestSessionId)) {
+        setBusy(false);
+      }
+    }
+  }, [isCurrentSession, refresh, sessionId]);
+
+  const revertFile = useCallback(
+    async (relativePath?: string) => {
+      const pathToRevert = relativePath ?? selectedFileRef.current?.path;
+      if (!sessionId || !pathToRevert) {
+        return false;
+      }
+      const requestSessionId = sessionId;
+      setBusy(true);
+      try {
+        const response = await revertChatSessionWorkbenchFile(requestSessionId, { path: pathToRevert });
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+        setState(response.state);
+        setError(null);
+        await refresh();
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+        setOutput(response.output);
+        return true;
+      } catch (cause) {
+        if (isCurrentSession(requestSessionId)) {
+          setError(cause instanceof Error ? cause.message : "Unable to revert the selected workbench file.");
+        }
+        return false;
+      } finally {
+        if (isCurrentSession(requestSessionId)) {
+          setBusy(false);
+        }
+      }
+    },
+    [isCurrentSession, refresh, sessionId],
+  );
+
+  const revertAll = useCallback(async () => {
+    if (!sessionId) {
+      return false;
+    }
+    const requestSessionId = sessionId;
+    setBusy(true);
+    try {
+      const response = await revertChatSessionWorkbenchChanges(requestSessionId);
+      if (!isCurrentSession(requestSessionId)) {
+        return false;
+      }
+      setState(response.state);
+      setError(null);
+      await refresh();
+      if (!isCurrentSession(requestSessionId)) {
+        return false;
+      }
+      setOutput(response.output);
+      return true;
+    } catch (cause) {
+      if (isCurrentSession(requestSessionId)) {
+        setError(cause instanceof Error ? cause.message : "Unable to revert workbench changes.");
+      }
+      return false;
+    } finally {
+      if (isCurrentSession(requestSessionId)) {
+        setBusy(false);
+      }
+    }
+  }, [isCurrentSession, refresh, sessionId]);
+
   useEffect(() => {
     activeSessionRef.current = enabled ? sessionId : null;
     if (!enabled || !sessionId) {
@@ -501,5 +667,10 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     openWorkbenchFile: loadFile,
     saveWorkbenchFile: saveFile,
     discardWorkbenchDraft: discardDraft,
+    runWorkbenchValidationCommand: runValidationCommand,
+    applyWorkbenchPatch: applyPatch,
+    exportWorkbenchPatch: exportPatch,
+    revertWorkbenchFile: revertFile,
+    revertWorkbenchAll: revertAll,
   };
 }

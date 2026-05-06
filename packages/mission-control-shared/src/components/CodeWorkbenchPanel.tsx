@@ -10,6 +10,7 @@ import type {
   ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { ConfirmModal } from "./ConfirmModal";
+import { AgenticRuntimeVisibilityPanel } from "./AgenticRuntimeVisibilityPanel";
 import { MonacoDiffEditor } from "./MonacoDiffEditor";
 import { StatusChip } from "./StatusChip";
 import { WorkbenchFileTree } from "./WorkbenchFileTree";
@@ -41,6 +42,11 @@ function normalizeSnippetLanguage(language?: string): "javascript" | "typescript
   return "typescript";
 }
 
+function isPatchSnippet(language?: string): boolean {
+  const normalized = language?.trim().toLowerCase();
+  return normalized === "diff" || normalized === "patch";
+}
+
 type WorkbenchPaneId = "file" | "selected-diff" | "repo-diff" | "output" | "snippets" | "artifact";
 
 export function CodeWorkbenchPanel({
@@ -69,6 +75,11 @@ export function CodeWorkbenchPanel({
   onRefresh,
   onSaveFile,
   onDiscardDraft,
+  onRunValidationCommand,
+  onApplyPatch,
+  onExportPatch,
+  onRevertFile,
+  onRevertAll,
   onRunHelperSnippet,
 }: {
   selectedTurn: ChatThreadTurnRecord | null;
@@ -107,6 +118,11 @@ export function CodeWorkbenchPanel({
   onRefresh: () => void;
   onSaveFile: () => void;
   onDiscardDraft: () => void;
+  onRunValidationCommand?: (input: { command: string; args?: string[]; timeoutMs?: number }) => void;
+  onApplyPatch?: (patch: string) => void;
+  onExportPatch?: () => void;
+  onRevertFile?: (relativePath?: string) => void;
+  onRevertAll?: () => void;
   onRunHelperSnippet: (language: string, source: string) => void;
 }) {
   const codeBlocks = useMemo(
@@ -120,6 +136,8 @@ export function CodeWorkbenchPanel({
   const [activePane, setActivePane] = useState<WorkbenchPaneId>("file");
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
+  const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
+  const [validationCommand, setValidationCommand] = useState("pnpm test");
 
   useEffect(() => {
     setActiveBlockIndex(0);
@@ -187,12 +205,47 @@ export function CodeWorkbenchPanel({
   const userInputBlocked = selectedTurn?.trace?.status === "waiting_for_user_input";
   const activeDraft = draftContent ?? selectedFile?.content ?? "";
   const activeBlock = codeBlocks[activeBlockIndex] ?? null;
+  const activePatchBlock = activeBlock && isPatchSnippet(activeBlock.language) ? activeBlock : null;
   const primaryPath = selectedFile?.path ?? changedFiles[0];
   const fileTreeItems = workbenchTree?.items ?? [];
   const effectiveSelectedFileDiffOriginal = selectedFileDiff?.originalContent ?? selectedFile?.content ?? "";
   const effectiveSelectedFileDiffModified =
     hasDirtyDraft && selectedFile ? activeDraft : (selectedFileDiff?.modifiedContent ?? selectedFile?.content ?? "");
   const currentLanguage = selectedFile?.language ?? selectedFileDiff?.language ?? "plaintext";
+  const hasPatchDiff = Boolean(diff?.diff.trim());
+  const draftConflictReason = hasDirtyDraft ? "Save or discard the file draft before running repo operations." : null;
+  const worktreeBlockedReason = !readyForRepoOps ? "Create a ready worktree before running repo operations." : null;
+  const patchBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (!activePatchBlock
+      ? "Apply requires a separate pending patch. Select a diff or patch snippet before applying it."
+      : null);
+  const exportBlockedReason =
+    worktreeBlockedReason ?? draftConflictReason ?? (!hasPatchDiff ? "No worktree diff is ready to export." : null);
+  const selectedRevertBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (!selectedFile ? "Select a changed file before reverting it." : null) ??
+    (!selectedFile?.changed ? "The selected file has no worktree changes." : null);
+  const allRevertBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (changedFiles.length === 0 ? "No worktree changes to revert." : null);
+  const validationBlockedReason = worktreeBlockedReason ?? draftConflictReason;
+
+  const runValidationFromInput = () => {
+    if (!onRunValidationCommand || validationBlockedReason || busy) {
+      return;
+    }
+    const tokens = validationCommand.trim().split(/\s+/).filter(Boolean);
+    const [command, ...args] = tokens;
+    if (!command) {
+      return;
+    }
+    onRunValidationCommand({ command, args });
+    setActivePane("output");
+  };
 
   const requestFileSelection = (relativePath: string) => {
     if (!relativePath || relativePath === selectedFile?.path) {
@@ -270,6 +323,67 @@ export function CodeWorkbenchPanel({
               Create worktree
             </button>
           </div>
+          <div className="chat-code-workbench-actions">
+            <input
+              className="chat-code-workbench-command-input"
+              value={validationCommand}
+              onChange={(event) => setValidationCommand(event.target.value)}
+              disabled={busy}
+              aria-label="Validation command"
+            />
+            <button
+              type="button"
+              className="gc-button"
+              onClick={runValidationFromInput}
+              disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
+              title={
+                validationBlockedReason ?? (!onRunValidationCommand ? "Validation backend is unavailable." : undefined)
+              }
+            >
+              Test
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => {
+                if (activePatchBlock) {
+                  onApplyPatch?.(activePatchBlock.content);
+                  setActivePane("output");
+                }
+              }}
+              disabled={busy || Boolean(patchBlockedReason) || !onApplyPatch}
+              title={patchBlockedReason ?? (!onApplyPatch ? "Patch apply backend is unavailable." : undefined)}
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={onExportPatch}
+              disabled={busy || Boolean(exportBlockedReason) || !onExportPatch}
+              title={exportBlockedReason ?? (!onExportPatch ? "Patch export backend is unavailable." : undefined)}
+            >
+              Export
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => onRevertFile?.(selectedFile?.path)}
+              disabled={busy || Boolean(selectedRevertBlockedReason) || !onRevertFile}
+              title={selectedRevertBlockedReason ?? (!onRevertFile ? "File revert backend is unavailable." : undefined)}
+            >
+              Revert file
+            </button>
+            <button
+              type="button"
+              className="gc-button"
+              onClick={() => setConfirmRevertAllOpen(true)}
+              disabled={busy || Boolean(allRevertBlockedReason) || !onRevertAll}
+              title={allRevertBlockedReason ?? (!onRevertAll ? "Revert backend is unavailable." : undefined)}
+            >
+              Revert all
+            </button>
+          </div>
         </div>
       </div>
 
@@ -278,6 +392,8 @@ export function CodeWorkbenchPanel({
           <p>{error}</p>
         </div>
       ) : null}
+
+      <AgenticRuntimeVisibilityPanel surface="code" className="chat-code-workbench-runtime-panel" />
 
       <div className="chat-code-workbench-shell">
         <section className="chat-code-workbench-sidebar">
@@ -602,6 +718,23 @@ export function CodeWorkbenchPanel({
           </ul>
         </aside>
       </div>
+
+      <ConfirmModal
+        open={confirmRevertAllOpen}
+        title="Revert all worktree changes?"
+        message="This will discard every visible worktree change in this session. Review the repo diff before confirming."
+        confirmLabel="Revert all changes"
+        danger
+        pending={busy}
+        cancelDisabled={busy}
+        disableDismiss={busy}
+        onCancel={() => setConfirmRevertAllOpen(false)}
+        onConfirm={() => {
+          onRevertAll?.();
+          setActivePane("output");
+          setConfirmRevertAllOpen(false);
+        }}
+      />
 
       <ConfirmModal
         open={Boolean(pendingFilePath)}

@@ -83,6 +83,24 @@ const workbenchSaveFileBodySchema = z.object({
   content: z.string(),
 });
 
+const workbenchCommandRunBodySchema = z.object({
+  command: z.string().min(1).max(128),
+  args: z.array(z.string().max(4096)).max(64).optional(),
+  timeoutMs: z.number().int().positive().max(120_000).optional(),
+});
+
+const workbenchPatchApplyBodySchema = z.object({
+  patch: z
+    .string()
+    .min(1)
+    .max(4 * 1024 * 1024),
+  checkOnly: z.boolean().optional(),
+});
+
+const workbenchRevertFileBodySchema = z.object({
+  path: z.string().min(1),
+});
+
 const generatedArtifactsQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
@@ -439,6 +457,90 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     }
     try {
       return reply.send(await fastify.services.chatSessions.getChatSessionWorkbenchOutput(params.data.sessionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/workbench/command", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = workbenchCommandRunBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        await fastify.services.chatSessions.runChatSessionWorkbenchCommand(params.data.sessionId, body.data),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/workbench/patch/apply", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = workbenchPatchApplyBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        await fastify.services.chatSessions.applyChatSessionWorkbenchPatch(params.data.sessionId, body.data),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/workbench/patch/export", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.services.chatSessions.exportChatSessionWorkbenchPatch(params.data.sessionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/workbench/revert-file", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = workbenchRevertFileBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        await fastify.services.chatSessions.revertChatSessionWorkbenchFile(params.data.sessionId, body.data),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/workbench/revert-all", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.services.chatSessions.revertChatSessionWorkbenchChanges(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

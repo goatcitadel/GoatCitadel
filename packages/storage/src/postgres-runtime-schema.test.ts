@@ -185,6 +185,25 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS subagent_policy TEXT DEFAULT 'ask_when_useful'/);
   });
 
+  it("repairs comms delivery runtime metadata for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 30);
+
+    assert.equal(repairMigration?.name, "comms_delivery_runtime_metadata");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE comms_deliveries/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS payload_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS delivery_status TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS idempotency_key TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS next_attempt_at TEXT/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS stale_after_ms INTEGER/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS base_backoff_ms INTEGER/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS max_backoff_ms INTEGER/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS stale_reason TEXT/);
+    assert.match(repairMigration?.sql ?? "", /CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_deliveries_idempotency/);
+    assert.match(repairMigration?.sql ?? "", /CREATE INDEX IF NOT EXISTS idx_comms_deliveries_due/);
+  });
+
   it("repairs prompt-pack agentic diagnostic columns for older Postgres runtimes", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 21);
 

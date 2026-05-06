@@ -58,4 +58,49 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.evidenceSummary.label).toBe("Evidence: checkpoint gate");
     expect(viewModel.runMap.checkpoints[0]?.title).toBe("Continuation gate");
   });
+
+  it("summarizes optional agentic run-tree diagnostics and controls", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      agenticRunTree: {
+        runId: "agentic-run-1",
+        generatedAt: "2026-05-04T00:00:00.000Z",
+        nodes: [
+          {
+            id: "root",
+            kind: "run",
+            label: "Main Cowork run",
+            status: "running",
+          },
+        ],
+        edges: [],
+        diagnostics: [
+          {
+            signalId: "signal-1",
+            code: "child_timeout",
+            severity: "warning",
+            title: "Child timed out",
+            summary: "A child agent exceeded its runtime budget.",
+            createdAt: "2026-05-04T00:00:00.000Z",
+          },
+        ],
+        controls: [
+          {
+            action: "retry",
+            label: "Retry child",
+            enabled: true,
+            runtimeEffect: "state_only",
+            reason: "Records retry intent without replaying commands.",
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.agenticRuntime?.runId).toBe("agentic-run-1");
+    expect(viewModel.agenticRuntime?.treeNodes[0]?.label).toBe("Main Cowork run");
+    expect(viewModel.agenticRuntime?.diagnostics[0]?.title).toBe("Child timed out");
+    expect(viewModel.agenticRuntime?.controls[0]?.status).toBe("available");
+    expect(viewModel.agenticRuntime?.controls[0]?.meta).toBe("state only");
+    expect(viewModel.agenticRuntime?.controls[0]?.note).toBe("Records retry intent without replaying commands.");
+  });
 });

@@ -72,8 +72,6 @@ import {
   commsGmailRead as commsGmailReadImpl,
   commsGmailSend as commsGmailSendImpl,
   commsReact as commsReactImpl,
-  commsReply as commsReplyImpl,
-  commsSend as commsSendImpl,
   commsTyping as commsTypingImpl,
   commsUnsend as commsUnsendImpl,
 } from "./comms-service.js";
@@ -142,14 +140,15 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     commsGmailRead: (input) => commsGmailReadImpl(commsDeps, input),
     commsGmailSend: (input) => commsGmailSendImpl(commsDeps, input),
     commsReact: (input) => commsReactImpl(commsDeps, input),
-    commsReply: (input) => commsReplyImpl(commsDeps, input),
-    commsSend: (input) => commsSendImpl(commsDeps, input),
+    commsReply: (input) => gateway.commsReply(input),
+    commsSend: (input) => gateway.commsSend(input),
     commsTyping: (input) => commsTypingImpl(commsDeps, input),
     commsUnsend: (input) => commsUnsendImpl(commsDeps, input),
     getIntegrationConnectionChannelCapabilities: (connectionId) =>
       integrationChannel.getIntegrationConnectionChannelCapabilities(connectionId),
     getIntegrationConnectionChannelRuntimeStatus: (connectionId) =>
       integrationChannel.getIntegrationConnectionChannelRuntimeStatus(connectionId),
+    listChannelDeliveryRuntime: () => gateway.listChannelDeliveryRuntime(),
     runIntegrationConnectionDiagnostics: (connectionId) =>
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
   });
@@ -349,6 +348,8 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
     archiveChatSession: (sessionId) => chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId),
     archiveChatSessionsBulk: (input) => chatSessionService.archiveChatSessionsBulk(ChatSessionDependencies, input),
+    applyChatSessionWorkbenchPatch: (sessionId, input) =>
+      chatWorkbenchService.applyChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId, input),
     assignChatSessionProject: (sessionId, projectId) =>
       chatSessionService.assignChatSessionProject(ChatSessionDependencies, sessionId, projectId),
     attachChatThreadKnowledgeAttachment: (sessionId, input) =>
@@ -359,6 +360,8 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
     createChatSessionWorkbenchWorktree: (sessionId, input) =>
       chatWorkbenchService.createChatSessionWorkbenchWorktree(ChatWorkbenchDependencies, sessionId, input),
     deleteChatSession: (sessionId) => chatSessionService.deleteChatSession(ChatSessionDependencies, sessionId),
+    exportChatSessionWorkbenchPatch: (sessionId) =>
+      chatWorkbenchService.exportChatSessionWorkbenchPatch(ChatWorkbenchDependencies, sessionId),
     getChatGeneratedArtifact: (artifactId, options) =>
       chatGeneratedArtifactService.getChatGeneratedArtifact(ChatGeneratedArtifactDependencies, artifactId, options),
     getChatSessionBinding: (sessionId) => chatSessionService.getChatSessionBinding(ChatSessionDependencies, sessionId),
@@ -387,6 +390,12 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionSour
         attachmentId,
       ),
     restoreChatSession: (sessionId) => chatSessionService.restoreChatSession(ChatSessionDependencies, sessionId),
+    revertChatSessionWorkbenchChanges: (sessionId) =>
+      chatWorkbenchService.revertChatSessionWorkbenchChanges(ChatWorkbenchDependencies, sessionId),
+    revertChatSessionWorkbenchFile: (sessionId, input) =>
+      chatWorkbenchService.revertChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, input),
+    runChatSessionWorkbenchCommand: (sessionId, input) =>
+      chatWorkbenchService.runChatSessionWorkbenchCommand(ChatWorkbenchDependencies, sessionId, input),
     saveChatSessionWorkbenchFile: (sessionId, input) =>
       chatWorkbenchService.saveChatSessionWorkbenchFile(ChatWorkbenchDependencies, sessionId, input),
     setChatSessionBinding: (input) => chatSessionService.setChatSessionBinding(ChatSessionDependencies, input),

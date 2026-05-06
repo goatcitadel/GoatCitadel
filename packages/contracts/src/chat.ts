@@ -326,6 +326,50 @@ export interface ChatSessionWorkbenchDiffResponse {
   diff: string;
 }
 
+export interface ChatSessionWorkbenchCommandRunRequest {
+  command: string;
+  args?: string[];
+  timeoutMs?: number;
+}
+
+export interface ChatSessionWorkbenchCommandRunResponse {
+  state: ChatSessionWorkbenchRecord;
+  run: import("./agentic-runtime.js").AgenticCommandRunRecord;
+  output: ChatSessionWorkbenchOutputResponse;
+}
+
+export interface ChatSessionWorkbenchPatchApplyRequest {
+  patch: string;
+  checkOnly?: boolean;
+}
+
+export interface ChatSessionWorkbenchPatchApplyResponse {
+  state: ChatSessionWorkbenchRecord;
+  applied: boolean;
+  checkOnly: boolean;
+  changedFiles: string[];
+  output: ChatSessionWorkbenchOutputResponse;
+}
+
+export interface ChatSessionWorkbenchPatchExportResponse {
+  state: ChatSessionWorkbenchRecord;
+  patch: string;
+  changedFiles: string[];
+  summary: ChatSessionWorkbenchDiffSummary;
+  generatedAt: string;
+}
+
+export interface ChatSessionWorkbenchRevertFileRequest {
+  path: string;
+}
+
+export interface ChatSessionWorkbenchRevertResponse {
+  state: ChatSessionWorkbenchRecord;
+  revertedFiles: string[];
+  changedFiles: string[];
+  output: ChatSessionWorkbenchOutputResponse;
+}
+
 export interface ChatSessionWorkbenchOutputRunSummary {
   runId: string;
   status: import("./capabilities.js").CodeModeRunRecord["status"];

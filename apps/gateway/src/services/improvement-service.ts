@@ -4,8 +4,10 @@ import {
   clampInt,
   type ApprovalCreateInput,
   type ApprovalRequest,
+  type AgenticDiagnosticSignal,
   type DurableRunRecord,
   type RealtimeEvent,
+  type TaskRecord,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -23,6 +25,8 @@ import type {
   ChatThinkingLevel,
   ChatTurnTraceRecord,
   ChatWebMode,
+  CuratorReviewItem,
+  CuratorReviewResponse,
   DecisionAutoTuneRecord,
   DecisionReplayCauseClass,
   DecisionReplayFindingRecord,
@@ -33,6 +37,9 @@ import type {
   ImprovementActivationRecord,
   ImprovementActorType,
   ImprovementCandidateDetailResponse,
+  ImprovementCandidateLifecycleAction,
+  ImprovementCandidateLifecycleInput,
+  ImprovementCandidateLifecycleResult,
   ImprovementCandidateKind,
   ImprovementCandidateRecord,
   ImprovementCandidateRevisionRecord,
@@ -40,6 +47,7 @@ import type {
   ImprovementEvaluationKind,
   ImprovementEvaluationRecord,
   ImprovementEvidenceRef,
+  ImprovementEvidenceRefType,
   ImprovementRef,
   ImprovementSignalClass,
   ImprovementSignalOrigin,
@@ -59,6 +67,11 @@ import type {
   WeeklyImprovementSpecialistSuggestionRecord,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import {
+  AgenticImprovementBridgeService,
+  type AgenticImprovementBridgeInput,
+  type AgenticImprovementBridgeProposal,
+} from "./agentic-improvement-bridge-service.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
@@ -278,6 +291,12 @@ interface ImprovementSignalInput {
   scoreDelta?: number;
   evidenceRefs?: ImprovementEvidenceRef[];
   metadata?: Record<string, unknown>;
+}
+
+export interface AgenticImprovementProposalIngestionResult {
+  proposal: AgenticImprovementBridgeProposal;
+  signal?: ImprovementSignalRecord;
+  candidate?: ImprovementCandidateRecord;
 }
 
 interface ImprovementSignalRow {
@@ -855,6 +874,192 @@ export class ImprovementService {
     };
   }
 
+  listCuratorReviewItems(input: { limit?: number; workspaceId?: string } = {}): CuratorReviewResponse {
+    this.ensureImprovementLedgerTables();
+    const candidates = this.listImprovementCandidates(input.limit ?? 100, input.workspaceId).filter((candidate) =>
+      this.isCuratorCandidate(candidate),
+    );
+    return {
+      generatedAt: new Date().toISOString(),
+      items: candidates.map((candidate) =>
+        this.buildCuratorReviewItem(this.getImprovementCandidateDetail(candidate.candidateId)),
+      ),
+    };
+  }
+
+  getCuratorReviewItem(candidateId: string): CuratorReviewItem {
+    this.ensureImprovementLedgerTables();
+    return this.buildCuratorReviewItem(this.getImprovementCandidateDetail(candidateId));
+  }
+
+  validateImprovementCandidate(
+    candidateId: string,
+    input: ImprovementCandidateLifecycleInput = {},
+  ): ImprovementCandidateLifecycleResult {
+    this.ensureImprovementLedgerTables();
+    const actorId = input.actorId?.trim() || "operator";
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revision = this.readCurrentRevision(candidateId);
+    if (!revision) {
+      throw new Error(`Candidate ${candidateId} is missing a current revision.`);
+    }
+    this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
+    this.queueCandidateEvaluation(candidateId);
+    const review = this.getCuratorReviewItem(candidateId);
+    this.emitLifecycleAuditSignal("candidate_validated", {
+      candidateId,
+      actorId,
+      workspaceId: review.candidate.workspaceId,
+      fingerprint: review.candidate.fingerprint,
+      targetKey: review.candidate.targetKey,
+      mutationApplied: review.mutationApplied,
+      reason: input.reason,
+    });
+    return {
+      action: "validate",
+      status: "validated",
+      review,
+      mutationApplied: review.mutationApplied,
+    };
+  }
+
+  approveImprovementCandidate(
+    candidateId: string,
+    input: ImprovementCandidateLifecycleInput = {},
+  ): ImprovementCandidateLifecycleResult {
+    this.ensureImprovementLedgerTables();
+    const actorId = input.actorId?.trim() || "operator";
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revision = this.readCurrentRevision(candidateId);
+    const evaluation = this.readLatestEvaluation(candidateId);
+    if (
+      !revision ||
+      !evaluation ||
+      evaluation.status !== "passed" ||
+      candidate.currentRevisionId !== evaluation.revisionId
+    ) {
+      throw new Error(`Candidate ${candidateId} must pass validation before approval.`);
+    }
+    this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
+    this.updateCandidateStatus(candidateId, "approved", actorId, "operator");
+    const review = this.getCuratorReviewItem(candidateId);
+    this.emitLifecycleAuditSignal("candidate_approved", {
+      candidateId,
+      actorId,
+      workspaceId: review.candidate.workspaceId,
+      fingerprint: review.candidate.fingerprint,
+      targetKey: review.candidate.targetKey,
+      mutationApplied: review.mutationApplied,
+      reason: input.reason,
+    });
+    return {
+      action: "approve",
+      status: "approved",
+      review,
+      mutationApplied: review.mutationApplied,
+    };
+  }
+
+  rejectImprovementCandidate(
+    candidateId: string,
+    input: ImprovementCandidateLifecycleInput = {},
+  ): ImprovementCandidateLifecycleResult {
+    this.ensureImprovementLedgerTables();
+    const actorId = input.actorId?.trim() || "operator";
+    this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
+    this.clearCandidateSuppression(candidateId, actorId, "operator");
+    const review = this.getCuratorReviewItem(candidateId);
+    this.emitLifecycleAuditSignal("candidate_rejected", {
+      candidateId,
+      actorId,
+      workspaceId: review.candidate.workspaceId,
+      fingerprint: review.candidate.fingerprint,
+      targetKey: review.candidate.targetKey,
+      mutationApplied: review.mutationApplied,
+      reason: input.reason,
+    });
+    return {
+      action: "reject",
+      status: "rejected",
+      review,
+      mutationApplied: review.mutationApplied,
+    };
+  }
+
+  snoozeImprovementCandidate(
+    candidateId: string,
+    input: ImprovementCandidateLifecycleInput = {},
+  ): ImprovementCandidateLifecycleResult {
+    this.ensureImprovementLedgerTables();
+    const actorId = input.actorId?.trim() || "operator";
+    const snoozeUntil =
+      input.snoozeUntil && Number.isFinite(Date.parse(input.snoozeUntil))
+        ? new Date(input.snoozeUntil).toISOString()
+        : new Date(Date.now() + IMPROVEMENT_SUPPRESSION_MS).toISOString();
+    this.updateCandidateStatus(candidateId, "rejected", actorId, "operator");
+    this.setCandidateSuppression(candidateId, snoozeUntil, actorId, "operator");
+    const review = this.getCuratorReviewItem(candidateId);
+    this.emitLifecycleAuditSignal("candidate_snoozed", {
+      candidateId,
+      actorId,
+      workspaceId: review.candidate.workspaceId,
+      fingerprint: review.candidate.fingerprint,
+      targetKey: review.candidate.targetKey,
+      snoozeUntil,
+      mutationApplied: review.mutationApplied,
+      reason: input.reason,
+    });
+    return {
+      action: "snooze",
+      status: "snoozed",
+      review,
+      mutationApplied: review.mutationApplied,
+    };
+  }
+
+  async activateImprovementCandidate(
+    candidateId: string,
+    input: ImprovementCandidateLifecycleInput = {},
+  ): Promise<ImprovementCandidateLifecycleResult> {
+    this.ensureImprovementLedgerTables();
+    const actorId = input.actorId?.trim() || "operator";
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revision = this.readCurrentRevision(candidateId);
+    if (!revision) {
+      throw new Error(`Candidate ${candidateId} is missing a current revision.`);
+    }
+    this.assertCandidateReadyForMutation(candidate, revision);
+    if (candidate.kind === "skill_revision") {
+      throw new Error(
+        "Skill revision candidates promote through capability proposals; no direct mutation was applied.",
+      );
+    }
+    const activation = await this.requestImprovementActivation(candidateId, actorId);
+    const review = this.getCuratorReviewItem(candidateId);
+    return {
+      action: "activate",
+      status: "approval_pending",
+      review,
+      activation,
+      approvalId: activation.approvalId,
+      mutationApplied: review.mutationApplied,
+    };
+  }
+
+  promoteImprovementCandidate(
+    candidateId: string,
+    input: ImprovementCandidateLifecycleInput = {},
+  ): ImprovementCandidateLifecycleResult {
+    this.ensureImprovementLedgerTables();
+    const candidate = this.readImprovementCandidate(candidateId);
+    const revision = this.readCurrentRevision(candidateId);
+    if (!revision) {
+      throw new Error(`Candidate ${candidateId} is missing a current revision.`);
+    }
+    this.assertCandidateReadyForMutation(candidate, revision);
+    throw new Error("Promotion is review-only until a capability proposal approval applies the mutation.");
+  }
+
   getImprovementActivation(activationId: string): ImprovementActivationRecord {
     this.ensureImprovementLedgerTables();
     return this.maybeAdvanceActivation(this.readImprovementActivation(activationId));
@@ -937,6 +1142,85 @@ export class ImprovementService {
         lastError: input.message,
       },
     });
+  }
+
+  recordAgenticDiagnosticSignal(input: {
+    task: TaskRecord;
+    diagnostic: AgenticDiagnosticSignal;
+  }): ImprovementSignalRecord | undefined {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return undefined;
+    }
+    const workspaceId = this.ctx.normalizeWorkspaceId(input.task.workspaceId);
+    const context = input.task.agenticContext;
+    const sourceEventId = `${input.task.taskId}:${input.diagnostic.signalId}`;
+    return this.recordImprovementSignal({
+      sourceService: "task-lifecycle-service",
+      sourceType: "agentic_diagnostic",
+      sourceId: input.diagnostic.signalId,
+      sourceEventId,
+      idempotencyKey: sourceEventId,
+      workspaceId,
+      occurredAt: input.diagnostic.createdAt,
+      origin: "runtime",
+      signalClass: "runtime",
+      signalKind: `agentic_${input.diagnostic.code}`,
+      outcome: input.diagnostic.severity === "info" ? "neutral" : "negative",
+      severity: mapAgenticDiagnosticSeverity(input.diagnostic.severity),
+      fingerprint: buildImprovementFingerprint([
+        "agentic",
+        workspaceId,
+        context?.surface,
+        context?.failureClass,
+        context?.profileId,
+        input.diagnostic.code,
+      ]),
+      sessionId: context?.parentSessionId,
+      durableRunId: context?.durableRunId,
+      taskId: input.task.taskId,
+      evidenceRefs: [
+        {
+          refType: "agentic_diagnostic",
+          refId: input.diagnostic.signalId,
+          hash: hashJson({
+            taskId: input.task.taskId,
+            runId: context?.runId,
+            code: input.diagnostic.code,
+            summary: input.diagnostic.summary,
+          }),
+          metadata: {
+            taskId: input.task.taskId,
+            runId: context?.runId,
+            evidenceRef: input.diagnostic.evidenceRef,
+          },
+        },
+      ],
+      metadata: {
+        diagnosticCode: input.diagnostic.code,
+        diagnosticTitle: input.diagnostic.title,
+        diagnosticSummary: input.diagnostic.summary,
+        severity: input.diagnostic.severity,
+        runId: context?.runId,
+        parentRunId: context?.parentRunId,
+        surface: context?.surface,
+        failureClass: context?.failureClass,
+        profileId: context?.profileId,
+      },
+    });
+  }
+
+  recordAgenticImprovementProposals(
+    input: AgenticImprovementBridgeInput,
+    options: { workspaceId?: string } = {},
+  ): AgenticImprovementProposalIngestionResult[] {
+    if (!this.ctx.isFeatureEnabled("improvementLedgerV1Enabled")) {
+      return [];
+    }
+    const workspaceId = this.ctx.normalizeWorkspaceId(options.workspaceId);
+    const bridge = new AgenticImprovementBridgeService();
+    return bridge
+      .buildProposalSummaries(input)
+      .map((proposal) => this.recordAgenticImprovementProposal(proposal, workspaceId));
   }
 
   recordFocusedToolFailureSignal(input: {
@@ -1516,6 +1800,61 @@ export class ImprovementService {
     this.applySignalToWatchWindows(signal);
     this.maybeSynthesizeCandidate(signal);
     return signal;
+  }
+
+  private recordAgenticImprovementProposal(
+    proposal: AgenticImprovementBridgeProposal,
+    workspaceId: string,
+  ): AgenticImprovementProposalIngestionResult {
+    const kind = determineAgenticProposalCandidateKind(proposal);
+    const targetKey = buildAgenticProposalTargetKey(proposal, kind);
+    const signal = this.recordImprovementSignal({
+      sourceService: "agentic-improvement-bridge",
+      sourceType: "agentic_improvement_proposal",
+      sourceId: proposal.proposalId,
+      sourceEventId: proposal.proposalId,
+      idempotencyKey: `agentic-improvement-proposal:${workspaceId}:${proposal.proposalId}`,
+      workspaceId,
+      origin: "evaluation",
+      signalClass: "evaluation",
+      signalKind: "agentic_improvement_proposal",
+      outcome: proposal.risk === "low" ? "neutral" : "negative",
+      severity: proposal.risk,
+      fingerprint: buildImprovementFingerprint(["agentic_proposal", workspaceId, kind, proposal.proposalId]),
+      capabilityId: proposal.evidence.find((ref) => ref.source !== "prompt_lab")?.sourceId,
+      memoryItemId: proposal.evidence.find((ref) => ref.source === "memory")?.sourceId,
+      evidenceRefs: proposal.evidence.map((ref) => ({
+        refType: mapAgenticProposalEvidenceRefType(ref.source),
+        refId: ref.sourceId,
+        hash: hashJson(ref),
+        metadata: {
+          source: ref.source,
+          title: ref.title,
+          summary: ref.summary,
+          proposalId: proposal.proposalId,
+        },
+      })),
+      metadata: {
+        kind,
+        targetKey,
+        proposalId: proposal.proposalId,
+        proposalTitle: proposal.title,
+        observedIssue: proposal.observedIssue,
+        proposedChange: proposal.proposedChange,
+        callableImpact: proposal.callableImpact,
+        rollbackRef: proposal.rollbackRef,
+        risk: proposal.risk,
+        actionStatuses: proposal.actionStatuses,
+        trust: proposal.trust,
+        mutationApplied: false,
+        agenticProposal: proposal,
+      },
+    });
+    if (signal) {
+      this.maybeSynthesizeCandidate(signal);
+    }
+    const candidate = signal ? this.readOpenImprovementCandidateBySignal(signal, kind) : undefined;
+    return { proposal, signal, candidate };
   }
 
   recordCapabilityGapEvent(input: CapabilityGapEventUpsertInput): CapabilityGapEventRecord {
@@ -2546,6 +2885,33 @@ export class ImprovementService {
     return mapImprovementCandidateRow(row);
   }
 
+  private readOpenImprovementCandidateBySignal(
+    signal: ImprovementSignalRecord,
+    kind: ImprovementCandidateKind,
+  ): ImprovementCandidateRecord | undefined {
+    const row = toImprovementCandidateRow(
+      this.ctx.gatewaySql
+        .prepare(
+          `
+          SELECT *
+          FROM improvement_candidates
+          WHERE workspace_id = @workspaceId
+            AND kind = @kind
+            AND fingerprint = @fingerprint
+            AND status IN ('proposed', 'evaluating', 'ready_for_approval', 'approval_pending', 'approved')
+          ORDER BY updated_at DESC, candidate_id DESC
+          LIMIT 1
+        `,
+        )
+        .get({
+          workspaceId: signal.workspaceId,
+          kind,
+          fingerprint: signal.fingerprint,
+        }),
+    );
+    return row ? mapImprovementCandidateRow(row) : undefined;
+  }
+
   private readCurrentRevision(candidateId: string): ImprovementCandidateRevisionRecord | undefined {
     const candidate = this.readImprovementCandidate(candidateId);
     if (!candidate.currentRevisionId) {
@@ -2671,6 +3037,7 @@ export class ImprovementService {
     }
 
     const shouldCreateImmediately =
+      signal.signalKind === "agentic_improvement_proposal" ||
       (signal.signalClass === "evaluation" && signal.outcome === "negative" && signal.severity === "high") ||
       (signal.signalKind === "skill_revision_evaluated" && signal.outcome === "positive");
     if (!shouldCreateImmediately && !this.isSynthesisThresholdMet(signal, kind)) {
@@ -2787,6 +3154,12 @@ export class ImprovementService {
   }
 
   private determineCandidateKind(signal: ImprovementSignalRecord): ImprovementCandidateKind | undefined {
+    if (signal.signalKind === "agentic_improvement_proposal") {
+      const kind = asOptionalString(safeJsonRecord(signal.metadata).kind);
+      return IMPROVEMENT_CANDIDATE_KINDS.has(kind as ImprovementCandidateKind)
+        ? (kind as ImprovementCandidateKind)
+        : "repair_policy";
+    }
     if (signal.signalKind === "tool_provider_failure" || signal.signalKind === "durable_run_failed") {
       return "repair_policy";
     }
@@ -2838,6 +3211,10 @@ export class ImprovementService {
 
   private deriveTargetKey(kind: ImprovementCandidateKind, signal: ImprovementSignalRecord): string {
     const metadata = safeJsonRecord(signal.metadata);
+    const explicitTargetKey = asOptionalString(metadata.targetKey);
+    if (explicitTargetKey) {
+      return explicitTargetKey;
+    }
     if (kind === "repair_policy") {
       return [
         signal.toolName,
@@ -2860,6 +3237,10 @@ export class ImprovementService {
 
   private buildCandidateSummary(kind: ImprovementCandidateKind, signal: ImprovementSignalRecord): string {
     const metadata = safeJsonRecord(signal.metadata);
+    const proposalTitle = asOptionalString(metadata.proposalTitle);
+    if (signal.signalKind === "agentic_improvement_proposal" && proposalTitle) {
+      return proposalTitle;
+    }
     if (kind === "repair_policy") {
       return [
         "Repair policy candidate",
@@ -2885,6 +3266,40 @@ export class ImprovementService {
     signal: ImprovementSignalRecord,
   ): ImprovementRef {
     const metadata = safeJsonRecord(signal.metadata);
+    if (signal.signalKind === "agentic_improvement_proposal") {
+      const proposalId = asOptionalString(metadata.proposalId) ?? signal.sourceId;
+      const proposedChange = {
+        strategy: "review_first_agentic_improvement",
+        proposalId,
+        title: asOptionalString(metadata.proposalTitle) ?? candidate.summary,
+        observedIssue: asOptionalString(metadata.observedIssue),
+        proposedChange: asOptionalString(metadata.proposedChange),
+        callableImpact: asOptionalString(metadata.callableImpact),
+        rollbackRef: asOptionalString(metadata.rollbackRef),
+        risk: asOptionalString(metadata.risk),
+        actionStatuses: isRecord(metadata.actionStatuses) ? metadata.actionStatuses : undefined,
+        trust: isRecord(metadata.trust) ? metadata.trust : undefined,
+        mutationApplied: false,
+      };
+      return {
+        refType:
+          candidate.kind === "repair_policy"
+            ? "repair_candidate"
+            : candidate.kind === "skill_revision"
+              ? "skill_evaluation_run"
+              : "artifact_manifest",
+        refId: `agentic_proposal:${proposalId}`,
+        metadata: {
+          workspaceId: candidate.workspaceId,
+          fingerprint: candidate.fingerprint,
+          targetKey: candidate.targetKey,
+          proposedChange,
+          agenticProposal: isRecord(metadata.agenticProposal) ? metadata.agenticProposal : undefined,
+          mutationApplied: false,
+        },
+        hash: hashJson(proposedChange),
+      };
+    }
     const proposedChange =
       candidate.kind === "repair_policy"
         ? {
@@ -3143,6 +3558,136 @@ export class ImprovementService {
     return count >= requiredCount && IMPROVEMENT_CANDIDATE_KINDS.has(kind);
   }
 
+  private isCuratorCandidate(candidate: ImprovementCandidateRecord): boolean {
+    return candidate.kind === "skill_revision" || candidate.targetKey.startsWith("memory:");
+  }
+
+  private buildCuratorReviewItem(detail: ImprovementCandidateDetailResponse): CuratorReviewItem {
+    const revision = detail.currentRevision;
+    const metadata = safeJsonRecord(revision?.candidateRef.metadata);
+    const proposedChange = safeJsonRecord(metadata.proposedChange);
+    const agenticProposal = safeJsonRecord(metadata.agenticProposal);
+    const latestActivation = detail.latestActivation;
+    const callableImpact = normalizeCallableImpact(
+      asOptionalString(proposedChange.callableImpact) ?? asOptionalString(agenticProposal.callableImpact),
+    );
+    const runtimeProvenCallable = readBooleanFlag(metadata, proposedChange, agenticProposal, "runtimeProvenCallable");
+    const corruptionStatus = resolveCuratorCorruptionStatus(metadata, proposedChange, agenticProposal);
+    const mutationApplied =
+      latestActivation?.status === "active" ||
+      readBooleanFlag(metadata, proposedChange, agenticProposal, "mutationApplied");
+    const risk = normalizeCuratorRisk(
+      asOptionalString(proposedChange.risk) ?? asOptionalString(agenticProposal.risk) ?? detail.candidate.severity,
+    );
+    const approvalReady =
+      Boolean(revision) &&
+      detail.latestEvaluation?.status === "passed" &&
+      detail.latestEvaluation.revisionId === detail.candidate.currentRevisionId &&
+      corruptionStatus === "clean" &&
+      detail.candidate.status !== "rejected";
+    const activationNeedsRuntimeCallable = callableImpact === "widens_after_approval";
+    const disabledReasons: CuratorReviewItem["disabledReasons"] = {};
+    if (!revision) {
+      disabledReasons.validate = "Missing candidate revision.";
+      disabledReasons.approve = "Missing candidate revision.";
+      disabledReasons.activate = "Missing candidate revision.";
+      disabledReasons.promote = "Missing candidate revision.";
+    }
+    if (corruptionStatus !== "clean") {
+      const reason = `Candidate is ${corruptionStatus} and cannot mutate runtime state.`;
+      disabledReasons.validate = reason;
+      disabledReasons.approve = reason;
+      disabledReasons.activate = reason;
+      disabledReasons.promote = reason;
+    }
+    if (!approvalReady && !disabledReasons.approve) {
+      disabledReasons.approve = "Candidate must pass validation before approval.";
+    }
+    if (detail.candidate.status !== "approved") {
+      disabledReasons.activate = "Candidate must be approved before activation.";
+      disabledReasons.promote = "Candidate must be approved before promotion.";
+    }
+    if (!disabledReasons.promote) {
+      disabledReasons.promote = "Promotion is review-only until capability proposal approval applies the mutation.";
+    }
+    if (detail.candidate.kind === "skill_revision") {
+      disabledReasons.activate = "Skill revisions promote through capability proposals.";
+      disabledReasons.promote = "Capability proposal promotion is approval-gated and not applied silently.";
+    }
+    if (activationNeedsRuntimeCallable && !runtimeProvenCallable) {
+      disabledReasons.activate = "Callable exposure must be runtime-proven before activation.";
+      disabledReasons.promote = "Callable exposure must be runtime-proven before promotion.";
+    }
+    if (mutationApplied) {
+      disabledReasons.reject = "Already applied candidates must be paused or rolled back instead.";
+      disabledReasons.snooze = "Already applied candidates must be paused or rolled back instead.";
+    }
+    return {
+      candidate: detail.candidate,
+      currentRevision: revision,
+      latestEvaluation: detail.latestEvaluation,
+      latestActivation,
+      evidence: dedupeImprovementEvidence(detail.supportingSignals.flatMap((signal) => signal.evidenceRefs)),
+      risk,
+      rollbackRef:
+        asOptionalString(proposedChange.rollbackRef) ??
+        asOptionalString(agenticProposal.rollbackRef) ??
+        revision?.candidateRef.hash,
+      observedIssue: asOptionalString(proposedChange.observedIssue) ?? asOptionalString(agenticProposal.observedIssue),
+      proposedChange:
+        asOptionalString(proposedChange.proposedChange) ?? asOptionalString(agenticProposal.proposedChange),
+      callableImpact,
+      approvalRequired: true,
+      mutationApplied,
+      runtimeProvenCallable,
+      corruptionStatus,
+      actionStatuses: {
+        validate: disabledReasons.validate ? "blocked" : "ready",
+        approve: disabledReasons.approve ? "blocked" : "ready",
+        reject: disabledReasons.reject ? "blocked" : "ready",
+        snooze: disabledReasons.snooze ? "blocked" : "ready",
+        activate: disabledReasons.activate ? "blocked" : "ready",
+        promote: disabledReasons.promote ? "blocked" : "ready",
+      },
+      disabledReasons,
+    };
+  }
+
+  private assertCandidateNotCorruptOrQuarantined(
+    candidate: ImprovementCandidateRecord,
+    revision: ImprovementCandidateRevisionRecord,
+  ): void {
+    const metadata = safeJsonRecord(revision.candidateRef.metadata);
+    const proposedChange = safeJsonRecord(metadata.proposedChange);
+    const agenticProposal = safeJsonRecord(metadata.agenticProposal);
+    const corruptionStatus = resolveCuratorCorruptionStatus(metadata, proposedChange, agenticProposal);
+    if (corruptionStatus !== "clean") {
+      throw new Error(`Candidate ${candidate.candidateId} is ${corruptionStatus} and cannot be promoted.`);
+    }
+  }
+
+  private assertCandidateReadyForMutation(
+    candidate: ImprovementCandidateRecord,
+    revision: ImprovementCandidateRevisionRecord,
+  ): void {
+    if (candidate.status !== "approved") {
+      throw new Error(`Candidate ${candidate.candidateId} must be approved before mutation-capable actions.`);
+    }
+    this.assertCandidateNotCorruptOrQuarantined(candidate, revision);
+    const metadata = safeJsonRecord(revision.candidateRef.metadata);
+    const proposedChange = safeJsonRecord(metadata.proposedChange);
+    const agenticProposal = safeJsonRecord(metadata.agenticProposal);
+    const callableImpact = normalizeCallableImpact(
+      asOptionalString(proposedChange.callableImpact) ?? asOptionalString(agenticProposal.callableImpact),
+    );
+    if (
+      callableImpact === "widens_after_approval" &&
+      !readBooleanFlag(metadata, proposedChange, agenticProposal, "runtimeProvenCallable")
+    ) {
+      throw new Error(`Candidate ${candidate.candidateId} must be runtime-proven callable before promotion.`);
+    }
+  }
+
   private updateCandidateStatus(
     candidateId: string,
     status: ImprovementCandidateStatus,
@@ -3166,6 +3711,52 @@ export class ImprovementService {
         actorId,
         actorType,
         candidateId,
+      });
+  }
+
+  private clearCandidateSuppression(candidateId: string, actorId: string, actorType: ImprovementActorType): void {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET suppression_until = NULL,
+            updated_at = @updatedAt,
+            updated_by_actor_id = @actorId,
+            updated_by_actor_type = @actorType
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({
+        candidateId,
+        updatedAt: new Date().toISOString(),
+        actorId,
+        actorType,
+      });
+  }
+
+  private setCandidateSuppression(
+    candidateId: string,
+    suppressionUntil: string,
+    actorId: string,
+    actorType: ImprovementActorType,
+  ): void {
+    this.ctx.gatewaySql
+      .prepare(
+        `
+        UPDATE improvement_candidates
+        SET suppression_until = @suppressionUntil,
+            updated_at = @updatedAt,
+            updated_by_actor_id = @actorId,
+            updated_by_actor_type = @actorType
+        WHERE candidate_id = @candidateId
+      `,
+      )
+      .run({
+        candidateId,
+        suppressionUntil,
+        updatedAt: new Date().toISOString(),
+        actorId,
+        actorType,
       });
   }
 
@@ -3595,6 +4186,10 @@ export class ImprovementService {
   private emitLifecycleAuditSignal(
     signalKind:
       | "candidate_created"
+      | "candidate_validated"
+      | "candidate_approved"
+      | "candidate_rejected"
+      | "candidate_snoozed"
       | "revision_created"
       | "evaluation_passed"
       | "evaluation_failed"
@@ -3618,6 +4213,9 @@ export class ImprovementService {
       actorId?: string;
       actorType?: ImprovementActorType;
       failureReason?: string;
+      reason?: string;
+      snoozeUntil?: string;
+      mutationApplied?: boolean;
       status?: string;
       watchStatus?: string;
     },
@@ -5227,6 +5825,135 @@ function buildImprovementFingerprint(parts: Array<string | undefined | null>): s
     .map((part) => (typeof part === "string" ? part.trim().toLowerCase() : ""))
     .filter((part) => part.length > 0)
     .join("|");
+}
+
+function determineAgenticProposalCandidateKind(proposal: AgenticImprovementBridgeProposal): ImprovementCandidateKind {
+  if (proposal.evidence.some((ref) => ref.source === "skill_evaluation")) {
+    return "skill_revision";
+  }
+  if (proposal.callableImpact === "narrows" || proposal.proposalId.startsWith("agentic-diagnostic-")) {
+    return "repair_policy";
+  }
+  return "routing_policy";
+}
+
+function buildAgenticProposalTargetKey(
+  proposal: AgenticImprovementBridgeProposal,
+  kind: ImprovementCandidateKind,
+): string {
+  const primary = proposal.evidence[0];
+  if (primary) {
+    if (primary.source === "prompt_lab") {
+      return `prompt-lab:${primary.sourceId}`;
+    }
+    if (primary.source === "skill_evaluation") {
+      return `skill:${primary.sourceId}`;
+    }
+    if (primary.source === "memory") {
+      return `memory:${primary.sourceId}`;
+    }
+    if (primary.source === "provider" || primary.source === "plugin" || primary.source === "channel") {
+      return `${primary.source}:${primary.sourceId}`;
+    }
+    return `agentic:${primary.sourceId}`;
+  }
+  return `${kind}:${proposal.proposalId}`;
+}
+
+function mapAgenticProposalEvidenceRefType(
+  source: AgenticImprovementBridgeProposal["evidence"][number]["source"],
+): ImprovementEvidenceRefType {
+  if (source === "agentic_diagnostic") {
+    return "agentic_diagnostic";
+  }
+  if (source === "prompt_lab") {
+    return "prompt_pack_run";
+  }
+  if (source === "skill_evaluation") {
+    return "skill_evaluation_run";
+  }
+  if (source === "plugin" || source === "provider" || source === "channel") {
+    return "capability_proposal";
+  }
+  return "artifact_manifest";
+}
+
+function mapAgenticDiagnosticSeverity(severity: AgenticDiagnosticSignal["severity"]): ImprovementSignalSeverity {
+  if (severity === "critical") {
+    return "high";
+  }
+  if (severity === "warning") {
+    return "medium";
+  }
+  return "low";
+}
+
+function normalizeCuratorRisk(value: unknown): "low" | "medium" | "high" {
+  return value === "low" || value === "medium" || value === "high" ? value : "medium";
+}
+
+function normalizeCallableImpact(value: unknown): "none" | "narrows" | "widens_after_approval" {
+  return value === "narrows" || value === "widens_after_approval" ? value : "none";
+}
+
+function readBooleanFlag(records: Record<string, unknown>[], key: string): boolean;
+function readBooleanFlag(
+  first: Record<string, unknown>,
+  second: Record<string, unknown>,
+  third: Record<string, unknown>,
+  key: string,
+): boolean;
+function readBooleanFlag(
+  first: Record<string, unknown> | Record<string, unknown>[],
+  second: Record<string, unknown> | string,
+  third?: Record<string, unknown>,
+  fourth?: string,
+): boolean {
+  const records = Array.isArray(first) ? first : [first, second as Record<string, unknown>, third ?? {}];
+  const key = Array.isArray(first) ? (second as string) : (fourth as string);
+  return records.some((record) => record[key] === true);
+}
+
+function resolveCuratorCorruptionStatus(
+  metadata: Record<string, unknown>,
+  proposedChange: Record<string, unknown>,
+  agenticProposal: Record<string, unknown>,
+): "clean" | "corrupt" | "quarantined" {
+  if (
+    metadata.quarantined === true ||
+    proposedChange.quarantined === true ||
+    agenticProposal.quarantined === true ||
+    metadata.integrityStatus === "quarantined" ||
+    proposedChange.integrityStatus === "quarantined" ||
+    agenticProposal.integrityStatus === "quarantined"
+  ) {
+    return "quarantined";
+  }
+  if (
+    metadata.corrupt === true ||
+    proposedChange.corrupt === true ||
+    agenticProposal.corrupt === true ||
+    metadata.integrityStatus === "corrupt" ||
+    proposedChange.integrityStatus === "corrupt" ||
+    agenticProposal.integrityStatus === "corrupt"
+  ) {
+    return "corrupt";
+  }
+  return "clean";
+}
+
+function dedupeImprovementEvidence(evidenceRefs: ImprovementEvidenceRef[]): ImprovementEvidenceRef[] {
+  const seen = new Set<string>();
+  const result: ImprovementEvidenceRef[] = [];
+  for (const ref of evidenceRefs) {
+    const key = `${ref.refType}:${ref.refId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(ref);
+  }
+  return result;
 }
 
 function normalizeEvidenceRefs(value: ImprovementEvidenceRef[] | undefined): ImprovementEvidenceRef[] {

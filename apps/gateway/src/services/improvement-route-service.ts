@@ -19,19 +19,27 @@ type ImprovementOperationsPort = Pick<
   | "getImprovementCandidateDetail"
   | "getImprovementReport"
   | "getImprovementSignal"
+  | "getCuratorReviewItem"
   | "getReplayDiffSummary"
   | "listCapabilityGapEvents"
+  | "listCuratorReviewItems"
   | "listDecisionReplayRuns"
   | "listImprovementCandidates"
   | "listImprovementReports"
   | "listImprovementSignals"
   | "listRepairCandidates"
+  | "activateImprovementCandidate"
+  | "approveImprovementCandidate"
   | "pauseImprovementActivation"
+  | "promoteImprovementCandidate"
+  | "rejectImprovementCandidate"
   | "requestImprovementActivation"
   | "revertDecisionAutoTune"
   | "rollbackImprovementActivation"
   | "runImprovementReplayManually"
+  | "snoozeImprovementCandidate"
   | "updateRepairCandidateValidation"
+  | "validateImprovementCandidate"
 >;
 
 export interface ImprovementAuditPort {
@@ -79,6 +87,56 @@ export class ImprovementRouteService {
 
   public getImprovementCandidate(candidateId: string) {
     return this.deps.improvement.getImprovementCandidateDetail(candidateId);
+  }
+
+  public listCuratorReviewItems(input: Parameters<ImprovementOperationsPort["listCuratorReviewItems"]>[0]) {
+    return this.deps.improvement.listCuratorReviewItems(input);
+  }
+
+  public getCuratorReviewItem(candidateId: string) {
+    return this.deps.improvement.getCuratorReviewItem(candidateId);
+  }
+
+  public validateImprovementCandidate(
+    candidateId: string,
+    input: Parameters<ImprovementOperationsPort["validateImprovementCandidate"]>[1],
+  ) {
+    return this.deps.improvement.validateImprovementCandidate(candidateId, input);
+  }
+
+  public approveImprovementCandidate(
+    candidateId: string,
+    input: Parameters<ImprovementOperationsPort["approveImprovementCandidate"]>[1],
+  ) {
+    return this.deps.improvement.approveImprovementCandidate(candidateId, input);
+  }
+
+  public rejectImprovementCandidate(
+    candidateId: string,
+    input: Parameters<ImprovementOperationsPort["rejectImprovementCandidate"]>[1],
+  ) {
+    return this.deps.improvement.rejectImprovementCandidate(candidateId, input);
+  }
+
+  public snoozeImprovementCandidate(
+    candidateId: string,
+    input: Parameters<ImprovementOperationsPort["snoozeImprovementCandidate"]>[1],
+  ) {
+    return this.deps.improvement.snoozeImprovementCandidate(candidateId, input);
+  }
+
+  public activateImprovementCandidate(
+    candidateId: string,
+    input: Parameters<ImprovementOperationsPort["activateImprovementCandidate"]>[1],
+  ) {
+    return this.deps.improvement.activateImprovementCandidate(candidateId, input);
+  }
+
+  public promoteImprovementCandidate(
+    candidateId: string,
+    input: Parameters<ImprovementOperationsPort["promoteImprovementCandidate"]>[1],
+  ) {
+    return this.deps.improvement.promoteImprovementCandidate(candidateId, input);
   }
 
   public requestImprovementActivation(candidateId: string) {

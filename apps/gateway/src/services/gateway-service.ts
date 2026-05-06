@@ -522,6 +522,11 @@ import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
+import {
+  ChannelDeliveryRuntimeService,
+  type ChannelDeliveryRuntimeRecord,
+  type ChannelDeliveryRuntimeSendInput,
+} from "./channel-delivery-runtime-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
@@ -529,7 +534,6 @@ import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-con
 import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import {
   commsSend as commsSendImpl,
-  commsReply as commsReplyImpl,
   commsReact as commsReactImpl,
   commsUnsend as commsUnsendImpl,
   commsTyping as commsTypingImpl,
@@ -747,6 +751,7 @@ export class GatewayService {
   public readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
+  private readonly channelDeliveryRuntimeService: ChannelDeliveryRuntimeService;
   private readonly backupRetentionService: BackupRetentionService;
   private readonly databaseCutoverService: DatabaseCutoverService;
   private readonly mediaVoiceService: MediaVoiceService;
@@ -774,6 +779,10 @@ export class GatewayService {
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
     this.storage = createGatewayStorage(config);
+    this.channelDeliveryRuntimeService = new ChannelDeliveryRuntimeService({
+      repository: this.storage.commsDeliveries,
+      send: (input) => this.sendQueuedChannelDelivery(input),
+    });
     this.personalityCatalogService = new PersonalityCatalogService(this.storage.systemSettings);
     this.realtimeEventService = new RealtimeEventService({
       storage: this.storage,
@@ -862,6 +871,9 @@ export class GatewayService {
       storage: this.storage,
       publishRealtime: (eventType, source, payload, options) => {
         this.publishRealtime(eventType, source, payload, options);
+      },
+      recordAgenticDiagnosticSignal: ({ task, diagnostic }) => {
+        this.improvementService.recordAgenticDiagnosticSignal({ task, diagnostic });
       },
     });
     this.orchestrationEngine = new OrchestrationEngine();
@@ -1501,6 +1513,12 @@ export class GatewayService {
         flushedTranscriptCount,
       });
     }
+    const restartedChannelDeliveries = await this.drainDueChannelDeliveries();
+    if (restartedChannelDeliveries.length > 0) {
+      log.info("drained due channel deliveries after restart", {
+        deliveryCount: restartedChannelDeliveries.length,
+      });
+    }
     await this.discordRuntimeService.sync();
     this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
@@ -1944,6 +1962,7 @@ export class GatewayService {
     await this.runUpdateReviewSchedulerIfDue();
     await this.cronAutomationService.runDueTaskCronJobs();
     await this.memoryLifecycleService.runDueEvaluation();
+    await this.drainDueChannelDeliveries();
   }
 
   public scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
@@ -5051,11 +5070,40 @@ export class GatewayService {
   }
 
   public async commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return commsSendImpl(this.buildCommsHost(), input);
+    const connection = this.storage.integrationConnections.get(input.connectionId);
+    const idempotencyKey = buildChannelDeliveryIdempotencyKey(input);
+    const queued = this.channelDeliveryRuntimeService.enqueue({
+      connectionId: input.connectionId,
+      channelKey: connection.key,
+      target: input.target,
+      payload: buildChannelDeliveryPayload(input),
+      idempotencyKey,
+    });
+    this.scheduleChannelDeliveryDrain();
+    return {
+      deliveryId: queued.deliveryId,
+      status:
+        queued.status === "sent"
+          ? "sent"
+          : queued.status === "failed" || queued.status === "stale"
+            ? "failed"
+            : "queued",
+      deliveryStatus: queued.deliveryStatus ?? (queued.status === "sent" ? "sent" : "retrying"),
+      channelKey: queued.channelKey,
+      target: queued.target,
+      ...(queued.providerMessageId ? { providerMessageId: queued.providerMessageId } : {}),
+      ...(queued.error ? { error: queued.error, fallbackReason: queued.fallbackReason ?? queued.error } : {}),
+      createdAt: queued.createdAt,
+      updatedAt: queued.updatedAt,
+      ...(queued.nextAttemptAt ? { nextAttemptAt: queued.nextAttemptAt } : {}),
+    };
   }
 
   public async commsReply(input: ChannelReplyInput): Promise<ToolInvokeResult | Record<string, unknown>> {
-    return commsReplyImpl(this.buildCommsHost(), input);
+    if (!input.replyToMessageId?.trim()) {
+      throw new Error("replyToMessageId is required for channel replies.");
+    }
+    return this.commsSend(input);
   }
 
   public async commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -5068,6 +5116,69 @@ export class GatewayService {
 
   public async commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult> {
     return commsTypingImpl(this.buildCommsHost(), input);
+  }
+
+  public async drainDueChannelDeliveries(limit = 25): Promise<ChannelDeliveryRuntimeRecord[]> {
+    return this.channelDeliveryRuntimeService.drainDue(limit);
+  }
+
+  public listChannelDeliveryRuntime(): ChannelDeliveryRuntimeRecord[] {
+    const recordsById = new Map<string, ChannelDeliveryRuntimeRecord>();
+    for (const record of this.storage.commsDeliveries.list(undefined, 200)) {
+      recordsById.set(record.deliveryId, {
+        deliveryId: record.deliveryId,
+        connectionId: record.connectionId,
+        channelKey: record.channelKey,
+        target: record.target,
+        status: mapPersistedChannelDeliveryRuntimeStatus(record.status, record.deliveryStatus, record.staleReason),
+        deliveryStatus: record.deliveryStatus,
+        idempotencyKey: record.idempotencyKey,
+        payloadHash: record.payloadHash,
+        attempts: record.attempts,
+        maxAttempts: record.maxAttempts,
+        nextAttemptAt: record.nextAttemptAt,
+        staleReason: record.staleReason,
+        providerMessageId: record.providerMessageId,
+        error: record.error,
+        fallbackReason: record.fallbackReason,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      });
+    }
+    for (const record of this.channelDeliveryRuntimeService.list()) {
+      recordsById.set(record.deliveryId, record);
+    }
+    return [...recordsById.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  private scheduleChannelDeliveryDrain(): void {
+    if (this.closing) {
+      return;
+    }
+    const task = this.drainDueChannelDeliveries()
+      .then(() => undefined)
+      .catch((error) => {
+        log.warn("channel delivery drain failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    this.backgroundTasks.add(task);
+    task.finally(() => this.backgroundTasks.delete(task));
+  }
+
+  private async sendQueuedChannelDelivery(
+    input: ChannelDeliveryRuntimeSendInput,
+  ): Promise<{ providerMessageId?: string }> {
+    const result = await commsSendImpl(this.buildCommsHost(), channelDeliveryPayloadToSendInput(input));
+    const unwrapped = extractCommsSendResult(result);
+    if (unwrapped.status === "failed") {
+      throw new Error(
+        readOptionalString(unwrapped.error) ??
+          readOptionalString(unwrapped.fallbackReason) ??
+          "Channel delivery failed.",
+      );
+    }
+    return { providerMessageId: readOptionalString(unwrapped.providerMessageId) };
   }
 
   public async commsGmailRead(input: GmailReadQuery): Promise<ToolInvokeResult | Record<string, unknown>> {
@@ -7592,6 +7703,112 @@ function toChatStreamChunk(value: unknown): ChatStreamChunk | undefined {
 
 function durableChatTurnPayloadToRecord(payload: DurableChatTurnExecutionPayload): Record<string, unknown> {
   return { ...payload };
+}
+
+function buildChannelDeliveryPayload(input: ChannelSendInput): Record<string, unknown> {
+  return {
+    connectionId: input.connectionId,
+    target: input.target,
+    message: input.message,
+    attachments: input.attachments,
+    attachmentIds: input.attachmentIds,
+    replyToMessageId: input.replyToMessageId,
+    replyToPartIndex: input.replyToPartIndex,
+    effectId: input.effectId,
+    subject: input.subject,
+    sessionId: input.sessionId,
+    agentId: input.agentId,
+    taskId: input.taskId,
+  };
+}
+
+function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeSendInput): ChannelSendInput {
+  const payload = input.payload;
+  return {
+    connectionId: readRequiredString(payload.connectionId, "connectionId"),
+    target: readRequiredString(payload.target, "target"),
+    message: typeof payload.message === "string" ? payload.message : "",
+    attachments: Array.isArray(payload.attachments)
+      ? (payload.attachments as ChannelSendInput["attachments"])
+      : undefined,
+    attachmentIds: Array.isArray(payload.attachmentIds) ? (payload.attachmentIds as string[]) : undefined,
+    replyToMessageId: typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : undefined,
+    replyToPartIndex: typeof payload.replyToPartIndex === "number" ? payload.replyToPartIndex : undefined,
+    effectId: typeof payload.effectId === "string" ? payload.effectId : undefined,
+    subject: typeof payload.subject === "string" ? payload.subject : undefined,
+    sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
+    agentId: typeof payload.agentId === "string" ? payload.agentId : undefined,
+    taskId: typeof payload.taskId === "string" ? payload.taskId : undefined,
+  };
+}
+
+function buildChannelDeliveryIdempotencyKey(input: ChannelSendInput): string | undefined {
+  const explicit = (input as ChannelSendInput & { idempotencyKey?: string }).idempotencyKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (input.effectId?.trim()) {
+    return `channel-delivery:effect:${input.effectId.trim()}`;
+  }
+  if (input.sessionId?.trim() && input.replyToMessageId?.trim()) {
+    const hash = createHash("sha256")
+      .update(JSON.stringify(buildChannelDeliveryPayload(input)))
+      .digest("hex");
+    return `channel-delivery:session:${input.sessionId.trim()}:${input.replyToMessageId.trim()}:${hash}`;
+  }
+  if (input.taskId?.trim()) {
+    const hash = createHash("sha256")
+      .update(JSON.stringify(buildChannelDeliveryPayload(input)))
+      .digest("hex");
+    return `channel-delivery:task:${input.taskId.trim()}:${hash}`;
+  }
+  return undefined;
+}
+
+function mapPersistedChannelDeliveryRuntimeStatus(
+  status: "queued" | "sent" | "failed",
+  deliveryStatus: string | undefined,
+  staleReason: string | undefined,
+): ChannelDeliveryRuntimeRecord["status"] {
+  if (staleReason) {
+    return "stale";
+  }
+  if (status === "sent") {
+    return "sent";
+  }
+  if (status === "failed") {
+    return "failed";
+  }
+  return deliveryStatus === "retrying" ? "retrying" : "queued";
+}
+
+function extractCommsSendResult(result: ToolInvokeResult | Record<string, unknown>): Record<string, unknown> {
+  if (isToolInvokeResultLike(result)) {
+    if (result.outcome !== "executed") {
+      throw new Error(result.policyReason || `channel.send returned ${result.outcome}`);
+    }
+    return result.result ?? {};
+  }
+  return result;
+}
+
+function isToolInvokeResultLike(value: unknown): value is ToolInvokeResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const outcome = (value as { outcome?: unknown }).outcome;
+  return outcome === "executed" || outcome === "blocked" || outcome === "approval_required";
+}
+
+function readRequiredString(value: unknown, label: string): string {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  throw new Error(`Channel delivery payload is missing ${label}.`);
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function toSkillStateRows(value: unknown): SkillStateRecord[] {

@@ -14,6 +14,11 @@ const ledgerListQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
 });
 
+const curatorReviewQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(300).default(100),
+  workspaceId: z.string().trim().min(1).optional(),
+});
+
 const reportParamsSchema = z.object({
   reportId: z.string().min(1),
 });
@@ -36,6 +41,12 @@ const signalParamsSchema = z.object({
 
 const candidateParamsSchema = z.object({
   candidateId: z.string().min(1),
+});
+
+const candidateLifecycleBodySchema = z.object({
+  actorId: z.string().trim().min(1).max(200).optional(),
+  reason: z.string().trim().min(1).max(2000).optional(),
+  snoozeUntil: z.string().trim().min(1).optional(),
 });
 
 const activationParamsSchema = z.object({
@@ -67,6 +78,30 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
     const message = error instanceof Error ? error.message : String(error);
     const statusCode = message.toLowerCase().includes("not found") ? 404 : 409;
     return reply.code(statusCode).send({ error: message });
+  };
+  const handleCandidateLifecycleAction = (
+    paramsValue: unknown,
+    bodyValue: unknown,
+    reply: FastifyReply,
+    handler: (candidateId: string, body: z.infer<typeof candidateLifecycleBodySchema>) => unknown,
+  ) => {
+    const params = candidateParamsSchema.safeParse(paramsValue);
+    const body = candidateLifecycleBodySchema.safeParse(bodyValue ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return Promise.resolve(handler(params.data.candidateId, body.data))
+        .then((result) => reply.send(result))
+        .catch((error) => replyWithImprovementMutationError(reply, error));
+    } catch (error) {
+      return replyWithImprovementMutationError(reply, error);
+    }
   };
 
   fastify.get("/api/v1/improvement/capability-gaps", async (request, reply) => {
@@ -150,6 +185,62 @@ export const improvementRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(404).send({ error: (error as Error).message });
     }
   });
+
+  fastify.get("/api/v1/improvement/curator-review", async (request, reply) => {
+    const parsed = curatorReviewQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(improvement.listCuratorReviewItems(parsed.data));
+  });
+
+  fastify.get("/api/v1/improvement/candidates/:candidateId/curator-review", async (request, reply) => {
+    const params = candidateParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(improvement.getCuratorReviewItem(params.data.candidateId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/validate", async (request, reply) =>
+    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
+      improvement.validateImprovementCandidate(candidateId, body),
+    ),
+  );
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/approve", async (request, reply) =>
+    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
+      improvement.approveImprovementCandidate(candidateId, body),
+    ),
+  );
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/reject", async (request, reply) =>
+    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
+      improvement.rejectImprovementCandidate(candidateId, body),
+    ),
+  );
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/snooze", async (request, reply) =>
+    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
+      improvement.snoozeImprovementCandidate(candidateId, body),
+    ),
+  );
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/activate", async (request, reply) =>
+    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
+      improvement.activateImprovementCandidate(candidateId, body),
+    ),
+  );
+
+  fastify.post("/api/v1/improvement/candidates/:candidateId/promote", async (request, reply) =>
+    handleCandidateLifecycleAction(request.params, request.body, reply, (candidateId, body) =>
+      improvement.promoteImprovementCandidate(candidateId, body),
+    ),
+  );
 
   fastify.post("/api/v1/improvement/candidates/:candidateId/activation-request", async (request, reply) => {
     const params = candidateParamsSchema.safeParse(request.params);

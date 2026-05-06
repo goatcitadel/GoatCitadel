@@ -23,6 +23,7 @@ interface PromptPackAutoScoreV2Row {
 
 export class PromptPackAutoScoreV2Repository {
   private readonly getStmt;
+  private readonly getByIdentityStmt;
   private readonly insertStmt;
   private readonly listByPackStmt;
   private readonly listByTestStmt;
@@ -31,6 +32,14 @@ export class PromptPackAutoScoreV2Repository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM prompt_pack_auto_scores_v2 WHERE auto_score_id = ?");
+    this.getByIdentityStmt = db.prepare(`
+      SELECT *
+      FROM prompt_pack_auto_scores_v2
+      WHERE run_id = @runId
+        AND scoring_schema_version = @scoringSchemaVersion
+        AND scorer_version = @scorerVersion
+        AND policy_hash = @policyHash
+    `);
     this.insertStmt = db.prepare(`
       INSERT INTO prompt_pack_auto_scores_v2 (
         auto_score_id, pack_id, test_id, run_id, scoring_schema_version,
@@ -86,25 +95,41 @@ export class PromptPackAutoScoreV2Repository {
   }
 
   public create(input: PromptPackAutoScoreRecord): PromptPackAutoScoreRecord {
+    const existing = this.findByIdentity(input);
+    const record = existing ? { ...input, autoScoreId: existing.autoScoreId } : input;
     this.insertStmt.run({
-      autoScoreId: input.autoScoreId,
-      packId: input.packId,
-      testId: input.testId,
-      runId: input.runId,
-      scoringSchemaVersion: input.scoringSchemaVersion,
-      scorerVersion: input.scorerVersion,
-      judgeRubricVersion: input.judgeRubricVersion,
-      policyHash: input.policyHash,
-      policySource: input.policySource,
-      scoreState: input.scoreState,
-      autoVerdict: input.autoVerdict,
-      weightedScore: input.weightedScore,
-      judgeStatus: input.judgeStatus,
-      protocolPass: input.protocol.protocolPass ? 1 : 0,
-      recordJson: JSON.stringify(input),
-      createdAt: input.createdAt,
+      autoScoreId: record.autoScoreId,
+      packId: record.packId,
+      testId: record.testId,
+      runId: record.runId,
+      scoringSchemaVersion: record.scoringSchemaVersion,
+      scorerVersion: record.scorerVersion,
+      judgeRubricVersion: record.judgeRubricVersion,
+      policyHash: record.policyHash,
+      policySource: record.policySource,
+      scoreState: record.scoreState,
+      autoVerdict: record.autoVerdict,
+      weightedScore: record.weightedScore,
+      judgeStatus: record.judgeStatus,
+      protocolPass: record.protocol.protocolPass ? 1 : 0,
+      recordJson: JSON.stringify(record),
+      createdAt: record.createdAt,
     });
-    return this.get(input.autoScoreId);
+    return this.findByIdentity(record) ?? this.get(record.autoScoreId);
+  }
+
+  private findByIdentity(
+    input: Pick<PromptPackAutoScoreRecord, "runId" | "scoringSchemaVersion" | "scorerVersion" | "policyHash">,
+  ): PromptPackAutoScoreRecord | undefined {
+    const row = toPromptPackAutoScoreV2Row(
+      this.getByIdentityStmt.get({
+        runId: input.runId,
+        scoringSchemaVersion: input.scoringSchemaVersion,
+        scorerVersion: input.scorerVersion,
+        policyHash: input.policyHash,
+      }),
+    );
+    return row ? mapRow(row) : undefined;
   }
 
   public listByPack(packId: string, limit = 1000): PromptPackAutoScoreRecord[] {
@@ -143,7 +168,27 @@ export class PromptPackAutoScoreV2Repository {
 function mapRow(row: PromptPackAutoScoreV2Row): PromptPackAutoScoreRecord {
   const parsed = safeJsonParse<PromptPackAutoScoreRecord | undefined>(row.record_json, undefined);
   if (parsed) {
-    return parsed;
+    return {
+      ...parsed,
+      autoScoreId: row.auto_score_id,
+      packId: row.pack_id,
+      testId: row.test_id,
+      runId: row.run_id,
+      scoringSchemaVersion: row.scoring_schema_version as PromptPackAutoScoreRecord["scoringSchemaVersion"],
+      scorerVersion: row.scorer_version,
+      judgeRubricVersion: row.judge_rubric_version,
+      policyHash: row.policy_hash,
+      policySource: row.policy_source as PromptPackAutoScoreRecord["policySource"],
+      scoreState: row.score_state as PromptPackAutoScoreRecord["scoreState"],
+      autoVerdict: row.auto_verdict as PromptPackAutoScoreRecord["autoVerdict"],
+      weightedScore: row.weighted_score,
+      judgeStatus: row.judge_status as PromptPackAutoScoreRecord["judgeStatus"],
+      protocol: {
+        ...parsed.protocol,
+        protocolPass: row.protocol_pass === 1,
+      },
+      createdAt: row.created_at,
+    } as PromptPackAutoScoreRecord;
   }
   throw new Error(`Stored prompt pack auto score ${row.auto_score_id} is malformed.`);
 }

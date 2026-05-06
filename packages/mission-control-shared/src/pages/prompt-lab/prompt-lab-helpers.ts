@@ -211,6 +211,9 @@ export function classifyTestResultCategory(
   if (run.status === "failed") {
     return "run_failed";
   }
+  if (run.integrity?.validationStatus === "invalid") {
+    return "run_failed";
+  }
   if (run.status !== "completed") {
     return "not_run";
   }

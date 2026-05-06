@@ -1,4 +1,5 @@
-import type { CoworkRunViewModel, CoworkViewItem } from "./cowork-view-model";
+import type { CoworkAgenticControlItem, CoworkRunViewModel, CoworkViewItem } from "./cowork-view-model";
+import { AgenticRuntimeVisibilityPanel } from "./AgenticRuntimeVisibilityPanel";
 
 function renderSectionList(label: string, items: { items: CoworkViewItem[]; overflow: number }, emptyCopy: string) {
   return (
@@ -35,6 +36,9 @@ export function CoworkCanvasPanel({
   onOpenDetails,
   onFocusComposer,
   onRefreshRunState,
+  onAgenticControl,
+  agenticControlPending,
+  agenticControlStatus,
 }: {
   viewModel: CoworkRunViewModel;
   onRetryTurn?: () => void;
@@ -43,6 +47,9 @@ export function CoworkCanvasPanel({
   onOpenDetails?: () => void;
   onFocusComposer?: () => void;
   onRefreshRunState?: () => void;
+  onAgenticControl?: (control: CoworkAgenticControlItem) => void;
+  agenticControlPending?: string | null;
+  agenticControlStatus?: string | null;
 }) {
   const primaryActionHandler =
     viewModel.nextAction?.kind === "retry_turn"
@@ -207,6 +214,75 @@ export function CoworkCanvasPanel({
               </p>
             )}
           </section>
+
+          {viewModel.agenticRuntime ? (
+            <section className="chat-cowork-section">
+              <p className="chat-cowork-section-label">Agentic runtime</p>
+              <div className="chat-cowork-step-head">
+                <strong>{viewModel.agenticRuntime.nodeCount} nodes</strong>
+                <span>{viewModel.agenticRuntime.edgeCount} links</span>
+              </div>
+              <p className="chat-cowork-step-meta">Run {viewModel.agenticRuntime.runId}</p>
+              {viewModel.agenticRuntime.treeNodes.length > 0 ? (
+                <ul className="chat-cowork-plan-list">
+                  {viewModel.agenticRuntime.treeNodes.slice(0, 4).map((node) => (
+                    <li key={node.id}>
+                      <div className="chat-cowork-step-head">
+                        <strong>{node.label}</strong>
+                        <span>{node.status}</span>
+                      </div>
+                      {node.meta ? <p className="chat-cowork-step-meta">{node.meta}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {viewModel.agenticRuntime.diagnostics.length > 0 ? (
+                <>
+                  <p className="chat-cowork-subsection-label">Diagnostics</p>
+                  <ul className="chat-cowork-orchestration-steps">
+                    {viewModel.agenticRuntime.diagnostics.map((diagnostic) => (
+                      <li key={diagnostic.id}>
+                        <div className="chat-cowork-step-head">
+                          <strong>{diagnostic.title}</strong>
+                          {diagnostic.status ? <span>{diagnostic.status}</span> : null}
+                        </div>
+                        {diagnostic.note ? <p>{diagnostic.note}</p> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+              {viewModel.agenticRuntime.controls.length > 0 ? (
+                <>
+                  <p className="chat-cowork-subsection-label">Controls</p>
+                  {agenticControlStatus ? <p className="chat-cowork-step-meta">{agenticControlStatus}</p> : null}
+                  <ul className="chat-cowork-orchestration-steps">
+                    {viewModel.agenticRuntime.controls.map((control) => (
+                      <li key={control.id}>
+                        <div className="chat-cowork-step-head">
+                          <strong>{control.title}</strong>
+                          {control.status ? <span>{control.status}</span> : null}
+                        </div>
+                        <p>{[control.meta, control.note].filter(Boolean).join(" · ") || "No control note."}</p>
+                        {onAgenticControl ? (
+                          <button
+                            type="button"
+                            className="gc-button"
+                            disabled={!control.enabled || agenticControlPending === control.action}
+                            onClick={() => onAgenticControl(control)}
+                          >
+                            {agenticControlPending === control.action ? "Recording..." : control.title}
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
+          <AgenticRuntimeVisibilityPanel surface="cowork" className="chat-cowork-section" />
 
           <section className="chat-cowork-section">
             <p className="chat-cowork-section-label">Operator actions</p>

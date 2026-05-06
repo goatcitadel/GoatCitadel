@@ -6,8 +6,12 @@ export type TasksRoutePort = Pick<
   | "appendTaskDeliverable"
   | "createTask"
   | "getTask"
+  | "getAgenticRunTree"
   | "hardDeleteTask"
+  | "invokeAgenticControl"
+  | "appendTaskDiagnostic"
   | "listTaskActivities"
+  | "listAgenticRuns"
   | "listTaskDeliverables"
   | "listTasks"
   | "listTaskSubagents"
@@ -31,6 +35,22 @@ export class TasksRouteService {
 
   public getTask(taskId: string) {
     return this.tasks.getTask(taskId);
+  }
+
+  public listAgenticRuns(...args: Parameters<TasksRoutePort["listAgenticRuns"]>) {
+    return this.tasks.listAgenticRuns(...args);
+  }
+
+  public getAgenticRunTree(runId: string) {
+    return this.tasks.getAgenticRunTree(runId);
+  }
+
+  public invokeAgenticControl(runId: string, input: Parameters<TasksRoutePort["invokeAgenticControl"]>[1]) {
+    return this.tasks.invokeAgenticControl(runId, input);
+  }
+
+  public appendTaskDiagnostic(taskId: string, input: Parameters<TasksRoutePort["appendTaskDiagnostic"]>[1]) {
+    return this.tasks.appendTaskDiagnostic(taskId, input);
   }
 
   public updateTask(taskId: string, input: Parameters<TasksRoutePort["updateTask"]>[1]) {

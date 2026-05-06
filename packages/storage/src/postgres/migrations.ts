@@ -851,4 +851,49 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS subagent_policy TEXT DEFAULT 'ask_when_useful';
     `,
   },
+  {
+    version: 29,
+    name: "agentic_runtime_task_metadata",
+    sql: `
+      ALTER TABLE task_subagent_sessions
+        ADD COLUMN IF NOT EXISTS metadata_json TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_workspace_status_updated
+        ON tasks(workspace_id, status, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_task_subagent_sessions_agent_status_updated
+        ON task_subagent_sessions(agent_session_id, status, updated_at DESC);
+    `,
+  },
+  {
+    version: 30,
+    name: "comms_delivery_runtime_metadata",
+    sql: `
+      ALTER TABLE comms_deliveries
+        ADD COLUMN IF NOT EXISTS payload_json TEXT,
+        ADD COLUMN IF NOT EXISTS delivery_status TEXT,
+        ADD COLUMN IF NOT EXISTS idempotency_key TEXT,
+        ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3,
+        ADD COLUMN IF NOT EXISTS next_attempt_at TEXT,
+        ADD COLUMN IF NOT EXISTS stale_after_ms INTEGER,
+        ADD COLUMN IF NOT EXISTS base_backoff_ms INTEGER,
+        ADD COLUMN IF NOT EXISTS max_backoff_ms INTEGER,
+        ADD COLUMN IF NOT EXISTS stale_reason TEXT;
+
+      UPDATE comms_deliveries
+      SET delivery_status = CASE status
+        WHEN 'sent' THEN 'sent'
+        WHEN 'failed' THEN COALESCE(NULLIF(delivery_status, ''), 'degraded')
+        ELSE COALESCE(NULLIF(delivery_status, ''), 'retrying')
+      END
+      WHERE delivery_status IS NULL OR BTRIM(delivery_status) = '';
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_deliveries_idempotency
+        ON comms_deliveries(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_comms_deliveries_due
+        ON comms_deliveries(status, next_attempt_at, created_at);
+    `,
+  },
 ];

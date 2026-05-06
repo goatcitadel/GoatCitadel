@@ -227,6 +227,175 @@ export async function runCodeModeSandboxRequiredLane(context) {
   );
 }
 
+export async function runAgenticContractsLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "contracts",
+    id: "agentic.contracts.anchors",
+    lane: "agentic-contracts",
+    title: "Agentic contract and API source anchors",
+    subsystem: "agentic",
+  });
+  await runAgenticProofScenario(context, {
+    profile: "workbench",
+    id: "agentic.workbench.patch-test-review-loop",
+    lane: "agentic-contracts",
+    title: "Code Workbench patch/test/apply/export/revert behavior",
+    subsystem: "agentic",
+  });
+  await runAgenticProofScenario(context, {
+    profile: "channels",
+    id: "agentic.channels.durable-delivery-runtime",
+    lane: "agentic-contracts",
+    title: "Durable channel delivery retry and stale-state behavior",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticWorkbenchLoopLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "workbench",
+    id: "agentic.workbench.patch-test-review-loop",
+    lane: "agentic-workbench-loop",
+    title: "Code Workbench patch/test/apply/export/revert behavior",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticChannelsRuntimeLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "channels",
+    id: "agentic.channels.durable-delivery-runtime",
+    lane: "agentic-channels-runtime",
+    title: "Durable channel delivery retry, stale-state, and route behavior",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticGovernanceLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "governance",
+    id: "agentic.governance.review-first",
+    lane: "agentic-governance",
+    title: "Review-first Cowork and Code governance anchors",
+    subsystem: "agentic",
+  });
+  await runAgenticProofScenario(context, {
+    profile: "marketplace",
+    id: "agentic.marketplace.callable-governance",
+    lane: "agentic-governance",
+    title: "Plugin/provider marketplace callable-boundary behavior",
+    subsystem: "agentic",
+  });
+  await runAgenticProofScenario(context, {
+    profile: "selfImprovement",
+    id: "agentic.self-improvement.review-first",
+    lane: "agentic-governance",
+    title: "Self-improvement and curator review-first behavior",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticPluginsMarketplaceLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "marketplace",
+    id: "agentic.marketplace.callable-governance",
+    lane: "agentic-plugins-marketplace",
+    title: "Plugin/provider marketplace callable-boundary behavior",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticSelfImprovementTrustLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "selfImprovement",
+    id: "agentic.self-improvement.review-first",
+    lane: "agentic-self-improvement-trust",
+    title: "Self-improvement and curator review-first behavior",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticHarnessesLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "harnesses",
+    id: "agentic.harnesses.availability-gated",
+    lane: "agentic-harnesses",
+    title: "External harness availability-gated parity anchors",
+    subsystem: "agentic",
+  });
+  await runAgenticProofScenario(context, {
+    profile: "behavioral",
+    id: "agentic.behavioral.callable-boundaries",
+    lane: "agentic-harnesses",
+    title: "Agentic behavioral callable-boundary proof",
+    subsystem: "agentic",
+  });
+}
+
+export async function runAgenticHarnessAvailabilityLane(context) {
+  await runAgenticProofScenario(context, {
+    profile: "availability",
+    id: "agentic.availability.route-and-callable-boundary",
+    lane: "agentic-harness-availability",
+    title: "Agentic availability route and callable-boundary behavior",
+    subsystem: "agentic",
+  });
+  await runAgenticProofScenario(context, {
+    profile: "behavioral",
+    id: "agentic.behavioral.callable-boundaries",
+    lane: "agentic-harness-availability",
+    title: "Agentic behavioral callable-boundary proof",
+    subsystem: "agentic",
+  });
+}
+
+async function runAgenticProofScenario(context, definition) {
+  await runScenario(
+    context,
+    {
+      id: definition.id,
+      lane: definition.lane,
+      title: definition.title,
+      subsystem: definition.subsystem,
+    },
+    async () => {
+      const proofPath = path.join(context.artifactRoot, "diagnostics", `${definition.id}.json`);
+      const result = await runCommand(
+        process.execPath,
+        [
+          path.join(repoRoot, "scripts", "verification", "agentic-proof.mjs"),
+          "--profile",
+          definition.profile,
+          "--output",
+          proofPath,
+        ],
+        {
+          cwd: repoRoot,
+          artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+          logName: definition.id,
+        },
+      );
+      const proof = await readJson(proofPath).catch(() => undefined);
+      return {
+        status: result.code === 0 ? "passed" : "failed",
+        error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+        notes: proof ? [`${proof.summary?.passed ?? 0}/${proof.summary?.total ?? 0} agentic proof checks passed.`] : [],
+        metrics: {
+          exitCode: result.code,
+          durationMs: result.durationMs,
+          checksTotal: proof?.summary?.total,
+          checksPassed: proof?.summary?.passed,
+          checksFailed: proof?.summary?.failed,
+        },
+        artifacts: emptyArtifacts({
+          diagnostics: proof ? [relativeToRun(context, proofPath)] : [],
+          logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+        }),
+      };
+    },
+  );
+}
+
 export async function runDeepCoreLane(context, options = {}) {
   const stack = await startVerificationStack(context, {
     includeUi: true,

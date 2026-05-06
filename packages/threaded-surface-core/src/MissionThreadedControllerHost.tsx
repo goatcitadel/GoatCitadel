@@ -37,6 +37,12 @@ import {
   removeThreadKnowledgeAttachment,
   updateChatSessionPrefs,
 } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  controlAgenticRun,
+  fetchAgenticRuns,
+  fetchAgenticRunTree,
+  type AgenticRunTreeResponse,
+} from "@goatcitadel/mission-control-shared/api/agentic";
 import { CardSkeleton } from "@goatcitadel/mission-control-shared/components/CardSkeleton";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { PageHeader } from "@goatcitadel/mission-control-shared/components/PageHeader";
@@ -45,7 +51,7 @@ import type { CodeWorkbenchPanel as LegacyCodeWorkbenchPanelComponent } from "@g
 import type { CoworkCanvasPanel as LegacyCoworkCanvasPanelComponent } from "@goatcitadel/mission-control-shared/components/CoworkCanvasPanel";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
-import { deriveCoworkRunViewModel } from "./cowork-view-model";
+import { deriveCoworkRunViewModel, type CoworkAgenticControlItem } from "./cowork-view-model";
 import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
@@ -56,7 +62,7 @@ import {
 } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import type { ChatContextDockPanelsProps } from "./chat/ChatContextDockPanels.types";
 import type { MissionControlActiveSessionSurfaceProps } from "./chat/MissionControlActiveSessionSurface";
-import type { ChatErrorSource } from "./chat/chat-error-copy";
+import { describeChatUiError, type ChatErrorSource } from "./chat/chat-error-copy";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
 import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat/work-trust";
@@ -408,6 +414,9 @@ export function MissionThreadedControllerHost({
     message: string;
     patch: ChatSessionPrefsPatch;
   } | null>(null);
+  const [agenticRunTree, setAgenticRunTree] = useState<AgenticRunTreeResponse | null>(null);
+  const [agenticControlPending, setAgenticControlPending] = useState<string | null>(null);
+  const [agenticControlStatus, setAgenticControlStatus] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -544,6 +553,36 @@ export function MissionThreadedControllerHost({
       ? surface
       : (sessions?.items.find((item) => item.sessionId === selectedSessionId)?.mode ?? fallbackSessionMode)
     : fallbackSessionMode;
+
+  const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {
+    if (!selectedSessionId || (currentSessionMode !== "cowork" && currentSessionMode !== "code")) {
+      return null;
+    }
+    const surfaceMode = currentSessionMode === "code" ? "code" : "cowork";
+    const response = await fetchAgenticRuns({ sessionId: selectedSessionId, surface: surfaceMode, limit: 1 });
+    const runId = response.items[0]?.runId;
+    return runId ? fetchAgenticRunTree(runId) : null;
+  }, [currentSessionMode, selectedSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveAgenticRunTree()
+      .then((tree) => {
+        if (!cancelled) {
+          setAgenticRunTree(tree);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAgenticRunTree(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resolveAgenticRunTree]);
+
   const threadController = useChatThreadController({
     surfaceMode: currentSessionMode,
     showAllModes: lockSurface,
@@ -1115,6 +1154,11 @@ export function MissionThreadedControllerHost({
     openWorkbenchFile,
     saveWorkbenchFile,
     discardWorkbenchDraft,
+    runWorkbenchValidationCommand,
+    applyWorkbenchPatch,
+    exportWorkbenchPatch,
+    revertWorkbenchFile,
+    revertWorkbenchAll,
     latestOrchestration,
     orchestrationRun,
     orchestrationCheckpoints,
@@ -1134,6 +1178,34 @@ export function MissionThreadedControllerHost({
     localNotices,
     dockSectionOrder,
   });
+  const handleAgenticControl = useCallback(
+    async (control: CoworkAgenticControlItem) => {
+      if (!agenticRunTree?.runId || !control.enabled) {
+        return;
+      }
+      setAgenticControlPending(control.action);
+      setAgenticControlStatus(null);
+      try {
+        const response = await controlAgenticRun(agenticRunTree.runId, {
+          action: control.action,
+          controlId: `${agenticRunTree.runId}:${control.action}:${Date.now()}`,
+          reason: "Mission Control operator action.",
+        });
+        const refreshedTree = await resolveAgenticRunTree();
+        setAgenticRunTree(refreshedTree);
+        await refreshOrchestrationRun();
+        setAgenticControlStatus(response.message);
+      } catch (error) {
+        const rawMessage = error instanceof Error ? error.message : String(error);
+        const message = describeChatUiError(rawMessage, "refresh")?.summary ?? rawMessage;
+        setAgenticControlStatus(message);
+        pushLocalNotice(message, "warning");
+      } finally {
+        setAgenticControlPending(null);
+      }
+    },
+    [agenticRunTree?.runId, pushLocalNotice, refreshOrchestrationRun, resolveAgenticRunTree],
+  );
   const guardWorkbenchNavigation = useCallback(
     (action: () => void, message: string) => {
       if (!(messageMode === "code" && hasDirtyWorkbenchDraft)) {
@@ -1230,10 +1302,12 @@ export function MissionThreadedControllerHost({
         activeTurn: activeWorkflowTurn,
         selectedTurn,
         workbenchState,
+        agenticRunTree,
       }),
     [
       activeDelegationRun,
       activeWorkflowTurn,
+      agenticRunTree,
       coworkItems,
       latestOrchestration,
       orchestrationCheckpoints,
@@ -2264,6 +2338,9 @@ export function MissionThreadedControllerHost({
             onOpenDetails: () => handleRevealActiveTurnDetails(),
             onFocusComposer: () => composerRef.current?.focus(),
             onRefreshRunState: () => void refreshOrchestrationRun(),
+            onAgenticControl: (control) => void handleAgenticControl(control),
+            agenticControlPending,
+            agenticControlStatus,
           },
         }
       : selectedSession && isCodeSurface
@@ -2310,6 +2387,33 @@ export function MissionThreadedControllerHost({
               onRefresh: () => void refreshWorkbench(),
               onSaveFile: () => void saveWorkbenchFile(),
               onDiscardDraft: () => discardWorkbenchDraft(),
+              onRunValidationCommand: (input) => void runWorkbenchValidationCommand(input),
+              onApplyPatch: (patch) => void applyWorkbenchPatch(patch),
+              onExportPatch: async () => {
+                const response = await exportWorkbenchPatch();
+                if (!response) {
+                  return;
+                }
+                if (typeof window !== "undefined" && response.patch.trim()) {
+                  const blob = new Blob([response.patch], { type: "text/x-diff" });
+                  const url = window.URL.createObjectURL(blob);
+                  const link = document.createElement("a");
+                  link.href = url;
+                  link.download = `${selectedSession.sessionId}-workbench-${response.generatedAt.replace(/[:.]/g, "-")}.patch`;
+                  document.body.appendChild(link);
+                  link.click();
+                  link.remove();
+                  window.URL.revokeObjectURL(url);
+                }
+                pushLocalNotice(
+                  `Exported workbench patch for ${response.changedFiles.length} changed file${
+                    response.changedFiles.length === 1 ? "" : "s"
+                  }.`,
+                  "success",
+                );
+              },
+              onRevertFile: (relativePath) => void revertWorkbenchFile(relativePath),
+              onRevertAll: () => void revertWorkbenchAll(),
               onRunHelperSnippet: (language, source) => void handleRunCodeHelper(language, source),
             },
           }
