@@ -55,6 +55,38 @@ describe("DurableRunRepository", () => {
     assert.deepEqual(repo.getRun(run.runId).payload, updated.payload);
   });
 
+  it("explicitly clears terminal and error fields without treating undefined as clear", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      finishedAt: "2026-03-03T12:00:00.000Z",
+      lastError: "provider failed",
+    });
+
+    const preserved = repo.updateRun({
+      runId: run.runId,
+      status: "queued",
+      finishedAt: undefined,
+      lastError: undefined,
+      expectedVersion: run.version,
+    });
+
+    assert.equal(preserved.finishedAt, "2026-03-03T12:00:00.000Z");
+    assert.equal(preserved.lastError, "provider failed");
+
+    const cleared = repo.updateRun({
+      runId: run.runId,
+      status: "queued",
+      clearFinishedAt: true,
+      clearLastError: true,
+      expectedVersion: preserved.version,
+    });
+
+    assert.equal(cleared.finishedAt, undefined);
+    assert.equal(cleared.lastError, undefined);
+  });
+
   it("serializes checkpoint state payloads safely", () => {
     const repo = createRepo();
     const run = repo.createRun({

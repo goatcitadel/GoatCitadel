@@ -36,6 +36,8 @@ describe("DurableRunService", () => {
         "run-1",
         {
           ...createRun("run-1", "running"),
+          finishedAt: "2026-03-14T00:00:05.000Z",
+          lastError: "stale terminal failure",
           leaseOwnerId: "worker-old",
           leaseHeartbeatAt: "2026-03-14T00:00:00.000Z",
           leaseExpiresAt: "2026-03-14T00:00:01.000Z",
@@ -74,6 +76,7 @@ describe("DurableRunService", () => {
       }),
     );
     expect(runs.get("run-1")?.status).toBe("completed");
+    expect(runs.get("run-1")?.lastError).toBeUndefined();
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("run_started");
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
   });
@@ -308,7 +311,11 @@ describe("DurableRunService", () => {
   });
 
   it("emits a durable retry scheduled signal when manual retry queues another attempt", () => {
-    const run = createRun("run-retry", "failed", "connector.delivery");
+    const run = {
+      ...createRun("run-retry", "failed", "connector.delivery"),
+      finishedAt: "2026-03-14T00:00:05.000Z",
+      lastError: "stale connector failure",
+    };
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
     const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
     const timeline: Array<{ runId: string; eventType: string }> = [];
@@ -320,6 +327,8 @@ describe("DurableRunService", () => {
     const retried = service.retryDurableRun(run.runId, "manual_retry", "operator-1");
 
     expect(retried.status).toBe("queued");
+    expect(retried.finishedAt).toBeUndefined();
+    expect(retried.lastError).toBeUndefined();
     expect(publishRealtime).toHaveBeenCalledWith(
       "system",
       "durable",
@@ -336,6 +345,92 @@ describe("DurableRunService", () => {
         }),
       }),
     );
+  });
+
+  it("blocks pause continuation gates before workflow execution", async () => {
+    const run = createRun("run-gated", "queued", "connector.delivery");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async () => undefined);
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      evaluateContinuationGate: () => ({
+        decision: "pause",
+        reasonCodes: ["approval_wait"],
+        summary: "Continue gate set to pause: approval_wait.",
+        metrics: {
+          stepsSinceCheckpoint: 0,
+          toolRunCount: 0,
+          failedToolRunCount: 0,
+          retryFailureStreak: 0,
+          approvalWait: true,
+          userInputWait: false,
+          evidenceGapCount: 0,
+        },
+        recommendedAction: "Wait for the operator to resolve the approval.",
+        createdAt: "2026-03-14T00:00:02.000Z",
+      }),
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(runs.get(run.runId)?.status).toBe("paused");
+    expect(runs.get(run.runId)?.leaseOwnerId).toBeUndefined();
+    expect(checkpoints.map((item) => item.checkpointKind)).toContain("continuation_gate");
+  });
+
+  it("records checkpoint continuation gates and continues workflow execution", async () => {
+    const run = createRun("run-checkpoint", "queued", "connector.delivery");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      updateRun(runs, claimed.runId, {
+        status: "completed",
+        finishedAt: "2026-03-14T00:00:05.000Z",
+      });
+    });
+    const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+      evaluateContinuationGate: () => ({
+        decision: "checkpoint",
+        reasonCodes: ["checkpoint_interval"],
+        summary: "Continue gate set to checkpoint: checkpoint_interval.",
+        metrics: {
+          stepsSinceCheckpoint: 8,
+          toolRunCount: 0,
+          failedToolRunCount: 0,
+          retryFailureStreak: 0,
+          approvalWait: false,
+          userInputWait: false,
+          evidenceGapCount: 0,
+        },
+        recommendedAction: "Create a checkpoint before continuing to the next step.",
+        createdAt: "2026-03-14T00:00:02.000Z",
+      }),
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(runs.get(run.runId)?.status).toBe("completed");
+    expect(checkpoints.map((item) => item.checkpointKind)).toContain("continuation_gate");
   });
 
   it("fails the run when lease heartbeat renewal throws", async () => {
@@ -684,8 +779,10 @@ function createContext(
           metadata?: Record<string, unknown>;
           startedAt?: string;
           finishedAt?: string;
+          clearFinishedAt?: boolean;
           updatedAt?: string;
           lastError?: string;
+          clearLastError?: boolean;
           clearLease?: boolean;
           leaseOwnerId?: string;
           leaseExpiresAt?: string;
@@ -706,7 +803,8 @@ function createContext(
             status: "running",
             startedAt: current.startedAt ?? input.leaseHeartbeatAt,
             updatedAt: input.updatedAt ?? input.leaseHeartbeatAt,
-            lastError: undefined,
+            clearFinishedAt: true,
+            clearLastError: true,
             leaseOwnerId: input.workerId,
             leaseHeartbeatAt: input.leaseHeartbeatAt,
             leaseExpiresAt: input.leaseExpiresAt,
@@ -848,8 +946,10 @@ function updateRun(
     metadata?: Record<string, unknown>;
     startedAt?: string;
     finishedAt?: string;
+    clearFinishedAt?: boolean;
     updatedAt?: string;
     lastError?: string;
+    clearLastError?: boolean;
     leaseOwnerId?: string;
     leaseExpiresAt?: string;
     leaseHeartbeatAt?: string;
@@ -866,9 +966,17 @@ function updateRun(
     ...(patch.status ? { status: patch.status } : {}),
     ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
     ...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
-    ...(patch.finishedAt !== undefined ? { finishedAt: patch.finishedAt } : {}),
+    ...(patch.clearFinishedAt
+      ? { finishedAt: undefined }
+      : patch.finishedAt !== undefined
+        ? { finishedAt: patch.finishedAt }
+        : {}),
     ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
-    ...(patch.lastError !== undefined ? { lastError: patch.lastError } : {}),
+    ...(patch.clearLastError
+      ? { lastError: undefined }
+      : patch.lastError !== undefined
+        ? { lastError: patch.lastError }
+        : {}),
     ...(patch.clearLease ? { leaseOwnerId: undefined, leaseExpiresAt: undefined, leaseHeartbeatAt: undefined } : {}),
     ...(patch.leaseOwnerId !== undefined ? { leaseOwnerId: patch.leaseOwnerId } : {}),
     ...(patch.leaseExpiresAt !== undefined ? { leaseExpiresAt: patch.leaseExpiresAt } : {}),

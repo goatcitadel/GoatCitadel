@@ -496,7 +496,13 @@ function createFinalizeState(options?: {
 }) {
   const runs = new Map<string, DurableRunRecord>([
     ["run-waiting", createRun("run-waiting", "running")],
-    ["run-complete", createRun("run-complete", "running")],
+    [
+      "run-complete",
+      {
+        ...createRun("run-complete", "running"),
+        lastError: "stale failure",
+      },
+    ],
     ["run-cancelled", createRun("run-cancelled", "running")],
   ]);
   const checkpoints: DurableCheckpointRecord[] = [];
@@ -544,7 +550,9 @@ function updateRun(
     status?: DurableRunRecord["status"];
     updatedAt?: string;
     finishedAt?: string;
+    clearFinishedAt?: boolean;
     lastError?: string;
+    clearLastError?: boolean;
     clearLease?: boolean;
   },
 ): DurableRunRecord {
@@ -557,8 +565,16 @@ function updateRun(
     version: (current.version ?? 1) + 1,
     ...(patch.status !== undefined ? { status: patch.status } : {}),
     ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
-    ...(patch.finishedAt !== undefined ? { finishedAt: patch.finishedAt } : {}),
-    ...(patch.lastError !== undefined ? { lastError: patch.lastError } : {}),
+    ...(patch.clearFinishedAt
+      ? { finishedAt: undefined }
+      : patch.finishedAt !== undefined
+        ? { finishedAt: patch.finishedAt }
+        : {}),
+    ...(patch.clearLastError
+      ? { lastError: undefined }
+      : patch.lastError !== undefined
+        ? { lastError: patch.lastError }
+        : {}),
     ...(patch.clearLease ? { leaseOwnerId: undefined, leaseExpiresAt: undefined, leaseHeartbeatAt: undefined } : {}),
   };
   runs.set(runId, next);

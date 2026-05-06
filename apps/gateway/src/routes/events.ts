@@ -144,10 +144,33 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       requestedCursor !== undefined
         ? fastify.services.realtimeEvents.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
         : fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.replay).reverse();
+    const latestReplayEvent = replay[replay.length - 1];
+    if (
+      requestedCursor !== undefined &&
+      bounds.newestSequence !== undefined &&
+      (latestReplayEvent?.sequence ?? requestedCursor) < bounds.newestSequence
+    ) {
+      sendNamedEvent("replay-gap", {
+        error: "replay_gap",
+        reason: "replay_window_truncated",
+        requestedCursor,
+        oldestCursor: bounds.oldestSequence,
+        lastReplayCursor: latestReplayEvent?.sequence,
+        newestCursor: bounds.newestSequence,
+        replayLimit: STREAM_REPLAY_LIMIT,
+      });
+      fastify.services.realtimeEvents.closeRealtimeStreamLease({
+        leaseId: lease.leaseId,
+        closeReason: "replay_gap",
+      });
+      releaseConnection();
+      raw.end();
+      reply.hijack();
+      return;
+    }
     for (const event of replay) {
       send(event, event.sequence);
     }
-    const latestReplayEvent = replay[replay.length - 1];
     fastify.services.realtimeEvents.touchRealtimeStreamLease({
       leaseId: lease.leaseId,
       requestedCursor,

@@ -424,10 +424,10 @@ export class TuiApiClient {
     input: { state: SkillRuntimeState; note?: string },
   ): Promise<SkillStateRecord> {
     return this.request(
-      `/api/v1/skills/${encodeURIComponent(skillId)}/state`,
+      "/api/v1/skills/by-id/state",
       {
         method: "PATCH",
-        body: JSON.stringify(input),
+        body: JSON.stringify({ ...input, skillId }),
       },
       true,
     );

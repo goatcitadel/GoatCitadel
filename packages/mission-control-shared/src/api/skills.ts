@@ -93,9 +93,9 @@ export async function previewSkillEvaluation(
   skillId: string,
   input: SkillEvaluationPreviewRequest = {},
 ): Promise<SkillEvaluationPreviewResponse> {
-  return request<SkillEvaluationPreviewResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}/evaluations/preview`, {
+  return request<SkillEvaluationPreviewResponse>("/api/v1/skills/by-id/evaluations/preview", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, skillId }),
   });
 }
 
@@ -103,14 +103,16 @@ export async function runSkillEvaluation(
   skillId: string,
   input: SkillEvaluationRunRequest = {},
 ): Promise<SkillEvaluationRunResponse> {
-  return request<SkillEvaluationRunResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}/evaluations/run`, {
+  return request<SkillEvaluationRunResponse>("/api/v1/skills/by-id/evaluations/run", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, skillId }),
   });
 }
 
 export async function fetchSkillEvaluations(skillId: string): Promise<SkillEvaluationListResponse> {
-  return request<SkillEvaluationListResponse>(`/api/v1/skills/${encodeURIComponent(skillId)}/evaluations`);
+  return request<SkillEvaluationListResponse>(
+    `/api/v1/skills/by-id/evaluations?${new URLSearchParams({ skillId }).toString()}`,
+  );
 }
 
 export async function fetchSkillEvaluationRun(runId: string): Promise<SkillEvaluationPreviewResponse["run"]> {
@@ -128,9 +130,9 @@ export async function updateSkillState(
   skillId: string,
   input: { state: SkillRuntimeState; note?: string },
 ): Promise<SkillStateRecord> {
-  return request<SkillStateRecord>(`/api/v1/skills/${encodeURIComponent(skillId)}/state`, {
+  return request<SkillStateRecord>("/api/v1/skills/by-id/state", {
     method: "PATCH",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, skillId }),
   });
 }
 

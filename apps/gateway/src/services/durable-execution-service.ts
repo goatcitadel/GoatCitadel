@@ -530,7 +530,7 @@ function completeDurableWorkflowRun(
     updatedAt: now,
     finishedAt: now,
     clearLease: true,
-    lastError: undefined,
+    clearLastError: true,
     expectedVersion: current.version,
   });
   host.storage.durableRuns.createCheckpoint({

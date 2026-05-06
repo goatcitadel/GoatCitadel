@@ -159,9 +159,10 @@ Before running the manual plan:
 #### SM-01 Release-bearing routes load
 
 - Cover every manifest route:
-  - Work: Chat, Cowork, Code, Tasks, Approvals
-  - Observe: Timeline, Health, Artifacts, Quality
-  - Tune: General, Runtime, Workspaces, Integrations, Tools, Agents
+  - Chat, Cowork, Code, Projects
+  - Library: agents, memory, files, prompt packs, artifacts
+  - Ops: activity, approvals, runtime, diagnostics, sessions, schedules, improvement, costs
+  - Settings: general, providers, workspaces, access, runtime, add-ons, integrations, channels, MCP, tools
 - Expected:
   - each route loads via direct URL
   - page label matches the selected route
@@ -170,7 +171,7 @@ Before running the manual plan:
 #### SM-02 Top-level shell state stays coherent
 
 - Steps:
-  1. move across Work, Observe, Tune
+  1. move across Chat, Cowork, Code, Projects, Library, Ops, and Settings
   2. watch status chips, workspace selector, freshness indicators
   3. open and close command palette
 - Expected:
@@ -189,7 +190,7 @@ Before running the manual plan:
   - no clipped labels, broken nav, or hidden primary actions
   - no page becomes unusable because secondary nav overflows
 
-### Work Surfaces
+### Chat, Cowork, And Code Surfaces
 
 #### MC-W-01 Chat basic thread flow
 
@@ -442,7 +443,7 @@ Before running the manual plan:
 #### EV-01 Timeline page
 
 - Steps:
-  1. open Observe -> Timeline
+  1. open Ops -> Activity
   2. inspect activity, scheduler, and sessions variants if available
 - Expected:
   - event summaries are human-readable
@@ -469,12 +470,12 @@ Before running the manual plan:
   - projected or inferred relationships are not shown as facts
   - missing linkage is admitted plainly
 
-### Observe Pages
+### Ops And Library Pages
 
 #### MC-O-01 Health page
 
 - Steps:
-  1. open Observe -> Health
+  1. open Ops -> Runtime
   2. inspect runtime, spend, and backup summaries
 - Expected:
   - runtime and spend summaries load
@@ -582,12 +583,12 @@ Before running the manual plan:
   - false passes and false fails are called out
   - result interpretation in Quality matches the raw run evidence
 
-### Tune Pages
+### Settings Pages
 
 #### MC-T-01 General settings
 
 - Steps:
-  1. open Tune -> General
+  1. open Settings -> General
   2. inspect provider, access, budget, and onboarding tabs if visible
 - Expected:
   - tab routing is stable
@@ -597,7 +598,7 @@ Before running the manual plan:
 #### MC-T-02 Runtime page
 
 - Steps:
-  1. open Tune -> Runtime
+  1. open Settings -> Runtime
   2. inspect runtime-specific controls and health
 - Expected:
   - runtime status loads
@@ -607,7 +608,7 @@ Before running the manual plan:
 
 - Steps:
   1. switch workspaces from shell selector
-  2. open Tune -> Workspaces
+  2. open Settings -> Workspaces
   3. inspect workspace-specific state
 - Expected:
   - workspace switch is reflected in page content
@@ -616,7 +617,7 @@ Before running the manual plan:
 #### MC-T-04 Integrations overview
 
 - Steps:
-  1. open Tune -> Integrations overview
+  1. open Settings -> Integrations
   2. inspect visible entries
 - Expected:
   - guided vs manual-only setup truth is visible
@@ -635,7 +636,7 @@ Before running the manual plan:
 #### MC-T-06 Tools page
 
 - Steps:
-  1. open Tune -> Tools
+  1. open Settings -> Tools
   2. inspect grants, permissions, and policy posture
 - Expected:
   - tool access state is readable
@@ -644,7 +645,7 @@ Before running the manual plan:
 #### MC-T-07 Agents page
 
 - Steps:
-  1. open Tune -> Agents overview
+  1. open Library -> Agents
   2. inspect herd live, herd lab, and skills if visible
 - Expected:
   - agent roster/office surfaces load

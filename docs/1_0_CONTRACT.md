@@ -6,7 +6,7 @@ This document defines the product promise, visible scope, trust posture, upgrade
 
 For `1.0` governance language:
 
-- `proof` means a named end-to-end verification lane with a bespoke scenario body
+- `proof` means a named verification lane with a bespoke scenario body or targeted contract/behavior harness; lanes that are not live end-to-end proof must say so explicitly
 - `evidence` means the repo-visible code, tests, manifests, and supporting docs that anchor those claims
 
 ## Product Promise
@@ -25,11 +25,11 @@ The `1.0` promise is:
 
 No visible Mission Control page or catalog entry may remain half-baked, parity-incomplete, or only explainable by internal tribal knowledge.
 
-Mission Control still contains compatibility labels such as `Operate / Observe / Configure` in the current shell. The `1.0` release footprint groups those surfaces as:
+The current `apps/mission-control-next` operator navigation is `Chat / Cowork / Code / Projects / Library / Ops / Settings`. The older `Work / Observe / Tune` grouping is a legacy release taxonomy only:
 
-- `Work`: Chat, Cowork, Code, Tasks, Approvals
-- `Observe`: Timeline, Health, Artifacts, Quality
-- `Tune`: General, Runtime, Workspaces, Integrations, Tools, Agents
+- `Work`: maps to current Chat, Cowork, Code, task, and approval workflows
+- `Observe`: maps to current Ops, activity, runtime, cost, diagnostics, and Library evidence surfaces
+- `Tune`: maps to current Settings, providers, integrations, channels, tools, agents, and workspace controls
 
 Release-target mappings for the current UI:
 
@@ -100,14 +100,14 @@ GoatCitadel may not claim `1.0` until all of these are true:
 
 - `verify:operator:proof` is green
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
-- `verify:surface:regression` is green across the visible `Work / Observe / Tune` route set derived from the canonical release-surface manifest
+- `verify:surface:regression` is green across the current Mission Control Next release-surface manifest derived from the canonical route set
 - `verify:catalog:parity` is green and executes real runtime-backed operator actions for the visible non-channel catalog classes it claims to cover
-- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for the visible shell and primary `Work / Observe / Tune` surfaces derived from the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
+- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for every current Mission Control Next release-surface route derived from the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)
 - `verify:api:compat` is green and fails on breaking REST route/schema or realtime event-envelope diffs
 - `verify:runtime:truth` is green as a bespoke end-to-end proof lane for the canonical wait/resume/restart/recovery operator story in the current shell
 - `verify:auth:matrix` is green as a bespoke end-to-end proof lane for the privileged control-plane route set
-- `verify:ui:parity` is green as a bespoke end-to-end proof lane while the legacy compatibility shell remains shipped
+- `verify:ui:parity` is green as current-shell seeded-fact proof plus legacy compatibility-surface smoke while the legacy compatibility shell remains shipped
 - `verify:memory:truth` is green as a bespoke end-to-end proof lane for TTL/lifecycle truth
 - `verify:realtime:truth` is green as a bespoke end-to-end proof lane for replay-gap, compatibility-fallback, and explicit-event-envelope behavior
 - `verify:architecture:metrics` is green and does not show coupling regressions relative to the accepted baseline

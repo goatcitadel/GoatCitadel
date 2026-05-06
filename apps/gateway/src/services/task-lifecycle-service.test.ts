@@ -243,6 +243,11 @@ describe("TaskLifecycleService agentic runtime", () => {
         summary: "The worker process crashed.",
       }),
     ).not.toThrow();
+    expect(
+      serviceWithFailingBridge
+        .listTaskActivities(secondTask.taskId)
+        .some((activity) => activity.metadata?.code === "agentic_diagnostic_mirror_failed"),
+    ).toBe(true);
   });
 
   it("paginates agentic-filtered runs with a cursor from returned records", () => {

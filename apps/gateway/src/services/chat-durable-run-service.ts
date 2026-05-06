@@ -22,7 +22,9 @@ interface DurableRunStore {
     status?: DurableRunStatus;
     updatedAt?: string;
     finishedAt?: string;
+    clearFinishedAt?: boolean;
     lastError?: string;
+    clearLastError?: boolean;
     clearLease?: boolean;
   }): DurableRunRecord;
   createCheckpoint(input: {
@@ -138,7 +140,8 @@ export function finalizeDurableChatRun(
       runId,
       status: "waiting",
       updatedAt: now,
-      finishedAt: undefined,
+      clearFinishedAt: true,
+      clearLastError: true,
       clearLease: true,
     });
     deps.durableRuns.createCheckpoint({
@@ -164,6 +167,7 @@ export function finalizeDurableChatRun(
       updatedAt: now,
       finishedAt: now,
       clearLease: true,
+      lastError: "cancelled",
     });
     deps.durableRuns.createCheckpoint({
       runId,
@@ -190,7 +194,7 @@ export function finalizeDurableChatRun(
     updatedAt: now,
     finishedAt: now,
     clearLease: true,
-    lastError: failed ? trace.failure?.message : undefined,
+    ...(failed ? { lastError: trace.failure?.message ?? "Durable chat run failed." } : { clearLastError: true }),
   });
   deps.durableRuns.createCheckpoint({
     runId,

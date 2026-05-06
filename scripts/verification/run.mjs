@@ -68,6 +68,7 @@ const VALID_LANES = new Set([
   "agentic-harness-availability",
   "agentic-plugins-marketplace",
   "agentic-self-improvement-trust",
+  "agentic-proof",
   "agentic-parity",
   "review",
   "all",
@@ -165,7 +166,7 @@ async function main() {
       await runAgenticPluginsMarketplaceLane(context, { profile });
     } else if (lane === "agentic-self-improvement-trust") {
       await runAgenticSelfImprovementTrustLane(context, { profile });
-    } else if (lane === "agentic-parity") {
+    } else if (lane === "agentic-proof" || lane === "agentic-parity") {
       await runAgenticContractsLane(context, { profile });
       await runAgenticGovernanceLane(context, { profile });
       await runAgenticHarnessesLane(context, { profile });

@@ -5332,7 +5332,9 @@ export class GatewayService {
     status?: DurableRunRecord["status"];
     metadata?: Record<string, unknown>;
     lastError?: string;
+    clearLastError?: boolean;
     finishedAt?: string;
+    clearFinishedAt?: boolean;
   }): DurableRunRecord {
     const current = this.storage.durableRuns.getRun(input.runId);
     return this.storage.durableRuns.updateRun({
@@ -5340,7 +5342,9 @@ export class GatewayService {
       status: input.status ?? current.status,
       metadata: input.metadata ?? current.metadata,
       lastError: input.lastError,
+      clearLastError: input.clearLastError,
       finishedAt: input.finishedAt,
+      clearFinishedAt: input.clearFinishedAt,
       updatedAt: new Date().toISOString(),
       expectedVersion: current.version,
     });

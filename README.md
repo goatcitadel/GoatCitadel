@@ -133,7 +133,7 @@ For public `1.0` wording:
 
 - `mission-control-next` is the canonical shell
 - `apps/mission-control` is compatibility-only
-- `proof` means a named end-to-end verification lane with a bespoke scenario body
+- `proof` means a named verification lane with a bespoke scenario body or targeted contract/behavior harness; lanes that are not live end-to-end proof must say so explicitly
 - supporting code paths, tests, manifests, and docs are `evidence`
 
 Safe claims today:
@@ -149,7 +149,7 @@ Safe claims today:
 - Docker can add a stronger runtime isolation boundary for local/shared-host deployment when paired with auth and policy configuration
 - provider secrets may be stored in local env/config files when secure-store persistence is disabled or unavailable
 - visible MCP authoring stays on local `stdio` plus the built-in Approval Inbox template until broader remote transport invocation is implemented
-- `verify:visual:regression` compares checked-in shell and primary-surface baselines for the full visible `Work / Observe / Tune` footprint derived from the canonical release-surface manifest
+- `verify:visual:regression` compares checked-in shell and route baselines for the full current Mission Control Next release-surface footprint (`Chat / Cowork / Code / Projects / Library / Ops / Settings`) derived from the canonical release-surface manifest
 - backup verify now reports both archive integrity and `contractVerified` coverage for the `1.0` minimum backup set
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file
 - `verify:catalog:parity` now executes real operator actions for visible runtime-backed non-channel entries instead of stopping at metadata checks
@@ -168,13 +168,13 @@ Refreshed on April 12, 2026 from the sanitized Mission Control demo runtime used
 
 Full gallery: [docs/screenshots/mission-control](./docs/screenshots/mission-control)
 
-| Operate Chat | Operate Code |
+| Legacy Operate Chat | Legacy Operate Code |
 | --- | --- |
-| ![Operate Chat](docs/screenshots/mission-control/operate-chat.png) | ![Operate Code](docs/screenshots/mission-control/operate-code.png) |
+| ![Legacy Operate Chat](docs/screenshots/mission-control/operate-chat.png) | ![Legacy Operate Code](docs/screenshots/mission-control/operate-code.png) |
 
-| Observe Quality | Configure Integrations |
+| Legacy Observe Quality | Legacy Configure Integrations |
 | --- | --- |
-| ![Observe Quality](docs/screenshots/mission-control/observe-quality.png) | ![Configure Integrations](docs/screenshots/mission-control/configure-integrations-overview.png) |
+| ![Legacy Observe Quality](docs/screenshots/mission-control/observe-quality.png) | ![Legacy Configure Integrations](docs/screenshots/mission-control/configure-integrations-overview.png) |
 
 ## Public docs
 

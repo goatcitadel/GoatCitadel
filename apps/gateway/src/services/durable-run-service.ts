@@ -84,9 +84,10 @@ export class DurableRunService {
 
   getDurableDiagnostics(): DurableDiagnosticsResponse {
     const statusCounts = this.ctx.storage.durableRuns.statusCounts();
+    const durableFoundationReady = this.isDurableFoundationEnabled() && Boolean(this.deps?.workflowRegistry);
     return {
       enabled: this.isDurableFoundationEnabled(),
-      replayFoundationReady: true,
+      replayFoundationReady: durableFoundationReady,
       runCount: this.ctx.storage.durableRuns.countRuns(),
       queuedCount: statusCounts.queued ?? 0,
       runningCount: statusCounts.running ?? 0,
@@ -257,7 +258,8 @@ export class DurableRunService {
         runId,
         status: "paused",
         startedAt: current.startedAt ?? new Date().toISOString(),
-        finishedAt: undefined,
+        clearFinishedAt: true,
+        clearLastError: true,
         clearLease: true,
         updatedAt: new Date().toISOString(),
         expectedVersion: current.version,
@@ -292,10 +294,10 @@ export class DurableRunService {
         runId,
         status: "queued",
         startedAt: current.startedAt ?? new Date().toISOString(),
-        finishedAt: undefined,
+        clearFinishedAt: true,
         clearLease: true,
         updatedAt: new Date().toISOString(),
-        lastError: undefined,
+        clearLastError: true,
         expectedVersion: current.version,
       });
       this.ctx.storage.durableRuns.createCheckpoint({
@@ -416,9 +418,9 @@ export class DurableRunService {
       status: "queued",
       attemptCount: attemptNo,
       updatedAt: new Date().toISOString(),
-      finishedAt: undefined,
+      clearFinishedAt: true,
       clearLease: true,
-      lastError: undefined,
+      clearLastError: true,
       expectedVersion: current.version,
     });
     this.ctx.publishRealtime(
@@ -496,9 +498,9 @@ export class DurableRunService {
         status: "queued",
         updatedAt: now,
         startedAt: current.startedAt ?? now,
-        finishedAt: undefined,
+        clearFinishedAt: true,
         clearLease: true,
-        lastError: undefined,
+        clearLastError: true,
         expectedVersion: current.version,
       });
     } catch (error) {
@@ -556,9 +558,9 @@ export class DurableRunService {
         runId: deadLetter.runId,
         status: "queued",
         updatedAt: new Date().toISOString(),
-        finishedAt: undefined,
+        clearFinishedAt: true,
         clearLease: true,
-        lastError: undefined,
+        clearLastError: true,
         ...(newMaxAttempts ? { maxAttempts: newMaxAttempts } : {}),
         expectedVersion: current.version,
       });
@@ -656,9 +658,9 @@ export class DurableRunService {
         this.ctx.storage.durableRuns.updateRun({
           runId: current.runId,
           status: "queued",
-          finishedAt: undefined,
+          clearFinishedAt: true,
           clearLease: true,
-          lastError: undefined,
+          clearLastError: true,
           updatedAt: new Date().toISOString(),
           expectedVersion: current.version,
         }),
@@ -682,39 +684,11 @@ export class DurableRunService {
       }
       const gateDecision = deps.evaluateContinuationGate?.(run);
       if (gateDecision && gateDecision.decision !== "continue") {
-        this.ctx.storage.durableRuns.createCheckpoint({
-          runId: run.runId,
-          checkpointKind: "continuation_gate",
-          state: { continuationGate: gateDecision },
-          createdAt: gateDecision.createdAt,
-        });
-        this.recordDurableTimelineEvent(run.runId, "continuation_gate", {
-          decision: gateDecision.decision,
-          reasonCodes: gateDecision.reasonCodes,
-          recommendedAction: gateDecision.recommendedAction,
-        });
-        this.ctx.publishRealtime(
-          "system",
-          "durable",
-          {
-            type: "durable_continuation_gate",
-            runId: run.runId,
-            decision: gateDecision.decision,
-            reasonCodes: gateDecision.reasonCodes,
-            recommendedAction: gateDecision.recommendedAction,
-          },
-          buildDurableRealtimeOptions(run.runId),
-        );
-        deps.recordEvidenceEnvelope?.({
-          eventKind: "continuation_gate",
-          runId: run.runId,
-          metadata: {
-            workflowKey: run.workflowKey,
-            decision: gateDecision.decision,
-            reasonCodes: gateDecision.reasonCodes,
-            recommendedAction: gateDecision.recommendedAction,
-          },
-        });
+        this.recordContinuationGateDecision(run, gateDecision, deps);
+        if (this.shouldBlockContinuationGateDecision(gateDecision)) {
+          this.blockRunForContinuationGate(run, gateDecision);
+          continue;
+        }
       }
       try {
         await this.executeWithLeaseHeartbeat(run, ({ signal, controller }) =>
@@ -734,6 +708,85 @@ export class DurableRunService {
         }
       }
     }
+  }
+
+  private recordContinuationGateDecision(
+    run: DurableRunRecord,
+    gateDecision: ContinuationGateDecision,
+    deps: NonNullable<typeof this.deps>,
+  ): void {
+    this.ctx.storage.durableRuns.createCheckpoint({
+      runId: run.runId,
+      checkpointKind: "continuation_gate",
+      state: { continuationGate: gateDecision },
+      createdAt: gateDecision.createdAt,
+    });
+    this.recordDurableTimelineEvent(run.runId, "continuation_gate", {
+      decision: gateDecision.decision,
+      reasonCodes: gateDecision.reasonCodes,
+      recommendedAction: gateDecision.recommendedAction,
+    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: "durable_continuation_gate",
+        runId: run.runId,
+        decision: gateDecision.decision,
+        reasonCodes: gateDecision.reasonCodes,
+        recommendedAction: gateDecision.recommendedAction,
+      },
+      buildDurableRealtimeOptions(run.runId),
+    );
+    deps.recordEvidenceEnvelope?.({
+      eventKind: "continuation_gate",
+      runId: run.runId,
+      metadata: {
+        workflowKey: run.workflowKey,
+        decision: gateDecision.decision,
+        reasonCodes: gateDecision.reasonCodes,
+        recommendedAction: gateDecision.recommendedAction,
+      },
+    });
+  }
+
+  private shouldBlockContinuationGateDecision(gateDecision: ContinuationGateDecision): boolean {
+    return (
+      gateDecision.decision === "pause" || gateDecision.decision === "throttle" || gateDecision.decision === "stop"
+    );
+  }
+
+  private blockRunForContinuationGate(run: DurableRunRecord, gateDecision: ContinuationGateDecision): DurableRunRecord {
+    const now = new Date().toISOString();
+    const status = gateDecision.decision === "stop" ? "cancelled" : "paused";
+    const blocked = this.ctx.storage.durableRuns.updateRun({
+      runId: run.runId,
+      status,
+      updatedAt: now,
+      ...(status === "cancelled" ? { finishedAt: now } : { clearFinishedAt: true }),
+      clearLease: true,
+      clearLastError: true,
+      expectedVersion: run.version,
+    });
+    const eventType = status === "cancelled" ? "run_cancelled" : "run_paused";
+    this.recordDurableTimelineEvent(run.runId, eventType, {
+      actorId: "continuation_gate",
+      previousStatus: run.status,
+      decision: gateDecision.decision,
+      reasonCodes: gateDecision.reasonCodes,
+    });
+    this.ctx.publishRealtime(
+      "system",
+      "durable",
+      {
+        type: status === "cancelled" ? "durable_run_cancelled" : "durable_run_paused",
+        runId: run.runId,
+        actorId: "continuation_gate",
+        decision: gateDecision.decision,
+      },
+      buildDurableRealtimeOptions(run.runId),
+    );
+    return blocked;
   }
 
   private executeWithTimeout<T>(

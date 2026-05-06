@@ -562,11 +562,11 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
   assert.equal(memorySearch.statusCode, 200);
   assert.equal(Array.isArray(memorySearch.body.items), true);
 
-  const commsSend = await postJson<{ outcome?: string; approvalId?: string }>(
+  const commsSend = await postJson<{ outcome?: string; approvalId?: string; deliveryId?: string; status?: string }>(
     app,
     "/api/v1/comms/send",
     {
-      connectionId: randomUUID(),
+      connectionId: (await createSmokeChannelConnection(app, "native-tools-expansion")).connectionId,
       target: "smoke",
       message: "test",
       sessionId: "smoke-comms-session",
@@ -579,8 +579,11 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
   assert.equal(commsSend.statusCode, 200);
   if (commsSend.body.outcome === "approval_required") {
     assert.equal(typeof commsSend.body.approvalId, "string");
-  } else {
+  } else if (commsSend.body.outcome === "blocked") {
     assert.equal(commsSend.body.outcome, "blocked");
+  } else {
+    assert.equal(typeof commsSend.body.deliveryId, "string");
+    assert.equal(typeof commsSend.body.status, "string");
   }
 }
 
@@ -624,6 +627,23 @@ async function smokeApprovals(app: Awaited<ReturnType<typeof buildApp>>): Promis
 }
 
 async function smokeIntegrations(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
+  const created = await createSmokeChannelConnection(app, "integration-create");
+
+  assert.equal(typeof created.connectionId, "string");
+
+  const pathSuggestionsRes = await app.inject({
+    method: "GET",
+    url: "/api/v1/files/path-suggestions?root=.&limit=25",
+  });
+  assert.equal(pathSuggestionsRes.statusCode, 200);
+  const suggestionsBody = JSON.parse(pathSuggestionsRes.body) as { items: string[] };
+  assert.equal(Array.isArray(suggestionsBody.items), true);
+}
+
+async function createSmokeChannelConnection(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  keySuffix: string,
+): Promise<{ connectionId: string }> {
   const catalogRes = await app.inject({
     method: "GET",
     url: "/api/v1/integrations/catalog?kind=channel",
@@ -642,29 +662,23 @@ async function smokeIntegrations(app: Awaited<ReturnType<typeof buildApp>>): Pro
   assert.equal(schemaBody.catalogId, first.catalogId);
   assert.equal(Array.isArray(schemaBody.fields), true);
 
-  const created = await postJson(
+  const created = await postJson<{ connectionId: string }>(
     app,
     "/api/v1/integrations/connections",
     {
       catalogId: first.catalogId,
-      label: "Smoke Connection",
+      label: `Smoke Connection ${keySuffix}`,
       enabled: true,
       status: "connected",
       config: {},
     },
     {
-      "Idempotency-Key": smokeIdempotencyKey("smoke-integration-create-1"),
+      "Idempotency-Key": smokeIdempotencyKey(`smoke-${keySuffix}`),
     },
   );
   assert.equal(created.statusCode, 201);
-
-  const pathSuggestionsRes = await app.inject({
-    method: "GET",
-    url: "/api/v1/files/path-suggestions?root=.&limit=25",
-  });
-  assert.equal(pathSuggestionsRes.statusCode, 200);
-  const suggestionsBody = JSON.parse(pathSuggestionsRes.body) as { items: string[] };
-  assert.equal(Array.isArray(suggestionsBody.items), true);
+  assert.equal(typeof created.body.connectionId, "string");
+  return created.body;
 }
 
 async function smokeSecrets(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {

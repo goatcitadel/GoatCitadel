@@ -290,25 +290,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
   },
 ];
 
-const NEXT_VISUAL_ROUTE_SLUGS = new Set([
-  "chat",
-  "cowork",
-  "cowork-tasks",
-  "code",
-  "library-agents",
-  "library-memory",
-  "library-files",
-  "library-prompt-packs",
-  "ops-activity",
-  "ops-approvals",
-  "ops-runtime",
-  "ops-diagnostics",
-  "settings-general",
-  "settings-providers",
-  "settings-integrations",
-  "settings-tools",
-  "settings-workspaces",
-]);
+const NEXT_VISUAL_ROUTE_SLUGS = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map((route) => route.slug));
 
 export const NEXT_VISUAL_REGRESSION_MANIFEST = NEXT_RELEASE_SURFACE_MANIFEST.filter((route) =>
   NEXT_VISUAL_ROUTE_SLUGS.has(route.slug),

@@ -107,6 +107,18 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
     targetPassRate: z.number().min(0).max(1).optional(),
   });
 
+  const skillIdQuerySchema = z.object({
+    skillId: z.string().min(1),
+  });
+
+  const skillEvaluationByIdBodySchema = skillEvaluationBodySchema.extend({
+    skillId: z.string().min(1),
+  });
+
+  const updateStateByIdSchema = updateStateSchema.extend({
+    skillId: z.string().min(1),
+  });
+
   fastify.get("/api/v1/skills", async (_request, reply) => {
     return reply.send({ items: skills.listSkills() });
   });
@@ -191,6 +203,57 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(201).send(skills.createSkillEvaluationProposal(params.data.runId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/by-id/evaluations/preview", async (request, reply) => {
+    const body = skillEvaluationByIdBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    const { skillId, ...input } = body.data;
+    try {
+      return reply.send(skills.previewSkillEvaluation(skillId, input));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/by-id/evaluations/run", async (request, reply) => {
+    const body = skillEvaluationByIdBodySchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    const { skillId, ...input } = body.data;
+    try {
+      return reply.code(201).send(skills.runSkillEvaluation(skillId, input));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/skills/by-id/evaluations", async (request, reply) => {
+    const query = skillIdQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
+    try {
+      return reply.send(skills.listSkillEvaluationRuns(query.data.skillId));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.patch("/api/v1/skills/by-id/state", async (request, reply) => {
+    const body = updateStateByIdSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      const updated = skills.setSkillState(body.data.skillId, body.data.state, body.data.note);
+      return reply.send(updated);
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
     }
   });
 

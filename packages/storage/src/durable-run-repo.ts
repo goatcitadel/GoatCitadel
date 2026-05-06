@@ -275,7 +275,9 @@ export class DurableRunRepository {
     metadata?: Record<string, unknown>;
     startedAt?: string;
     finishedAt?: string;
+    clearFinishedAt?: boolean;
     lastError?: string;
+    clearLastError?: boolean;
     leaseOwnerId?: string;
     leaseExpiresAt?: string;
     leaseHeartbeatAt?: string;
@@ -323,8 +325,8 @@ export class DurableRunRepository {
       runId: input.runId,
       status: "running",
       startedAt: current.startedAt ?? input.leaseHeartbeatAt,
-      finishedAt: undefined,
-      lastError: undefined,
+      clearFinishedAt: true,
+      clearLastError: true,
       leaseOwnerId: input.workerId,
       leaseHeartbeatAt: input.leaseHeartbeatAt,
       leaseExpiresAt: input.leaseExpiresAt,
@@ -589,7 +591,9 @@ export class DurableRunRepository {
       metadata?: Record<string, unknown>;
       startedAt?: string;
       finishedAt?: string;
+      clearFinishedAt?: boolean;
       lastError?: string;
+      clearLastError?: boolean;
       leaseOwnerId?: string;
       leaseExpiresAt?: string;
       leaseHeartbeatAt?: string;
@@ -607,8 +611,16 @@ export class DurableRunRepository {
       payload: input.payload !== undefined ? normalizeObject(input.payload) : current.payload,
       metadata: input.metadata !== undefined ? normalizeOptionalObject(input.metadata) : current.metadata,
       startedAt: input.startedAt !== undefined ? input.startedAt : current.startedAt,
-      finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finishedAt,
-      lastError: input.lastError !== undefined ? input.lastError?.trim() || undefined : current.lastError,
+      finishedAt: input.clearFinishedAt
+        ? undefined
+        : input.finishedAt !== undefined
+          ? input.finishedAt
+          : current.finishedAt,
+      lastError: input.clearLastError
+        ? undefined
+        : input.lastError !== undefined
+          ? input.lastError?.trim() || undefined
+          : current.lastError,
       leaseOwnerId: clearLease
         ? undefined
         : input.leaseOwnerId !== undefined

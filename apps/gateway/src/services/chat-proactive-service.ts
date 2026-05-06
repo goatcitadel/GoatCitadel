@@ -780,9 +780,9 @@ export class ChatProactiveService {
         proactive: nextState,
       },
       startedAt: run.startedAt ?? now,
-      finishedAt: status === "completed" || status === "failed" ? now : undefined,
+      ...(status === "completed" || status === "failed" ? { finishedAt: now } : { clearFinishedAt: true }),
       clearLease: status === "completed" || status === "failed",
-      lastError: status === "failed" ? run.lastError : undefined,
+      ...(status === "failed" ? { lastError: run.lastError } : { clearLastError: true }),
       updatedAt: now,
     });
   }
@@ -832,9 +832,9 @@ export class ChatProactiveService {
       status: "waiting",
       metadata: nextMetadata,
       startedAt: run.startedAt ?? now,
-      finishedAt: undefined,
+      clearFinishedAt: true,
       clearLease: true,
-      lastError: undefined,
+      clearLastError: true,
       updatedAt: now,
     });
     const checkpointState = {
@@ -882,7 +882,7 @@ export class ChatProactiveService {
       updatedAt: now,
       finishedAt: now,
       clearLease: true,
-      lastError: undefined,
+      clearLastError: true,
     });
     this.ctx.storage.durableRuns.createCheckpoint({
       runId,

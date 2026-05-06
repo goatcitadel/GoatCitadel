@@ -3,8 +3,11 @@ import { constants } from "node:fs";
 import path from "node:path";
 import {
   buildVisualBaselineFileName,
+  NEXT_RELEASE_SURFACE_MANIFEST,
+  NEXT_VISUAL_REGRESSION_MANIFEST,
   RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
+  resolveVisualBaselineNamespace,
 } from "./verification/lib/release-surface-manifest.mjs";
 
 const root = process.cwd();
@@ -182,7 +185,7 @@ if (!/docs\/1_0_RELEASE_EVIDENCE\.md/.test(readme)) {
 if (!/visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers/i.test(readme)) {
   errors.push("README.md must describe visible beta integrations as real operator-action runtimes, not diagnostics-only shells.");
 }
-if (!/verify:visual:regression` compares checked-in shell and primary-surface baselines/i.test(readme)) {
+if (!/verify:visual:regression` compares checked-in shell and route baselines/i.test(readme)) {
   errors.push("README.md must describe verify:visual:regression as baseline comparison, not screenshot capture only.");
 }
 if (!/verify:backup:roundtrip` now restores and verifies the full minimum operator backup set/i.test(readme)) {
@@ -241,8 +244,11 @@ const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf
 if (!/local-first AI workbench/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must define GoatCitadel 1.0 as a local-first AI workbench.");
 }
-if (!/Work`: Chat, Cowork, Code, Tasks, Approvals/i.test(contract) || !/Observe`: Timeline, Health, Artifacts, Quality/i.test(contract) || !/Tune`: General, Runtime, Workspaces, Integrations, Tools, Agents/i.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must freeze the visible 1.0 footprint as Work / Observe / Tune.");
+if (
+  !/Chat \/ Cowork \/ Code \/ Projects \/ Library \/ Ops \/ Settings/i.test(contract) ||
+  !/Work \/ Observe \/ Tune.*legacy release taxonomy/i.test(contract)
+) {
+  errors.push("docs/1_0_CONTRACT.md must define the current Mission Control Next IA and demote Work / Observe / Tune to release taxonomy.");
 }
 if (!/trusted-code surface/i.test(contract) || !/best-effort and fail-closed/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must keep the Code Mode security posture narrow and explicit.");
@@ -337,17 +343,27 @@ if (!/release-surface-manifest\.mjs/.test(scenariosSource) || !/RELEASE_SURFACE_
 }
 
 if (RELEASE_SURFACE_MANIFEST.length !== 15) {
-  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 15 release-bearing primary surfaces.");
+  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 15 legacy compatibility release-taxonomy surfaces.");
 }
 
-for (const route of RELEASE_SURFACE_MANIFEST) {
+if (NEXT_RELEASE_SURFACE_MANIFEST.length !== 30) {
+  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 30 Mission Control Next release-surface routes.");
+}
+
+if (NEXT_VISUAL_REGRESSION_MANIFEST.length !== NEXT_RELEASE_SURFACE_MANIFEST.length) {
+  errors.push("scripts/verification/lib/release-surface-manifest.mjs must visually cover every Mission Control Next release-surface route.");
+}
+
+for (const route of NEXT_VISUAL_REGRESSION_MANIFEST) {
   for (const variant of RELEASE_SURFACE_VARIANTS) {
+    const namespace = resolveVisualBaselineNamespace("@goatcitadel/mission-control-next");
     const baselinePath = path.join(
       root,
       "scripts",
       "verification",
       "baselines",
       "visual",
+      namespace,
       buildVisualBaselineFileName(route.slug, variant.slug),
     );
     try {

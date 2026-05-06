@@ -200,6 +200,65 @@ describe("skills routes bankr migration", () => {
     expect(run.json().run).toMatchObject({ status: "completed", accepted: true });
   });
 
+  it("supports path-safe skill id routes for source-qualified skills", async () => {
+    const previewSkillEvaluation = vi.fn(() => ({
+      run: { runId: "skill-eval-1", skillId: "bundled:agentic-skill-architect", status: "preview" },
+    }));
+    const runSkillEvaluation = vi.fn(() => ({
+      run: { runId: "skill-eval-2", skillId: "bundled:agentic-skill-architect", status: "completed" },
+    }));
+    const listSkillEvaluationRuns = vi.fn(() => ({ items: [] }));
+    const setSkillState = vi.fn(() => ({
+      skillId: "bundled:agentic-skill-architect",
+      state: "sleep",
+      note: "review",
+      updatedAt: "2026-05-04T00:00:00.000Z",
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      skills: {
+        isBankrBuiltinEnabled: vi.fn(() => true),
+        getBankrOptionalMigrationMessage: vi.fn(() => ""),
+        previewSkillEvaluation,
+        runSkillEvaluation,
+        listSkillEvaluationRuns,
+        setSkillState,
+      },
+    } as never);
+    await app.register(skillsRoutes);
+
+    const skillId = "bundled:agentic-skill-architect";
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/by-id/evaluations/preview",
+      payload: { skillId },
+    });
+    const run = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/by-id/evaluations/run",
+      payload: { skillId },
+    });
+    const list = await app.inject({
+      method: "GET",
+      url: `/api/v1/skills/by-id/evaluations?skillId=${encodeURIComponent(skillId)}`,
+    });
+    const state = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/skills/by-id/state",
+      payload: { skillId, state: "sleep", note: "review" },
+    });
+
+    expect(preview.statusCode).toBe(200);
+    expect(run.statusCode).toBe(201);
+    expect(list.statusCode).toBe(200);
+    expect(state.statusCode).toBe(200);
+    expect(previewSkillEvaluation).toHaveBeenCalledWith(skillId, {});
+    expect(runSkillEvaluation).toHaveBeenCalledWith(skillId, {});
+    expect(listSkillEvaluationRuns).toHaveBeenCalledWith(skillId);
+    expect(setSkillState).toHaveBeenCalledWith(skillId, "sleep", "review");
+  });
+
   it("creates skill evaluation proposals from accepted runs", async () => {
     const createSkillEvaluationProposal = vi.fn(() => ({
       run: { runId: "skill-eval-1", status: "proposal_created" },

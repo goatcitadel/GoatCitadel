@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { eventsRoutes } from "./events.js";
@@ -143,6 +143,49 @@ describe("events stream route", () => {
     await reader!.cancel();
   });
 
+  it("signals replay gaps when retained replay is truncated before the newest sequence", async () => {
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    const replay = Array.from({ length: 500 }, (_, index) => ({
+      eventId: `event-${index + 101}`,
+      sequence: index + 101,
+      eventType: "system",
+      source: "tests",
+      timestamp: "2026-03-20T10:00:00.000Z",
+      payload: { index },
+    }));
+    const closeRealtimeStreamLease = vi.fn();
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => replay,
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 100, newestSequence: 700 }),
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-truncated",
+        clientId: "client-truncated",
+        gatewayNodeId: "node-truncated",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease,
+    });
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?afterCursor=100`);
+
+    expect(response.status).toBe(200);
+    const text = await readSseText(response);
+    expect(text).toContain("event: replay-gap");
+    expect(text).toContain('"reason":"replay_window_truncated"');
+    expect(text).toContain('"lastReplayCursor":600');
+    expect(text).not.toContain("event: stream-ready");
+    expect(text).not.toContain("id: 101");
+    expect(closeRealtimeStreamLease).toHaveBeenCalledWith({
+      leaseId: "lease-truncated",
+      closeReason: "replay_gap",
+    });
+  });
+
   it("rejects concurrent SSE streams beyond the per-client cap and frees slots on disconnect", async () => {
     process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP = "1";
     app = Fastify();
@@ -217,3 +260,19 @@ describe("events stream route", () => {
     await Promise.all(responses.map((response) => response.body?.cancel()));
   });
 });
+
+async function readSseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  expect(reader).toBeDefined();
+  const chunks: Uint8Array[] = [];
+  for (let index = 0; index < 10; index += 1) {
+    const chunk = await reader!.read();
+    if (chunk.value) {
+      chunks.push(chunk.value);
+    }
+    if (chunk.done) {
+      break;
+    }
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}

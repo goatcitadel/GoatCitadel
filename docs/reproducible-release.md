@@ -65,7 +65,7 @@ To validate a published release:
 3. Verify the installer signature with the adjacent `.sig` and `.pem` files.
 4. Inspect `provenance/build-metadata.json` for the exact tag, commit, workflow run, and toolchain versions.
 5. Inspect `SBOM/*.cyclonedx.json` for the dependency inventory used for the release.
-6. Inspect `release-certificate.json` and require every required lane to be `success` with an empty `acceptedFailures` array before treating the signed public installer build as public-trust ready.
+6. Inspect `release-certificate.json` and require every required lane to be `success` with an empty `acceptedFailures` array before treating the signed public installer build as public-trust ready. Direct lane evidence and umbrella release-proof evidence are recorded separately; an exact-SHA direct lane failure is blocking even if the umbrella proof is green.
 
 ## Local Rebuild
 

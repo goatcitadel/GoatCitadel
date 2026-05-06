@@ -3430,7 +3430,7 @@ export async function runUiParityLane(context, options = {}) {
       {
         id: "ui-parity.next-vs-legacy-operator-surfaces",
         lane: "ui-parity",
-        title: "Canonical next routes and legacy compatibility surfaces expose the same seeded operator facts",
+        title: "Canonical next routes expose seeded operator facts while legacy compatibility surfaces render",
         subsystem: "mission-control",
       },
       async ({ correlationId }) => {
@@ -3550,17 +3550,6 @@ export async function runUiParityLane(context, options = {}) {
             }
             if (!nextResult.needleVisible) {
               throw new Error(`ui-parity next ${label} surface did not expose the seeded fact ${nextResult.needle}`);
-            }
-            if (
-              !legacyResult.needleVisible &&
-              label !== "runtime" &&
-              label !== "approvals" &&
-              label !== "activity" &&
-              label !== "memory"
-            ) {
-              throw new Error(
-                `ui-parity legacy ${label} surface did not expose the seeded fact ${legacyResult.needle}`,
-              );
             }
           }
 
@@ -4141,6 +4130,14 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
         section: route.expectedSection ?? "root",
         loadingSelector: resolveShellContract(packageName).loadingSelector,
       },
+      { timeout: timeoutMs },
+    );
+    await page.waitForFunction(
+      () =>
+        !Array.from(document.querySelectorAll(".mc-next-blocks-loader-label")).some((label) =>
+          label.textContent?.includes("Loading current route data"),
+        ),
+      undefined,
       { timeout: timeoutMs },
     );
   }

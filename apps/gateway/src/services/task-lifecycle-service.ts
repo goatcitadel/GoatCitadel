@@ -329,8 +329,24 @@ export class TaskLifecycleService {
     });
     try {
       this.deps.recordAgenticDiagnosticSignal?.({ task, diagnostic });
-    } catch {
-      // Improvement-ledger failures must not hide or roll back task-board diagnostics.
+    } catch (error) {
+      try {
+        this.appendTaskActivity(taskId, {
+          activityType: "diagnostic",
+          message: "Agentic diagnostic was saved, but improvement-ledger mirroring failed.",
+          metadata: {
+            code: "agentic_diagnostic_mirror_failed",
+            diagnosticSignalId: diagnostic.signalId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      } catch (activityError) {
+        process.stderr.write(
+          `[task-lifecycle] failed to record agentic diagnostic mirror failure: ${
+            activityError instanceof Error ? activityError.message : String(activityError)
+          }\n`,
+        );
+      }
     }
     return diagnostic;
   }

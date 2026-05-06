@@ -6,7 +6,7 @@ This document maps the public `1.0` claims to the repo-visible code paths, tests
 
 For this document:
 
-- `proof` means a named end-to-end verification lane with a bespoke scenario body under [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs)
+- `proof` means a named verification lane with a bespoke scenario body under [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs) or a targeted contract/behavior harness; lanes that are not live end-to-end proof must say so explicitly
 - `evidence` means the supporting repo-visible code paths, unit/integration tests, and manifests that anchor those claims
 
 Current shell posture for this map:
@@ -14,8 +14,9 @@ Current shell posture for this map:
 - `apps/mission-control-next` is the canonical `1.0` shell.
 - `apps/mission-control` remains a compatibility-only shell. Legacy code and tests are cited here only when they are explicitly needed for parity or rollback continuity evidence.
 - `release-certificate.json` is the commit-bound proof record for signed public Windows installer releases. Source/dev/onboarding 1.0 readiness is backed by the named verification lanes below; public-trust EXE distribution additionally requires a green release certificate with an empty `acceptedFailures` array.
-- Required lane workflows run directly on relevant PR/main changes, and the umbrella `Verification 1.0 Release Proof` workflow can be dispatched or tag-triggered on a release-candidate SHA to refresh every required lane in one commit-bound proof run.
-- Signed release publication waits for the exact-SHA umbrella proof workflow before writing the release certificate, so tag-triggered installer builds cannot race ahead of their required proof.
+- Required lane workflows run directly on relevant PR/main changes. The umbrella `Verification 1.0 Release Proof` workflow can be dispatched or tag-triggered on a release-candidate SHA to refresh the umbrella-covered required lanes; direct-only lanes such as `docs:check` and `security:trivy` still require their own exact-SHA workflow evidence.
+- Signed release publication writes the release certificate from exact-SHA lane evidence. Umbrella proof can cover only missing or unavailable direct runs for umbrella-covered lanes, so tag-triggered installer builds cannot race ahead of direct-only proof or hide direct lane failures.
+- The current operator IA is `Chat / Cowork / Code / Projects / Library / Ops / Settings`; `Work / Observe / Tune` is legacy release taxonomy, not the current shell navigation.
 
 ## Recovery Truth
 
@@ -35,8 +36,8 @@ Current shell posture for this map:
 ## Visible Surface Evidence
 
 - The canonical release-bearing primary surface manifest lives in [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
-- `verify:surface:regression` and `verify:visual:regression` both derive from that same manifest in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs).
-- `verify:ui:parity` is the named compatibility proof lane for the seeded next-vs-legacy surface set while the legacy shell remains shipped for rollback/comparison.
+- `verify:surface:regression` and `verify:visual:regression` both derive from the Mission Control Next release-surface manifest in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs); visual proof now covers every current release-surface route.
+- `verify:ui:parity` is current-shell seeded-fact proof plus legacy compatibility-surface smoke while the legacy shell remains shipped for rollback/comparison.
 - `verify:visual:regression` is the read-only screenshot gate in [scripts/verification/run.mjs](../scripts/verification/run.mjs); intentional baseline maintenance now goes through `verify:visual:rebaseline`, which threads explicit baseline-write intent into [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs) instead of letting the normal lane rewrite proof artifacts.
 - Checked-in visual baselines live under [scripts/verification/baselines/visual](../scripts/verification/baselines/visual).
 
@@ -126,14 +127,15 @@ Current shell posture for this map:
 - Public release posture is defined in [README.md](../README.md), [CHANGELOG.md](../CHANGELOG.md), and [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md).
 - Governance freshness and implementation-anchor checks live in [scripts/validate-governance-docs.mjs](../scripts/validate-governance-docs.mjs).
 - Tagged release assets are bound to the exact commit, workflow run, required lane statuses, artifact digests, proof ZIP digest, Trivy status, and accepted-failure list by [scripts/release/write-release-certificate.mjs](../scripts/release/write-release-certificate.mjs).
-- Required certificate lanes include `verify:ui:parity`, mapped to the `verification-truth-lanes.yml` workflow and covered by the umbrella `verification-1-0-release-proof.yml` matrix.
-- The release certificate accepts either the direct exact-SHA lane workflow result or a successful exact-SHA umbrella 1.0 proof workflow result only for lanes explicitly listed in `releaseProofCoverage.coveredLanes`, and fails with the missing, unavailable, or failed lane list when proof is stale. Direct-only lanes such as `security:trivy` must be green in their own workflow and cannot be masked by umbrella fallback.
+- Required certificate lanes include `verify:ui:parity`, mapped to the `verification-truth-lanes.yml` workflow and covered by the umbrella `verification-1-0-release-proof.yml` matrix; `docs:check` is also a direct required certificate lane via `verification-docs-check.yml`.
+- The release certificate records direct lane evidence and umbrella release-proof evidence separately. Umbrella proof may cover a missing or unavailable direct exact-SHA lane only for lanes explicitly listed in `releaseProofCoverage.coveredLanes`; it must not mask an exact-SHA direct lane failure. Direct-only lanes such as `security:trivy` and `docs:check` must be green in their own workflows.
 
 ## Closeout Validation Evidence
 
-- Closeout validation keeps the contract and handbook anchored through `pnpm docs:check`.
+- Closeout validation keeps the contract and handbook anchored through `pnpm docs:check`, and `docs:check` is first-class release-certificate evidence rather than only an item nested inside `verify:fast`.
 - The hardening pass now ships named runtime-truth, auth-matrix, ui-parity, memory-truth, realtime-truth, and architecture-metrics lanes through [scripts/verification/run.mjs](../scripts/verification/run.mjs) and [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs). Each named truth lane now runs a bespoke scenario body instead of delegating to older shared coverage.
-- The architecture-metrics baseline was refreshed on 2026-05-05 after the final blocker-closure batch, including migration drift detection, durable cancellation truth, MCP transport narrowing, and Mission Control runtime-source truth. Broad GatewayService reduction remains post-1.0 debt; the refreshed baseline is an explicit accepted snapshot and keeps future changes fail-closed against the current hardened state.
+- The architecture-metrics baseline is an explicit accepted `1.0` debt snapshot, not proof that broad GatewayService decomposition is complete. Broad GatewayService reduction remains post-1.0 debt; the refreshed baseline keeps future changes fail-closed against the current hardened state.
+- `/api/v1/dev/verification/*` routes are verification-only routes guarded by dev diagnostics, default-disabled as production 404s, and still operator-auth classified when enabled for harness runs.
 - The visual regression lane remains read-only and any intentional baseline updates must go through `verify:visual:rebaseline` before a clean rerun against the checked-in assets under [scripts/verification/baselines/visual](../scripts/verification/baselines/visual).
 - `pnpm verify:fast` now builds `@goatcitadel/extensions-sdk` before root tests/smoke in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs), so clean lanes do not depend on generated `dist` artifacts from a previous local build.
 - Public release packaging and required verification workflows are aligned on Node 22 in [.github/workflows/release-installers.yml](../.github/workflows/release-installers.yml) and the verification workflows, avoiding "validated on 22, packaged on 24" drift.

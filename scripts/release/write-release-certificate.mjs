@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { resolveLaneProof } from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -40,6 +41,7 @@ const REQUIRED_LANE_SPECS = [
   { name: "verify:backup:roundtrip", workflowFile: "verification-backup-roundtrip.yml", required: true },
   { name: "verify:catalog:parity", workflowFile: "verification-catalog-parity.yml", required: true },
   { name: "verify:api:compat", workflowFile: "verification-api-compat.yml", required: true },
+  { name: "docs:check", workflowFile: "verification-docs-check.yml", required: true },
   { name: "security:trivy", workflowFile: "security-trivy.yml", required: true },
 ].map((spec) => ({
   ...spec,
@@ -175,18 +177,15 @@ async function resolveRequiredLanes({ commit, repository }) {
 
   return Promise.all(
     REQUIRED_LANE_SPECS.map(async (spec) => {
-      const run = await fetchLatestWorkflowRun({ repository, commit, workflowFile: spec.workflowFile });
-      const useReleaseProof =
-        spec.releaseProofCovered === true && run.status !== "success" && releaseProofRun.status === "success";
-      const effectiveRun = useReleaseProof ? releaseProofRun : run;
+      const directRun = await fetchLatestWorkflowRun({ repository, commit, workflowFile: spec.workflowFile });
       return {
-        ...spec,
-        status: effectiveRun.status,
-        conclusion: effectiveRun.conclusion,
-        workflowRunUrl: effectiveRun.html_url,
-        workflowRunId: effectiveRun.id,
-        proofWorkflowFile: useReleaseProof ? RELEASE_PROOF_WORKFLOW_FILE : spec.workflowFile,
-        proofSource: useReleaseProof ? "release-proof" : "lane-workflow",
+        ...resolveLaneProof({
+          spec,
+          directRun,
+          releaseProofRun,
+          releaseProofWorkflowFile: RELEASE_PROOF_WORKFLOW_FILE,
+          targetCommit: commit,
+        }),
         checkedAt: new Date().toISOString(),
       };
     }),
@@ -200,6 +199,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       conclusion: null,
       html_url: null,
       id: null,
+      head_sha: null,
     };
   }
   const encodedWorkflow = encodeURIComponent(workflowFile);
@@ -218,6 +218,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
         conclusion: null,
         html_url: null,
         id: null,
+        head_sha: null,
       };
     }
     const payload = await response.json();
@@ -228,6 +229,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
         conclusion: null,
         html_url: null,
         id: null,
+        head_sha: null,
       };
     }
     return {
@@ -235,6 +237,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       conclusion: run.conclusion ?? null,
       html_url: run.html_url ?? null,
       id: run.id ?? null,
+      head_sha: run.head_sha ?? null,
     };
   } catch (error) {
     return {
@@ -242,6 +245,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       conclusion: null,
       html_url: null,
       id: null,
+      head_sha: null,
     };
   }
 }
@@ -269,7 +273,7 @@ function formatRequiredLaneFailure(blocking, commit) {
     lines.push(`${label}: ${entries.join("; ")}`);
   }
   lines.push(
-    "Run the missing lane workflow(s) or the umbrella Verification 1.0 Release Proof workflow on the exact release-candidate SHA, then rerun release certificate generation.",
+    "Run the missing direct-only lane workflow(s) and, for umbrella-covered lanes only, either the direct lane workflow or the umbrella Verification 1.0 Release Proof workflow on the exact release-candidate SHA, then rerun release certificate generation.",
   );
   return lines.join(" ");
 }

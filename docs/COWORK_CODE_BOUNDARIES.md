@@ -78,7 +78,7 @@ The agentic parity lanes are focused behavior-backed lanes. They do not replace 
 - `verify:agentic:contracts` (`agentic-contracts`) checks the contract, route, service, workbench, channel, and boundary-document anchors for governed Cowork/Code agentic runtime truth.
 - `verify:agentic:governance` (`agentic-governance`) checks review-first self-improvement, callable-vs-inspectable capability boundaries, marketplace/provider governance, approvals, and durable runtime ownership anchors.
 - `verify:agentic:harnesses` (`agentic-harnesses`) checks external harness boundary documentation, availability-gated comparison anchors, and behavioral callable-boundary proof.
-- `verify:agentic:parity` (`agentic-parity`) runs the contract, governance, and harness proof families together for closeout parity coverage.
+- `verify:agentic:proof` (`agentic-proof`) runs the contract, governance, and harness proof families together as targeted contract/behavior proof; it is not a live end-to-end product proof. `verify:agentic:parity` remains a compatibility alias for the same aggregate lane.
 - `verify:code:workbench-loop` (`agentic-workbench-loop`) focuses the Code Workbench patch, test, apply, export, and revert behavior.
 - `verify:channels:runtime` (`agentic-channels-runtime`) focuses durable channel delivery retry, stale-state, and route behavior.
 - `verify:harness:availability` (`agentic-harness-availability`) focuses agentic availability routes plus callable-boundary behavior when external harness anchors are absent or present.

@@ -28,7 +28,7 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
 - Filesystem-backed backup restore is offline-only for `1.0`; operators must stop any gateway serving the same runtime root before invoking the CLI restore, and the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
 - Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
-- Surface-regression and visual-regression derive from the same canonical release-surface manifest so the visible `Work / Observe / Tune` evidence set cannot drift silently.
+- Surface-regression and visual-regression derive from the same canonical Mission Control Next release-surface manifest, covering the current `Chat / Cowork / Code / Projects / Library / Ops / Settings` operator navigation while legacy `Work / Observe / Tune` remains release taxonomy only.
 - Postgres backups participate in shipped create/verify coverage, but restore remains an operator-driven `pg_restore` workflow rather than the SQLite file-copy restore path.
 - `GatewayService` has been substantially decomposed, but `apps/gateway/src/services/gateway-service.ts` remains the facade many routes call through. Treat facade extraction as active architecture work, not finished clean-architecture proof.
 
@@ -769,7 +769,7 @@ Minimum backup set:
 Release-proof expectation:
 
 - `verify:backup:roundtrip` must seed, mutate, restore, and verify all four classes above, including every runtime `config/*.json` file present at backup time.
-- `verify:visual:regression` must compare checked-in baselines for the shell and primary `Work / Observe / Tune` surfaces, not just capture screenshots, and it must stay read-only; intentional baseline updates go through `verify:visual:rebaseline`.
+- `verify:visual:regression` must compare checked-in baselines for every current Mission Control Next release-surface route, not just capture screenshots, and it must stay read-only; intentional baseline updates go through `verify:visual:rebaseline`.
 - `verify:catalog:parity` must execute real operator actions for the visible runtime-backed non-channel classes it claims to cover.
 - `verify:api:compat` must snapshot REST schemas and realtime event envelopes and fail on breaking diffs.
 

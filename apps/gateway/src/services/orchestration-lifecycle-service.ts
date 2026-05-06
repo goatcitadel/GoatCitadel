@@ -107,7 +107,9 @@ export interface OrchestrationLifecycleHost {
     status?: DurableRunRecord["status"];
     metadata?: Record<string, unknown>;
     lastError?: string;
+    clearLastError?: boolean;
     finishedAt?: string;
+    clearFinishedAt?: boolean;
   }): DurableRunRecord;
   allocateOrchestrationWorktree(input: { runId: string; workspaceId: string; baseRef?: string }): Promise<{
     worktreePath: string;
