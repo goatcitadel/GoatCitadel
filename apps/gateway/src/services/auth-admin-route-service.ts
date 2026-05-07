@@ -1,8 +1,12 @@
 import type {
+  BackupCreateResponse,
+  BackupManifestRecord,
   CompanionSessionExchangeInput,
   CompanionSessionRefreshInput,
   DeviceAccessGrantRecord as DeviceAccessGrantContractRecord,
   DeviceAccessRequestCreateInput,
+  RetentionPolicy,
+  RetentionPruneResult,
 } from "@goatcitadel/contracts";
 
 export interface DeviceAccessRequestMetadata {
@@ -27,25 +31,25 @@ export interface CompanionAuditListOptions {
 }
 
 export interface AuthAdminRoutePort {
-  createBackup(input: unknown): unknown;
+  createBackup(input?: { name?: string; outputPath?: string }): Promise<BackupCreateResponse>;
   createDeviceAccessRequest(input: DeviceAccessRequestCreateInput, metadata: DeviceAccessRequestMetadata): unknown;
   exchangeCompanionSessionFromDeviceGrant(grantId: string, input: CompanionSessionExchangeInput): unknown;
   getAuthCredentialPlan(): unknown;
   getCompanionSessionInfo(sessionId: string): unknown;
   getCompanionSessionRecord(sessionId: string): unknown;
   getDeviceAccessRequestStatus(requestId: string, secret: string): unknown;
-  getRetentionPolicy(): unknown;
-  listBackups(limit: number): unknown;
+  getRetentionPolicy(): RetentionPolicy;
+  listBackups(limit: number): Promise<BackupManifestRecord[]>;
   listCompanionAuditEvents(input?: CompanionAuditListOptions): unknown;
   listCompanionSessions(input?: CompanionSessionListOptions): unknown;
   listDeviceAccessGrants(): DeviceAccessGrantContractRecord[];
-  pruneRetention(input: unknown): unknown;
+  pruneRetention(input: { dryRun?: boolean }): Promise<RetentionPruneResult>;
   resolveGatewayInstallToken(input: unknown): unknown;
   revokeCompanionSession(sessionId: string, actorId: string): unknown;
   revokeDeviceAccessGrant(grantId: string, actorId: string): Promise<DeviceAccessGrantContractRecord>;
   rotateCompanionSession(input: CompanionSessionRefreshInput): unknown;
   runDatabaseCutover(input: unknown): unknown;
-  updateRetentionPolicy(patch: unknown): unknown;
+  updateRetentionPolicy(patch: Partial<RetentionPolicy>): RetentionPolicy;
   verifyBackup(input: unknown): unknown;
   verifyDatabaseCutover(input: unknown): unknown;
 }
@@ -109,11 +113,11 @@ export class AuthAdminRouteService {
     return this.gateway.getRetentionPolicy();
   }
 
-  public updateRetentionPolicy(patch: unknown) {
+  public updateRetentionPolicy(patch: Partial<RetentionPolicy>) {
     return this.gateway.updateRetentionPolicy(patch);
   }
 
-  public pruneRetention(input: unknown) {
+  public pruneRetention(input: { dryRun?: boolean }) {
     return this.gateway.pruneRetention(input);
   }
 
@@ -121,7 +125,7 @@ export class AuthAdminRouteService {
     return this.gateway.listBackups(limit);
   }
 
-  public createBackup(input: unknown) {
+  public createBackup(input?: { name?: string; outputPath?: string }) {
     return this.gateway.createBackup(input);
   }
 

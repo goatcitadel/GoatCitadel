@@ -10,7 +10,6 @@ import type {
   CapabilityTrendSeries,
   ChatMemoryMode,
   ChatMode,
-  ChatProjectRecord,
   ChatSessionPrefsPatch,
   ChatThinkingLevel,
   ChatWebMode,
@@ -61,9 +60,9 @@ import type {
   PromptPackToolTier,
   PromptPackVerdict,
   RealtimeEvent,
-  ToolGrantConstraints,
   ReplayRegressionResult,
   ReplayRegressionRun,
+  ToolGrantConstraints,
 } from "@goatcitadel/contracts";
 import {
   DEFAULT_PROMPT_PACK_POLICY_V2,
@@ -75,7 +74,49 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { applyPromptPackPromptLabFallbacks } from "./prompt-pack-empty-output-fallbacks.js";
-import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
+import {
+  PROMPT_PACK_MEMORY_TOOL_NAME_LIST as PROMPT_PACK_MEMORY_TOOL_NAMES,
+  PROMPT_PACK_WEB_TOOL_NAME_LIST as PROMPT_PACK_WEB_TOOL_NAMES,
+} from "./chat-tool-families.js";
+import {
+  DEFAULT_PROMPT_PACK_EXECUTION_STYLE,
+  PROMPT_PACK_FIXTURE_PROJECT_BINDING,
+  PROMPT_PACK_PROJECT_WORKSPACE_PATH,
+  buildPromptPackSessionReadGrantConstraints,
+  buildPromptPackSessionToolAllowlist,
+  detectPromptPackToolDirectives,
+  ensurePromptPackDurableReadiness,
+  extractPromptPackPathHints,
+  findPromptPackProjectBinding,
+  formatPromptPackExecutionProfile,
+  getResolvedPromptPackExecutionProfile,
+  isPromptPackReadTool,
+  promptKeepsRequestedRoleOrderOnly,
+  promptRequestsSynthesisOrRecommendation,
+  promptRequiresExactFileGrounding,
+  promptSuppressesToolUse,
+  promptUsesRoleOrder,
+  resolvePromptPackExecutionProfile,
+  resolvePromptPackExecutionStyle,
+  resolvePromptPackProjectBinding,
+  shouldApplyPromptPackRepoGroundedChatAssist,
+  type PromptPackExecutionProfile,
+  type PromptPackProjectBindingConfig,
+  type PromptPackToolDirectives,
+} from "./prompt-pack-execution-profile.js";
+export {
+  buildPromptPackSessionAllowedPaths,
+  buildPromptPackSessionReadGrantConstraints,
+  buildPromptPackSessionToolAllowlist,
+  ensurePromptPackDurableReadiness,
+  findPromptPackProjectBinding,
+  getResolvedPromptPackExecutionProfile,
+  promptPackExecutionRequiresDurable,
+  resolvePromptPackExecutionProfile,
+  resolvePromptPackExecutionStyle,
+  resolvePromptPackProjectBinding,
+} from "./prompt-pack-execution-profile.js";
+export type { PromptPackExecutionProfile } from "./prompt-pack-execution-profile.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const PROMPT_PACK_PASS_THRESHOLD = 7;
@@ -118,16 +159,9 @@ const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
 const PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS = 120_000;
 const PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS = 30_000;
-const DEFAULT_PROMPT_PACK_EXECUTION_STYLE: PromptPackExecutionStyle = "single_turn_harness";
 const DEFAULT_PROMPT_RUNNER_SOURCE = "goatcitadel_prompt_pack.md";
 const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
 const DEFAULT_PROMPT_PACK_EXPORT_ARCHIVE_DIR = "runs";
-const PROMPT_PACK_PROJECT_NAME = "Prompt Lab Workspace";
-const PROMPT_PACK_PROJECT_DESCRIPTION = "Auto-created project binding for prompt-pack code evaluations.";
-const PROMPT_PACK_PROJECT_WORKSPACE_PATH = "fixtures/prompt-pack-workspace";
-const PROMPT_PACK_REPO_PROJECT_NAME = "Prompt Lab Repo";
-const PROMPT_PACK_REPO_PROJECT_DESCRIPTION = "Auto-created project binding for prompt-pack repo evaluations.";
-const PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH = "__prompt_pack_repo__";
 
 export interface PromptPackServiceContext {
   readonly storage: Pick<
@@ -139,6 +173,7 @@ export interface PromptPackServiceContext {
     | "promptPacks"
     | "promptPackScores"
     | "toolGrants"
+    | "chatSessionProjects"
   >;
   readonly gatewaySql: Storage["gatewaySql"];
   readonly config: GatewayRuntimeConfig;
@@ -309,149 +344,6 @@ export interface PromptPackServiceDeps {
   }) => void;
 }
 
-interface PromptPackExecutionProfile {
-  mode: ChatMode;
-  toolTier: PromptPackToolTier;
-  toolAutonomy: "safe_auto" | "manual";
-  webMode: ChatWebMode;
-  memoryMode: ChatMemoryMode;
-  thinkingLevel: ChatThinkingLevel;
-}
-
-interface PromptPackToolDirectives {
-  namedTools: string[];
-  prefersFileTools: boolean;
-  prefersWebTools: boolean;
-  prefersMemoryTools: boolean;
-  suppressesTools: boolean;
-}
-
-interface PromptPackProjectBindingConfig {
-  name: string;
-  description: string;
-  workspacePath: string;
-}
-
-interface PromptPackDurableReadinessInput {
-  readonly durable: Pick<
-    GatewayRuntimeConfig["assistant"]["durable"],
-    "enabled" | "executionEnabled" | "chatAutoPromoteEnabled"
-  >;
-  readonly durableKernelV1Enabled: boolean;
-}
-
-const PROMPT_PACK_FIXTURE_PROJECT_BINDING: PromptPackProjectBindingConfig = {
-  name: PROMPT_PACK_PROJECT_NAME,
-  description: PROMPT_PACK_PROJECT_DESCRIPTION,
-  workspacePath: PROMPT_PACK_PROJECT_WORKSPACE_PATH,
-};
-
-const PROMPT_PACK_REPO_PROJECT_BINDING: PromptPackProjectBindingConfig = {
-  name: PROMPT_PACK_REPO_PROJECT_NAME,
-  description: PROMPT_PACK_REPO_PROJECT_DESCRIPTION,
-  workspacePath: PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH,
-};
-
-export function promptPackExecutionRequiresDurable(profile: Pick<PromptPackExecutionProfile, "mode">): boolean {
-  return profile.mode === "chat" || profile.mode === "cowork" || profile.mode === "code";
-}
-
-export function ensurePromptPackDurableReadiness(
-  profile: Pick<PromptPackExecutionProfile, "mode">,
-  readiness: PromptPackDurableReadinessInput,
-): void {
-  if (!promptPackExecutionRequiresDurable(profile)) {
-    return;
-  }
-  if (
-    readiness.durable.enabled &&
-    readiness.durable.executionEnabled &&
-    readiness.durable.chatAutoPromoteEnabled &&
-    readiness.durableKernelV1Enabled
-  ) {
-    return;
-  }
-  throw new Error(
-    `Prompt Lab preflight failed: durable-owned ${profile.mode} execution is unavailable. ` +
-      "GoatCitadel shipped Chat/Cowork/Code runs require durable execution before Prompt Lab can start the run.",
-  );
-}
-
-// Keep in sync with LOCAL_PATH_TOOL_NAMES in chat-agent-orchestrator.ts
-const PROMPT_PACK_FILE_TOOL_NAMES = [
-  "fs.read",
-  "fs.list",
-  "fs.stat",
-  "file.read_range",
-  "file.find",
-  "code.search",
-  "code.search_files",
-] as const;
-
-const PROMPT_PACK_CODE_TOOL_NAMES = [...PROMPT_PACK_FILE_TOOL_NAMES, "tests.run", "lint.run"] as const;
-
-const PROMPT_PACK_WEB_TOOL_NAMES = ["browser.search", "browser.navigate", "browser.extract"] as const;
-const PROMPT_PACK_MEMORY_TOOL_NAMES = ["memory.read", "memory.search"] as const;
-
-const PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAMES = [
-  "session.status",
-  "time.now",
-  "fs.read",
-  "fs.list",
-  "fs.stat",
-  "file.read_range",
-  "file.find",
-  "code.search",
-  "code.search_files",
-  "http.get",
-  "tests.run",
-  "lint.run",
-  "build.run",
-  "git.status",
-  "git.diff",
-  "browser.search",
-  "browser.navigate",
-  "browser.extract",
-  "browser.screenshot",
-  "citations.build",
-  "memory.read",
-  "memory.search",
-  "embeddings.query",
-] as const;
-
-const PROMPT_PACK_GATED_EXPLICIT_TOOL_NAMES = [
-  "fs.write",
-  "artifacts.create",
-  "shell.exec",
-  "shell.exec_background",
-  "git.exec",
-  "http.post",
-  "browser.interact",
-  "browser.cookies.get",
-  "browser.cookies.set",
-  "browser.cookies.clear",
-  "browser.storage.get",
-  "browser.storage.set",
-  "browser.storage.clear",
-  "browser.context.configure",
-  "memory.write",
-  "memory.upsert",
-  "docs.ingest",
-  "embeddings.index",
-] as const;
-
-const PROMPT_PACK_EXPLICIT_TOOL_NAMES = [
-  ...PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAMES,
-  ...PROMPT_PACK_GATED_EXPLICIT_TOOL_NAMES,
-] as const;
-
-const PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES = new Set<string>([
-  "browser.search",
-  "browser.navigate",
-  "browser.extract",
-  "http.get",
-]);
-
 /**
  * Encapsulates all prompt-pack (Prompt Lab) operations previously inlined
  * in GatewayService.
@@ -542,18 +434,25 @@ export class PromptPackService {
       throw new Error(`Missing placeholder values for ${test.code}: ${resolvedPrompt.missingPlaceholders.join(", ")}.`);
     }
     const promptInput = buildPromptPackPromptInput(resolvedPrompt.prompt, executionProfile, test.title);
-    const projectBinding = resolvePromptPackProjectBinding(executionProfile, resolvedPrompt.prompt);
+    const projectBinding = resolvePromptPackProjectBinding(executionProfile, resolvedPrompt.prompt, {
+      rootDir: this.ctx.config.rootDir,
+      workspaceRoot: path.resolve(this.ctx.config.rootDir, this.ctx.config.assistant.workspaceDir),
+    });
+    const projectId = projectBinding ? this.ensurePromptPackProjectBindingFor(projectBinding) : undefined;
     const runId = randomUUID();
     const sessionId =
       input?.sessionId ??
       this.deps.createChatSession({
         title: `[${test.code}] ${test.title}`.slice(0, 200),
         workspaceId: this.ctx.normalizeWorkspaceId(undefined),
-        projectId: projectBinding ? this.ensurePromptPackProjectBindingFor(projectBinding) : undefined,
+        projectId,
         mode: executionProfile.mode,
         origin: "prompt_pack",
         includeInHistory: false,
       }).sessionId;
+    if (input?.sessionId && projectId) {
+      this.ctx.storage.chatSessionProjects.assign(sessionId, projectId);
+    }
     this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt, projectBinding);
 
     this.ctx.storage.promptPackRuns.create({
@@ -2699,10 +2598,18 @@ export class PromptPackService {
       );
     const activeAllowPatterns = new Set(activeAllowGrants.map((grant) => grant.toolPattern));
     for (const toolName of toolNames) {
-      if (activeAllowPatterns.has(toolName)) {
+      const constraints = isPromptPackReadTool(toolName) ? readConstraints : undefined;
+      if (constraints) {
+        const matchingReadGrant = activeAllowGrants.some(
+          (grant) =>
+            grant.toolPattern === toolName && promptPackReadGrantConstraintsCover(grant.constraints, constraints),
+        );
+        if (matchingReadGrant) {
+          continue;
+        }
+      } else if (activeAllowPatterns.has(toolName)) {
         continue;
       }
-      const constraints = isPromptPackReadTool(toolName) ? readConstraints : undefined;
       this.ctx.storage.toolGrants.create(
         {
           toolPattern: toolName,
@@ -4876,7 +4783,7 @@ function buildPromptPackCodeInspectionRepair(input: {
 
   if (/\bmost relevant existing tests\b/.test(prompt) && /\bprompt pack scoring behavior\b/.test(prompt)) {
     const scoringTestEvidence = pickPromptPackCodeEvidence(evidence, [
-      /apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i,
+      /apps\/gateway\/src\/services\/prompt-pack-service\.scoring\.test\.ts$/i,
       /packages\/storage\/src\/prompt-pack-auto-score-v2-repo\.ts$/i,
       /packages\/storage\/src\/prompt-pack-score-repo\.test\.ts$/i,
       /packages\/storage\/src\/prompt-pack-repo\.test\.ts$/i,
@@ -4884,20 +4791,20 @@ function buildPromptPackCodeInspectionRepair(input: {
     ]);
     return buildPromptPackCodeTemplate([
       "## Existing Test Files",
-      "- `apps/gateway/src/services/prompt-pack-service.test.ts`: covers Prompt Pack rule scoring, auto-score selection, judge status handling, v2/v3 score merging, report rendering, integrity invalidation, tool-use scoring, and prompt-contract scoring.",
+      "- `apps/gateway/src/services/prompt-pack-service.scoring.test.ts`: covers Prompt Pack rule scoring, auto-score selection, judge status handling, v2/v3 score merging, report rendering, integrity invalidation, tool-use scoring, and prompt-contract scoring.",
       "- `packages/storage/src/prompt-pack-score-repo.test.ts`: covers legacy Prompt Pack score repository persistence against SQLite.",
       "- `packages/storage/src/prompt-pack-repo.test.ts`: covers Prompt Pack record/test persistence, including pack policy inputs that feed scoring.",
       "- `packages/storage/src/prompt-pack-run-repo.test.ts`: covers Prompt Pack run persistence, which is the run-side input selected for auto-scoring.",
       "",
       "## What They Cover",
-      "- Gateway scoring behavior is concentrated in `apps/gateway/src/services/prompt-pack-service.test.ts`, especially `evaluatePromptPackRuleScores`, `mergePromptPackAutoScoresV2`, `mergePromptPackAutoScoresV3`, `resolvePromptPackEffectiveJudgeStatusV2`, `pickPromptPackAutoScoreRun`, and `renderPromptPackMarkdownReport`.",
+      "- Gateway scoring behavior is concentrated in `apps/gateway/src/services/prompt-pack-service.scoring.test.ts`, especially `evaluatePromptPackRuleScores`, `mergePromptPackAutoScoresV2`, `mergePromptPackAutoScoresV3`, `resolvePromptPackEffectiveJudgeStatusV2`, `pickPromptPackAutoScoreRun`, and `renderPromptPackMarkdownReport`.",
       "- Storage tests prove surrounding persistence exists, but the retained evidence does not show dedicated tests for `packages/storage/src/prompt-pack-auto-score-v2-repo.ts` or `packages/storage/src/prompt-pack-human-review-v2-repo.ts`.",
       "",
       "## Gap v3 scoring should still test",
-      "- Add a focused gateway regression in `apps/gateway/src/services/prompt-pack-service.test.ts` proving invalid judge output cannot erase v3 failure attribution, v3 dimensions, or degraded/review state when `mergePromptPackAutoScoresV3(...)` falls back to rule evidence.",
+      "- Add a focused gateway regression in `apps/gateway/src/services/prompt-pack-service.scoring.test.ts` proving invalid judge output cannot erase v3 failure attribution, v3 dimensions, or degraded/review state when `mergePromptPackAutoScoresV3(...)` falls back to rule evidence.",
       "",
       buildPromptPackCodeEvidenceSection(scoringTestEvidence, [
-        "apps/gateway/src/services/prompt-pack-service.test.ts",
+        "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
         "packages/storage/src/prompt-pack-score-repo.test.ts",
         "packages/storage/src/prompt-pack-repo.test.ts",
         "packages/storage/src/prompt-pack-run-repo.test.ts",
@@ -4936,19 +4843,19 @@ function buildPromptPackCodeInspectionRepair(input: {
 
   if (/\bv3 failure attribution\b/.test(prompt) && /\bjudge output is invalid\b/.test(prompt)) {
     const testEvidence = pickPromptPackCodeEvidence(evidence, [
-      /apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i,
+      /apps\/gateway\/src\/services\/prompt-pack-service\.scoring\.test\.ts$/i,
       /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
       /packages\/contracts\/src\/prompt-pack\.ts$/i,
     ]);
     return buildPromptPackCodeTemplate([
-      "- Target test file: `apps/gateway/src/services/prompt-pack-service.test.ts`.",
+      "- Target test file: `apps/gateway/src/services/prompt-pack-service.scoring.test.ts`.",
       '- Setup: create a v3 scoring case around `mergePromptPackAutoScoresV3(...)` using a completed `PromptPackRunRecord`, `DEFAULT_PROMPT_PACK_POLICY_V3`, rule scores that identify a non-pass condition, and a judge evaluation with `judgeStatus: "invalid"` and no usable judge scores.',
       "- Act: call `mergePromptPackAutoScoresV3(...)` once with that invalid judge evaluation.",
       "- Assert: assert the merged score stays v3, does not pass, carries degraded/review state as appropriate, and preserves failure attribution such as `harness_or_judge_failure` or invalid-judge evidence instead of reporting `not_applicable`.",
       "- Failure signature: the test should fail if an invalid judge output can erase v3 failure attribution, produce a passing/current-looking score, or omit the invalid-judge evidence from the merged score.",
       "",
       buildPromptPackCodeEvidenceSection(testEvidence, [
-        "apps/gateway/src/services/prompt-pack-service.test.ts",
+        "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
         "apps/gateway/src/services/prompt-pack-service.ts",
         "packages/contracts/src/prompt-pack.ts",
       ]),
@@ -4958,7 +4865,7 @@ function buildPromptPackCodeInspectionRepair(input: {
   if (/\boutdated v2-only label\b/.test(prompt) && /\bprompt pack report label\b/.test(prompt)) {
     const reportEvidence = pickPromptPackCodeEvidence(evidence, [
       /apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i,
-      /apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i,
+      /apps\/gateway\/src\/services\/prompt-pack-service\.parser-report\.test\.ts$/i,
     ]);
     return buildPromptPackCodeTemplate([
       "## Change",
@@ -4966,14 +4873,14 @@ function buildPromptPackCodeInspectionRepair(input: {
       "",
       "## Exact files checked",
       "- `apps/gateway/src/services/prompt-pack-service.ts`: report rendering and active scoring-schema labels.",
-      "- `apps/gateway/src/services/prompt-pack-service.test.ts`: markdown report coverage for scoring/report wording.",
+      "- `apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`: markdown report coverage for scoring/report wording.",
       "",
       "## Validation command",
-      "- `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.test.ts`.",
+      "- `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.parser-report.test.ts`.",
       "",
       buildPromptPackCodeEvidenceSection(reportEvidence, [
         "apps/gateway/src/services/prompt-pack-service.ts",
-        "apps/gateway/src/services/prompt-pack-service.test.ts",
+        "apps/gateway/src/services/prompt-pack-service.parser-report.test.ts",
       ]),
     ]);
   }
@@ -5301,7 +5208,7 @@ function buildPromptPackCodeInspectionRepair(input: {
     ]);
     return buildPromptPackCodeTemplate([
       "## Smallest Validation Set",
-      '- Parser/service behavior: `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.test.ts -t "prompt-pack|parse|diagnostic metadata"`.',
+      '- Parser/service behavior: `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.parser-report.test.ts src/services/prompt-pack-service.normalization.test.ts -t "prompt-pack|parse|diagnostic metadata"`.',
       "- Storage round trip: `pnpm --filter @goatcitadel/storage test -- prompt-pack-repo.test.ts prompt-pack-run-repo.test.ts`.",
       "- Contract typecheck: `pnpm --filter @goatcitadel/contracts typecheck`.",
       "- Mission Control Next typecheck: `pnpm --filter @goatcitadel/mission-control-next typecheck`.",
@@ -5334,7 +5241,7 @@ function buildPromptPackCodeInspectionRepair(input: {
     ]);
     return buildPromptPackCodeTemplate([
       "## Parser Tests",
-      '- `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.test.ts -t "parse|diagnostic metadata|v4"`.',
+      '- `pnpm --filter @goatcitadel/gateway exec vitest run src/services/prompt-pack-service.parser-report.test.ts src/services/prompt-pack-service.normalization.test.ts -t "parse|diagnostic metadata|v4"`.',
       "- Cover diagnostic metadata extraction, original prompt-body preservation, and exact mode/tool-tier counts for the v4 fixture.",
       "",
       "## Storage Tests",
@@ -6173,82 +6080,6 @@ function applyPromptPlaceholderValues(
   };
 }
 
-export function resolvePromptPackExecutionProfile(input: {
-  test: PromptPackTestRecord;
-  override?: {
-    mode?: ChatMode;
-    toolTier?: PromptPackToolTier;
-    toolAutonomy?: "safe_auto" | "manual";
-    webMode?: ChatWebMode;
-    memoryMode?: ChatMemoryMode;
-    thinkingLevel?: ChatThinkingLevel;
-  };
-}): PromptPackExecutionProfile {
-  const mode = input.override?.mode ?? input.test.mode ?? "chat";
-  const preset = getChatModePreset(mode).defaultPrefs;
-  const toolTier = input.override?.toolTier ?? input.test.toolTier ?? "implicit-tools";
-  const presetMemoryMode = (preset as { memoryMode?: ChatMemoryMode }).memoryMode ?? "auto";
-  const profile: PromptPackExecutionProfile = {
-    mode,
-    toolTier,
-    toolAutonomy: (preset.toolAutonomy ?? "safe_auto") as "safe_auto" | "manual",
-    webMode: (preset.webMode ?? "auto") as ChatWebMode,
-    memoryMode: presetMemoryMode,
-    thinkingLevel: (preset.thinkingLevel ?? "standard") as ChatThinkingLevel,
-  };
-
-  switch (toolTier) {
-    case "no-tools":
-      profile.toolAutonomy = "manual";
-      profile.webMode = "off";
-      profile.memoryMode = "off";
-      break;
-    case "explicit-tools":
-    case "implicit-tools":
-    default:
-      profile.toolAutonomy = "safe_auto";
-      profile.webMode = "auto";
-      profile.memoryMode = "auto";
-      break;
-  }
-
-  if (input.override?.toolAutonomy) {
-    profile.toolAutonomy = input.override.toolAutonomy;
-  }
-  if (input.override?.webMode) {
-    profile.webMode = input.override.webMode;
-  }
-  if (input.override?.memoryMode) {
-    profile.memoryMode = input.override.memoryMode;
-  }
-  if (input.override?.thinkingLevel) {
-    profile.thinkingLevel = input.override.thinkingLevel;
-  }
-
-  return profile;
-}
-
-export function resolvePromptPackExecutionStyle(value?: string | null): PromptPackExecutionStyle {
-  return value === "agentic_surface" ? "agentic_surface" : DEFAULT_PROMPT_PACK_EXECUTION_STYLE;
-}
-
-export function getResolvedPromptPackExecutionProfile(
-  run: PromptPackRunRecord,
-  test: PromptPackTestRecord,
-): PromptPackExecutionProfile {
-  return resolvePromptPackExecutionProfile({
-    test,
-    override: {
-      mode: run.mode,
-      toolTier: run.toolTier,
-      toolAutonomy: run.toolAutonomy,
-      webMode: run.webMode,
-      memoryMode: run.memoryMode,
-      thinkingLevel: run.thinkingLevel,
-    },
-  });
-}
-
 export function buildPromptPackSessionPrefsOverride(
   profile: PromptPackExecutionProfile,
   prompt = "",
@@ -6318,258 +6149,6 @@ export function buildPromptPackSessionPrefsOverride(
     // between sibling worker turns while preserving the visible role handoff.
     orchestrationParallelism: "sequential",
   };
-}
-
-export function resolvePromptPackProjectBinding(
-  profile: PromptPackExecutionProfile,
-  prompt = "",
-): PromptPackProjectBindingConfig | undefined {
-  const pathHints = extractPromptPackPathHints(prompt);
-  const directives = detectPromptPackToolDirectives(prompt);
-  const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
-  const needsProjectBinding =
-    profile.mode === "code" || directives.prefersFileTools || repoGroundedChatAssist || pathHints.length > 0;
-  if (!needsProjectBinding) {
-    return undefined;
-  }
-  if (prompt.toLowerCase().includes(PROMPT_PACK_PROJECT_WORKSPACE_PATH.toLowerCase())) {
-    return PROMPT_PACK_FIXTURE_PROJECT_BINDING;
-  }
-  return PROMPT_PACK_REPO_PROJECT_BINDING;
-}
-
-export function findPromptPackProjectBinding(
-  projects: ChatProjectRecord[],
-  preferredWorkspacePath = PROMPT_PACK_PROJECT_WORKSPACE_PATH,
-): ChatProjectRecord | undefined {
-  const preferredByPath = projects.find((project) => project.workspacePath === preferredWorkspacePath);
-  if (preferredByPath) {
-    return preferredByPath;
-  }
-  if (preferredWorkspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH) {
-    return projects.find(
-      (project) =>
-        project.name === PROMPT_PACK_REPO_PROJECT_NAME ||
-        (project.workspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH &&
-          project.description === PROMPT_PACK_REPO_PROJECT_DESCRIPTION),
-    );
-  }
-  return projects.find(
-    (project) =>
-      project.name === PROMPT_PACK_PROJECT_NAME ||
-      (project.workspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH &&
-        project.description === PROMPT_PACK_PROJECT_DESCRIPTION),
-  );
-}
-
-export function buildPromptPackSessionToolAllowlist(profile: PromptPackExecutionProfile, prompt = ""): string[] {
-  if (profile.toolTier === "no-tools") {
-    return [];
-  }
-  const directives = detectPromptPackToolDirectives(prompt);
-  if (directives.suppressesTools) {
-    return [];
-  }
-  const repoGroundedChatAssist = shouldApplyPromptPackRepoGroundedChatAssist(prompt, profile);
-  const tools = new Set<string>();
-  if (profile.mode === "code") {
-    for (const toolName of PROMPT_PACK_CODE_TOOL_NAMES) {
-      tools.add(toolName);
-    }
-    if (promptPackNeedsShellExec(prompt, directives)) {
-      tools.add("shell.exec");
-    }
-  } else if (directives.prefersFileTools || repoGroundedChatAssist) {
-    for (const toolName of PROMPT_PACK_FILE_TOOL_NAMES) {
-      tools.add(toolName);
-    }
-  }
-  if (directives.prefersWebTools) {
-    for (const toolName of PROMPT_PACK_WEB_TOOL_NAMES) {
-      tools.add(toolName);
-    }
-  }
-  if (directives.prefersMemoryTools) {
-    for (const toolName of PROMPT_PACK_MEMORY_TOOL_NAMES) {
-      tools.add(toolName);
-    }
-  }
-  for (const toolName of directives.namedTools) {
-    tools.add(toolName);
-  }
-  return [...tools];
-}
-
-function isPromptPackReadTool(toolName: string): boolean {
-  return PROMPT_PACK_FILE_TOOL_NAMES.includes(toolName as (typeof PROMPT_PACK_FILE_TOOL_NAMES)[number]);
-}
-
-export function buildPromptPackSessionReadGrantConstraints(input: {
-  prompt: string;
-  rootDir: string;
-  workspaceRoot: string;
-  projectWorkspacePath?: string;
-}): ToolGrantConstraints | undefined {
-  const allowedPaths = buildPromptPackSessionAllowedPaths(input);
-  if (allowedPaths.length === 0) {
-    return undefined;
-  }
-  return { allowedPaths };
-}
-
-export function buildPromptPackSessionAllowedPaths(input: {
-  prompt: string;
-  rootDir: string;
-  workspaceRoot: string;
-  projectWorkspacePath?: string;
-}): string[] {
-  const allowedPaths = new Set<string>();
-  const projectRoot = resolvePromptPackProjectRootForAllowedPaths(input);
-  if (input.projectWorkspacePath) {
-    addPromptPackAllowedPath(allowedPaths, projectRoot ?? input.workspaceRoot, false);
-  }
-  for (const candidate of extractPromptPackPathHints(input.prompt)) {
-    for (const resolvedPath of resolvePromptPackAllowedCandidates({
-      candidate,
-      workspaceRoot: input.workspaceRoot,
-      projectRoot,
-      projectWorkspacePath: input.projectWorkspacePath,
-    })) {
-      addPromptPackAllowedPath(allowedPaths, resolvedPath, true);
-    }
-  }
-  return [...allowedPaths];
-}
-
-function resolvePromptPackProjectRootForAllowedPaths(input: {
-  rootDir: string;
-  workspaceRoot: string;
-  projectWorkspacePath?: string;
-}): string | undefined {
-  if (!input.projectWorkspacePath) {
-    return undefined;
-  }
-  if (input.projectWorkspacePath === PROMPT_PACK_REPO_PROJECT_WORKSPACE_PATH) {
-    return resolvePromptPackPortablePath(input.rootDir);
-  }
-  const resolved =
-    resolveProjectRootForToolContext({
-      workspaceRoot: input.workspaceRoot,
-      repoRoot: input.rootDir,
-      projectWorkspacePath: input.projectWorkspacePath,
-    }) ?? input.workspaceRoot;
-  if (isPromptPackWindowsAbsolutePath(input.workspaceRoot) || isPromptPackWindowsAbsolutePath(input.rootDir)) {
-    return resolvePromptPackPortablePath(input.workspaceRoot, input.projectWorkspacePath);
-  }
-  return resolved;
-}
-
-function extractPromptPackPathHints(prompt: string): string[] {
-  const matches = new Set<string>();
-  const captureMatches = (pattern: RegExp) => {
-    for (const match of prompt.matchAll(pattern)) {
-      const candidate = match[1]?.trim().replace(/[.,:;]+$/, "");
-      if (candidate) {
-        matches.add(candidate.replaceAll("\\", "/"));
-      }
-    }
-  };
-  captureMatches(/([A-Za-z]:[\\/][^\s`"',)]+)/g);
-  captureMatches(
-    /(?:^|[\s`"'(])((?:\.{1,2}\/)?(?:fixtures\/prompt-pack-workspace|apps\/|packages\/|docs\/|workspace\/|config\/|scripts\/|artifacts\/)[^\s`"',)]*)/g,
-  );
-  captureMatches(
-    /(?:^|[\s`"'(])((?:goatcitadel_prompt_pack(?:_[A-Za-z0-9._-]+)?\.md|AGENTS\.md|\.gitignore|pnpm-workspace\.yaml|package\.json))(?:$|[\s`"',)])/g,
-  );
-  return [...matches];
-}
-
-function resolvePromptPackAllowedCandidates(input: {
-  candidate: string;
-  workspaceRoot: string;
-  projectRoot?: string;
-  projectWorkspacePath?: string;
-}): string[] {
-  if (path.isAbsolute(input.candidate) || isPromptPackWindowsAbsolutePath(input.candidate)) {
-    return [resolvePromptPackPortablePath(input.candidate)];
-  }
-
-  const candidates = new Set<string>([resolvePromptPackPortablePath(input.workspaceRoot, input.candidate)]);
-
-  if (input.projectRoot) {
-    const projectRelative = normalizePromptPackProjectRelativeInput(input.candidate, input.projectWorkspacePath);
-    candidates.add(resolvePromptPackPortablePath(input.projectRoot, projectRelative));
-  }
-
-  return [...candidates];
-}
-
-function normalizePromptPackProjectRelativeInput(rawPath: string, projectWorkspacePath?: string): string {
-  if (!projectWorkspacePath) {
-    return rawPath;
-  }
-  const normalizedRawPath = rawPath
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "");
-  const normalizedProjectPath = projectWorkspacePath
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "");
-  const projectBaseName = normalizedProjectPath.split("/").at(-1);
-  if (!projectBaseName) {
-    return rawPath;
-  }
-  if (normalizedRawPath === projectBaseName) {
-    return ".";
-  }
-  if (normalizedRawPath.startsWith(`${projectBaseName}/`)) {
-    return normalizedRawPath.slice(projectBaseName.length + 1);
-  }
-  return rawPath;
-}
-
-function addPromptPackAllowedPath(target: Set<string>, candidate: string, includeParentForFile: boolean): void {
-  const pathApi = promptPackPathApiFor(candidate);
-  const normalizedCandidate = pathApi.resolve(candidate);
-  target.add(normalizedCandidate);
-  if (!includeParentForFile) {
-    return;
-  }
-  const basename = pathApi.basename(normalizedCandidate);
-  const looksLikeFile = basename.startsWith(".") || pathApi.extname(basename).length > 0;
-  if (looksLikeFile) {
-    target.add(pathApi.dirname(normalizedCandidate));
-  }
-}
-
-function isPromptPackWindowsAbsolutePath(value: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(value.trim());
-}
-
-function promptPackPathApiFor(...values: string[]): typeof path.win32 | typeof path {
-  return values.some((value) => isPromptPackWindowsAbsolutePath(value)) ? path.win32 : path;
-}
-
-function resolvePromptPackPortablePath(...segments: string[]): string {
-  return promptPackPathApiFor(...segments).resolve(...segments);
-}
-
-function promptPackNeedsShellExec(prompt: string, directives: PromptPackToolDirectives): boolean {
-  if (directives.namedTools.includes("shell.exec") || directives.namedTools.includes("shell.exec_background")) {
-    return true;
-  }
-  const lower = prompt.toLowerCase();
-  return (
-    /\b(shell|terminal)\s+(command|commands?)\b/.test(lower) ||
-    /\b(run|execute|invoke|launch|start)\b[^.\n]{0,80}\b(command|commands|script|scripts|shell|terminal)\b/.test(
-      lower,
-    ) ||
-    /\b(run|execute|invoke|launch|start)\b[^.\n]{0,80}\b(npm|pnpm|yarn|bun|node|python|pytest|cargo|docker|gradle|mvn|make|go test)\b/.test(
-      lower,
-    ) ||
-    /\binstall\b[^.\n]{0,80}\b(package|packages|dependency|dependencies|deps)\b/.test(lower)
-  );
 }
 
 export function buildPromptPackPromptInput(
@@ -6868,89 +6447,6 @@ export function buildPromptPackPromptInput(
   };
 }
 
-function detectPromptPackToolDirectives(prompt: string): PromptPackToolDirectives {
-  const lower = prompt.toLowerCase();
-  const namedTools = PROMPT_PACK_EXPLICIT_TOOL_NAMES.filter((toolName) => lower.includes(toolName));
-  const suppressesTools = promptSuppressesToolUse(prompt);
-  const prefersFileTools =
-    !suppressesTools &&
-    (/\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?(?:file|filesystem|code|file\/code)\s+tools\b/.test(lower) ||
-      /\b(use|using|with)\s+(?:only\s+|just\s+|strictly\s+)?file\s+or\s+code\s+tools\b/.test(lower) ||
-      /\bread\b[\s\S]{0,80}\busing\s+(?:only\s+|just\s+|strictly\s+)?(?:file|file\/code)\s+tools\b/.test(lower) ||
-      /\buse\b[\s\S]{0,120}\bfile\s+(?:search|read)\b[\s\S]{0,80}\btools\b/.test(lower) ||
-      /\bfile\s+search\b[\s\S]{0,80}\bfile\s+read\b[\s\S]{0,80}\btools\b/.test(lower) ||
-      /\bfile\s+read\s+tools?\b/.test(lower));
-  const prefersWebTools =
-    !suppressesTools &&
-    (namedTools.some((toolName) => PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES.has(toolName)) ||
-      /\bweb\s+lookup\b/.test(lower) ||
-      /\buse\s+(?:a\s+)?(?:web|browser)\s+(?:search|lookup)\b/.test(lower) ||
-      /\blive\s+(?:lookup|information|source|sources|weather)\b/.test(lower) ||
-      /\bcurrent\s+(?:weather|disruption|disruptions|sources?|advice|guidance|status|information)\b/.test(lower) ||
-      /\blatest\s+official\s+guidance\b/.test(lower) ||
-      /\bstandard mileage rate\b/.test(lower) ||
-      /\bbring an umbrella\b/.test(lower) ||
-      /\bresearch\s+whether\b/.test(lower) ||
-      /\buse\s+available\s+lookup\b/.test(lower) ||
-      /\bfind\s+a\s+plausible\s+public\s+venue\b/.test(lower) ||
-      /\bfind\s+(?:one\s+)?(?:reliable|official|credible)\s+source\b/.test(lower) ||
-      /\bsource\s+on\s+whether\b/.test(lower) ||
-      /\bopen\s+late\s+this\s+friday\b/.test(lower) ||
-      /\bpublic\s+venue\b[\s\S]{0,80}\b(?:small meetup|meetup|availability|meeting room)\b/.test(lower) ||
-      /\bfarmers?\s+market\b[\s\S]{0,120}\b(?:busy|arrive|arrival|weekend)\b/.test(lower) ||
-      /\blook\s+up\b/.test(lower) ||
-      /\blook\s+up\b[\s\S]{0,80}\b(?:current|latest|public|official|source|hours?|tips?|weather|venue|place|market)\b/.test(
-        lower,
-      ) ||
-      /\bcurrent\s+public\b[\s\S]{0,80}\b(?:source|tips?|guidance|information)\b/.test(lower) ||
-      /\bcite\b[\s\S]{0,80}\b(?:source|sources|url|web|official)\b/.test(lower));
-  const prefersMemoryTools =
-    !suppressesTools &&
-    (namedTools.some((toolName) => toolName.startsWith("memory.")) ||
-      /\bmemory\s+tools?\b/.test(lower) ||
-      /\buse\s+(?:available\s+)?memory\b/.test(lower) ||
-      /\buse\s+available\s+memory\/context\b/.test(lower) ||
-      /\bavailable\s+memory\/context\b/.test(lower) ||
-      /\bbased on what you know about my preferences\b/.test(lower) ||
-      /\bmemory-informed\b/.test(lower));
-
-  return {
-    namedTools,
-    prefersFileTools,
-    prefersWebTools,
-    prefersMemoryTools,
-    suppressesTools,
-  };
-}
-
-function promptSuppressesToolUse(prompt: string): boolean {
-  const lower = prompt.toLowerCase();
-  return (
-    /\banswer\s+without\s+tools\b/.test(lower) ||
-    /\bdo\s+not\s+use\s+(?:any\s+)?tools\b/.test(lower) ||
-    /\bdon't\s+use\s+(?:any\s+)?tools\b/.test(lower) ||
-    /\bplease\s+do\s+not\s+look\s+anything\s+up\b/.test(lower) ||
-    /\bdo\s+not\s+look\s+(?:anything|this|that|it)\s+up\b/.test(lower) ||
-    /\bdon't\s+look\s+(?:anything|this|that|it)\s+up\b/.test(lower) ||
-    /\bfrom\s+memory\s+only\b/.test(lower) ||
-    /\bbased\s+only\s+on\s+the\s+(?:details|prompt|text)\b/.test(lower)
-  );
-}
-
-function promptUsesRoleOrder(prompt: string): boolean {
-  return /\broles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b/i.test(prompt);
-}
-
-function promptRequestsSynthesisOrRecommendation(prompt: string): boolean {
-  return (
-    /\b(?:then\s+)?end\s+with\b[\s\S]{0,120}\b(?:synthesized|recommendation|uncertainty|handoff|summary)\b/i.test(
-      prompt,
-    ) ||
-    /\bthen\s+give\b[\s\S]{0,80}\b(?:single\s+)?recommendation\b/i.test(prompt) ||
-    /\bgive\b[\s\S]{0,80}\bsingle\s+recommendation\b/i.test(prompt)
-  );
-}
-
 function shouldDisablePromptPackModeOrchestration(profile: PromptPackExecutionProfile, prompt: string): boolean {
   if (profile.mode !== "cowork") {
     return false;
@@ -6975,29 +6471,6 @@ function shouldDisablePromptPackModeOrchestration(profile: PromptPackExecutionPr
     /\bbook club\b[\s\S]{0,120}\bmonthly\b[\s\S]{0,120}\bbiweekly\b/.test(normalized) ||
     /\bsource conflict workflow\b|\bif sources conflict\b|\bcredible sources disagree\b/.test(normalized) ||
     /\bpause before\b|\bapproval checkpoint\b/.test(normalized)
-  );
-}
-
-function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
-  return (
-    /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt) ||
-    /\brequested role order only\b/i.test(prompt) ||
-    (/\brequested role order\b/i.test(prompt) &&
-      (/\bno extra headings\b/i.test(prompt) || /\bdo not add extra headings\b/i.test(prompt))) ||
-    (/\bkeep\b[\s\S]{0,80}\bsections?\b[\s\S]{0,40}\brequested order\b/i.test(prompt) &&
-      /\bdo not add\b[\s\S]{0,40}\bsynthesis section\b/i.test(prompt)) ||
-    /\bdo not add\b[\s\S]{0,20}\bsynthesis section\b/i.test(prompt)
-  );
-}
-
-function promptRequiresExactFileGrounding(prompt: string): boolean {
-  const normalized = prompt.toLowerCase();
-  return (
-    /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?|rollout wiring)\b/.test(
-      normalized,
-    ) ||
-    /\bfile-grounded\b/.test(normalized) ||
-    /\bcite the exact\b/.test(normalized)
   );
 }
 
@@ -8871,10 +8344,6 @@ function getRunOrderingTimestamp(run: PromptPackRunRecord): number {
   return Date.parse(run.startedAt || run.finishedAt || "1970-01-01T00:00:00.000Z");
 }
 
-function formatPromptPackExecutionProfile(profile: PromptPackExecutionProfile): string {
-  return [profile.toolAutonomy, profile.webMode, profile.memoryMode, profile.thinkingLevel].join(" / ");
-}
-
 function formatPromptPackMetadataValues(values: string[] | undefined): string {
   return values && values.length > 0 ? values.join(", ") : "none";
 }
@@ -8903,25 +8372,6 @@ export function resolvePromptPackJudgeTarget(input: {
     providerId: input.defaultProviderId ?? input.runProviderId,
     model: input.defaultModel ?? input.runModel,
   };
-}
-
-function shouldApplyPromptPackRepoGroundedChatAssist(
-  prompt: string,
-  profile: Pick<PromptPackExecutionProfile, "mode" | "toolTier">,
-): boolean {
-  if (profile.toolTier !== "implicit-tools") {
-    return false;
-  }
-  const normalized = prompt.toLowerCase();
-  return (
-    /\binspect(?: the)? (?:repo|repository|codebase|workspace)\b/.test(normalized) ||
-    /\buse (?:file|code|file\/code) tools\b/.test(normalized) ||
-    /\bcite the exact files?\b/.test(normalized) ||
-    /\bexact evidence\b/.test(normalized) ||
-    /\bguidance-loading chain\b/.test(normalized) ||
-    /\bcurrent implementation\b/.test(normalized) ||
-    (/\bcurrent\b/.test(normalized) && /\b(repo|repository|workspace|codebase)\b/.test(normalized))
-  );
 }
 
 function shouldPreferPromptPackJudgeDefaults(providerId?: string, model?: string): boolean {
@@ -9875,6 +9325,33 @@ function isPromptPackBenchmarkItemRow(value: unknown): value is PromptPackBenchm
     (typeof value.failure_signal === "string" || value.failure_signal === null) &&
     typeof value.created_at === "string"
   );
+}
+
+function promptPackReadGrantConstraintsCover(
+  existing: ToolGrantConstraints | undefined,
+  required: ToolGrantConstraints,
+): boolean {
+  const requiredPaths = required.allowedPaths ?? [];
+  if (requiredPaths.length === 0) {
+    return (existing?.allowedPaths ?? []).length === 0;
+  }
+  const existingPaths = existing?.allowedPaths ?? [];
+  if (existingPaths.includes("*")) {
+    return true;
+  }
+  return requiredPaths.every((requiredPath) =>
+    existingPaths.some((existingPath) => promptPackPathIsWithinRoot(existingPath, requiredPath)),
+  );
+}
+
+function promptPackPathIsWithinRoot(root: string, target: string): boolean {
+  const pathApi = promptPackPathApiForGrant(root, target);
+  const relative = pathApi.relative(pathApi.resolve(root), pathApi.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !pathApi.isAbsolute(relative));
+}
+
+function promptPackPathApiForGrant(...values: string[]): typeof path.win32 | typeof path {
+  return values.some((value) => /^[A-Za-z]:[\\/]/.test(value.trim())) ? path.win32 : path;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

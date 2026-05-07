@@ -385,6 +385,58 @@ describe("ImprovementService ledger lifecycle", () => {
       /capability proposals/,
     );
   });
+
+  it("deduplicates capability gaps and promotes repeated gaps into repair candidates", () => {
+    const harness = createHarness();
+
+    const first = harness.service.recordCapabilityGapEvent({
+      sessionId: "sess-gap",
+      causeClass: "tool_exists_but_not_in_profile",
+      requestedTool: "web.search",
+      toolProfile: "chat",
+      providerId: "openai",
+      configArea: "toolPolicy",
+      recoveryOptions: ["switch_tool_profile", "retry_once", "invalid-option" as never],
+      confidence: 0.4,
+    });
+    const second = harness.service.recordCapabilityGapEvent({
+      sessionId: "sess-gap",
+      causeClass: "tool_exists_but_not_in_profile",
+      requestedTool: "web.search",
+      toolProfile: "chat",
+      providerId: "openai",
+      configArea: "toolPolicy",
+      recoveryOptions: ["request_approval"],
+      confidence: 0.8,
+    });
+
+    assert.equal(first.repeatCount, 1);
+    assert.deepEqual(first.recoveryOptions, ["switch_tool_profile", "retry_once"]);
+    assert.equal(second.repeatCount, 2);
+    assert.equal(second.confidence, 0.8);
+    assert.equal(second.repairCandidateId !== undefined, true);
+
+    const [candidate] = harness.service.listRepairCandidates(10);
+    assert.ok(candidate);
+    assert.equal(candidate.causeClass, "tool_exists_but_not_in_profile");
+    assert.equal(candidate.eventCount, 2);
+    assert.equal(candidate.validationStatus, "not_started");
+    assert.equal(candidate.suggestedPatch?.includes("web.search"), true);
+
+    const invalidStatus = harness.service.updateRepairCandidateValidation(candidate.candidateId, {
+      status: "unexpected" as never,
+      summary: "invalid statuses normalize",
+    });
+    assert.equal(invalidStatus.validationStatus, "not_started");
+    assert.equal(invalidStatus.validationSummary, "invalid statuses normalize");
+
+    const passed = harness.service.updateRepairCandidateValidation(candidate.candidateId, {
+      status: "passed",
+      summary: "validated by replay",
+    });
+    assert.equal(passed.validationStatus, "passed");
+    assert.equal(passed.validationSummary, "validated by replay");
+  });
 });
 
 function createHarness(): Harness {

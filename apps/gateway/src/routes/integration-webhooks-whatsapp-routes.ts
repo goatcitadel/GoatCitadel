@@ -1,0 +1,129 @@
+import type { FastifyInstance } from "fastify";
+import {
+  deriveWhatsAppWebhookIdempotencyKey,
+  normalizeWhatsAppWebhookPayload,
+  verifyWhatsAppWebhookSignature,
+} from "../services/whatsapp-webhook.js";
+import {
+  createWebhookReadRouteOptions,
+  createWebhookRouteOptions,
+  resolveWhatsAppAppSecret,
+  resolveWhatsAppVerifyToken,
+} from "./integration-webhooks-shared.js";
+import {
+  createIgnoredWebhookReply,
+  createWebhookHandler,
+  dispatchInboundWebhookMessage,
+  readHeaderValue,
+  readQueryString,
+} from "./webhook-handler-factory.js";
+import { connectionParamsSchema } from "./integration-webhook-schemas.js";
+
+type WhatsAppDispatchPayload = Exclude<ReturnType<typeof normalizeWhatsAppWebhookPayload>, { kind: "ignore" }>;
+
+export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
+  fastify.get(
+    "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
+    createWebhookReadRouteOptions(),
+    async (request, reply) => {
+      const params = connectionParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: params.error.flatten() });
+      }
+
+      let connection;
+      try {
+        connection = fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
+      } catch (error) {
+        return reply.code(404).send({ error: (error as Error).message });
+      }
+      if (connection.key !== "whatsapp") {
+        return reply.code(400).send({ error: "Integration connection is not a WhatsApp connector" });
+      }
+
+      const verifyToken = resolveWhatsAppVerifyToken(connection.config);
+      if (!verifyToken) {
+        return reply.code(400).send({ error: "WhatsApp connection is missing a webhook verify token" });
+      }
+
+      const query = request.query as Record<string, unknown>;
+      const mode = readQueryString(query, "hub.mode");
+      const providedVerifyToken = readQueryString(query, "hub.verify_token");
+      const challenge = readQueryString(query, "hub.challenge");
+      if (mode !== "subscribe" || !challenge) {
+        return reply.code(400).send({ error: "Invalid WhatsApp webhook verification query" });
+      }
+      if (providedVerifyToken !== verifyToken) {
+        return reply.code(401).send({ error: "Invalid WhatsApp webhook verify token" });
+      }
+
+      return reply.type("text/plain").send(challenge);
+    },
+  );
+
+  fastify.post(
+    "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
+    createWebhookRouteOptions("whatsappRawBody"),
+    createWebhookHandler<WhatsAppDispatchPayload>(fastify, {
+      source: "whatsapp",
+      connectorKey: "whatsapp",
+      connectorLabel: "WhatsApp",
+      rawBodyKey: "whatsappRawBody",
+      missingRawBodyError: "Missing WhatsApp raw request body",
+      verifySignature: ({ request, connection, rawBody }) => {
+        const appSecret = resolveWhatsAppAppSecret(connection.config);
+        if (!appSecret) {
+          return { ok: false as const, statusCode: 400, error: "WhatsApp connection is missing an app secret" };
+        }
+
+        const signatureHeader = readHeaderValue(request.headers["x-hub-signature-256"]);
+        if (!verifyWhatsAppWebhookSignature(signatureHeader, rawBody, appSecret)) {
+          return {
+            ok: false as const,
+            statusCode: 401,
+            error: "Invalid WhatsApp webhook signature",
+            logReason: "signature_mismatch",
+          };
+        }
+        return { ok: true as const };
+      },
+      parsePayload: ({ connectionId, request }) => {
+        const normalized = normalizeWhatsAppWebhookPayload({
+          connectionId,
+          payload: request.body,
+        });
+        if (normalized.kind === "ignore") {
+          return {
+            kind: "reply" as const,
+            payload: createIgnoredWebhookReply(normalized.eventType, normalized.reason),
+          };
+        }
+        return {
+          kind: "dispatch" as const,
+          parsed: normalized,
+        };
+      },
+      dispatch: async ({ connectionId, request, rawBody, parsed }) =>
+        dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
+          channel: "whatsapp",
+          connectionId,
+          idempotencyKey: deriveWhatsAppWebhookIdempotencyKey(connectionId, request.body, rawBody),
+          eventType: parsed.eventType,
+          bindingTarget: parsed.peer,
+          message: {
+            eventId: parsed.eventId,
+            account: parsed.account,
+            peer: parsed.peer,
+            actorId: parsed.actorId,
+            actorType: parsed.actorType,
+            displayName: parsed.displayName,
+            content: parsed.content,
+            metadata: parsed.metadata,
+          },
+          responseOptions: {
+            deliveryReplyToMessageId: parsed.deliveryReplyToMessageId,
+          },
+        }),
+    }),
+  );
+}

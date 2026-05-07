@@ -27,7 +27,7 @@ import type {
   SessionMeta,
 } from "@goatcitadel/contracts";
 import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
-import { normalizeAgentInputFromSend } from "./chat-agent-orchestrator.js";
+import { normalizeAgentInputFromSend, type NormalizedAgentInputFromSend } from "./chat-agent-input-normalization.js";
 import { assertChatSessionActive, splitChatPrefsPatch } from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
@@ -77,8 +77,13 @@ export interface ChatTurnSessionState {
   activeLeafTurnId?: string;
 }
 
+type ChatTurnPrepStorage = Pick<
+  Storage,
+  "chatAttachments" | "chatSessionMeta" | "chatSessionPrefs" | "chatSessionProjects" | "chatSpecialistCandidates"
+>;
+
 export interface ChatTurnPrepHost {
-  readonly storage: Storage;
+  readonly storage: ChatTurnPrepStorage;
   readonly llmService: Pick<LlmService, "getRuntimeConfig">;
   getSession(sessionId: string): SessionMeta;
   ensureChatSessionRuntimeGrants(sessionId: string): void;
@@ -129,7 +134,7 @@ export interface PreparedAgentChatTurn {
   userMessage: ChatMessageRecord;
   prefs: ChatSessionPrefsRecord;
   autonomy: SessionAutonomyPrefsRecord;
-  normalized: ReturnType<typeof normalizeAgentInputFromSend>;
+  normalized: NormalizedAgentInputFromSend;
   retrievalTrace: NonNullable<ChatTurnTraceRecord["retrieval"]>;
   threadKnowledgeCitations: ChatCitationRecord[];
   resolvedGuidance: ResolvedRuntimeGuidance;

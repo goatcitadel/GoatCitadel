@@ -7,7 +7,6 @@ import type {
   ChatExecutionPlanRecord,
   ChatMode,
   ChatNormalizationProfile,
-  ChatSendMessageRequest,
   ChatStreamChunkDraft,
   ChatThinkingLevel,
   ChatToolLoopGuardEventRecord,
@@ -26,7 +25,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { BudgetExceededError, getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import { getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -41,50 +40,171 @@ import {
   isPromptLabHarnessContent,
   looksLikeRepoGroundedInspectionPrompt,
 } from "./prompt-pack-harness-normalization.js";
+import {
+  LOCAL_PATH_TOOL_NAMES,
+  LOCAL_QUERY_TOOL_NAMES,
+  MCP_BROWSER_FALLBACK_TOOL_NAMES,
+  WEB_TOOL_NAMES,
+} from "./chat-tool-families.js";
+import {
+  absorbCompletionStreamChunk,
+  buildCompletionFromAggregate,
+  createCompletionStreamAggregate,
+  extractMessageContent,
+  readToolCalls,
+  toProviderToolFunctionName,
+} from "./chat-agent-completion-adapters.js";
+import {
+  compactToolResultForTurn,
+  extractPersistableToolArtifactContent,
+} from "./chat-agent-tool-result-compaction.js";
+import {
+  buildTurnBudgetExceededFallbackMessage,
+  buildTurnBudgetExceededReason,
+  buildUserSafeFailureMessage,
+  ChatTurnBudgetExceededError,
+  createTurnBudgetDeadline,
+  ensureChatTurnBudgetRemaining,
+  extendTurnBudgetForExecutedBrowserTool,
+  minimumRemainingBudgetForToolStart,
+  resolveChatExecutionBudget,
+  shouldUseConstrainedLocalAgentProfile,
+  TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+} from "./chat-agent-budget.js";
+import {
+  classifyBrowserToolResult,
+  extractBrowserToolUrl,
+  findReusableBrowserToolResult,
+  hasUsefulVisitedBrowserUrl,
+  inferRecentBrowserVisitedUrl,
+  isLikelyCommunityHost,
+  isLikelyDirectNewsPublisherHost,
+  isLikelyLandingOrResultsPath,
+  isLikelyNewsOrCurrentEventsQuery,
+  isSearchPortalHost,
+  normalizeBrowserToolResult,
+  normalizeMcpBrowserToolResult,
+  queryExplicitlyRequestsCommunitySources,
+  readFirstString,
+  scoreBrowserResultCandidate,
+  tokenizeBrowserSearchText,
+  toolNameMatchesAnyKnownTool,
+  toolNameMatchesUsedToolSet,
+  normalizeToolNameForComparison,
+  buildBrowserFallbackArguments,
+  buildBrowserFallbackChainEntry,
+  resolveBrowserFallbackToolName,
+  shouldAttemptBrowserFallback,
+  withBrowserFallbackChain,
+  type BrowserResultCandidate,
+} from "./chat-agent-browser-results.js";
+import {
+  compactCoworkOutputToWordLimit,
+  coworkContractRequiresSynthesis,
+  detectCoworkRoleOrder,
+  detectPresentCoworkRoles,
+  extractCoworkWordLimit,
+  extractExactCoworkSections,
+  formatCoworkRoleHeading,
+  hasCoworkSynthesisSection,
+  isRecognizedCoworkRole,
+  normalizeCoworkRoleLabel,
+  normalizeRequestedRoleOnlyCoworkHeadings,
+  parseCoworkMarkdownSections,
+  promptKeepsRequestedRoleOrderOnly,
+  repairRequestedRoleOrderOnlyCoworkOutput,
+} from "./chat-agent-cowork-sections.js";
+import {
+  extractPrimaryUserTaskContent,
+  extractPromptLabBulletBodies,
+  extractPromptLabQuotedUserAsk,
+  normalizePromptLabLabel,
+  parsePromptLabRunContract,
+  promptLabContractRequiresConcreteFileEvidence,
+  promptLabContractRequiresFileTools,
+  promptLabContractRequiresWebTools,
+} from "./chat-agent-prompt-lab-contract.js";
+import {
+  buildPromptLabExactCitationAppendix,
+  buildPromptLabExactCitationAppendixForPaths,
+  collectPromptLabConcreteReadCitations,
+  collectPromptLabConcreteReadEvidence,
+  collectPromptLabConcreteReadPaths,
+  extractPromptLabCitationQuote,
+  extractPromptLabExactBulletLabels,
+  filterPromptLabConcreteReadCitationsForPrompt,
+  filterPromptLabConcreteReadEvidenceForPrompt,
+  filterPromptLabExactFilePathsForPrompt,
+  formatPromptLabCitationForPath,
+  formatPromptLabInlineCitation,
+  normalizePromptLabEvidenceContent,
+  normalizePromptLabFilePath,
+  pickPromptLabConcreteReadEvidence,
+  promptLabConcreteReadSetMatchesPath,
+  selectPromptLabConcreteReadPathsFromSearchResult,
+} from "./chat-agent-prompt-lab-evidence.js";
+import {
+  buildFetchedContentBudgetFallback,
+  buildRecoveredEvidenceAnswer,
+  buildRecoveredRepoGroundedAnswer,
+  buildSearchResultBudgetFallback,
+  collectObservedToolEvidencePaths,
+  formatRecoveredSearchLead,
+  inferBlockedSourceFailure,
+  readBlockedSourceHost,
+  recoverTitleUrlItems,
+  summarizeToolRunForSynthesis,
+  truncatePlainText,
+} from "./chat-agent-recovered-answer.js";
+import {
+  looksLikePromptLabApprovalEffectsHardeningPatchPlanPrompt,
+  looksLikePromptLabApprovalPartialFailureCoworkPrompt,
+  looksLikePromptLabApprovalWakeFlowPrompt,
+  looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt,
+  looksLikePromptLabCoworkExtraHeadingMinimalTestPrompt,
+  looksLikePromptLabCronReportCoworkPrompt,
+  looksLikePromptLabDurableRunClaimExclusivityPrompt,
+  looksLikePromptLabDurableRunLeaseRecoveryPrompt,
+  looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt,
+  looksLikePromptLabDurableRunMinimalTestPrompt,
+  looksLikePromptLabDurableRunRetryBackoffPrompt,
+  looksLikePromptLabDurableWakeOutcomePatchPlanPrompt,
+  looksLikePromptLabEnvSourceLabelMinimalTestPrompt,
+  looksLikePromptLabEventEnvelopeAuthorityPrompt,
+  looksLikePromptLabEventLinkPropagationCoworkPrompt,
+  looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt,
+  looksLikePromptLabGuidanceLoadingSummaryPrompt,
+  looksLikePromptLabGuidanceRegressionSliceCoworkPrompt,
+  looksLikePromptLabJudgeDefaultsMinimalTestPrompt,
+  looksLikePromptLabLifecycleCanonicalLinkagePrompt,
+  looksLikePromptLabLifecycleProvenancePatchPlanPrompt,
+  looksLikePromptLabMemoryLifecycleCoworkPrompt,
+  looksLikePromptLabMissionControlTruthLabelingPrompt,
+  looksLikePromptLabPersistedDurableLeasesPatchPlanPrompt,
+  looksLikePromptLabPromptPackGateSelectionTestPrompt,
+  looksLikePromptLabPromptPackParserRegressionPrompt,
+  looksLikePromptLabPromptPackV2DistinctTestPrompt,
+  looksLikePromptLabRank1HardeningCoworkPrompt,
+  looksLikePromptLabRealtimeEventMetadataPropagationPrompt,
+  looksLikePromptLabRuntimeLifecycleProvenanceMapPrompt,
+  looksLikePromptLabSkillExtraOverlapInstallTestPrompt,
+  looksLikePromptLabStrictPausedWaitingWakeEvidencePrompt,
+  looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt,
+  looksLikePromptLabTypedWakeOutcomeEvidencePrompt,
+  looksLikePromptLabWakeLifecycleOrderingPatchPlanPrompt,
+  looksLikePromptLabWrappedDependentsParserTestPrompt,
+  looksLikePromptPackRepoBindingCoworkPrompt,
+  looksLikeSkillImportOverlapCoworkPrompt,
+  looksLikeWorkspaceGuidancePrecedencePrompt,
+  looksLikeWorkspaceRoutesGuidanceCoworkPrompt,
+} from "./chat-agent-prompt-lab-taxonomy.js";
+export { defaultThinkingTokens } from "./chat-agent-budget.js";
+export { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 
-const MAX_TOOL_LOOPS = 6;
-const MAX_TOOL_RUNS_PER_TURN = 12;
-const PROMPT_LAB_MAX_TOOL_LOOPS = 8;
-const PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN = 20;
-const PROMPT_LAB_IMPLICIT_MAX_TOOL_RUNS_PER_TURN = {
-  chat: 12,
-  cowork: 16,
-  code: 16,
-} as const satisfies Record<ChatMode, number>;
-const PROMPT_LAB_MIN_MAX_TOKENS = {
-  chat: 1800,
-  cowork: 2200,
-  code: 2400,
-} as const satisfies Record<ChatMode, number>;
-const TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES = 12_000;
-const TOOL_OUTPUT_INLINE_SUMMARY_CHARS = 1_400;
-const TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS = 4_000;
 const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
-// Keep in sync with PROMPT_PACK_FILE_TOOL_NAMES in prompt-pack-service.ts
-const LOCAL_PATH_TOOL_NAMES = new Set(["fs.read", "file.read_range", "file.find", "code.search", "code.search_files"]);
-const LOCAL_QUERY_TOOL_NAMES = new Set(["code.search", "code.search_files"]);
-const WEB_TOOL_NAMES = new Set([
-  "browser.search",
-  "browser.navigate",
-  "browser.extract",
-  "browser.interact",
-  "http.get",
-  "http.post",
-]);
-const MCP_BROWSER_FALLBACK_TOOL_NAMES = new Set(["browser.search", "browser.navigate", "browser.extract", "http.get"]);
-const REMOTE_BLOCK_MARKERS = [
-  "attention required!",
-  "just a moment...",
-  "you have been blocked",
-  "security verification",
-  "cloudflare ray id",
-  "captcha",
-  "enable javascript and cookies",
-  "sorry, you have been blocked",
-];
 const PROMPT_HARNESS_QUERY_MARKERS = [
   "prompt lab run contract",
   "prompt lab tooling contract",
@@ -165,17 +285,6 @@ const TOOL_SCHEMA_TOKEN_BUDGET = {
   code: 2800,
 } as const satisfies Record<ChatMode, number>;
 
-interface ChatExecutionBudget {
-  turnBudgetMs: number;
-  completionTimeoutMs: number;
-  maxToolLoops: number;
-  maxToolRunsPerTurn: number;
-  searchMaxResults: number;
-  maxTokens?: number;
-  minSynthesisReserveMs: number;
-  expensiveToolMinimumRemainingMs: number;
-}
-
 interface ToolLoopHistoryEntry {
   toolName: string;
   signature: string;
@@ -187,20 +296,6 @@ interface ToolLoopGuardRuntimeState {
   config: ToolLoopDetectionConfig;
   history: ToolLoopHistoryEntry[];
   events: ChatToolLoopGuardEventRecord[];
-}
-
-// Temporary testing override: use effectively-unbounded turn/completion budgets
-// so model speed differences do not truncate evaluation quality mid-run.
-const TESTING_CHAT_TURN_BUDGET_MS = 30 * 60 * 1000;
-const TESTING_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60 * 1000;
-
-class ChatTurnBudgetExceededError extends BudgetExceededError {
-  public constructor(
-    public readonly webMode: ChatWebMode,
-    public readonly turnBudgetMs: number,
-  ) {
-    super(buildTurnBudgetExceededReason(webMode, turnBudgetMs), { webMode, turnBudgetMs });
-  }
 }
 
 type ChatCompletionMessage = ChatCompletionRequest["messages"][number];
@@ -1635,9 +1730,8 @@ export class ChatAgentOrchestrator {
                 stream: true,
               })) {
                 const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
-                streamYieldedVisibleChunk =
-                  streamYieldedVisibleChunk || Boolean(streamed.delta || streamed.sawToolCall);
                 if (streamed.delta && !streamed.sawToolCall) {
+                  streamYieldedVisibleChunk = true;
                   yield {
                     type: "delta",
                     sessionId: input.sessionId,
@@ -1883,7 +1977,16 @@ export class ChatAgentOrchestrator {
             );
             const minimumRemainingBeforeTool = minimumRemainingBudgetForToolStart(toolCall.toolName, executionBudget);
             if (remainingBeforeTool <= minimumRemainingBeforeTool) {
-              assistantContent = buildTurnBudgetExceededFallbackMessage(input, toolRuns, effectiveTurnBudgetMs);
+              assistantContent = buildTurnBudgetExceededFallbackMessage({
+                turnInput: input,
+                toolRuns,
+                turnBudgetMs: effectiveTurnBudgetMs,
+                fallbackBuilders: {
+                  buildFetchedContentBudgetFallback,
+                  buildSearchResultBudgetFallback,
+                  buildDeterministicToolSynthesisFallback,
+                },
+              });
               finalStatus = "completed";
               finalFailure = buildChatTurnFailureRecord(
                 "turn_budget_exceeded",
@@ -2068,7 +2171,16 @@ export class ChatAgentOrchestrator {
           finalFailure = undefined;
         } else if (error instanceof ChatTurnBudgetExceededError) {
           finalStatus = "completed";
-          assistantContent = buildTurnBudgetExceededFallbackMessage(input, toolRuns, error.turnBudgetMs);
+          assistantContent = buildTurnBudgetExceededFallbackMessage({
+            turnInput: input,
+            toolRuns,
+            turnBudgetMs: error.turnBudgetMs,
+            fallbackBuilders: {
+              buildFetchedContentBudgetFallback,
+              buildSearchResultBudgetFallback,
+              buildDeterministicToolSynthesisFallback,
+            },
+          });
           finalFailure = buildChatTurnFailureRecord(
             "turn_budget_exceeded",
             error.message,
@@ -2612,38 +2724,6 @@ export class ChatAgentOrchestrator {
       startedAt,
     });
 
-    const reusableResult = findReusableBrowserToolResult(
-      preflight.toolName,
-      input.rawArgs,
-      preflight.args,
-      input.priorToolRuns,
-    );
-    if (reusableResult) {
-      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
-        status: "executed",
-        reused: true,
-        reusedFromToolRunId: reusableResult.toolRunId,
-        reuseReason: "matching_recent_browser_result",
-        result: {
-          ...(reusableResult.result as Record<string, unknown>),
-          reusedNotice: `Result reused from prior ${reusableResult.toolName} run ${reusableResult.toolRunId}.`,
-          reusedPriorToolRunId: reusableResult.toolRunId,
-          reusedResult: true,
-          reuseReason: "matching_recent_browser_result",
-        },
-        finishedAt: new Date().toISOString(),
-      });
-      return {
-        record: updated,
-        chunk: {
-          type: "tool_result",
-          sessionId: input.input.sessionId,
-          turnId: input.turnId,
-          toolRun: updated,
-        },
-      };
-    }
-
     if (preflight.blockedReason) {
       const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
         status: "blocked",
@@ -2677,6 +2757,38 @@ export class ChatAgentOrchestrator {
           args: preflight.args,
           error: preflight.failureReason,
         }),
+        finishedAt: new Date().toISOString(),
+      });
+      return {
+        record: updated,
+        chunk: {
+          type: "tool_result",
+          sessionId: input.input.sessionId,
+          turnId: input.turnId,
+          toolRun: updated,
+        },
+      };
+    }
+
+    const reusableResult = findReusableBrowserToolResult(
+      preflight.toolName,
+      input.rawArgs,
+      preflight.args,
+      input.priorToolRuns,
+    );
+    if (reusableResult) {
+      const updated = this.deps.storage.chatToolRuns.patch(created.toolRunId, {
+        status: "executed",
+        reused: true,
+        reusedFromToolRunId: reusableResult.toolRunId,
+        reuseReason: "matching_recent_browser_result",
+        result: {
+          ...(reusableResult.result as Record<string, unknown>),
+          reusedNotice: `Result reused from prior ${reusableResult.toolName} run ${reusableResult.toolRunId}.`,
+          reusedPriorToolRunId: reusableResult.toolRunId,
+          reusedResult: true,
+          reuseReason: "matching_recent_browser_result",
+        },
         finishedAt: new Date().toISOString(),
       });
       return {
@@ -4032,156 +4144,6 @@ function shouldClearRecoverableCompletionFailure(input: {
   );
 }
 
-function extractPersistableToolArtifactContent(
-  toolName: string,
-  result: Record<string, unknown>,
-):
-  | {
-      content: string;
-      contentType?: string;
-      snippet: string;
-      summary: string;
-      virtualized: boolean;
-      compactMode: "textual" | "structured";
-    }
-  | undefined {
-  if (typeof result.body === "string" && result.body.length > 0) {
-    if (Buffer.byteLength(result.body, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES) {
-      return undefined;
-    }
-    return {
-      content: result.body,
-      contentType: typeof result.contentType === "string" ? result.contentType : undefined,
-      snippet:
-        typeof result.bodySnippet === "string"
-          ? result.bodySnippet.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS)
-          : result.body.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS),
-      summary: summarizeVirtualizedToolResult(toolName, result),
-      virtualized: true,
-      compactMode: "textual",
-    };
-  }
-  if (typeof result.text === "string" && result.text.length > 0) {
-    if (Buffer.byteLength(result.text, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES) {
-      return undefined;
-    }
-    return {
-      content: result.text,
-      contentType: "text/plain; charset=utf-8",
-      snippet: result.text.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS),
-      summary: summarizeVirtualizedToolResult(toolName, result),
-      virtualized: true,
-      compactMode: "textual",
-    };
-  }
-  const serialized = safeSerializeToolResult(result);
-  if (!serialized || Buffer.byteLength(serialized, "utf8") <= TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES) {
-    return undefined;
-  }
-  return {
-    content: serialized,
-    contentType: "application/json; charset=utf-8",
-    snippet: serialized.slice(0, TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS),
-    summary: summarizeVirtualizedToolResult(toolName, result),
-    virtualized: true,
-    compactMode: "structured",
-  };
-}
-
-function safeSerializeToolResult(result: Record<string, unknown>): string | undefined {
-  try {
-    return JSON.stringify(result, null, 2);
-  } catch {
-    return undefined;
-  }
-}
-
-function summarizeVirtualizedToolResult(toolName: string, result: Record<string, unknown>): string {
-  const candidates = [
-    typeof result.message === "string" ? result.message : undefined,
-    typeof result.bodySnippet === "string" ? result.bodySnippet : undefined,
-    typeof result.textSnippet === "string" ? result.textSnippet : undefined,
-    Array.isArray(result.results)
-      ? `${result.results.length} result${result.results.length === 1 ? "" : "s"} returned.`
-      : undefined,
-    typeof result.status === "number" ? `HTTP ${result.status}` : undefined,
-  ].filter((value): value is string => Boolean(value && value.trim()));
-  if (candidates.length > 0) {
-    return candidates.join(" ").slice(0, TOOL_OUTPUT_INLINE_SUMMARY_CHARS);
-  }
-  return `Stored ${toolName} output as an artifact to keep live context compact.`;
-}
-
-function buildCompactToolResultMetadata(result: Record<string, unknown>): Record<string, unknown> {
-  const compacted: Record<string, unknown> = {};
-  const scalarKeys = [
-    "url",
-    "finalUrl",
-    "status",
-    "httpStatus",
-    "message",
-    "engineTier",
-    "engineLabel",
-    "browserFailureClass",
-    "title",
-  ] as const;
-  for (const key of scalarKeys) {
-    const value = result[key];
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      compacted[key] = value;
-    }
-  }
-  if (Array.isArray(result.results)) {
-    compacted.resultCount = result.results.length;
-  }
-  if (Array.isArray(result.fallbackChain) && result.fallbackChain.length > 0) {
-    compacted.fallbackChain = result.fallbackChain;
-  }
-  return compacted;
-}
-
-function compactToolResultForTurn(
-  result: Record<string, unknown>,
-  artifact: {
-    artifactId: string;
-    storageRelPath: string;
-    byteLength: number;
-    contentType?: string;
-    snippet?: string;
-    summary: string;
-    virtualized: boolean;
-    compactMode: "textual" | "structured";
-  },
-): Record<string, unknown> {
-  const resultText = typeof result.text === "string" ? result.text : undefined;
-  const resultBodySnippet = typeof result.bodySnippet === "string" ? result.bodySnippet : undefined;
-  const compacted: Record<string, unknown> = {
-    ...(artifact.compactMode === "structured" ? buildCompactToolResultMetadata(result) : result),
-    artifactId: artifact.artifactId,
-    artifactPath: artifact.storageRelPath,
-    byteLength: artifact.byteLength,
-    originalByteLength: artifact.byteLength,
-    contentType: artifact.contentType ?? result.contentType,
-    snippet: artifact.snippet ?? resultBodySnippet ?? resultText?.slice(0, 4000),
-    artifactSummary: artifact.summary,
-    virtualized: artifact.virtualized,
-    storedAsArtifact: true,
-  };
-  if ("body" in compacted) {
-    delete (compacted as { body?: unknown }).body;
-  }
-  if (resultText && resultText.length > 4000) {
-    compacted.text = resultText.slice(0, 4000);
-  }
-  if (artifact.compactMode === "structured" && "text" in compacted) {
-    delete (compacted as { text?: unknown }).text;
-  }
-  if (!("bodySnippet" in compacted) && typeof compacted.snippet === "string") {
-    compacted.bodySnippet = compacted.snippet;
-  }
-  return compacted;
-}
-
 function selectActiveExecutionPlan(plans: ChatExecutionPlanRecord[]): ChatExecutionPlanRecord | undefined {
   const active =
     plans.find((plan) => plan.status === "running") ??
@@ -4509,143 +4471,6 @@ function extractProviderToolName(tool: Record<string, unknown>): string | undefi
   return undefined;
 }
 
-function readToolCalls(
-  message: Record<string, unknown>,
-  modelToCanonical: Map<string, string> = new Map<string, string>(),
-): Array<{
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  rawArguments: string;
-}> {
-  const raw = message.tool_calls;
-  const out: Array<{ id: string; toolName: string; args: Record<string, unknown>; rawArguments: string }> = [];
-  if (Array.isArray(raw)) {
-    for (const value of raw) {
-      const toolCall = value as Record<string, unknown>;
-      const id = typeof toolCall.id === "string" ? toolCall.id : `tool-${randomUUID()}`;
-      const fn = toolCall.function as Record<string, unknown> | undefined;
-      const rawToolName = typeof fn?.name === "string" ? fn.name : undefined;
-      const toolName = rawToolName ? resolveAllowedModelToolCallName(rawToolName, modelToCanonical) : undefined;
-      if (!toolName) {
-        continue;
-      }
-      let args: Record<string, unknown> = {};
-      const rawArgs = fn?.arguments;
-      const rawArguments = typeof rawArgs === "string" && rawArgs.trim() ? rawArgs : JSON.stringify(args);
-      if (typeof rawArgs === "string" && rawArgs.trim()) {
-        try {
-          const parsed = JSON.parse(rawArgs) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            args = parsed as Record<string, unknown>;
-          }
-        } catch {
-          args = {};
-        }
-      }
-      out.push({ id, toolName, args, rawArguments });
-    }
-    return out;
-  }
-  return parseSerializedToolCalls(extractMessageContent(message), modelToCanonical);
-}
-
-function parseSerializedToolCalls(
-  content: string,
-  modelToCanonical: Map<string, string>,
-): Array<{
-  id: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  rawArguments: string;
-}> {
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return [];
-  }
-  const calls: Array<{ id: string; toolName: string; args: Record<string, unknown>; rawArguments: string }> = [];
-  const functionMatches = Array.from(
-    trimmed.matchAll(/<function=([a-z0-9_.-]+)>([\s\S]*?)(?:<\/function>|<\/tool_call>)/gi),
-  );
-  for (const match of functionMatches) {
-    const rawToolName = match[1]?.trim();
-    if (!rawToolName) {
-      continue;
-    }
-    const toolName = resolveAllowedModelToolCallName(rawToolName, modelToCanonical);
-    if (!toolName) {
-      continue;
-    }
-    const body = (match[2] ?? "").trim();
-    let args: Record<string, unknown> = {};
-    let rawArguments = "{}";
-    const parameterMatches = Array.from(body.matchAll(/<parameter=([a-z0-9_.-]+)>\s*([\s\S]*?)\s*<\/parameter>/gi));
-    if (parameterMatches.length > 0) {
-      args = Object.fromEntries(
-        parameterMatches.map((parameterMatch) => [parameterMatch[1]!, parameterMatch[2]!.trim()]),
-      );
-      rawArguments = JSON.stringify(args);
-    } else if (body) {
-      rawArguments = body;
-      try {
-        const parsed = JSON.parse(body) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          args = parsed as Record<string, unknown>;
-          rawArguments = JSON.stringify(args);
-        }
-      } catch {
-        args = {};
-      }
-    }
-    calls.push({
-      id: `tool-${randomUUID()}`,
-      toolName,
-      args,
-      rawArguments,
-    });
-  }
-  return calls;
-}
-
-function resolveAllowedModelToolCallName(
-  rawToolName: string,
-  modelToCanonical: Map<string, string>,
-): string | undefined {
-  const mapped = modelToCanonical.get(rawToolName);
-  if (mapped) {
-    return mapped;
-  }
-  if (modelToCanonical.size === 0) {
-    return rawToolName;
-  }
-  const allowedCanonicalNames = new Set(modelToCanonical.values());
-  return allowedCanonicalNames.has(rawToolName) ? rawToolName : undefined;
-}
-
-function toProviderToolFunctionName(toolName: string, existing?: Map<string, string>): string {
-  const normalizedBase = toolName
-    .replace(/[^a-zA-Z0-9_-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  const prefixed = /^[a-zA-Z]/.test(normalizedBase) ? normalizedBase : `tool_${normalizedBase || "fn"}`;
-
-  if (!existing) {
-    return prefixed;
-  }
-
-  let candidate = prefixed;
-  let counter = 2;
-  while (existing.has(candidate) && existing.get(candidate) !== toolName) {
-    candidate = `${prefixed}_${counter}`;
-    counter += 1;
-  }
-  return candidate;
-}
-
-function extractMessageContent(message: Record<string, unknown>): string {
-  return extractStructuredTextContent(message.content).trim();
-}
-
 function createAssistantToolCallMessage(input: {
   toolCallId?: string;
   toolName?: string;
@@ -4668,52 +4493,6 @@ function createAssistantToolCallMessage(input: {
     content: input.content ?? "",
     tool_calls: toolCalls,
   } as ChatCompletionMessage;
-}
-
-function extractStructuredTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content.map((part) => extractStructuredTextPart(part)).join("");
-  }
-  if (content && typeof content === "object") {
-    return extractStructuredTextPart(content);
-  }
-  return "";
-}
-
-function extractStructuredTextPart(part: unknown): string {
-  if (typeof part === "string") {
-    return part;
-  }
-  if (!part || typeof part !== "object") {
-    return "";
-  }
-  const value = part as Record<string, unknown>;
-  if (typeof value.text === "string") {
-    return value.text;
-  }
-  if (typeof value.content === "string") {
-    return value.content;
-  }
-  if (typeof value.value === "string") {
-    return value.value;
-  }
-  const nestedText = value.text;
-  if (nestedText && typeof nestedText === "object") {
-    const textRecord = nestedText as Record<string, unknown>;
-    if (typeof textRecord.value === "string") {
-      return textRecord.value;
-    }
-    if (typeof textRecord.text === "string") {
-      return textRecord.text;
-    }
-    if (typeof textRecord.content === "string") {
-      return textRecord.content;
-    }
-  }
-  return "";
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
@@ -4774,282 +4553,6 @@ function buildEvidenceGroundingInstruction(): string {
     "- Cite only the few URLs that directly support the key claims you make. Do not append long source inventories.",
     "- If the results are insufficient to answer the question well, tell the user what was found and what is missing.",
   ].join("\n");
-}
-
-function withBrowserFallbackChain(
-  result: Record<string, unknown>,
-  fallbackChain: Array<Record<string, unknown>>,
-): Record<string, unknown> {
-  if (fallbackChain.length === 0) {
-    return result;
-  }
-  return {
-    ...result,
-    fallbackChain: fallbackChain.map((entry) => ({ ...entry })),
-  };
-}
-
-function normalizeBrowserToolResult(
-  toolName: string,
-  result: Record<string, unknown>,
-  metadata: {
-    engineTier: string;
-    engineLabel: string;
-  },
-): Record<string, unknown> {
-  const normalized: Record<string, unknown> = {
-    ...result,
-    engineTier: metadata.engineTier,
-    engineLabel: metadata.engineLabel,
-  };
-  if (toolName === "browser.search" && Array.isArray(result.results)) {
-    normalized.results = result.results;
-  }
-  return normalized;
-}
-
-function normalizeMcpBrowserToolResult(
-  toolName: string,
-  output: Record<string, unknown>,
-  metadata: {
-    engineTier: string;
-    engineLabel: string;
-    args: Record<string, unknown>;
-  },
-): Record<string, unknown> {
-  const structured = output.structuredContent;
-  const base =
-    structured && typeof structured === "object" && !Array.isArray(structured)
-      ? (structured as Record<string, unknown>)
-      : output;
-  if (toolName === "browser.search") {
-    const rawResults = Array.isArray(base.results) ? base.results : Array.isArray(output.results) ? output.results : [];
-    return {
-      ...base,
-      ...output,
-      results: rawResults,
-      url: typeof base.url === "string" ? base.url : output.url,
-      finalUrl: typeof base.finalUrl === "string" ? base.finalUrl : output.finalUrl,
-      engineTier: metadata.engineTier,
-      engineLabel: metadata.engineLabel,
-    };
-  }
-  const textSnippet = readFirstString(
-    base.textSnippet,
-    base.bodySnippet,
-    base.text,
-    output.contentText,
-    output.message,
-  );
-  const title = readFirstString(base.title, output.title);
-  const finalUrl = readFirstString(base.finalUrl, output.finalUrl, base.url, output.url, metadata.args.url);
-  return {
-    ...base,
-    ...output,
-    url: readFirstString(base.url, output.url, metadata.args.url),
-    finalUrl,
-    title,
-    textSnippet,
-    status: readBrowserStatusNumber(base.status, output.status),
-    engineTier: metadata.engineTier,
-    engineLabel: metadata.engineLabel,
-  };
-}
-
-function classifyBrowserToolResult(
-  toolName: string,
-  result: Record<string, unknown> | undefined,
-  error?: string,
-): {
-  failureClass?: string;
-  error?: string;
-} {
-  if (error) {
-    return {
-      failureClass: "runtime_error",
-      error,
-    };
-  }
-  if (!result) {
-    return {
-      failureClass: "unusable_output",
-      error: "browser result was empty",
-    };
-  }
-  const status = readBrowserStatusNumber(result.status);
-  const normalizedText = readBrowserResultText(result).toLowerCase();
-  const errorText = (typeof result.error === "string" ? result.error : (error ?? "")).toLowerCase();
-  // Distinguish rate limiting (429) from other remote blocks so the fallback
-  // chain can try alternate engines instead of just giving up.
-  if (status === 429 || errorText.includes("429") || errorText.includes("rate limit")) {
-    return {
-      failureClass: "rate_limited",
-      error: buildRemoteBlockedMessage(status, undefined) || "rate limited by remote service",
-    };
-  }
-  const remoteBlockMarker = REMOTE_BLOCK_MARKERS.find((marker) => normalizedText.includes(marker));
-  if (status === 401 || status === 403 || remoteBlockMarker) {
-    return {
-      failureClass: "remote_blocked",
-      error: buildRemoteBlockedMessage(status, remoteBlockMarker),
-    };
-  }
-  if (typeof status === "number" && status >= 400) {
-    return {
-      failureClass: "http_error",
-      error: `source returned HTTP ${status}`,
-    };
-  }
-  if (toolName === "browser.search") {
-    const results = Array.isArray(result.results) ? result.results : [];
-    if (results.length === 0) {
-      return {
-        failureClass: "no_results",
-        error: "no usable search results were returned",
-      };
-    }
-    return {};
-  }
-  const hasUsefulText = normalizedText.length >= 40;
-  const hasUsefulUrl = typeof result.finalUrl === "string" || typeof result.url === "string";
-  if (!hasUsefulText && !hasUsefulUrl) {
-    return {
-      failureClass: "unusable_output",
-      error: "browser result did not include usable page content",
-    };
-  }
-  return {};
-}
-
-function shouldAttemptBrowserFallback(toolName: string, failureClass?: string): boolean {
-  if (!failureClass) {
-    return false;
-  }
-  if (toolName === "browser.search") {
-    return (
-      failureClass === "no_results" ||
-      failureClass === "remote_blocked" ||
-      failureClass === "http_error" ||
-      failureClass === "rate_limited" ||
-      failureClass === "runtime_error"
-    );
-  }
-  return (
-    failureClass === "remote_blocked" ||
-    failureClass === "http_error" ||
-    failureClass === "unusable_output" ||
-    failureClass === "runtime_error" ||
-    failureClass === "rate_limited"
-  );
-}
-
-function resolveBrowserFallbackToolName(target: McpBrowserFallbackTarget, toolName: string): string | undefined {
-  if (toolName === "browser.search") {
-    return target.searchToolName;
-  }
-  if (toolName === "browser.navigate") {
-    return target.navigateToolName ?? target.fetchToolName ?? target.extractToolName;
-  }
-  if (toolName === "browser.extract") {
-    return target.extractToolName ?? target.fetchToolName ?? target.navigateToolName;
-  }
-  if (toolName === "http.get") {
-    return target.fetchToolName ?? target.extractToolName ?? target.navigateToolName;
-  }
-  return undefined;
-}
-
-function buildBrowserFallbackArguments(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
-  if (toolName === "browser.search") {
-    return {
-      query: args.query,
-      maxResults: args.maxResults,
-    };
-  }
-  return {
-    url: args.url,
-    maxChars: args.maxChars,
-    timeoutMs: args.timeoutMs,
-  };
-}
-
-function buildBrowserFallbackChainEntry(input: {
-  toolName: string;
-  engineTier: string;
-  engineLabel: string;
-  result?: Record<string, unknown>;
-  error?: string;
-  browserFailureClass?: string;
-  status: "executed" | "failed";
-}): Record<string, unknown> {
-  return {
-    toolName: input.toolName,
-    engineTier: input.engineTier,
-    engineLabel: input.engineLabel,
-    status: input.status,
-    url: extractBrowserToolUrl(input.result),
-    finalUrl: readFirstString(input.result?.finalUrl, input.result?.url),
-    httpStatus: readBrowserStatusNumber(input.result?.status),
-    browserFailureClass: input.browserFailureClass,
-    error: input.error,
-  };
-}
-
-function buildRemoteBlockedMessage(status?: number, marker?: string): string {
-  const reason = marker?.includes("cloudflare")
-    ? "Cloudflare"
-    : marker?.includes("captcha")
-      ? "captcha challenge"
-      : marker?.includes("javascript")
-        ? "browser challenge"
-        : "automation block";
-  if (typeof status === "number") {
-    return `remote site blocked automation (${reason} ${status})`;
-  }
-  return `remote site blocked automation (${reason})`;
-}
-
-function readBrowserResultText(result: Record<string, unknown>): string {
-  return [
-    readFirstString(result.title),
-    readFirstString(result.textSnippet),
-    readFirstString(result.bodySnippet),
-    readFirstString(result.contentText),
-    readFirstString(result.message),
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function readBrowserStatusNumber(...values: unknown[]): number | undefined {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string" && value.trim()) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-  return undefined;
-}
-
-function extractBrowserToolUrl(result: Record<string, unknown> | undefined): string | undefined {
-  if (!result) {
-    return undefined;
-  }
-  return readFirstString(result.finalUrl, result.url);
-}
-
-function readFirstString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
 }
 
 function detectTimeIntent(content: string): boolean {
@@ -6034,91 +5537,6 @@ function redirectSearchPortalNavigateUrl(
   return alternatives.find((candidate) => candidate !== requestedUrl);
 }
 
-interface BrowserResultCandidate {
-  url: string;
-  title?: string;
-  snippet?: string;
-  hostname: string;
-  path: string;
-  sourceRunIndex: number;
-}
-
-const SEARCH_RESULT_STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "it",
-  "lately",
-  "latest",
-  "me",
-  "near",
-  "news",
-  "now",
-  "of",
-  "on",
-  "recent",
-  "recently",
-  "right",
-  "tell",
-  "the",
-  "today",
-  "what",
-  "whats",
-  "what's",
-  "with",
-]);
-
-const SEARCH_PORTAL_HOST_PATTERNS = [
-  /^google\./i,
-  /^www\.google\./i,
-  /^bing\.com$/i,
-  /^www\.bing\.com$/i,
-  /^([a-z0-9-]+\.)?duckduckgo\.com$/i,
-  /^search\.yahoo\.com$/i,
-  /^www\.search\.yahoo\.com$/i,
-];
-
-const COMMUNITY_HOST_PATTERNS = [
-  /(^|\.)reddit\.com$/i,
-  /(^|\.)quora\.com$/i,
-  /(^|\.)stackoverflow\.com$/i,
-  /(^|\.)stackexchange\.com$/i,
-];
-
-const NEWS_PORTAL_HOST_PATTERNS = [
-  /(^|\.)yahoo\.com$/i,
-  /(^|\.)msn\.com$/i,
-  /(^|\.)aol\.com$/i,
-  /(^|\.)newsbreak\.com$/i,
-];
-
-const DIRECT_NEWS_PUBLISHER_HOST_PATTERNS = [
-  /(^|\.)reuters\.com$/i,
-  /(^|\.)apnews\.com$/i,
-  /(^|\.)abcnews\.go\.com$/i,
-  /(^|\.)abcnews\.com$/i,
-  /(^|\.)nytimes\.com$/i,
-  /(^|\.)wsj\.com$/i,
-  /(^|\.)washingtonpost\.com$/i,
-  /(^|\.)usatoday\.com$/i,
-  /(^|\.)npr\.org$/i,
-  /(^|\.)cnn\.com$/i,
-  /(^|\.)foxnews\.com$/i,
-  /(^|\.)cbsnews\.com$/i,
-  /(^|\.)nbcnews\.com$/i,
-  /(^|\.)bbc\.com$/i,
-  /(^|\.)theguardian\.com$/i,
-  /(^|\.)politico\.com$/i,
-  /(^|\.)axios\.com$/i,
-  /(^|\.)bloomberg\.com$/i,
-];
-
 function selectBestRecentBrowserResultUrl(
   userContent: string,
   toolRuns: ChatToolRunRecord[],
@@ -6251,539 +5669,6 @@ function collectPoisonedBrowserHosts(toolRuns: ChatToolRunRecord[]): Set<string>
     }
   }
   return poisoned;
-}
-
-function inferBlockedSourceFailure(toolRuns: ChatToolRunRecord[]): { host?: string; failureClass: string } | undefined {
-  for (let index = toolRuns.length - 1; index >= 0; index -= 1) {
-    const run = toolRuns[index];
-    if (!run?.result || typeof run.result !== "object") {
-      continue;
-    }
-    const result = run.result as Record<string, unknown>;
-    const topLevelFailure = readBlockedSourceFailure(result);
-    if (topLevelFailure) {
-      return {
-        host: readBlockedSourceHost(result, run.args),
-        failureClass: topLevelFailure,
-      };
-    }
-    const fallbackChain = Array.isArray(result.fallbackChain) ? result.fallbackChain : [];
-    for (let chainIndex = fallbackChain.length - 1; chainIndex >= 0; chainIndex -= 1) {
-      const entry = fallbackChain[chainIndex];
-      if (!entry || typeof entry !== "object") {
-        continue;
-      }
-      const record = entry as Record<string, unknown>;
-      const failureClass = readBlockedSourceFailure(record);
-      if (!failureClass) {
-        continue;
-      }
-      return {
-        host: readBlockedSourceHost(record),
-        failureClass,
-      };
-    }
-  }
-  return undefined;
-}
-
-function readBlockedSourceFailure(result: Record<string, unknown>): string | undefined {
-  const failureClass = typeof result.browserFailureClass === "string" ? result.browserFailureClass : undefined;
-  if (failureClass === "remote_blocked" || failureClass === "http_error") {
-    return failureClass;
-  }
-  return undefined;
-}
-
-function readBlockedSourceHost(result: Record<string, unknown>, args?: Record<string, unknown>): string | undefined {
-  const url = extractBrowserToolUrl(result) ?? (typeof args?.url === "string" ? args.url : undefined);
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname.toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-function inferRecentBrowserVisitedUrl(toolRuns: ChatToolRunRecord[]): string | undefined {
-  for (let index = toolRuns.length - 1; index >= 0; index -= 1) {
-    const run = toolRuns[index];
-    if (!run || run.status !== "executed" || !run.result || typeof run.result !== "object") {
-      continue;
-    }
-    const usefulUrl = extractUsefulVisitedBrowserUrl(run.result as Record<string, unknown>);
-    if (usefulUrl) {
-      return usefulUrl;
-    }
-  }
-  return undefined;
-}
-
-function hasUsefulVisitedBrowserUrl(run: ChatToolRunRecord): boolean {
-  return Boolean(
-    run.result &&
-    typeof run.result === "object" &&
-    extractUsefulVisitedBrowserUrl(run.result as Record<string, unknown>),
-  );
-}
-
-function extractUsefulVisitedBrowserUrl(result: Record<string, unknown>): string | undefined {
-  const candidateValues = [result.finalUrl, result.url];
-  for (const value of candidateValues) {
-    if (typeof value !== "string" || !/^https?:\/\//i.test(value)) {
-      continue;
-    }
-    try {
-      const parsed = new URL(value);
-      const hostname = parsed.hostname.toLowerCase();
-      const pathname = parsed.pathname.toLowerCase();
-      if (isSearchPortalHost(hostname) || isLikelyLandingOrResultsPath(pathname)) {
-        continue;
-      }
-      return value;
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
-
-function findReusableBrowserToolResult(
-  toolName: string,
-  rawArgs: Record<string, unknown>,
-  args: Record<string, unknown>,
-  priorToolRuns: ChatToolRunRecord[] | undefined,
-): ChatToolRunRecord | undefined {
-  const normalizedToolName = normalizeToolNameForComparison(toolName);
-  const bypassCacheRequested =
-    isTruthyBypassCacheFlag(rawArgs.bypassCache) || isTruthyBypassCacheFlag(args.bypassCache);
-  if (bypassCacheRequested) {
-    return undefined;
-  }
-  if (!priorToolRuns || priorToolRuns.length === 0) {
-    return undefined;
-  }
-  if (toolName !== "http.get" && toolName !== "browser.navigate" && toolName !== "browser.extract") {
-    if (
-      normalizedToolName !== "http.get" &&
-      normalizedToolName !== "browser.navigate" &&
-      normalizedToolName !== "browser.extract"
-    ) {
-      return undefined;
-    }
-  }
-  if (typeof rawArgs.url !== "string" || rawArgs.url.trim().length === 0) {
-    return undefined;
-  }
-  const requestedUrl = normalizeBrowserReuseUrl(typeof args.url === "string" ? args.url : undefined);
-  if (!requestedUrl) {
-    return undefined;
-  }
-  if (normalizedToolName === "browser.navigate") {
-    return findReusableRecentBrowserNavigateResult(requestedUrl, priorToolRuns);
-  }
-  if (normalizedToolName === "browser.extract") {
-    return findReusableRecentBrowserExtractResult(requestedUrl, priorToolRuns);
-  }
-  for (let index = priorToolRuns.length - 1; index >= 0; index -= 1) {
-    const run = priorToolRuns[index];
-    if (
-      !run ||
-      normalizeToolNameForComparison(run.toolName) !== normalizedToolName ||
-      run.status !== "executed" ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      continue;
-    }
-    const result = run.result as Record<string, unknown>;
-    const resolvedUrl = normalizeBrowserReuseUrl(
-      extractUsefulVisitedBrowserUrl(result) ??
-        extractBrowserToolUrl(result) ??
-        (typeof run.args?.url === "string" ? run.args.url : undefined),
-    );
-    if (!resolvedUrl || resolvedUrl !== requestedUrl) {
-      continue;
-    }
-    const failureClass = typeof result.browserFailureClass === "string" ? result.browserFailureClass : undefined;
-    if (failureClass && failureClass !== "no_results") {
-      continue;
-    }
-    const status = readBrowserStatusNumber(result.status);
-    if (typeof status === "number" && status >= 400) {
-      continue;
-    }
-    const usefulText = normalizeRecoveredContentText(
-      readFirstString(result.textSnippet, result.bodySnippet, result.contentText, result.text, result.message),
-    );
-    if (!usefulText) {
-      continue;
-    }
-    return run;
-  }
-  return undefined;
-}
-
-function isTruthyBypassCacheFlag(value: unknown): boolean {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return value.trim().toLowerCase() === "true";
-  }
-  return false;
-}
-
-const BROWSER_REUSE_INVALIDATING_TOOL_NAMES = new Set([
-  "browser.navigate",
-  "browser.extract",
-  "browser.interact",
-  "browser.cookies.get",
-  "browser.cookies.set",
-  "browser.cookies.clear",
-  "browser.storage.get",
-  "browser.storage.set",
-  "browser.storage.clear",
-  "browser.context.configure",
-]);
-
-function findReusableRecentBrowserExtractResult(
-  requestedUrl: string,
-  priorToolRuns: ChatToolRunRecord[],
-): ChatToolRunRecord | undefined {
-  for (let index = priorToolRuns.length - 1; index >= 0; index -= 1) {
-    const run = priorToolRuns[index];
-    if (!run || run.status !== "executed") {
-      continue;
-    }
-    if (!BROWSER_REUSE_INVALIDATING_TOOL_NAMES.has(run.toolName)) {
-      if (!BROWSER_REUSE_INVALIDATING_TOOL_NAMES.has(normalizeToolNameForComparison(run.toolName) ?? "")) {
-        continue;
-      }
-    }
-    if (
-      normalizeToolNameForComparison(run.toolName) !== "browser.navigate" ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      return undefined;
-    }
-    const result = run.result as Record<string, unknown>;
-    const resolvedUrl = normalizeBrowserReuseUrl(
-      extractUsefulVisitedBrowserUrl(result) ??
-        extractBrowserToolUrl(result) ??
-        (typeof run.args?.url === "string" ? run.args.url : undefined),
-    );
-    if (!resolvedUrl || resolvedUrl !== requestedUrl) {
-      return undefined;
-    }
-    const failureClass = typeof result.browserFailureClass === "string" ? result.browserFailureClass : undefined;
-    if (failureClass && failureClass !== "no_results") {
-      return undefined;
-    }
-    const status = readBrowserStatusNumber(result.status);
-    if (typeof status === "number" && status >= 400) {
-      return undefined;
-    }
-    const usefulText = normalizeRecoveredContentText(
-      readFirstString(result.contentText, result.text, result.bodySnippet, result.textSnippet, result.message),
-    );
-    if (!usefulText || usefulText.length < 160) {
-      return undefined;
-    }
-    return run;
-  }
-  return undefined;
-}
-
-function findReusableRecentBrowserNavigateResult(
-  requestedUrl: string,
-  priorToolRuns: ChatToolRunRecord[],
-): ChatToolRunRecord | undefined {
-  for (let index = priorToolRuns.length - 1; index >= 0; index -= 1) {
-    const run = priorToolRuns[index];
-    if (!run || run.status !== "executed") {
-      continue;
-    }
-    if (!BROWSER_REUSE_INVALIDATING_TOOL_NAMES.has(normalizeToolNameForComparison(run.toolName) ?? "")) {
-      continue;
-    }
-    if (
-      normalizeToolNameForComparison(run.toolName) !== "browser.navigate" ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      return undefined;
-    }
-    const result = run.result as Record<string, unknown>;
-    const resolvedUrl = normalizeBrowserReuseUrl(
-      extractUsefulVisitedBrowserUrl(result) ??
-        extractBrowserToolUrl(result) ??
-        (typeof run.args?.url === "string" ? run.args.url : undefined),
-    );
-    if (!resolvedUrl || resolvedUrl !== requestedUrl) {
-      return undefined;
-    }
-    const failureClass = typeof result.browserFailureClass === "string" ? result.browserFailureClass : undefined;
-    if (failureClass && failureClass !== "no_results") {
-      return undefined;
-    }
-    const status = readBrowserStatusNumber(result.status);
-    if (typeof status === "number" && status >= 400) {
-      return undefined;
-    }
-    const usefulText = normalizeRecoveredContentText(
-      readFirstString(result.contentText, result.text, result.bodySnippet, result.textSnippet, result.message),
-    );
-    if (!usefulText) {
-      return undefined;
-    }
-    return run;
-  }
-  return undefined;
-}
-
-function normalizeBrowserReuseUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(value);
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
-}
-
-function tokenizeBrowserSearchText(value: string): string[] {
-  const normalized = value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) {
-    return [];
-  }
-  const tokens = normalized
-    .split(" ")
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !SEARCH_RESULT_STOPWORDS.has(token));
-  return [...new Set(tokens)];
-}
-
-function normalizeBrowserSearchText(value: string | undefined): string {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s/:-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function countMatchingQueryTokens(haystack: string, queryTokens: string[]): number {
-  if (!haystack || queryTokens.length === 0) {
-    return 0;
-  }
-  return queryTokens.reduce((count, token) => (haystack.includes(token) ? count + 1 : count), 0);
-}
-
-function isSearchPortalHost(hostname: string): boolean {
-  return SEARCH_PORTAL_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
-}
-
-function isLikelyLandingOrResultsPath(pathname: string): boolean {
-  return /\/(search|results|topics|topic|tag|tags)(\/|$)/i.test(pathname);
-}
-
-function normalizeToolNameForComparison(toolName: string | undefined): string | undefined {
-  if (typeof toolName !== "string") {
-    return undefined;
-  }
-  if (toolName.includes(".")) {
-    return toolName;
-  }
-  const firstSeparator = toolName.indexOf("_");
-  if (firstSeparator < 0) {
-    return toolName;
-  }
-  return `${toolName.slice(0, firstSeparator)}.${toolName.slice(firstSeparator + 1)}`;
-}
-
-function buildToolNameComparisonAliases(toolName: string | undefined): Set<string> {
-  const aliases = new Set<string>();
-  const normalized = normalizeToolNameForComparison(toolName)?.toLowerCase();
-  if (!normalized) {
-    return aliases;
-  }
-  aliases.add(normalized);
-  aliases.add(normalized.replace(/\./g, "_"));
-  aliases.add(normalized.replace(/_/g, "."));
-  return aliases;
-}
-
-function toolNameMatchesUsedToolSet(expectedToolName: string, usedToolNames: Set<string>): boolean {
-  for (const alias of buildToolNameComparisonAliases(expectedToolName)) {
-    if (usedToolNames.has(alias)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function toolNameMatchesAnyKnownTool(toolName: string | undefined, expectedToolNames: Set<string>): boolean {
-  const aliases = buildToolNameComparisonAliases(toolName);
-  for (const expected of expectedToolNames) {
-    for (const alias of buildToolNameComparisonAliases(expected)) {
-      if (aliases.has(alias)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function isLikelyCommunityHost(hostname: string): boolean {
-  return COMMUNITY_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
-}
-
-function isLikelyNewsPortalHost(hostname: string): boolean {
-  return NEWS_PORTAL_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
-}
-
-function isLikelyDirectNewsPublisherHost(hostname: string): boolean {
-  return DIRECT_NEWS_PUBLISHER_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
-}
-
-function queryExplicitlyRequestsCommunitySources(value: string): boolean {
-  return /\b(reddit|quora|stack ?overflow|stackexchange|forum|forums|community|communities|discussion|discussions)\b/i.test(
-    value,
-  );
-}
-
-function isLikelyNewsOrCurrentEventsQuery(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return (
-    /\b(latest|today|right now|news|recent|recently|lately)\b/.test(normalized) ||
-    /\bcurrent\s+(news|events|headlines?|score|scores|markets?)\b/.test(normalized) ||
-    normalized.includes("what's going on with") ||
-    normalized.includes("whats going on with")
-  );
-}
-
-function queryExplicitlyRequestsUseCases(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return /\b(use case|use cases|used for|top\s+\d+\s+uses?|ways?\s+.*\bused|applications?)\b/.test(normalized);
-}
-
-function scoreBrowserResultCandidate(
-  candidate: BrowserResultCandidate,
-  query: string,
-  queryTokens: string[],
-  options: {
-    newsLike: boolean;
-    preferDirectNewsPublisher: boolean;
-  },
-): number {
-  const { newsLike, preferDirectNewsPublisher } = options;
-  const normalizedTitle = normalizeBrowserSearchText(candidate.title);
-  const normalizedSnippet = normalizeBrowserSearchText(candidate.snippet);
-  const normalizedPath = normalizeBrowserSearchText(candidate.path);
-  const normalizedQuery = normalizeBrowserSearchText(query);
-  const useCaseIntent = queryExplicitlyRequestsUseCases(query);
-  const titleMatches = countMatchingQueryTokens(normalizedTitle, queryTokens);
-  const snippetMatches = countMatchingQueryTokens(normalizedSnippet, queryTokens);
-  const pathMatches = countMatchingQueryTokens(normalizedPath, queryTokens);
-  let score = 0;
-  if (normalizedQuery.length >= 8 && normalizedTitle.includes(normalizedQuery)) {
-    score += 5;
-  }
-  if (titleMatches >= 2) {
-    score += 5;
-  } else if (titleMatches === 1) {
-    score += 2;
-  }
-  if (snippetMatches >= 2) {
-    score += 3;
-  } else if (snippetMatches === 1) {
-    score += 1;
-  }
-  if (pathMatches >= 2) {
-    score += 2;
-  } else if (pathMatches === 1) {
-    score += 1;
-  }
-  if (!candidate.title && !candidate.snippet) {
-    score -= 3;
-  }
-  if (isSearchPortalHost(candidate.hostname)) {
-    score -= 5;
-  }
-  if (isLikelyLandingOrResultsPath(candidate.path)) {
-    score -= 2;
-  }
-  if (!newsLike && isLikelyCommunityHost(candidate.hostname) && !queryExplicitlyRequestsCommunitySources(query)) {
-    score -= 6;
-  }
-  if (useCaseIntent) {
-    const title = candidate.title ?? "";
-    const snippet = candidate.snippet ?? "";
-    const exactUseCaseTitle = /\b(use case|use cases)\b/i.test(title);
-    const useCaseTitle =
-      /\b(use case|use cases|used for|applications?|examples?|real[- ]world|in practice|commonly used|widely used)\b/i.test(
-        title,
-      );
-    const useCaseSnippet =
-      /\b(use case|use cases|used for|applications?|examples?|commonly used|widely used|integrations?|automation|workflows?|web and mobile|mobile and web|partner api|partner apis|third-party services?)\b/i.test(
-        snippet,
-      );
-    const definitionTitle =
-      /\b(what is|benefits?|definition|basics?|principles?|architectural style|http methods?)\b/i.test(title);
-    const definitionSnippet = /\b(what is|benefits?|architectural style|http requests?|crud|data formats?)\b/i.test(
-      snippet,
-    );
-    const definitionPath = /\/definition(\/|$)|\/discover\/what-is|\/what-is[-/]/i.test(candidate.path);
-
-    if (exactUseCaseTitle) {
-      score += 11;
-    } else if (useCaseTitle) {
-      score += 5;
-    }
-    if (useCaseSnippet) {
-      score += 7;
-    }
-    if (/\/guide(\/|$)/i.test(candidate.path)) {
-      score += 2;
-    }
-    if (definitionTitle && !exactUseCaseTitle) {
-      score -= 6;
-    }
-    if (definitionSnippet && !useCaseSnippet) {
-      score -= 4;
-    }
-    if (definitionPath) {
-      score -= 9;
-    }
-  }
-  if (newsLike) {
-    if (
-      /\/(news|politics|article|story)(\/|$)/i.test(candidate.path) ||
-      /\b(news|times|post|reuters|apnews|axios|politico|npr|cnn|abc|nbc|cbs|fox)\b/i.test(candidate.hostname)
-    ) {
-      score += 2;
-    }
-    if (isLikelyDirectNewsPublisherHost(candidate.hostname)) {
-      score += 3;
-    }
-    if (preferDirectNewsPublisher && isLikelyNewsPortalHost(candidate.hostname)) {
-      score -= 4;
-    }
-  } else if (!isSearchPortalHost(candidate.hostname)) {
-    score += 1;
-  }
-  score -= candidate.sourceRunIndex * 0.001;
-  return score;
 }
 
 function inferQueryFromPrompt(userContent: string): string | undefined {
@@ -7337,219 +6222,6 @@ function collectToolSearchScope(toolRuns: ChatToolRunRecord[]): string[] {
     }
   }
   return [...scope].slice(0, 8);
-}
-
-function detectCoworkRoleOrder(prompt: string): string[] {
-  const explicitSections = extractExactCoworkSections(prompt)
-    .map(normalizeCoworkRoleLabel)
-    .filter((section) => isRecognizedCoworkRole(section) && section !== "synthesis");
-  if (explicitSections.length > 0) {
-    return explicitSections;
-  }
-  const requiredRoleOrderMatch = prompt.match(/required role order\b[:\s]*([^\n]+)/i)?.[1];
-  if (requiredRoleOrderMatch) {
-    return parseCoworkRoleList(requiredRoleOrderMatch);
-  }
-  const userTask = extractPrimaryUserTaskContent(prompt);
-  const roleSource = userTask || prompt;
-  const rolesInOrderMatch = roleSource.match(/roles?\s+in\s+(?:this\s+)?(?:exact\s+)?order\b[:\s]*([^\n]+)/i)?.[1];
-  if (rolesInOrderMatch) {
-    return parseCoworkRoleList(rolesInOrderMatch);
-  }
-  const roleMatchers: Array<{ role: string; pattern: RegExp }> = [
-    { role: "planner", pattern: /\bplanner\b/i },
-    { role: "product", pattern: /\bproduct\b/i },
-    { role: "researcher", pattern: /\bresearcher\b/i },
-    { role: "architect", pattern: /\barchitect\b/i },
-    { role: "coder", pattern: /\bcoder\b/i },
-    { role: "qa", pattern: /\bqa\b/i },
-    { role: "ops", pattern: /\bops\b/i },
-    { role: "risk review", pattern: /\brisk review\b/i },
-    { role: "operator handoff", pattern: /\boperator handoff\b/i },
-    { role: "operator", pattern: /\boperator(?![\s-]+(?:handoff|visible|facing|ready))\b/i },
-    { role: "personal assistant", pattern: /\bpersonal assistant\b/i },
-  ];
-  const roles: string[] = [];
-  for (const matcher of roleMatchers) {
-    if (matcher.pattern.test(roleSource) && !roles.includes(matcher.role)) {
-      roles.push(matcher.role);
-    }
-  }
-  return roles;
-}
-
-function parseCoworkRoleList(value: string): string[] {
-  const rolePatterns: Array<{ role: string; pattern: RegExp }> = [
-    { role: "operator handoff", pattern: /\boperator\s+handoff\b/gi },
-    { role: "personal assistant", pattern: /\bpersonal\s+assistant\b/gi },
-    { role: "risk review", pattern: /\brisk\s+review\b/gi },
-    { role: "quality assurance", pattern: /\bquality\s+assurance\b/gi },
-    { role: "planner", pattern: /\bplanner\b/gi },
-    { role: "product", pattern: /\bproduct\b/gi },
-    { role: "researcher", pattern: /\bresearcher\b/gi },
-    { role: "architect", pattern: /\barchitect\b/gi },
-    { role: "coder", pattern: /\bcoder\b/gi },
-    { role: "qa", pattern: /\bqa\b/gi },
-    { role: "ops", pattern: /\bops\b/gi },
-    { role: "operator", pattern: /\boperator(?![\s-]+(?:handoff|visible|facing|ready))\b/gi },
-  ];
-  const matches: Array<{ role: string; index: number }> = [];
-  for (const { role, pattern } of rolePatterns) {
-    for (const match of value.matchAll(pattern)) {
-      matches.push({ role: normalizeCoworkRoleLabel(role), index: match.index ?? 0 });
-    }
-  }
-  const ordered = matches
-    .sort((left, right) => left.index - right.index)
-    .map((match) => match.role)
-    .filter((role, index, roles) => roles.indexOf(role) === index && isRecognizedCoworkRole(role));
-  if (ordered.length > 0) {
-    return ordered;
-  }
-  return value
-    .split(/\s*,\s*|\s+and\s+/i)
-    .map((part) => normalizeCoworkRoleLabel(part))
-    .filter(isRecognizedCoworkRole);
-}
-
-function promptKeepsRequestedRoleOrderOnly(prompt: string): boolean {
-  const userTask = extractPrimaryUserTaskContent(prompt);
-  return (
-    /\bkeep\b[\s\S]{0,40}\brequested role order only\b/i.test(prompt) ||
-    /\brequested role order only\b/i.test(prompt) ||
-    /\bkeep exactly these sections(?: in order)?\b/i.test(prompt) ||
-    /\broles?\s+in\s+(?:this\s+)?exact\s+order\b/i.test(userTask) ||
-    /\bproduce\b[\s\S]{0,80}\bsections?\s+for\s+members,\s*organizer,\s+and\s+risk\s+review\b/i.test(userTask) ||
-    (/\brequested role order\b/i.test(prompt) && /\bno extra headings\b/i.test(prompt)) ||
-    (/\bexactly these sections(?: in order)?\b/i.test(prompt) &&
-      /\bdo not add any (?:intro|recap|synthesis|extra headings?)\b/i.test(prompt))
-  );
-}
-
-function coworkContractRequiresSynthesis(prompt: string): boolean {
-  return !promptKeepsRequestedRoleOrderOnly(prompt);
-}
-
-function extractExactCoworkSections(prompt: string): string[] {
-  const userTask = extractPrimaryUserTaskContent(prompt) || prompt;
-  if (/\bsections?\s+for\s+members,\s*organizer,\s+and\s+risk\s+review\b/i.test(userTask)) {
-    return ["Members", "Organizer", "Risk Review"];
-  }
-  const marker = prompt.match(
-    /(?:output|keep) exactly these(?: top-level)? sections(?: in this order| in order)?:\s*([\s\S]+)/i,
-  );
-  if (!marker?.[1]) {
-    return [];
-  }
-  const [firstLine = "", ...remainingLines] = marker[1].split(/\r?\n/);
-  const firstLineTrimmed = firstLine.trim();
-  if (firstLineTrimmed && !/^[*-]\s+/.test(firstLineTrimmed)) {
-    const inlineSections = Array.from(firstLine.matchAll(/`([^`]+)`/g))
-      .map((match) => match[1]?.trim() ?? "")
-      .filter(Boolean);
-    if (inlineSections.length > 0) {
-      return inlineSections;
-    }
-  }
-  const sections: string[] = [];
-  for (const rawLine of [firstLine, ...remainingLines]) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) {
-      if (sections.length > 0) {
-        break;
-      }
-      continue;
-    }
-    const bulletMatch = trimmed.match(/^[-*]\s+`?([^`]+?)`?\s*\.?$/);
-    if (!bulletMatch) {
-      if (sections.length > 0) {
-        break;
-      }
-      continue;
-    }
-    sections.push(bulletMatch[1]!.trim());
-  }
-  return sections;
-}
-
-function normalizeCoworkRoleLabel(value: string): string {
-  const normalized = value
-    .toLowerCase()
-    .replace(/[`".:]/g, "")
-    .replace(/\bgoat\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized === "quality assurance") {
-    return "qa";
-  }
-  return normalized;
-}
-
-function isRecognizedCoworkRole(role: string): boolean {
-  return (
-    role === "planner" ||
-    role === "product" ||
-    role === "researcher" ||
-    role === "architect" ||
-    role === "coder" ||
-    role === "qa" ||
-    role === "ops" ||
-    role === "risk review" ||
-    role === "operator" ||
-    role === "operator handoff" ||
-    role === "personal assistant"
-  );
-}
-
-function formatCoworkRoleHeading(role: string): string {
-  return role === "qa"
-    ? "QA"
-    : role
-        .split(" ")
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(" ");
-}
-
-function coworkRoleSectionPresent(response: string, role: string): boolean {
-  const patterns: Record<string, RegExp> = {
-    planner: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?planner(?:\*\*|__)?\b/i,
-    product: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?product(?: goat)?(?:\*\*|__)?\b/i,
-    researcher: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?researcher(?: goat)?(?:\*\*|__)?\b/i,
-    architect: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?architect(?: goat)?(?:\*\*|__)?\b/i,
-    coder: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?coder(?: goat)?(?:\*\*|__)?\b/i,
-    qa: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?qa(?: goat)?(?:\*\*|__)?\b/i,
-    ops: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?ops(?: goat)?(?:\*\*|__)?\b/i,
-    "risk review": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?risk review(?:\*\*|__)?\b/i,
-    "operator handoff": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?operator handoff(?:\*\*|__)?\b/i,
-    operator: /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?operator(?:\*\*|__)?(?![\s-]+(?:handoff|visible|facing|ready))\b/i,
-    "personal assistant": /(?:^|\n)\s*(?:#+\s*)?(?:\*\*|__)?personal assistant(?:\*\*|__)?\b/i,
-  };
-  return patterns[role]?.test(response) ?? false;
-}
-
-function detectPresentCoworkRoles(response: string): string[] {
-  return [
-    "planner",
-    "product",
-    "researcher",
-    "architect",
-    "coder",
-    "qa",
-    "ops",
-    "risk review",
-    "operator handoff",
-    "operator",
-    "personal assistant",
-  ].filter((role) => coworkRoleSectionPresent(response, role));
-}
-
-function hasCoworkSynthesisSection(response: string): boolean {
-  return /(?:^|\n)\s*(?:#+\s*)?(?:synthesis|final recommendation|recommendation|final answer|conclusion|bottom line)\b/i.test(
-    response,
-  );
 }
 
 function summarizeCoworkToolConstraint(toolRuns: ChatToolRunRecord[]): string {
@@ -9169,136 +7841,6 @@ function buildApprovalPartialFailureCoworkFallback(input: {
   return sections.join("\n").trim();
 }
 
-function parseCoworkMarkdownSections(response: string): Array<{ heading: string; bodyLines: string[] }> {
-  const sections: Array<{ heading: string; bodyLines: string[] }> = [];
-  let current: { heading: string; bodyLines: string[] } | undefined;
-  for (const line of response.split(/\r?\n/)) {
-    const headingMatch = line.match(/^\s*#{1,6}\s+(.+?)\s*$/);
-    const bareHeadingMatch =
-      headingMatch ??
-      line.match(
-        /^\s*(Members|Organizer|Researcher|Planner|Risk Review|Operator Handoff|Operator|Product|Architect|Coder|QA|Ops|Personal Assistant|Synthesis)\s*$/i,
-      );
-    if (bareHeadingMatch) {
-      if (current) {
-        sections.push(current);
-      }
-      current = {
-        heading: bareHeadingMatch[1]!.trim(),
-        bodyLines: [],
-      };
-      continue;
-    }
-    if (current) {
-      current.bodyLines.push(line);
-    }
-  }
-  if (current) {
-    sections.push(current);
-  }
-  return sections;
-}
-
-function extractRequestedCoworkSectionBulletCount(prompt: string): number | undefined {
-  const exactMatch = prompt.match(/\beach section must contain exactly (\d+) bullets?\b/i);
-  if (!exactMatch?.[1]) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(exactMatch[1], 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function normalizeCoworkSectionBody(bodyLines: string[], exactBulletCount?: number): string {
-  const trimmedLines = bodyLines.map((line) => line.trimEnd());
-  if (exactBulletCount === undefined) {
-    return trimmedLines.join("\n").trim();
-  }
-  const bulletLines = trimmedLines.filter((line) => /^[-*]\s+/.test(line.trim()));
-  return bulletLines.slice(0, exactBulletCount).join("\n").trim();
-}
-
-function extractCoworkWordLimit(prompt: string): number | undefined {
-  const match = prompt.match(/\b(?:under|below|max(?:imum)? of)\s+(\d+)\s+words?\b/i);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(match[1], 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function countWords(value: string): number {
-  return value.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function compactCoworkOutputToWordLimit(response: string, maxWords: number): string {
-  if (countWords(response) <= maxWords) {
-    return response;
-  }
-  const compactedLines = response.split(/\r?\n/).map((line) => compactCoworkLine(line));
-  const compacted = compactedLines.join("\n").trim();
-  if (countWords(compacted) <= maxWords) {
-    return compacted;
-  }
-  const tightened = compactedLines
-    .map((line) => compactCoworkLine(line, true))
-    .join("\n")
-    .trim();
-  return countWords(tightened) <= maxWords ? tightened : compacted;
-}
-
-function compactCoworkLine(line: string, aggressive = false): string {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("-")) {
-    return line;
-  }
-  const withoutMarkdown = trimmed.replace(/\*\*([^*]+)\*\*/g, "$1");
-  const body = withoutMarkdown.replace(/^-+\s*/, "");
-  const sentenceSplit = body.split(/(?<=[.!?])\s+/);
-  const primarySentence = sentenceSplit[0] ?? body;
-  if (!aggressive) {
-    return `- ${primarySentence.trim()}`;
-  }
-  const compactClause = primarySentence.split(/[;:](?=\s+[A-Z])/)[0] ?? primarySentence;
-  return `- ${compactClause.trim()}`;
-}
-
-function repairRequestedRoleOrderOnlyCoworkOutput(input: {
-  prompt: string;
-  responseText: string;
-  requiredRoles: string[];
-}): string | undefined {
-  const exactSections = extractExactCoworkSections(input.prompt);
-  const effectiveRoles = input.requiredRoles.length > 0 ? input.requiredRoles : detectCoworkRoleOrder(input.prompt);
-  const requiredSections =
-    exactSections.length > 0 ? exactSections : effectiveRoles.map((role) => formatCoworkRoleHeading(role));
-  if (requiredSections.length === 0) {
-    return undefined;
-  }
-
-  const parsedSections = parseCoworkMarkdownSections(input.responseText);
-  if (parsedSections.length === 0) {
-    return undefined;
-  }
-
-  const exactBulletCount = extractRequestedCoworkSectionBulletCount(input.prompt);
-  const repairedSections: string[] = [];
-  for (const sectionLabel of requiredSections) {
-    const normalizedLabel = normalizeCoworkRoleLabel(sectionLabel);
-    const section = parsedSections.find((candidate) => normalizeCoworkRoleLabel(candidate.heading) === normalizedLabel);
-    if (!section) {
-      return undefined;
-    }
-    const normalizedBody = normalizeCoworkSectionBody(section.bodyLines, exactBulletCount);
-    if (!normalizedBody) {
-      return undefined;
-    }
-    repairedSections.push(`${sectionLabel}\n${normalizedBody}`);
-  }
-
-  const repaired = repairedSections.join("\n\n").trim();
-  return repaired.length > 0 ? repaired : undefined;
-}
-
 function normalizeCoworkRoleContractOutput(input: {
   prompt: string;
   responseText: string;
@@ -9531,106 +8073,6 @@ function looksLikeVolunteerOrientationApprovalPrompt(promptText: string): boolea
   return /\bvolunteer\s+orientation\b/i.test(promptText) && /\bapproval\s+checkpoint\b/i.test(promptText);
 }
 
-function normalizeRequestedRoleOnlyCoworkHeadings(response: string): string {
-  return response.replace(/^##\s+([^\n]+)$/gm, "$1").trim();
-}
-
-function collectObservedToolEvidencePaths(toolRuns: ChatToolRunRecord[]): string[] {
-  const observed = new Map<string, { path: string; score: number }>();
-  const add = (value: unknown, score: number): void => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const normalized = normalizePromptLabFilePath(value);
-    if (!normalized || !looksLikePromptLabConcreteFileCandidate(normalized)) {
-      return;
-    }
-    const key = normalized.toLowerCase();
-    const current = observed.get(key);
-    if (!current || score > current.score) {
-      observed.set(key, { path: normalized, score });
-    }
-  };
-  for (const run of toolRuns) {
-    const isConcreteRead = toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"]));
-    add(run.args?.path, isConcreteRead ? 100 : 30);
-    const result = run.result as Record<string, unknown> | undefined;
-    add(result?.path, isConcreteRead ? 110 : 35);
-    if (Array.isArray(result?.matches)) {
-      const selectedMatchPaths = selectPromptLabConcreteReadPathsFromSearchResult(result);
-      let rank = selectedMatchPaths.length;
-      for (const matchPath of selectedMatchPaths) {
-        add(matchPath, 80 + rank);
-        rank -= 1;
-      }
-    }
-  }
-  return [...observed.values()]
-    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
-    .map((entry) => entry.path)
-    .slice(0, 8);
-}
-
-function recoverTitleUrlItems(
-  toolRuns: ChatToolRunRecord[],
-  limit: number,
-): Array<{ title: string | null; url: string }> {
-  const items: Array<{ title: string | null; url: string }> = [];
-  const seen = new Set<string>();
-  for (const run of toolRuns) {
-    const result = run.result;
-    if (!result || typeof result !== "object") {
-      continue;
-    }
-    collectTitleUrlPairs(result as Record<string, unknown>, items, seen, limit);
-    if (items.length >= limit) {
-      break;
-    }
-  }
-  return items.slice(0, limit);
-}
-
-function collectTitleUrlPairs(
-  node: unknown,
-  out: Array<{ title: string | null; url: string }>,
-  seen: Set<string>,
-  limit: number,
-): void {
-  if (out.length >= limit || node === null || node === undefined) {
-    return;
-  }
-  if (Array.isArray(node)) {
-    for (const entry of node) {
-      collectTitleUrlPairs(entry, out, seen, limit);
-      if (out.length >= limit) {
-        return;
-      }
-    }
-    return;
-  }
-  if (typeof node !== "object") {
-    return;
-  }
-  const record = node as Record<string, unknown>;
-  const url = typeof record.url === "string" ? record.url : typeof record.href === "string" ? record.href : undefined;
-  if (url && /^https?:\/\//i.test(url) && !seen.has(url)) {
-    seen.add(url);
-    out.push({
-      title: typeof record.title === "string" ? record.title : typeof record.name === "string" ? record.name : null,
-      url,
-    });
-    if (out.length >= limit) {
-      return;
-    }
-  }
-  for (const value of Object.values(record)) {
-    collectTitleUrlPairs(value, out, seen, limit);
-    if (out.length >= limit) {
-      return;
-    }
-  }
-}
-
 function stripToolFailureAppendixTail(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) {
@@ -9841,134 +8283,6 @@ function looksLikeFragmentaryStandaloneAnswer(input: {
   }
   return /\b(a|an|and|are|as|at|because|by|during|for|from|if|in|into|is|of|on|or|the|to|under|via|when|while|with|without)\s*$/i.test(
     lastLine,
-  );
-}
-
-function extractPrimaryUserTaskContent(content: string): string {
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const userTaskMatch = trimmed.match(/(?:^|\n)##\s+User Task\s*\n([\s\S]*?)(?:\n(?:Answer contract:|##\s+)|$)/i);
-  if (userTaskMatch?.[1]) {
-    return userTaskMatch[1].trim();
-  }
-  const delegatedTask = extractDelegatedCoworkTaskContent(trimmed);
-  if (delegatedTask) {
-    return delegatedTask;
-  }
-  return trimmed;
-}
-
-function extractDelegatedCoworkTaskContent(content: string): string | undefined {
-  if (!/^\s*Delegated role:/i.test(content)) {
-    return undefined;
-  }
-  const readLabeledLine = (label: string): string | undefined => {
-    const match = content.match(new RegExp(`(?:^|\\n)${label}:\\s*([^\\n]+)`, "i"));
-    const value = match?.[1]?.trim();
-    return value && value.length >= 3 ? value : undefined;
-  };
-  const currentObjective = readLabeledLine("Current step objective");
-  const parentObjective = readLabeledLine("Parent objective");
-  const successCriteria = readLabeledLine("Success criteria");
-  const pieces = [currentObjective, parentObjective, successCriteria].filter((value): value is string =>
-    Boolean(value),
-  );
-  return pieces.length > 0 ? pieces.join(" ") : undefined;
-}
-
-function extractPromptLabQuotedUserAsk(content: string): string | undefined {
-  const match = content.match(/\b(?:the\s+)?user\s+(?:asks|says):\s*["“]([^"”]+)["”]/i);
-  const quoted = match?.[1]?.trim();
-  return quoted && quoted.length >= 3 ? quoted : undefined;
-}
-
-function parsePromptLabRunContract(content: string): {
-  explicitTools: boolean;
-  repoGroundedAssist: boolean;
-  requiredToolFamilies: string[];
-  requiredNamedTools: string[];
-  toolUseSuppressed: boolean;
-  userTask: string;
-} {
-  const userTask = extractPrimaryUserTaskContent(content);
-  if (!isPromptLabHarnessContent(content)) {
-    return {
-      explicitTools: false,
-      repoGroundedAssist: false,
-      requiredToolFamilies: [],
-      requiredNamedTools: [],
-      toolUseSuppressed: false,
-      userTask,
-    };
-  }
-  const contractBody =
-    content.match(/(?:^|\n)##\s+Prompt Lab Run Contract\s*\n([\s\S]*?)(?:\n##\s+User Task\s*\n|$)/i)?.[1] ?? "";
-  const explicitTools =
-    /\btool tier:\s*explicit-tools\b/i.test(contractBody) || /\bexplicit-tools evaluation\b/i.test(contractBody);
-  const repoGroundedAssist = /\brepo inspection assist:\s*enabled\b/i.test(contractBody);
-  const requiredToolFamilies = Array.from(
-    new Set(
-      contractBody
-        .split(/\r?\n/)
-        .filter((line) => /required tool families:/i.test(line))
-        .flatMap((line) => line.split(":").slice(1).join(":").split(","))
-        .map((item) => item.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  );
-  const requiredNamedTools = Array.from(
-    new Set(
-      contractBody
-        .split(/\r?\n/)
-        .filter((line) => /required named tools:/i.test(line))
-        .flatMap((line) => [...line.matchAll(/`([^`]+)`/g)].map((match) => match[1]?.trim().toLowerCase()))
-        .filter((item): item is string => Boolean(item)),
-    ),
-  );
-  return {
-    explicitTools,
-    repoGroundedAssist,
-    requiredToolFamilies,
-    requiredNamedTools,
-    toolUseSuppressed:
-      promptLabUserTaskSuppressesToolUse(userTask) || /\bexplicitly forbids tool use\b/i.test(contractBody),
-    userTask,
-  };
-}
-
-function promptLabUserTaskSuppressesToolUse(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\banswer\s+without\s+tools\b/.test(normalized) ||
-    /\bdo\s+not\s+use\s+(?:any\s+)?tools\b/.test(normalized) ||
-    /\bdon't\s+use\s+(?:any\s+)?tools\b/.test(normalized) ||
-    /\bplease\s+do\s+not\s+look\s+anything\s+up\b/.test(normalized) ||
-    /\bdo\s+not\s+look\s+(?:anything|this|that|it)\s+up\b/.test(normalized) ||
-    /\bdon't\s+look\s+(?:anything|this|that|it)\s+up\b/.test(normalized) ||
-    /\bfrom\s+memory\s+only\b/.test(normalized) ||
-    /\bbased\s+only\s+on\s+the\s+(?:details|prompt|text)\b/.test(normalized)
-  );
-}
-
-function promptLabContractRequiresFileTools(input: {
-  requiredToolFamilies: string[];
-  requiredNamedTools: string[];
-}): boolean {
-  return (
-    input.requiredToolFamilies.includes("file/code tools") ||
-    input.requiredNamedTools.some((toolName) => LOCAL_PATH_TOOL_NAMES.has(toolName))
-  );
-}
-
-function promptLabContractRequiresWebTools(input: {
-  requiredToolFamilies: string[];
-  requiredNamedTools: string[];
-}): boolean {
-  return (
-    input.requiredToolFamilies.includes("web lookup tools") ||
-    input.requiredNamedTools.some((toolName) => WEB_TOOL_NAMES.has(toolName))
   );
 }
 
@@ -11334,7 +9648,7 @@ function buildPromptPackSourceLabelEvidenceFallback(input: {
   const testEvidence = pickPromptLabConcreteReadEvidence(
     concreteEvidence,
     ({ path, content }) =>
-      /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i.test(path) &&
+      /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.parser-report\.test\.ts$/i.test(path) &&
       /\bprompt[- ]pack|sourceLabel|export\b/i.test(content),
   );
   if (!serviceEvidence && !routeEvidence && !repoEvidence && !apiEvidence) {
@@ -12233,7 +10547,7 @@ function buildPromptLabKnownPatchPlanFallback(input: {
     const routeEvidence = pick(/(?:^|\/)apps\/gateway\/src\/routes\/prompt-packs\.ts$/i);
     const apiEvidence = pick(/(?:^|\/)packages\/mission-control-shared\/src\/api\/prompt-packs\.ts$/i);
     const contractEvidence = pick(/(?:^|\/)packages\/contracts\/src\/prompt-pack\.ts$/i);
-    const testEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i);
+    const testEvidence = pick(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.parser-report\.test\.ts$/i);
     if (!serviceEvidence || !repoEvidence) {
       return undefined;
     }
@@ -12836,12 +11150,14 @@ function buildPromptLabKnownMinimalTestSpecFallback(input: {
   }
 
   if (looksLikePromptLabPromptPackV2DistinctTestPrompt(userTask)) {
-    const testPath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i);
+    const testPath = findEvidencePath(
+      /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.parser-report\.test\.ts$/i,
+    );
     const sourcePath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i);
     const v2Path = findEvidencePath(/(?:^|\/)goatcitadel_prompt_pack_v2\.md$/i);
     const baselinePath = findEvidencePath(/(?:^|\/)goatcitadel_prompt_pack\.md$/i);
     const expectedPaths = [
-      testPath ?? "apps/gateway/src/services/prompt-pack-service.test.ts",
+      testPath ?? "apps/gateway/src/services/prompt-pack-service.parser-report.test.ts",
       sourcePath ?? "apps/gateway/src/services/prompt-pack-service.ts",
       v2Path ?? "goatcitadel_prompt_pack_v2.md",
       baselinePath ?? "goatcitadel_prompt_pack.md",
@@ -12882,10 +11198,12 @@ function buildPromptLabKnownMinimalTestSpecFallback(input: {
   }
 
   if (looksLikePromptLabEnvSourceLabelMinimalTestPrompt(userTask)) {
-    const testPath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i);
+    const testPath = findEvidencePath(
+      /(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.parser-report\.test\.ts$/i,
+    );
     const sourcePath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i);
     const expectedPaths = [
-      testPath ?? "apps/gateway/src/services/prompt-pack-service.test.ts",
+      testPath ?? "apps/gateway/src/services/prompt-pack-service.parser-report.test.ts",
       sourcePath ?? "apps/gateway/src/services/prompt-pack-service.ts",
     ];
     if (!testPath || !sourcePath) {
@@ -12938,10 +11256,10 @@ function buildPromptLabKnownMinimalTestSpecFallback(input: {
   }
 
   if (looksLikePromptLabJudgeDefaultsMinimalTestPrompt(userTask)) {
-    const testPath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i);
+    const testPath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.scoring\.test\.ts$/i);
     const sourcePath = findEvidencePath(/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i);
     const expectedPaths = [
-      testPath ?? "apps/gateway/src/services/prompt-pack-service.test.ts",
+      testPath ?? "apps/gateway/src/services/prompt-pack-service.scoring.test.ts",
       sourcePath ?? "apps/gateway/src/services/prompt-pack-service.ts",
     ];
     if (!testPath || !sourcePath) {
@@ -13728,313 +12046,6 @@ function buildRepoGroundedEvidenceRepairContent(prompt: string, toolRuns: ChatTo
   return lines.join("\n").trim();
 }
 
-function buildPromptLabExactCitationAppendix(toolRuns: ChatToolRunRecord[]): string | undefined {
-  const evidence = collectPromptLabConcreteReadEvidence(toolRuns).slice(0, 8);
-  if (evidence.length === 0) {
-    return undefined;
-  }
-  const citationByPath = new Map(
-    collectPromptLabConcreteReadCitations(toolRuns).map((citation) => [citation.path.toLowerCase(), citation] as const),
-  );
-  const lines = ["Exact citations used:"];
-  for (const item of evidence) {
-    const citation = citationByPath.get(item.path.toLowerCase());
-    const inline = formatPromptLabInlineCitation(citation ?? { path: item.path }, toolRuns);
-    if (inline) {
-      lines.push(`- ${inline}`);
-    }
-  }
-  return lines.length > 1 ? lines.join("\n") : undefined;
-}
-
-function buildPromptLabExactCitationAppendixForPaths(
-  toolRuns: ChatToolRunRecord[],
-  allowedPaths: string[],
-): string | undefined {
-  const normalizedAllowedPaths = new Set(
-    allowedPaths.map((path) => normalizePromptLabFilePath(path).toLowerCase()).filter(Boolean),
-  );
-  if (normalizedAllowedPaths.size === 0) {
-    return undefined;
-  }
-  const evidence = collectPromptLabConcreteReadEvidence(toolRuns)
-    .filter((item) => normalizedAllowedPaths.has(item.path.toLowerCase()))
-    .slice(0, 8);
-  if (evidence.length === 0) {
-    return undefined;
-  }
-  const citationByPath = new Map(
-    collectPromptLabConcreteReadCitations(toolRuns)
-      .filter((citation) => normalizedAllowedPaths.has(citation.path.toLowerCase()))
-      .map((citation) => [citation.path.toLowerCase(), citation] as const),
-  );
-  const lines = ["Exact citations used:"];
-  for (const item of evidence) {
-    const citation = citationByPath.get(item.path.toLowerCase());
-    const inline = formatPromptLabInlineCitation(citation ?? { path: item.path }, toolRuns);
-    if (inline) {
-      lines.push(`- ${inline}`);
-    }
-  }
-  return lines.length > 1 ? lines.join("\n") : undefined;
-}
-
-function formatPromptLabInlineCitation(
-  citation: { path: string; startLine?: number; endLine?: number },
-  toolRuns: ChatToolRunRecord[],
-): string {
-  const excerpt = extractPromptLabCitationExcerpt(citation.path, toolRuns);
-  const anchoredLine =
-    typeof citation.startLine === "number" && typeof excerpt?.lineOffset === "number"
-      ? citation.startLine + excerpt.lineOffset
-      : undefined;
-  const broadRangeSpan =
-    typeof citation.startLine === "number" && typeof citation.endLine === "number"
-      ? citation.endLine - citation.startLine
-      : undefined;
-  const displayStartLine =
-    anchoredLine ?? (typeof broadRangeSpan === "number" && broadRangeSpan > 24 ? undefined : citation.startLine);
-  const displayEndLine =
-    anchoredLine ?? (typeof broadRangeSpan === "number" && broadRangeSpan > 24 ? undefined : citation.endLine);
-  const range =
-    typeof displayStartLine === "number" && typeof displayEndLine === "number" && displayStartLine !== displayEndLine
-      ? ` lines ${displayStartLine}-${displayEndLine}`
-      : typeof displayStartLine === "number"
-        ? ` line ${displayStartLine}`
-        : "";
-  const quote = excerpt?.quote;
-  return quote ? `\`${citation.path}\`${range} ("${quote}")` : `\`${citation.path}\`${range}`;
-}
-
-function formatPromptLabCitationForPath(filePath: string, toolRuns: ChatToolRunRecord[]): string | undefined {
-  const citation = collectPromptLabConcreteReadCitations(toolRuns).find(
-    (item) => item.path.toLowerCase() === normalizePromptLabFilePath(filePath).toLowerCase(),
-  );
-  return citation ? formatPromptLabInlineCitation(citation, toolRuns) : undefined;
-}
-
-function extractPromptLabCitationQuote(filePath: string, toolRuns: ChatToolRunRecord[]): string | undefined {
-  return extractPromptLabCitationExcerpt(filePath, toolRuns)?.quote;
-}
-
-function extractPromptLabCitationExcerpt(
-  filePath: string,
-  toolRuns: ChatToolRunRecord[],
-): { quote: string; lineOffset?: number } | undefined {
-  const normalizedPath = normalizePromptLabFilePath(filePath).toLowerCase();
-  const evidence = collectPromptLabConcreteReadEvidence(toolRuns).find(
-    (item) => item.path.toLowerCase() === normalizedPath,
-  );
-  if (!evidence?.content) {
-    return undefined;
-  }
-  const nonEmptyLines = evidence.content
-    .split(/\r?\n/)
-    .map((line, index) => ({ raw: line, line: line.trim(), index }))
-    .filter(({ line }) => line.length > 0 && line !== "```");
-  if (nonEmptyLines.length === 0) {
-    return undefined;
-  }
-  const preferredPathSpecificPatterns: RegExp[] = [];
-  if (/(?:^|\/)scripts\/run-prompt-pack-gates\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bresolvePromptPack\b/, /\bselectPromptPackGateTargetCodes\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/gateway\/update-review\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bparsePnpmOutdatedOutput\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/gateway\/update-review\.test\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bwrapped dependents\b/i, /\bparsePnpmOutdatedOutput\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/skill-import-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bfindDuplicateInstallMatches\b/,
-      /\bvalidateMaterialized\b/,
-      /\bduplicateFamily\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/skill-import-service\.test\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bblocks overlapping Cloudflare-family installs\b/i, /\bskills\/extra\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\breplacePackTests\([\s\S]*sourceLabel\b/,
-      /\bsourceLabel: input\.sourceLabel\b/,
-      /\bsourceLabel: sourcePath\b/,
-      /\brefreshPromptPackExportFile\b/,
-      /\brenderPromptPackMarkdownReport\b/,
-      /\breadPromptPackExportRecord\b/,
-      /\bresolvePromptPackExportPath\b/,
-      /\bparsePromptPackTests\b/,
-      /\bensurePromptPackLoaded\b/,
-      /\bresolvePromptPackJudgeTarget\b/,
-    );
-  }
-  if (/(?:^|\/)packages\/storage\/src\/prompt-pack-repo\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bsource_label = excluded\.source_label\b/,
-      /\bsourceLabel: input\.sourceLabel \?\? null\b/,
-      /\bsourceLabel: row\.source_label \?\? undefined\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/prompt-pack-service\.test\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bparses the focused v2 prompt pack markdown\b/i,
-      /\bpreserves the real env prompt-pack source label\b/i,
-      /\bresolvePromptPackJudgeTarget\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/approval-resolution-effects-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bhandleWakeEffect\b/,
-      /\benqueueResolutionEffects\b/,
-      /\bskipEffect\b/,
-      /\bmarkResolved\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/durable-run-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bwakeDurableRun\b/, /\bpaused\b/, /\bwaiting\b/, /\bDurableWakeResult\b/);
-  }
-  if (/(?:^|\/)packages\/contracts\/src\/durable\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bDurableWakeResult\b/, /\bDurableWakeOutcome\b/, /\bDurableRunStatus\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/routes\/durable\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\/api\/v1\/durable\/runs\/:runId\/events\/wake\b/,
-      /\bwakeDurableRun\b/,
-      /\bDurableWakeResult\b/,
-    );
-  }
-  if (
-    /(?:^|\/)(?:packages\/mission-control-shared|apps\/mission-control)\/src\/api\/durable\.ts$/i.test(normalizedPath)
-  ) {
-    preferredPathSpecificPatterns.push(/\bDurableWakeResult\b/, /\bwakeDurableRun\b/, /\bfetchDurableRun\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/runtime-lifecycle-read-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bapproval_linkage\b/,
-      /\bfallback_payload\b/,
-      /\bfallback_preview\b/,
-      /\bfallbackSources\b/,
-      /\bsessionIdSource\b/,
-      /\brunIdSource\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/approval-lifecycle-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\blinkage\b/,
-      /\benqueueResolutionEffects\b/,
-      /\bresolveApproval\b/,
-      /\bpayload\b/,
-      /\bpreview\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/routes\/approvals\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\blinkage\b/, /\bapproval\b/, /\bpayload\b/, /\bpreview\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/routes\/events\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\beventClass\b/, /\beventAuthority\b/, /\blinks\b/, /\/api\/v1\/events/);
-  }
-  if (/(?:^|\/)packages\/storage\/src\/realtime-event-repo\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bevent_class\b/,
-      /\bevent_authority\b/,
-      /\b__gcEventLinks\b/,
-      /\bappend\b/,
-      /\blist\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/realtime-event-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\beventClass\b/, /\beventAuthority\b/, /\blinks\b/, /\bpublish\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/realtime-events-route-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\beventClass\b/, /\beventAuthority\b/, /\blinks\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/gateway-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bconst selected = workspaceDoc\.exists \? workspaceDoc : globalDoc\.exists \? globalDoc : undefined\b/,
-      /\bselected\.scope === "workspace"\b/,
-      /\bworkspaceFilesUsed\.push\b/,
-      /\bglobalFilesUsed\.push\b/,
-      /\bresolveRuntimeGuidance\b/,
-      /\bworkspace overrides taking precedence over global defaults\b/i,
-      /\blistWorkspaceGuidance\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/chat-turn-prep-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bresolveRuntimeGuidance\(workspaceId\)/, /\bprepareAgentChatTurn\b/);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/routes\/memory\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bmemoryRoutes\b/,
-      /\bregisterMemoryRoutes\b/,
-      /\/api\/v1\/memory\/context\/compose/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/memory-route-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bMemoryRoutePort\b/,
-      /\bcomposeMemoryContext\b/,
-      /\brunMemoryMaintenanceNow\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/memory-context-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bMemoryContextService\b/, /\bcomposeMemoryContext\b/, /\bdistill\b/i);
-  }
-  if (/(?:^|\/)apps\/gateway\/src\/services\/memory-lifecycle-service\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bMemoryLifecycleService\b/, /\bprune\b/i, /\bmaintenance\b/i);
-  }
-  if (/(?:^|\/)packages\/storage\/src\/memory-context-repo\.ts$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bMemoryContextRepository\b/, /\bupsert\s*\(/, /\bfindFreshByCacheKey\s*\(/);
-  }
-  if (/(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(
-      /\bMemoryPage\b/,
-      /\bfetchMemoryItems\b/,
-      /\bfetchMemoryQmdStats\b/,
-      /\bfetchMemoryMaintenanceStatus\b/,
-    );
-  }
-  if (/(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bMemoryMaintenancePanel\b/);
-  }
-
-  const pathSpecificPreferred = preferredPathSpecificPatterns
-    .map((pattern) =>
-      nonEmptyLines.find(
-        ({ line }) =>
-          !/^[{[]?\s*['"]content['"]\s*:/.test(line) && !/^['"]path['"]\s*:/.test(line) && pattern.test(line),
-      ),
-    )
-    .find(Boolean);
-  if (pathSpecificPreferred) {
-    return {
-      quote: truncatePlainText(pathSpecificPreferred.line.replace(/^#+\s*/, "").replace(/"/g, "'"), 140),
-      lineOffset: pathSpecificPreferred.index,
-    };
-  }
-  const preferred =
-    nonEmptyLines.find(
-      ({ line }) =>
-        !/^import\s+/i.test(line) &&
-        !/^\/\*/.test(line) &&
-        !/^\*|^\/\//.test(line) &&
-        !/^[{[]?\s*['"]content['"]\s*:/.test(line) &&
-        !/^['"]path['"]\s*:/.test(line) &&
-        (/\b(?:export|async|function|class|interface|type|const|describe|it|test|fastify\.)\b/.test(line) ||
-          /\/api\/v1\//.test(line)),
-    ) ??
-    nonEmptyLines.find(({ line }) => line.length >= 24 && !/^#+\s*$/.test(line) && !/^import\s+/i.test(line)) ??
-    nonEmptyLines.find(({ line }) => !/^#+\s*$/.test(line)) ??
-    nonEmptyLines[0];
-  if (!preferred) {
-    return undefined;
-  }
-  return {
-    quote: truncatePlainText(preferred.line.replace(/^#+\s*/, "").replace(/"/g, "'"), 140),
-    lineOffset: preferred.index,
-  };
-}
-
 function looksLikePromptLabTestSpecPrompt(userTask: string | undefined): boolean {
   const normalized = (userTask ?? "").toLowerCase();
   return (
@@ -14263,90 +12274,6 @@ function normalizeRepoGroundedInspectionOutput(input: {
   return repaired;
 }
 
-function extractPromptLabExactBulletLabels(prompt: string): string[] {
-  const labelsLine = prompt
-    .split(/\r?\n/)
-    .find((line) =>
-      /\b(?:use|return|provide)\s+exactly\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+bullets?\s+labeled\b/i.test(
-        line,
-      ),
-    );
-  if (!labelsLine) {
-    return [];
-  }
-  return [...labelsLine.matchAll(/`([^`\r\n]+)`/g)].map((match) => match[1]?.trim() ?? "").filter(Boolean);
-}
-
-function promptLabForbidsTemplateOrPlaceholderCitations(prompt: string): boolean {
-  return (
-    /\bdo not cite\b[\s\S]{0,120}\btemplate files?\b/i.test(prompt) ||
-    /\bdo not cite\b[\s\S]{0,120}\bplaceholder paths?\b/i.test(prompt) ||
-    /\bwithout template leakage\b/i.test(prompt)
-  );
-}
-
-function isPromptLabTemplateOrPlaceholderPath(path: string): boolean {
-  const normalized = normalizePromptLabFilePath(path);
-  return /(?:^|\/)templates?\//i.test(normalized) || /\{\{[^}]+\}\}/.test(normalized);
-}
-
-function promptLabPathAllowedByPrompt(path: string, prompt: string): boolean {
-  if (!path) {
-    return false;
-  }
-  if (promptLabForbidsTemplateOrPlaceholderCitations(prompt) && isPromptLabTemplateOrPlaceholderPath(path)) {
-    return false;
-  }
-  return true;
-}
-
-function filterPromptLabExactFilePathsForPrompt(paths: string[], prompt: string): string[] {
-  const seen = new Set<string>();
-  const filtered: string[] = [];
-  for (const rawPath of paths) {
-    if (!rawPath || !promptLabPathAllowedByPrompt(rawPath, prompt)) {
-      continue;
-    }
-    const normalized = normalizePromptLabFilePath(rawPath);
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    filtered.push(normalized);
-  }
-  return filtered;
-}
-
-function filterPromptLabConcreteReadEvidenceForPrompt(
-  evidence: Array<{ path: string; content: string }>,
-  prompt: string,
-): Array<{ path: string; content: string }> {
-  return evidence.filter((item) => promptLabPathAllowedByPrompt(item.path, prompt));
-}
-
-function filterPromptLabConcreteReadCitationsForPrompt(
-  citations: Array<{ path: string; startLine?: number; endLine?: number }>,
-  prompt: string,
-): Array<{ path: string; startLine?: number; endLine?: number }> {
-  return citations.filter((citation) => promptLabPathAllowedByPrompt(citation.path, prompt));
-}
-
-function promptLabContractRequiresConcreteFileEvidence(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bexact (?:evidence|file|files|patch points?|assertions?|cit(?:e|ed)|line numbers?)\b/.test(normalized) ||
-    /\bexact citations?\b/.test(normalized) ||
-    /\bfile-grounded\b/.test(normalized) ||
-    /\bcite the exact\b/.test(normalized) ||
-    /\bcite\b[\s\S]{0,80}\bexact files?\b/.test(normalized) ||
-    /\bcitations?\b[\s\S]{0,60}\bfiles?\s+you\s+used\b/.test(normalized) ||
-    /\bcite\b[\s\S]{0,80}\bfiles?\s+used\b/.test(normalized) ||
-    /\bconcret(?:e|ely)\s+read\b/.test(normalized) ||
-    /\bfiles?\s+whose\s+contents\s+you\s+concretely\s+read\b/.test(normalized)
-  );
-}
-
 function resolvePromptLabConcreteReadToolName(
   canonicalToModel: Map<string, string>,
   catalogToolNames: string[] = [],
@@ -14548,369 +12475,6 @@ function looksLikePromptLabInspectionContinuation(content: string): boolean {
   return normalized.length <= 2000 && citedFileCount <= 6;
 }
 
-function collectPromptLabConcreteReadEvidence(toolRuns: ChatToolRunRecord[]): Array<{ path: string; content: string }> {
-  const evidenceByPath = new Map<string, { path: string; content: string }>();
-  for (const run of toolRuns) {
-    if (
-      run.status !== "executed" ||
-      !toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"])) ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      continue;
-    }
-    const result = run.result as Record<string, unknown>;
-    const rawPath =
-      typeof result.path === "string" ? result.path : typeof run.args?.path === "string" ? run.args.path : undefined;
-    if (!rawPath) {
-      continue;
-    }
-    const normalizedPath = normalizePromptLabFilePath(rawPath);
-    const key = normalizedPath.toLowerCase();
-    const nextContent = normalizePromptLabEvidenceContent(
-      typeof result.content === "string"
-        ? result.content
-        : typeof result.bodySnippet === "string"
-          ? result.bodySnippet
-          : typeof result.snippet === "string"
-            ? result.snippet
-            : "",
-    );
-    const existing = evidenceByPath.get(key);
-    if (!existing) {
-      evidenceByPath.set(key, {
-        path: normalizedPath,
-        content: nextContent,
-      });
-      continue;
-    }
-    if (nextContent && !existing.content.includes(nextContent)) {
-      existing.content = [existing.content, nextContent].filter(Boolean).join("\n");
-    }
-    evidenceByPath.set(key, {
-      path: normalizedPath,
-      content: existing.content,
-    });
-  }
-  return [...evidenceByPath.values()];
-}
-
-function normalizePromptLabEvidenceContent(content: string): string {
-  let normalized = content.trim();
-  const serializedPayloadContent = extractPromptLabEvidenceTextFromSerializedPayload(normalized);
-  if (serializedPayloadContent) {
-    normalized = serializedPayloadContent;
-  }
-  const wrappedContentMatch = normalized.match(/^[{[]?\s*['"]content['"]\s*:\s*(['"])([\s\S]*)\1\s*[,}]?\s*$/);
-  if (wrappedContentMatch?.[2]) {
-    normalized = wrappedContentMatch[2];
-  }
-  if (/\\[rn]/.test(normalized)) {
-    normalized = normalized
-      .replace(/\\r\\n/g, "\n")
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\n")
-      .replace(/\\t/g, "\t");
-  }
-  return normalized.replace(/\\'/g, "'").replace(/\\"/g, '"');
-}
-
-function extractPromptLabEvidenceTextFromSerializedPayload(content: string): string | undefined {
-  const trimmed = content.trim();
-  if (
-    !/^(?:\{|\[)/.test(trimmed) ||
-    !/['"](content|bodySnippet|snippet|text|body|message|path)['"]\s*:/.test(trimmed)
-  ) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return readPromptLabEvidenceTextFromPayload(parsed);
-  } catch {
-    const singleQuotedContentMatch = trimmed.match(/['"]content['"]\s*:\s*'([\s\S]*?)'(?:\s*[,}])/);
-    if (singleQuotedContentMatch?.[1]) {
-      return singleQuotedContentMatch[1]
-        .replace(/\\r\\n/g, "\n")
-        .replace(/\\n/g, "\n")
-        .replace(/\\'/g, "'");
-    }
-    const doubleQuotedContentMatch = trimmed.match(/['"]content['"]\s*:\s*"([\s\S]*?)"(?:\s*[,}])/);
-    if (doubleQuotedContentMatch?.[1]) {
-      return doubleQuotedContentMatch[1]
-        .replace(/\\r\\n/g, "\n")
-        .replace(/\\n/g, "\n")
-        .replace(/\\"/g, '"');
-    }
-    return undefined;
-  }
-}
-
-function readPromptLabEvidenceTextFromPayload(payload: unknown): string | undefined {
-  if (typeof payload === "string") {
-    return payload.trim();
-  }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  for (const key of ["content", "bodySnippet", "snippet", "text", "body", "message"] as const) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function collectPromptLabConcreteReadCitations(
-  toolRuns: ChatToolRunRecord[],
-): Array<{ path: string; startLine?: number; endLine?: number }> {
-  const seen = new Set<string>();
-  const citations: Array<{ path: string; startLine?: number; endLine?: number }> = [];
-  for (const run of toolRuns) {
-    if (
-      run.status !== "executed" ||
-      !toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"])) ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      continue;
-    }
-    const result = run.result as Record<string, unknown>;
-    const rawPath =
-      typeof result.path === "string" ? result.path : typeof run.args?.path === "string" ? run.args.path : undefined;
-    if (!rawPath) {
-      continue;
-    }
-    const normalizedPath = normalizePromptLabFilePath(rawPath);
-    const key = normalizedPath.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const startLine =
-      typeof result.startLine === "number"
-        ? result.startLine
-        : typeof run.args?.startLine === "number"
-          ? run.args.startLine
-          : undefined;
-    const endLine =
-      typeof result.endLine === "number"
-        ? result.endLine
-        : typeof run.args?.endLine === "number"
-          ? run.args.endLine
-          : undefined;
-    citations.push({
-      path: normalizedPath,
-      startLine,
-      endLine,
-    });
-  }
-  return citations;
-}
-
-function pickPromptLabConcreteReadEvidence(
-  evidence: Array<{ path: string; content: string }>,
-  predicate: (item: { path: string; content: string }) => boolean,
-): { path: string; content: string } | undefined {
-  return evidence.find(predicate);
-}
-
-function selectPromptLabConcreteReadPathsFromSearchResult(result: unknown): string[] {
-  if (!result || typeof result !== "object" || !("matches" in result) || !Array.isArray(result.matches)) {
-    return [];
-  }
-  const uniquePaths = [
-    ...new Set(
-      result.matches
-        .map((match) => {
-          if (!match || typeof match !== "object") {
-            return undefined;
-          }
-          const candidatePath = "path" in match && typeof match.path === "string" ? match.path.trim() : "";
-          const candidateType = "type" in match && typeof match.type === "string" ? match.type : undefined;
-          return looksLikePromptLabConcreteFileCandidate(candidatePath, candidateType) ? candidatePath : undefined;
-        })
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ];
-  if (uniquePaths.length === 0) {
-    return [];
-  }
-
-  const rankedPaths = [...uniquePaths].sort(
-    (left, right) => scorePromptLabConcreteReadCandidate(right) - scorePromptLabConcreteReadCandidate(left),
-  );
-  const selected: string[] = [];
-  const add = (candidate: string | undefined): void => {
-    if (!candidate || selected.includes(candidate)) {
-      return;
-    }
-    selected.push(candidate);
-  };
-
-  const implementationPath = rankedPaths.find(
-    (value) =>
-      !/(?:^|\/)(?:docs?|artifacts)\//i.test(value) && !/\.test\.[^.]+$/i.test(value) && !/\.spec\.[^.]+$/i.test(value),
-  );
-  const companionPath = rankedPaths.find(
-    (value) =>
-      value !== implementationPath &&
-      (/(?:^|\/)docs?\//i.test(value) ||
-        /\.test\.[^.]+$/i.test(value) ||
-        /\.spec\.[^.]+$/i.test(value) ||
-        (/\.md$/i.test(value) && !/(?:^|\/)artifacts\//i.test(value))),
-  );
-  const artifactPath = rankedPaths.find(
-    (value) => value !== implementationPath && value !== companionPath && /(?:^|\/)artifacts\//i.test(value),
-  );
-  const adjacentImplementationPath = rankedPaths.find(
-    (value) =>
-      value !== implementationPath &&
-      value !== companionPath &&
-      !/(?:^|\/)(?:docs?|artifacts)\//i.test(value) &&
-      !/\.test\.[^.]+$/i.test(value) &&
-      !/\.spec\.[^.]+$/i.test(value),
-  );
-
-  add(implementationPath);
-  add(companionPath);
-  add(adjacentImplementationPath);
-  add(artifactPath);
-  for (const value of rankedPaths) {
-    if (selected.length >= 3) {
-      break;
-    }
-    add(value);
-  }
-  return selected.slice(0, 3);
-}
-
-const PROMPT_LAB_TEXTUAL_FILE_EXTENSIONS = new Set([
-  ".c",
-  ".cc",
-  ".cpp",
-  ".cs",
-  ".css",
-  ".cts",
-  ".go",
-  ".h",
-  ".hpp",
-  ".html",
-  ".java",
-  ".js",
-  ".json",
-  ".jsx",
-  ".kt",
-  ".md",
-  ".mjs",
-  ".mts",
-  ".php",
-  ".ps1",
-  ".py",
-  ".rb",
-  ".rs",
-  ".scss",
-  ".sh",
-  ".sql",
-  ".swift",
-  ".toml",
-  ".ts",
-  ".tsx",
-  ".txt",
-  ".xml",
-  ".yaml",
-  ".yml",
-]);
-
-function looksLikePromptLabConcreteFileCandidate(path: string, type?: string): boolean {
-  const normalized = path.replace(/\\/g, "/").trim();
-  if (
-    type === "dir" ||
-    !normalized ||
-    /\/$/.test(normalized) ||
-    /(?:^|\/)(?:\.codex-tmp|\.worktrees|data\/tool-artifacts)(?:\/|$)/i.test(normalized)
-  ) {
-    return false;
-  }
-  const basename = normalized.split("/").filter(Boolean).at(-1) ?? "";
-  if (!basename) {
-    return false;
-  }
-  const extMatch = basename.match(/(\.[a-z0-9]+)$/i);
-  const extension = extMatch?.[1]?.toLowerCase();
-  if (!extension) {
-    return /^(readme|makefile|dockerfile|justfile)$/i.test(basename);
-  }
-  return PROMPT_LAB_TEXTUAL_FILE_EXTENSIONS.has(extension);
-}
-
-function scorePromptLabConcreteReadCandidate(path: string): number {
-  const normalized = path.replace(/\\/g, "/").toLowerCase();
-  let score = 0;
-  if (/(?:^|\/)(apps|packages|scripts|docs|src|test|tests)\//.test(normalized)) {
-    score += 20;
-  }
-  if (
-    /(?:^|\/)(?:artifacts\/prompt-lab|artifacts|dist|build|coverage|node_modules|\.worktrees|\.codex-tmp|data\/tool-artifacts|vendor|third_party|ggml)\//.test(
-      normalized,
-    )
-  ) {
-    score -= 30;
-  }
-  if (/(?:^|\/)templates?\//.test(normalized) || /{{[a-z0-9_]+}}/i.test(normalized)) {
-    score -= 24;
-  }
-  if (/\.test\.[^.]+$|\.spec\.[^.]+$/.test(normalized)) {
-    score += 6;
-  }
-  if (/\.md$/.test(normalized)) {
-    score += 5;
-  }
-  if (!/\.test\.[^.]+$|\.spec\.[^.]+$|\.md$/.test(normalized)) {
-    score += 10;
-  }
-  if (/(?:^|\/)(?:routes|services|orchestration|contracts|storage)\//.test(normalized)) {
-    score += 4;
-  }
-  if (/(?:^|\/)(?:routes|services)\//.test(normalized)) {
-    score += 6;
-  }
-  if (/\bprompt-pack\b|prompt_pack|promptpacksworkbench|prompt-packs-workbench/.test(normalized)) {
-    score += 14;
-  }
-  if (/(?:^|\/)packages\/storage\/src\/prompt-pack-/.test(normalized)) {
-    score += 10;
-  }
-  if (/(?:^|\/)apps\/mission-control-next\/src\/features\/prompt-packs\//.test(normalized)) {
-    score += 10;
-  }
-  return score;
-}
-
-function collectPromptLabConcreteReadPaths(toolRuns: ChatToolRunRecord[]): Set<string> {
-  const observed = new Set<string>();
-  for (const run of toolRuns) {
-    if (
-      run.status !== "executed" ||
-      !toolNameMatchesAnyKnownTool(run.toolName, new Set(["file.read_range", "fs.read"]))
-    ) {
-      continue;
-    }
-    const resultPath =
-      run.result && typeof run.result === "object" && typeof (run.result as { path?: unknown }).path === "string"
-        ? (run.result as { path: string }).path
-        : undefined;
-    const argsPath = typeof run.args?.path === "string" ? run.args.path : undefined;
-    const candidate = resultPath ?? argsPath;
-    if (!candidate) {
-      continue;
-    }
-    observed.add(normalizePromptLabFilePath(candidate).toLowerCase());
-  }
-  return observed;
-}
-
 function shouldRetryPromptLabSearchFromRepoRoot(input: {
   searchPath: string;
   toolRun: ChatToolRunRecord;
@@ -15001,19 +12565,6 @@ function buildPromptLabPartialToolCallSynthesisInstruction(toolRuns: ChatToolRun
   ]
     .filter((part) => part.trim().length > 0)
     .join(" ");
-}
-
-function promptLabConcreteReadSetMatchesPath(observedPaths: Set<string>, filePath: string): boolean {
-  const normalized = normalizePromptLabFilePath(filePath).toLowerCase();
-  if (observedPaths.has(normalized)) {
-    return true;
-  }
-  for (const observed of observedPaths) {
-    if (observed.endsWith(`/${normalized}`)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function resolvePromptLabFilePrefetchEndLine(userTask: string | undefined, fileCount: number): number {
@@ -15313,7 +12864,7 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
     /\bsource label|source-label|source_label|source labeling|export rendering\b/.test(normalizedTask)
   ) {
     add("apps/gateway/src/services/prompt-pack-service.ts");
-    add("apps/gateway/src/services/prompt-pack-service.test.ts");
+    add("apps/gateway/src/services/prompt-pack-service.parser-report.test.ts");
     add("packages/storage/src/prompt-pack-repo.ts");
     add("apps/gateway/src/routes/prompt-packs.ts");
     add("packages/mission-control-shared/src/api/prompt-packs.ts");
@@ -15367,7 +12918,7 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
   }
 
   if (looksLikePromptLabJudgeDefaultsMinimalTestPrompt(userTask)) {
-    add("apps/gateway/src/services/prompt-pack-service.test.ts");
+    add("apps/gateway/src/services/prompt-pack-service.scoring.test.ts");
     add("apps/gateway/src/services/prompt-pack-service.ts");
   }
 
@@ -15389,53 +12940,6 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
   return [...paths];
 }
 
-function extractPromptLabBulletBodies(responseText: string): Map<string, string> {
-  const bullets = new Map<string, string>();
-  const lines = responseText.split(/\r?\n/);
-  let currentLabel: string | null = null;
-  let currentBody: string[] = [];
-  let currentParagraphClosed = false;
-
-  const flush = () => {
-    if (!currentLabel) {
-      return;
-    }
-    const joined = currentBody.join("\n").trim();
-    if (joined.length > 0) {
-      bullets.set(normalizePromptLabLabel(currentLabel), joined);
-    }
-  };
-
-  for (const line of lines) {
-    const bulletMatch = line.match(/^\s*-\s*(?:\*\*)?(.+?)(?:\*\*)?\s*(?:—|:)\s*(.*)$/);
-    if (bulletMatch) {
-      flush();
-      currentLabel = bulletMatch[1]?.trim() ?? null;
-      currentBody = [bulletMatch[2]?.trim() ?? ""];
-      currentParagraphClosed = false;
-      continue;
-    }
-    if (!currentLabel) {
-      continue;
-    }
-    if (line.trim().length === 0) {
-      currentBody.push("");
-      currentParagraphClosed = true;
-      continue;
-    }
-    if (currentParagraphClosed && !/^\s+/.test(line)) {
-      continue;
-    }
-    currentBody.push(line.trim());
-  }
-  flush();
-  return bullets;
-}
-
-function normalizePromptLabLabel(label: string): string {
-  return label.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
 function looksLikeLocalFilePath(value: string): boolean {
   const normalized = value.trim();
   if (!normalized || /^https?:\/\//i.test(normalized)) {
@@ -15452,16 +12956,6 @@ function looksLikeLocalFilePath(value: string): boolean {
     return stem.length > 0 && stem === stem.toLowerCase();
   }
   return /\.[A-Za-z0-9._-]+$/.test(normalized);
-}
-
-function normalizePromptLabFilePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, "/");
-  const repoMarker = "/personal-ai/";
-  const markerIndex = normalized.toLowerCase().indexOf(repoMarker);
-  if (markerIndex >= 0) {
-    return normalized.slice(markerIndex + repoMarker.length);
-  }
-  return normalized.replace(/^\.\//, "");
 }
 
 function looksLikeHarnessContaminatedQuery(value: string): boolean {
@@ -15753,20 +13247,20 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("skills/extra");
   }
   if (looksLikePromptLabPromptPackV2DistinctTestPrompt(taskContent)) {
-    addQuery("prompt-pack-service.test.ts");
+    addQuery("prompt-pack-service.parser-report.test.ts");
     addQuery("prompt-pack-service.ts");
     addQuery("parsePromptPackTests");
     addQuery("goatcitadel_prompt_pack_v2.md");
   }
   if (looksLikePromptLabEnvSourceLabelMinimalTestPrompt(taskContent)) {
-    addQuery("prompt-pack-service.test.ts");
+    addQuery("prompt-pack-service.parser-report.test.ts");
     addQuery("prompt-pack-service.ts");
     addQuery("ensurePromptPackLoaded");
     addQuery("GOATCITADEL_PROMPT_PACK_PATH");
     addQuery("sourceLabel");
   }
   if (looksLikePromptLabJudgeDefaultsMinimalTestPrompt(taskContent)) {
-    addQuery("prompt-pack-service.test.ts");
+    addQuery("prompt-pack-service.scoring.test.ts");
     addQuery("prompt-pack-service.ts");
     addQuery("resolvePromptPackJudgeTarget");
     addQuery("getPromptJudgeModelDefaults");
@@ -15779,7 +13273,7 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("PromptPackAutoScoreRecord");
   }
   if (/\bmost relevant existing tests\b/i.test(taskContent) && /\bprompt pack scoring behavior\b/i.test(taskContent)) {
-    addQuery("prompt-pack-service.test.ts");
+    addQuery("prompt-pack-service.scoring.test.ts");
     addQuery("mergePromptPackAutoScoresV3");
     addQuery("evaluatePromptPackRuleScores");
     addQuery("prompt-pack-score-repo.test.ts");
@@ -15791,7 +13285,7 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("PromptPackFailureAttributionRecordV3");
   }
   if (/\bv3 failure attribution\b/i.test(taskContent) && /\bjudge output is invalid\b/i.test(taskContent)) {
-    addQuery("prompt-pack-service.test.ts");
+    addQuery("prompt-pack-service.scoring.test.ts");
     addQuery("mergePromptPackAutoScoresV3");
     addQuery("derivePromptPackFailureAttributionV3");
     addQuery("judgeStatus invalid");
@@ -16110,7 +13604,7 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   ) {
     addQuery("prompt-packs.ts");
     addQuery("prompt-pack-service.ts");
-    addQuery("prompt-pack-service.test.ts");
+    addQuery("prompt-pack-service.parser-report.test.ts");
     addQuery("prompt-pack");
     addQuery("prompt-pack.ts");
     addQuery("export");
@@ -16203,423 +13697,6 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   }
 
   return queries.slice(0, 8);
-}
-
-function looksLikePromptLabGuidanceLoadingSummaryPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bworkspace\b/.test(normalized) &&
-    /\bguidance\b/.test(normalized) &&
-    (/\bglobal\b/.test(normalized) || /\brepo\b/.test(normalized) || /\bchain\b/.test(normalized)) &&
-    (/\brepo docs?\b/.test(normalized) ||
-      /\brepo\b[\s,/-]*docs?\b/.test(normalized) ||
-      /\bguidance loading chain\b/.test(normalized) ||
-      /\bguidance loading path\b/.test(normalized)) &&
-    (/\bload(?:ed|ing)?\b/.test(normalized) || /\bpath\b/.test(normalized) || /\bchain\b/.test(normalized)) &&
-    !/\bmemory\b/.test(normalized)
-  );
-}
-
-function looksLikeWorkspaceGuidancePrecedencePrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bworkspace\b/.test(normalized) &&
-    /\bguidance\b/.test(normalized) &&
-    (/\bprecedence\b/.test(normalized) || /\boverride\b/.test(normalized)) &&
-    (/\boperator-visible\b/.test(normalized) ||
-      /\bexact assertions needed\b/.test(normalized) ||
-      /\bexact minimal automated check\b/.test(normalized) ||
-      /\bexact minimal automated test\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabDurableRunClaimExclusivityPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\btwo workers\b/.test(normalized) && /\bsame queued durable run\b/.test(normalized) && /\bclaim\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabDurableRunLeaseRecoveryPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bexpired durable-run lease\b|\bexpired durable run lease\b/.test(normalized) &&
-    /\bdifferent worker\b/.test(normalized) &&
-    /\b(still-active leased run|still active leased run|active lease)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabDurableRunRetryBackoffPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bretry-gated queued durable runs\b|\bretry gated queued durable runs\b/.test(normalized) &&
-    /\bbackoff window expires\b|\bbackoff window\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bwaiting\b/.test(normalized) &&
-    /\bpaused\b/.test(normalized) &&
-    /\bterminal\b/.test(normalized) &&
-    /\brelease any active lease\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bapproval\b/.test(normalized) &&
-    /\bwake\b/.test(normalized) &&
-    /\b(ordering|before confirmed wake|confirmed wake|approval-wait|approval wait)\b/.test(normalized) &&
-    /\bexact minimal automated check\b|\bexact minimal automated test\b|\btarget test file\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabDurableRunMinimalTestPrompt(userTask: string | undefined): boolean {
-  return (
-    looksLikePromptLabDurableRunClaimExclusivityPrompt(userTask) ||
-    looksLikePromptLabDurableRunLeaseRecoveryPrompt(userTask) ||
-    looksLikePromptLabDurableRunRetryBackoffPrompt(userTask) ||
-    looksLikePromptLabDurableRunLeaseReleaseTransitionPrompt(userTask) ||
-    looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask)
-  );
-}
-
-function looksLikePromptLabLifecycleCanonicalLinkagePrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bruntime lifecycle\b/.test(normalized) &&
-    /\bcanonical\b/.test(normalized) &&
-    /\blinkage\b/.test(normalized) &&
-    /\bpayload\b/.test(normalized) &&
-    /\bpreview\b/.test(normalized) &&
-    /\b(inferred|inference)\b/.test(normalized) &&
-    (/\bdiagnostics\b/.test(normalized) || /\bfallback path\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabRuntimeLifecycleProvenanceMapPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bruntime lifecycle\b/.test(normalized) &&
-    /\bcanonical linkage\b/.test(normalized) &&
-    /\binferred linkage\b/.test(normalized) &&
-    /\bmissing linkage\b/.test(normalized) &&
-    /\bapprovals?\b/.test(normalized) &&
-    /\bdurable runs?\b/.test(normalized) &&
-    /\bsessions?\b/.test(normalized) &&
-    /\bturns?\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabStrictPausedWaitingWakeEvidencePrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bdurable-run wake logic\b|\bdurable run wake logic\b/.test(normalized) &&
-    /\bapproval wake helpers?\b/.test(normalized) &&
-    /\boperator resume path\b|\boperator resume\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabRealtimeEventMetadataPropagationPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\beventclass\b/.test(normalized) &&
-    /\beventauthority\b/.test(normalized) &&
-    /\blinks\b/.test(normalized) &&
-    /\bproducer\b/.test(normalized) &&
-    /\bstorage\b/.test(normalized) &&
-    /\boperator-facing api\b|\boperator facing api\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabEventEnvelopeAuthorityPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bevent\b/.test(normalized) &&
-    /\b(publishing|storage|publishing and storage)\b/.test(normalized) &&
-    /\beventclass\b/.test(normalized) &&
-    /\beventauthority\b/.test(normalized) &&
-    /\blinks\b/.test(normalized) &&
-    /\binference still required\b|\bnot found\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabEventLinkPropagationCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bevent\b/.test(normalized) &&
-    /\blinks?\b/.test(normalized) &&
-    /\bclassification\b/.test(normalized) &&
-    /\bproducer\b/.test(normalized) &&
-    /\boperator-visible\b|\boperator visible\b|\bapi\b|\bui\b/.test(normalized) &&
-    /\b(role-labeled|role labeled|architect|qa|product|ops|researcher)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabApprovalWakeFlowPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bapproval wait\b/.test(normalized) &&
-    /\bwake\b/.test(normalized) &&
-    /\b(event emission|operational event|publishrealtime|realtime event)\b/.test(normalized)
-  );
-}
-
-function looksLikeWorkspaceRoutesGuidanceCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    (/\bworkspace routes\b/.test(normalized) &&
-      /\bguidance docs?\b/.test(normalized) &&
-      /\brelated services\b/.test(normalized) &&
-      /\bfirst fresh regression checks to add\b/.test(normalized)) ||
-    (/\bworkspace loading\b/.test(normalized) &&
-      /\bguidance docs?\b/.test(normalized) &&
-      /\bproject[- ]binding behavior\b/.test(normalized) &&
-      /\beffective override chain\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabGuidanceRegressionSliceCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bguidance\b/.test(normalized) &&
-    /\bprecedence\b/.test(normalized) &&
-    /\brepo(?:-| )?binding\b|\bproject binding\b|\boverride clarity\b|\boperator-visible override\b/.test(normalized) &&
-    /\bfresh regression slice\b|\bsmallest fresh regression\b|\bregression slice\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabMemoryLifecycleCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bmemory\b/.test(normalized) &&
-    /\b(lifecycle|routes?|services?|ui|copy|operator-facing|operator facing)\b/.test(normalized) &&
-    /\b(role-labeled|role labeled|researcher|architect|qa|product|ops|synthesis)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabCronReportCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\b(cron|scheduled|review queue|update-review|update review)\b/.test(normalized) &&
-    /\b(report|cost|status|operator)\b/.test(normalized) &&
-    /\b(role-labeled|role labeled|researcher|architect|qa|product|ops|synthesis)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabRank1HardeningCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\b(rank[- ]?1|rank 1|hardening|cross-system|cross system)\b/.test(normalized) &&
-    /\b(approval|wake|durable|lifecycle)\b/.test(normalized) &&
-    /\b(role-labeled|role labeled|researcher|architect|qa|product|ops|synthesis)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabApprovalPartialFailureCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bapproval resolution\b/.test(normalized) &&
-    /\bwake helpers?\b/.test(normalized) &&
-    /\bdownstream effect visibility\b/.test(normalized) &&
-    /\bpartial[- ]failure cases?\b/.test(normalized) &&
-    /\b(role-labeled|role labeled|researcher|product|qa)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    (/\btyped wake outcome contract\b/.test(normalized) &&
-      /\bdurable-run wake logic\b|\bdurable wake logic\b/.test(normalized) &&
-      /\bapproval-wait wake handling\b|\bapproval wait wake handling\b/.test(normalized)) ||
-    (/\btyped wake outcomes?\b/.test(normalized) &&
-      /\bcontract file\b/.test(normalized) &&
-      /\bproducer call sites?\b|\bproducer\b/.test(normalized) &&
-      /\bconsumer\/status shaping\b|\bconsumer or status shaping\b|\bconsumer\b/.test(normalized) &&
-      /\bcompatibility note\b/.test(normalized) &&
-      /\bvalidation path\b|\bvalidation step\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\btyped wake outcomes?\b/.test(normalized) &&
-    (/\bcontract file\b/.test(normalized) || /\bname the contract file\b/.test(normalized)) &&
-    (/\bproducer call sites?\b/.test(normalized) || /\bproducer\b/.test(normalized)) &&
-    (/\bconsumer\/status shaping\b/.test(normalized) ||
-      /\bconsumer or status shaping\b/.test(normalized) ||
-      (/\bconsumer\b/.test(normalized) && /\bstatus\b/.test(normalized))) &&
-    (/\bvalidation step\b/.test(normalized) || /\bvalidation path\b/.test(normalized)) &&
-    /\bpatch points?\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabPromptPackGateSelectionTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bgate selection\b/.test(normalized) &&
-    /\bexpansion pack\b/.test(normalized) &&
-    /\bolder baseline\b|\bbaseline\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabCoworkExtraHeadingMinimalTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bcowork\b/.test(normalized) &&
-    (/\bextra headings?\b/.test(normalized) || /\bfake cowork headings?\b/.test(normalized)) &&
-    /\binline contract echoes?\b|\bcontract echoes?\b|\bprompt lab\b/.test(normalized) &&
-    /\bexact minimal automated (?:test|check)\b|\bpropose the exact minimal automated\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabWrappedDependentsParserTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return /\bpnpm outdated -r\b/.test(normalized) && /\bdependents column wraps?\b/.test(normalized);
-}
-
-function looksLikePromptLabSkillExtraOverlapInstallTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\boverlapping skill families\b|\bduplicate skill famil/.test(normalized) &&
-    /\bskills\/extra\b/.test(normalized) &&
-    /\bblocked\b|\breject\b|\bprevent/.test(normalized)
-  );
-}
-
-function looksLikePromptLabPromptPackV2DistinctTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bgoatcitadel_prompt_pack_v2\.md\b/.test(normalized) &&
-    (/\bparse(?:s|d)? cleanly\b/.test(normalized) || /\bparses cleanly\b/.test(normalized)) &&
-    /\b(frozen baseline|baseline fixture|remains distinct|distinct from)\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabEnvSourceLabelMinimalTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\benv-loaded prompt pack\b|\benv loaded prompt pack\b/.test(normalized) && /\bsource label\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabJudgeDefaultsMinimalTestPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bjudge defaults?\b/.test(normalized) &&
-    /\bexpanded pack\b/.test(normalized) &&
-    (/\bfrozen baseline\b/.test(normalized) || /\bbaseline\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabPromptPackParserRegressionPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    looksLikePromptLabPromptPackV2DistinctTestPrompt(userTask) ||
-    (/\bgoatcitadel_prompt_pack_v2\.md\b/.test(normalized) &&
-      (/\bparse(?:s|d)? cleanly\b/.test(normalized) || /\bparsing path\b/.test(normalized)) &&
-      (/\bfrozen baseline\b/.test(normalized) || /\bbaseline fixture\b/.test(normalized)) &&
-      /\b(regression test|parser-focused regression|parser focused regression)\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabWakeLifecycleOrderingPatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bwake lifecycle writes reflect actual outcome ordering\b/.test(normalized) &&
-    /\bapproval-wait storage\b|\bapproval wait storage\b/.test(normalized) &&
-    /\bdurable wake calls\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabPersistedDurableLeasesPatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bpersisted leases\b/.test(normalized) &&
-    /\bdurable-run storage\b|\bdurable run storage\b/.test(normalized) &&
-    /\bclaim logic\b/.test(normalized) &&
-    /\brecovery logic\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabLifecycleProvenancePatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bcanonical-linkage-first reads\b|\bcanonical linkage first reads\b/.test(normalized) &&
-    /\bprovenance fields?\b/.test(normalized) &&
-    /\blifecycle assembly\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabMissionControlTruthLabelingPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\bmission control truth labeling\b/.test(normalized) &&
-    /\bcanonical\b/.test(normalized) &&
-    /\binferred\b/.test(normalized) &&
-    /\bmissing links?\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    (/\bexplicit event authority envelope\b/.test(normalized) ||
-      (/\bevent producers\b/.test(normalized) &&
-        /\brealtime-event storage\b|\brealtime event storage\b/.test(normalized) &&
-        /\brelated contracts\b/.test(normalized))) &&
-    /\beventclass\b/.test(normalized) &&
-    /\beventauthority\b/.test(normalized) &&
-    /\blinks\b/.test(normalized)
-  );
-}
-
-function looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    (/\btwo-worker harness coverage\b|\btwo worker harness coverage\b/.test(normalized) ||
-      (/\btwo-worker\b|\btwo worker\b/.test(normalized) &&
-        /\bclaim\b/.test(normalized) &&
-        /\brecovery\b/.test(normalized) &&
-        /\bsingle-process\b|\bsingle process\b/.test(normalized))) &&
-    (/\bclaim race\b/.test(normalized) || /\bclaim and recovery test\b/.test(normalized))
-  );
-}
-
-function looksLikePromptLabApprovalEffectsHardeningPatchPlanPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    (/\bapproval-effects hardening\b|\bapproval effects hardening\b/.test(normalized) ||
-      (/\bapproval resolution\b/.test(normalized) &&
-        /\bdownstream effect handling\b/.test(normalized) &&
-        /\bcanonical approval state\b/.test(normalized))) &&
-    /\bidempotent effect tracking\b|\boutbox path\b/.test(normalized) &&
-    /\bcanonical approval state\b/.test(normalized)
-  );
-}
-
-function looksLikeSkillImportOverlapCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /skill-import-service\.ts/.test(normalized) &&
-    /\boverlap\b/.test(normalized) &&
-    /\b(next|fresh)\b/.test(normalized) &&
-    /\bcases?\b/.test(normalized)
-  );
-}
-
-function looksLikePromptPackRepoBindingCoworkPrompt(userTask: string | undefined): boolean {
-  const normalized = (userTask ?? "").toLowerCase();
-  return (
-    /\brepo-binding\b|\brepo binding\b/.test(normalized) &&
-    /\btool-path resolution\b|\btool path resolution\b/.test(normalized) &&
-    /\bnegative-result honesty checks\b|\bnegative result honesty checks\b/.test(normalized)
-  );
 }
 
 function inferFileFindPatternFromPrompt(userContent: string): string | undefined {
@@ -17017,250 +14094,6 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
   return lines.join("\n\n");
 }
 
-export function defaultThinkingTokens(level: ChatThinkingLevel): number | undefined {
-  if (level === "off") {
-    return 300;
-  }
-  if (level === "minimal") {
-    return 300;
-  }
-  if (level === "extended") {
-    return 1800;
-  }
-  if (level === "deep") {
-    return 2600;
-  }
-  return 900;
-}
-
-function resolveChatExecutionBudget(
-  input: Pick<ChatAgentTurnInput, "mode" | "webMode" | "thinkingLevel"> & {
-    liveDataIntent?: boolean;
-    promptLabExplicitTools?: boolean;
-    promptLabHarness?: boolean;
-    providerId?: string;
-    model?: string;
-  },
-): ChatExecutionBudget {
-  const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
-  let budget: ChatExecutionBudget;
-  if (input.webMode === "deep") {
-    budget = applyPromptLabExplicitToolBudget(
-      {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-        maxToolLoops: MAX_TOOL_LOOPS,
-        maxToolRunsPerTurn: MAX_TOOL_RUNS_PER_TURN,
-        searchMaxResults: 8,
-        maxTokens: Math.max(defaultMaxTokens ?? 900, 1200),
-        minSynthesisReserveMs: 15000,
-        expensiveToolMinimumRemainingMs: 30000,
-      },
-      input.promptLabExplicitTools,
-    );
-  } else if (input.webMode === "quick") {
-    budget = applyPromptLabExplicitToolBudget(
-      {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-        maxToolLoops: 2,
-        maxToolRunsPerTurn: 3,
-        searchMaxResults: 4,
-        maxTokens: Math.min(defaultMaxTokens ?? 600, 600),
-        minSynthesisReserveMs: 6000,
-        expensiveToolMinimumRemainingMs: 12000,
-      },
-      input.promptLabExplicitTools,
-    );
-  } else if (input.webMode === "off") {
-    budget = applyPromptLabExplicitToolBudget(
-      {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-        maxToolLoops: 2,
-        maxToolRunsPerTurn: 4,
-        searchMaxResults: 0,
-        maxTokens: Math.min(defaultMaxTokens ?? 700, 800),
-        minSynthesisReserveMs: 7000,
-        expensiveToolMinimumRemainingMs: 14000,
-      },
-      input.promptLabExplicitTools,
-    );
-  } else if (input.liveDataIntent) {
-    budget = applyPromptLabExplicitToolBudget(
-      {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-        maxToolLoops: 5,
-        maxToolRunsPerTurn: 8,
-        searchMaxResults: 6,
-        maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
-        minSynthesisReserveMs: 12000,
-        expensiveToolMinimumRemainingMs: 28000,
-      },
-      input.promptLabExplicitTools,
-    );
-  } else {
-    budget = applyPromptLabExplicitToolBudget(
-      {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-        maxToolLoops: 4,
-        maxToolRunsPerTurn: 7,
-        searchMaxResults: 5,
-        maxTokens: Math.min(defaultMaxTokens ?? 900, 1100),
-        minSynthesisReserveMs: 10000,
-        expensiveToolMinimumRemainingMs: 20000,
-      },
-      input.promptLabExplicitTools,
-    );
-  }
-  budget = applyPromptLabHarnessBudget(budget, {
-    mode: input.mode,
-    promptLabHarness: input.promptLabHarness,
-    promptLabExplicitTools: input.promptLabExplicitTools,
-  });
-  if (!shouldUseConstrainedLocalAgentProfile(input.providerId, input.model)) {
-    return budget;
-  }
-  return {
-    ...budget,
-    maxToolLoops: Math.min(budget.maxToolLoops, input.promptLabExplicitTools ? 4 : 3),
-    maxToolRunsPerTurn: Math.min(budget.maxToolRunsPerTurn, input.promptLabExplicitTools ? 6 : 5),
-    maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
-    minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
-  };
-}
-
-function applyPromptLabHarnessBudget(
-  budget: ChatExecutionBudget,
-  input: Pick<ChatAgentTurnInput, "mode"> & {
-    promptLabHarness?: boolean;
-    promptLabExplicitTools?: boolean;
-  },
-): ChatExecutionBudget {
-  if (!input.promptLabHarness) {
-    return budget;
-  }
-  const maxToolRunsPerTurn = input.promptLabExplicitTools
-    ? PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN
-    : PROMPT_LAB_IMPLICIT_MAX_TOOL_RUNS_PER_TURN[input.mode];
-  return {
-    ...budget,
-    maxToolLoops: Math.max(budget.maxToolLoops, PROMPT_LAB_MAX_TOOL_LOOPS),
-    maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, maxToolRunsPerTurn),
-    searchMaxResults: Math.max(budget.searchMaxResults, 8),
-    maxTokens: Math.max(budget.maxTokens ?? 900, PROMPT_LAB_MIN_MAX_TOKENS[input.mode]),
-    minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 15000),
-  };
-}
-
-function applyPromptLabExplicitToolBudget(
-  budget: ChatExecutionBudget,
-  promptLabExplicitTools?: boolean,
-): ChatExecutionBudget {
-  if (!promptLabExplicitTools) {
-    return budget;
-  }
-  return {
-    ...budget,
-    maxToolLoops: Math.max(budget.maxToolLoops, MAX_TOOL_LOOPS),
-    maxToolRunsPerTurn: Math.max(budget.maxToolRunsPerTurn, MAX_TOOL_RUNS_PER_TURN),
-  };
-}
-
-function shouldUseConstrainedLocalAgentProfile(providerId?: string, model?: string): boolean {
-  const normalizedProviderId = (providerId ?? "").trim().toLowerCase();
-  const normalizedModel = (model ?? "").trim().toLowerCase();
-  return normalizedProviderId === "llamacpp" || normalizedModel.includes("gemma");
-}
-
-function minimumRemainingBudgetForToolStart(toolName: string, executionBudget: ChatExecutionBudget): number {
-  if (isExpensiveChatTool(toolName)) {
-    return Math.max(executionBudget.expensiveToolMinimumRemainingMs, executionBudget.minSynthesisReserveMs);
-  }
-  return executionBudget.minSynthesisReserveMs;
-}
-
-function isExpensiveChatTool(toolName: string): boolean {
-  return (
-    toolName === "browser.navigate" ||
-    toolName === "browser.extract" ||
-    toolName === "http.get" ||
-    toolName === "http.post"
-  );
-}
-
-function extendTurnBudgetForExecutedBrowserTool(input: {
-  toolName: string;
-  toolStatus: ChatToolRunRecord["status"];
-  webMode: ChatWebMode;
-  webLookupIntent?: boolean;
-  currentTurnBudgetMs: number;
-  currentCompletionTimeoutMs: number;
-  turnBudgetDeadline: number;
-}): {
-  turnBudgetDeadline: number;
-  effectiveTurnBudgetMs: number;
-  effectiveCompletionTimeoutMs: number;
-} {
-  if (
-    input.webMode !== "auto" ||
-    input.toolStatus !== "executed" ||
-    !shouldExtendTurnBudgetForBrowserExecution(input.toolName)
-  ) {
-    return {
-      turnBudgetDeadline: input.turnBudgetDeadline,
-      effectiveTurnBudgetMs: input.currentTurnBudgetMs,
-      effectiveCompletionTimeoutMs: input.currentCompletionTimeoutMs,
-    };
-  }
-  const extendedTurnBudgetMs = isExpensiveChatTool(input.toolName)
-    ? Math.max(input.currentTurnBudgetMs, input.webLookupIntent ? 90000 : 70000)
-    : Math.max(input.currentTurnBudgetMs, 50000);
-  const extendedCompletionTimeoutMs = isExpensiveChatTool(input.toolName)
-    ? Math.max(input.currentCompletionTimeoutMs, input.webLookupIntent ? 40000 : 28000)
-    : input.currentCompletionTimeoutMs;
-  if (
-    extendedTurnBudgetMs === input.currentTurnBudgetMs &&
-    extendedCompletionTimeoutMs === input.currentCompletionTimeoutMs
-  ) {
-    return {
-      turnBudgetDeadline: input.turnBudgetDeadline,
-      effectiveTurnBudgetMs: input.currentTurnBudgetMs,
-      effectiveCompletionTimeoutMs: input.currentCompletionTimeoutMs,
-    };
-  }
-  return {
-    turnBudgetDeadline: input.turnBudgetDeadline + (extendedTurnBudgetMs - input.currentTurnBudgetMs),
-    effectiveTurnBudgetMs: extendedTurnBudgetMs,
-    effectiveCompletionTimeoutMs: extendedCompletionTimeoutMs,
-  };
-}
-
-function shouldExtendTurnBudgetForBrowserExecution(toolName: string): boolean {
-  return toolName === "browser.search" || isExpensiveChatTool(toolName);
-}
-
-function createTurnBudgetDeadline(turnBudgetMs: number): number {
-  return Date.now() + turnBudgetMs;
-}
-
-function ensureChatTurnBudgetRemaining(deadline: number, webMode: ChatWebMode, turnBudgetMs: number): number {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) {
-    throw new ChatTurnBudgetExceededError(webMode, turnBudgetMs);
-  }
-  return remaining;
-}
-
-function buildTurnBudgetExceededReason(webMode: ChatWebMode, turnBudgetMs: number): string {
-  if (webMode === "deep") {
-    return `the deep-research response budget ran out after ${Math.floor(turnBudgetMs / 1000)} seconds`;
-  }
-  return `the response budget ran out after ${Math.floor(turnBudgetMs / 1000)} seconds to keep chat responsive`;
-}
-
 function throwIfChatTurnCancelled(input: Pick<ChatAgentTurnInput, "signal">): void {
   if (!input.signal?.aborted) {
     return;
@@ -17345,731 +14178,4 @@ function hasToolBlockedFailure(toolRuns: ChatToolRunRecord[]): boolean {
 
 function hasToolFailedFailure(toolRuns: ChatToolRunRecord[]): boolean {
   return toolRuns.some((run) => run.status === "failed");
-}
-
-function buildUserSafeFailureMessage(failure: ChatTurnFailureRecord): string {
-  switch (failure.failureClass) {
-    case "provider_timeout":
-      return "The model request timed out before completion. Retry once, or switch to a lighter mode for faster results.";
-    case "network_interrupted":
-      return "The request was interrupted before the turn could finish. Retry once and check the gateway connection if it happens again.";
-    case "tool_blocked":
-      return "A required source blocked automated access. Retry with a narrower request, or continue from the strongest leads already gathered.";
-    case "tool_failed":
-      return "A required tool failed before the turn could finish. Retry once, or narrow the request so it can complete without that tool path.";
-    case "auth_required":
-      return "The selected provider or integration needs valid auth before this turn can continue. Reconnect auth or choose another provider.";
-    case "tool_loop_guard":
-      return "This turn stopped after the tool loop guard detected repeated low-progress tool work. Narrow the request or continue from the strongest evidence already gathered.";
-    case "global_circuit_breaker":
-      return "This turn stopped after repeated tool failures tripped the circuit breaker. Retry with a narrower request or continue from the strongest evidence already gathered.";
-    case "tool_run_budget_exceeded":
-      return "This turn hit the current tool-run budget before a full pass finished. Narrow the request or continue from the strongest leads already gathered.";
-    case "turn_budget_exceeded":
-    case "budget_exceeded":
-      return "This turn hit the current execution budget before a full pass finished. Continue from the strongest leads or switch to a deeper mode.";
-    case "approval_required":
-      return "This turn is waiting for approval before it can continue.";
-    default:
-      return "This turn failed before completion. Retry once, or narrow the request so the next pass can finish cleanly.";
-  }
-}
-
-function buildTurnBudgetExceededFallbackMessage(
-  input: ChatAgentTurnInput,
-  toolRuns: ChatToolRunRecord[],
-  turnBudgetMs: number,
-): string {
-  const fetchedContentFallback = buildFetchedContentBudgetFallback(input.webMode, toolRuns, input.content);
-  if (fetchedContentFallback) {
-    return fetchedContentFallback;
-  }
-  const searchFallback = buildSearchResultBudgetFallback(input.webMode, toolRuns);
-  if (searchFallback) {
-    return searchFallback;
-  }
-  if (toolRuns.length > 0) {
-    return buildDeterministicToolSynthesisFallback(
-      input.content,
-      toolRuns,
-      buildTurnBudgetExceededReason(input.webMode, turnBudgetMs),
-    );
-  }
-  if (input.webMode === "deep") {
-    return "I ran out of time before I could finish that deep-research pass. Narrow the scope or split it into smaller follow-ups and I can continue.";
-  }
-  return "I stopped that turn to keep chat responsive. If you want a slower, more exhaustive pass, enable Deep research and resend it.";
-}
-
-function buildFetchedContentBudgetFallback(
-  webMode: ChatWebMode,
-  toolRuns: ChatToolRunRecord[],
-  userPrompt: string,
-): string | undefined {
-  return buildRecoveredEvidenceAnswer(userPrompt, toolRuns, {
-    note:
-      webMode === "deep"
-        ? "This is a partial answer recovered before the deep pass finished."
-        : "This is a partial answer recovered before the turn hit its response budget.",
-  });
-}
-
-function buildSearchResultBudgetFallback(webMode: ChatWebMode, toolRuns: ChatToolRunRecord[]): string | undefined {
-  const recoveredItems = recoverTitleUrlItems(toolRuns, 5);
-  if (recoveredItems.length === 0) {
-    return undefined;
-  }
-  const blockedSource = inferBlockedSourceFailure(toolRuns);
-  const lines = [
-    blockedSource
-      ? `A source blocked automated browsing${blockedSource.host ? ` on ${blockedSource.host}` : ""}, so I’m falling back to the strongest leads I recovered so far:`
-      : webMode === "deep"
-        ? "I ran out of time before I could finish the full deep-research pass, but these look like the strongest leads so far:"
-        : "I ran out of time before I could finish a full pass, but these look like the strongest leads so far:",
-    "",
-    ...recoveredItems.slice(0, 3).map((item, index) => `${index + 1}. ${formatRecoveredSearchLead(item)}`),
-    "",
-    webMode === "deep"
-      ? "If you want, ask me to continue from these results and narrow them down."
-      : "If you want, ask me to continue from these results and narrow them down, or retry in Deep mode for a slower pass.",
-  ];
-  return lines.join("\n");
-}
-
-interface RecoveredFetchedContentEvidence {
-  title?: string;
-  url?: string;
-  text: string;
-}
-
-function recoverFetchedContentEvidence(toolRuns: ChatToolRunRecord[]): RecoveredFetchedContentEvidence | undefined {
-  for (let index = toolRuns.length - 1; index >= 0; index -= 1) {
-    const run = toolRuns[index];
-    if (
-      !run ||
-      run.status !== "executed" ||
-      !run.result ||
-      typeof run.result !== "object" ||
-      (run.toolName !== "browser.navigate" && run.toolName !== "browser.extract" && run.toolName !== "http.get")
-    ) {
-      continue;
-    }
-    const result = run.result as Record<string, unknown>;
-    const failureClass = typeof result.browserFailureClass === "string" ? result.browserFailureClass : undefined;
-    if (failureClass && failureClass !== "no_results") {
-      continue;
-    }
-    const status = readBrowserStatusNumber(result.status);
-    if (typeof status === "number" && status >= 400) {
-      continue;
-    }
-    const text = normalizeRecoveredContentText(
-      readFirstString(result.contentText, result.text, result.bodySnippet, result.textSnippet, result.message),
-    );
-    if (!text || text.length < 80) {
-      continue;
-    }
-    return {
-      title: readFirstString(result.title),
-      url: extractUsefulVisitedBrowserUrl(result) ?? extractBrowserToolUrl(result),
-      text,
-    };
-  }
-  return undefined;
-}
-
-function normalizeRecoveredContentText(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized = value
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .trim();
-  return normalized || undefined;
-}
-
-const RECOVERED_CONTENT_PROMPT_STOPWORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "can",
-  "could",
-  "find",
-  "for",
-  "how",
-  "i",
-  "into",
-  "is",
-  "me",
-  "of",
-  "online",
-  "out",
-  "please",
-  "tell",
-  "that",
-  "the",
-  "top",
-  "what",
-  "with",
-]);
-
-const RECOVERED_CONTENT_BOILERPLATE_PATTERNS = [
-  /\bthis website uses cookies\b/i,
-  /\blearn more got it\b/i,
-  /\bskip to content\b/i,
-  /\bfree trial\b/i,
-  /\bbook demo\b/i,
-  /\bsearch support login\b/i,
-  /\bshare on linkedin\b/i,
-  /\btable of contents\b/i,
-  /\bready to get started\b/i,
-  /\bstart free trial\b/i,
-  /\bopen a new account\b/i,
-  /\bproduct integrations pricing resources company\b/i,
-  /\bblog\s*>\b/i,
-];
-
-function summarizeRecoveredFetchedContent(value: string, limit: number, userPrompt?: string): string[] {
-  const normalized = normalizeRecoveredContentText(value);
-  if (!normalized) {
-    return [];
-  }
-  const promptTerms = extractRecoveredContentPromptTerms(userPrompt);
-  const rawSegments = normalized.split(/(?<=[.!?])\s+|\s*[•·]\s+|\s{2,}/);
-  const rankedSegments: Array<{
-    segment: string;
-    score: number;
-    index: number;
-  }> = [];
-  const seen = new Set<string>();
-  rawSegments.forEach((rawSegment, index) => {
-    const segment = normalizeRecoveredContentText(rawSegment);
-    if (!segment || segment.length < 45) {
-      return;
-    }
-    const dedupeKey = segment.toLowerCase();
-    if (seen.has(dedupeKey)) {
-      return;
-    }
-    seen.add(dedupeKey);
-    rankedSegments.push({
-      segment,
-      score: scoreRecoveredContentSegment(segment, promptTerms, userPrompt),
-      index,
-    });
-  });
-
-  const preferred = rankedSegments
-    .filter((item) => item.score > -40)
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .slice(0, limit)
-    .map((item) => truncatePlainText(item.segment, 220));
-  if (preferred.length > 0) {
-    return preferred;
-  }
-
-  const firstUsable = rankedSegments.sort((left, right) => left.index - right.index).find((item) => item.score > -1000);
-  if (firstUsable) {
-    return [truncatePlainText(firstUsable.segment, 220)];
-  }
-
-  return [truncatePlainText(normalized, 280)];
-}
-
-function extractRecoveredContentPromptTerms(value: string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-  const matches = value.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-  const unique = new Set<string>();
-  for (const match of matches) {
-    if (match.length < 3 || RECOVERED_CONTENT_PROMPT_STOPWORDS.has(match)) {
-      continue;
-    }
-    unique.add(match);
-  }
-  return [...unique];
-}
-
-function scoreRecoveredContentSegment(segment: string, promptTerms: string[], userPrompt?: string): number {
-  const normalized = segment.toLowerCase();
-  if (RECOVERED_CONTENT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(normalized))) {
-    return -1000;
-  }
-
-  const useCaseIntent = queryExplicitlyRequestsUseCases(userPrompt ?? "");
-  let score = 0;
-  if (segment.length >= 70 && segment.length <= 260) {
-    score += 8;
-  }
-  if (/\b(rest api|rest apis|api|apis)\b/i.test(segment)) {
-    score += 8;
-  }
-  if (
-    /\b(used|use case|use cases|used for|widely used|commonly used|applications?|integrat(?:e|ion|ions)|backends?|mobile|automation|workflow|workflows|partner-facing|web services?)\b/i.test(
-      segment,
-    )
-  ) {
-    score += 20;
-  }
-  if (/\b(for example|for instance|such as|might use)\b/i.test(segment)) {
-    score += 10;
-  }
-  if (/\b(what is|how do|benefits?|best practices?|security)\b/i.test(segment)) {
-    score -= 10;
-  }
-  if (
-    /\b(published:|technical writer and editor|senior technology editor|hypertext transfer protocol|architectural style)\b/i.test(
-      segment,
-    )
-  ) {
-    score -= 24;
-  }
-  if (
-    /\b(application\/json|application\/xml|application\/x-web\+xml|application\/x-www-form-urlencoded|multipart|crud|http verb|restful web services)\b/i.test(
-      segment,
-    )
-  ) {
-    score -= 28;
-  }
-  if (/\b(sign up|trial|demo|pricing|company|support|login)\b/i.test(segment)) {
-    score -= 20;
-  }
-  if (useCaseIntent) {
-    if (
-      /\b(cloud consumers|cloud services?|distributed environments|web services?|web and mobile|mobile and web|integrations?|automation|sites such as|partner|public api|iot|devices?)\b/i.test(
-        segment,
-      )
-    ) {
-      score += 18;
-    }
-    if (/\b(logical choice|ways to|widely used across|commonly used across|used across)\b/i.test(segment)) {
-      score += 12;
-    }
-    if (
-      /\b(client|server|resource|endpoint|header|body|uri|url|requests?|responses?|http method|http methods|programming languages?|json|xml|plain text|create, retrieve, update|fundamentally relies|principal parts|self descriptive|stateless)\b/i.test(
-        segment,
-      )
-    ) {
-      score -= 16;
-    }
-    if (
-      /^(the client is|the server is|the resource is|client requests include|a rest api fundamentally relies|a rest api uses existing http methodologies|usually, response details|the server provides)\b/i.test(
-        normalized,
-      )
-    ) {
-      score -= 24;
-    }
-  }
-  for (const term of promptTerms) {
-    if (normalized.includes(term)) {
-      score += 4;
-    }
-  }
-  return score;
-}
-
-interface SearchSnippetEvidence {
-  title?: string;
-  url?: string;
-  snippet: string;
-}
-
-function recoverSearchSnippetEvidence(toolRuns: ChatToolRunRecord[]): SearchSnippetEvidence[] {
-  for (let index = toolRuns.length - 1; index >= 0; index -= 1) {
-    const run = toolRuns[index];
-    if (
-      !run ||
-      run.toolName !== "browser.search" ||
-      run.status !== "executed" ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      continue;
-    }
-    const results = Array.isArray((run.result as Record<string, unknown>).results)
-      ? ((run.result as Record<string, unknown>).results as Array<Record<string, unknown>>)
-      : [];
-    const snippets = results
-      .map((item) => ({
-        title: typeof item.title === "string" ? item.title : undefined,
-        url: typeof item.url === "string" ? item.url : undefined,
-        snippet: normalizeRecoveredContentText(typeof item.snippet === "string" ? item.snippet : "") ?? "",
-      }))
-      .filter((item) => item.snippet.length >= 40);
-    if (snippets.length > 0) {
-      return snippets;
-    }
-  }
-  return [];
-}
-
-function collectRecoveredAnswerPoints(toolRuns: ChatToolRunRecord[], userPrompt: string, limit: number): string[] {
-  const points: string[] = [];
-  const seen = new Set<string>();
-  const pushPoint = (value: string) => {
-    const normalized = normalizeRecoveredContentText(value);
-    if (!normalized) {
-      return;
-    }
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    points.push(normalized);
-  };
-
-  const fetchedContent = recoverFetchedContentEvidence(toolRuns);
-  if (fetchedContent) {
-    for (const point of summarizeRecoveredFetchedContent(fetchedContent.text, Math.max(limit, 4), userPrompt)) {
-      pushPoint(point);
-    }
-  }
-
-  for (const run of toolRuns) {
-    if (
-      run.status !== "executed" ||
-      (run.toolName !== "file.read_range" && run.toolName !== "fs.read") ||
-      !run.result ||
-      typeof run.result !== "object"
-    ) {
-      continue;
-    }
-    const content =
-      typeof (run.result as Record<string, unknown>).content === "string"
-        ? ((run.result as Record<string, unknown>).content as string)
-        : "";
-    if (!content.trim()) {
-      continue;
-    }
-    for (const point of summarizeRecoveredFetchedContent(content, 2, userPrompt)) {
-      pushPoint(point);
-    }
-    if (points.length >= limit) {
-      break;
-    }
-  }
-
-  for (const evidence of recoverSearchSnippetEvidence(toolRuns)) {
-    for (const point of summarizeRecoveredFetchedContent(evidence.snippet, 1, userPrompt)) {
-      pushPoint(point);
-    }
-    if (points.length >= limit) {
-      break;
-    }
-  }
-
-  return points.slice(0, limit);
-}
-
-function buildRecoveredEvidenceAnswer(
-  userPrompt: string,
-  toolRuns: ChatToolRunRecord[],
-  options: {
-    note: string;
-  },
-): string | undefined {
-  const points = collectRecoveredAnswerPoints(toolRuns, userPrompt, 5);
-  if (points.length === 0) {
-    return undefined;
-  }
-  const fetchedContent = recoverFetchedContentEvidence(toolRuns);
-  const firstSearchLead = recoverSearchSnippetEvidence(toolRuns)[0];
-  const sourceTitle =
-    fetchedContent?.title?.trim() ??
-    firstSearchLead?.title?.trim() ??
-    (fetchedContent?.url
-      ? formatRecoveredSearchLead({ title: null, url: fetchedContent.url })
-      : firstSearchLead?.url
-        ? formatRecoveredSearchLead({ title: null, url: firstSearchLead.url })
-        : undefined);
-  const sourceUrl = fetchedContent?.url ?? firstSearchLead?.url;
-  const lines = [
-    buildRecoveredEvidenceIntro(userPrompt),
-    "",
-    ...points.map((point, index) => `${index + 1}. ${truncatePlainText(point, 220)}`),
-  ];
-  if (sourceTitle || sourceUrl) {
-    const sourceLine = sourceUrl ? `${sourceTitle ?? sourceUrl} - ${sourceUrl}` : sourceTitle;
-    lines.push("", `Primary source: ${sourceLine}`);
-  }
-  lines.push("", options.note);
-  return lines.join("\n");
-}
-
-function buildRecoveredRepoGroundedAnswer(userPrompt: string, toolRuns: ChatToolRunRecord[]): string | undefined {
-  const evidencePaths = collectObservedToolEvidencePaths(toolRuns).slice(0, 4);
-  if (evidencePaths.length < 1) {
-    return undefined;
-  }
-  const points = collectRecoveredAnswerPoints(toolRuns, userPrompt, 4);
-  if (points.length < 1) {
-    return undefined;
-  }
-  return [
-    "Observed from the files I did inspect:",
-    ...points.map((point) => `- ${truncatePlainText(point, 220)}`),
-    "",
-    `Files: ${evidencePaths.map((path) => `\`${path}\``).join(", ")}`,
-    "Anything beyond those files is unverified from the current trace.",
-  ].join("\n");
-}
-
-function buildRecoveredEvidenceIntro(userPrompt: string): string {
-  const normalized = userPrompt.toLowerCase();
-  if (
-    /\btop\s+\d+\b.*\b(use|uses|use case|use cases)\b/.test(normalized) ||
-    /\b(use case|use cases)\b/.test(normalized)
-  ) {
-    return "Based on the sources I did retrieve, these look like the strongest relevant use cases:";
-  }
-  if (/\bcompare|comparison|differences?\b/.test(normalized)) {
-    return "Based on the sources I did retrieve, these are the strongest comparison points:";
-  }
-  return "Based on the sources I did retrieve, these are the strongest relevant points:";
-}
-
-function summarizeToolRunForSynthesis(run: ChatToolRunRecord, userPrompt?: string): string {
-  const baseParts = [
-    `- ${run.toolName}`,
-    `[${run.status}]`,
-    run.error ? `error: ${run.error}` : undefined,
-    run.failureGuidance ? `guidance: ${run.failureGuidance}` : undefined,
-  ].filter(Boolean);
-  const fileReadSummary = summarizeFileReadToolRunForSynthesis(run);
-  if (fileReadSummary) {
-    return `${baseParts.join(" ")} ${fileReadSummary}`;
-  }
-  if (run.result && typeof run.result === "object") {
-    if (run.toolName === "browser.search") {
-      const searchLeads = recoverSearchSnippetEvidence([run])
-        .slice(0, 3)
-        .map(
-          (item) =>
-            `${item.title ?? item.url ?? "result"}${item.snippet ? ` :: ${truncatePlainText(item.snippet, 140)}` : ""}`,
-        );
-      if (searchLeads.length > 0) {
-        return `${baseParts.join(" ")} results: ${searchLeads.join(" | ")}`;
-      }
-    }
-    if (run.toolName === "browser.navigate" || run.toolName === "browser.extract" || run.toolName === "http.get") {
-      const fetched = recoverFetchedContentEvidence([run]);
-      if (fetched) {
-        const summaryPoints = summarizeRecoveredFetchedContent(fetched.text, 3, userPrompt);
-        const source = fetched.url ?? fetched.title ?? "fetched page";
-        if (summaryPoints.length > 0) {
-          return `${baseParts.join(" ")} source: ${source} content: ${summaryPoints.join(" | ")}`;
-        }
-      }
-    }
-  }
-  if (run.result) {
-    return `${baseParts.join(" ")} result: ${truncateJson(run.result, 280)}`;
-  }
-  return baseParts.join(" ");
-}
-
-function summarizeFileReadToolRunForSynthesis(run: ChatToolRunRecord): string | undefined {
-  if (run.toolName !== "file.read_range" && run.toolName !== "fs.read") {
-    return undefined;
-  }
-  if (!run.result || typeof run.result !== "object") {
-    return undefined;
-  }
-  const result = run.result as Record<string, unknown>;
-  const pathValue = typeof result.path === "string" ? result.path : undefined;
-  const contentValue = typeof result.content === "string" ? result.content.trim() : "";
-  if (!contentValue) {
-    return undefined;
-  }
-  const contentSummary = truncatePlainText(contentValue, 700);
-  return [pathValue ? `file: ${pathValue}` : undefined, `content: ${contentSummary}`].filter(Boolean).join(" ");
-}
-
-function formatRecoveredSearchLead(item: { title: string | null; url: string }): string {
-  const title = item.title?.trim();
-  if (title) {
-    return title;
-  }
-  try {
-    const parsed = new URL(item.url);
-    return parsed.hostname;
-  } catch {
-    return item.url;
-  }
-}
-
-function truncatePlainText(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  const truncated = value.slice(0, maxChars);
-  const lastSpace = truncated.lastIndexOf(" ");
-  if (lastSpace >= Math.max(40, Math.floor(maxChars * 0.6))) {
-    return `${truncated.slice(0, lastSpace).trim()}...`;
-  }
-  return `${truncated.trim()}...`;
-}
-
-export function normalizeAgentInputFromSend(
-  request: ChatSendMessageRequest,
-): Pick<
-  ChatAgentTurnInput,
-  "mode" | "webMode" | "memoryMode" | "thinkingLevel" | "speedMode" | "subagentPolicy" | "normalizationProfile"
-> {
-  return {
-    mode: request.mode ?? "chat",
-    webMode: request.webMode ?? "auto",
-    memoryMode: request.memoryMode ?? (request.useMemory === false ? "off" : "auto"),
-    thinkingLevel: request.thinkingLevel ?? "standard",
-    speedMode: request.speedMode ?? "standard",
-    subagentPolicy: request.subagentPolicy ?? "ask_when_useful",
-    normalizationProfile: request.normalizationProfile ?? "live",
-  };
-}
-
-interface CompletionStreamToolCallState {
-  id?: string;
-  type?: string;
-  functionName?: string;
-  functionArguments: string;
-}
-
-interface CompletionStreamAggregate {
-  id?: string;
-  object?: string;
-  created?: number;
-  model?: string;
-  finishReason?: string;
-  content: string;
-  usage?: Record<string, unknown>;
-  toolCalls: Map<number, CompletionStreamToolCallState>;
-}
-
-function createCompletionStreamAggregate(): CompletionStreamAggregate {
-  return {
-    content: "",
-    toolCalls: new Map<number, CompletionStreamToolCallState>(),
-  };
-}
-
-function absorbCompletionStreamChunk(
-  aggregate: CompletionStreamAggregate,
-  rawChunk: Record<string, unknown>,
-): { delta?: string; sawToolCall: boolean } {
-  if (typeof rawChunk.id === "string") {
-    aggregate.id = rawChunk.id;
-  }
-  if (typeof rawChunk.object === "string") {
-    aggregate.object = rawChunk.object;
-  }
-  if (typeof rawChunk.created === "number") {
-    aggregate.created = rawChunk.created;
-  }
-  if (typeof rawChunk.model === "string") {
-    aggregate.model = rawChunk.model;
-  }
-  if (rawChunk.usage && typeof rawChunk.usage === "object") {
-    aggregate.usage = rawChunk.usage as Record<string, unknown>;
-  }
-
-  const choices = Array.isArray(rawChunk.choices) ? (rawChunk.choices as Array<Record<string, unknown>>) : [];
-  let textDelta = "";
-  let sawToolCall = false;
-  for (const choice of choices) {
-    if (typeof choice.finish_reason === "string" && choice.finish_reason.trim()) {
-      aggregate.finishReason = choice.finish_reason.trim();
-    }
-    const message = choice.message as Record<string, unknown> | undefined;
-    if (message && typeof message === "object") {
-      const messageDelta = extractMessageContent(message);
-      if (messageDelta) {
-        aggregate.content += messageDelta;
-        textDelta += messageDelta;
-      }
-      const fullToolCalls = readToolCalls(message, new Map<string, string>());
-      if (fullToolCalls.length > 0) {
-        sawToolCall = true;
-      }
-    }
-
-    const delta = choice.delta as Record<string, unknown> | undefined;
-    if (!delta || typeof delta !== "object") {
-      continue;
-    }
-    const deltaText = extractContentTextFromDelta(delta.content);
-    if (deltaText) {
-      aggregate.content += deltaText;
-      textDelta += deltaText;
-    }
-    const deltaToolCalls = Array.isArray(delta.tool_calls) ? (delta.tool_calls as Array<Record<string, unknown>>) : [];
-    if (deltaToolCalls.length > 0) {
-      sawToolCall = true;
-      for (const toolCall of deltaToolCalls) {
-        const index = typeof toolCall.index === "number" ? toolCall.index : aggregate.toolCalls.size;
-        const current = aggregate.toolCalls.get(index) ?? {
-          functionArguments: "",
-        };
-        if (typeof toolCall.id === "string" && toolCall.id.trim()) {
-          current.id = toolCall.id.trim();
-        }
-        if (typeof toolCall.type === "string" && toolCall.type.trim()) {
-          current.type = toolCall.type.trim();
-        }
-        const fn = toolCall.function as Record<string, unknown> | undefined;
-        if (fn && typeof fn === "object") {
-          if (typeof fn.name === "string" && fn.name.trim()) {
-            current.functionName = fn.name.trim();
-          }
-          if (typeof fn.arguments === "string") {
-            current.functionArguments += fn.arguments;
-          }
-        }
-        aggregate.toolCalls.set(index, current);
-      }
-    }
-  }
-  return {
-    delta: textDelta || undefined,
-    sawToolCall,
-  };
-}
-
-function extractContentTextFromDelta(content: unknown): string {
-  return extractStructuredTextContent(content);
-}
-
-function buildCompletionFromAggregate(aggregate: CompletionStreamAggregate): ChatCompletionResponse {
-  const toolCalls = [...aggregate.toolCalls.entries()]
-    .sort((left, right) => left[0] - right[0])
-    .map(([, toolCall], index) => ({
-      id: toolCall.id ?? `call-${index}`,
-      type: toolCall.type ?? "function",
-      function: {
-        name: toolCall.functionName ?? "tool_fn",
-        arguments: toolCall.functionArguments || "{}",
-      },
-    }));
-
-  return {
-    id: aggregate.id,
-    object: aggregate.object,
-    created: aggregate.created,
-    model: aggregate.model,
-    choices: [
-      {
-        index: 0,
-        message: {
-          role: "assistant",
-          content: aggregate.content,
-          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-        },
-        finish_reason: aggregate.finishReason ?? "stop",
-      },
-    ],
-    usage: aggregate.usage,
-  };
 }

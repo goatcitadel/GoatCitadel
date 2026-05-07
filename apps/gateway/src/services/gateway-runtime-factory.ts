@@ -1,25 +1,19 @@
 import type { GatewayRuntimeConfig } from "../config.js";
-import type { Storage } from "@goatcitadel/storage";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
-import type { CapabilityPackService } from "./capability-pack-service.js";
-import type { ContinuationGateService } from "./continuation-gate-service.js";
-import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
-import type { MemoryWriteGateService } from "./memory-write-gate-service.js";
+import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+
+type GatewayLogger = {
+  debug: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
 
 export interface GatewayRuntimePort {
-  readonly storage: Storage;
+  readonly mutationIdempotencyStore: MutationIdempotencyStore;
   readonly routeServices: GatewayRouteServices;
-  readonly capabilityPackService: CapabilityPackService;
-  readonly continuationGateService: ContinuationGateService;
-  readonly evidenceEnvelopeService: EvidenceEnvelopeService;
-  readonly memoryWriteGateService: MemoryWriteGateService;
-  attachDevDiagnosticsLogger(logger: {
-    debug: (...args: unknown[]) => void;
-    info: (...args: unknown[]) => void;
-    warn: (...args: unknown[]) => void;
-    error: (...args: unknown[]) => void;
-  }): void;
+  attachDevDiagnosticsLogger(logger: GatewayLogger): void;
   init(): Promise<void>;
   initCritical(): Promise<void>;
   startDeferredInit(): Promise<void>;
@@ -61,9 +55,46 @@ export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidat
 }
 
 export function createGatewayRuntime(config: GatewayRuntimeConfig): GatewayRuntimeInstance {
-  return new GatewayService(config);
+  return createGatewayRuntimeFacade(new GatewayService(config));
 }
 
 export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): GatewayAdminPort {
-  return new GatewayService(config);
+  const gateway = new GatewayService(config);
+  return {
+    ...createGatewayRuntimeFacade(gateway),
+    createBackup: (input) => gateway.createBackup(input),
+    getAuthCredentialPlan: () => gateway.getAuthCredentialPlan(),
+    getRetentionPolicy: () => gateway.getRetentionPolicy(),
+    listBackups: (limit) => gateway.listBackups(limit),
+    pruneRetention: (input) => gateway.pruneRetention(input),
+    resolveGatewayInstallToken: (input) => gateway.resolveGatewayInstallToken(input),
+    runDatabaseCutover: (input) => gateway.runDatabaseCutover(input),
+    updateRetentionPolicy: (input) => gateway.updateRetentionPolicy(input),
+    verifyDatabaseCutover: (input) => gateway.verifyDatabaseCutover(input),
+  };
+}
+
+function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInstance {
+  return {
+    get mutationIdempotencyStore() {
+      return gateway.mutationIdempotencyStore;
+    },
+    get routeServices() {
+      return gateway.routeServices;
+    },
+    attachDevDiagnosticsLogger: (logger) => gateway.attachDevDiagnosticsLogger(logger),
+    close: () => gateway.close(),
+    getOnboardingStartupState: () => gateway.getOnboardingStartupState(),
+    init: () => gateway.init(),
+    initCritical: () => gateway.initCritical(),
+    recordDevDiagnostic: (input) =>
+      gateway.recordDevDiagnostic(input as Parameters<GatewayService["recordDevDiagnostic"]>[0]),
+    startDeferredInit: () => gateway.startDeferredInit(),
+    validateCompanionAccessToken: (token) => gateway.validateCompanionAccessToken(token),
+    validateDeviceAccessToken: (token) => gateway.validateDeviceAccessToken(token),
+    verifyCompanionRequestSignature: (input) =>
+      gateway.verifyCompanionRequestSignature(
+        input as Parameters<GatewayService["verifyCompanionRequestSignature"]>[0],
+      ),
+  };
 }

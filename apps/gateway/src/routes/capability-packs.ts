@@ -14,7 +14,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
 
   fastify.get("/api/v1/capability-packs", operatorOnly, async (_request, reply) => {
-    return reply.send({ items: fastify.gatewayRuntime.capabilityPackService.listPacks() });
+    return reply.send({ items: fastify.services.capabilityPacks.listPacks() });
   });
 
   fastify.get("/api/v1/capability-packs/:packId/preview", operatorOnly, async (request, reply) => {
@@ -23,7 +23,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.gatewayRuntime.capabilityPackService.previewPack(parsed.data.packId));
+      return reply.send(fastify.services.capabilityPacks.previewPack(parsed.data.packId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -46,9 +46,7 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
         (typeof request.authActorId === "string" && request.authActorId.trim()
           ? request.authActorId.trim()
           : undefined);
-      return reply
-        .code(201)
-        .send(fastify.gatewayRuntime.capabilityPackService.installPack(params.data.packId, { actorId }));
+      return reply.code(201).send(fastify.services.capabilityPacks.installPack(params.data.packId, { actorId }));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

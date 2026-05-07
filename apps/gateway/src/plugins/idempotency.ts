@@ -6,35 +6,7 @@ import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.j
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
 import { isTelegramWebhookPath } from "../services/telegram-webhook.js";
 import { isWhatsAppWebhookPath } from "../services/whatsapp-webhook.js";
-
-interface MutationIdempotencyStore {
-  claim(input: {
-    method: string;
-    routePath: string;
-    idempotencyKey: string;
-    actorScope?: string;
-    payloadHash: string;
-    now?: string;
-  }):
-    | { outcome: "claimed"; record: { status: string } }
-    | { outcome: "in_progress"; record: { status: string } }
-    | { outcome: "duplicate"; record: { status: string } }
-    | { outcome: "payload_mismatch"; record: { status: string } };
-  markCompleted(input: {
-    method: string;
-    routePath: string;
-    idempotencyKey: string;
-    actorScope?: string;
-    updatedAt?: string;
-  }): Promise<void> | void;
-  markFailed(input: {
-    method: string;
-    routePath: string;
-    idempotencyKey: string;
-    actorScope?: string;
-    updatedAt?: string;
-  }): Promise<void> | void;
-}
+import type { MutationIdempotencyStore } from "../services/mutation-idempotency-store.js";
 
 interface MutationIdempotencyState {
   method: string;

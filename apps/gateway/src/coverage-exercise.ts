@@ -11,6 +11,20 @@ import { buildApp } from "./app.js";
 import { renderDoctorReport, runDoctor } from "./doctor/engine.js";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+type EnvSnapshot = Record<string, string | undefined>;
+
+const COVERAGE_ENV_OVERRIDES: Record<string, string> = {
+  GOATCITADEL_AUTH_MODE: "none",
+  GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "false",
+  GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false",
+  GOATCITADEL_DATABASE_DRIVER: "sqlite",
+  GOATCITADEL_DISABLE_SECRET_STORE: "true",
+  GOATCITADEL_I_UNDERSTAND_THIS_IS_INSECURE_LOCAL_ONLY: "true",
+  GOATCITADEL_LLAMACPP_AUTOSTART: "false",
+  GOATCITADEL_LLAMACPP_ENABLED: "false",
+  GOATCITADEL_NPU_AUTOSTART: "false",
+  GOATCITADEL_NPU_ENABLED: "false",
+};
 
 interface RequestResult<T = unknown> {
   statusCode: number;
@@ -65,13 +79,12 @@ async function runCoverageExercise(): Promise<void> {
 async function withTempRoot(run: (app: FastifyInstance, tempRoot: string) => Promise<void>): Promise<void> {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-coverage-exercise-"));
-  const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
+  const envSnapshot = applyCoverageEnvironment(tempRoot);
   try {
     await cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
     await mkdir(path.join(tempRoot, "data", "transcripts"), { recursive: true });
     await mkdir(path.join(tempRoot, "data", "audit"), { recursive: true });
     await mkdir(path.join(tempRoot, "workspace"), { recursive: true });
-    process.env.GOATCITADEL_ROOT_DIR = tempRoot;
 
     const app = await buildApp();
     try {
@@ -80,12 +93,31 @@ async function withTempRoot(run: (app: FastifyInstance, tempRoot: string) => Pro
       await app.close();
     }
   } finally {
-    if (priorRoot === undefined) {
-      delete process.env.GOATCITADEL_ROOT_DIR;
-    } else {
-      process.env.GOATCITADEL_ROOT_DIR = priorRoot;
-    }
+    restoreEnvironment(envSnapshot);
     await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function applyCoverageEnvironment(rootDir: string): EnvSnapshot {
+  const keys = ["GOATCITADEL_ROOT_DIR", ...Object.keys(COVERAGE_ENV_OVERRIDES)];
+  const snapshot: EnvSnapshot = {};
+  for (const key of keys) {
+    snapshot[key] = process.env[key];
+  }
+  process.env.GOATCITADEL_ROOT_DIR = rootDir;
+  for (const [key, value] of Object.entries(COVERAGE_ENV_OVERRIDES)) {
+    process.env[key] = value;
+  }
+  return snapshot;
+}
+
+function restoreEnvironment(snapshot: EnvSnapshot): void {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
   }
 }
 
@@ -185,7 +217,7 @@ async function seedChat(app: FastifyInstance): Promise<ChatSeed> {
 }
 
 async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Promise<void> {
-  const gateway = getCoverageGateway(app);
+  const chatSupport = getCoverageChatSupport(app);
 
   const commands = [
     "/help",
@@ -227,7 +259,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
 
   for (const command of commands) {
     try {
-      await gateway.parseChatCommand(sessionId, command);
+      await chatSupport.parseChatCommand(sessionId, command);
     } catch {
       // Some command branches intentionally reference missing ids to cover error paths.
     }
@@ -781,11 +813,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "GET", "/api/v1/mesh/replication/events?limit=25");
   await requestNotServerError(app, "GET", "/api/v1/mesh/replication/offsets");
 
-  await requestNotServerError(app, "POST", "/api/v1/secrets/providers/openai", {
-    apiKey: "coverage-secret-value",
-  });
-  await requestNotServerError(app, "GET", "/api/v1/secrets/providers/openai/status");
-  await requestNotServerError(app, "DELETE", "/api/v1/secrets/providers/openai");
+  await exerciseProviderSecretRoutes(app);
 
   await requestNotServerError(app, "GET", "/api/v1/admin/retention");
   await requestNotServerError(app, "PATCH", "/api/v1/admin/retention", {
@@ -816,17 +844,79 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   };
 }
 
-async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: ExerciseSeed): Promise<void> {
-  const gateway = getCoverageGateway(app) as Record<string, unknown>;
+async function exerciseProviderSecretRoutes(app: FastifyInstance): Promise<void> {
+  const envSnapshot = snapshotEnvironment(getCoverageProviderSecretEnvNames(app));
+  try {
+    await requestNotServerError(app, "POST", "/api/v1/secrets/providers/openai", {
+      apiKey: "coverage-secret-value",
+    });
+    await requestNotServerError(app, "GET", "/api/v1/secrets/providers/openai/status");
+    await requestNotServerError(app, "DELETE", "/api/v1/secrets/providers/openai");
+  } finally {
+    restoreEnvironment(envSnapshot);
+  }
+}
 
+function getCoverageProviderSecretEnvNames(app: FastifyInstance): string[] {
+  const names = new Set<string>();
+  const gatewayApp = app as FastifyInstance & {
+    gatewayConfig?: {
+      llm?: {
+        providers?: Array<{
+          apiKeyEnv?: unknown;
+          apiKeyRef?: unknown;
+        }>;
+      };
+    };
+  };
+
+  for (const provider of gatewayApp.gatewayConfig?.llm?.providers ?? []) {
+    collectProviderEnvName(names, provider.apiKeyEnv);
+    collectProviderEnvName(names, provider.apiKeyRef);
+  }
+
+  return [...names];
+}
+
+function collectProviderEnvName(names: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith("keychain:") || !/^[A-Z_][A-Z0-9_]*$/.test(trimmed)) {
+    return;
+  }
+  names.add(trimmed);
+}
+
+function snapshotEnvironment(keys: string[]): EnvSnapshot {
+  const snapshot: EnvSnapshot = {};
+  for (const key of keys) {
+    snapshot[key] = process.env[key];
+  }
+  return snapshot;
+}
+
+async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: ExerciseSeed): Promise<void> {
+  const skipTargets = new Set<string>(["services.llamaCpp", "services.secrets"]);
   const skip = new Set<string>([
     "constructor",
     "init",
     "close",
     "startImprovementScheduler",
     "startProactiveScheduler",
+    "installVoiceRuntime",
+    "deleteProviderSecret",
+    "saveProviderSecret",
+    "startLlamaCppHuggingFaceDownload",
+    "startLlamaCppRuntime",
     "startNpuRuntime",
+    "startTalkSession",
+    "startVoiceWake",
+    "stopLlamaCppRuntime",
     "stopNpuRuntime",
+    "stopTalkSession",
+    "stopVoiceWake",
     "daemonStart",
     "daemonStop",
     "daemonRestart",
@@ -957,12 +1047,7 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
     ],
   };
 
-  const proto = Object.getPrototypeOf(gateway) as Record<string, unknown>;
-  const methodNames = Object.getOwnPropertyNames(proto)
-    .filter((name) => !skip.has(name))
-    .filter((name) => typeof gateway[name] === "function");
-
-  const withTimeout = async (value: unknown, timeoutMs = 500): Promise<void> => {
+  const withTimeout = async (value: unknown, timeoutMs = 75): Promise<void> => {
     if (!value || typeof value !== "object" || typeof (value as Promise<unknown>).then !== "function") {
       return;
     }
@@ -1037,62 +1122,104 @@ async function exerciseGatewayServiceMethods(app: FastifyInstance, seed: Exercis
 
   let invoked = 0;
   let attempted = 0;
-  for (const methodName of methodNames) {
-    if (skip.has(methodName)) {
+  let totalMethods = 0;
+  for (const { label, target } of getCoverageMethodTargets(app)) {
+    if (skipTargets.has(label)) {
       continue;
     }
-    const method = gateway[methodName];
-    if (typeof method !== "function") {
-      continue;
-    }
-
-    const candidates: unknown[][] = [];
-    const special = specialArgs[methodName];
-    if (special) {
-      candidates.push(special);
-    }
-    candidates.push(buildFallbackArgs(methodName, method.length));
-    candidates.push(Array.from({ length: method.length }, () => undefined));
-    candidates.push(Array.from({ length: method.length }, () => null));
-    candidates.push(Array.from({ length: method.length }, () => "coverage"));
-    candidates.push(Array.from({ length: method.length }, () => ({})));
-    candidates.push(Array.from({ length: method.length }, () => []));
-    candidates.push(Array.from({ length: method.length }, () => true));
-    candidates.push(Array.from({ length: method.length }, () => false));
-
-    let succeeded = false;
-    for (const args of candidates) {
-      attempted += 1;
-      try {
-        const result = method.apply(gateway, args);
-        await withTimeout(result);
-        succeeded = true;
-      } catch {
-        // Continue trying alternate argument shapes to execute method branches.
+    const methodNames = collectCoverageMethodNames(target).filter(
+      (name) => !skip.has(name) && !isUnsafeRuntimeProbeMethod(name),
+    );
+    totalMethods += methodNames.length;
+    for (const methodName of methodNames) {
+      const method = target[methodName];
+      if (typeof method !== "function") {
+        continue;
       }
-    }
-    if (succeeded) {
-      invoked += 1;
+
+      const candidates: unknown[][] = [];
+      const special = specialArgs[methodName];
+      if (special) {
+        candidates.push(special);
+      }
+      candidates.push(buildFallbackArgs(methodName, method.length));
+      candidates.push(Array.from({ length: method.length }, () => undefined));
+      candidates.push(Array.from({ length: method.length }, () => ({})));
+
+      let succeeded = false;
+      for (const args of candidates) {
+        attempted += 1;
+        try {
+          const result = method.apply(target, args);
+          await withTimeout(result);
+          succeeded = true;
+        } catch {
+          // Continue trying alternate argument shapes to execute method branches.
+        }
+      }
+      if (succeeded) {
+        invoked += 1;
+      }
     }
   }
 
   console.log(
-    `[coverage-exercise] gateway method sweep invoked ${invoked}/${methodNames.length} public methods (attempted ${attempted} calls)`,
+    `[coverage-exercise] gateway/runtime/route method sweep invoked ${invoked}/${totalMethods} public methods (attempted ${attempted} calls)`,
   );
 }
 
-function getCoverageGateway(app: FastifyInstance): {
+function isUnsafeRuntimeProbeMethod(methodName: string): boolean {
+  const normalized = methodName.toLowerCase();
+  return normalized.includes("llamacpp") || normalized.includes("huggingface");
+}
+
+function getCoverageChatSupport(app: FastifyInstance): {
   parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;
 } & Record<string, unknown> {
-  const candidate: unknown = app.gatewayRuntime;
+  const candidate: unknown = app.services?.chatSupport;
   assert.ok(
     candidate && typeof candidate === "object" && !Array.isArray(candidate),
-    "Expected Fastify gatewayRuntime decorator",
+    "Expected Fastify chatSupport route service decorator",
   );
   assert.equal(typeof (candidate as { parseChatCommand?: unknown }).parseChatCommand, "function");
   return candidate as {
     parseChatCommand: (sessionId: string, command: string) => Promise<unknown>;
   } & Record<string, unknown>;
+}
+
+function getCoverageMethodTargets(app: FastifyInstance): Array<{ label: string; target: Record<string, unknown> }> {
+  const targets: Array<{ label: string; target: Record<string, unknown> }> = [];
+  const addTarget = (label: string, candidate: unknown): void => {
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      targets.push({ label, target: candidate as Record<string, unknown> });
+    }
+  };
+
+  addTarget("gatewayRuntime", app.gatewayRuntime);
+  for (const [serviceName, service] of Object.entries(app.services ?? {})) {
+    addTarget(`services.${serviceName}`, service);
+  }
+  assert.ok(targets.length > 0, "Expected gateway runtime or route services for coverage sweep");
+  return targets;
+}
+
+function collectCoverageMethodNames(target: Record<string, unknown>): string[] {
+  const names = new Set<string>();
+  for (const name of Object.getOwnPropertyNames(target)) {
+    if (typeof target[name] === "function") {
+      names.add(name);
+    }
+  }
+  let prototype: object | null = Object.getPrototypeOf(target);
+  while (prototype && prototype !== Object.prototype) {
+    for (const name of Object.getOwnPropertyNames(prototype)) {
+      if (typeof target[name] === "function") {
+        names.add(name);
+      }
+    }
+    prototype = Object.getPrototypeOf(prototype);
+  }
+  return [...names];
 }
 
 async function requestNotServerError(

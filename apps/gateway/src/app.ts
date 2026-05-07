@@ -299,7 +299,7 @@ export async function buildApp() {
   });
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin, {
-    mutationStore: app.gatewayRuntime.storage.mutationIdempotency,
+    mutationStore: app.gatewayRuntime.mutationIdempotencyStore,
   });
 
   await app.register(healthRoute);

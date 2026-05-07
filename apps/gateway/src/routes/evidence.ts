@@ -18,7 +18,7 @@ export const evidenceRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send({
-      items: fastify.gatewayRuntime.evidenceEnvelopeService.listEnvelopes(parsed.data),
+      items: fastify.services.evidence.listEnvelopes(parsed.data),
     });
   });
 };

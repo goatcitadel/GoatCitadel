@@ -287,7 +287,6 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
   ModelReputation,
-  GuidanceBundleRecord,
   GuidanceDocType,
   GuidanceDocumentRecord,
   ImprovementRef,
@@ -354,7 +353,6 @@ import { MemoryContextService } from "./memory-context-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { NpuSidecarService } from "./npu-sidecar-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
-import { normalizeAgentInputFromSend } from "./chat-agent-orchestrator.js";
 import { GatewayTurnRuntime } from "./chat-turn-runtime.js";
 import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
@@ -400,10 +398,12 @@ import {
   composeGatewayRouteServices,
   createChatThreadKnowledgeDependenciesForGateway,
   createCommsHostForGateway,
+  createGatewayRouteCompositionPort,
   createIntegrationChannelServiceForGateway,
   createIntegrationDiagnosticsServiceForGateway,
   createSettingsAuthRuntimeDependenciesForGateway,
   createSettingsRuntimeDependenciesForGateway,
+  type GatewayRouteCompositionPort,
 } from "./gateway-route-service-composition.js";
 import { RealtimeEventService } from "./realtime-event-service.js";
 import { verifyBackupAtPath } from "./gateway/backup-verify.js";
@@ -417,7 +417,7 @@ import * as discordPairingHelpers from "./discord-pairing-helpers.js";
 import * as discordRuntimeBridgeService from "./discord-runtime-bridge-service.js";
 import * as connectionUrlHelpers from "./connection-url-helpers.js";
 import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
-import * as guidanceDocumentHelpers from "./guidance-document-helpers.js";
+import { GuidanceService } from "./guidance-service.js";
 import * as cronJobConfigHelpers from "./cron-job-config-helpers.js";
 import * as chatCommandService from "./chat-command-service.js";
 import * as chatSessionService from "./chat-session-service.js";
@@ -559,7 +559,6 @@ export interface MemoryFileEntry {
 const MCP_SERVERS_SETTING_KEY = "mcp_servers_v1";
 const MCP_TOOLS_SETTING_KEY = "mcp_tools_v1";
 const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
-const INTEGRATION_PLUGINS_SETTING_KEY = "integration_plugins_v1";
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
@@ -649,19 +648,6 @@ const PIPELINE_TEMPLATES: Record<string, string[]> = {
 };
 export const DEFAULT_WORKSPACE_ID = "default";
 const REPLAY_SCRATCH_SESSION_TITLE_PREFIX = "[Replay scratch]";
-export const GUIDANCE_DOC_FILE_MAP: Record<GuidanceDocType, string> = {
-  goatcitadel: "GOATCITADEL.md",
-  agents: "AGENTS.md",
-  claude: "CLAUDE.md",
-  contributing: "CONTRIBUTING.md",
-  security: "SECURITY.md",
-  vision: "VISION.md",
-};
-const WORKSPACE_GUIDANCE_DOC_TYPES: GuidanceDocType[] = ["goatcitadel", "agents", "claude", "vision"];
-const RUNTIME_GUIDANCE_DOC_TYPES: GuidanceDocType[] = ["goatcitadel", "agents", "claude"];
-const MAX_RUNTIME_GUIDANCE_CHARS = 6000;
-const GUIDANCE_DEBUG_KILL_SWITCH_ENV = "GOATCITADEL_DISABLE_GUIDANCE_INJECTION";
-
 type SessionAutonomyPrefs = SessionAutonomyPrefsRecord;
 
 interface ProactiveTriggerInput {
@@ -745,18 +731,21 @@ export class GatewayService {
   private readonly improvementService: ImprovementService;
   private readonly memoryMaintenanceService: MemoryMaintenanceService;
   public readonly memoryLifecycleService: MemoryLifecycleService;
-  public readonly evidenceEnvelopeService: EvidenceEnvelopeService;
-  public readonly continuationGateService: ContinuationGateService;
-  public readonly capabilityPackService: CapabilityPackService;
-  public readonly memoryWriteGateService: MemoryWriteGateService;
+  private readonly evidenceEnvelopeService: EvidenceEnvelopeService;
+  private readonly continuationGateService: ContinuationGateService;
+  private readonly capabilityPackService: CapabilityPackService;
+  private readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
+  private readonly guidanceService: GuidanceService;
   private readonly channelDeliveryRuntimeService: ChannelDeliveryRuntimeService;
   private readonly backupRetentionService: BackupRetentionService;
   private readonly databaseCutoverService: DatabaseCutoverService;
   private readonly mediaVoiceService: MediaVoiceService;
   private readonly realtimeEventService: RealtimeEventService;
+  private readonly routeCompositionPort?: GatewayRouteCompositionPort;
   public readonly routeServices: GatewayRouteServices;
+  public readonly mutationIdempotencyStore: Storage["mutationIdempotency"];
   public readonly chatTurnExecutionRegistry = new ChatTurnExecutionRegistry();
   public readonly backgroundTasks = new Set<Promise<void>>();
   private readonly warnedOutsideRootPathFingerprints = new Set<string>();
@@ -779,6 +768,7 @@ export class GatewayService {
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
     this.storage = createGatewayStorage(config);
+    this.mutationIdempotencyStore = this.storage.mutationIdempotency;
     this.channelDeliveryRuntimeService = new ChannelDeliveryRuntimeService({
       repository: this.storage.commsDeliveries,
       send: (input) => this.sendQueuedChannelDelivery(input),
@@ -1035,6 +1025,7 @@ export class GatewayService {
       isFeatureEnabled: (flag: keyof RuntimeSettings["features"]) => this.isFeatureEnabled(flag),
       normalizeWorkspaceId: (workspaceId?: string) => this.normalizeWorkspaceId(workspaceId),
     };
+    this.guidanceService = new GuidanceService(serviceCtx);
     this.chatProjectService = new ChatProjectService(serviceCtx);
     this.durableRunService = new DurableRunService(serviceCtx, {
       backgroundTasks: this.backgroundTasks,
@@ -1114,7 +1105,7 @@ export class GatewayService {
       resolveApproval: (approvalId, input) => this.approvalRuntime.resolveApproval(approvalId, input),
       resolveDeviceAccessApproval: (current, input) =>
         settingsAuthService.resolveDeviceAccessApproval(
-          createSettingsAuthRuntimeDependenciesForGateway(this),
+          createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
           current,
           input,
         ),
@@ -1125,7 +1116,7 @@ export class GatewayService {
       wakeDurableRun: (runId, event) => this.wakeDurableRun(runId, event),
       recordApprovalResolution: (approval, input) =>
         settingsAuthService.recordApprovalResolution(
-          createSettingsAuthRuntimeDependenciesForGateway(this),
+          createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
           approval,
           input,
         ),
@@ -1364,23 +1355,55 @@ export class GatewayService {
         },
       }),
     );
+    this.routeCompositionPort = this.buildRouteCompositionPort();
     this.routeServices = this.buildRouteServices();
   }
 
+  private buildRouteCompositionPort() {
+    return createGatewayRouteCompositionPort(this, {
+      addonsService: this.addonsService,
+      approvalRuntime: this.approvalRuntime,
+      assemblyService: this.assemblyService,
+      backupRetentionService: this.backupRetentionService,
+      capabilityPackService: this.capabilityPackService,
+      capabilitySystemService: this.capabilitySystemService,
+      chatProjectService: this.chatProjectService,
+      chatTurnRuntime: this.chatTurnRuntime,
+      databaseCutoverService: this.databaseCutoverService,
+      devDiagnostics: this.devDiagnostics,
+      durableOperatorService: this.durableOperatorService,
+      evidenceEnvelopeService: this.evidenceEnvelopeService,
+      guidanceService: this.guidanceService,
+      improvementService: this.improvementService,
+      mediaVoiceService: this.mediaVoiceService,
+      obsidianVaultService: this.obsidianVaultService,
+      promptPackService: this.promptPackService,
+      realtimeEventService: this.realtimeEventService,
+      researchService: this.researchService,
+      runtimeLifecycleReadService: this.runtimeLifecycleReadService,
+      taskLifecycleService: this.taskLifecycleService,
+      toolInvocationCoordinator: this.toolInvocationCoordinator,
+    });
+  }
+
+  private getRouteCompositionPort(): GatewayRouteCompositionPort {
+    return this.routeCompositionPort ?? this.buildRouteCompositionPort();
+  }
+
   private buildRouteServices(): GatewayRouteServices {
-    return composeGatewayRouteServices(this);
+    return composeGatewayRouteServices(this.getRouteCompositionPort());
   }
 
   private buildIntegrationDiagnosticsService() {
-    return createIntegrationDiagnosticsServiceForGateway(this);
+    return createIntegrationDiagnosticsServiceForGateway(this.getRouteCompositionPort());
   }
 
   private buildIntegrationChannelService(integrationDiagnostics = this.buildIntegrationDiagnosticsService()) {
-    return createIntegrationChannelServiceForGateway(this, integrationDiagnostics);
+    return createIntegrationChannelServiceForGateway(this.getRouteCompositionPort(), integrationDiagnostics);
   }
 
   private buildCommsHost(integrationChannel = this.buildIntegrationChannelService()): CommsHost {
-    return createCommsHostForGateway(this, integrationChannel);
+    return createCommsHostForGateway(this.getRouteCompositionPort(), integrationChannel);
   }
 
   private buildDurableChatTurnWorkflowHost(): durableExecutionService.DurableChatTurnWorkflowHost {
@@ -1401,6 +1424,7 @@ export class GatewayService {
       beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
+      getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
       ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
       updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
         this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
@@ -1418,6 +1442,7 @@ export class GatewayService {
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
+      withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
       persistChatStreamChunk: (chunk, durableRunId) => {
         if (!chunk.turnId) {
           throw new Error("Persistable chat stream chunk is missing a turn id.");
@@ -1593,39 +1618,15 @@ export class GatewayService {
   }
 
   public async listGlobalGuidance(): Promise<GuidanceDocumentRecord[]> {
-    const docs = await Promise.all(
-      (Object.keys(GUIDANCE_DOC_FILE_MAP) as GuidanceDocType[]).map((docType) =>
-        this.readGuidanceDocument(docType, "global"),
-      ),
-    );
-    return docs;
+    return this.guidanceService.listGlobalGuidance();
   }
 
-  public async listWorkspaceGuidance(workspaceId: string): Promise<GuidanceBundleRecord> {
-    const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
-    this.storage.workspaces.get(normalizedWorkspaceId);
-    const [globalDocs, workspaceDocs] = await Promise.all([
-      this.listGlobalGuidance(),
-      Promise.all(
-        WORKSPACE_GUIDANCE_DOC_TYPES.map((docType) =>
-          this.readGuidanceDocument(docType, "workspace", normalizedWorkspaceId),
-        ),
-      ),
-    ]);
-    return {
-      workspaceId: normalizedWorkspaceId,
-      global: globalDocs,
-      workspace: workspaceDocs,
-    };
+  public async listWorkspaceGuidance(workspaceId: string) {
+    return this.guidanceService.listWorkspaceGuidance(workspaceId);
   }
 
   public async updateGlobalGuidance(docType: GuidanceDocType, content: string): Promise<GuidanceDocumentRecord> {
-    await this.writeGuidanceDocument(docType, "global", undefined, content);
-    this.publishRealtime("guidance_updated", "system", {
-      scope: "global",
-      docType,
-    });
-    return this.readGuidanceDocument(docType, "global");
+    return this.guidanceService.updateGlobalGuidance(docType, content);
   }
 
   public async updateWorkspaceGuidance(
@@ -1633,18 +1634,7 @@ export class GatewayService {
     docType: GuidanceDocType,
     content: string,
   ): Promise<GuidanceDocumentRecord> {
-    const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
-    this.storage.workspaces.get(normalizedWorkspaceId);
-    if (!WORKSPACE_GUIDANCE_DOC_TYPES.includes(docType)) {
-      throw new Error(`Workspace override is not supported for ${docType}; use global guidance instead.`);
-    }
-    await this.writeGuidanceDocument(docType, "workspace", normalizedWorkspaceId, content);
-    this.publishRealtime("guidance_updated", "system", {
-      scope: "workspace",
-      workspaceId: normalizedWorkspaceId,
-      docType,
-    });
-    return this.readGuidanceDocument(docType, "workspace", normalizedWorkspaceId);
+    return this.guidanceService.updateWorkspaceGuidance(workspaceId, docType, content);
   }
 
   public async getTranscript(sessionId: string) {
@@ -1867,7 +1857,7 @@ export class GatewayService {
   }
 
   private buildChatThreadKnowledgeDependencies(): chatThreadKnowledgeService.ChatThreadKnowledgeDependencies {
-    return createChatThreadKnowledgeDependenciesForGateway(this);
+    return createChatThreadKnowledgeDependenciesForGateway(this.getRouteCompositionPort());
   }
 
   public getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord {
@@ -4810,7 +4800,7 @@ export class GatewayService {
   }
 
   public getSettings(): RuntimeSettings {
-    return settingsAuthService.getSettings(createSettingsRuntimeDependenciesForGateway(this));
+    return settingsAuthService.getSettings(createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()));
   }
 
   public getPersonalityCatalog() {
@@ -4826,7 +4816,10 @@ export class GatewayService {
   }
 
   public updateSettings(input: settingsAuthService.UpdateSettingsInput): RuntimeSettings {
-    return settingsAuthService.updateSettings(createSettingsRuntimeDependenciesForGateway(this), input);
+    return settingsAuthService.updateSettings(
+      createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+      input,
+    );
   }
 
   /** @internal */ public assertDeploymentProfileUpdate(input: {
@@ -4896,11 +4889,16 @@ export class GatewayService {
   }
 
   public getAuthRuntimeSettings(): AuthRuntimeSettings {
-    return settingsAuthService.getAuthRuntimeSettings(createSettingsRuntimeDependenciesForGateway(this));
+    return settingsAuthService.getAuthRuntimeSettings(
+      createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+    );
   }
 
   public updateAuthSettings(input: AuthSettingsUpdateInput): AuthRuntimeSettings {
-    return settingsAuthService.updateAuthSettings(createSettingsRuntimeDependenciesForGateway(this), input);
+    return settingsAuthService.updateAuthSettings(
+      createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+      input,
+    );
   }
 
   public getAuthCredentialPlan() {
@@ -4926,12 +4924,15 @@ export class GatewayService {
   }
 
   public validateDeviceAccessToken(token: string): { actorId: string; deviceId: string; grantId: string } | undefined {
-    return settingsAuthService.validateDeviceAccessToken(createSettingsAuthRuntimeDependenciesForGateway(this), token);
+    return settingsAuthService.validateDeviceAccessToken(
+      createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
+      token,
+    );
   }
 
   public validateCompanionAccessToken(token: string): CompanionAccessValidationResult | undefined {
     return settingsAuthService.validateCompanionAccessToken(
-      createSettingsAuthRuntimeDependenciesForGateway(this),
+      createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       token,
     );
   }
@@ -4946,7 +4947,7 @@ export class GatewayService {
     body: unknown;
   }): void {
     return settingsAuthService.verifyCompanionRequestSignature(
-      createSettingsAuthRuntimeDependenciesForGateway(this),
+      createSettingsAuthRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       input,
     );
   }
@@ -5627,12 +5628,6 @@ export class GatewayService {
     return discordRuntimeBridgeService.startNewDiscordRouteSession(this, input);
   }
 
-  private assertDiscordConnection(connection: IntegrationConnection): void {
-    if (connection.kind !== "channel" || connection.key !== "discord") {
-      throw new Error("Integration connection is not a Discord channel");
-    }
-  }
-
   public isConnectionUrlAllowlisted(urlValue: string): boolean {
     try {
       const url = new URL(urlValue);
@@ -5663,18 +5658,6 @@ export class GatewayService {
 
   /** @internal */ public tryParseJson<T>(raw: string | null | undefined, fallback: T): T {
     return connectionUrlHelpers.tryParseJson(raw, fallback);
-  }
-
-  private readIntegrationPlugins(): IntegrationPluginRecord[] {
-    const stored = this.storage.systemSettings.get<IntegrationPluginRecord[]>(INTEGRATION_PLUGINS_SETTING_KEY)?.value;
-    if (!Array.isArray(stored)) {
-      return [];
-    }
-    return stored.filter((item): item is IntegrationPluginRecord => Boolean(item?.pluginId));
-  }
-
-  private writeIntegrationPlugins(plugins: IntegrationPluginRecord[]): void {
-    this.storage.systemSettings.set(INTEGRATION_PLUGINS_SETTING_KEY, plugins);
   }
 
   /** @internal */ public readMcpServers(): McpServerRecord[] {
@@ -6273,111 +6256,8 @@ export class GatewayService {
     return DEFAULT_WORKSPACE_ID;
   }
 
-  private resolveGuidancePath(
-    docType: GuidanceDocType,
-    scope: "global" | "workspace",
-    workspaceId?: string,
-  ): { fileName: string; absolutePath: string } {
-    return guidanceDocumentHelpers.resolveGuidancePath(this, docType, scope, workspaceId);
-  }
-
-  private async readGuidanceDocument(
-    docType: GuidanceDocType,
-    scope: "global" | "workspace",
-    workspaceId?: string,
-  ): Promise<GuidanceDocumentRecord> {
-    return guidanceDocumentHelpers.readGuidanceDocument(this, docType, scope, workspaceId);
-  }
-
-  private async writeGuidanceDocument(
-    docType: GuidanceDocType,
-    scope: "global" | "workspace",
-    workspaceId: string | undefined,
-    content: string,
-  ): Promise<void> {
-    return guidanceDocumentHelpers.writeGuidanceDocument(this, docType, scope, workspaceId, content);
-  }
-
   /** @internal */ public async resolveRuntimeGuidance(workspaceId: string): Promise<ResolvedRuntimeGuidance> {
-    const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
-    if (isTruthy(process.env[GUIDANCE_DEBUG_KILL_SWITCH_ENV])) {
-      return {
-        workspaceId: normalizedWorkspaceId,
-        globalFilesUsed: [],
-        workspaceFilesUsed: [],
-        truncated: false,
-      };
-    }
-
-    const globalFilesUsed: string[] = [];
-    const workspaceFilesUsed: string[] = [];
-    const selectedBlocks: Array<{ title: string; content: string }> = [];
-
-    for (const docType of RUNTIME_GUIDANCE_DOC_TYPES) {
-      const [workspaceDoc, globalDoc] = await Promise.all([
-        this.readGuidanceDocument(docType, "workspace", normalizedWorkspaceId),
-        this.readGuidanceDocument(docType, "global"),
-      ]);
-      const selected = workspaceDoc.exists ? workspaceDoc : globalDoc.exists ? globalDoc : undefined;
-      if (!selected || !selected.content.trim()) {
-        continue;
-      }
-      if (selected.scope === "workspace") {
-        workspaceFilesUsed.push(selected.fileName);
-      } else {
-        globalFilesUsed.push(selected.fileName);
-      }
-      selectedBlocks.push({
-        title: `${selected.fileName} (${selected.scope})`,
-        content: selected.content.trim(),
-      });
-    }
-
-    const header = [
-      `Workspace context: ${normalizedWorkspaceId}.`,
-      "Apply these runtime guidance notes with workspace overrides taking precedence over global defaults.",
-    ].join("\n");
-    const immutableSafetyFooter = [
-      "Non-overridable safety invariants:",
-      "- Approval requirements remain authoritative.",
-      "- Deny-wins policy remains authoritative.",
-      "- Tool grants and host/network/path security boundaries remain authoritative.",
-    ].join("\n");
-    const budgetForBlocks = Math.max(
-      1200,
-      MAX_RUNTIME_GUIDANCE_CHARS - header.length - immutableSafetyFooter.length - 12,
-    );
-
-    let consumed = 0;
-    let truncated = false;
-    const blockLines: string[] = [];
-    for (const block of selectedBlocks) {
-      if (consumed >= budgetForBlocks) {
-        truncated = true;
-        break;
-      }
-      const rendered = `## ${block.title}\n${block.content}`;
-      if (consumed + rendered.length <= budgetForBlocks) {
-        blockLines.push(rendered);
-        consumed += rendered.length;
-        continue;
-      }
-      const remaining = budgetForBlocks - consumed;
-      if (remaining > 80) {
-        blockLines.push(`${rendered.slice(0, remaining)}\n...[truncated]`);
-      }
-      truncated = true;
-      break;
-    }
-
-    const systemInstruction = [header, ...blockLines, immutableSafetyFooter].filter(Boolean).join("\n\n");
-    return {
-      workspaceId: normalizedWorkspaceId,
-      systemInstruction: systemInstruction.trim().length > 0 ? systemInstruction : undefined,
-      globalFilesUsed,
-      workspaceFilesUsed,
-      truncated,
-    };
+    return this.guidanceService.resolveRuntimeGuidance(workspaceId);
   }
 
   /** @internal */ public requireChatSession(sessionId: string): ChatSessionRecord {
@@ -7833,12 +7713,4 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, Math.max(0, ms));
   });
-}
-
-function isTruthy(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }

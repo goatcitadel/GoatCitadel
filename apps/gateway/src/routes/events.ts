@@ -17,6 +17,7 @@ const streamQuerySchema = z.object({
 
 const STREAM_REPLAY_LIMIT = 500;
 const DEFAULT_MAX_SSE_CONNECTIONS_PER_IP = 25;
+const SEQUENCE_CURSOR_PATTERN = /^\d+$/;
 
 export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
   const activeSseConnectionsByIp = new Map<string, number>();
@@ -237,10 +238,14 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
 };
 
 function parseSequenceCursor(cursor?: string): number | undefined {
-  if (!cursor || !/^\d+$/.test(cursor.trim())) {
+  if (!cursor) {
     return undefined;
   }
-  const value = Number.parseInt(cursor.trim(), 10);
+  const trimmed = cursor.trim();
+  if (!SEQUENCE_CURSOR_PATTERN.test(trimmed)) {
+    return undefined;
+  }
+  const value = Number.parseInt(trimmed, 10);
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 

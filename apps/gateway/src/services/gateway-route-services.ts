@@ -10,6 +10,11 @@ import type { ApprovalRuntime } from "./approval-runtime-service.js";
 import { ApprovalsRouteService } from "./approvals-route-service.js";
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
 import {
+  createCapabilityPacksRouteService,
+  type CapabilityPacksRoutePort,
+  type CapabilityPacksRouteService,
+} from "./capability-packs-route-service.js";
+import {
   createChatAttachmentsRouteService,
   type ChatAttachmentsRoutePort,
   type ChatAttachmentsRouteService,
@@ -71,6 +76,11 @@ import {
 import type { DurableOperatorService } from "./durable-operator-service.js";
 import { DurableRouteService } from "./durable-route-service.js";
 import { createFilesRouteService, type FilesRoutePort, type FilesRouteService } from "./files-route-service.js";
+import {
+  createEvidenceRouteService,
+  type EvidenceRoutePort,
+  type EvidenceRouteService,
+} from "./evidence-route-service.js";
 import {
   createGatewayEventsRouteService,
   type GatewayEventsRoutePort,
@@ -156,6 +166,7 @@ export interface GatewayRouteServices {
   authAdmin: AuthAdminRouteService;
   approvals: ApprovalsRouteService;
   capabilities: CapabilitiesRouteService;
+  capabilityPacks: CapabilityPacksRouteService;
   chatAttachments: ChatAttachmentsRouteService;
   chatDelegate: ChatDelegateRouteService;
   chatMessages: ChatMessagesRouteService;
@@ -173,6 +184,7 @@ export interface GatewayRouteServices {
   devDiagnostics: DevDiagnosticsRouteService;
   devVerification: DevVerificationRouteService;
   durable: DurableRouteService;
+  evidence: EvidenceRouteService;
   files: FilesRouteService;
   gatewayEvents: GatewayEventsRouteService;
   health: HealthRouteService;
@@ -212,6 +224,7 @@ export interface GatewayRouteServiceDependencies {
   authAdmin: AuthAdminRoutePort;
   approvals: ApprovalRuntime;
   capabilities: CapabilitiesRoutePort;
+  capabilityPacks: CapabilityPacksRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
   chatDelegate: ChatDelegateRoutePort;
   chatMessages: ChatMessagesRoutePort;
@@ -229,6 +242,7 @@ export interface GatewayRouteServiceDependencies {
   devDiagnostics: DevDiagnosticsRoutePort;
   devVerification: DevVerificationRouteDependencies;
   durable: DurableOperatorService;
+  evidence: EvidenceRoutePort;
   files: FilesRoutePort;
   gatewayEvents: GatewayEventsRoutePort;
   health: HealthRoutePort;
@@ -269,6 +283,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     authAdmin: new AuthAdminRouteService(deps.authAdmin),
     approvals: new ApprovalsRouteService(deps.approvals),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
+    capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
     chatDelegate: createChatDelegateRouteService(deps.chatDelegate),
     chatMessages: createChatMessagesRouteService(deps.chatMessages),
@@ -286,6 +301,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     devDiagnostics: createDevDiagnosticsRouteService(deps.devDiagnostics),
     devVerification: new DevVerificationRouteService(deps.devVerification),
     durable: new DurableRouteService(deps.durable),
+    evidence: createEvidenceRouteService(deps.evidence),
     files: createFilesRouteService(deps.files),
     gatewayEvents: createGatewayEventsRouteService(deps.gatewayEvents),
     health: createHealthRouteService(deps.health),

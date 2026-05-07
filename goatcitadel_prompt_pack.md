@@ -420,7 +420,7 @@ Rules:
 "Read these files using file/code tools:
 - `F:/code/personal-ai/goatcitadel_prompt_pack.md`
 - `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.ts`
-- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.test.ts`
+- `F:/code/personal-ai/apps/gateway/src/services/prompt-pack-service.parser-report.test.ts`
 - `F:/code/personal-ai/.gitignore`
 
 Review whether Prompt Lab currently has a clear source of truth for prompt packs, or whether source files, SQLite imports, and ignored artifacts can drift.

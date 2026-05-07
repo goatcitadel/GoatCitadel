@@ -8,17 +8,13 @@
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type {
-  ChannelSendInput,
   ChatCitationRecord,
   ChatMessageRecord,
-  RealtimeEvent,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
   ChatSessionBindingRecord,
   ChatStreamChunkDraft,
   ChatTurnTraceRecord,
-  GatewayEventInput,
-  ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { dedupeChatCitations, splitIntoChunks } from "./chat-turn-helpers.js";
@@ -30,50 +26,20 @@ import {
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
+import type {
+  ChatTurnDurableRunOwner,
+  ChatTurnIntegrationDispatch,
+  ChatTurnStreamLifecycleControl,
+} from "./chat-turn-runtime-collaborators.js";
 
-export interface ChatTurnDispatchHost extends chatTurnStreamService.ChatTurnStreamHost {
-  readonly config: {
-    assistant: {
-      durable: {
-        enabled: boolean;
-        executionEnabled: boolean;
-        chatAutoPromoteEnabled: boolean;
-      };
-    };
-  };
+export interface ChatTurnDispatchHost
+  extends
+    chatTurnStreamService.ChatTurnStreamHost,
+    ChatTurnDurableRunOwner,
+    ChatTurnIntegrationDispatch,
+    ChatTurnStreamLifecycleControl {
   readonly storage: chatTurnStreamService.ChatTurnStreamHost["storage"] & Pick<Storage, "durableRuns">;
-  readonly backgroundTasks: Set<Promise<void>>;
-  isFeatureEnabled(flag: string): boolean;
-  streamPersistedChatTurnEvents(
-    sessionId: string,
-    turnId: string,
-    options?: { liveTail?: boolean },
-  ): AsyncGenerator<InspectableChatStreamChunk>;
-  persistChatStreamChunk(chunk: ChatStreamChunkDraft, durableRunId?: string): void;
-  createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
-  finalizeDurableChatRun(runId: string, prepared: PreparedAgentChatTurn, trace: ChatTurnTraceRecord): void;
-  completeActiveChatTurnStream(turnId: string): void;
-  closeActiveChatTurnStream(turnId: string): void;
-  beginDurableChatRun(
-    prepared: PreparedAgentChatTurn,
-    input: ChatSendMessageRequest,
-    threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
-  ): import("@goatcitadel/contracts").DurableRunRecord | undefined;
-  registerActiveChatTurnStream(sessionId: string, turnId: string, durableRunId?: string): void;
-  ensureSessionInternalToolGrant(sessionId: string, toolName: string, reason: string): void;
-  requireExecutedToolResult(
-    toolName: string,
-    result: ToolInvokeResult | Record<string, unknown>,
-  ): Record<string, unknown>;
-  commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
-  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
   updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
-  publishRealtime(
-    channel: string,
-    topic: string,
-    payload: Record<string, unknown>,
-    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
 }
 
 export function isDurableExecutionEnabled(host: ChatTurnDispatchHost): boolean {

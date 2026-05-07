@@ -22,9 +22,6 @@ import type {
   ChatSessionRecord,
   ChatToolRunRecord,
   ChatTurnTraceRecord,
-  GatewayEventInput,
-  MemoryRelationScope,
-  RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
@@ -53,6 +50,13 @@ import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { HooksService } from "./hooks-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
+import type {
+  ChatTurnActiveExecutionControl,
+  ChatTurnMemorySideEffects,
+  ChatTurnRealtimeEmitter,
+  ChatTurnTranscriptIngress,
+} from "./chat-turn-runtime-collaborators.js";
+import { PROMPT_LAB_LOCAL_FILE_TOOL_NAMES } from "./chat-tool-families.js";
 
 type ChatTurnStreamStorage = Pick<
   Storage,
@@ -64,7 +68,12 @@ type ChatTurnStreamStorage = Pick<
   | "chatTurnTraces"
 >;
 
-export interface ChatTurnStreamHost {
+export interface ChatTurnStreamHost
+  extends
+    ChatTurnActiveExecutionControl,
+    ChatTurnMemorySideEffects,
+    ChatTurnRealtimeEmitter,
+    ChatTurnTranscriptIngress {
   readonly storage: ChatTurnStreamStorage;
   readonly turnRuntime: Pick<TurnRuntime, "runStream">;
   readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
@@ -110,9 +119,6 @@ export interface ChatTurnStreamHost {
   inheritDelegatedSessionToolGrants(sessionId: string, delegatedSessionId: string): void;
   updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): unknown;
   agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
-  beginActiveChatTurnExecution(sessionId: string, turnId: string, operation: string): AbortController;
-  endActiveChatTurnExecution(turnId: string, controller: AbortController): void;
-  ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<unknown>;
   updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
   collectCapabilityUpgradeSuggestions(input: {
     sessionId: string;
@@ -127,34 +133,6 @@ export interface ChatTurnStreamHost {
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[];
-  publishRealtime(
-    channel: string,
-    topic: string,
-    payload: Record<string, unknown>,
-    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): void;
-  extractAndPersistLearnedMemory(
-    sessionId: string,
-    content: string,
-    source: {
-      role: "user" | "assistant";
-      sourceRef: string;
-      trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
-    },
-  ): void;
-  scheduleChatMemoryContextPrewarm(input: {
-    sessionId: string;
-    prompt: string;
-    relationScope?: MemoryRelationScope;
-  }): void;
-  scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void;
-  recordCapabilityGapFromTrace(input: {
-    sessionId: string;
-    turnId: string;
-    content: string;
-    trace: ChatTurnTraceRecord;
-  }): void;
-  markChatTurnCancelled(sessionId: string, turnId: string): ChatTurnTraceRecord;
 }
 
 export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: string): ChatToolRunRecord[] {
@@ -853,14 +831,6 @@ function buildDelegatedPriorStepContext(
 function formatDelegatedStepTitle(step: Pick<OrchestrationStepExecutionResult, "label" | "role">): string {
   return step.label?.trim() || toTitleCase(step.role);
 }
-
-const PROMPT_LAB_LOCAL_FILE_TOOL_NAMES = new Set([
-  "fs.read",
-  "file.read_range",
-  "file.find",
-  "code.search",
-  "code.search_files",
-]);
 
 function filterDelegatedSuggestedToolsForPromptLab(
   suggestedTools: string[],

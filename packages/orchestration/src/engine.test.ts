@@ -35,6 +35,8 @@ const plan: OrchestrationPlan = {
   ],
 };
 
+const testNow = "2026-02-27T00:01:00.000Z";
+
 describe("OrchestrationEngine", () => {
   it("starts hitl runs in paused state and advances phases", () => {
     const engine = new OrchestrationEngine();
@@ -51,11 +53,11 @@ describe("OrchestrationEngine", () => {
     expect(started.status).toBe("paused");
     expect(started.currentPhaseId).toBe("phase-1");
 
-    const afterPhase1 = engine.approvePhase(plan, started, "phase-1");
+    const afterPhase1 = engine.approvePhase(plan, started, "phase-1", { now: testNow });
     expect(afterPhase1.status).toBe("paused");
     expect(afterPhase1.currentPhaseId).toBe("phase-2");
 
-    const afterPhase2 = engine.approvePhase(plan, afterPhase1, "phase-2");
+    const afterPhase2 = engine.approvePhase(plan, afterPhase1, "phase-2", { now: testNow });
     expect(afterPhase2.status).toBe("completed");
   });
 
@@ -100,7 +102,7 @@ describe("OrchestrationEngine", () => {
       status: "paused" as const,
       currentPhaseId: "phase-2",
     };
-    const afterApproval = engine.approvePhase(autoPlan, waitingForApproval, "phase-2");
+    const afterApproval = engine.approvePhase(autoPlan, waitingForApproval, "phase-2", { now: testNow });
     expect(afterApproval.status).toBe("completed");
   });
 
@@ -138,7 +140,7 @@ describe("OrchestrationEngine", () => {
       totalIterations: 0,
     };
 
-    const advanced = engine.advancePhase(autoPlan, started, "phase-1");
+    const advanced = engine.advancePhase(autoPlan, started, "phase-1", { now: testNow });
     expect(advanced.status).toBe("paused");
     expect(advanced.currentPhaseId).toBe("phase-2");
     expect(advanced.totalIterations).toBe(1);

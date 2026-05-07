@@ -9,7 +9,6 @@ import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatCancelTurnResponse,
-  ChatStreamChunkDraft,
   ChatTurnBranchKind,
   ChatMessageRecord,
   RoutingPreflightRequest,
@@ -21,7 +20,7 @@ import type {
   ChatTurnTraceRecord,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import type { SessionAutonomyPrefsRecord } from "@goatcitadel/storage";
+import type { SessionAutonomyPrefsRecord, Storage } from "@goatcitadel/storage";
 import { looksLowConfidenceResponse } from "./learned-memory-utils.js";
 import {
   preflightChatRoute,
@@ -38,6 +37,14 @@ import {
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { ChatTurnPrepHost, PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
+import type {
+  ChatTurnActiveExecutionControl,
+  ChatTurnLeaseControl,
+  ChatTurnMemorySideEffects,
+  ChatTurnRealtimeEmitter,
+  ChatTurnStreamLifecycleControl,
+  ChatTurnTranscriptIngress,
+} from "./chat-turn-runtime-collaborators.js";
 
 type ChatTurnProactiveTriggerInput = {
   source?: "scheduler" | "manual" | "chat";
@@ -45,11 +52,31 @@ type ChatTurnProactiveTriggerInput = {
   prefs?: SessionAutonomyPrefsRecord;
 };
 
+type ChatTurnEntryStorage = ChatTurnPrepHost["storage"] &
+  chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
+  Pick<Storage, "chatReflectionAttempts" | "chatSessionBindings">;
+
 export interface ChatTurnEntryHost
   extends
     Omit<ChatTurnPrepHost, "storage">,
-    Omit<chatTurnDispatchService.ChatTurnDispatchHost, "storage" | "turnRuntime"> {
-  readonly storage: ChatTurnPrepHost["storage"] & chatTurnDispatchService.ChatTurnDispatchHost["storage"];
+    Omit<
+      chatTurnDispatchService.ChatTurnDispatchHost,
+      | "storage"
+      | "turnRuntime"
+      | keyof ChatTurnActiveExecutionControl
+      | keyof ChatTurnLeaseControl
+      | keyof ChatTurnMemorySideEffects
+      | keyof ChatTurnRealtimeEmitter
+      | keyof ChatTurnStreamLifecycleControl
+      | keyof ChatTurnTranscriptIngress
+    >,
+    ChatTurnActiveExecutionControl,
+    ChatTurnLeaseControl,
+    ChatTurnMemorySideEffects,
+    ChatTurnRealtimeEmitter,
+    ChatTurnStreamLifecycleControl,
+    ChatTurnTranscriptIngress {
+  readonly storage: ChatTurnEntryStorage;
   readonly turnRuntime: Pick<TurnRuntime, "run" | "runStream">;
   prepareAgentChatTurn(
     sessionId: string,
@@ -64,24 +91,6 @@ export interface ChatTurnEntryHost
       assistantMessageId?: string;
     },
   ): Promise<PreparedAgentChatTurn>;
-  withChatTurnWriteLease<T>(sessionId: string, operation: string, task: () => Promise<T>): Promise<T>;
-  withChatTurnWriteLeaseStream(
-    sessionId: string,
-    operation: string,
-    factory: () => AsyncGenerator<ChatStreamChunk>,
-  ): AsyncGenerator<ChatStreamChunk>;
-  withEphemeralStreamEnvelope(
-    stream: AsyncGenerator<ChatStreamChunkDraft>,
-    runId?: string,
-  ): AsyncGenerator<ChatStreamChunk>;
-  streamPersistedChatTurnEvents(
-    sessionId: string,
-    turnId: string,
-    options?: {
-      sinceEventId?: string;
-      liveTail?: boolean;
-    },
-  ): AsyncGenerator<ChatStreamChunk>;
   requireChatTurnContext(
     sessionId: string,
     turnId: string,
@@ -90,15 +99,6 @@ export interface ChatTurnEntryHost
     userMessage: ChatMessageRecord;
     assistantMessage?: ChatMessageRecord;
   }>;
-  beginActiveChatTurnExecution(sessionId: string, turnId: string, operation: string): AbortController;
-  endActiveChatTurnExecution(turnId: string, controller: AbortController): void;
-  getActiveChatTurnExecution(turnId: string):
-    | {
-        sessionId: string;
-        controller: AbortController;
-      }
-    | undefined;
-  markChatTurnCancelled(sessionId: string, turnId: string, cancelledBy?: string): ChatTurnTraceRecord;
   collectCapabilityUpgradeSuggestions(input: {
     sessionId: string;
     content: string;
@@ -112,21 +112,6 @@ export interface ChatTurnEntryHost
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[];
-  recordCapabilityGapFromTrace(input: {
-    sessionId: string;
-    turnId: string;
-    content: string;
-    trace: ChatTurnTraceRecord;
-  }): void;
-  extractAndPersistLearnedMemory(
-    sessionId: string,
-    content: string,
-    source: {
-      role: "user" | "assistant";
-      sourceRef: string;
-      trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
-    },
-  ): void;
   isReplayScratchSession(sessionId: string): boolean;
   triggerChatSessionProactive(sessionId: string, input?: ChatTurnProactiveTriggerInput): Promise<ProactiveRunRecord>;
 }
