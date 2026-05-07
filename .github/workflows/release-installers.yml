@@ -125,6 +125,14 @@ jobs:
             $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
             if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
           }
+          if (Test-Path $desktop) { throw "Installed desktop executable remained after uninstall at $desktop" }
+          if (Test-Path $installDir) {
+            $remaining = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue
+            if ($remaining) {
+              $sample = ($remaining | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
+              throw "Installer left files after uninstall in $installDir`n$sample"
+            }
+          }
 
       - name: Write SHA-256 checksum
         shell: pwsh
