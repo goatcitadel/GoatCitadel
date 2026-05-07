@@ -32,7 +32,7 @@ export const gatewayPlugin = fp(async (fastify) => {
   await gateway.initCritical();
 
   fastify.addHook("onReady", async () => {
-    void gateway.startDeferredInit();
+    await gateway.startDeferredInit();
   });
 
   fastify.addHook("onClose", async () => {

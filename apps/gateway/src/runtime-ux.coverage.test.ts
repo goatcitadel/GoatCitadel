@@ -57,4 +57,26 @@ describe("runtime logger coverage", () => {
     expect(output).not.toContain("socket");
     expect(output).not.toContain("parser");
   });
+
+  it("redacts sensitive log metadata keys", () => {
+    const logger = createGatewayLogger(true);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    logger.warn(
+      {
+        provider_api_key: "sk-test",
+        connector_secret_value: "secret-value",
+        nested: {
+          refreshToken: "refresh-token",
+        },
+      },
+      "sensitive metadata",
+    );
+
+    const output = String(warnSpy.mock.calls.at(-1)?.[0] ?? "");
+    expect(output).toContain("[redacted]");
+    expect(output).not.toContain("sk-test");
+    expect(output).not.toContain("secret-value");
+    expect(output).not.toContain("refresh-token");
+  });
 });

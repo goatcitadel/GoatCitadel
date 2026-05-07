@@ -18,13 +18,11 @@ afterEach(() => {
 
 describe("assertWritePathInJail", () => {
   it("allows writes in jail", () => {
-    expect(() => assertWritePathInJail("./workspace/file.txt", ["./workspace"]))
-      .not.toThrow();
+    expect(() => assertWritePathInJail("./workspace/file.txt", ["./workspace"])).not.toThrow();
   });
 
   it("blocks traversal outside jail", () => {
-    expect(() => assertWritePathInJail("./workspace/../secret.txt", ["./workspace"]))
-      .toThrow(/outside write jail/i);
+    expect(() => assertWritePathInJail("./workspace/../secret.txt", ["./workspace"])).toThrow(/outside write jail/i);
   });
 
   it("blocks writes through symlink escape paths", () => {
@@ -34,8 +32,17 @@ describe("assertWritePathInJail", () => {
     }
 
     const attemptedWritePath = path.join(fixture.jailRoot, "link-out", "pwned.txt");
-    expect(() => assertWritePathInJail(attemptedWritePath, [fixture.jailRoot]))
-      .toThrow(/outside write jail/i);
+    expect(() => assertWritePathInJail(attemptedWritePath, [fixture.jailRoot])).toThrow(/outside write jail/i);
+  });
+
+  it("blocks missing write targets when an existing symlink ancestor escapes the jail", () => {
+    const fixture = createSymlinkFixture();
+    if (!fixture) {
+      return;
+    }
+
+    const attemptedWritePath = path.join(fixture.jailRoot, "link-out", "missing", "pwned.txt");
+    expect(() => assertWritePathInJail(attemptedWritePath, [fixture.jailRoot])).toThrow(/outside write jail/i);
   });
 });
 
@@ -47,8 +54,7 @@ describe("assertReadPathAllowed", () => {
     }
 
     const escapedFile = path.join(fixture.jailRoot, "link-out", "secret.txt");
-    expect(() => assertReadPathAllowed(escapedFile, [fixture.jailRoot], []))
-      .toThrow(/outside read allowlist/i);
+    expect(() => assertReadPathAllowed(escapedFile, [fixture.jailRoot], [])).toThrow(/outside read allowlist/i);
   });
 
   it("blocks nonexistent absolute paths outside the allowlist before filesystem access", () => {
@@ -58,14 +64,11 @@ describe("assertReadPathAllowed", () => {
     }
 
     const missingOutsidePath = path.join(path.dirname(fixture.jailRoot), "outside-missing", "ghost.txt");
-    expect(() => assertReadPathAllowed(missingOutsidePath, [fixture.jailRoot], []))
-      .toThrow(/outside read allowlist/i);
+    expect(() => assertReadPathAllowed(missingOutsidePath, [fixture.jailRoot], [])).toThrow(/outside read allowlist/i);
   });
 });
 
-function createSymlinkFixture():
-  | { jailRoot: string }
-  | undefined {
+function createSymlinkFixture(): { jailRoot: string } | undefined {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-"));
   tempDirs.push(root);
 

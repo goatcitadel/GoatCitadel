@@ -526,6 +526,27 @@ describe("auth plugin", () => {
     expect(response.json()).toMatchObject({ actorSource: "sse" });
   });
 
+  it("consumes SSE bridge tokens on wrong-scope attempts", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "sse-bearer", queryParam: "access_token" },
+    });
+
+    const issued = app.issueSseToken("dev:diagnostics:stream", 30_000);
+
+    const wrongScope = await app.inject({
+      method: "GET",
+      url: `/api/v1/events/stream?sse_token=${encodeURIComponent(issued.token)}`,
+    });
+    expect(wrongScope.statusCode).toBe(401);
+
+    const retryOnCorrectScope = await app.inject({
+      method: "GET",
+      url: `/api/v1/dev/diagnostics/stream?sse_token=${encodeURIComponent(issued.token)}`,
+    });
+    expect(retryOnCorrectScope.statusCode).toBe(401);
+  });
+
   it("evicts the oldest SSE bridge token when one actor exceeds the per-actor cap", async () => {
     app = await buildApp({
       mode: "token",

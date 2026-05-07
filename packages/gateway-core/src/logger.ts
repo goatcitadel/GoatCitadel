@@ -27,6 +27,10 @@ export interface Logger {
   readonly child: (component: string) => Logger;
 }
 
+const REDACTED_LOG_VALUE = "[redacted]";
+const SENSITIVE_LOG_KEY_PATTERN =
+  /(?:api[_-]?key|authorization|bearer|client[_-]?secret|companion[_-]?session[_-]?token|connector[_-]?secret[_-]?value|cookie|idempotency[_-]?key|password|provider[_-]?api[_-]?key|refresh[_-]?token|request[_-]?secret|secret|session[_-]?token|token)$/i;
+
 function formatError(errorOrContext: unknown): LogContext {
   if (errorOrContext instanceof Error) {
     return {
@@ -52,7 +56,7 @@ function createLogger(component: string): Logger {
       ts: new Date().toISOString(),
       component,
       msg,
-      ...context,
+      ...sanitizeLogContext(context),
     };
     const line = JSON.stringify(entry);
     if (stream === "stderr") {
@@ -73,6 +77,53 @@ function createLogger(component: string): Logger {
     },
     child: (sub) => createLogger(`${component}:${sub}`),
   };
+}
+
+function sanitizeLogContext(value: unknown, seen = new WeakSet<object>()): LogContext {
+  const sanitized = sanitizeLogValue(value, seen);
+  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) {
+    return {};
+  }
+  return sanitized as LogContext;
+}
+
+function sanitizeLogValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (value instanceof Error) {
+    return {
+      message: value.message,
+      name: value.name,
+      stack: value.stack,
+    };
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const sanitized = value.map((entry) => sanitizeLogValue(entry, seen));
+    seen.delete(value);
+    return sanitized;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "function") {
+      continue;
+    }
+    if (SENSITIVE_LOG_KEY_PATTERN.test(key)) {
+      result[key] = REDACTED_LOG_VALUE;
+      continue;
+    }
+    result[key] = sanitizeLogValue(entry, seen);
+  }
+  seen.delete(value);
+  return result;
 }
 
 /** Root logger — call `.child("service-name")` to create scoped loggers. */

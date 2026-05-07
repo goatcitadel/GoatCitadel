@@ -7,15 +7,14 @@ export interface ReadPathAccessDecision {
 }
 
 export function assertWritePathInJail(targetPath: string, writeJailRoots: string[]): void {
-  const resolvedTarget = resolvePathViaExistingAncestor(targetPath);
+  const resolvedTarget = resolvePathViaExistingAncestor(targetPath, {
+    roots: writeJailRoots,
+    scope: "write jail",
+  });
   assertWithinRoots(resolvedTarget, writeJailRoots, "write jail");
 }
 
-export function assertReadPathAllowed(
-  targetPath: string,
-  writeJailRoots: string[],
-  readOnlyRoots: string[],
-): void {
+export function assertReadPathAllowed(targetPath: string, writeJailRoots: string[], readOnlyRoots: string[]): void {
   const access = resolveReadPathAccess(targetPath, writeJailRoots, readOnlyRoots);
   if (!access.withinRoots) {
     throw new Error(`Path is outside read allowlist: ${access.resolvedPath}`);
@@ -59,7 +58,7 @@ function assertWithinRoots(target: string, roots: string[], scope: string): void
   }
 }
 
-function resolvePathViaExistingAncestor(targetPath: string): string {
+function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots: string[]; scope: string }): string {
   const absoluteTarget = path.resolve(targetPath);
 
   // Resolve symlinks for the closest existing ancestor so read/write checks
@@ -68,11 +67,18 @@ function resolvePathViaExistingAncestor(targetPath: string): string {
   while (true) {
     if (fs.existsSync(probe)) {
       const realExisting = fs.realpathSync(probe);
+      if (rootGuard) {
+        assertWithinRoots(realExisting, rootGuard.roots, rootGuard.scope);
+      }
       if (probe === absoluteTarget) {
         return realExisting;
       }
       const relativeTail = path.relative(probe, absoluteTarget);
-      return path.resolve(realExisting, relativeTail);
+      const resolvedPath = path.resolve(realExisting, relativeTail);
+      if (rootGuard) {
+        assertWithinRoots(resolvedPath, rootGuard.roots, rootGuard.scope);
+      }
+      return resolvedPath;
     }
 
     const parent = path.dirname(probe);
@@ -82,5 +88,8 @@ function resolvePathViaExistingAncestor(targetPath: string): string {
     probe = parent;
   }
 
+  if (rootGuard) {
+    assertWithinRoots(absoluteTarget, rootGuard.roots, rootGuard.scope);
+  }
   return absoluteTarget;
 }

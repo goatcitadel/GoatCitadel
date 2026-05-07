@@ -26,14 +26,14 @@ interface MutationIdempotencyStore {
     idempotencyKey: string;
     actorScope?: string;
     updatedAt?: string;
-  }): void;
+  }): Promise<void> | void;
   markFailed(input: {
     method: string;
     routePath: string;
     idempotencyKey: string;
     actorScope?: string;
     updatedAt?: string;
-  }): void;
+  }): Promise<void> | void;
 }
 
 interface MutationIdempotencyState {
@@ -114,10 +114,10 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
       return;
     }
     if (reply.statusCode >= 500) {
-      options.mutationStore.markFailed(state);
+      await options.mutationStore.markFailed(state);
       return;
     }
-    options.mutationStore.markCompleted(state);
+    await options.mutationStore.markCompleted(state);
   });
 });
 

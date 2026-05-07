@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
-import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
@@ -62,6 +62,7 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
 });
 
+const MAX_REMOTE_APPROVAL_TOKEN_LENGTH = 4096;
 const REMOTE_APPROVAL_CREATE_TOKEN_HEADER = "x-goatcitadel-approval-create-token";
 
 export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -305,20 +306,8 @@ function readHeader(value: unknown): string | undefined {
     return undefined;
   }
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function timingSafeStringEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    const comparableLength = Math.max(leftBuffer.length, rightBuffer.length, 1);
-    const leftComparable = Buffer.alloc(comparableLength);
-    const rightComparable = Buffer.alloc(comparableLength);
-    leftBuffer.copy(leftComparable);
-    rightBuffer.copy(rightComparable);
-    timingSafeEqual(leftComparable, rightComparable);
-    return false;
+  if (trimmed.length > MAX_REMOTE_APPROVAL_TOKEN_LENGTH) {
+    return undefined;
   }
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  return trimmed.length > 0 ? trimmed : undefined;
 }

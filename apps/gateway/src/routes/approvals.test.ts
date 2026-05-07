@@ -131,6 +131,37 @@ describe("approvals routes", () => {
     expect(createApproval).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized remote approval creation tokens before comparison", async () => {
+    vi.stubEnv("GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN", "remote-create-token");
+    const createApproval = vi.fn();
+    const built = buildApp({
+      createApproval,
+    });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: {
+        "idempotency-key": "approval-create-oversized",
+        "x-goatcitadel-approval-create-token": "x".repeat(4097),
+        "x-forwarded-for": "100.64.0.9",
+      },
+      payload: {
+        kind: "tool.invoke",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+        sourceConnectorId: "slack",
+        sourceTraceId: "evt-123",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
   it("issues remote action tokens for approval resolution", async () => {
     const createApprovalRemoteActionToken = vi.fn(() => ({
       approvalId: "apr_123",

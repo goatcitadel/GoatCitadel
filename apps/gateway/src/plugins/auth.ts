@@ -1,6 +1,7 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
 import { enterRequestAttribution } from "@goatcitadel/storage";
+import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
@@ -242,11 +243,10 @@ export const authPlugin = fp(async (fastify) => {
       }
 
       const credentials = readBasicCredentials(request.headers.authorization);
-      if (
-        !credentials ||
-        !timingSafeStringEqual(credentials.username, username) ||
-        !timingSafeStringEqual(credentials.password, password)
-      ) {
+      const usernameMatches = credentials ? timingSafeStringEqual(credentials.username, username) : false;
+      const passwordMatches = credentials ? timingSafeStringEqual(credentials.password, password) : false;
+      const credentialsMatch = usernameMatches && passwordMatches;
+      if (!credentialsMatch) {
         reply.header("WWW-Authenticate", 'Basic realm="GoatCitadel Gateway"');
         return reply.code(401).send({
           error: "Unauthorized",
@@ -460,21 +460,6 @@ function resolveRemoteApprovalCreateToken(): string | undefined {
   return fromNamedEnv || process.env.GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN?.trim() || undefined;
 }
 
-function timingSafeStringEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    const comparableLength = Math.max(leftBuffer.length, rightBuffer.length, 1);
-    const leftComparable = Buffer.alloc(comparableLength);
-    const rightComparable = Buffer.alloc(comparableLength);
-    leftBuffer.copy(leftComparable);
-    rightBuffer.copy(rightComparable);
-    timingSafeEqual(leftComparable, rightComparable);
-    return false;
-  }
-  return timingSafeEqual(leftBuffer, rightBuffer);
-}
-
 function validateSseToken(
   provided: string,
   scope: "events:stream" | "dev:diagnostics:stream",
@@ -482,14 +467,17 @@ function validateSseToken(
 ): boolean {
   purgeExpiredSseTokens(store);
   const record = store.get(provided);
+  if (record) {
+    // Consume bridge tokens before validation so every token is single-attempt,
+    // including wrong-scope and expired attempts.
+    store.delete(provided);
+  }
   if (
     record &&
     record.scope === scope &&
     record.expiresAt > Date.now() &&
     timingSafeStringEqual(record.token, provided)
   ) {
-    // One-time use token.
-    store.delete(provided);
     return true;
   }
   return false;

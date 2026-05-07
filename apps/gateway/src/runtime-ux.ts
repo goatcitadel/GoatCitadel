@@ -42,6 +42,10 @@ const compactMetaKeys = new Set([
   "url",
 ]);
 
+const REDACTED_LOG_VALUE = "[redacted]";
+const SENSITIVE_LOG_KEY_PATTERN =
+  /(?:api[_-]?key|authorization|bearer|client[_-]?secret|companion[_-]?session[_-]?token|connector[_-]?secret[_-]?value|cookie|idempotency[_-]?key|password|provider[_-]?api[_-]?key|refresh[_-]?token|request[_-]?secret|secret|session[_-]?token|token)$/i;
+
 export function isVerboseLoggingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.GOATCITADEL_VERBOSE?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
@@ -526,6 +530,10 @@ function sanitizeUnknown(value: unknown, verbose: boolean, seen = new WeakSet<ob
   const result: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (typeof entry === "function") {
+      continue;
+    }
+    if (SENSITIVE_LOG_KEY_PATTERN.test(key)) {
+      result[key] = REDACTED_LOG_VALUE;
       continue;
     }
     const normalized = sanitizeUnknown(entry, verbose, seen);
