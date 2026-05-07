@@ -208,6 +208,9 @@ Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gate
 Filename: "{app}\\app\\runtime\\node\\node.exe"; Parameters: """{app}\\app\\gateway\\dist\\voice-runtime-cli.js"" install --model base.en"; WorkingDir: "{app}\\app\\gateway"; StatusMsg: "Installing local voice runtime..."; Flags: waituntilterminated runhidden skipifsilent; Components: voice
 Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\\app"
 Type: filesandordirs; Name: "{app}\\bin"
