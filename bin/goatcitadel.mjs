@@ -252,6 +252,7 @@ function installOrUpdate() {
     env: runtimeProcessEnv,
   });
   materializeInstallerConfigExamples(appDir);
+  materializeInstallerEnvDefaults(appDir);
   printManagedInstallNotice({
     title: "Installing Playwright Chromium runtime...",
     what: "the managed Chromium browser used by GoatCitadel browser automation",
@@ -479,6 +480,40 @@ function materializeInstallerConfigExamples(repositoryPath) {
     }
     fs.copyFileSync(examplePath, actualPath);
   }
+}
+
+function materializeInstallerEnvDefaults(repositoryPath) {
+  const envPath = path.join(repositoryPath, ".env");
+  const examplePath = path.join(repositoryPath, ".env.example");
+  if (!fs.existsSync(envPath) && fs.existsSync(examplePath)) {
+    fs.copyFileSync(examplePath, envPath);
+  }
+  if (setEnvFileDefault(envPath, "GOATCITADEL_DATABASE_DRIVER", "sqlite")) {
+    console.log("Configured local .env database driver for install-safe startup: sqlite");
+  }
+}
+
+function setEnvFileDefault(envPath, key, value) {
+  let raw = "";
+  try {
+    raw = fs.readFileSync(envPath, "utf8");
+  } catch {
+    raw = "";
+  }
+
+  if (hasActiveEnvValue(raw, key)) {
+    return false;
+  }
+
+  const nextLine = `${key}=${value}`;
+  const next = raw.trim() ? `${raw.replace(/\s*$/u, "")}\n${nextLine}\n` : `${nextLine}\n`;
+  fs.writeFileSync(envPath, next, "utf8");
+  return true;
+}
+
+function hasActiveEnvValue(raw, key) {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*(?:export\\s+)?${escapedKey}\\s*=`, "mu").test(raw);
 }
 
 function doctor(extraArgs = []) {

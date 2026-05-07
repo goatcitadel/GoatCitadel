@@ -50,6 +50,33 @@ function Write-InstallExplanation {
   Write-Host "  Why: $Why"
 }
 
+function Set-EnvFileDefault {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Key,
+    [Parameter(Mandatory = $true)][string]$Value
+  )
+
+  $raw = ""
+  if (Test-Path $Path) {
+    $raw = Get-Content -Path $Path -Raw
+  }
+
+  $escapedKey = [regex]::Escape($Key)
+  $hasActiveValue = [regex]::IsMatch($raw, "(?m)^\s*(?:export\s+)?$escapedKey\s*=")
+  if ($hasActiveValue) {
+    return $false
+  }
+
+  $nextLine = "$Key=$Value"
+  if ([string]::IsNullOrWhiteSpace($raw)) {
+    Set-Content -Path $Path -Value $nextLine -Encoding UTF8
+  } else {
+    Add-Content -Path $Path -Value $nextLine -Encoding UTF8
+  }
+  return $true
+}
+
 function Invoke-PnpmInstallWithRecovery {
   param([Parameter(Mandatory = $true)][string]$RepositoryPath)
 
@@ -239,6 +266,9 @@ $envPath = Join-Path $AppDir ".env"
 if ((Test-Path $envExamplePath) -and -not (Test-Path $envPath)) {
   Write-Host "Materializing local .env from .env.example..."
   Copy-Item -Path $envExamplePath -Destination $envPath -Force
+}
+if (Set-EnvFileDefault -Path $envPath -Key "GOATCITADEL_DATABASE_DRIVER" -Value "sqlite") {
+  Write-Host "Configured local .env database driver for install-safe startup: sqlite"
 }
 Write-InstallExplanation -Title "Installing Playwright Chromium runtime..." `
   -What "the managed Chromium browser used by GoatCitadel browser automation" `
