@@ -11,8 +11,6 @@
 
 GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflows. It gives you a Mission Control UI, a Fastify gateway, shared orchestration and policy packages, and a local-first runtime model that stays explicit about tools, approvals, and system state.
 
-![GoatCitadel Mission Control](docs/screenshots/mission-control/operate-chat.png)
-
 ## What it does
 
 - Chat, Cowork, and Code surfaces with different operating posture
@@ -20,13 +18,17 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 - Tool policy enforcement with path jails, allowlists, and approval gates
 - Workspace-aware context and memory maintenance flows
 - Multi-provider model routing with local-friendly runtime support
+- Native Windows desktop host and installer path for packaged Mission Control
 - Add-on and integration-plugin scaffolds plus the published `@goatcitadel/extensions-sdk` package for extending the system
 
 ## What's new on `main`
 
+- **Gateway runtime decomposition and safety hardening**: the gateway service and route composition work now has narrower integration, webhook, prompt-pack, Prompt Lab, and chat-agent coverage, with tightened auth comparison, logging, idempotency, and path-jail behavior.
+- **Bundled skill activation metadata**: the built-in Coding, Operations, Personal Assistant, safe self-improvement, and local NPU skills now carry clearer activation context so skill-aware routing can expose useful workflows without implying ungoverned execution.
+- **Windows installer cleanup refreshed**: the x64 and arm64 installer path keeps the native desktop host in the bundle, runs silent install/uninstall smoke in the workflow, and now removes extracted `app` / `bin` payloads more reliably on uninstall, including long-path cases.
 - **Guided `llama.cpp` setup**: Mission Control now includes richer local-runtime setup, diagnostics, and provider handoff for `llama.cpp`, with the operator rollout notes captured in [docs/LLAMA_CPP_INTEGRATION_MEMO.md](./docs/LLAMA_CPP_INTEGRATION_MEMO.md).
 - **Approval delivery auth clarified**: remote approval delivery now keeps connector delivery auth boundaries explicit, making channel-backed approval routing easier to reason about during setup and testing.
-- **Windows installer proof refreshed**: the x64 and arm64 installer workflow now supports unsigned packaging smoke and `v1.0.0` convenience installers, while public-trust EXE distribution remains gated on Authenticode signing proof.
+- **Unsigned installer labeling is explicit**: `v1.0.0` convenience installers may be attached as unsigned Windows assets, while public-trust EXE distribution remains gated on Authenticode signing proof.
 
 ## What ships in this repo
 
@@ -49,7 +51,15 @@ GoatCitadel is a hybrid local/cloud AI workspace built for real operator workflo
 
 ## Quickstart
 
-Windows note: use the PowerShell installer and setup flow in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md). The shell commands below assume macOS, Linux, WSL, or another bash-compatible shell that can resolve the repo path correctly.
+Windows installer one-liner:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 | iex
+```
+
+That installer path adds the `goatcitadel`, `goat`, and `gc` launchers and opens the native Mission Control desktop host. The full setup, update, uninstall, and troubleshooting flow is in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
+
+The shell commands below assume macOS, Linux, WSL, or another bash-compatible shell that can resolve the repo path correctly.
 
 ### Clone and boot
 
@@ -162,19 +172,21 @@ Not safe to over-claim yet:
 - `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it still has targeted service coverage rather than full release evidence
 - NPU sidecar maturity or local-inference completeness as a `1.0` signal
 
-## Screenshots
+## Visual proof
 
-Refreshed on April 12, 2026 from the sanitized Mission Control demo runtime used for public-share docs.
+Current release visual proof is driven by checked-in Mission Control Next shell and route baselines rather than README-embedded screenshot files.
 
-Full gallery: [docs/screenshots/mission-control](./docs/screenshots/mission-control)
+```bash
+pnpm verify:visual:regression
+```
 
-| Legacy Operate Chat | Legacy Operate Code |
-| --- | --- |
-| ![Legacy Operate Chat](docs/screenshots/mission-control/operate-chat.png) | ![Legacy Operate Code](docs/screenshots/mission-control/operate-code.png) |
+That lane compares the current Mission Control Next release-surface footprint (`Chat / Cowork / Code / Projects / Library / Ops / Settings`) against the maintained visual baselines. Intentional baseline updates go through:
 
-| Legacy Observe Quality | Legacy Configure Integrations |
-| --- | --- |
-| ![Legacy Observe Quality](docs/screenshots/mission-control/observe-quality.png) | ![Legacy Configure Integrations](docs/screenshots/mission-control/configure-integrations-overview.png) |
+```bash
+pnpm verify:visual:rebaseline
+```
+
+Shareable README/gallery screenshots can still be regenerated from a sanitized demo runtime with `pnpm screenshots:capture`; do that intentionally before adding screenshot embeds back to this file.
 
 ## Public docs
 
@@ -196,7 +208,7 @@ packages/              shared libraries and runtime modules
 scripts/               repo automation and verification
 templates/             add-on, integration, companion, and verification templates
 config/*.example.json  public config templates
-docs/screenshots/      curated Mission Control screenshots
+docs/screenshots/      generated Mission Control screenshot output
 ```
 
 ## Philosophy
