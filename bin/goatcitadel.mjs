@@ -280,7 +280,10 @@ function installOrUpdate() {
           installArgs.voiceModel,
         ],
         {
-          env: runtimeProcessEnv,
+          env: {
+            ...runtimeProcessEnv,
+            GOATCITADEL_DATABASE_DRIVER: "sqlite",
+          },
         },
       );
     } catch (error) {

@@ -248,10 +248,18 @@ if (-not $SkipVoice) {
   Write-InstallExplanation -Title "Installing managed local voice runtime ($VoiceModel)..." `
     -What "the managed local whisper.cpp voice runtime" `
     -Why "Voice transcription and local speech features need a downloaded runtime before GoatCitadel can use them."
+  $previousDatabaseDriver = $env:GOATCITADEL_DATABASE_DRIVER
   try {
+    $env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
     Invoke-NativeOrThrow -FilePath "pnpm" -Arguments @("--dir", $AppDir, "--filter", "@goatcitadel/gateway", "run", "voice:runtime", "install", "--model", $VoiceModel) -FailureMessage "Failed to install managed voice runtime"
   } catch {
     Write-Warning "Managed voice runtime install failed. Core GoatCitadel install is complete. Repair later with '$BinDir\goatcitadel.cmd voice install'."
+  } finally {
+    if ([string]::IsNullOrEmpty($previousDatabaseDriver)) {
+      Remove-Item Env:\GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
+    } else {
+      $env:GOATCITADEL_DATABASE_DRIVER = $previousDatabaseDriver
+    }
   }
 }
 
