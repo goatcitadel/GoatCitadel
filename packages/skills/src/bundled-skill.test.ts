@@ -26,6 +26,7 @@ describe("goatcitadel-native-safe-self-improvement bundled skill", () => {
     expect(parsed.frontmatter.metadata?.tools).toEqual(["fs.read", "fs.write", "memory.read"]);
     expect(parsed.frontmatter.metadata?.keywords).toContain("log this routing gap");
     expect(parsed.frontmatter.metadata?.keywords).toContain("goatcitadel native safe improvement");
+    expect(parsed.frontmatter.metadata?.keywords).toContain("goatcitadel-native-safe-self-improvement");
   });
 
   it("loads from the bundled skills source", async () => {
@@ -36,6 +37,7 @@ describe("goatcitadel-native-safe-self-improvement bundled skill", () => {
     expect(skill).toBeTruthy();
     expect(skill?.source).toBe("bundled");
     expect(skill?.declaredTools).toEqual(["fs.read", "fs.write", "memory.read"]);
+    expect(skill?.keywords).toContain("goatcitadel-native-safe-self-improvement");
     expect(skill?.keywords).toContain("post-task reflection");
     expect(skill?.keywords).toContain("self-improvement log");
   });
@@ -48,6 +50,11 @@ describe("goatcitadel-native-safe-self-improvement bundled skill", () => {
       text: "Please use goatcitadel native safe improvement for this correction log.",
     });
     expect(explicit.selected.map((skill) => skill.name)).toContain("GoatCitadel Native Safe Improvement");
+
+    const explicitSlug = service.resolveActivation({
+      text: "Please use goatcitadel-native-safe-self-improvement for this correction log.",
+    });
+    expect(explicitSlug.selected.map((skill) => skill.name)).toContain("GoatCitadel Native Safe Improvement");
 
     const guardedAuto = service.resolveActivation({
       text: "That's wrong. Log this as workflow friction and log this routing gap.",

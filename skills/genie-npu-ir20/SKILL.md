@@ -1,15 +1,42 @@
-# Skill: Genie NPU Node (ir20) – OpenAI-Compatible-ish API
-
-This skill teaches GoatCitadel how to use a specific **Windows ARM64 laptop** node (Tailscale name **`ir20`**) running **GenieAPIService** (FastAPI/Uvicorn) that exposes an **OpenAI-style HTTP API**.
-
-Use this node when you want:
-- **Local / private inference** (stays on your devices + mesh)
-- **NPU-backed** inference (when available)
-- A **mesh compute target** that other GoatCitadel nodes can call
-
+---
+name: genie-npu-ir20
+description: "Route text generation to the ir20 Windows ARM64 laptop node running GenieAPIService with OpenAI-compatible endpoints over Tailscale mesh. Use when GoatCitadel needs local/private inference, NPU-backed generation, or a mesh compute target via the ir20 node's /v1/chat/completions API."
+metadata:
+  version: "0.1.0"
+  tags:
+    - inference
+    - npu
+    - mesh
+    - openai-compat
+  tools:
+    - http.get
+    - http.post
+  keywords:
+    - genie
+    - npu
+    - ir20
+    - local inference
+    - mesh compute
+    - openai api
+    - ibm granite
+    - tailscale
 ---
 
-## Node identity
+# Genie NPU Node (ir20)
+
+OpenAI-compatible text generation via a Windows ARM64 laptop node running GenieAPIService (FastAPI/Uvicorn) over Tailscale mesh.
+
+Use this skill when:
+- GoatCitadel needs **local/private inference** that stays on your devices and mesh
+- **NPU-backed** generation is preferred (when available on ir20)
+- Another GoatCitadel node needs a **mesh compute target** for text generation
+
+Do not use this skill when:
+- The task requires image generation (ir20 endpoints are probe-only for images)
+- Low latency from a cloud provider is more appropriate
+- The ir20 node is offline or unreachable
+
+## Node Identity
 
 - **Node name:** `ir20`
 - **Service:** `GenieAPIService`
@@ -325,7 +352,16 @@ $resp | ConvertTo-Json -Depth 50
 
 ---
 
-## Future extension (planned)
+## Execution Pipeline
+
+1. Select base URL in priority order (Tailscale IP -> MagicDNS -> LAN)
+2. Health check via `GET /v1/models` - confirm HTTP 200 and model list
+3. Choose model (`IBM-Granite` default, `IBM-Granite-v3.1-8B` if requested)
+4. Send `POST /v1/chat/completions` with `stream: false` for tool calls, `stream: true` for interactive output
+5. For streaming, concatenate `choices[0].delta.content` until `[DONE]`
+6. If connection fails, fall back to next base URL or route to another provider
+
+## Future Extension (Planned)
 This skill currently hardcodes `ir20` details. Later you can generalize by:
 - Discovering nodes via mesh registry
 - Probing `/v1/models` to detect capability
