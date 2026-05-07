@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SystemSettingsRepository } from "@goatcitadel/storage";
-import type {
-  InstalledVoiceModelRecord,
-  VoiceRuntimeStatus,
-} from "@goatcitadel/contracts";
+import type { InstalledVoiceModelRecord, VoiceRuntimeStatus } from "@goatcitadel/contracts";
 import {
   DEFAULT_MANAGED_VOICE_MODEL_ID,
   formatVoiceReadiness,
@@ -24,6 +21,7 @@ export interface ManagedVoiceManifest {
   schemaVersion: 1;
   lastSuccessfulInstallAt?: string;
   lastError?: string;
+  selectedModelId?: string;
   whisper?: {
     version: string;
     platform: string;
@@ -74,17 +72,19 @@ export function setVoiceRuntimeConfig(
 }
 
 export async function getManagedVoiceRuntimeStatus(
-  systemSettings: Pick<SystemSettingsRepository, "get">,
+  systemSettings?: Pick<SystemSettingsRepository, "get">,
 ): Promise<VoiceRuntimeStatus> {
   const manifest = await readManagedVoiceManifest();
-  const config = getVoiceRuntimeConfig(systemSettings);
+  const config = systemSettings ? getVoiceRuntimeConfig(systemSettings) : {};
   const catalog = listManagedVoiceModels();
   const envBinaryPath = process.env.GOATCITADEL_WHISPER_CPP_BIN?.trim();
   const envModelPath = process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH?.trim();
   const envFfmpegPath = process.env.GOATCITADEL_FFMPEG_BIN?.trim();
-  const selectedModelId = config.selectedModelId
-    ?? manifest?.models.find((item) => item.modelId === DEFAULT_MANAGED_VOICE_MODEL_ID)?.modelId
-    ?? manifest?.models[0]?.modelId;
+  const selectedModelId =
+    config.selectedModelId ??
+    manifest?.selectedModelId ??
+    manifest?.models.find((item) => item.modelId === DEFAULT_MANAGED_VOICE_MODEL_ID)?.modelId ??
+    manifest?.models[0]?.modelId;
 
   const installedModels: InstalledVoiceModelRecord[] = [];
   for (const entry of manifest?.models ?? []) {
@@ -112,17 +112,13 @@ export async function getManagedVoiceRuntimeStatus(
   const binaryReady = await pathExists(binaryPath);
   const ffmpegReady = await pathExists(ffmpegPath);
   const modelReady = await pathExists(selectedModelPath);
-  const source = isEnvOverride ? "env_override" : (binaryReady || installedModels.length > 0 ? "managed" : "manual");
-  const derivedSelectedModelId = envModelPath
-    ? selectedModelId ?? path.basename(envModelPath)
-    : selectedModelId;
+  const source = isEnvOverride ? "env_override" : binaryReady || installedModels.length > 0 ? "managed" : "manual";
+  const derivedSelectedModelId = envModelPath ? (selectedModelId ?? path.basename(envModelPath)) : selectedModelId;
 
   return {
     provider: "whisper.cpp",
     source,
-    readiness: isEnvOverride
-      ? (binaryReady ? "ready" : "missing")
-      : formatVoiceReadiness(binaryReady, modelReady),
+    readiness: isEnvOverride ? (binaryReady ? "ready" : "missing") : formatVoiceReadiness(binaryReady, modelReady),
     binaryReady,
     binaryPath,
     binaryVersion: manifest?.whisper?.version,

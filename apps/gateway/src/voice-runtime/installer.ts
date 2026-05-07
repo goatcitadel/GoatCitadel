@@ -31,12 +31,14 @@ import {
 } from "./status.js";
 
 export async function installManagedVoiceRuntime(
-  systemSettings: Pick<SystemSettingsRepository, "get" | "set">,
+  systemSettings?: Pick<SystemSettingsRepository, "get" | "set">,
   input: VoiceRuntimeInstallRequest = {},
 ): Promise<VoiceRuntimeStatus> {
   const platform = detectManagedVoicePlatform();
   if (!platform) {
-    throw new Error(`Managed whisper.cpp install is not supported on ${process.platform}/${process.arch}. Use manual env overrides instead.`);
+    throw new Error(
+      `Managed whisper.cpp install is not supported on ${process.platform}/${process.arch}. Use manual env overrides instead.`,
+    );
   }
 
   const modelId = input.modelId?.trim() || DEFAULT_MANAGED_VOICE_MODEL_ID;
@@ -51,27 +53,30 @@ export async function installManagedVoiceRuntime(
   await fs.mkdir(paths.whisperDir, { recursive: true });
   await fs.mkdir(paths.ffmpegDir, { recursive: true });
 
-  const manifest = await readManagedVoiceManifest() ?? {
-    schemaVersion: 1,
-    models: [],
-  } satisfies ManagedVoiceManifest;
+  const manifest =
+    (await readManagedVoiceManifest()) ??
+    ({
+      schemaVersion: 1,
+      models: [],
+    } satisfies ManagedVoiceManifest);
 
   try {
     const whisper = await ensureManagedWhisperRuntime(platform, manifest);
     const ffmpeg = await ensureManagedFfmpeg(platform, manifest);
     const modelRecord = await ensureManagedModel(voiceModel.id, manifest);
-    const selectedModelId = input.activate === false ? undefined : voiceModel.id;
+    const selectedModelId = input.activate === false ? manifest.selectedModelId : voiceModel.id;
 
     const next: ManagedVoiceManifest = {
       ...manifest,
       lastError: undefined,
       lastSuccessfulInstallAt: new Date().toISOString(),
+      selectedModelId,
       whisper,
       ffmpeg,
       models: upsertModel(manifest.models, modelRecord),
     };
     await writeManagedVoiceManifest(next);
-    if (selectedModelId) {
+    if (selectedModelId && systemSettings) {
       setVoiceRuntimeConfig(systemSettings, {
         selectedModelId,
         mode: "managed",
@@ -91,30 +96,39 @@ export async function installManagedVoiceRuntime(
 }
 
 export async function selectManagedVoiceModel(
-  systemSettings: Pick<SystemSettingsRepository, "get" | "set">,
+  systemSettings: Pick<SystemSettingsRepository, "get" | "set"> | undefined,
   modelId: string,
 ): Promise<VoiceRuntimeStatus> {
   const manifest = await readManagedVoiceManifest();
-  const installed = manifest?.models.find((item) => item.modelId === modelId);
-  if (!installed) {
+  if (!manifest || !manifest.models.some((item) => item.modelId === modelId)) {
     throw new Error(`Model ${modelId} is not installed yet.`);
   }
-  setVoiceRuntimeConfig(systemSettings, {
+  await writeManagedVoiceManifest({
+    ...manifest,
     selectedModelId: modelId,
-    mode: "managed",
   });
+  if (systemSettings) {
+    setVoiceRuntimeConfig(systemSettings, {
+      selectedModelId: modelId,
+      mode: "managed",
+    });
+  }
   return getManagedVoiceRuntimeStatus(systemSettings);
 }
 
 export async function removeManagedVoiceModel(
-  systemSettings: Pick<SystemSettingsRepository, "get" | "set">,
+  systemSettings: Pick<SystemSettingsRepository, "get" | "set"> | undefined,
   modelId: string,
 ): Promise<VoiceRuntimeStatus> {
   const manifest = await readManagedVoiceManifest();
   if (!manifest) {
     throw new Error("Managed voice runtime is not installed.");
   }
-  const selectedModelId = systemSettings.get<{ selectedModelId?: string }>(VOICE_RUNTIME_CONFIG_KEY)?.value?.selectedModelId;
+  const selectedModelId =
+    systemSettings?.get<{ selectedModelId?: string }>(VOICE_RUNTIME_CONFIG_KEY)?.value?.selectedModelId ??
+    manifest.selectedModelId ??
+    manifest.models.find((item) => item.modelId === DEFAULT_MANAGED_VOICE_MODEL_ID)?.modelId ??
+    manifest.models[0]?.modelId;
   if (selectedModelId === modelId) {
     throw new Error(`Model ${modelId} is currently active. Select another model before removing it.`);
   }
@@ -176,7 +190,12 @@ async function ensureManagedWhisperRuntime(
       throw new Error("whisper.cpp source archive did not extract as expected.");
     }
     const extractedDir = path.join(sourceRoot, extractedDirName);
-    runCommand("cmake", ["-B", "build", "-S", ".", "-DWHISPER_FFMPEG=OFF"], "Failed to configure whisper.cpp build.", extractedDir);
+    runCommand(
+      "cmake",
+      ["-B", "build", "-S", ".", "-DWHISPER_FFMPEG=OFF"],
+      "Failed to configure whisper.cpp build.",
+      extractedDir,
+    );
     runCommand("cmake", ["--build", "build", "--config", "Release"], "Failed to build whisper.cpp.", extractedDir);
     const binaryName = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
     const builtBinary = await findExpectedBinary(extractedDir, binaryName);
@@ -214,11 +233,7 @@ async function ensureManagedFfmpeg(
 
   const source = getManagedFfmpegSource(platform);
   const paths = resolveVoiceRuntimePaths();
-  const installDir = path.join(
-    paths.ffmpegDir,
-    FFMPEG_HELPER_VERSION.replace(/[^a-z0-9._-]+/gi, "_"),
-    platform,
-  );
+  const installDir = path.join(paths.ffmpegDir, FFMPEG_HELPER_VERSION.replace(/[^a-z0-9._-]+/gi, "_"), platform);
   await fs.rm(installDir, { recursive: true, force: true });
   await fs.mkdir(installDir, { recursive: true });
   const tempDir = await createTempDir("goatcitadel-voice-ffmpeg-");

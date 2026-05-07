@@ -88,8 +88,25 @@ describe("managed voice runtime status", () => {
 
   it("reports a managed install with an active selected model as ready", async () => {
     const systemSettings = createSystemSettingsMock();
-    const whisperBinary = path.join(tempHome, "tools", "voice", "whispercpp", "v1.8.3", "windows-x64", "Release", "whisper-cli.exe");
-    const ffmpegBinary = path.join(tempHome, "tools", "voice", "ffmpeg", "eugeneware_ffmpeg-static_b6.1.1", "windows-x64", "ffmpeg.exe");
+    const whisperBinary = path.join(
+      tempHome,
+      "tools",
+      "voice",
+      "whispercpp",
+      "v1.8.3",
+      "windows-x64",
+      "Release",
+      "whisper-cli.exe",
+    );
+    const ffmpegBinary = path.join(
+      tempHome,
+      "tools",
+      "voice",
+      "ffmpeg",
+      "eugeneware_ffmpeg-static_b6.1.1",
+      "windows-x64",
+      "ffmpeg.exe",
+    );
     const modelPath = path.join(tempHome, "tools", "voice", "models", "ggml-base.en.bin");
     await fs.mkdir(path.dirname(whisperBinary), { recursive: true });
     await fs.mkdir(path.dirname(ffmpegBinary), { recursive: true });
@@ -137,5 +154,59 @@ describe("managed voice runtime status", () => {
     expect(status.installedModels).toHaveLength(1);
     expect(status.installedModels[0]?.active).toBe(true);
     expect(status.ffmpegReady).toBe(true);
+  });
+
+  it("uses the manifest-selected model when database settings are unavailable", async () => {
+    const whisperBinary = path.join(
+      tempHome,
+      "tools",
+      "voice",
+      "whispercpp",
+      "v1.8.3",
+      "windows-x64",
+      "Release",
+      "whisper-cli.exe",
+    );
+    const baseModelPath = path.join(tempHome, "tools", "voice", "models", "ggml-base.en.bin");
+    const smallModelPath = path.join(tempHome, "tools", "voice", "models", "ggml-small.en.bin");
+    await fs.mkdir(path.dirname(whisperBinary), { recursive: true });
+    await fs.mkdir(path.dirname(baseModelPath), { recursive: true });
+    await fs.writeFile(whisperBinary, "binary", "utf8");
+    await fs.writeFile(baseModelPath, "model", "utf8");
+    await fs.writeFile(smallModelPath, "model", "utf8");
+
+    await writeManagedVoiceManifest({
+      schemaVersion: 1,
+      selectedModelId: "small.en",
+      whisper: {
+        version: "v1.8.3",
+        platform: "windows-x64",
+        binaryPath: whisperBinary,
+        installedAt: "2026-03-08T00:00:00.000Z",
+        source: "download-binary",
+      },
+      models: [
+        {
+          modelId: "base.en",
+          filePath: baseModelPath,
+          sizeBytes: 123,
+          sha256: "abc",
+          installedAt: "2026-03-08T00:00:00.000Z",
+        },
+        {
+          modelId: "small.en",
+          filePath: smallModelPath,
+          sizeBytes: 456,
+          sha256: "def",
+          installedAt: "2026-03-08T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const status = await getManagedVoiceRuntimeStatus();
+
+    expect(status.selectedModelId).toBe("small.en");
+    expect(status.installedModels.find((item) => item.modelId === "small.en")?.active).toBe(true);
+    expect(status.installedModels.find((item) => item.modelId === "base.en")?.active).toBe(false);
   });
 });
