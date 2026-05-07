@@ -596,10 +596,13 @@ function quoteWindowsCommand(parts) {
   return parts
     .map((part) => {
       const value = String(part);
-      if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) {
+      if (value.length === 0) {
+        return '""';
+      }
+      if (!/[\s"&()^<>|]/.test(value)) {
         return value;
       }
-      return `"${value.replace(/"/g, '\\"')}"`;
+      return `"${value.replace(/(["\\])/g, "\\$1")}"`;
     })
     .join(" ");
 }
