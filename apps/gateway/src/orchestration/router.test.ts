@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessageRecord, ChatSessionPrefsRecord, LlmRuntimeConfig } from "@goatcitadel/contracts";
 import { buildProviderCapabilityRegistry } from "./providers/capability-registry.js";
-import {
-  buildOrchestrationPlan,
-  resolveModePolicy,
-  shouldUseModeOrchestration,
-} from "./router.js";
+import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "./router.js";
 import type { OrchestrationRouterInput } from "./types.js";
 
 const NOW = "2026-03-08T20:00:00.000Z";
@@ -164,10 +160,7 @@ describe("orchestration router", () => {
   });
 
   it("keeps explicit web search phrases off orchestration", () => {
-    for (const phrase of [
-      "web search for recent AI breakthroughs",
-      "use internet to find the top news",
-    ]) {
+    for (const phrase of ["web search for recent AI breakthroughs", "use internet to find the top news"]) {
       const input = createInput({
         mode: "chat",
         objective: phrase,
@@ -242,6 +235,8 @@ describe("orchestration router", () => {
     expect(plan.steps.map((step) => step.role)).toEqual(["researcher", "researcher", "critic", "synthesizer"]);
     expect(plan.steps.filter((step) => step.role === "researcher")).toHaveLength(2);
     expect(plan.steps.filter((step) => step.role === "researcher").every((step) => step.stage === 1)).toBe(true);
+    expect(plan.steps.find((step) => step.role === "critic")?.dependsOnStepIds).toEqual(["orch-step-1", "orch-step-2"]);
+    expectPlanDependenciesValid(plan);
   });
 
   it("preserves explicit Cowork workstreams for final synthesis", () => {
@@ -267,13 +262,7 @@ describe("orchestration router", () => {
       "Risk Review",
       "Synthesis",
     ]);
-    expect(plan.steps.map((step) => step.role)).toEqual([
-      "worker",
-      "worker",
-      "worker",
-      "reviewer",
-      "synthesizer",
-    ]);
+    expect(plan.steps.map((step) => step.role)).toEqual(["worker", "worker", "worker", "reviewer", "synthesizer"]);
     expect(plan.steps.find((step) => step.label === "Risk Review")?.stage).toBe(2);
     expect(plan.steps.at(-1)).toMatchObject({
       role: "synthesizer",
@@ -281,6 +270,31 @@ describe("orchestration router", () => {
       stage: 3,
       dependsOnStepIds: ["orch-step-1", "orch-step-2", "orch-step-3", "orch-step-4"],
     });
+    expectPlanDependenciesValid(plan);
+  });
+
+  it("does not link same-stage review workstreams together", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective:
+        "Use Cowork to prepare a business plan with roles for Market Plan, Website Plan, Risk Review, and Quality Review, then give me a final recommendation.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+        orchestrationParallelism: "parallel",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    const reviewSteps = plan.steps.filter((step) => step.role === "reviewer");
+
+    expect(reviewSteps.map((step) => step.stage)).toEqual([2, 2]);
+    expect(reviewSteps.map((step) => step.dependsOnStepIds)).toEqual([
+      ["orch-step-1", "orch-step-2"],
+      ["orch-step-1", "orch-step-2"],
+    ]);
+    expectPlanDependenciesValid(plan);
   });
 
   it("keeps generic Cowork planning on the existing plan-work-synthesize route", () => {
@@ -325,3 +339,16 @@ describe("orchestration router", () => {
     expect(plan.routeDecision.selectedProviders.every((selection) => selection.model === "kimi-k2.5")).toBe(true);
   });
 });
+
+function expectPlanDependenciesValid(plan: ReturnType<typeof buildOrchestrationPlan>): void {
+  const byId = new Map(plan.steps.map((step) => [step.stepId, step]));
+  for (const step of plan.steps) {
+    for (const dependencyId of step.dependsOnStepIds ?? []) {
+      const dependency = byId.get(dependencyId);
+      expect(dependency, `${step.stepId} dependency ${dependencyId} should exist`).toBeDefined();
+      expect(dependency?.stage, `${step.stepId} dependency ${dependencyId} should be in an earlier stage`).toBeLessThan(
+        step.stage,
+      );
+    }
+  }
+}

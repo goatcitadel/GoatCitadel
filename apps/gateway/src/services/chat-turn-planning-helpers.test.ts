@@ -192,4 +192,66 @@ describe("chat turn planning helpers", () => {
       dependsOnStepIds: ["step-3"],
     });
   });
+
+  it("drops planner-proposed dependencies that point to the same or a later stage", () => {
+    const templatePlan: OrchestrationPlan = {
+      ...createCoworkPlan(),
+      steps: [
+        {
+          ...createCoworkPlan().steps[0]!,
+          stepId: "step-1",
+          role: "worker",
+          label: "Market Plan",
+          stage: 1,
+          dependsOnStepIds: undefined,
+        },
+        {
+          ...createCoworkPlan().steps[1]!,
+          stepId: "step-2",
+          role: "worker",
+          label: "Website Plan",
+          stage: 1,
+          dependsOnStepIds: undefined,
+        },
+        {
+          ...createCoworkPlan().steps[3]!,
+          stepId: "step-3",
+          role: "synthesizer",
+          label: "Synthesis",
+          stage: 2,
+          dependsOnStepIds: ["step-1", "step-2"],
+        },
+      ],
+    };
+
+    const draft = coercePlannerExecutionPlanDraft(
+      {
+        summary: "Business plan draft.",
+        steps: [
+          {
+            objective: "Produce the market plan.",
+            dependsOnStepIds: ["step-2"],
+          },
+          {
+            objective: "Produce the website plan.",
+            dependsOnStepIds: ["step-1"],
+          },
+          {
+            objective: "Synthesize.",
+            dependsOnStepIds: ["step-1", "step-2"],
+          },
+        ],
+      },
+      templatePlan,
+      {
+        advisoryOnly: false,
+        mode: "cowork",
+        objective: "Build a business plan.",
+      },
+    );
+
+    expect(draft?.steps[0]?.dependsOnStepIds).toBeUndefined();
+    expect(draft?.steps[1]?.dependsOnStepIds).toBeUndefined();
+    expect(draft?.steps[2]?.dependsOnStepIds).toEqual(["step-1", "step-2"]);
+  });
 });

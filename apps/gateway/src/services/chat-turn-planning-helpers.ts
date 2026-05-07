@@ -473,12 +473,7 @@ export function coercePlannerExecutionPlanDraft(
         : templateStep.expectedOutput;
     const dependsOnStepIds =
       !controlStep && Array.isArray(raw?.dependsOnStepIds)
-        ? dedupeStrings(
-            raw.dependsOnStepIds
-              .filter((value): value is string => typeof value === "string")
-              .map((value) => value.trim())
-              .filter((value) => templatePlan.steps.some((step) => step.stepId === value)),
-          )
+        ? filterPlannerDependencyIds(raw.dependsOnStepIds, templatePlan, templateStep)
         : templateStep.dependsOnStepIds;
     const delegatedRole = input.mode === "chat" || input.advisoryOnly ? undefined : templateStep.delegatedRole;
     if (controlStep && raw && plannerStepOverridesTemplate(raw, templateStep)) {
@@ -510,6 +505,25 @@ export function coercePlannerExecutionPlanDraft(
     summary,
     steps,
   };
+}
+
+function filterPlannerDependencyIds(
+  rawDependsOnStepIds: unknown[],
+  templatePlan: ModeOrchestrationPlan,
+  templateStep: ModeOrchestrationPlan["steps"][number],
+): string[] {
+  const byId = new Map(templatePlan.steps.map((step) => [step.stepId, step]));
+  return dedupeStrings(
+    rawDependsOnStepIds
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((dependencyId) => {
+        const dependency = byId.get(dependencyId);
+        return Boolean(
+          dependency && dependency.stepId !== templateStep.stepId && dependency.stage < templateStep.stage,
+        );
+      }),
+  );
 }
 
 export function applyExecutionPlanDraftToOrchestrationPlan(

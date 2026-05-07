@@ -65,7 +65,7 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
     requestedWorkstreams.length > 0
       ? "cowork.workstreams.synthesize"
       : selectWorkflowTemplate(task.mode, task.objective);
-  const steps =
+  const rawSteps =
     workflowTemplate === "cowork.workstreams.synthesize"
       ? buildWorkstreamStepPlans(requestedWorkstreams, capabilities, {
           objective: task.objective,
@@ -78,6 +78,7 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
           parallelism: requestedParallelism,
           workflowTemplate,
         });
+  const steps = sanitizeStepDependencies(rawSteps.slice(0, policy.maxSteps));
   const routeDecision: ChatOrchestrationRouteDecision = {
     modePolicy: task.mode,
     workflowTemplate,
@@ -100,7 +101,7 @@ export function buildOrchestrationPlan(input: OrchestrationRouterInput): Orchest
     summary: buildWorkflowTemplateSummary(task.mode, workflowTemplate, task.objective),
     source: "workflow_template",
     routeDecision,
-    steps: steps.slice(0, policy.maxSteps),
+    steps,
   };
 }
 
@@ -200,6 +201,9 @@ function buildWorkstreamStepPlans(
   const usedProviders = new Set<string>();
   const parallelProduction = input.parallelism === "parallel" || input.parallelism === "auto";
   const productionCount = labels.filter((label) => !isReviewWorkstream(label)).length;
+  const productionStepIds = labels
+    .map((label, index) => (isReviewWorkstream(label) ? undefined : `orch-step-${index + 1}`))
+    .filter((stepId): stepId is string => Boolean(stepId));
   const workstreamSteps = labels.map((label, index) => {
     const role: OrchestrationRole = isReviewWorkstream(label) ? "reviewer" : "worker";
     const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
@@ -218,8 +222,7 @@ function buildWorkstreamStepPlans(
       suggestedTools: buildFallbackSuggestedTools(role, "cowork.workstreams.synthesize"),
       expectedOutput: `${label} section for the final answer.`,
       parallelizable: role !== "reviewer" && parallelProduction,
-      dependsOnStepIds:
-        role === "reviewer" ? labels.slice(0, index).map((_, priorIndex) => `orch-step-${priorIndex + 1}`) : undefined,
+      dependsOnStepIds: role === "reviewer" ? productionStepIds : undefined,
       delegatedRole: label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
@@ -273,13 +276,28 @@ function buildStepPlans(
   const parallelStages =
     input.parallelism === "parallel" ||
     (input.parallelism === "auto" && input.workflowTemplate === "cowork.research.synthesize.critic");
+  const stages = roles.map((role, index) =>
+    parallelStages && role === "researcher" ? 1 : parallelStages && index > 1 ? index : index + 1,
+  );
   return roles.map((role, index) => {
     const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
     if (!input.prefs.providerId && provider?.providerId) {
       usedProviders.add(provider.providerId);
     }
     const stepId = `orch-step-${index + 1}`;
-    const priorStepId = index > 0 ? `orch-step-${index}` : undefined;
+    const stage = stages[index] ?? index + 1;
+    const dependsOnStepIds = parallelStages
+      ? roles
+          .slice(0, index)
+          .map((_, priorIndex) => ({
+            stepId: `orch-step-${priorIndex + 1}`,
+            stage: stages[priorIndex] ?? priorIndex + 1,
+          }))
+          .filter((dependency) => dependency.stage < stage)
+          .map((dependency) => dependency.stepId)
+      : index > 0
+        ? [`orch-step-${index}`]
+        : [];
     const objective = buildFallbackStepObjective(input.objective, role, index, roles.length);
     const expectedOutput = buildFallbackExpectedOutput(role);
     const label = buildFallbackStepLabel(role, index, roles, input.workflowTemplate);
@@ -288,16 +306,30 @@ function buildStepPlans(
       index,
       role,
       label,
-      stage: parallelStages && role === "researcher" ? 1 : parallelStages && index > 1 ? index : index + 1,
+      stage,
       objective,
       successCriteria: buildFallbackSuccessCriteria(role, expectedOutput),
       suggestedTools: buildFallbackSuggestedTools(role, input.workflowTemplate),
       expectedOutput,
       parallelizable: parallelStages && role === "researcher",
-      dependsOnStepIds: priorStepId ? [priorStepId] : [],
+      dependsOnStepIds,
       delegatedRole: input.prefs.mode === "chat" ? undefined : label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
+    };
+  });
+}
+
+function sanitizeStepDependencies(steps: OrchestrationStepPlan[]): OrchestrationStepPlan[] {
+  const byId = new Map(steps.map((step) => [step.stepId, step]));
+  return steps.map((step) => {
+    const dependsOnStepIds = (step.dependsOnStepIds ?? []).filter((dependencyId) => {
+      const dependency = byId.get(dependencyId);
+      return Boolean(dependency && dependency.stepId !== step.stepId && dependency.stage < step.stage);
+    });
+    return {
+      ...step,
+      dependsOnStepIds: dependsOnStepIds.length ? dependsOnStepIds : undefined,
     };
   });
 }
