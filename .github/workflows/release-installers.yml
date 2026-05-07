@@ -127,10 +127,18 @@ jobs:
           }
           if (Test-Path $desktop) { throw "Installed desktop executable remained after uninstall at $desktop" }
           if (Test-Path $installDir) {
+            $remainingFiles = Get-ChildItem -LiteralPath $installDir -Recurse -Force -File -ErrorAction SilentlyContinue
+            if ($remainingFiles) {
+              $sample = ($remainingFiles | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
+              throw "Installer left files after uninstall in $installDir`n$sample"
+            }
+            Get-ChildItem -LiteralPath $installDir -Recurse -Force -Directory -ErrorAction SilentlyContinue |
+              Sort-Object FullName -Descending |
+              Remove-Item -Force -ErrorAction SilentlyContinue
             $remaining = Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue
             if ($remaining) {
               $sample = ($remaining | Select-Object -First 5 -ExpandProperty FullName) -join "`n"
-              throw "Installer left files after uninstall in $installDir`n$sample"
+              throw "Installer left non-empty directories after uninstall in $installDir`n$sample"
             }
           }
 

@@ -211,6 +211,8 @@ Filename: "{app}\\{#MyDesktopExe}"; Description: "Launch GoatCitadel"; Flags: no
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\\app"
 Type: filesandordirs; Name: "{app}\\bin"
+Type: dirifempty; Name: "{app}\\app"
+Type: dirifempty; Name: "{app}\\bin"
 Type: dirifempty; Name: "{app}"
 `.trimStart();
 }
