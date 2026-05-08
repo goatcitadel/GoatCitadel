@@ -36,6 +36,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 
 type HarnessState = {
   execute: (item: any) => Promise<void>;
+  getSnapshot: () => {
+    activeStream: ActiveChatStreamState | null;
+    sending: boolean;
+  };
 };
 
 let latest: HarnessState | null = null;
@@ -69,7 +73,21 @@ function makeThread(): ChatThreadResponse {
   } as any;
 }
 
-function Harness(props: { streamEnabled?: boolean; surfaceMode?: "chat" | "cowork" | "code" }) {
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function Harness(props: {
+  loadSidebar?: () => Promise<void>;
+  streamEnabled?: boolean;
+  surfaceMode?: "chat" | "cowork" | "code";
+}) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(makeThread());
   const [, setDraft] = useState("");
   const [, setPendingAttachments] = useState<any[]>([]);
@@ -151,7 +169,7 @@ function Harness(props: { streamEnabled?: boolean; surfaceMode?: "chat" | "cowor
     setEditingTurnId: vi.fn(),
     setCapabilitySuggestions,
     setSpecialistSuggestions,
-    loadSidebar: vi.fn(async () => undefined),
+    loadSidebar: props.loadSidebar ?? vi.fn(async () => undefined),
     loadSessionCoreState: vi.fn(async () => undefined),
     ensureSession: vi.fn(async () => ({ sessionId: "session-1" }) as any),
     pushLocalNotice: vi.fn(),
@@ -166,6 +184,10 @@ function Harness(props: { streamEnabled?: boolean; surfaceMode?: "chat" | "cowor
 
   latest = {
     execute: executeOutboundItemRef.current,
+    getSnapshot: () => ({
+      activeStream: activeStreamRef.current,
+      sending,
+    }),
   };
   return null;
 }
@@ -400,6 +422,59 @@ describe("useChatOutboundExecution", () => {
       expect.any(Function),
       expect.objectContaining({ originSurface: "cowork" }),
     );
+  });
+
+  it("releases the active stream before post-send sidebar refresh finishes", async () => {
+    const sidebarRefresh = createDeferred<void>();
+    const loadSidebar = vi.fn(() => sidebarRefresh.promise);
+    streamAgentChatMessageMock.mockImplementation(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "message_done",
+        eventId: "evt-1",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        content: "Done",
+      });
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled surfaceMode="cowork" loadSidebar={loadSidebar} />);
+    });
+
+    let executePromise: Promise<void> | undefined;
+    await act(async () => {
+      executePromise = latest?.execute({
+        id: "queue-1",
+        action: "send",
+        content: "Coordinate beta outreach",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(loadSidebar).toHaveBeenCalledTimes(1);
+    expect(latest?.getSnapshot()).toEqual({
+      activeStream: null,
+      sending: false,
+    });
+    await expect(executePromise).resolves.toBeUndefined();
+
+    await act(async () => {
+      sidebarRefresh.resolve();
+      await Promise.resolve();
+    });
   });
 
   it("resumes interrupted streams with the locked Cowork surface mode", async () => {

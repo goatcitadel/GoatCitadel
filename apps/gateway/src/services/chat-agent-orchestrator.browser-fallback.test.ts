@@ -4273,6 +4273,55 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("Seattle");
   });
 
+  it("does not short-circuit delegated orchestration prompts with the estimate clarification gate", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "gpt-5.5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Synthesized launch plan with the geography gap called out as a blocker.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog([]),
+      createChatCompletion,
+      invokeTool,
+    });
+    const delegatedPrompt = [
+      "Delegated role: Synthesizer",
+      "Parent objective: Create a business plan and launch plan for iRolled20.",
+      "Current step objective: Merge the planner, worker, and reviewer handoffs into a final answer.",
+      "Prior handoffs:",
+      "Reviewer: Estimate the number of genuinely active local GMs in the area before choosing launch channels.",
+      "Produce only the delegated output for this step.",
+    ].join("\n\n");
+
+    const result = await orchestrator.run({
+      sessionId: "sess-delegated-clarification-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-delegated-clarification-1",
+      content: delegatedPrompt,
+      mode: "cowork",
+      providerId: "openai-codex",
+      model: "gpt-5.5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: delegatedPrompt }],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toContain("Synthesized launch plan");
+    expect(result.assistantContent).not.toContain("What geographic area do you mean exactly");
+  });
+
   it("carries clarification context forward instead of searching on a partial follow-up answer", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>();
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();

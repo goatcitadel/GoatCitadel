@@ -7,9 +7,14 @@ export default tseslint.config(
   {
     ignores: [
       "**/dist/**",
+      "**/dist-node/**",
       "**/node_modules/**",
       "**/coverage/**",
       "**/.tmp/**",
+      "**/.codex-tmp/**",
+      "**/.codex-smoke/**",
+      "**/.worktrees/**",
+      "**/src-tauri/target/**",
       "vendor/**",
       "*.mjs",
       "*.cjs",
@@ -18,6 +23,15 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,
+  {
+    files: ["**/public/sw.js"],
+    languageOptions: {
+      globals: {
+        caches: "readonly",
+        self: "readonly",
+      },
+    },
+  },
   {
     files: ["**/*.ts", "**/*.tsx"],
     rules: {

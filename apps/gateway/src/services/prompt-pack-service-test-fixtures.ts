@@ -32,8 +32,7 @@ export function buildRepoExpansionPromptPackMarkdown(): string {
         {
           code: "TEST-D26",
           title: "Rules judge inspection",
-          prompt:
-            "Inspect F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts and explain the minimal patch.",
+          prompt: "Inspect goatcitadel-arena/packages/engine/src/judge/rules-judge.ts and explain the minimal patch.",
         },
         { code: "TEST-D27", title: "Planner follow-up", prompt: "Review the repo-level planner follow-up flow." },
         { code: "TEST-D28", title: "Replay wiring", prompt: "Trace the replay benchmark wiring end to end." },

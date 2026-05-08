@@ -23,7 +23,19 @@ export function rankMemoryCandidates(
     } satisfies RankedMemoryCandidate;
   });
 
-  scored.sort((left, right) => right.rankScore - left.rankScore);
+  scored.sort((left, right) => {
+    const scoreDelta = right.rankScore - left.rankScore;
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    if (left.candidateId < right.candidateId) {
+      return -1;
+    }
+    if (left.candidateId > right.candidateId) {
+      return 1;
+    }
+    return 0;
+  });
   return scored.slice(0, Math.max(1, options.maxCandidates));
 }
 

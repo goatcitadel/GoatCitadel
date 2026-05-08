@@ -120,6 +120,23 @@ describe("OrchestrationEngine", () => {
     expect(() => engine.validate(invalidPlan)).toThrow("Duplicate owner agentId agent-a in wave wave-1");
   });
 
+  it("rejects verify entries that do not point at a declared phase", () => {
+    const engine = new OrchestrationEngine();
+    const invalidPlan: OrchestrationPlan = {
+      ...plan,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          verify: ["phase-missing"],
+        },
+      ],
+    };
+
+    expect(() => engine.validate(invalidPlan)).toThrow(
+      "verify entry phase-missing does not reference any declared phaseId",
+    );
+  });
+
   it("starts hitl runs in paused state and advances phases", () => {
     const engine = new OrchestrationEngine();
     const run: OrchestrationRun = {

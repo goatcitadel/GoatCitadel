@@ -952,7 +952,21 @@ export function useChatOutboundExecution(input: {
           });
         }
         setEditingTurnId(null);
-        await loadSidebar(undefined, { bypassCache: true, preferredSessionId: session.sessionId });
+        const completedSessionId = session.sessionId;
+        void loadSidebar(undefined, { bypassCache: true, preferredSessionId: completedSessionId }).catch(
+          (sidebarError: unknown) => {
+            recordClientDiagnostic({
+              level: "warn",
+              category: "chat",
+              event: "sidebar.refresh_failed_after_send",
+              message: "Sidebar refresh failed after outbound chat completion.",
+              sessionId: completedSessionId,
+              context: {
+                error: sidebarError instanceof Error ? sidebarError.message : String(sidebarError),
+              },
+            });
+          },
+        );
         recordChatOutboundPhase({
           phase: "complete",
           action: item.action,

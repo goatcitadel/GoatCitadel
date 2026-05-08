@@ -599,13 +599,14 @@ export class ChatAgentOrchestrator {
       assistantContent = buildLocalFileAccessFallback(input.content);
     }
     const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
-    if (!assistantContent && !promptLabHarnessTurn) {
+    const delegatedOrchestrationPrompt = looksLikeDelegatedOrchestrationPrompt(input.content);
+    if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationFollowUp = buildClarificationFollowUpIfNeeded(input.content, input.historyMessages);
       if (clarificationFollowUp) {
         assistantContent = clarificationFollowUp;
       }
     }
-    if (!assistantContent && !promptLabHarnessTurn) {
+    if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationPrompt = buildClarificationPromptIfNeeded(input.content);
       if (clarificationPrompt) {
         assistantContent = clarificationPrompt;
@@ -4779,6 +4780,14 @@ function buildLocalFileAccessFallback(userPrompt: string): string {
     "",
     composeHint,
   ].join("\n");
+}
+
+function looksLikeDelegatedOrchestrationPrompt(content: string): boolean {
+  return (
+    /^\s*Delegated role:/i.test(content) &&
+    /(?:^|\n)Parent objective:/i.test(content) &&
+    /(?:^|\n)Current step objective:/i.test(content)
+  );
 }
 
 function hasAvailableLocalFileTools(availableTools: Map<string, string>): boolean {

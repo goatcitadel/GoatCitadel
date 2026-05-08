@@ -77,6 +77,12 @@ export class DatabaseCutoverService {
       throw new Error("Database cutover execution requires confirm=true.");
     }
 
+    if (input.execute && this.deps.config.assistant.database.driver === "postgres") {
+      throw new Error(
+        "Database cutover already applied; runtime driver is postgres. Use the verify command to check parity instead of re-running cutover.",
+      );
+    }
+
     const cutoverId = randomUUID();
     const startedAt = new Date().toISOString();
     const steps: DatabaseCutoverStepRecord[] = [

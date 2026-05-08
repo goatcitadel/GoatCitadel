@@ -59,6 +59,49 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.runMap.checkpoints[0]?.title).toBe("Continuation gate");
   });
 
+  it("treats a loaded delegation run as linked Cowork state for trace-backed turns", () => {
+    const orchestration = {
+      runId: "delegation-run-1",
+      status: "completed",
+      workflowTemplate: "cowork.plan.work.synthesize",
+      routeDecision: {
+        selectedRoles: ["planner", "worker", "reviewer", "synthesizer"],
+      },
+      finalSummary: "Launch plan completed.",
+    };
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      orchestration: orchestration as never,
+      activeTurn: {
+        turnId: "turn-1",
+        userMessage: { content: "Build a launch plan." },
+        trace: {
+          status: "running",
+          durable: {
+            runId: "durable-run-1",
+            status: "running",
+          },
+          orchestration,
+          toolRuns: [],
+          startedAt: "2026-05-04T00:00:00.000Z",
+        },
+      } as never,
+      delegationRun: {
+        runId: "delegation-run-1",
+        label: "Launch plan",
+        objective: "Build a launch plan.",
+        mode: "cowork",
+        status: "completed",
+        steps: [],
+      },
+    });
+
+    expect(viewModel.sourceLabel).toBe("Source: delegation run");
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation-backed");
+    expect(viewModel.stageCards.find((item) => item.label === "Execution")?.value).toBe("completed");
+    expect(viewModel.stateGaps).not.toContain("Canonical run not loaded");
+  });
+
   it("summarizes optional agentic run-tree diagnostics and controls", () => {
     const viewModel = deriveCoworkRunViewModel({
       items: [],

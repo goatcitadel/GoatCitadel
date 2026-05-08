@@ -393,7 +393,7 @@ describe("prompt-pack parser, import, export, and reports", () => {
     ]);
     expect(tests.slice(0, 7).every((test) => test.mode === "code" && test.toolTier === "explicit-tools")).toBe(true);
     expect(tests.slice(7).every((test) => test.mode === "cowork" && test.toolTier === "explicit-tools")).toBe(true);
-    expect(tests[0]?.prompt).toContain("F:/code/goatcitadel-arena/packages/engine/src/judge/rules-judge.ts");
+    expect(tests[0]?.prompt).toContain("goatcitadel-arena/packages/engine/src/judge/rules-judge.ts");
     expect(tests[7]?.prompt).toContain("Roles in order: `Researcher`, `Architect`, `QA`.");
   });
 

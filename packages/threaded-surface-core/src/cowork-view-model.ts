@@ -165,7 +165,7 @@ function humanizeStatus(value?: string | null): string {
   return value.replaceAll("_", " ");
 }
 
-function formatExecutionState(value?: OrchestrationRun["executionState"]): string {
+function formatExecutionState(value?: string | null): string {
   switch (value) {
     case "worktree_allocating":
       return "allocating worktree";
@@ -494,7 +494,13 @@ export function deriveCoworkRunViewModel(input: {
   const toolRuns = currentTrace?.toolRuns.length ?? 0;
   const failedToolRunCount = currentTrace?.toolRuns.filter((run) => run.status === "failed").length ?? 0;
   const planState = orchestrationRun?.status ?? orchestration?.status ?? currentTrace?.status ?? "idle";
-  const executionState = formatExecutionState(orchestrationRun?.executionState);
+  const delegationRunLoaded = Boolean(orchestration?.runId && delegationRun?.runId === orchestration.runId);
+  const executionState = formatExecutionState(
+    orchestrationRun?.executionState ??
+      (delegationRunLoaded ? delegationRun?.status : undefined) ??
+      currentTrace?.durable?.status ??
+      currentTrace?.status,
+  );
   const selectionLabel = describeSelectionState({ selectedTurn, activeTurn });
   const errorSummary = formatCoworkFriendlyError(orchestrationError);
   const runFailureSummary = formatCoworkFriendlyError(orchestrationRun?.lastError ?? currentTrace?.failure?.message);
@@ -502,7 +508,7 @@ export function deriveCoworkRunViewModel(input: {
   const delegationFailureSummary = formatCoworkFriendlyError(delegationFailure?.error);
   const stateGaps = [
     orchestrationError ? "Run state refresh needs attention" : null,
-    orchestration?.runId && !orchestrationRun ? "Canonical run not loaded" : null,
+    orchestration?.runId && !orchestrationRun && !delegationRunLoaded ? "Canonical run not loaded" : null,
     waitingForApproval ? "Approval unresolved" : null,
     waitingForUserInput ? "Operator answer required" : null,
     orchestrationRun?.status === "completed" && outputItemsMissingProof(workbenchState)
@@ -640,11 +646,13 @@ export function deriveCoworkRunViewModel(input: {
 
   const sourceLabel = orchestrationRun
     ? "Source: canonical run"
-    : orchestration?.runId
-      ? "Source: trace fallback"
-      : activeTurn
-        ? "Source: active turn"
-        : "Source: pre-run";
+    : delegationRunLoaded
+      ? "Source: delegation run"
+      : orchestration?.runId
+        ? "Source: trace fallback"
+        : activeTurn
+          ? "Source: active turn"
+          : "Source: pre-run";
   const freshnessLabel =
     orchestrationLoading && !orchestrationRun
       ? "Freshness: loading live run state"
@@ -659,7 +667,9 @@ export function deriveCoworkRunViewModel(input: {
       ? "Completeness: pre-run"
       : orchestrationRun
         ? "Completeness: full"
-        : "Completeness: trace-backed";
+        : delegationRunLoaded
+          ? "Completeness: delegation-backed"
+          : "Completeness: trace-backed";
 
   const operatorActionItems = limitItems(
     items.map((item) => ({
@@ -690,7 +700,7 @@ export function deriveCoworkRunViewModel(input: {
     [
       ...roleSteps.map((step) => ({
         id: `role-${step.stepId}`,
-        title: step.role,
+        title: step.label ?? step.role,
         status: humanizeStatus(step.status),
         meta: [step.providerId ?? "provider auto", step.model]
           .filter((value): value is string => Boolean(value))
@@ -699,7 +709,7 @@ export function deriveCoworkRunViewModel(input: {
       })),
       ...delegationSteps.map((step) => ({
         id: `delegation-${step.stepId}`,
-        title: `${step.role} delegation`,
+        title: `${step.label ?? step.role} delegation`,
         status: humanizeStatus(step.status),
         meta: step.output ? "Output ready in run details" : undefined,
         note: normalizeSummary(step.summary ?? step.output ?? step.error, 120),

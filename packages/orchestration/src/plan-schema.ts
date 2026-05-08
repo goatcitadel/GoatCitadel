@@ -76,6 +76,18 @@ export const planSchema = z
         }
       });
     });
+
+    plan.waves.forEach((wave, waveIndex) => {
+      wave.verify.forEach((verifyPhaseId, verifyIndex) => {
+        if (!phaseIds.has(verifyPhaseId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["waves", waveIndex, "verify", verifyIndex],
+            message: `verify entry ${verifyPhaseId} does not reference any declared phaseId.`,
+          });
+        }
+      });
+    });
   });
 
 export type ParsedPlan = z.infer<typeof planSchema>;
