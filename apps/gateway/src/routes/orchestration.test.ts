@@ -39,6 +39,64 @@ describe("orchestration routes", () => {
     expect(createOrchestrationPlan).not.toHaveBeenCalled();
   });
 
+  it("rejects semantically invalid plans before they reach the orchestration service", async () => {
+    const createOrchestrationPlan = vi.fn();
+    app = Fastify();
+    app.decorate("services", { orchestration: { createPlan: createOrchestrationPlan } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/plans",
+      payload: {
+        planId: "plan-1",
+        goal: "Ship safely",
+        mode: "auto",
+        maxIterations: 3,
+        maxRuntimeMinutes: 15,
+        maxCostUsd: 1,
+        waves: [
+          {
+            waveId: "wave-1",
+            verify: [],
+            budgetUsd: 1,
+            ownership: [{ agentId: "agent-1", paths: ["apps/**"] }],
+            phases: [
+              {
+                phaseId: "phase-1",
+                ownerAgentId: "agent-1",
+                specPath: "spec.md",
+                loopMode: "fresh-context",
+                requiresApproval: false,
+              },
+              {
+                phaseId: "phase-1",
+                ownerAgentId: "agent-missing",
+                specPath: "spec-2.md",
+                loopMode: "fresh-context",
+                requiresApproval: false,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        fieldErrors: {
+          waves: expect.arrayContaining([
+            "Duplicate phaseId phase-1.",
+            "Phase owner agent-missing is not declared in wave wave-1 ownership.",
+          ]),
+        },
+      },
+    });
+    expect(createOrchestrationPlan).not.toHaveBeenCalled();
+  });
+
   it("creates orchestration plans with the enriched run contract", async () => {
     const createOrchestrationPlan = vi.fn(async () => ({
       runId: "run-1",

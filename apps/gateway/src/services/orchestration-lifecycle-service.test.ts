@@ -22,7 +22,7 @@ function buildPlan(): OrchestrationPlan {
         waveId: "wave-1",
         verify: [],
         budgetUsd: 2,
-        ownership: [],
+        ownership: [{ agentId: "agent-1", paths: ["apps/**"] }],
         phases: [
           {
             phaseId: "phase-1",
@@ -106,6 +106,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     },
     storage,
     orchestrationEngine: {
+      validate: vi.fn(),
       createRun: vi.fn(() => run),
       startRun: vi.fn(
         () =>
@@ -350,6 +351,54 @@ describe("orchestration-lifecycle-service", () => {
         },
       }),
     );
+  });
+
+  it("rejects phase hook patches that make the orchestration plan invalid", async () => {
+    const base = createHost();
+    const validationError = new Error("Phase owner agent-missing is not declared in wave wave-1 ownership.");
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            status: "paused",
+            executionState: "paused_for_approval",
+            currentWaveId: "wave-1",
+            currentPhaseId: "phase-1",
+            durableRunId: "durable-run-1",
+            worktreeStatus: "ready",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...base.orchestrationEngine,
+        validate: vi.fn(() => {
+          throw validationError;
+        }),
+      },
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({
+          blockedBy: undefined,
+          patch: { ownerAgentId: "agent-missing" },
+        })),
+        enqueueAfterHooks: vi.fn(),
+      },
+    });
+
+    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow(validationError.message);
+
+    expect(host.orchestrationEngine.validate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        waves: [
+          expect.objectContaining({
+            phases: [expect.objectContaining({ ownerAgentId: "agent-missing" })],
+          }),
+        ],
+      }),
+    );
+    expect(host.storage.orchestration.upsertPlan).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRun).not.toHaveBeenCalled();
   });
 
   it("rejects approvals when the run is not paused", async () => {

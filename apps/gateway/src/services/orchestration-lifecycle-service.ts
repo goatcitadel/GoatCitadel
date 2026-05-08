@@ -68,7 +68,10 @@ export interface OrchestrationLifecycleHost {
       getRun(runId: string): OrchestrationRun;
     };
   };
-  readonly orchestrationEngine: Pick<OrchestrationEngine, "advancePhase" | "approvePhase" | "createRun" | "startRun">;
+  readonly orchestrationEngine: Pick<
+    OrchestrationEngine,
+    "advancePhase" | "approvePhase" | "createRun" | "startRun" | "validate"
+  >;
   readonly hooksService: {
     runInlineHooks<T extends Record<string, unknown>>(input: {
       workspaceId?: string;
@@ -544,6 +547,7 @@ export async function approvePhase(
   }
   if (phaseBeforeHook.patch) {
     plan = applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
+    host.orchestrationEngine.validate(plan);
     host.storage.orchestration.upsertPlan(plan);
     const patchedPhase = findPhaseInPlan(plan, phaseId);
     if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {
