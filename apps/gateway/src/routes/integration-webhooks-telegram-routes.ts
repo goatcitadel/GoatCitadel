@@ -15,9 +15,11 @@ import {
   normalizeTelegramWebhookPayload,
   verifyTelegramWebhookSecretToken,
 } from "../services/telegram-webhook.js";
-import { createWebhookRouteOptions, resolveTelegramWebhookSecret } from "./integration-webhooks-shared.js";
+import { resolveTelegramWebhookSecret } from "./integration-webhooks-shared.js";
 import {
+  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
+  createWebhookPreParsing,
   createWebhookHandler,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -28,7 +30,15 @@ type TelegramDispatchPayload = Exclude<ReturnType<typeof normalizeTelegramWebhoo
 export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/telegram/webhook",
-    createWebhookRouteOptions("telegramRawBody"),
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: createWebhookPreParsing("telegramRawBody"),
+      config: {
+        rateLimit: {
+          max: 500,
+        },
+      },
+    },
     createWebhookHandler<TelegramDispatchPayload>(fastify, {
       source: "telegram",
       connectorKey: "telegram",

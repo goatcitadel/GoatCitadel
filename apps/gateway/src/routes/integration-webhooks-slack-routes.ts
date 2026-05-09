@@ -4,9 +4,11 @@ import {
   normalizeSlackWebhookPayload,
   verifySlackSignature,
 } from "../services/slack-webhook.js";
-import { createWebhookRouteOptions, readConfigSecret } from "./integration-webhooks-shared.js";
+import { readConfigSecret } from "./integration-webhooks-shared.js";
 import {
+  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
+  createWebhookPreParsing,
   createWebhookHandler,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -20,7 +22,15 @@ type SlackDispatchPayload = Exclude<
 export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/slack/webhook",
-    createWebhookRouteOptions("slackRawBody"),
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: createWebhookPreParsing("slackRawBody"),
+      config: {
+        rateLimit: {
+          max: 500,
+        },
+      },
+    },
     createWebhookHandler<SlackDispatchPayload>(fastify, {
       source: "slack",
       connectorKey: "slack",

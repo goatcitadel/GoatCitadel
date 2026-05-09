@@ -65,6 +65,57 @@ describe("gateway route rate limits", () => {
       await app.close();
     }
   });
+
+  it("applies explicit rate limits to provider webhook routes", async () => {
+    configureRateLimitedGateway();
+    const app = await buildApp();
+    try {
+      await expectRouteToRateLimit(
+        app,
+        "POST",
+        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/slack/webhook",
+        "203.0.113.61",
+        404,
+      );
+      await expectRouteToRateLimit(
+        app,
+        "POST",
+        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+        "203.0.113.62",
+        404,
+      );
+      await expectRouteToRateLimit(
+        app,
+        "GET",
+        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+        "203.0.113.63",
+        404,
+      );
+      await expectRouteToRateLimit(
+        app,
+        "POST",
+        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+        "203.0.113.64",
+        404,
+      );
+      await expectRouteToRateLimit(
+        app,
+        "POST",
+        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/line/webhook",
+        "203.0.113.65",
+        404,
+      );
+      await expectRouteToRateLimit(
+        app,
+        "POST",
+        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/nextcloud-talk/webhook",
+        "203.0.113.66",
+        404,
+      );
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 function configureRateLimitedGateway(): void {
@@ -123,6 +174,7 @@ async function expectRouteToRateLimit(
       headers: {
         authorization: `Bearer ${TOKEN}`,
       },
+      ...(method === "POST" ? { payload: {} } : {}),
     });
     statuses.push(response.statusCode);
   }

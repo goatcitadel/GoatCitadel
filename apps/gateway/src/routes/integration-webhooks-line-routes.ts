@@ -4,9 +4,11 @@ import {
   normalizeLineWebhookPayload,
   verifyLineWebhookSignature,
 } from "../services/line-webhook.js";
-import { createWebhookRouteOptions, resolveLineChannelSecret } from "./integration-webhooks-shared.js";
+import { resolveLineChannelSecret } from "./integration-webhooks-shared.js";
 import {
+  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
+  createWebhookPreParsing,
   createWebhookHandler,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -17,7 +19,15 @@ type LineDispatchPayload = Exclude<ReturnType<typeof normalizeLineWebhookPayload
 export function registerLineWebhookRoutes(fastify: FastifyInstance): void {
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/line/webhook",
-    createWebhookRouteOptions("lineRawBody"),
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: createWebhookPreParsing("lineRawBody"),
+      config: {
+        rateLimit: {
+          max: 500,
+        },
+      },
+    },
     createWebhookHandler<LineDispatchPayload>(fastify, {
       source: "line",
       connectorKey: "line",

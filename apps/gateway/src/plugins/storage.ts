@@ -31,6 +31,7 @@ export const gatewayPlugin = fp(async (fastify) => {
   fastify.decorate("gatewayConfig", config);
   await gateway.initCritical();
 
+  // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {
     await gateway.startDeferredInit();
   });

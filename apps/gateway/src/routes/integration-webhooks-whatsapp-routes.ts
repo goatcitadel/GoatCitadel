@@ -4,14 +4,11 @@ import {
   normalizeWhatsAppWebhookPayload,
   verifyWhatsAppWebhookSignature,
 } from "../services/whatsapp-webhook.js";
+import { resolveWhatsAppAppSecret, resolveWhatsAppVerifyToken } from "./integration-webhooks-shared.js";
 import {
-  createWebhookReadRouteOptions,
-  createWebhookRouteOptions,
-  resolveWhatsAppAppSecret,
-  resolveWhatsAppVerifyToken,
-} from "./integration-webhooks-shared.js";
-import {
+  CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
+  createWebhookPreParsing,
   createWebhookHandler,
   dispatchInboundWebhookMessage,
   readHeaderValue,
@@ -24,7 +21,13 @@ type WhatsAppDispatchPayload = Exclude<ReturnType<typeof normalizeWhatsAppWebhoo
 export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
   fastify.get(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
-    createWebhookReadRouteOptions(),
+    {
+      config: {
+        rateLimit: {
+          max: 500,
+        },
+      },
+    },
     async (request, reply) => {
       const params = connectionParamsSchema.safeParse(request.params);
       if (!params.success) {
@@ -63,7 +66,15 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
 
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
-    createWebhookRouteOptions("whatsappRawBody"),
+    {
+      bodyLimit: CHANNEL_INBOUND_MAX_BYTES,
+      preParsing: createWebhookPreParsing("whatsappRawBody"),
+      config: {
+        rateLimit: {
+          max: 500,
+        },
+      },
+    },
     createWebhookHandler<WhatsAppDispatchPayload>(fastify, {
       source: "whatsapp",
       connectorKey: "whatsapp",
