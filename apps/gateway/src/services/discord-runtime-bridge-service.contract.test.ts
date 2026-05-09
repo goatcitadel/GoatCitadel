@@ -30,6 +30,18 @@ function createHost(): DiscordRuntimeBridgeHost & {
   const systemSettings = createSystemSettingsStore();
   const sessionsById = new Map<string, ChatSessionRecord>();
   const sessionProjects = new Map<string, { sessionId: string; projectId: string; assignedAt: string }>();
+  let connection = {
+    connectionId: "discord-1",
+    catalogId: "discord",
+    kind: "channel",
+    key: "discord",
+    label: "Discord",
+    enabled: true,
+    status: "connected",
+    config: {},
+    createdAt: "2026-04-08T00:00:00.000Z",
+    updatedAt: "2026-04-08T00:00:00.000Z",
+  } as DiscordRuntimeBridgeHost["storage"]["integrationConnections"]["get"] extends (id: string) => infer T ? T : never;
   const diagnostics = vi.fn();
   const updateSessionMock = vi.fn();
   const respondMock = vi.fn();
@@ -73,6 +85,21 @@ function createHost(): DiscordRuntimeBridgeHost & {
           return sessionProjects.get(sessionId);
         },
       } as DiscordRuntimeBridgeHost["storage"]["chatSessionProjects"],
+      integrationConnections: {
+        get() {
+          return connection;
+        },
+        update(_connectionId, input) {
+          connection = {
+            ...connection,
+            ...input,
+            config: input.config ?? connection.config,
+            lastSyncAt: input.lastSyncAt ?? connection.lastSyncAt,
+            lastError: input.lastError === undefined ? connection.lastError : (input.lastError ?? undefined),
+          };
+          return connection;
+        },
+      } as DiscordRuntimeBridgeHost["storage"]["integrationConnections"],
     },
     operatorSummaryCache: {
       invalidate: vi.fn(),
@@ -86,6 +113,9 @@ function createHost(): DiscordRuntimeBridgeHost & {
       return session;
     },
     updateChatSession: updateSessionMock,
+    cancelLatestActiveChatTurnForSession: vi.fn(async () => ({ status: "no_active_run" })),
+    getPersonalityCatalog: () => ({ items: [], defaultPersonalityId: "default" }),
+    hasRunningTurn: () => false,
     parseChatCommand: vi.fn(async () => ({
       ok: true,
       command: "/noop",

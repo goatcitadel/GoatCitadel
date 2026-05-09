@@ -560,7 +560,10 @@ export const CronJobSchema = z
   .object({
     jobId: z.string(),
     name: z.string(),
-    action: z.enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review"]).default("task"),
+    action: z
+      .enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review", "watchdog"])
+      .default("task"),
+    actionConfig: z.record(z.string(), z.unknown()).optional(),
     description: z.string().optional(),
     schedule: z.string(),
     enabled: z.boolean(),

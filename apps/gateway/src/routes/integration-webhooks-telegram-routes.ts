@@ -204,6 +204,19 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           room: parsed.room,
           threadId: parsed.threadId,
         });
+        const activeSessionId = resolveTelegramChannelSessionId(connection.config, {
+          account: parsed.account,
+          peer: parsed.peer,
+          room: parsed.room,
+          threadId: parsed.threadId,
+        });
+        if (activeSessionId && fastify.services.integrationWebhooks.hasRunningTurn(activeSessionId)) {
+          return {
+            method: "sendMessage",
+            chat_id: target ?? parsed.peer,
+            text: "A GoatCitadel run is already active for this chat. Use /status to inspect it or /stop to cancel it before starting another request.",
+          };
+        }
         return dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "telegram",
           connectionId,

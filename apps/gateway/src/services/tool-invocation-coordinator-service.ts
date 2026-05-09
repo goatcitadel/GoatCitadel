@@ -3,6 +3,7 @@ import type {
   ApprovalRequest,
   McpInvokeRequest,
   McpInvokeResponse,
+  McpNormalizedContentItem,
   McpServerRecord,
   McpToolRecord,
   RealtimeEvent,
@@ -493,6 +494,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           signal: input.signal,
         });
     const runtimeRetryCount = "retryCount" in runtime ? runtime.retryCount : undefined;
+    const runtimeDegraded = "degraded" in runtime ? runtime.degraded : undefined;
     if (runtimeRetryCount || runtime.output?.degradedReason) {
       this.host.recordDevDiagnostic?.({
         level: "warn",
@@ -522,6 +524,11 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         }
       : undefined;
     const redactedOutput = output ? this.host.applyMcpRedaction(output, server.policy.redactionMode) : undefined;
+    const redactedContentItems = redactMcpContentItems(
+      runtime.contentItems,
+      server.policy.redactionMode,
+      this.host.applyMcpRedaction,
+    );
 
     this.host.publishRealtime(
       "tool_invoked",
@@ -558,6 +565,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       return {
         ok: false,
         output: redactedOutput,
+        contentItems: redactedContentItems,
+        diagnostics: {
+          transport: server.transport,
+          degraded: runtimeDegraded,
+          retryCount: runtimeRetryCount,
+          sanitizedError: runtime.error,
+        },
         error: runtime.error ?? `MCP tool ${input.toolName} failed.`,
       };
     }
@@ -565,6 +579,24 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     return {
       ok: true,
       output: redactedOutput,
+      contentItems: redactedContentItems,
+      diagnostics: {
+        transport: server.transport,
+        degraded: runtimeDegraded,
+        retryCount: runtimeRetryCount,
+      },
     };
   }
+}
+
+function redactMcpContentItems(
+  contentItems: McpNormalizedContentItem[] | undefined,
+  mode: McpServerRecord["policy"]["redactionMode"],
+  applyRedaction: ToolInvocationCoordinatorHost["applyMcpRedaction"],
+): McpNormalizedContentItem[] | undefined {
+  if (!contentItems) {
+    return undefined;
+  }
+  const redacted = applyRedaction({ contentItems }, mode).contentItems;
+  return Array.isArray(redacted) ? (redacted as McpNormalizedContentItem[]) : contentItems;
 }

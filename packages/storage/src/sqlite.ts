@@ -764,6 +764,13 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "comms_delivery_runtime_metadata",
     up: migrateCommsDeliveryRuntimeMetadata,
   },
+  {
+    version: 78,
+    name: "cron_jobs_action_config",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cron_jobs", "action_config_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1091,6 +1098,7 @@ function createBaseSchema(db: DatabaseSync): void {
       job_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       action TEXT NOT NULL DEFAULT 'task',
+      action_config_json TEXT,
       description TEXT,
       schedule TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,

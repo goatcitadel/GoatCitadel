@@ -54,10 +54,16 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       },
     });
     expect(payload?.payload?.message).toContain("GoatCitadel approval action requested.");
-    expect(payload?.payload?.message).toContain("Action token: grat_token");
-    expect(payload?.payload?.message).toContain(
-      "Resolve from an authenticated GoatCitadel session via POST /api/v1/approvals/remote-resolve",
-    );
+    expect(payload?.payload?.message).toContain("Action token ID: rat_123");
+    expect(payload?.payload?.message).not.toContain("grat_token");
+    expect(payload?.payload?.interactiveActions).toMatchObject({
+      platform: "telegram",
+      tokenId: "rat_123",
+      buttons: [
+        { label: "Approve", callbackData: "gca:grat_token:a" },
+        { label: "Deny", callbackData: "gca:grat_token:r" },
+      ],
+    });
   });
 
   it("builds MCP invoke payloads for approval-capable MCP connectors", () => {

@@ -295,6 +295,7 @@ import type {
   OrchestrationPlanWorkflowPayload,
   CronReviewItem,
   CronRunDiff,
+  CronWatchdogRunResult,
   ReplayRegressionRun,
   ReplayRegressionResult,
   CapabilityTrendSeries,
@@ -1007,6 +1008,7 @@ export class GatewayService {
         updateReview: async () => {
           await this.runUpdateReviewSchedulerIfDue({ force: true });
         },
+        watchdog: async (job) => this.runCronWatchdog(job),
       },
     });
 
@@ -1955,6 +1957,147 @@ export class GatewayService {
     await this.drainDueChannelDeliveries();
   }
 
+  private async runCronWatchdog(job: CronJobRecord): Promise<CronWatchdogRunResult> {
+    const checkId = job.actionConfig?.watchdog?.checkId ?? "runtime_health";
+    const notifyHomeChannel = job.actionConfig?.watchdog?.notifyHomeChannel === true;
+    let result: CronWatchdogRunResult;
+    switch (checkId) {
+      case "durable_dead_letters":
+        result = this.runDurableDeadLetterWatchdog();
+        break;
+      case "channel_delivery_queue":
+        result = this.runChannelDeliveryQueueWatchdog();
+        break;
+      case "mcp_posture":
+        result = this.runMcpPostureWatchdog();
+        break;
+      case "runtime_health":
+      default:
+        result = this.runRuntimeHealthWatchdog();
+        break;
+    }
+    const finalResult = { ...result, notifyHomeChannel };
+    if (notifyHomeChannel && finalResult.status !== "ok") {
+      await this.notifyWatchdogHomeChannel(job, finalResult).catch((error) => {
+        this.recordDevDiagnostic({
+          level: "warn",
+          category: "cron",
+          event: "watchdog.home_channel_notify_failed",
+          message: "Watchdog found an issue but could not notify the configured home channel.",
+          context: {
+            jobId: job.jobId,
+            checkId: finalResult.checkId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      });
+    }
+    return finalResult;
+  }
+
+  private runRuntimeHealthWatchdog(): CronWatchdogRunResult {
+    return {
+      status: this.closing ? "error" : "ok",
+      checkId: "runtime_health",
+      summary: this.closing ? "Gateway runtime is closing." : "Gateway runtime heartbeat is healthy.",
+      details: {
+        uptimeSeconds: Math.floor(process.uptime()),
+        backgroundTaskCount: this.backgroundTasks.size,
+        durableEnabled: this.config.assistant.durable.enabled,
+      },
+    };
+  }
+
+  private runDurableDeadLetterWatchdog(): CronWatchdogRunResult {
+    const unresolved = this.storage.durableRuns.listDeadLetters(1000).filter((item) => !item.resolvedAt);
+    return {
+      status: unresolved.length > 0 ? "warning" : "ok",
+      checkId: "durable_dead_letters",
+      summary:
+        unresolved.length > 0
+          ? `${unresolved.length} unresolved durable dead letter(s) need review.`
+          : "No unresolved durable dead letters.",
+      details: {
+        unresolvedCount: unresolved.length,
+        sampleRunIds: unresolved.slice(0, 10).map((item) => item.runId),
+      },
+    };
+  }
+
+  private runChannelDeliveryQueueWatchdog(): CronWatchdogRunResult {
+    const deliveries = this.listChannelDeliveryRuntime();
+    const blocked = deliveries.filter(
+      (item) =>
+        item.deliveryStatus === "blocked" ||
+        item.deliveryStatus === "not_available" ||
+        item.deliveryStatus === "degraded",
+    );
+    const retrying = deliveries.filter((item) => item.deliveryStatus === "retrying");
+    const status = blocked.length > 0 ? "error" : retrying.length > 0 ? "warning" : "ok";
+    return {
+      status,
+      checkId: "channel_delivery_queue",
+      summary:
+        status === "ok"
+          ? "Channel delivery queue is clear."
+          : `${blocked.length} blocked/degraded and ${retrying.length} retrying channel delivery item(s).`,
+      details: {
+        blockedCount: blocked.length,
+        retryingCount: retrying.length,
+        sampleDeliveryIds: [...blocked, ...retrying].slice(0, 10).map((item) => item.deliveryId),
+      },
+    };
+  }
+
+  private runMcpPostureWatchdog(): CronWatchdogRunResult {
+    const enabledServers = this.readMcpServers().filter((server) => server.enabled);
+    const hardIssues = enabledServers.filter(
+      (server) => server.status === "error" || server.trustTier === "quarantined",
+    );
+    const softIssues = enabledServers.filter(
+      (server) =>
+        server.status !== "connected" ||
+        Boolean(server.lastError) ||
+        ((server.transport === "http" || server.transport === "sse") && !server.url?.trim()) ||
+        (server.authType === "oauth2" && !server.url?.trim()),
+    );
+    const status = hardIssues.length > 0 ? "error" : softIssues.length > 0 ? "warning" : "ok";
+    return {
+      status,
+      checkId: "mcp_posture",
+      summary:
+        status === "ok"
+          ? "MCP posture is healthy for enabled servers."
+          : `${hardIssues.length} hard and ${softIssues.length} soft MCP posture issue(s) found.`,
+      details: {
+        enabledCount: enabledServers.length,
+        hardIssueServerIds: hardIssues.slice(0, 10).map((server) => server.serverId),
+        softIssueServerIds: softIssues.slice(0, 10).map((server) => server.serverId),
+      },
+    };
+  }
+
+  private async notifyWatchdogHomeChannel(job: CronJobRecord, result: CronWatchdogRunResult): Promise<void> {
+    const connection = this.storage.integrationConnections
+      .list(undefined, 1000)
+      .find(
+        (item) =>
+          item.enabled &&
+          item.kind === "channel" &&
+          typeof item.config.defaultChannelId === "string" &&
+          item.config.defaultChannelId.trim().length > 0,
+      );
+    const target = typeof connection?.config.defaultChannelId === "string" ? connection.config.defaultChannelId : "";
+    if (!connection || !target) {
+      return;
+    }
+    await this.commsSend({
+      connectionId: connection.connectionId,
+      target,
+      message: [`Watchdog attention needed: ${job.name}`, "", result.summary].join("\n"),
+    });
+  }
+
   public scheduleMemoryMaintenancePostTurnEvaluation(sessionId: string, parentTurnId?: string): void {
     if (this.closing || parentTurnId) {
       return;
@@ -2329,7 +2472,7 @@ export class GatewayService {
     });
   }
 
-  private hasRunningTurn(sessionId: string): boolean {
+  public hasRunningTurn(sessionId: string): boolean {
     const latest = this.storage.chatTurnTraces.listBySession(sessionId, 1)[0];
     return latest ? isChatTurnActiveStatus(latest.status) : false;
   }
@@ -6566,8 +6709,12 @@ export class GatewayService {
       jobs: this.storage.cronJobs.list().map((job) => ({
         jobId: job.jobId,
         name: job.name,
+        action: job.action,
+        actionConfig: job.actionConfig,
+        description: job.description,
         schedule: job.schedule,
         enabled: job.enabled,
+        endAt: job.endAt,
         lastRunAt: job.lastRunAt,
         nextRunAt: job.nextRunAt,
       })),
@@ -7596,6 +7743,7 @@ function buildChannelDeliveryPayload(input: ChannelSendInput): Record<string, un
     message: input.message,
     attachments: input.attachments,
     attachmentIds: input.attachmentIds,
+    interactiveActions: input.interactiveActions,
     replyToMessageId: input.replyToMessageId,
     replyToPartIndex: input.replyToPartIndex,
     effectId: input.effectId,
@@ -7616,6 +7764,10 @@ function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeSendInpu
       ? (payload.attachments as ChannelSendInput["attachments"])
       : undefined,
     attachmentIds: Array.isArray(payload.attachmentIds) ? (payload.attachmentIds as string[]) : undefined,
+    interactiveActions:
+      typeof payload.interactiveActions === "object" && payload.interactiveActions !== null
+        ? (payload.interactiveActions as ChannelSendInput["interactiveActions"])
+        : undefined,
     replyToMessageId: typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : undefined,
     replyToPartIndex: typeof payload.replyToPartIndex === "number" ? payload.replyToPartIndex : undefined,
     effectId: typeof payload.effectId === "string" ? payload.effectId : undefined,

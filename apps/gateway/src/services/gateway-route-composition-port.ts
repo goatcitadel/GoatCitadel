@@ -128,6 +128,7 @@ export interface GatewayRouteCompositionPort {
   getSessionSummary: RouteDependencyMethod<"sessionsList", "getSessionSummary">;
   getSkillActivationPolicy: RouteDependencyMethod<"skills", "getSkillActivationPolicy">;
   getTranscript: RouteDependencyMethod<"runtimeLifecycle", "getTranscript">;
+  hasRunningTurn(sessionId: string): boolean;
   hydrateChatPrefsWithAutonomy: chatSessionService.ChatSessionDependencies["hydrateChatPrefsWithAutonomy"];
   ingestChannelMessage: RouteDependencyMethod<"integrationWebhooks", "ingestChannelMessage">;
   ingestEvent: RouteDependencyMethod<"gatewayEvents", "ingestEvent">;
@@ -314,6 +315,7 @@ export function createGatewayRouteCompositionPort(
     getSessionSummary: gateway.getSessionSummary.bind(gateway),
     getSkillActivationPolicy: gateway.getSkillActivationPolicy.bind(gateway),
     getTranscript: gateway.getTranscript.bind(gateway),
+    hasRunningTurn: gateway.hasRunningTurn.bind(gateway),
     hydrateChatPrefsWithAutonomy: gateway.hydrateChatPrefsWithAutonomy.bind(gateway),
     ingestChannelMessage: gateway.ingestChannelMessage.bind(gateway),
     ingestEvent: gateway.ingestEvent.bind(gateway),

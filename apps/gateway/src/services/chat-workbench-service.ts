@@ -23,6 +23,7 @@ import {
   type ChatSessionWorkbenchSaveFileRequest,
   type ChatSessionWorkbenchTreeEntry,
   type ChatSessionWorkbenchTreeResponse,
+  type ChatSessionWorkbenchValidationResult,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { WorktreeManager } from "@goatcitadel/orchestration";
@@ -204,6 +205,8 @@ export async function saveChatSessionWorkbenchFile(
   }
 
   await fs.writeFile(targetPath, input.content, "utf8");
+  const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
+  const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
 
   const response = await buildWorkbenchFileResponse(deps, sessionId, context, normalized);
   deps.publishRealtime(
@@ -216,6 +219,8 @@ export async function saveChatSessionWorkbenchFile(
       path: normalized,
       changed: response.changed,
       activeFilePath: response.state.activeFilePath,
+      validationStatus: response.state.validationStatus,
+      validation,
     },
     {
       eventClass: "operational_signal",
@@ -435,7 +440,12 @@ export async function applyChatSessionWorkbenchPatch(
   const artifactId = `workbench-patch:${randomUUID()}`;
   const applyResult = applyPatchWithScope(context, patch, checkOnly);
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
-  const validationStatus = applyResult.exitCode === 0 ? "passed" : "failed";
+  const validation =
+    applyResult.exitCode === 0 && !checkOnly
+      ? await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles)
+      : undefined;
+  const validationStatus =
+    applyResult.exitCode !== 0 ? "failed" : validation ? mapWorkbenchValidationState(validation) : "passed";
   const finalState = deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId: context.project.projectId,
     diffArtifactId: artifactId,
@@ -452,6 +462,7 @@ export async function applyChatSessionWorkbenchPatch(
       applyResult.stderrPreview,
     ),
     startedAt,
+    validation,
   );
   deps.publishRealtime(
     "chat_workbench_updated",
@@ -465,6 +476,7 @@ export async function applyChatSessionWorkbenchPatch(
       checkOnly,
       changedFiles,
       validationStatus,
+      validation,
     },
     {
       eventClass: "operational_signal",
@@ -588,7 +600,7 @@ export async function getChatSessionWorkbenchOutput(
   sessionId: string,
 ): Promise<ChatSessionWorkbenchOutputResponse> {
   deps.requireChatSession(sessionId);
-  syncWorkbenchState(deps, sessionId);
+  const state = syncWorkbenchState(deps, sessionId);
   const projectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
   const helperRuns = deps.storage.codeModeRuns
     .list(200)
@@ -610,10 +622,12 @@ export async function getChatSessionWorkbenchOutput(
       : latest.status === "failed"
         ? "failed"
         : "pending"
-    : "idle";
+    : state.validationStatus;
   const output =
     helperRuns.length === 0
-      ? "No validation output yet."
+      ? state.validationStatus === "idle"
+        ? "No validation output yet."
+        : `Latest validation status: ${state.validationStatus}.`
       : helperRuns
           .map((run) => {
             const header = `${run.language} helper · ${run.status}`;
@@ -694,13 +708,194 @@ function buildWorkbenchOperationOutput(
   state: ChatSessionWorkbenchRecord,
   output: string,
   lastUpdatedAt: string,
+  validation?: ChatSessionWorkbenchValidationResult,
 ): ChatSessionWorkbenchOutputResponse {
   return {
     state,
     helperRuns: [],
-    output: output || "Workbench operation completed.",
+    output: [output || "Workbench operation completed.", formatWorkbenchValidationOutput(validation)]
+      .filter(Boolean)
+      .join("\n\n"),
+    validation,
     lastUpdatedAt,
   };
+}
+
+function formatWorkbenchValidationOutput(validation?: ChatSessionWorkbenchValidationResult): string | undefined {
+  if (!validation) {
+    return undefined;
+  }
+  const label = validation.commandLabel ? `Post-write validation: ${validation.commandLabel}` : "Post-write validation";
+  const lines = [
+    `${label} · ${validation.status}`,
+    validation.reason ? `Reason: ${validation.reason}` : undefined,
+    validation.durationMs !== undefined ? `Duration: ${validation.durationMs}ms` : undefined,
+    validation.changedFiles.length > 0 ? `Changed files: ${validation.changedFiles.join(", ")}` : undefined,
+    validation.stdoutPreview ? `stdout\n${validation.stdoutPreview}` : undefined,
+    validation.stderrPreview ? `stderr\n${validation.stderrPreview}` : undefined,
+  ];
+  return lines.filter((line): line is string => Boolean(line)).join("\n\n");
+}
+
+async function runWorkbenchPostWriteValidation(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  context: {
+    project: { projectId: string; workspacePath: string };
+    projectRoot: string;
+    worktreePath: string;
+    repoScopePath: string;
+  },
+  changedFiles: string[],
+): Promise<ChatSessionWorkbenchValidationResult> {
+  const startedAt = Date.now();
+  const distinctChangedFiles = [...new Set(changedFiles)].sort();
+  if (distinctChangedFiles.length === 0) {
+    const validation = buildSkippedWorkbenchValidation(
+      distinctChangedFiles,
+      "No changed files were detected after the write.",
+      startedAt,
+    );
+    persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    return validation;
+  }
+
+  const jsonValidation = await validateChangedJsonFiles(context.projectRoot, distinctChangedFiles, startedAt);
+  if (jsonValidation.status === "failed") {
+    persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, jsonValidation);
+    publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, jsonValidation);
+    return jsonValidation;
+  }
+
+  if (!fsSync.existsSync(path.join(context.worktreePath, ".git"))) {
+    const validation = buildSkippedWorkbenchValidation(
+      distinctChangedFiles,
+      "No Git metadata is available for the workbench, so git diff --check could not run.",
+      startedAt,
+    );
+    persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+    return validation;
+  }
+
+  const command = "git";
+  const args = ["diff", "--check"];
+  assertWorkbenchCommandAllowed(command, args);
+  const result = await executeWorkbenchCommand(command, args, {
+    cwd: context.projectRoot,
+    timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+  });
+  const stderrPreview = result.spawnError
+    ? appendPreviewLine(result.stderrPreview, result.spawnError)
+    : result.stderrPreview;
+  const validation: ChatSessionWorkbenchValidationResult = {
+    status: result.timedOut ? "timed_out" : result.exitCode === 0 ? "passed" : "failed",
+    commandLabel: "git diff --check",
+    durationMs: Date.now() - startedAt,
+    changedFiles: distinctChangedFiles,
+    stdoutPreview: result.stdoutPreview,
+    stderrPreview,
+    reason: result.timedOut ? "Validation timed out before completion." : result.spawnError,
+  };
+  persistWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+  publishWorkbenchValidationResult(deps, sessionId, context.project.projectId, validation);
+  return validation;
+}
+
+async function validateChangedJsonFiles(
+  projectRoot: string,
+  changedFiles: string[],
+  startedAt: number,
+): Promise<ChatSessionWorkbenchValidationResult> {
+  const jsonFiles = changedFiles.filter((file) => /\.json$/i.test(file));
+  for (const relativePath of jsonFiles) {
+    const targetPath = path.resolve(projectRoot, relativePath);
+    assertPathInsideRoot(targetPath, projectRoot, "workbench validation file");
+    if (!fsSync.existsSync(targetPath)) {
+      continue;
+    }
+    try {
+      JSON.parse(await fs.readFile(targetPath, "utf8"));
+    } catch (error) {
+      return {
+        status: "failed",
+        commandLabel: "JSON parse",
+        durationMs: Date.now() - startedAt,
+        changedFiles,
+        stderrPreview: `${relativePath}: ${(error as Error).message}`,
+        reason: "Changed JSON failed to parse.",
+      };
+    }
+  }
+  return {
+    status: "passed",
+    commandLabel: "JSON parse",
+    durationMs: Date.now() - startedAt,
+    changedFiles,
+  };
+}
+
+function buildSkippedWorkbenchValidation(
+  changedFiles: string[],
+  reason: string,
+  startedAt: number,
+): ChatSessionWorkbenchValidationResult {
+  return {
+    status: "skipped",
+    commandLabel: "post-write validation",
+    durationMs: Date.now() - startedAt,
+    changedFiles,
+    reason,
+  };
+}
+
+function persistWorkbenchValidationResult(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  projectId: string,
+  validation: ChatSessionWorkbenchValidationResult,
+): void {
+  deps.storage.chatSessionWorkbench.patch(sessionId, {
+    projectId,
+    validationStatus: mapWorkbenchValidationState(validation),
+  });
+}
+
+function publishWorkbenchValidationResult(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  projectId: string,
+  validation: ChatSessionWorkbenchValidationResult,
+): void {
+  deps.publishRealtime(
+    "chat_workbench_updated",
+    "chat",
+    {
+      type: "chat_workbench_post_write_validation_completed",
+      sessionId,
+      projectId,
+      validationStatus: mapWorkbenchValidationState(validation),
+      validation,
+    },
+    {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links: { sessionId },
+    },
+  );
+}
+
+function mapWorkbenchValidationState(
+  validation: ChatSessionWorkbenchValidationResult,
+): ChatSessionWorkbenchRecord["validationStatus"] {
+  if (validation.status === "passed") {
+    return "passed";
+  }
+  if (validation.status === "skipped") {
+    return "idle";
+  }
+  return "failed";
 }
 
 function formatCommandOutput(

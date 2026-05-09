@@ -10,6 +10,7 @@ import {
   ToolInvocationCoordinatorService,
   type ToolInvocationCoordinatorHost,
 } from "./tool-invocation-coordinator-service.js";
+import { applyMcpRedaction } from "./mcp-server-policy.js";
 
 function createToolRequest(overrides: Partial<ToolInvokeRequest> = {}): ToolInvokeRequest {
   return {
@@ -597,6 +598,43 @@ describe("ToolInvocationCoordinatorService", () => {
         }),
       }),
     );
+  });
+
+  it("applies MCP redaction policy to normalized content items", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuvwx";
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        requireMcpServer: vi.fn(() =>
+          createMcpServer({
+            policy: {
+              requireFirstToolApproval: false,
+              redactionMode: "basic",
+              allowedToolPatterns: [],
+              blockedToolPatterns: [],
+            },
+          }),
+        ),
+        applyMcpRedaction: vi.fn((output, mode) => applyMcpRedaction(output, mode)),
+        invokeMcpRuntimeTool: vi.fn(async () => ({
+          ok: true,
+          output: {
+            payload: `secret ${secret}`,
+          },
+          contentItems: [{ type: "text" as const, text: `secret ${secret}` }],
+        })),
+      }),
+    );
+
+    const response = await coordinator.invokeMcpTool({
+      serverId: "srv-1",
+      toolName: "tool.echo",
+      sessionId: "session-1",
+      arguments: {},
+    });
+
+    expect(JSON.stringify(response.output)).not.toContain(secret);
+    expect(JSON.stringify(response.contentItems)).not.toContain(secret);
+    expect(JSON.stringify(response.contentItems)).toContain("[REDACTED]");
   });
 
   it("emits degraded diagnostics when MCP runtime reconnects an expired session", async () => {

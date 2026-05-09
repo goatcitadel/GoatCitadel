@@ -52,6 +52,7 @@ export async function commsSend(
         target: input.target,
         message: input.message,
         attachments,
+        interactiveActions: input.interactiveActions,
         replyTo: input.replyToMessageId,
         replyToMessageId: input.replyToMessageId,
         replyToMessageGuid: input.replyToMessageId,

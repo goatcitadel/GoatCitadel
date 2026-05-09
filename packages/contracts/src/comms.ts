@@ -12,6 +12,11 @@ export interface ChannelSendInput {
   message: string;
   attachments?: ChannelAttachmentInput[];
   attachmentIds?: string[];
+  interactiveActions?: {
+    platform?: string;
+    tokenId?: string;
+    buttons: Array<{ label: string; callbackData: string }>;
+  };
   replyToMessageId?: string;
   replyToPartIndex?: number;
   effectId?: string;

@@ -143,6 +143,7 @@ async function dispatchIntegrationChannelAction(
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       message,
       attachments,
+      interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
       sessionId: optionalString(actionPayload.sessionId),
       agentId: optionalString(actionPayload.agentId),
       taskId: optionalString(actionPayload.taskId),
@@ -156,6 +157,7 @@ async function dispatchIntegrationChannelAction(
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       message,
       attachments,
+      interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
       replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
       replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
       sessionId: optionalString(actionPayload.sessionId),
@@ -428,6 +430,35 @@ function normalizeAttachments(value: unknown): ChannelSendInput["attachments"] |
   return attachments.length > 0 ? attachments : undefined;
 }
 
+function normalizeInteractiveActions(value: unknown): ChannelSendInput["interactiveActions"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const recordValue = value as Record<string, unknown>;
+  if (!Array.isArray(recordValue.buttons)) {
+    return undefined;
+  }
+  const buttons = recordValue.buttons
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const button = item as Record<string, unknown>;
+      return {
+        label: optionalString(button.label) ?? "",
+        callbackData: optionalString(button.callbackData) ?? "",
+      };
+    })
+    .filter((item) => item.label && item.callbackData)
+    .slice(0, 8);
+  if (buttons.length === 0) {
+    return undefined;
+  }
+  return {
+    platform: optionalString(recordValue.platform),
+    tokenId: optionalString(recordValue.tokenId),
+    buttons,
+  };
+}
+
 function unwrapToolInvokeResult(result: ConnectorActionResult): Record<string, unknown> {
   if ("outcome" in result && typeof result.outcome === "string") {
     const invokeResult = result as ToolInvokeResult;
@@ -450,7 +481,9 @@ function throwIfConnectorDeliveryAborted(signal?: AbortSignal): void {
     return;
   }
   const reason = signal.reason;
-  throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : "Connector delivery aborted.");
+  throw reason instanceof Error
+    ? reason
+    : new Error(typeof reason === "string" ? reason : "Connector delivery aborted.");
 }
 
 function buildConnectorRealtimeLinks(

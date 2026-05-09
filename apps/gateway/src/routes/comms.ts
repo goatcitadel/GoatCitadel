@@ -10,12 +10,22 @@ const channelAttachmentSchema = z.object({
   attachmentId: z.string().uuid().optional(),
 });
 
+const channelInteractiveActionsSchema = z.object({
+  platform: z.string().optional(),
+  tokenId: z.string().optional(),
+  buttons: z
+    .array(z.object({ label: z.string().min(1), callbackData: z.string().min(1) }))
+    .min(1)
+    .max(8),
+});
+
 const channelSendBaseSchema = z.object({
   connectionId: z.string().uuid(),
   target: z.string().min(1),
   message: z.string().default(""),
   attachments: z.array(channelAttachmentSchema).optional(),
   attachmentIds: z.array(z.string().uuid()).optional(),
+  interactiveActions: channelInteractiveActionsSchema.optional(),
   replyToMessageId: z.string().min(1).optional(),
   replyToPartIndex: z.number().int().min(0).optional(),
   effectId: z.string().min(1).optional(),

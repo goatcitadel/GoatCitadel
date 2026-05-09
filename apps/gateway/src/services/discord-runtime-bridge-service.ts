@@ -1,8 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
-import type { ApprovalResolveInput, ChatSessionPrefsRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import type {
+  ApprovalResolveInput,
+  ChatSessionPrefsRecord,
+  ChatSessionRecord,
+  IntegrationConnection,
+  IntegrationConnectionUpdateInput,
+  PersonalityCatalogResponse,
+} from "@goatcitadel/contracts";
 import type { ApprovalResolveResult } from "./approval-types.js";
-import { normalizeChannelCommandInput } from "./channel-command-contract.js";
+import {
+  DEFAULT_CHANNEL_TOOLSET_POSTURE,
+  findSharedChannelCommand,
+  normalizeChannelCommandInput,
+} from "./channel-command-contract.js";
+import { getPersonalityPreset, listPersonalityPresets, normalizePersonalityId } from "./channel-personalities.js";
 
 const DEFAULT_DISCORD_WORKSPACE_ID = "default";
 const DISCORD_ROUTE_SESSIONS_SETTING_KEY = "discord_route_sessions_v1";
@@ -40,6 +52,10 @@ export interface DiscordRuntimeBridgeHost {
     chatSessionProjects: {
       get(sessionId: string): { projectId: string } | undefined;
     };
+    integrationConnections: {
+      get(connectionId: string): IntegrationConnection;
+      update(connectionId: string, input: IntegrationConnectionUpdateInput): IntegrationConnection;
+    };
     sessions: {
       upsert(input: {
         sessionId: string;
@@ -60,8 +76,21 @@ export interface DiscordRuntimeBridgeHost {
     invalidate(): void;
   };
   assignChatSessionProject(sessionId: string, projectId?: string): unknown;
+  cancelLatestActiveChatTurnForSession(
+    sessionId: string,
+    cancelledBy?: string,
+  ): Promise<{
+    status: "cancelled" | "no_active_run" | "failed";
+    sessionId?: string;
+    turnId?: string;
+    durableRunId?: string;
+    durableCancelled?: boolean;
+    error?: string;
+  }>;
   ensureChatSessionRuntimeGrants(sessionId: string): void;
+  getPersonalityCatalog?(): PersonalityCatalogResponse;
   getChatSessionPrefs(sessionId: string): ChatSessionPrefsRecord;
+  hasRunningTurn(sessionId: string): boolean;
   ingestChannelMessage(
     channel: string,
     dedupeKey: string,
@@ -284,6 +313,17 @@ export async function handleDiscordRuntimeSlashCommand(
       ? `Approved ${result.approval.approvalId}. GoatCitadel will resume any waiting work it can safely resume.`
       : `Rejected ${result.approval.approvalId}. GoatCitadel will keep the requested action blocked.`;
   }
+  if (
+    normalizedCommand.name === "status" ||
+    normalizedCommand.name === "sethome" ||
+    normalizedCommand.name === "skills" ||
+    normalizedCommand.name === "skill" ||
+    normalizedCommand.name === "tools" ||
+    normalizedCommand.name === "personality" ||
+    normalizedCommand.name === "stop"
+  ) {
+    return handleDiscordSharedChannelCommand(host, input, normalizedCommand);
+  }
 
   const session = ensureDiscordChatSession(host, {
     connectionId: input.connectionId,
@@ -293,8 +333,187 @@ export async function handleDiscordRuntimeSlashCommand(
     room: input.room,
     threadId: input.threadId,
   });
+  const sharedDefinition = normalizedCommand.name ? findSharedChannelCommand(normalizedCommand.name) : undefined;
+  if (!sharedDefinition?.bypassesActiveRunGuard && host.hasRunningTurn(session.sessionId)) {
+    return "A GoatCitadel run is already active for this Discord channel. Use /status to inspect it or /stop to cancel it before starting another request.";
+  }
   const result = await host.parseChatCommand(session.sessionId, commandText);
   return result.message;
+}
+
+async function handleDiscordSharedChannelCommand(
+  host: DiscordRuntimeBridgeHost,
+  input: Parameters<typeof handleDiscordRuntimeSlashCommand>[1],
+  command: ReturnType<typeof normalizeChannelCommandInput>,
+): Promise<string> {
+  const connection = host.storage.integrationConnections.get(input.connectionId);
+  switch (command.name) {
+    case "status":
+      return renderDiscordStatus(connection, input.target, host.getPersonalityCatalog?.());
+    case "sethome":
+      host.storage.integrationConnections.update(input.connectionId, {
+        config: {
+          ...connection.config,
+          defaultChannelId: input.target,
+          defaultDiscordChannelId: input.target,
+          homeChannelSetAt: new Date().toISOString(),
+        },
+        lastSyncAt: new Date().toISOString(),
+        lastError: null,
+      });
+      return `Home channel set to this Discord channel (${input.target}). Background summaries will use it when no more specific target is selected.`;
+    case "skills":
+      return renderDiscordSkills(connection.config);
+    case "skill":
+      return renderDiscordSkill(command.argText, connection.config);
+    case "tools":
+      return renderDiscordTools();
+    case "personality":
+      return handleDiscordPersonalityCommand(host, input, command.argText, connection);
+    case "stop": {
+      const session = ensureDiscordChatSession(host, input);
+      const outcome = await host.cancelLatestActiveChatTurnForSession(session.sessionId, `discord:${input.actorId}`);
+      if (outcome.status === "no_active_run") {
+        return "No active Discord channel run is currently running for this channel.";
+      }
+      if (outcome.status === "failed") {
+        return `Could not stop the active Discord channel run: ${outcome.error ?? "unknown error"}`;
+      }
+      return outcome.durableRunId
+        ? `Stopped the active Discord channel run. Linked durable run ${outcome.durableRunId} was ${outcome.durableCancelled === false ? "already terminal or could not be cancelled" : "cancelled too"}.`
+        : "Stopped the active Discord channel run.";
+    }
+    default:
+      return "Command is not available on Discord yet.";
+  }
+}
+
+function renderDiscordStatus(
+  connection: IntegrationConnection,
+  target: string,
+  catalog?: PersonalityCatalogResponse,
+): string {
+  const active = getPersonalityPreset(readActiveDiscordPersonality(connection.config, target), catalog?.items);
+  const home = readString(connection.config.defaultChannelId) ?? readString(connection.config.defaultDiscordChannelId);
+  return [
+    "GoatCitadel Discord status",
+    "",
+    `Connection: ${connection.label}`,
+    `Enabled: ${connection.enabled ? "yes" : "no"}`,
+    `Status: ${connection.status}`,
+    `Home channel: ${home ? (home === target ? "this channel" : home) : "not set"}`,
+    `Personality: ${active.label}`,
+    `Commands: ${["/status", "/sethome", "/personality", "/tools", "/skills", "/stop", "/new"].join(", ")}`,
+    "Trust: channel requests can ask for tools, but terminal/filesystem/network actions remain policy- and approval-gated.",
+  ].join("\n");
+}
+
+function renderDiscordSkills(config: Record<string, unknown>): string {
+  const bindings = readSkillBindings(config);
+  if (bindings.length === 0) {
+    return "No channel-specific skills are enabled for this Discord connection yet. Configure visible skill bindings in Mission Control before using /skill <name>.";
+  }
+  return ["Enabled channel skills:", ...bindings.map((item) => `- ${item.alias}: ${item.skillId}`)].join("\n");
+}
+
+function renderDiscordSkill(name: string, config: Record<string, unknown>): string {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return "Use /skill <name> to inspect a visible channel skill binding.";
+  }
+  const binding = readSkillBindings(config).find((item) => item.enabled && item.alias.toLowerCase() === normalized);
+  if (!binding) {
+    return `No visible channel skill binding matched "${name.trim()}". Use /skills to list enabled skills.`;
+  }
+  return `Skill "${binding.alias}" is available and will run through GoatCitadel's normal skill trust and approval policy. Send your request as a normal message and mention ${binding.alias}.`;
+}
+
+function renderDiscordTools(): string {
+  return [
+    "Channel tool posture",
+    "",
+    ...DEFAULT_CHANNEL_TOOLSET_POSTURE.map(
+      (item) =>
+        `- ${item.label}: ${item.enabled ? item.approval.replace("_", " ") : "unavailable"} - ${item.riskSummary}`,
+    ),
+  ].join("\n");
+}
+
+function handleDiscordPersonalityCommand(
+  host: DiscordRuntimeBridgeHost,
+  input: Parameters<typeof handleDiscordRuntimeSlashCommand>[1],
+  argument: string,
+  connection: IntegrationConnection,
+): string {
+  const catalog = host.getPersonalityCatalog?.() ?? {
+    items: listPersonalityPresets(),
+    defaultPersonalityId: "default",
+  };
+  if (!argument.trim()) {
+    return [
+      "Available personalities:",
+      ...catalog.items.map((preset) => `- ${preset.id}: ${preset.description}`),
+      "",
+      "Use /personality <name> to set one for this channel, or /personality none to clear it.",
+    ].join("\n");
+  }
+
+  const requested = normalizePersonalityId(argument);
+  const preset = getPersonalityPreset(requested, catalog.items);
+  if (requested !== "default" && preset.id === "default") {
+    return `Unknown personality "${argument.trim()}". Use /personality to list available presets.`;
+  }
+
+  const current = readRecord(connection.config.channelPersonalities);
+  const nextPersonalities = { ...current };
+  if (preset.id === "default") {
+    delete nextPersonalities[input.target];
+  } else {
+    nextPersonalities[input.target] = preset.id;
+  }
+  host.storage.integrationConnections.update(input.connectionId, {
+    config: {
+      ...connection.config,
+      channelPersonalities: nextPersonalities,
+      channelPersonalityUpdatedAt: new Date().toISOString(),
+    },
+    lastSyncAt: new Date().toISOString(),
+    lastError: null,
+  });
+  return preset.id === "default"
+    ? "Personality cleared for this Discord channel. GoatCitadel is back to the default voice."
+    : `Personality set to ${preset.label} for this Discord channel.\n\n${preset.description}`;
+}
+
+function readActiveDiscordPersonality(config: Record<string, unknown>, target: string): string {
+  const personalities = readRecord(config.channelPersonalities);
+  const targetValue = readString(personalities[target]);
+  return normalizePersonalityId(targetValue ?? readString(config.defaultPersonalityId));
+}
+
+function readSkillBindings(
+  config: Record<string, unknown>,
+): Array<{ skillId: string; alias: string; enabled: boolean }> {
+  const raw = config.channelSkillBindings;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => ({
+      skillId: readString(item.skillId) ?? "",
+      alias: readString(item.alias) ?? readString(item.skillId) ?? "",
+      enabled: item.enabled !== false,
+    }))
+    .filter((item) => item.skillId && item.alias);
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 export async function handleDiscordRuntimeInbound(
@@ -336,6 +555,21 @@ export async function handleDiscordRuntimeInbound(
     target: input.target,
     writable: true,
   });
+  if (!ingestResult.deduped && host.hasRunningTurn(ingestResult.session.sessionId)) {
+    host.recordDevDiagnostic({
+      level: "warn",
+      category: "channels",
+      event: "discord.gateway.active_run_guard",
+      message:
+        "Discord inbound message was ingested, but reply generation was skipped because a run is already active.",
+      context: {
+        connectionId: input.connectionId,
+        sessionId: ingestResult.session.sessionId,
+        sourceMessageId: input.sourceMessageId,
+      },
+    });
+    return;
+  }
   if (!ingestResult.deduped) {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {

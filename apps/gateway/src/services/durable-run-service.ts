@@ -51,6 +51,70 @@ function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventC
   };
 }
 
+export function deriveDurableRunOperationalState(run: DurableRunRecord, nowMs = Date.now()): DurableRunRecord {
+  const leaseExpiresAtMs = run.leaseExpiresAt ? Date.parse(run.leaseExpiresAt) : Number.NaN;
+  const heartbeatAtMs = run.leaseHeartbeatAt ? Date.parse(run.leaseHeartbeatAt) : Number.NaN;
+  const leaseExpired = Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs <= nowMs;
+  const heartbeatStale =
+    run.status === "running" &&
+    Number.isFinite(heartbeatAtMs) &&
+    nowMs - heartbeatAtMs > DURABLE_LEASE_HEARTBEAT_MS * 2;
+  if (run.status === "dead_lettered") {
+    return {
+      ...run,
+      workerHealth: "released",
+      recoveryState: run.lastError?.startsWith("retry_exhausted:") ? "retry_budget_exhausted" : "dead_lettered",
+      recoverySummary: run.lastError ?? "Run is in the durable dead-letter queue.",
+    };
+  }
+  if (run.lastError?.startsWith("retry_exhausted:")) {
+    return {
+      ...run,
+      workerHealth: "released",
+      recoveryState: "retry_budget_exhausted",
+      recoverySummary: run.lastError,
+    };
+  }
+  if (/exited without marking/i.test(run.lastError ?? "")) {
+    return {
+      ...run,
+      workerHealth: "released",
+      recoveryState: "incomplete_worker_exit",
+      recoverySummary: run.lastError,
+    };
+  }
+  if (run.status === "running" && leaseExpired) {
+    return {
+      ...run,
+      workerHealth: "expired_lease",
+      recoveryState: "reclaimable",
+      recoverySummary: `Lease expired at ${run.leaseExpiresAt}; the run can be reclaimed by a worker.`,
+    };
+  }
+  if (heartbeatStale) {
+    return {
+      ...run,
+      workerHealth: "stale_heartbeat",
+      recoveryState: "reclaiming",
+      recoverySummary: `No heartbeat recorded since ${run.leaseHeartbeatAt}.`,
+    };
+  }
+  if (run.status === "running") {
+    return {
+      ...run,
+      workerHealth: "active",
+      recoveryState: "none",
+      recoverySummary: run.leaseOwnerId ? `Lease held by worker ${run.leaseOwnerId}.` : undefined,
+    };
+  }
+  return {
+    ...run,
+    workerHealth: run.status === "queued" || run.status === "waiting" ? "idle" : "released",
+    recoveryState: "none",
+    recoverySummary: undefined,
+  };
+}
+
 /**
  * Encapsulates all durable-run lifecycle operations previously inlined
  * in GatewayService.
@@ -94,7 +158,7 @@ export class DurableRunService {
       waitingCount: statusCounts.waiting ?? 0,
       failedCount: statusCounts.failed ?? 0,
       deadLetterCount: this.ctx.storage.durableRuns.listDeadLetters(1000).length,
-      recentRuns: this.ctx.storage.durableRuns.listRuns(25),
+      recentRuns: this.ctx.storage.durableRuns.listRuns(25).map((run) => deriveDurableRunOperationalState(run)),
       recentDeadLetters: this.ctx.storage.durableRuns.listDeadLetters(25),
       ...(this.lastEventLoopLagAt
         ? {
@@ -112,7 +176,7 @@ export class DurableRunService {
   }
 
   listDurableRuns(limit = 50): DurableRunRecord[] {
-    return this.ctx.storage.durableRuns.listRuns(limit);
+    return this.ctx.storage.durableRuns.listRuns(limit).map((run) => deriveDurableRunOperationalState(run));
   }
 
   listDurableDeadLetters(limit = 50): DurableDeadLetterRecord[] {
@@ -125,7 +189,7 @@ export class DurableRunService {
 
   getDurableRun(runId: string): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    return this.ctx.storage.durableRuns.getRun(runId);
+    return deriveDurableRunOperationalState(this.ctx.storage.durableRuns.getRun(runId));
   }
 
   listDurableRunTimeline(runId: string, limit = 300): DurableRunTimelineEvent[] {
@@ -387,6 +451,12 @@ export class DurableRunService {
         actorId,
         reason: deadLetter.reason,
       });
+      this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
+        actorId,
+        reason: deadLetter.reason,
+        attemptNo,
+        maxAttempts: current.maxAttempts,
+      });
       this.ctx.publishRealtime(
         "system",
         "durable",
@@ -642,6 +712,10 @@ export class DurableRunService {
     const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(new Date().toISOString());
     for (const runId of runningRunIds) {
       const run = this.ctx.storage.durableRuns.getRun(runId);
+      this.recordDurableTimelineEvent(run.runId, "run_lease_expired", {
+        leaseOwnerId: run.leaseOwnerId,
+        leaseExpiresAt: run.leaseExpiresAt,
+      });
       const recoverability = this.deps.workflowRegistry.isWorkflowRecoverable(run);
       if (!recoverability.recoverable) {
         await this.failExpiredOrphanedWorkflowRun(
@@ -654,7 +728,7 @@ export class DurableRunService {
         );
         continue;
       }
-      this.retryDurableRunUpdate(run.runId, (current) =>
+      const reclaimed = this.retryDurableRunUpdate(run.runId, (current) =>
         this.ctx.storage.durableRuns.updateRun({
           runId: current.runId,
           status: "queued",
@@ -665,6 +739,10 @@ export class DurableRunService {
           expectedVersion: current.version,
         }),
       );
+      this.recordDurableTimelineEvent(reclaimed.runId, "run_reclaimed", {
+        previousLeaseOwnerId: run.leaseOwnerId,
+        previousLeaseExpiresAt: run.leaseExpiresAt,
+      });
     }
   }
 
@@ -704,6 +782,10 @@ export class DurableRunService {
       } finally {
         const current = this.ctx.storage.durableRuns.getRun(run.runId);
         if (current.status === "running") {
+          this.recordDurableTimelineEvent(current.runId, "run_incomplete_worker_exit", {
+            leaseOwnerId: current.leaseOwnerId,
+            leaseExpiresAt: current.leaseExpiresAt,
+          });
           await this.failWorkflowRun(current, "Durable workflow exited without marking a terminal or waiting state.");
         }
       }

@@ -139,6 +139,33 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_CONTENT_ITEMS_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "test-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    reply(message.id, {
+      content: [
+        { type: "resource", resource: { uri: "file:///tmp/report.json", mimeType: "application/json", text: JSON.stringify({ ok: true }) } },
+        { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+      ],
+    });
+  }
+});
+`;
+
 describe("mcp runtime", () => {
   it("discovers tools from a stdio MCP server", async () => {
     const server = createTestServer(MCP_TEST_SCRIPT);
@@ -207,5 +234,34 @@ describe("mcp runtime", () => {
     } finally {
       fs.rmSync(statePath, { force: true });
     }
+  });
+
+  it("normalizes resource and image MCP content items without flattening resources into text", async () => {
+    const server = createTestServer(MCP_CONTENT_ITEMS_SCRIPT);
+
+    const result = await invokeMcpRuntimeTool(server, {
+      toolName: "browser.extract",
+      arguments: {},
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.contentItems).toEqual([
+      {
+        type: "resource",
+        uri: "file:///tmp/report.json",
+        mimeType: "application/json",
+        text: '{"ok":true}',
+        blob: undefined,
+        name: undefined,
+      },
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgo=",
+        url: undefined,
+        resourceUri: undefined,
+        name: undefined,
+      },
+    ]);
   });
 });

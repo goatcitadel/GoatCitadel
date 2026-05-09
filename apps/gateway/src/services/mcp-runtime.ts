@@ -1,5 +1,10 @@
 import { spawn } from "node:child_process";
-import type { McpInvokeRequest, McpServerRecord, McpToolRecord } from "@goatcitadel/contracts";
+import type {
+  McpInvokeRequest,
+  McpNormalizedContentItem,
+  McpServerRecord,
+  McpToolRecord,
+} from "@goatcitadel/contracts";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const DEFAULT_STDIO_TIMEOUT_MS = 25000;
@@ -40,6 +45,7 @@ export interface McpBrowserFallbackTarget {
 export interface McpRuntimeInvocationResult {
   ok: boolean;
   output?: Record<string, unknown>;
+  contentItems?: McpNormalizedContentItem[];
   error?: string;
   degraded?: boolean;
   retryCount?: number;
@@ -100,7 +106,17 @@ export async function invokeMcpRuntimeTool(
   if (server.transport !== "stdio") {
     return {
       ok: false,
-      error: `MCP transport ${server.transport} is not yet supported for runtime invocation.`,
+      output: {
+        transport: server.transport,
+        liveness: server.url?.trim() ? "url_configured" : "missing_url",
+      },
+      contentItems: [
+        {
+          type: "error",
+          text: `MCP ${server.transport.toUpperCase()} runtime invocation requires a URL-backed bridge before tools can run.`,
+        },
+      ],
+      error: `MCP transport ${server.transport} requires a URL-backed runtime bridge before invocation.`,
     };
   }
   if (!server.command?.trim()) {
@@ -128,9 +144,11 @@ export async function invokeMcpRuntimeTool(
       error: second.ok ? undefined : second.error,
     };
   } catch (error) {
+    const sanitized = sanitizeMcpRuntimeError((error as Error).message);
     return {
       ok: false,
-      error: (error as Error).message,
+      error: sanitized,
+      contentItems: [{ type: "error", text: sanitized }],
     };
   }
 }
@@ -154,34 +172,38 @@ async function performMcpRuntimeToolCall(
       );
       if (response.error) {
         const detail = stringifyUnknown(response.error.data);
-        return {
-          ok: false,
-          error: [
-            `MCP tool ${input.toolName} failed`,
-            response.error.message,
-            detail ? `details: ${detail}` : undefined,
-          ]
+        const error = sanitizeMcpRuntimeError(
+          [`MCP tool ${input.toolName} failed`, response.error.message, detail ? `details: ${detail}` : undefined]
             .filter(Boolean)
             .join(": "),
+        );
+        return {
+          ok: false,
+          error,
+          contentItems: [{ type: "error", text: error }],
         };
       }
       const result = response.result ?? {};
       const content = Array.isArray(result.content) ? result.content : [];
+      const contentItems = normalizeMcpContentItems(content, result);
       const contentText = extractMcpContentText(content);
       const output: Record<string, unknown> = {
         ...result,
         contentText: contentText || undefined,
       };
       if (result.isError === true) {
+        const error = sanitizeMcpRuntimeError(contentText || `MCP tool ${input.toolName} reported an error.`);
         return {
           ok: false,
           output,
-          error: contentText || `MCP tool ${input.toolName} reported an error.`,
+          contentItems: contentItems.length > 0 ? contentItems : [{ type: "error", text: error }],
+          error,
         };
       }
       return {
         ok: true,
         output,
+        contentItems,
       };
     },
     input.signal,
@@ -189,7 +211,11 @@ async function performMcpRuntimeToolCall(
 }
 
 function isExpiredMcpSessionError(error?: string): boolean {
-  return Boolean(error && /\b(expired|stale|invalid)\s+(session|connection|transport)\b/i.test(error));
+  return Boolean(
+    error &&
+    (/\b(expired|stale|invalid)\s+(session|connection|transport)\b/i.test(error) ||
+      /\b(closed|reset|econnreset|socket hang up|terminated)\b/i.test(error)),
+  );
 }
 
 export function collectMcpBrowserFallbackTargets(
@@ -613,6 +639,60 @@ function extractMcpContentText(content: unknown[]): string {
   return text;
 }
 
+function normalizeMcpContentItems(content: unknown[], result: Record<string, unknown>): McpNormalizedContentItem[] {
+  const items: McpNormalizedContentItem[] = [];
+  for (const item of content) {
+    const normalized = normalizeMcpContentItem(item);
+    if (normalized) {
+      items.push(normalized);
+    }
+  }
+  if (items.length === 0 && Object.keys(result).length > 0) {
+    items.push({ type: "json", data: result });
+  }
+  return items;
+}
+
+function normalizeMcpContentItem(item: unknown): McpNormalizedContentItem | undefined {
+  if (typeof item === "string") {
+    const text = item.trim();
+    return text ? { type: "text", text } : undefined;
+  }
+  if (!isRecord(item)) {
+    return undefined;
+  }
+  const type = typeof item.type === "string" ? item.type : undefined;
+  if (type === "image" || type === "image_url") {
+    return {
+      type: "image",
+      mimeType: readString(item.mimeType) ?? readString(item.mime_type),
+      data: readString(item.data) ?? readString(item.dataBase64),
+      url: readString(item.url),
+      resourceUri: readString(item.resourceUri) ?? readString(item.uri),
+      name: readString(item.name),
+    };
+  }
+  if (type === "resource" || item.resource !== undefined) {
+    const resource = isRecord(item.resource) ? item.resource : item;
+    return {
+      type: "resource",
+      uri: readString(resource.uri),
+      mimeType: readString(resource.mimeType) ?? readString(resource.mime_type),
+      text: readString(resource.text) ? sanitizeMcpRuntimeError(readString(resource.text) ?? "") : undefined,
+      blob: readString(resource.blob),
+      name: readString(resource.name),
+    };
+  }
+  if (type === "json") {
+    return { type: "json", data: item.data ?? item };
+  }
+  if (type === "text" || typeof item.text === "string" || isRecord(item.text)) {
+    const text = extractMcpContentPart(item);
+    return text ? { type: "text", text: sanitizeMcpRuntimeError(text) } : undefined;
+  }
+  return { type: "json", data: item };
+}
+
 function extractMcpContentPart(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
@@ -630,6 +710,18 @@ function extractMcpContentPart(value: unknown): string {
     return value.content.trim();
   }
   return "";
+}
+
+function sanitizeMcpRuntimeError(value: string): string {
+  return value
+    .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, "$1=[REDACTED]")
+    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
+    .replace(/sk-[A-Za-z0-9]{20,}/g, "[REDACTED]")
+    .slice(0, 4096);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

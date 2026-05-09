@@ -13,7 +13,8 @@ export async function fetchCronJob(jobId: string): Promise<CronJobRecordResponse
 export async function createCronJob(input: {
   jobId: string;
   name: string;
-  action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review" | "watchdog";
+  actionConfig?: Record<string, unknown>;
   description?: string;
   schedule: string;
   enabled?: boolean;
@@ -29,7 +30,8 @@ export async function updateCronJob(
   jobId: string,
   input: {
     name?: string;
-    action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+    action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review" | "watchdog";
+    actionConfig?: Record<string, unknown> | null;
     description?: string;
     schedule?: string;
     enabled?: boolean;

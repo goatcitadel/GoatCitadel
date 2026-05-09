@@ -78,10 +78,41 @@ export interface DashboardState {
   dailyCostUsd: number;
 }
 
+export type CronJobAction =
+  | "task"
+  | "improvement"
+  | "backup"
+  | "memory_flush"
+  | "cost_report"
+  | "update_review"
+  | "watchdog";
+
+export type CronWatchdogCheckId = "runtime_health" | "durable_dead_letters" | "channel_delivery_queue" | "mcp_posture";
+export type CronWatchdogStatus = "ok" | "warning" | "error";
+
+export interface CronWatchdogConfig {
+  checkId?: CronWatchdogCheckId;
+  severityThreshold?: Extract<CronWatchdogStatus, "warning" | "error">;
+  notifyHomeChannel?: boolean;
+}
+
+export interface CronJobActionConfig {
+  watchdog?: CronWatchdogConfig;
+}
+
+export interface CronWatchdogRunResult {
+  status: CronWatchdogStatus;
+  checkId: CronWatchdogCheckId;
+  summary: string;
+  details?: Record<string, unknown>;
+  notifyHomeChannel?: boolean;
+}
+
 export interface CronJobRecord {
   jobId: string;
   name: string;
-  action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  action: CronJobAction;
+  actionConfig?: CronJobActionConfig;
   description?: string;
   schedule: string;
   enabled: boolean;

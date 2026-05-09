@@ -258,6 +258,16 @@ export type ChatSessionWorkbenchWorktreeStatus = "uninitialized" | "ready" | "mi
 
 export type ChatSessionWorkbenchValidationStatus = "idle" | "pending" | "passed" | "failed";
 
+export interface ChatSessionWorkbenchValidationResult {
+  status: "passed" | "failed" | "skipped" | "timed_out";
+  commandLabel?: string;
+  durationMs?: number;
+  changedFiles: string[];
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  reason?: string;
+}
+
 export interface ChatSessionWorkbenchRecord {
   sessionId: string;
   projectId?: string;
@@ -384,6 +394,7 @@ export interface ChatSessionWorkbenchOutputResponse {
   state: ChatSessionWorkbenchRecord;
   helperRuns: ChatSessionWorkbenchOutputRunSummary[];
   output: string;
+  validation?: ChatSessionWorkbenchValidationResult;
   lastUpdatedAt?: string;
 }
 
@@ -757,6 +768,9 @@ export interface ChatTurnDurableRecord {
   runId?: string;
   status?: DurableRunStatus | "backgrounded";
   checkpointKind?: string;
+  workerHealth?: import("./durable.js").DurableWorkerHealth;
+  recoveryState?: import("./durable.js").DurableRecoveryState;
+  recoverySummary?: string;
 }
 
 export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): ChatTurnRecoveryAction {

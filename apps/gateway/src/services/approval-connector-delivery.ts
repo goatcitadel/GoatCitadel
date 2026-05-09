@@ -58,6 +58,14 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
         payload: {
           target,
           message: buildIntegrationApprovalDeliveryMessage(input),
+          interactiveActions: {
+            platform: "telegram",
+            tokenId: input.tokenId,
+            buttons: [
+              { label: "Approve", callbackData: `gca:${input.token}:a` },
+              { label: "Deny", callbackData: `gca:${input.token}:r` },
+            ],
+          },
         },
       };
     }
@@ -130,11 +138,8 @@ function buildIntegrationApprovalDeliveryMessage(input: {
     `Status: ${input.approval.status}`,
     summary ? `Preview: ${summary}` : undefined,
     `Action token ID: ${input.tokenId}`,
-    `Action token: ${input.token}`,
     `Expires at: ${input.expiresAt}`,
-    `Telegram fallback: /approve ${input.token} or /deny ${input.token}`,
-    "Telegram inline button payloads should carry the action token, not the token ID.",
-    "Resolve from an authenticated GoatCitadel session via POST /api/v1/approvals/remote-resolve with { token, decision }.",
+    "Use the inline approval buttons when available, or resolve this approval from Mission Control.",
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");
 }

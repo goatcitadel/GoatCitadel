@@ -195,6 +195,7 @@ export function composeIntegrationChannelRouteDependencies(
       getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
       cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
         gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
+      hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
       ingestChannelMessage: (channel, idempotencyKey, input) =>
         gateway.ingestChannelMessage(channel, idempotencyKey, input),
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),

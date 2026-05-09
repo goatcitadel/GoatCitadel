@@ -302,7 +302,8 @@ export interface CronJobsResponse {
   items: Array<{
     jobId: string;
     name: string;
-    action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+    action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review" | "watchdog";
+    actionConfig?: Record<string, unknown>;
     description?: string;
     schedule: string;
     enabled: boolean;
@@ -316,7 +317,8 @@ export interface CronJobsResponse {
 export interface CronJobRecordResponse {
   jobId: string;
   name: string;
-  action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review" | "watchdog";
+  actionConfig?: Record<string, unknown>;
   description?: string;
   schedule: string;
   enabled: boolean;

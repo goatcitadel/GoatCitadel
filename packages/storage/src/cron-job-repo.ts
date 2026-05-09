@@ -1,10 +1,12 @@
 import type { CronJobRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { safeJsonParse } from "./safe-json.js";
 
 interface CronJobRow {
   job_id: string;
   name: string;
   action: string;
+  action_config_json: string | null;
   description: string | null;
   schedule: string;
   enabled: number;
@@ -23,13 +25,14 @@ export class CronJobRepository {
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
       INSERT INTO cron_jobs (
-        job_id, name, action, description, schedule, enabled, end_at, last_run_at, next_run_at, updated_at
+        job_id, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, updated_at
       ) VALUES (
-        @jobId, @name, @action, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @updatedAt
+        @jobId, @name, @action, @actionConfigJson, @description, @schedule, @enabled, @endAt, @lastRunAt, @nextRunAt, @updatedAt
       )
       ON CONFLICT(job_id) DO UPDATE SET
         name = excluded.name,
         action = excluded.action,
+        action_config_json = excluded.action_config_json,
         description = excluded.description,
         schedule = excluded.schedule,
         enabled = excluded.enabled,
@@ -49,6 +52,7 @@ export class CronJobRepository {
       jobId: job.jobId,
       name: job.name,
       action: job.action,
+      actionConfigJson: job.actionConfig ? JSON.stringify(job.actionConfig) : null,
       description: job.description ?? null,
       schedule: job.schedule,
       enabled: job.enabled ? 1 : 0,
@@ -95,10 +99,12 @@ export class CronJobRepository {
 }
 
 function mapRow(row: CronJobRow): CronJobRecord {
+  const actionConfig = safeJsonParse<CronJobRecord["actionConfig"] | undefined>(row.action_config_json, undefined);
   return {
     jobId: row.job_id,
     name: row.name,
     action: row.action as CronJobRecord["action"],
+    ...(actionConfig ? { actionConfig } : {}),
     description: row.description ?? undefined,
     schedule: row.schedule,
     enabled: Boolean(row.enabled),
@@ -114,6 +120,7 @@ function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {
     existing.jobId === next.jobId &&
     existing.name === next.name &&
     existing.action === next.action &&
+    JSON.stringify(existing.actionConfig ?? {}) === JSON.stringify(next.actionConfig ?? {}) &&
     existing.description === next.description &&
     existing.schedule === next.schedule &&
     existing.enabled === next.enabled &&
@@ -143,6 +150,7 @@ function isCronJobRow(row: unknown): row is CronJobRow {
     typeof row.job_id === "string" &&
     typeof row.name === "string" &&
     typeof row.action === "string" &&
+    (typeof row.action_config_json === "string" || row.action_config_json === null) &&
     (typeof row.description === "string" || row.description === null) &&
     typeof row.schedule === "string" &&
     typeof row.enabled === "number" &&

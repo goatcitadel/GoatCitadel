@@ -34,7 +34,10 @@ export function decorateIntegrationServices(app: FastifyInstance, methods: Recor
       channelSetup: routeMethods,
       integrations: routeMethods,
       obsidian: routeMethods,
-      integrationWebhooks: routeMethods,
+      integrationWebhooks: {
+        hasRunningTurn: () => false,
+        ...routeMethods,
+      },
     } as never);
   }
   app.decorate("gatewayAuth", {

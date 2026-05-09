@@ -114,9 +114,25 @@ export interface McpInvokeRequest {
   signal?: AbortSignal;
 }
 
+export type McpNormalizedContentItem =
+  | { type: "text"; text: string }
+  | { type: "json"; data: unknown }
+  | { type: "image"; mimeType?: string; data?: string; url?: string; resourceUri?: string; name?: string }
+  | { type: "resource"; uri?: string; mimeType?: string; text?: string; blob?: string; name?: string }
+  | { type: "error"; text: string };
+
+export interface McpInvokeDiagnostics {
+  transport: McpTransport;
+  degraded?: boolean;
+  retryCount?: number;
+  sanitizedError?: string;
+}
+
 export interface McpInvokeResponse {
   ok: boolean;
   output?: Record<string, unknown>;
+  contentItems?: McpNormalizedContentItem[];
+  diagnostics?: McpInvokeDiagnostics;
   error?: string;
   approvalRequired?: boolean;
   approvalId?: string;

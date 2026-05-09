@@ -79,6 +79,16 @@ export interface DurableRunCreateRequest {
   waitForEvent?: DurableEventWait;
 }
 
+export type DurableWorkerHealth = "unknown" | "idle" | "active" | "stale_heartbeat" | "expired_lease" | "released";
+
+export type DurableRecoveryState =
+  | "none"
+  | "reclaiming"
+  | "reclaimable"
+  | "retry_budget_exhausted"
+  | "dead_lettered"
+  | "incomplete_worker_exit";
+
 export interface DurableRunRecord {
   runId: string;
   workflowKey: string;
@@ -94,6 +104,9 @@ export interface DurableRunRecord {
   leaseOwnerId?: string;
   leaseExpiresAt?: string;
   leaseHeartbeatAt?: string;
+  workerHealth?: DurableWorkerHealth;
+  recoveryState?: DurableRecoveryState;
+  recoverySummary?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -127,7 +140,11 @@ export interface DurableCheckpointRecord {
     | "run_failed"
     | "run_cancelled"
     | "manual_replay_requested"
-    | "continuation_gate";
+    | "continuation_gate"
+    | "run_lease_expired"
+    | "run_reclaimed"
+    | "run_incomplete_worker_exit"
+    | "run_retry_budget_exhausted";
   state: Record<string, unknown>;
   createdAt: string;
 }
@@ -186,6 +203,10 @@ export interface DurableRunTimelineEvent {
     | "run_failed"
     | "continuation_gate"
     | "run_dead_lettered"
+    | "run_lease_expired"
+    | "run_reclaimed"
+    | "run_incomplete_worker_exit"
+    | "run_retry_budget_exhausted"
     | "worker_event_loop_lag"
     | "dead_letter_recovered";
   stepKey?: string;

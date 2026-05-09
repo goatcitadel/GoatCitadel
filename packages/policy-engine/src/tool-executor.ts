@@ -2014,6 +2014,7 @@ async function telegramSend(
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChatId);
   const replyToMessageId = parseOptionalIntegerLike(args.replyToMessageId ?? args.replyTo);
+  const replyMarkup = normalizeTelegramInlineKeyboard(args.interactiveActions);
   if (!token) {
     throw new Error("Missing Telegram bot token");
   }
@@ -2022,7 +2023,7 @@ async function telegramSend(
   }
 
   if (attachments.length === 0) {
-    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId);
+    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId, replyMarkup);
   }
 
   let lastMessageId: string | undefined;
@@ -2122,6 +2123,30 @@ async function telegramReact(
   return messageId;
 }
 
+function normalizeTelegramInlineKeyboard(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const recordValue = value as Record<string, unknown>;
+  if (recordValue.platform !== undefined && asString(recordValue.platform) !== "telegram") {
+    return undefined;
+  }
+  if (!Array.isArray(recordValue.buttons)) {
+    return undefined;
+  }
+  const buttons = recordValue.buttons
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const button = item as Record<string, unknown>;
+      const text = asString(button.label);
+      const callbackData = asString(button.callbackData);
+      return text && callbackData ? { text, callback_data: callbackData } : undefined;
+    })
+    .filter((item): item is { text: string; callback_data: string } => Boolean(item))
+    .slice(0, 8);
+  return buttons.length > 0 ? { inline_keyboard: [buttons] } : undefined;
+}
+
 async function telegramSendText(
   config: Record<string, unknown>,
   allowlist: string[],
@@ -2129,6 +2154,7 @@ async function telegramSendText(
   chatId: string,
   message: string,
   replyToMessageId?: number,
+  replyMarkup?: Record<string, unknown>,
 ): Promise<string> {
   const res = await fetchAllowlisted(
     `https://api.telegram.org/bot${token}/sendMessage`,
@@ -2140,6 +2166,7 @@ async function telegramSendText(
         text: message,
         parse_mode: asString(config.parseMode) ?? undefined,
         reply_parameters: replyToMessageId ? { message_id: replyToMessageId } : undefined,
+        reply_markup: replyMarkup,
       }),
     },
     allowlist,

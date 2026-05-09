@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { CronJobRecord, CronReviewItem, CronRunDiff } from "@goatcitadel/contracts";
+import type {
+  CronJobRecord,
+  CronReviewItem,
+  CronRunDiff,
+  CronWatchdogCheckId,
+  CronWatchdogRunResult,
+} from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 
 export const IMPROVEMENT_WEEKLY_JOB_ID = "self_improvement_weekly_replay";
@@ -29,6 +35,7 @@ export interface CronAutomationServiceDeps {
     memoryFlush: () => Promise<void>;
     costReport: () => Promise<void>;
     updateReview: () => Promise<void>;
+    watchdog: (job: CronJobRecord) => Promise<CronWatchdogRunResult>;
   };
 }
 
@@ -56,15 +63,18 @@ export class CronAutomationService {
     schedule: string;
     enabled?: boolean;
     endAt?: string;
+    actionConfig?: unknown;
   }): CronJobRecord {
     const jobId = normalizeCronJobId(input.jobId);
     if (this.deps.storage.cronJobs.get(jobId)) {
       throw new Error(`Cron job already exists: ${jobId}`);
     }
+    const action = normalizeCronJobAction(input.action);
     const job: CronJobRecord = {
       jobId,
       name: normalizeCronJobName(input.name),
-      action: normalizeCronJobAction(input.action),
+      action,
+      actionConfig: normalizeCronJobActionConfig(input.actionConfig, action),
       description: normalizeCronJobDescription(input.description),
       schedule: normalizeCronSchedule(input.schedule),
       enabled: input.enabled ?? true,
@@ -72,7 +82,7 @@ export class CronAutomationService {
       lastRunAt: undefined,
       nextRunAt: undefined,
     };
-    if (job.action === "task") {
+    if (isScheduledCronAction(job.action)) {
       job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
     }
     const saved = this.deps.storage.cronJobs.upsert(job);
@@ -97,20 +107,28 @@ export class CronAutomationService {
       schedule?: string;
       enabled?: boolean;
       endAt?: string | null;
+      actionConfig?: unknown;
     },
   ): CronJobRecord {
     const current = this.getCronJob(jobId);
+    const action = input.action !== undefined ? normalizeCronJobAction(input.action) : current.action;
     const updated: CronJobRecord = {
       ...current,
       name: input.name !== undefined ? normalizeCronJobName(input.name) : current.name,
-      action: input.action !== undefined ? normalizeCronJobAction(input.action) : current.action,
+      action,
+      actionConfig:
+        input.actionConfig !== undefined
+          ? normalizeCronJobActionConfig(input.actionConfig, action)
+          : action === current.action
+            ? current.actionConfig
+            : undefined,
       description:
         input.description !== undefined ? normalizeCronJobDescription(input.description) : current.description,
       schedule: input.schedule !== undefined ? normalizeCronSchedule(input.schedule) : current.schedule,
       enabled: input.enabled ?? current.enabled,
       endAt: input.endAt !== undefined ? normalizeCronEndAt(input.endAt) : current.endAt,
     };
-    if (updated.action === "task") {
+    if (isScheduledCronAction(updated.action)) {
       updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
     }
     const saved = this.deps.storage.cronJobs.upsert(updated);
@@ -159,6 +177,7 @@ export class CronAutomationService {
       throw new Error(`Cron job has ended: ${normalizedJobId}`);
     }
     let runSummary: Record<string, unknown> = { result: "ok" };
+    let watchdogReviewRecorded = false;
     if (job.action === "task") {
       const taskResult = await this.deps.runHandlers.task(job);
       const finishedAt = new Date().toISOString();
@@ -183,6 +202,57 @@ export class CronAutomationService {
         taskId: taskResult?.taskId,
         name: saved.name,
       });
+    } else if (job.action === "watchdog") {
+      const watchdogResult = await this.deps.runHandlers.watchdog(job);
+      const finishedAt = new Date().toISOString();
+      const saved = this.deps.storage.cronJobs.upsert(
+        {
+          ...job,
+          lastRunAt: finishedAt,
+          nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
+        },
+        finishedAt,
+      );
+      this.deps.persistCronJobsConfig();
+      runSummary = {
+        ...runSummary,
+        action: job.action,
+        watchdogStatus: watchdogResult.status,
+        checkId: watchdogResult.checkId,
+        summary: watchdogResult.summary,
+        nextRunAt: saved.nextRunAt,
+      };
+      if (watchdogResult.status !== "ok") {
+        this.deps.publishRealtime("cron_job_run", "cron", {
+          type: "watchdog_check_attention_required",
+          jobId: saved.jobId,
+          name: saved.name,
+          checkId: watchdogResult.checkId,
+          status: watchdogResult.status,
+          summary: watchdogResult.summary,
+        });
+        if (this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") && shouldRecordWatchdogReview(job, watchdogResult)) {
+          this.recordCronReviewItem({
+            jobId: normalizedJobId,
+            runId: randomUUID(),
+            severity: watchdogResult.status === "error" ? "high" : "medium",
+            status: "open",
+            summary: {
+              trigger: "watchdog",
+              checkId: watchdogResult.checkId,
+              status: watchdogResult.status,
+              summary: watchdogResult.summary,
+              notifyHomeChannel: watchdogResult.notifyHomeChannel,
+              ...(watchdogResult.details ? { details: watchdogResult.details } : {}),
+            },
+            diff: {
+              type: "watchdog",
+              changed: false,
+            },
+          });
+          watchdogReviewRecorded = true;
+        }
+      }
     } else if (job.action === "improvement") {
       await this.deps.runHandlers.improvement();
     } else if (job.action === "backup") {
@@ -196,7 +266,11 @@ export class CronAutomationService {
     } else {
       throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
     }
-    if (this.deps.isFeatureEnabled("cronReviewQueueV1Enabled")) {
+    if (
+      this.deps.isFeatureEnabled("cronReviewQueueV1Enabled") &&
+      job.action !== "watchdog" &&
+      !watchdogReviewRecorded
+    ) {
       this.recordCronReviewItem({
         jobId: normalizedJobId,
         runId: randomUUID(),
@@ -221,7 +295,7 @@ export class CronAutomationService {
   public async runDueTaskCronJobs(now = new Date()): Promise<void> {
     const jobs = this.deps.storage.cronJobs
       .list()
-      .filter((job) => job.action === "task" && job.enabled && !SYSTEM_CRON_JOB_IDS.has(job.jobId));
+      .filter((job) => isScheduledCronAction(job.action) && job.enabled && !SYSTEM_CRON_JOB_IDS.has(job.jobId));
     for (const job of jobs) {
       if (!isCronJobActive(job, now)) {
         continue;
@@ -507,6 +581,53 @@ export function normalizeCronJobName(value: string): string {
 
 export function normalizeCronJobAction(value: CronJobRecord["action"] | undefined): CronJobRecord["action"] {
   return value ?? "task";
+}
+
+function normalizeCronJobActionConfig(
+  value: unknown,
+  action: CronJobRecord["action"],
+): CronJobRecord["actionConfig"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value) || action !== "watchdog") {
+    return undefined;
+  }
+  const rawValue = value as Record<string, unknown>;
+  const rawWatchdog =
+    rawValue.watchdog && typeof rawValue.watchdog === "object" && !Array.isArray(rawValue.watchdog)
+      ? (rawValue.watchdog as Record<string, unknown>)
+      : {};
+  const checkId = normalizeWatchdogCheckId(rawWatchdog.checkId);
+  const severityThreshold = rawWatchdog.severityThreshold === "error" ? "error" : "warning";
+  return {
+    watchdog: {
+      checkId,
+      severityThreshold,
+      notifyHomeChannel: rawWatchdog.notifyHomeChannel === true,
+    },
+  };
+}
+
+function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
+  if (
+    value === "runtime_health" ||
+    value === "durable_dead_letters" ||
+    value === "channel_delivery_queue" ||
+    value === "mcp_posture"
+  ) {
+    return value;
+  }
+  return "runtime_health";
+}
+
+function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
+  return action === "task" || action === "watchdog";
+}
+
+function shouldRecordWatchdogReview(job: CronJobRecord, result: CronWatchdogRunResult): boolean {
+  const threshold = job.actionConfig?.watchdog?.severityThreshold ?? "warning";
+  if (threshold === "error") {
+    return result.status === "error";
+  }
+  return result.status === "warning" || result.status === "error";
 }
 
 export function normalizeCronJobDescription(value: string | undefined): string | undefined {

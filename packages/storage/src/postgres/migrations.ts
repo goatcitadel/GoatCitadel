@@ -896,4 +896,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON comms_deliveries(status, next_attempt_at, created_at);
     `,
   },
+  {
+    version: 31,
+    name: "cron_jobs_action_config",
+    sql: `
+      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS action_config_json TEXT;
+    `,
+  },
 ];
