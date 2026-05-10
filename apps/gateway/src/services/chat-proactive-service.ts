@@ -278,6 +278,7 @@ export class ChatProactiveService {
     );
     const eligible = sessions
       .map((session) => ({
+        session,
         sessionId: session.sessionId,
         prefs: prefsBySessionId.get(session.sessionId) ?? {
           sessionId: session.sessionId,
@@ -286,7 +287,8 @@ export class ChatProactiveService {
           updatedAt: new Date().toISOString(),
         },
       }))
-      .filter((item) => item.prefs.proactiveMode !== "off");
+      .filter((item) => item.prefs.proactiveMode !== "off")
+      .filter((item) => !this.shouldSkipSchedulerSession(item.session, item.prefs));
 
     if (eligible.length === 0) {
       return;
@@ -322,6 +324,21 @@ export class ChatProactiveService {
       }
     });
     await Promise.all(workers);
+  }
+
+  private shouldSkipSchedulerSession(
+    session: { sessionId: string; lastActivityAt: string },
+    prefs: Pick<SessionAutonomyPrefs, "lastProactiveAt">,
+  ): boolean {
+    if (!prefs.lastProactiveAt) {
+      return false;
+    }
+    const lastProactiveAt = Date.parse(prefs.lastProactiveAt);
+    const lastActivityAt = Date.parse(session.lastActivityAt);
+    if (!Number.isFinite(lastProactiveAt) || !Number.isFinite(lastActivityAt)) {
+      return false;
+    }
+    return lastActivityAt <= lastProactiveAt;
   }
 
   // ── policy helpers ───────────────────────────────────────────────

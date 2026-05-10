@@ -117,6 +117,41 @@ describe("ChatProactiveService", () => {
     expect(triggerSpy).not.toHaveBeenCalled();
   });
 
+  it("skips scheduler ticks when the session has no activity since the last proactive tick", async () => {
+    const harness = createHarness();
+    const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");
+    const prefs = harness.state.prefs.get(harness.state.session.sessionId)!;
+    harness.state.prefs.set(harness.state.session.sessionId, {
+      ...prefs,
+      lastProactiveAt: "2026-04-04T18:56:00.000Z",
+      lastProactiveRunId: "previous-run",
+    });
+
+    await (harness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(triggerSpy).not.toHaveBeenCalled();
+    expect(harness.state.durableRuns.size).toBe(0);
+  });
+
+  it("allows scheduler ticks after newer session activity", async () => {
+    const harness = createHarness();
+    const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");
+    const prefs = harness.state.prefs.get(harness.state.session.sessionId)!;
+    harness.state.prefs.set(harness.state.session.sessionId, {
+      ...prefs,
+      lastProactiveAt: "2026-04-04T18:54:00.000Z",
+      lastProactiveRunId: "previous-run",
+    });
+
+    await (harness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(triggerSpy).toHaveBeenCalledWith(
+      harness.state.session.sessionId,
+      expect.objectContaining({ source: "scheduler" }),
+    );
+    expect(harness.state.durableRuns.size).toBe(1);
+  });
+
   it("finds approval-linked durable runs in latest-started order without duplicate ids", () => {
     const { service, state } = createHarness();
     state.proactiveRuns.set(

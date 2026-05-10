@@ -2457,6 +2457,7 @@ describe("LlmService", () => {
         ],
         temperature: 0.2,
         top_p: 0.9,
+        service_tier: "auto",
         response_format: { type: "json_object" },
         tools: [
           {
@@ -2504,6 +2505,7 @@ describe("LlmService", () => {
     expect(payloadBody?.max_output_tokens).toBeUndefined();
     expect(payloadBody?.temperature).toBeUndefined();
     expect(payloadBody?.top_p).toBeUndefined();
+    expect(payloadBody?.service_tier).toBeUndefined();
     expect(payloadBody?.text).toEqual({ verbosity: "low" });
   });
 

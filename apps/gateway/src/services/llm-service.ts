@@ -2197,7 +2197,7 @@ function buildOpenAiResponsesPayload(
   if (request.parallel_tool_calls !== undefined) payload.parallel_tool_calls = request.parallel_tool_calls;
   if (request.stop !== undefined) payload.stop = request.stop;
   if (request.metadata !== undefined) payload.metadata = request.metadata;
-  if (request.service_tier) payload.service_tier = request.service_tier;
+  if (request.service_tier && !isOpenAICodexResponsesProvider(provider)) payload.service_tier = request.service_tier;
   if (request.prompt_cache_retention) payload.prompt_cache_retention = request.prompt_cache_retention;
 
   applyOpenAiResponsesProviderDefaults(payload, provider, model);
