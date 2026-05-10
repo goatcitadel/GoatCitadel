@@ -78,6 +78,7 @@ describe("RuntimeLifecycleExportService", () => {
       includeTranscript: true,
       includeTimeline: true,
       timelineLimit: 80,
+      format: "bundle",
     });
     expect(result.stats).toMatchObject({
       linkedSessionCount: 1,
@@ -95,5 +96,84 @@ describe("RuntimeLifecycleExportService", () => {
       transcriptEventCount: 1,
       timelineEventCount: 1,
     });
+  });
+
+  it("attaches a shareable trust report when requested", async () => {
+    const service = new RuntimeLifecycleExportService({
+      getRuntimeLifecycle: vi.fn(async () => ({
+        query: {
+          sessionId: "session-1",
+        },
+        canonical: {
+          sessionId: "session-1",
+          turnId: "turn-1",
+        },
+        session: {
+          sessionId: "session-1",
+          displayName: "Demo Cowork Run",
+        },
+        linked: {
+          sessionIds: ["session-1"],
+          turnIds: ["turn-1"],
+          runIds: [],
+          proactiveRunIds: [],
+          approvalIds: [],
+          taskIds: [],
+          workspaceIds: [],
+        },
+        turns: [
+          {
+            turnId: "turn-1",
+            model: "gpt-5.2",
+            routing: {
+              primaryProviderId: "openai",
+              primaryModel: "gpt-5.2",
+              effectiveProviderId: "openai",
+              effectiveModel: "gpt-5.2",
+              fallbackUsed: false,
+            },
+          },
+        ],
+        toolRuns: [
+          {
+            toolRunId: "tool-1",
+            toolName: "filesystem.read",
+            status: "completed",
+          },
+        ],
+        executionPlans: [],
+        delegationRuns: [],
+        delegationSteps: [],
+        proactiveRuns: [],
+        approvalEffects: [],
+      })),
+      getTranscript: vi.fn(async () => []),
+      listSessionTimeline: vi.fn(async () => []),
+    });
+
+    const result = await service.exportBundle({
+      sessionId: "session-1",
+      includeTranscript: true,
+      includeTimeline: true,
+      format: "trust_report",
+    });
+
+    expect(result.export.format).toBe("trust_report");
+    expect(result.trustReport).toMatchObject({
+      version: "runtime.trust_report.v1",
+      title: "Demo Cowork Run",
+      modelProvider: {
+        requestedProviderId: "openai",
+        requestedModel: "gpt-5.2",
+        effectiveProviderId: "openai",
+        effectiveModel: "gpt-5.2",
+        fallbackUsed: false,
+      },
+      activity: {
+        turnCount: 1,
+        toolRunCount: 1,
+      },
+    });
+    expect(result.trustReport?.shareableMarkdown).toContain("# Demo Cowork Run Trust Report");
   });
 });

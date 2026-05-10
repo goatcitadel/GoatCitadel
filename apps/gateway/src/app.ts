@@ -28,6 +28,7 @@ import { integrationsRoutes } from "./routes/integrations.js";
 import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
+import { demoRoutes } from "./routes/demo.js";
 import { memoryRoutes } from "./routes/memory.js";
 import { npuRoutes } from "./routes/npu.js";
 import { uiChangeRiskRoutes } from "./routes/ui-change-risk.js";
@@ -324,6 +325,7 @@ export async function buildApp() {
   await app.register(integrationWebhookRoutes);
   await app.register(meshRoutes);
   await app.register(onboardingRoutes);
+  await app.register(demoRoutes);
   await app.register(memoryRoutes);
   await app.register(npuRoutes);
   await app.register(uiChangeRiskRoutes);

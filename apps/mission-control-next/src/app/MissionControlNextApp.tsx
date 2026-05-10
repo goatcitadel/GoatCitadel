@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The next shell coordinates top-level routing, realtime state, and inspector chrome while route extraction continues. */
 import { Suspense, startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
@@ -11,6 +12,7 @@ import {
   MoonStar,
   PanelRightClose,
   PanelRightOpen,
+  Rocket,
   Search,
   ShieldCheck,
   SlidersHorizontal,
@@ -29,7 +31,11 @@ import {
   type EventStreamConnectionState,
   type GatewayAccessPreflightResult,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
-import { fetchDashboardState, fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  fetchDashboardState,
+  fetchHealthSummary,
+  fetchRuntimeLifecycleExport,
+} from "@goatcitadel/mission-control-shared/api/client";
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import {
   NotificationStack,
@@ -111,6 +117,7 @@ const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: typeof Bot }> = [
 export function MissionControlNextApp() {
   const {
     mode,
+    setMode,
     density,
     effectsMode,
     showTechnicalDetails,
@@ -173,6 +180,51 @@ export function MissionControlNextApp() {
   const hasVisibleInspector = detailPanelPinned || inspectorOpen;
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+
+  const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
+    setNotifications((current) =>
+      upsertNotificationItem(current, {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        tone,
+        message,
+        timestamp: Date.now(),
+        groupKey,
+      }),
+    );
+  }, []);
+
+  const copyTrustReportForRoute = useCallback(
+    async (targetRoute: AppRoute) => {
+      if (!targetRoute.sessionId) {
+        pushNotification(
+          "warning",
+          "Open a Chat, Cowork, or Code run before exporting a trust report.",
+          "trust-report",
+        );
+        return;
+      }
+      try {
+        const bundle = await fetchRuntimeLifecycleExport({
+          sessionId: targetRoute.sessionId,
+          turnId: targetRoute.turnId,
+          includeTimeline: true,
+          includeTranscript: true,
+          format: "trust_report",
+        });
+        const report = bundle.trustReport?.shareableMarkdown ?? JSON.stringify(bundle.trustReport ?? bundle, null, 2);
+        await navigator.clipboard.writeText(report);
+        pushNotification("success", "Trust report copied to clipboard.", "trust-report");
+      } catch (error) {
+        pushNotification(
+          "error",
+          error instanceof Error ? `Trust report export failed: ${error.message}` : "Trust report export failed.",
+          "trust-report",
+        );
+      }
+    },
+    [pushNotification],
+  );
+
   const passiveInspectorEntry = useMemo<ShellDetailPanelEntry>(() => {
     const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
     const taskBacklog = (status.dashboard?.taskStatusCounts ?? [])
@@ -188,7 +240,18 @@ export function MissionControlNextApp() {
           <span>{currentRouteDescription}</span>
         </div>
       ),
-      actions: null,
+      actions: route.sessionId ? (
+        <button
+          type="button"
+          className="mc-next-button-secondary"
+          onClick={() => {
+            void copyTrustReportForRoute(route);
+          }}
+        >
+          <ShieldCheck size={14} />
+          Copy trust report
+        </button>
+      ) : null,
       body: (
         <div className="mc-next-inspector-stack">
           <div className="mc-next-inline-metrics">
@@ -226,7 +289,9 @@ export function MissionControlNextApp() {
     currentAreaMeta.label,
     currentRouteDescription,
     currentRouteLabel,
+    copyTrustReportForRoute,
     realtimeStatusCopy.inspector,
+    route,
     status.dashboard,
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
@@ -242,18 +307,6 @@ export function MissionControlNextApp() {
           `${status.dashboard?.activeSubagents ?? 0} active subagents`,
           `${formatUsd(status.dashboard?.dailyCostUsd ?? 0)} daily spend`,
         ];
-
-  const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
-    setNotifications((current) =>
-      upsertNotificationItem(current, {
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        tone,
-        message,
-        timestamp: Date.now(),
-        groupKey,
-      }),
-    );
-  }, []);
 
   const dismissNotification = useCallback((id: string) => {
     setNotifications((current) => current.filter((item) => item.id !== id));
@@ -535,6 +588,24 @@ export function MissionControlNextApp() {
                 <Search size={15} />
                 <span>Search sessions, agents, files...</span>
                 <kbd>⌘K</kbd>
+              </button>
+              <button
+                type="button"
+                className="mc-next-button-secondary mc-next-start-button"
+                onClick={() => navigate({ area: "settings", section: "onboarding", theme: route.theme ?? theme })}
+                title="Open Start Here"
+              >
+                <Rocket size={15} />
+                Start Here
+              </button>
+              <button
+                type="button"
+                className="mc-next-button-secondary mc-next-mode-toggle"
+                onClick={() => setMode(mode === "simple" ? "advanced" : "simple")}
+                title={mode === "simple" ? "Switch to Expert mode" : "Switch to Guided mode"}
+              >
+                <SlidersHorizontal size={15} />
+                {mode === "simple" ? "Guided" : "Expert"}
               </button>
               <label className="mc-next-select-field">
                 <span>Workspace</span>
@@ -868,6 +939,7 @@ function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] 
         items: items.filter(
           (item) =>
             item.section === "general" ||
+            item.section === "onboarding" ||
             item.section === "providers" ||
             item.section === "personalities" ||
             item.section === "access" ||
@@ -899,6 +971,7 @@ function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] 
           (item) =>
             item.section === "agents" ||
             item.section === "skills" ||
+            item.section === "capabilities" ||
             item.section === "memory" ||
             item.section === "knowledge",
         ),

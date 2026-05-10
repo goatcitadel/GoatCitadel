@@ -279,6 +279,8 @@ export class RuntimeLifecycleReadService {
         assistantMessageId: turn.assistantMessageId,
         status: turn.status,
         mode: turn.mode,
+        model: turn.model,
+        routing: turn.routing,
         startedAt: turn.startedAt,
         finishedAt: turn.finishedAt,
         durableRunId: turn.durable?.runId,

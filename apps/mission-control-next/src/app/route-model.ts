@@ -1,6 +1,14 @@
 export type PrimaryArea = "chat" | "cowork" | "code" | "projects" | "library" | "ops" | "settings";
 export type CoworkSection = "workspace" | "tasks" | "board";
-export type LibrarySection = "agents" | "skills" | "memory" | "knowledge" | "files" | "artifacts" | "prompt-packs";
+export type LibrarySection =
+  | "agents"
+  | "skills"
+  | "capabilities"
+  | "memory"
+  | "knowledge"
+  | "files"
+  | "artifacts"
+  | "prompt-packs";
 export type OpsSection =
   | "activity"
   | "sessions"
@@ -217,6 +225,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "skills",
     },
     {
+      id: "library-capabilities",
+      label: "Capabilities",
+      description: "See what skills, tools, providers, MCP entries, and channels are available or degraded.",
+      area: "library",
+      section: "capabilities",
+    },
+    {
       id: "library-memory",
       label: "Memory",
       description: "Maintain durable memory items and lifecycle policy.",
@@ -327,8 +342,8 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-onboarding",
-      label: "Onboarding",
-      description: "First-run readiness, defaults, and setup checkpoints.",
+      label: "Start Here",
+      description: "Safe demo, first-run readiness, setup center, and release-proof checkpoints.",
       area: "settings",
       section: "onboarding",
     },

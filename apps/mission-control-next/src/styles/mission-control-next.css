@@ -185,6 +185,10 @@
   background: transparent;
 }
 
+.mc-next-shell.ui-hide-technical .mc-next-technical-detail {
+  display: none;
+}
+
 .theme-signal-noir .mc-gc-combobox-content,
 .theme-signal-noir .mc-gc-modal-content {
   border-color: rgba(255, 255, 255, 0.16);
@@ -482,6 +486,19 @@
 .mc-next-topbar-right > button:not(.mc-next-command-search) svg {
   width: 0.8rem;
   height: 0.8rem;
+}
+
+.mc-next-topbar-right > button.mc-next-start-button,
+.mc-next-topbar-right > button.mc-next-mode-toggle {
+  width: auto;
+  min-width: 4.2rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.mc-next-topbar-right > button.mc-next-mode-toggle {
+  min-width: 3.7rem;
 }
 
 .mc-next-badge {
@@ -1704,6 +1721,28 @@
   .mc-next-status-strip {
     padding-left: 0.45rem;
     padding-right: 0.45rem;
+  }
+
+  .mc-next-topbar {
+    overflow: hidden;
+  }
+
+  .mc-next-brand {
+    width: 8.2rem;
+    padding-right: 0.35rem;
+  }
+
+  .mc-next-topbar-right > button.mc-next-start-button,
+  .mc-next-topbar-right > button.mc-next-mode-toggle {
+    width: 1.65rem;
+    min-width: 1.65rem;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .mc-next-topbar-right > button.mc-next-wa-button,
+  .mc-next-topbar-right > button.mc-next-button-ghost {
+    display: none;
   }
 
   .mc-next-inline-metrics {

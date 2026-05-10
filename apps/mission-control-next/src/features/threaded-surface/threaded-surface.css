@@ -634,6 +634,24 @@
   margin-inline: 0;
 }
 
+.mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-header,
+.mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-header {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-header-actions,
+.mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-header-actions {
+  grid-column: 1;
+  grid-row: auto;
+  justify-items: start;
+  width: 100%;
+}
+
+.mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-action-row,
+.mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-action-row {
+  justify-content: flex-start;
+}
+
 .mc-next-threaded-mobile-bar {
   display: none;
 }
@@ -1097,6 +1115,7 @@
 .mc-next-thread-bubble,
 .mc-next-context-card,
 .mc-next-panel-list,
+.mc-next-cowork-mission-brief,
 .mc-next-cowork-action-callout,
 .mc-next-cowork-now {
   display: grid;
@@ -1683,6 +1702,7 @@
 
 .mc-next-context-card,
 .mc-next-panel-list,
+.mc-next-cowork-mission-brief,
 .mc-next-cowork-action-callout,
 .mc-next-cowork-now,
 .mc-next-cowork-blockers,
@@ -1732,9 +1752,34 @@
 }
 
 .mc-next-cowork-stage-card span,
+.mc-next-cowork-mission-brief dt,
 .mc-next-cowork-facts dt {
   color: var(--text-secondary);
   font-size: 0.82rem;
+}
+
+.mc-next-cowork-mission-brief {
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
+  align-items: start;
+}
+
+.mc-next-cowork-mission-brief h5,
+.mc-next-cowork-mission-brief p {
+  margin: 0;
+}
+
+.mc-next-cowork-mission-brief dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem 0.85rem;
+  margin: 0;
+}
+
+.mc-next-cowork-mission-brief dd {
+  margin: 0.1rem 0 0;
+  color: var(--foreground);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-cowork-facts {

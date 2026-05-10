@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BrainCircuit, RefreshCw, ShieldCheck } from "lucide-react";
-import type { EvidenceEnvelope } from "@goatcitadel/contracts";
+import type { EvidenceEnvelope, MemoryItemRecord } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import {
@@ -229,6 +229,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   <p>{formatShortDateTime(memory.selectedItem.updatedAt)}</p>
                 </div>
               </div>
+              <MemoryProvenancePanel item={memory.selectedItem} writeEnvelopeCount={memoryWriteEnvelopes.length} />
               <div className="mc-next-settings-field-grid">
                 <label className="mc-next-settings-field span-2">
                   <span>Title</span>
@@ -706,6 +707,46 @@ function readMemoryWriteDecision(envelope: EvidenceEnvelope): string {
   }
   const value = (decision as { decision?: unknown }).decision;
   return typeof value === "string" ? value : envelope.signatureStatus;
+}
+
+function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemRecord; writeEnvelopeCount: number }) {
+  const reason =
+    readMetadataString(item.metadata, "reason") ??
+    readMetadataString(item.metadata, "why") ??
+    "This item can be selected when its namespace, title, or content matches the current task context.";
+  const source =
+    readMetadataString(item.metadata, "source") ??
+    readMetadataString(item.metadata, "sourceRef") ??
+    "local memory store";
+  const provenanceRows = [
+    { label: "Why it may be used", value: reason },
+    { label: "Source", value: source },
+    { label: "Namespace", value: item.namespace },
+    { label: "Workspace", value: readMetadataString(item.metadata, "workspaceId") ?? "not attached" },
+    { label: "Session", value: readMetadataString(item.metadata, "sessionId") ?? "not attached" },
+    { label: "Task", value: readMetadataString(item.metadata, "taskId") ?? "not attached" },
+    { label: "Write-gate evidence", value: `${writeEnvelopeCount} recent memory-write envelopes` },
+  ];
+
+  return (
+    <div className="mc-next-settings-code-block">
+      <span>Memory provenance</span>
+      <ul className="mc-next-approvals-compact-list">
+        {provenanceRows.map((row) => (
+          <li key={row.label}>
+            <strong>{row.label}</strong>
+            {" · "}
+            {row.value}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function readMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function SectionTruthNotice({ message }: { message: string | null | undefined }) {

@@ -215,6 +215,14 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
     agenticControlStatus,
   } = panel.props;
   const [activeTab, setActiveTab] = useState<"plan" | "run-map" | "timeline" | "actions">("plan");
+  const activeTrace = viewModel.raw.selectedTurn?.trace ?? viewModel.raw.activeTurn?.trace ?? null;
+  const pendingApproval = activeTrace?.pendingApprovalSummary;
+  const requestedModel =
+    activeTrace?.routing.primaryModel ?? activeTrace?.routing.fallbackModel ?? activeTrace?.model ?? "not requested";
+  const effectiveModel = activeTrace?.routing.effectiveModel ?? activeTrace?.model ?? "not resolved";
+  const activeAgentSummary = viewModel.agenticRuntime
+    ? `${viewModel.agenticRuntime.nodeCount} runtime nodes`
+    : `${viewModel.roleItems.items.length}${viewModel.roleItems.overflow ? "+" : ""} visible roles`;
 
   return (
     <section className={`mc-next-cowork-panel${viewModel.empty ? " is-empty" : ""}`}>
@@ -246,6 +254,50 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
           </div>
         ))}
       </div>
+
+      <section className="mc-next-cowork-mission-brief" aria-label="Cowork mission brief">
+        <div>
+          <p className="mc-next-panel-kicker">Mission brief</p>
+          <h5>{viewModel.runMap.objective || viewModel.headerTitle}</h5>
+          <p>{viewModel.runMap.currentState || viewModel.now.summary}</p>
+        </div>
+        <dl>
+          <div>
+            <dt>Phase</dt>
+            <dd>{viewModel.now.title}</dd>
+          </div>
+          <div>
+            <dt>Active agents</dt>
+            <dd>{activeAgentSummary}</dd>
+          </div>
+          <div>
+            <dt>Blockers</dt>
+            <dd>{viewModel.blockers.length || "None"}</dd>
+          </div>
+          <div>
+            <dt>Approvals</dt>
+            <dd>
+              {pendingApproval ? (pendingApproval.description ?? pendingApproval.kind ?? "Pending") : "None pending"}
+            </dd>
+          </div>
+          <div>
+            <dt>Evidence</dt>
+            <dd>{viewModel.evidenceSummary.detail}</dd>
+          </div>
+          <div>
+            <dt>Requested model</dt>
+            <dd>{requestedModel}</dd>
+          </div>
+          <div>
+            <dt>Effective model</dt>
+            <dd>{effectiveModel}</dd>
+          </div>
+          <div>
+            <dt>Next action</dt>
+            <dd>{viewModel.nextAction?.label ?? viewModel.runMap.nextAction}</dd>
+          </div>
+        </dl>
+      </section>
 
       <section className="mc-next-cowork-now">
         <p className="mc-next-panel-kicker">{viewModel.now.label}</p>
@@ -609,6 +661,17 @@ function validationStatusTone(status?: string | null): "success" | "warning" | "
   return "warning";
 }
 
+function shortId(value: string): string {
+  return value.length <= 12 ? value : `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+const VALIDATION_COMMAND_PRESETS = [
+  { label: "Typecheck", command: "pnpm typecheck" },
+  { label: "Test", command: "pnpm test" },
+  { label: "Lint", command: "pnpm lint" },
+  { label: "Fast verify", command: "pnpm verify:fast" },
+];
+
 function describeAgenticControlCopy(control: AgenticControlItem): { buttonLabel: string; intentNote?: string } {
   if (control.runtimeEffect !== "state_only") {
     return { buttonLabel: control.title };
@@ -752,11 +815,11 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     onSelectFile(relativePath);
   };
 
-  const runValidationFromInput = () => {
+  const runValidationCommandLine = (commandLine: string) => {
     if (!onRunValidationCommand || validationBlockedReason || busy) {
       return;
     }
-    const tokens = validationCommand.trim().split(/\s+/).filter(Boolean);
+    const tokens = commandLine.trim().split(/\s+/).filter(Boolean);
     const [command, ...args] = tokens;
     if (!command) {
       return;
@@ -764,6 +827,7 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     onRunValidationCommand({ command, args });
     setActivePane("output");
   };
+  const runValidationFromInput = () => runValidationCommandLine(validationCommand);
 
   return (
     <section className="mc-next-workbench-panel">
@@ -823,6 +887,21 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
           disabled={busy}
           aria-label="Validation command"
         />
+        {VALIDATION_COMMAND_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            className="mc-next-panel-button"
+            disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
+            title={validationBlockedReason ?? preset.command}
+            onClick={() => {
+              setValidationCommand(preset.command);
+              runValidationCommandLine(preset.command);
+            }}
+          >
+            {preset.label}
+          </button>
+        ))}
         <button
           type="button"
           className="mc-next-panel-button"
@@ -1076,6 +1155,53 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
           ) : null}
         </section>
         <aside className="mc-next-workbench-sidebar">
+          <section className="mc-next-panel-list">
+            <div className="mc-next-panel-list-head">
+              <strong>Task traceability</strong>
+              <span>{selectedTurn?.turnId ? shortId(selectedTurn.turnId) : "no turn"}</span>
+            </div>
+            <ul>
+              <li>
+                <strong>Session</strong>
+                <p>{workbenchState?.sessionId ?? selectedTurn?.trace.sessionId ?? "not linked"}</p>
+              </li>
+              <li>
+                <strong>Worktree</strong>
+                <p>{workbenchState?.worktreePath ?? "not created"}</p>
+              </li>
+              <li>
+                <strong>Validation</strong>
+                <p>{workbenchState?.validationStatus ?? "idle"}</p>
+              </li>
+              <li>
+                <strong>Result</strong>
+                <p>
+                  {changedFiles.length} changed files · {output?.helperRuns.length ?? 0} command records
+                </p>
+              </li>
+            </ul>
+          </section>
+          <section className="mc-next-panel-list">
+            <div className="mc-next-panel-list-head">
+              <strong>Validation history</strong>
+              <span>{output?.helperRuns.length ?? 0} runs</span>
+            </div>
+            {output?.helperRuns.length ? (
+              <ul>
+                {output.helperRuns.slice(0, 5).map((run) => (
+                  <li key={run.runId}>
+                    <strong>{run.language}</strong>
+                    <p>
+                      {run.status}
+                      {run.createdAt ? ` · ${new Date(run.createdAt).toLocaleTimeString()}` : ""}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>No validation commands have been captured yet.</p>
+            )}
+          </section>
           <AgenticRuntimeVisibilityPanel surface="code" className="mc-next-panel-list" deliveryLimit={3} />
         </aside>
       </div>

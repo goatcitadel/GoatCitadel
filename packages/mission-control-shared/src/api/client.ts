@@ -295,6 +295,8 @@ export {
   fetchSessions,
   fetchSessionTimeline,
 } from "./sessions.js";
+export { bootstrapDemo, fetchDemoState } from "./demo.js";
+export type { DemoBootstrapResponse, DemoBootstrapStateResponse } from "./demo.js";
 
 export type {
   ChatDelegationStreamChunk,

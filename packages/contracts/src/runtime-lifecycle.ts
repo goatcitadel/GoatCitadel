@@ -24,6 +24,7 @@ export interface RuntimeLifecycleExportQuery extends RuntimeLifecycleQuery {
   includeTranscript?: boolean;
   includeTimeline?: boolean;
   timelineLimit?: number;
+  format?: "bundle" | "trust_report";
 }
 
 export interface RuntimeLifecycleTurnSummary extends Pick<
@@ -33,6 +34,8 @@ export interface RuntimeLifecycleTurnSummary extends Pick<
   userMessageId: string;
   assistantMessageId?: string;
   durableRunId?: string;
+  model?: ChatTurnTraceRecord["model"];
+  routing?: ChatTurnTraceRecord["routing"];
   completion?: ChatTurnTraceRecord["completion"];
   failure?: ChatTurnTraceRecord["failure"];
 }
@@ -191,6 +194,47 @@ export interface RuntimeLifecycleExportBundleStats {
   timelineEventCount: number;
 }
 
+export interface RuntimeLifecycleTrustReport {
+  version: "runtime.trust_report.v1";
+  generatedAt: string;
+  title: string;
+  summary: string;
+  source: RuntimeLifecycleCanonicalIds;
+  modelProvider: {
+    requestedProviderId?: string;
+    requestedModel?: string;
+    effectiveProviderId?: string;
+    effectiveModel?: string;
+    fallbackUsed: boolean;
+    fallbackReason?: string;
+  };
+  activity: {
+    turnCount: number;
+    toolRunCount: number;
+    executionPlanCount: number;
+    delegationRunCount: number;
+    delegationStepCount: number;
+    approvalEffectCount: number;
+  };
+  tools: Array<{
+    toolRunId: string;
+    toolName?: string;
+    status?: string;
+    approvalId?: string;
+    reused?: boolean;
+  }>;
+  approvals: Array<{
+    approvalId: string;
+    status?: string;
+    kind?: string;
+    riskLevel?: string;
+  }>;
+  evidence: string[];
+  failures: string[];
+  openRisks: string[];
+  shareableMarkdown: string;
+}
+
 export interface RuntimeLifecycleExportBundle extends RuntimeLifecycleResponse {
   export: {
     version: "runtime.lifecycle.export.v1";
@@ -198,8 +242,10 @@ export interface RuntimeLifecycleExportBundle extends RuntimeLifecycleResponse {
     includeTranscript: boolean;
     includeTimeline: boolean;
     timelineLimit: number;
+    format: "bundle" | "trust_report";
   };
   transcript?: TranscriptEvent[];
   timeline?: SessionTimelineItem[];
   stats: RuntimeLifecycleExportBundleStats;
+  trustReport?: RuntimeLifecycleTrustReport;
 }

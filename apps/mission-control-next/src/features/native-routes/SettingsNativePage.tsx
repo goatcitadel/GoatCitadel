@@ -58,6 +58,7 @@ import {
   disconnectMcpServer,
   fetchAddonStatus,
   fetchAddonsCatalog,
+  bootstrapDemo,
   fetchCapabilityPackPreview,
   fetchCapabilityPacks,
   fetchChannelSetupDefinitions,
@@ -82,6 +83,7 @@ import {
   fetchOpenAICodexOAuthStatus,
   fetchOnboardingState,
   fetchPersonalities,
+  fetchDemoState,
   fetchProviderSecretStatus,
   fetchSettings,
   fetchToolCatalog,
@@ -356,7 +358,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
   );
 }
 
-function OnboardingSection({ route, navigate }: SettingsSectionProps) {
+function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => fetchOnboardingState(), []);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -410,6 +412,8 @@ function OnboardingSection({ route, navigate }: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
         <SettingsGrid>
+          <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
+          <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <SettingsPanel
             title="First-run setup"
             subtitle="Live readiness for the first trustworthy send."
@@ -528,6 +532,167 @@ function OnboardingSection({ route, navigate }: SettingsSectionProps) {
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
+  );
+}
+
+function DemoStartPanel({
+  route,
+  navigate,
+  setActiveWorkspaceId,
+}: {
+  route: AppRoute;
+  navigate: SettingsNativePageProps["navigate"];
+  setActiveWorkspaceId: (workspaceId: string) => void;
+}) {
+  const load = useCallback(async () => fetchDemoState(), []);
+  const { loading, error, data, reload } = useAsyncLoad(load);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+
+  const startDemo = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await bootstrapDemo();
+      if (result.workspace?.workspaceId) {
+        setActiveWorkspaceId(result.workspace.workspaceId);
+      }
+      const nextSession =
+        result.sessions.find((item) => item.mode === "cowork") ??
+        result.sessions.find((item) => item.mode === "chat") ??
+        result.sessions[0];
+      setNotice({ tone: result.status === "ready" ? "success" : "warning", message: result.notes[0] ?? "Demo ready." });
+      await reload();
+      navigate({
+        area: nextSession?.mode === "code" ? "code" : nextSession?.mode === "chat" ? "chat" : "cowork",
+        sessionId: nextSession?.sessionId,
+        theme: route.theme,
+      });
+    } catch (demoError) {
+      setNotice({ tone: "error", message: getErrorMessage(demoError) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const promptPreview = data?.starterPrompts.slice(0, 3) ?? [];
+  const workspaceLabel = data?.workspace?.name ?? "Not created";
+
+  return (
+    <SettingsPanel
+      title="Start Here"
+      subtitle="Create a safe local demo workspace with sample Chat, Cowork, Code, and memory data."
+      stats={[
+        { label: "Demo", value: loading ? "Checking" : (data?.status ?? "Unknown") },
+        { label: "Workspace", value: workspaceLabel },
+        { label: "Credentials", value: "Not required" },
+      ]}
+    >
+      {notice ? <SettingsNotice notice={notice} /> : null}
+      {error ? (
+        <div className="mc-next-directory-alert">
+          <AlertTriangle className="h-4 w-4" />
+          <span>{error}</span>
+        </div>
+      ) : null}
+      <SettingsWizardSteps
+        steps={[
+          {
+            label: "Safe demo workspace",
+            description: data?.workspace
+              ? "Existing demo workspace will be reused."
+              : "Creates a local-only workspace with no provider or channel credentials.",
+            state: data?.workspace ? "complete" : "active",
+          },
+          {
+            label: "Sample mission",
+            description: "Seeds a Cowork run and Code review scenario you can inspect without sending messages.",
+            state: data?.sessions.length ? "complete" : "active",
+          },
+          {
+            label: "Trust proof",
+            description: "Adds starter prompts and a memory example so Guided mode has something concrete to explain.",
+            state: data?.status === "ready" ? "complete" : "pending",
+          },
+        ]}
+      />
+      <SettingsActionList
+        items={promptPreview.map((prompt) => ({
+          id: `${prompt.surface}-${prompt.title}`,
+          label: prompt.title,
+          description: prompt.prompt,
+          meta: prompt.surface,
+          actionLabel: "Sample",
+        }))}
+        emptyLabel="Starter prompts will appear after the demo state loads."
+      />
+      <SettingsButtonRow>
+        <button type="button" className="mc-next-button" onClick={() => void startDemo()} disabled={busy}>
+          <Play size={16} />
+          {data?.status === "ready" ? "Open demo" : "Start safe demo"}
+        </button>
+        <button type="button" className="mc-next-button-secondary" onClick={() => void reload()} disabled={busy}>
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </SettingsButtonRow>
+    </SettingsPanel>
+  );
+}
+
+function SetupCenterPanel({
+  route,
+  navigate,
+  onboarding,
+}: {
+  route: AppRoute;
+  navigate: SettingsNativePageProps["navigate"];
+  onboarding: OnboardingState;
+}) {
+  const items = deriveSetupCenterItems(onboarding);
+  const readyCount = items.filter((item) => item.state === "complete").length;
+  const needsInputCount = items.filter((item) => item.state === "active").length;
+
+  return (
+    <SettingsPanel
+      title="Setup Center"
+      subtitle="One checklist for providers, local runtimes, channels, tools, database posture, and packaging readiness."
+      stats={[
+        { label: "Ready", value: String(readyCount) },
+        { label: "Needs input", value: String(needsInputCount) },
+        { label: "Mode", value: onboarding.completed ? "Complete" : "Guided" },
+      ]}
+    >
+      <SettingsWizardSteps steps={items.map(({ label, description, state }) => ({ label, description, state }))} />
+      <SettingsActionList
+        items={[
+          {
+            label: "Provider smoke tests",
+            description: "Verify configured model providers and exact key/source status.",
+            meta: setupMeta(onboarding.checklist.find((item) => item.id === "llm")?.status),
+            onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+          },
+          {
+            label: "Runtime health",
+            description: "Check daemon, database, llama.cpp, NPU, voice, and local runtime readiness.",
+            meta: setupMeta(onboarding.checklist.find((item) => item.id === "runtime")?.status),
+            onClick: () => navigate({ area: "settings", section: "runtime", theme: route.theme }),
+          },
+          {
+            label: "Channels and MCP",
+            description: "Configure Slack, Telegram, Discord, MCP servers, and tool access from one path.",
+            meta: "Optional until connected",
+            onClick: () => navigate({ area: "settings", section: "channels", theme: route.theme }),
+          },
+          {
+            label: "Capabilities",
+            description: "Inspect skills, tools, providers, generated candidates, and degraded capabilities.",
+            meta: "Catalog view",
+            onClick: () => navigate({ area: "library", section: "capabilities", theme: route.theme }),
+          },
+        ]}
+      />
+    </SettingsPanel>
   );
 }
 
@@ -5689,6 +5854,67 @@ function splitLineList(value: string) {
     .filter(Boolean);
 }
 
+function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
+  label: string;
+  description: string;
+  state: SettingsWizardStepState;
+}> {
+  const checklistById = new Map(onboarding.checklist.map((item) => [item.id, item]));
+  const providersWithKeys = onboarding.settings.llm.providers.filter((provider) => provider.hasApiKey).length;
+  return [
+    {
+      label: "Provider smoke",
+      description:
+        providersWithKeys > 0
+          ? `${providersWithKeys} provider credential source available. Active model: ${
+              onboarding.settings.llm.activeModel || "unset"
+            }.`
+          : "No provider credentials required for demo/local paths; add one before cloud sends.",
+      state: wizardStateForChecklist(checklistById.get("llm")?.status),
+    },
+    {
+      label: "Local runtime",
+      description: checklistById.get("runtime")?.detail ?? "Gateway and bundled runtime health are checked locally.",
+      state: wizardStateForChecklist(checklistById.get("runtime")?.status),
+    },
+    {
+      label: "Access and auth",
+      description:
+        onboarding.settings.auth.mode === "none"
+          ? "Local access is open; add gateway auth before exposing the app."
+          : `${onboarding.settings.auth.mode} gateway auth configured.`,
+      state: wizardStateForChecklist(checklistById.get("auth")?.status),
+    },
+    {
+      label: "Channels and MCP",
+      description: "Optional connectors stay off until explicitly configured and smoke-tested.",
+      state: "pending",
+    },
+    {
+      label: "Installer proof",
+      description: "Unsigned builds need checksums, install smoke, screenshots, and release notes before sharing.",
+      state: "pending",
+    },
+  ];
+}
+
+function wizardStateForChecklist(status?: OnboardingState["checklist"][number]["status"]): SettingsWizardStepState {
+  if (status === "complete") {
+    return "complete";
+  }
+  return status === "needs_input" ? "active" : "pending";
+}
+
+function setupMeta(status?: OnboardingState["checklist"][number]["status"]): string {
+  if (status === "complete") {
+    return "Pass";
+  }
+  if (status === "needs_input") {
+    return "Needs repair";
+  }
+  return "Optional";
+}
+
 function normalizeToolApprovalMode(value: string | undefined): ToolApprovalMode {
   return TOOL_APPROVAL_MODE_OPTIONS.includes(value as ToolApprovalMode) ? (value as ToolApprovalMode) : "approve_risky";
 }
@@ -5916,7 +6142,7 @@ function labelForSettingsSection(section: string) {
     case "general":
       return "General";
     case "onboarding":
-      return "Onboarding";
+      return "Start Here";
     case "budget":
       return "Budget";
     case "providers":
@@ -5949,7 +6175,7 @@ function descriptionForSettingsSection(section: string) {
     case "general":
       return "Focused next-native settings instead of placeholder summaries.";
     case "onboarding":
-      return "First-run setup routes for provider, runtime, secret, and access readiness.";
+      return "Safe demo launch, setup center, provider, runtime, channel, and release-readiness checkpoints.";
     case "budget":
       return "Cost-control deep links route to explicit budget guidance instead of silent fallback.";
     case "providers":

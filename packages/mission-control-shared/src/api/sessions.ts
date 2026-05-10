@@ -50,6 +50,7 @@ export async function fetchRuntimeLifecycleExport(input: {
   includeTranscript?: boolean;
   includeTimeline?: boolean;
   timelineLimit?: number;
+  format?: "bundle" | "trust_report";
 }): Promise<RuntimeLifecycleExportBundle> {
   const query = new URLSearchParams();
   if (input.sessionId) query.set("sessionId", input.sessionId);
@@ -62,5 +63,6 @@ export async function fetchRuntimeLifecycleExport(input: {
   if (input.timelineLimit !== undefined) {
     query.set("timelineLimit", String(Math.max(1, Math.min(input.timelineLimit, 1000))));
   }
+  if (input.format) query.set("format", input.format);
   return request<RuntimeLifecycleExportBundle>(`/api/v1/runtime/lifecycle/export?${query.toString()}`);
 }

@@ -31,6 +31,7 @@ const runtimeLifecycleExportQuerySchema = runtimeLifecycleIdentifierSchema
     includeTranscript: z.coerce.boolean().optional(),
     includeTimeline: z.coerce.boolean().optional(),
     timelineLimit: z.coerce.number().int().positive().max(1000).optional(),
+    format: z.enum(["bundle", "trust_report"]).optional(),
   })
   .refine((value) => Boolean(value.sessionId || value.turnId || value.runId || value.approvalId || value.taskId), {
     message: "Provide at least one lifecycle identifier.",

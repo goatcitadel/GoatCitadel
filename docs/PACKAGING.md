@@ -102,6 +102,28 @@ pnpm verify:desktop
 
 `package:bundle` verifies the embedded Node archive against either `--node-sha256 <sha256>` or the upstream Node `SHASUMS256.txt` entry before copying `node.exe` into the bundle.
 
+## Unsigned distribution checklist
+
+Unsigned convenience builds are acceptable for internal or early public testing, but the release copy must be explicit:
+
+- name artifacts with `unsigned`, target, and commit or tag, for example `GoatCitadel-Setup-windows-x64-unsigned-v1.0.0.exe`
+- publish a matching `.sha256` file and a plain checksum verification command
+- include known-warning copy that Windows SmartScreen or browser download warnings may appear because the installer is not Authenticode-signed
+- attach install smoke output, uninstall smoke output, Mission Control screenshots, provider/channel fixture results, Docker smoke where applicable, and the standalone white-paper link
+- keep "works unsigned with warning" separate from any "signed/trusted installer" language
+
+Local unsigned rebuild and verification path:
+
+```text
+pnpm package:desktop --target windows-x64
+pnpm package:bundle --target windows-x64
+pnpm package:windows --target windows-x64
+Get-FileHash .\dist\installers\GoatCitadel-Setup-windows-x64.exe -Algorithm SHA256
+pnpm verify:install
+pnpm verify:desktop
+pnpm verify:fast
+```
+
 ## Release workflow
 
 The GitHub Actions installer workflow currently builds Windows x64/arm64 installers. The desktop executable is built before the bundle, checked with `cargo check` and `cargo test`, and copied into `app/desktop/`. Public release publication requires signing before the final installer is uploaded.
