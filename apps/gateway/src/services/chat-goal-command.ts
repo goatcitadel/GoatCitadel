@@ -67,6 +67,9 @@ interface GoalLoopResult {
   latestOutput?: string;
 }
 
+const GOAL_LOOP_ITERATION_TIMEOUT_MS = 5 * 60 * 1000;
+const activeGoalLoopSessionIds = new Set<string>();
+
 export async function handleGoalCommand(
   deps: ChatGoalCommandDependencies,
   sessionId: string,
@@ -98,6 +101,14 @@ export async function handleGoalCommand(
   }
 
   let objective = parsedGoal.objective;
+  let loopOptions = parsedGoal.options;
+  let shouldPersistGoalMemory = true;
+  if (activeGoalLoopSessionIds.has(sessionId)) {
+    return {
+      ok: false,
+      message: "A /goal loop is already running for this session. Wait for it to finish before starting another.",
+    };
+  }
   if (parsedGoal.action === "resume") {
     const paused = listGoalMemoryItems(deps.listChatSessionLearnedMemory(sessionId, 200).items).find(
       (item) => item.status === "disabled",
@@ -106,7 +117,10 @@ export async function handleGoalCommand(
       return { ok: false, message: "No paused session goal found to resume." };
     }
     deps.updateChatSessionLearnedMemory(sessionId, paused.itemId, { status: "active" });
-    objective = stripGoalPrefix(paused.content);
+    const storedGoal = parseStoredGoalMemory(paused.content);
+    objective = storedGoal.objective;
+    loopOptions = storedGoal.options ?? parsedGoal.options;
+    shouldPersistGoalMemory = false;
   }
   if (!objective) {
     return {
@@ -116,11 +130,18 @@ export async function handleGoalCommand(
     };
   }
 
-  const loop = await runGoalLoop(deps, sessionId, objective, parsedGoal.options);
-  return {
-    ok: loop.ok,
-    message: formatGoalLoopResult(loop),
-  };
+  activeGoalLoopSessionIds.add(sessionId);
+  try {
+    const loop = await runGoalLoop(deps, sessionId, objective, loopOptions, {
+      persistGoalMemory: shouldPersistGoalMemory,
+    });
+    return {
+      ok: loop.ok,
+      message: formatGoalLoopResult(loop),
+    };
+  } finally {
+    activeGoalLoopSessionIds.delete(sessionId);
+  }
 }
 
 async function runGoalLoop(
@@ -128,11 +149,14 @@ async function runGoalLoop(
   sessionId: string,
   objective: string,
   options: GoalLoopOptions,
+  runtimeOptions: { persistGoalMemory?: boolean } = {},
 ): Promise<GoalLoopResult> {
-  deps.extractAndPersistLearnedMemory(sessionId, `Goal: ${objective}`, {
-    role: "user",
-    sourceRef: "chat-command:/goal",
-  });
+  if (runtimeOptions.persistGoalMemory !== false) {
+    deps.extractAndPersistLearnedMemory(sessionId, serializeGoalMemory(objective, options), {
+      role: "user",
+      sourceRef: "chat-command:/goal",
+    });
+  }
 
   const iterations: GoalLoopIteration[] = [];
   const seenChildSessions = new Set<string>();
@@ -147,30 +171,32 @@ async function runGoalLoop(
     const iteration = index + 1;
     let response: Awaited<ReturnType<ChatGoalCommandDependencies["runChatDelegation"]>>;
     try {
-      response = await deps.runChatDelegation(sessionId, {
-        objective: buildGoalIterationObjective({
-          objective,
-          iteration,
-          maxIterations: options.maxIterations,
-          previousVerifierOutput: latestOutput,
+      response = await withGoalLoopTimeout(
+        deps.runChatDelegation(sessionId, {
+          objective: buildGoalIterationObjective({
+            objective,
+            iteration,
+            maxIterations: options.maxIterations,
+            previousVerifierOutput: latestOutput,
+          }),
+          roles: ["coder", "qa"],
+          mode: "sequential",
+          surfaceMode: options.surfaceMode,
+          steps: [
+            {
+              stepId: `goal-${iteration}-implement`,
+              index: 0,
+              role: "coder",
+            },
+            {
+              stepId: `goal-${iteration}-verify`,
+              index: 1,
+              role: "qa",
+              dependsOnStepIds: [`goal-${iteration}-implement`],
+            },
+          ],
         }),
-        roles: ["coder", "qa"],
-        mode: "sequential",
-        surfaceMode: options.surfaceMode,
-        steps: [
-          {
-            stepId: `goal-${iteration}-implement`,
-            index: 0,
-            role: "coder",
-          },
-          {
-            stepId: `goal-${iteration}-verify`,
-            index: 1,
-            role: "qa",
-            dependsOnStepIds: [`goal-${iteration}-implement`],
-          },
-        ],
-      });
+      );
     } catch (error) {
       return buildLoopResult(
         false,
@@ -212,8 +238,11 @@ async function runGoalLoop(
     if (verdict.status === "pass") {
       return buildLoopResult(true, objective, "goal_hit", iterations, totalCostUsd, options, latestOutput);
     }
-    if (verdict.status === "blocked") {
+    if (verdict.status === "blocked" || verdict.status === "unknown") {
       return buildLoopResult(false, objective, "blocked", iterations, totalCostUsd, options, latestOutput);
+    }
+    if (totalCostUsd >= options.budgetUsd) {
+      return buildLoopResult(false, objective, "budget_cap", iterations, totalCostUsd, options, latestOutput);
     }
   }
 
@@ -261,6 +290,9 @@ function parseGoalCommandArgs(args: string[]): ParsedGoalCommand {
   const first = args[0]?.toLowerCase();
   if ((first === "pause" || first === "resume" || first === "clear") && args.length === 1) {
     return { action: first, objective: "", options: defaultOptions };
+  }
+  if (first === "pause" || first === "resume" || first === "clear") {
+    return { action: "run", objective: "", options: defaultOptions };
   }
 
   const objectiveParts: string[] = [];
@@ -395,7 +427,7 @@ function formatGoalMemoryList(items: LearnedMemoryItemRecord[]): string {
     "Session goals:",
     ...goals.slice(0, 8).map((item) => {
       const confidence = Math.round(item.confidence * 100);
-      return `- ${item.content} [${item.status}, ${confidence}%, ${item.itemId.slice(0, 8)}]`;
+      return `- Goal: ${parseStoredGoalMemory(item.content).objective} [${item.status}, ${confidence}%, ${item.itemId.slice(0, 8)}]`;
     }),
   ].join("\n");
 }
@@ -406,6 +438,54 @@ function listGoalMemoryItems(items: LearnedMemoryItemRecord[]): LearnedMemoryIte
 
 function stripGoalPrefix(value: string): string {
   return value.replace(/^goal:\s*/i, "").trim();
+}
+
+function serializeGoalMemory(objective: string, options: GoalLoopOptions): string {
+  return [
+    `Goal: ${objective}`,
+    `GOAL_OPTIONS: maxIterations=${options.maxIterations}; budgetUsd=${options.budgetUsd}; surface=${options.surfaceMode}`,
+  ].join("\n");
+}
+
+function parseStoredGoalMemory(content: string): { objective: string; options?: GoalLoopOptions } {
+  const lines = content.split(/\r?\n/);
+  const objective = stripGoalPrefix(lines[0] ?? content);
+  const optionsLine = lines.find((line) => /^GOAL_OPTIONS:/i.test(line));
+  if (!optionsLine) {
+    return { objective };
+  }
+  const options = parseGoalOptionsLine(optionsLine);
+  return options ? { objective, options } : { objective };
+}
+
+function parseGoalOptionsLine(line: string): GoalLoopOptions | undefined {
+  const raw = line.replace(/^GOAL_OPTIONS:\s*/i, "");
+  const fields = new Map(
+    raw
+      .split(";")
+      .map((part) => part.trim().split("=", 2))
+      .filter((part): part is [string, string] => Boolean(part[0]) && Boolean(part[1])),
+  );
+  const surfaceMode = fields.get("surface");
+  return {
+    maxIterations: clampInteger(Number(fields.get("maxIterations")), 1, 8, 3),
+    budgetUsd: clampNumber(Number(fields.get("budgetUsd")), 0.01, 100, 3),
+    surfaceMode: surfaceMode === "chat" || surfaceMode === "cowork" || surfaceMode === "code" ? surfaceMode : "code",
+  };
+}
+
+async function withGoalLoopTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("Goal-loop iteration timeout")), GOAL_LOOP_ITERATION_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function clampInteger(value: number, min: number, max: number, fallback: number): number {

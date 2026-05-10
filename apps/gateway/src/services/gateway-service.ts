@@ -5473,16 +5473,17 @@ export class GatewayService {
     phaseId: string,
     approvedBy: string,
     costIncrementUsd = 0,
+    workspaceId?: string,
   ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
-    return orchestrationLifecycleService.approvePhase(this, runId, phaseId, approvedBy, costIncrementUsd);
+    return orchestrationLifecycleService.approvePhase(this, runId, phaseId, approvedBy, costIncrementUsd, workspaceId);
   }
 
-  public getRun(runId: string): OrchestrationRun {
-    return orchestrationLifecycleService.getRun(this, runId);
+  public getRun(runId: string, workspaceId?: string): OrchestrationRun {
+    return orchestrationLifecycleService.getRun(this, runId, workspaceId);
   }
 
-  public listRunCheckpoints(runId: string): OrchestrationCheckpoint[] {
-    return orchestrationLifecycleService.listRunCheckpoints(this, runId);
+  public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
+    return orchestrationLifecycleService.listRunCheckpoints(this, runId, workspaceId);
   }
 
   /** @internal */ public requestDurableRunProcessing(runId: string): void {

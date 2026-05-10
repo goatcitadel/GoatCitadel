@@ -254,4 +254,27 @@ describe("chat turn planning helpers", () => {
     expect(draft?.steps[1]?.dependsOnStepIds).toBeUndefined();
     expect(draft?.steps[2]?.dependsOnStepIds).toEqual(["step-1", "step-2"]);
   });
+
+  it("keeps template dependencies when a planner emits an empty dependency list", () => {
+    const templatePlan = createCoworkPlan();
+    const draft = coercePlannerExecutionPlanDraft(
+      {
+        summary: "Drafted plan.",
+        steps: [
+          { objective: "Plan.", dependsOnStepIds: [] },
+          { objective: "Work.", dependsOnStepIds: [] },
+          { objective: "Review.", dependsOnStepIds: [] },
+          { objective: "Synthesize.", dependsOnStepIds: [] },
+        ],
+      },
+      templatePlan,
+      {
+        advisoryOnly: false,
+        mode: "cowork",
+        objective: "Get beta users.",
+      },
+    );
+
+    expect(draft?.steps[1]?.dependsOnStepIds).toEqual(["step-1"]);
+  });
 });

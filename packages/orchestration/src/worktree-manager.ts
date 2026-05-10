@@ -13,7 +13,12 @@ export class WorktreeManager {
   public constructor(private readonly options: WorktreeOptions) {}
 
   public async create(worktreeId: string, baseRef = "HEAD"): Promise<string> {
-    const worktreePath = path.join(this.options.worktreesRoot, worktreeId);
+    const worktreesRoot = path.resolve(this.options.worktreesRoot);
+    const worktreePath = path.resolve(worktreesRoot, worktreeId);
+    const relativePath = path.relative(worktreesRoot, worktreePath);
+    if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+      throw new Error(`Worktree id resolves outside worktrees root: ${worktreeId}`);
+    }
     await execFileAsync("git", ["worktree", "add", "--detach", worktreePath, baseRef], {
       cwd: this.options.repoRoot,
     });

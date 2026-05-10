@@ -338,6 +338,26 @@ describe("orchestration router", () => {
     expect(plan.routeDecision.selectedProviders.every((selection) => selection.providerId === "moonshot")).toBe(true);
     expect(plan.routeDecision.selectedProviders.every((selection) => selection.model === "kimi-k2.5")).toBe(true);
   });
+
+  it("keeps dependencies valid after maxSteps truncation", () => {
+    const input = createInput({
+      mode: "code",
+      objective: "Inspect the repository, plan the patch, implement it, review it, and validate edge cases.",
+      prefs: createPrefs({
+        mode: "code",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = {
+      ...resolveModePolicy("code"),
+      maxSteps: 3,
+    };
+
+    const plan = buildOrchestrationPlan(input);
+
+    expect(plan.steps).toHaveLength(3);
+    expectPlanDependenciesValid(plan);
+  });
 });
 
 function expectPlanDependenciesValid(plan: ReturnType<typeof buildOrchestrationPlan>): void {

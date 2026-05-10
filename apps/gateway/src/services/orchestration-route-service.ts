@@ -16,9 +16,15 @@ export interface OrchestrationRoutePort {
   listRecipeTemplates(): WorkflowRecipeTemplatesResponse;
   previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse;
   runOrchestrationPlan(planId: string): Promise<OrchestrationRun>;
-  approvePhase(runId: string, phaseId: string, approvedBy: string, costIncrementUsd: number): Promise<unknown>;
-  getRun(runId: string): OrchestrationRun;
-  listRunCheckpoints(runId: string): OrchestrationCheckpoint[];
+  approvePhase(
+    runId: string,
+    phaseId: string,
+    approvedBy: string,
+    costIncrementUsd: number,
+    workspaceId?: string,
+  ): Promise<unknown>;
+  getRun(runId: string, workspaceId?: string): OrchestrationRun;
+  listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[];
   listRunContexts(runId: string): MemoryContextPack[];
 }
 
@@ -50,16 +56,17 @@ export class OrchestrationRouteService {
     phaseId: string,
     approvedBy: string,
     costIncrementUsd: number,
+    workspaceId?: string,
   ): Promise<unknown> {
-    return this.orchestration.approvePhase(runId, phaseId, approvedBy, costIncrementUsd);
+    return this.orchestration.approvePhase(runId, phaseId, approvedBy, costIncrementUsd, workspaceId);
   }
 
-  public getRun(runId: string): OrchestrationRun {
-    return this.orchestration.getRun(runId);
+  public getRun(runId: string, workspaceId?: string): OrchestrationRun {
+    return this.orchestration.getRun(runId, workspaceId);
   }
 
-  public listRunCheckpoints(runId: string): OrchestrationCheckpoint[] {
-    return this.orchestration.listRunCheckpoints(runId);
+  public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
+    return this.orchestration.listRunCheckpoints(runId, workspaceId);
   }
 
   public listRunContexts(runId: string): MemoryContextPack[] {

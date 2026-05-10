@@ -13,6 +13,26 @@ const recipeBodySchema = z
     message: "Provide source or recipe.",
   });
 
+const routeIdSchema = z.string().trim().min(1).max(256);
+const workspaceQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+});
+const planRunParamsSchema = z.object({
+  planId: routeIdSchema,
+});
+const runParamsSchema = z.object({
+  runId: routeIdSchema,
+});
+const phaseApproveParamsSchema = z.object({
+  phaseId: routeIdSchema,
+});
+const phaseApproveBodySchema = z.object({
+  runId: routeIdSchema,
+  approvedBy: z.string().trim().min(1).max(128).default("operator"),
+  costIncrementUsd: z.number().finite().nonnegative().optional(),
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+});
+
 export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
   const orchestration = fastify.services.orchestration;
@@ -60,9 +80,12 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/orchestration/plans/:planId/run", operatorOnly, async (request, reply) => {
-    const planId = (request.params as { planId: string }).planId;
+    const params = planRunParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
     try {
-      const run = await orchestration.runPlan(planId);
+      const run = await orchestration.runPlan(params.data.planId);
       return reply.send(run);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -70,54 +93,76 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post("/api/v1/orchestration/phases/:phaseId/approve", operatorOnly, async (request, reply) => {
-    const phaseId = (request.params as { phaseId: string }).phaseId;
-    const schema = z.object({
-      runId: z.string().min(1),
-      approvedBy: z.string().min(1).default("operator"),
-      costIncrementUsd: z.number().nonnegative().optional(),
-    });
-
-    const parsed = schema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+    const params = phaseApproveParamsSchema.safeParse(request.params);
+    const body = phaseApproveBodySchema.safeParse(request.body);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
     }
 
     try {
-      return reply.send(
-        await orchestration.approvePhase(
-          parsed.data.runId,
-          phaseId,
-          parsed.data.approvedBy,
-          parsed.data.costIncrementUsd ?? 0,
-        ),
-      );
+      return reply
+        .code(202)
+        .send(
+          await orchestration.approvePhase(
+            body.data.runId,
+            params.data.phaseId,
+            body.data.approvedBy,
+            body.data.costIncrementUsd ?? 0,
+            body.data.workspaceId,
+          ),
+        );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.get("/api/v1/orchestration/runs/:runId", operatorOnly, async (request, reply) => {
-    const runId = (request.params as { runId: string }).runId;
+    const params = runParamsSchema.safeParse(request.params);
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
     try {
-      return reply.send(orchestration.getRun(runId));
+      return reply.send(orchestration.getRun(params.data.runId, query.data.workspaceId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.get("/api/v1/orchestration/runs/:runId/checkpoints", operatorOnly, async (request, reply) => {
-    const runId = (request.params as { runId: string }).runId;
+    const params = runParamsSchema.safeParse(request.params);
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
     try {
-      return reply.send({ items: orchestration.listRunCheckpoints(runId) });
+      return reply.send({ items: orchestration.listRunCheckpoints(params.data.runId, query.data.workspaceId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.get("/api/v1/orchestration/runs/:runId/context", operatorOnly, async (request, reply) => {
-    const runId = (request.params as { runId: string }).runId;
+    const params = runParamsSchema.safeParse(request.params);
+    const query = workspaceQuerySchema.safeParse(request.query);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!query.success) {
+      return reply.code(400).send({ error: query.error.flatten() });
+    }
     try {
-      return reply.send({ items: orchestration.listRunContexts(runId) });
+      orchestration.getRun(params.data.runId, query.data.workspaceId);
+      return reply.send({ items: orchestration.listRunContexts(params.data.runId) });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

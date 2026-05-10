@@ -276,9 +276,8 @@ function buildStepPlans(
   const parallelStages =
     input.parallelism === "parallel" ||
     (input.parallelism === "auto" && input.workflowTemplate === "cowork.research.synthesize.critic");
-  const stages = roles.map((role, index) =>
-    parallelStages && role === "researcher" ? 1 : parallelStages && index > 1 ? index : index + 1,
-  );
+  const useStageDependencies = parallelStages && input.workflowTemplate === "cowork.research.synthesize.critic";
+  const stages = resolveWorkflowStages(roles, input.workflowTemplate, useStageDependencies);
   return roles.map((role, index) => {
     const provider = selectProviderForRole(role, capabilities, input.prefs, usedProviders);
     if (!input.prefs.providerId && provider?.providerId) {
@@ -286,7 +285,7 @@ function buildStepPlans(
     }
     const stepId = `orch-step-${index + 1}`;
     const stage = stages[index] ?? index + 1;
-    const dependsOnStepIds = parallelStages
+    const dependsOnStepIds = useStageDependencies
       ? roles
           .slice(0, index)
           .map((_, priorIndex) => ({
@@ -311,13 +310,24 @@ function buildStepPlans(
       successCriteria: buildFallbackSuccessCriteria(role, expectedOutput),
       suggestedTools: buildFallbackSuggestedTools(role, input.workflowTemplate),
       expectedOutput,
-      parallelizable: parallelStages && role === "researcher",
+      parallelizable: useStageDependencies && role === "researcher",
       dependsOnStepIds,
       delegatedRole: input.prefs.mode === "chat" ? undefined : label,
       providerId: provider?.providerId ?? input.prefs.providerId,
       model: provider?.model ?? input.prefs.model,
     };
   });
+}
+
+function resolveWorkflowStages(
+  roles: OrchestrationRole[],
+  workflowTemplate: string,
+  parallelStages: boolean,
+): number[] {
+  if (parallelStages && workflowTemplate === "cowork.research.synthesize.critic") {
+    return roles.map((role, index) => (role === "researcher" ? 1 : index));
+  }
+  return roles.map((_, index) => index + 1);
 }
 
 function sanitizeStepDependencies(steps: OrchestrationStepPlan[]): OrchestrationStepPlan[] {

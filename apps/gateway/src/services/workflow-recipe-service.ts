@@ -239,7 +239,7 @@ function buildOrchestrationPlan(
   }));
   const baseWave = {
     waveId: "wave-1",
-    verify: [`Review recipe output for: ${recipe.goal}`],
+    verify: [],
     budgetUsd: limits.maxCostUsd,
     ownership,
     phases,

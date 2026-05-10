@@ -73,6 +73,8 @@ export class OrchestrationEngine {
     approvedPhaseId: string,
     options: PhaseApprovalOptions = {},
   ): OrchestrationRun {
+    this.validate(plan);
+
     if (run.status !== "paused") {
       throw new Error(`Run ${run.runId} is not waiting for approval: ${run.status}`);
     }
@@ -96,6 +98,8 @@ export class OrchestrationEngine {
     phaseId: string,
     options: PhaseAdvanceOptions = {},
   ): OrchestrationRun {
+    this.validate(plan);
+
     if (run.status !== "running") {
       throw new Error(`Run ${run.runId} is not actively running: ${run.status}`);
     }

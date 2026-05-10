@@ -26,6 +26,7 @@ describe("live data detection", () => {
 
   it("still requires stronger currentness context for recency phrasing", () => {
     expect(hasLiveDataKeywords("What are the latest news headlines today?")).toBe(true);
+    expect(hasLiveDataKeywords("What are the Latest weather alerts?")).toBe(true);
     expect(hasLiveDataKeywords("Show me recently released games this month.")).toBe(true);
   });
 

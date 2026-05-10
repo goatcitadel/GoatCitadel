@@ -152,15 +152,23 @@ function validateOrchestrationPlan(plan: OrchestrationPlan): void {
 }
 
 function getMissingHandoffFailure(
-  role: OrchestrationRole,
+  step: OrchestrationPlan["steps"][number],
   priorSteps: OrchestrationStepExecutionResult[],
 ): { summary: string; error: string; failureGuidance: string } | undefined {
+  const role = step.role;
   const requiresCompletedHandoff =
     role === "synthesizer" || role === "critic" || role === "reviewer" || role === "qa-validator";
   if (!requiresCompletedHandoff) {
     return undefined;
   }
-  const hasCompletedOutput = priorSteps.some((step) => step.status === "completed" && step.output?.trim());
+  const declaredDependencies = step.dependsOnStepIds ?? [];
+  const hasCompletedOutput =
+    declaredDependencies.length === 0
+      ? priorSteps.some((priorStep) => priorStep.status === "completed" && priorStep.output?.trim())
+      : declaredDependencies.every((dependencyId) => {
+          const dependency = priorSteps.find((priorStep) => priorStep.stepId === dependencyId);
+          return dependency?.status === "completed" && dependency.output?.trim();
+        });
   if (hasCompletedOutput) {
     return undefined;
   }
@@ -181,7 +189,7 @@ async function executeStep(input: {
   callbacks: OrchestrationExecutionCallbacks;
 }): Promise<OrchestrationStepExecutionResult> {
   const startedAt = new Date().toISOString();
-  const missingHandoffFailure = getMissingHandoffFailure(input.step.role, input.priorSteps);
+  const missingHandoffFailure = getMissingHandoffFailure(input.step, input.priorSteps);
   if (missingHandoffFailure) {
     const finishedAt = new Date().toISOString();
     return {
@@ -323,7 +331,7 @@ function buildStepMessages(input: {
     conversationContext ? `Conversation context:\n${conversationContext}` : undefined,
     priorHandoffs ? `Prior handoffs:\n${priorHandoffs}` : undefined,
     specialistOverlay,
-    buildParallelHint(input.step.role, input.stepIndex, input.plan),
+    buildParallelHint(input.step, input.plan),
     "Return concise, high-signal output suitable for handoff to the next role.",
   ]
     .filter(Boolean)
@@ -400,15 +408,15 @@ function buildRoleInstruction(mode: ChatMode, role: OrchestrationRole, workflowT
   ].join("\n");
 }
 
-function buildParallelHint(role: OrchestrationRole, stepIndex: number, plan: OrchestrationPlan): string | undefined {
-  if (role !== "researcher") {
+function buildParallelHint(step: OrchestrationPlan["steps"][number], plan: OrchestrationPlan): string | undefined {
+  if (step.role !== "researcher") {
     return undefined;
   }
-  const stagePeers = plan.steps.filter((step) => step.role === role);
+  const stagePeers = plan.steps.filter((candidate) => candidate.role === step.role && candidate.stage === step.stage);
   if (stagePeers.length <= 1) {
     return undefined;
   }
-  const angleIndex = stagePeers.findIndex((step) => step.stepId === plan.steps[stepIndex]?.stepId);
+  const angleIndex = stagePeers.findIndex((peer) => peer.stepId === step.stepId);
   if (angleIndex < 0) {
     return undefined;
   }
@@ -523,15 +531,22 @@ async function repairFinalOutputIfNeeded(input: {
     missingFinalSynthesis ? "orchestration_final_synthesis_missing" : undefined,
     missingFinalSynthesis && input.finalStep ? "orchestration_final_synthesis_role_drift" : undefined,
   ].filter((signal): signal is string => Boolean(signal));
-  const repaired = await tryRepairFinalSynthesis(input);
-  if (repaired && (requiredLabels.length === 0 || hasRequiredLabels(repaired.output, requiredLabels))) {
+  const repairAttempt = await tryRepairFinalSynthesis(input);
+  if (
+    repairAttempt?.repaired &&
+    (requiredLabels.length === 0 || hasRequiredLabels(repairAttempt.output, requiredLabels))
+  ) {
     return {
-      output: repaired.output,
-      finalStep: repaired.finalStep,
+      output: repairAttempt.output,
+      finalStep: repairAttempt.finalStep,
       integritySignals: [...integritySignals, "orchestration_final_synthesis_repaired"],
     };
   }
 
+  const repairSignals =
+    repairAttempt && !repairAttempt.repaired && repairAttempt.repairFailed
+      ? ["orchestration_final_synthesis_repair_failed"]
+      : [];
   return {
     output:
       requiredLabels.length > 0
@@ -548,7 +563,7 @@ async function repairFinalOutputIfNeeded(input: {
             initialOutput: input.initialOutput,
           }),
     finalStep: input.finalStep,
-    integritySignals: [...integritySignals, "orchestration_final_synthesis_fallback"],
+    integritySignals: [...integritySignals, ...repairSignals, "orchestration_final_synthesis_fallback"],
   };
 }
 
@@ -559,7 +574,11 @@ async function tryRepairFinalSynthesis(input: {
   steps: OrchestrationStepExecutionResult[];
   finalStep?: OrchestrationStepExecutionResult;
   initialOutput: string;
-}): Promise<{ output: string; finalStep: OrchestrationStepExecutionResult } | undefined> {
+}): Promise<
+  | { repaired: true; output: string; finalStep: OrchestrationStepExecutionResult }
+  | { repaired: false; repairFailed: true }
+  | undefined
+> {
   const failedSynthesisStep = [...input.steps]
     .reverse()
     .find((step) => step.role === "synthesizer" && step.status === "failed");
@@ -617,6 +636,7 @@ async function tryRepairFinalSynthesis(input: {
     }
     const finishedAt = new Date().toISOString();
     return {
+      repaired: true,
       output,
       finalStep: {
         stepId: `repair-${repairSourceStep.stepId}`,
@@ -636,7 +656,7 @@ async function tryRepairFinalSynthesis(input: {
       },
     };
   } catch {
-    return undefined;
+    return { repaired: false, repairFailed: true };
   }
 }
 

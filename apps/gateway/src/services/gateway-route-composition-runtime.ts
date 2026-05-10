@@ -178,10 +178,10 @@ export function composeRuntimeAdminRouteDependencies(
       listRecipeTemplates: () => ({ items: workflowRecipes.listTemplates() }),
       previewRecipe: (input) => workflowRecipes.previewRecipe(input),
       runOrchestrationPlan: (planId) => gateway.runOrchestrationPlan(planId),
-      approvePhase: (runId, phaseId, approvedBy, costIncrementUsd) =>
-        gateway.approvePhase(runId, phaseId, approvedBy, costIncrementUsd),
-      getRun: (runId) => gateway.getRun(runId),
-      listRunCheckpoints: (runId) => gateway.listRunCheckpoints(runId),
+      approvePhase: (runId, phaseId, approvedBy, costIncrementUsd, workspaceId) =>
+        gateway.approvePhase(runId, phaseId, approvedBy, costIncrementUsd, workspaceId),
+      getRun: (runId, workspaceId) => gateway.getRun(runId, workspaceId),
+      listRunCheckpoints: (runId, workspaceId) => gateway.listRunCheckpoints(runId, workspaceId),
       listRunContexts: (runId) => gateway.memoryLifecycleService.listRunContexts(runId),
     },
     promptPacks: gateway.promptPackService,

@@ -264,12 +264,14 @@ describe("orchestration routes", () => {
 
   it("runs plans and exposes checkpoints/context", async () => {
     const runOrchestrationPlan = vi.fn(() => ({ runId: "run-1" }));
+    const getRun = vi.fn(() => ({ runId: "run-1", workspaceId: "default" }));
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
     const listRunContexts = vi.fn(() => [{ contextId: "ctx-1" }]);
     app = Fastify();
     app.decorate("services", {
       orchestration: {
         runPlan: runOrchestrationPlan,
+        getRun,
         listRunCheckpoints,
         listRunContexts,
       },
@@ -289,6 +291,7 @@ describe("orchestration routes", () => {
       url: "/api/v1/orchestration/runs/run-1/checkpoints",
     });
     expect(checkpoints.statusCode).toBe(200);
+    expect(listRunCheckpoints).toHaveBeenCalledWith("run-1", undefined);
     expect(checkpoints.json()).toMatchObject({ items: [{ checkpointId: "cp-1" }] });
 
     const context = await app.inject({
@@ -296,7 +299,36 @@ describe("orchestration routes", () => {
       url: "/api/v1/orchestration/runs/run-1/context",
     });
     expect(context.statusCode).toBe(200);
+    expect(getRun).toHaveBeenCalledWith("run-1", undefined);
     expect(context.json()).toMatchObject({ items: [{ contextId: "ctx-1" }] });
+  });
+
+  it("passes requested workspace scope to run-specific orchestration reads", async () => {
+    const getRun = vi.fn(() => ({ runId: "run-1", workspaceId: "workspace-a" }));
+    const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
+    app = Fastify();
+    app.decorate("services", {
+      orchestration: {
+        getRun,
+        listRunCheckpoints,
+      },
+    } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const run = await app.inject({
+      method: "GET",
+      url: "/api/v1/orchestration/runs/run-1?workspaceId=workspace-a",
+    });
+    const checkpoints = await app.inject({
+      method: "GET",
+      url: "/api/v1/orchestration/runs/run-1/checkpoints?workspaceId=workspace-a",
+    });
+
+    expect(run.statusCode).toBe(200);
+    expect(checkpoints.statusCode).toBe(200);
+    expect(getRun).toHaveBeenCalledWith("run-1", "workspace-a");
+    expect(listRunCheckpoints).toHaveBeenCalledWith("run-1", "workspace-a");
   });
 
   it("maps missing orchestration runs to a 404 instead of a 500", async () => {
@@ -354,8 +386,8 @@ describe("orchestration routes", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(approvePhase).toHaveBeenCalledWith("run-1", "phase-2", "operator", 0.5);
+    expect(response.statusCode).toBe(202);
+    expect(approvePhase).toHaveBeenCalledWith("run-1", "phase-2", "operator", 0.5, undefined);
     expect(response.json()).toMatchObject({
       run: {
         executionState: "resume_requested",

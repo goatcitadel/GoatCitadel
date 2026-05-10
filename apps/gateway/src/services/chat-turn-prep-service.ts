@@ -381,11 +381,15 @@ export function applyApprovedSpecialistsToPlan(
   if (!chatModeAllowsDynamicTeamGrowth(mode)) {
     return plan;
   }
-  const candidates = host.storage.chatSpecialistCandidates.listAutoRoutable(
-    prepared.session.sessionId,
-    mode,
-    Boolean(host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId),
-  );
+  const sessionWorkspaceId = host.normalizeWorkspaceId(prepared.workspaceId);
+  const candidates = host.storage.chatSpecialistCandidates
+    .listAutoRoutable(
+      prepared.session.sessionId,
+      mode,
+      Boolean(host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId),
+    )
+    .filter((candidate) => host.normalizeWorkspaceId(candidate.workspaceId) === sessionWorkspaceId)
+    .filter((candidate) => isSpecialistCandidateAutoRouteFresh(candidate.updatedAt));
   if (candidates.length === 0) {
     return plan;
   }
@@ -434,6 +438,14 @@ export function applyApprovedSpecialistsToPlan(
     },
     steps: nextSteps,
   };
+}
+
+function isSpecialistCandidateAutoRouteFresh(updatedAt: string): boolean {
+  const updatedAtMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedAtMs)) {
+    return false;
+  }
+  return Date.now() - updatedAtMs <= 30 * 24 * 60 * 60 * 1000;
 }
 
 export async function generatePreparedExecutionPlanDraft(

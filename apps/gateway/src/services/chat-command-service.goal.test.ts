@@ -138,7 +138,10 @@ describe("chat goal command", () => {
     expect(result.message).toContain("Estimated cost: $0.3500 / $1.00");
     expect(deps.extractAndPersistLearnedMemory).toHaveBeenCalledWith(
       "session-1",
-      "Goal: Complete the launch checklist without stopping until tests pass.",
+      [
+        "Goal: Complete the launch checklist without stopping until tests pass.",
+        "GOAL_OPTIONS: maxIterations=2; budgetUsd=1; surface=code",
+      ].join("\n"),
       {
         role: "user",
         sourceRef: "chat-command:/goal",
@@ -193,6 +196,55 @@ describe("chat goal command", () => {
     expect(runChatDelegation).toHaveBeenCalledTimes(2);
   });
 
+  it("blocks when QA omits a verifier verdict", async () => {
+    const runChatDelegation = vi.fn(async () => ({
+      runId: "run-unknown",
+      steps: [
+        step({ stepId: "goal-1-implement", role: "coder" }),
+        step({ stepId: "goal-1-verify", role: "qa", output: "Looks fine, ship it." }),
+      ],
+      stitchedOutput: "Looks fine, ship it.",
+    }));
+    const deps = createDeps({ runChatDelegation });
+
+    const result = await parseChatCommand(deps, "session-1", "/goal Ship the launch checklist. --max-iterations 8");
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Blocked:");
+    expect(result.message).toContain("Verifier did not emit GOAL_STATUS.");
+    expect(runChatDelegation).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops after the iteration that reaches the budget cap", async () => {
+    const runChatDelegation = vi.fn(async () => ({
+      runId: "run-budget",
+      steps: [
+        step({ stepId: "goal-1-implement", role: "coder", childSessionId: "child-coder" }),
+        step({
+          stepId: "goal-1-verify",
+          role: "qa",
+          childSessionId: "child-qa",
+          output: "Still failing.\nGOAL_STATUS: fail\nGOAL_REASON: Needs one more change.",
+        }),
+      ],
+      stitchedOutput: "Still failing.\nGOAL_STATUS: fail\nGOAL_REASON: Needs one more change.",
+    }));
+    const deps = createDeps({
+      runChatDelegation,
+      sessions: {
+        "child-coder": { costUsdTotal: 0.4 },
+        "child-qa": { costUsdTotal: 0.2 },
+      },
+    });
+
+    const result = await parseChatCommand(deps, "session-1", "/goal Ship the launch checklist. --budget-usd 0.5");
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Budget cap hit:");
+    expect(result.message).toContain("Estimated cost: $0.6000 / $0.50");
+    expect(runChatDelegation).toHaveBeenCalledTimes(1);
+  });
+
   it("pauses and resumes stored goals", async () => {
     const deps = createDeps({ items: [goalItem({ status: "active" })] });
 
@@ -203,11 +255,50 @@ describe("chat goal command", () => {
       status: "disabled",
     });
 
-    const pausedDeps = createDeps({ items: [goalItem({ status: "disabled" })] });
+    const runChatDelegation = vi.fn(async () => ({
+      runId: "run-resume",
+      steps: [
+        step({ stepId: "goal-1-implement", role: "coder" }),
+        step({
+          stepId: "goal-1-verify",
+          role: "qa",
+          output: "Validation passed.\nGOAL_STATUS: pass\nGOAL_REASON: Done.",
+        }),
+      ],
+      stitchedOutput: "Validation passed.\nGOAL_STATUS: pass\nGOAL_REASON: Done.",
+    }));
+    const pausedDeps = createDeps({
+      items: [
+        goalItem({
+          status: "disabled",
+          content: "Goal: Resume me.\nGOAL_OPTIONS: maxIterations=1; budgetUsd=0.5; surface=cowork",
+        }),
+      ],
+      runChatDelegation,
+    });
     result = await parseChatCommand(pausedDeps, "session-1", "/goal resume");
     expect(result.ok).toBe(true);
     expect(pausedDeps.updateChatSessionLearnedMemory).toHaveBeenCalledWith("session-1", "goal-item-123456", {
       status: "active",
     });
+    expect(pausedDeps.extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+    expect(result.message).toContain("Iterations: 1/1");
+    expect(result.message).toContain("Estimated cost: $0.0000 / $0.50");
+    expect(runChatDelegation).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        surfaceMode: "cowork",
+      }),
+    );
+  });
+
+  it("does not treat malformed pause/resume/clear commands as new goals", async () => {
+    const deps = createDeps();
+
+    const result = await parseChatCommand(deps, "session-1", "/goal pause extra-word");
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Usage: /goal Complete");
+    expect(deps.runChatDelegation).not.toHaveBeenCalled();
   });
 });

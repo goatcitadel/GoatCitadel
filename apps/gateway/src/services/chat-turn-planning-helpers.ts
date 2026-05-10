@@ -471,10 +471,13 @@ export function coercePlannerExecutionPlanDraft(
       !controlStep && typeof raw?.expectedOutput === "string" && raw.expectedOutput.trim()
         ? raw.expectedOutput.trim()
         : templateStep.expectedOutput;
-    const dependsOnStepIds =
-      !controlStep && Array.isArray(raw?.dependsOnStepIds)
-        ? filterPlannerDependencyIds(raw.dependsOnStepIds, templatePlan, templateStep)
-        : templateStep.dependsOnStepIds;
+    const dependsOnStepIds = (() => {
+      if (controlStep || !Array.isArray(raw?.dependsOnStepIds)) {
+        return templateStep.dependsOnStepIds;
+      }
+      const filtered = filterPlannerDependencyIds(raw.dependsOnStepIds, templatePlan, templateStep);
+      return filtered.length > 0 ? filtered : templateStep.dependsOnStepIds;
+    })();
     const delegatedRole = input.mode === "chat" || input.advisoryOnly ? undefined : templateStep.delegatedRole;
     if (controlStep && raw && plannerStepOverridesTemplate(raw, templateStep)) {
       usedFallback = true;

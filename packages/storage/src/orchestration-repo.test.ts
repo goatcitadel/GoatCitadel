@@ -39,7 +39,7 @@ const plan: OrchestrationPlan = {
   waves: [
     {
       waveId: "wave-1",
-      verify: ["echo ok"],
+      verify: [],
       budgetUsd: 1,
       ownership: [{ agentId: "agent-a", paths: ["apps/**"] }],
       phases: [
@@ -108,5 +108,44 @@ describe("OrchestrationRepository", () => {
     const checkpoints = repo.listCheckpoints("run-1");
     assert.equal(checkpoints.length, 1);
     assert.equal(checkpoints[0]?.checkpointKind, "run_created");
+  });
+
+  it("updates runs only when the current status and execution state still match", () => {
+    const repo = createRepo();
+    repo.upsertPlan(plan);
+    const run: OrchestrationRun = {
+      runId: "run-cas",
+      planId: "plan-1",
+      status: "paused",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      workspaceId: "default",
+      executionState: "paused_for_approval",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+    };
+    repo.createRun(run);
+
+    const updated = repo.updateRunIfCurrentState(
+      {
+        ...run,
+        executionState: "resume_requested",
+        pendingApprovalPhaseId: "phase-1",
+      },
+      { status: "paused", executionState: "paused_for_approval" },
+    );
+    const stale = repo.updateRunIfCurrentState(
+      {
+        ...run,
+        executionState: "resume_requested",
+        pendingApprovedBy: "duplicate",
+      },
+      { status: "paused", executionState: "paused_for_approval" },
+    );
+
+    assert.equal(updated?.executionState, "resume_requested");
+    assert.equal(stale, undefined);
+    assert.equal(repo.getRun("run-cas").pendingApprovedBy, undefined);
   });
 });

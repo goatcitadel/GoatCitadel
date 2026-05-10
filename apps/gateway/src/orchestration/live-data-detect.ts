@@ -1,7 +1,6 @@
 import type { ChatSessionPrefsRecord } from "@goatcitadel/contracts";
 
-const LIVE_DATA_KEYWORD_REGEX =
-  /\b(latest|today|news|weather|coming out|opening|releasing|release schedule)\b/;
+const LIVE_DATA_KEYWORD_REGEX = /\b(latest|today|news|weather|coming out|opening|releasing|release schedule)\b/i;
 
 const RIGHT_NOW_EVENT_REGEX =
   /\b(right now)\b.{0,30}\b(news|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic|events?|releases?|games?|shows?|movies?)\b|\b(news|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic|events?|releases?|games?|shows?|movies?)\b.{0,30}\b(right now)\b/i;
@@ -10,7 +9,7 @@ const RECENCY_EVENT_REGEX =
   /\b(recent|recently|lately)\b.{0,30}\b(news|headlines?|events?|weather|forecast|release(?:s| schedule)?|price|prices|stock|stocks|market|markets|score|scores|traffic|deals?|sales?|benchmarks?|comparisons?)\b|\b(news|headlines?|events?|weather|forecast|release(?:s| schedule)?|price|prices|stock|stocks|market|markets|score|scores|traffic|deals?|sales?|benchmarks?|comparisons?)\b.{0,30}\b(recent|recently|lately)\b/i;
 
 const PRICE_LOOKUP_REGEX =
-  /\b(price of|stock price|share price|market price|crypto price|bitcoin price|btc price|eth price|gas price|oil price|latest price|current price)\b/;
+  /\b(price of|stock price|share price|market price|crypto price|bitcoin price|btc price|eth price|gas price|oil price|latest price|current price)\b/i;
 
 // Temporal phrases like "this week" only indicate live-data intent when
 // paired with event/schedule context — "events this weekend" should match,
@@ -19,7 +18,7 @@ const TEMPORAL_EVENT_REGEX =
   /\b(happening|events?|schedule[ds]?|showing|playing|releases?|forecast|weather|deals?|sales?|openings?|concerts?|games?|movies?|shows?)\b.{0,30}\b(this week|this weekend|this month)\b|\b(this week|this weekend|this month)\b.{0,30}\b(happening|events?|schedule[ds]?|showing|playing|releases?|forecast|weather|deals?|sales?|openings?|concerts?|games?|movies?|shows?)\b/i;
 
 const CURRENT_EVENT_REGEX =
-  /\bcurrent\s+(news|events|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic)\b/;
+  /\bcurrent\s+(news|events|weather|forecast|temperature|price|prices|stock|stocks|market|markets|headlines?|score|scores|conditions?|traffic)\b/i;
 
 const EXPLICIT_WEB_PHRASES = [
   "look online",

@@ -6,14 +6,17 @@
  */
 
 import {
+  ConflictError,
   type DurableRunCreateRequest,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
   type HookTrigger,
+  NotFoundError,
   type OrchestrationPlan,
   type OrchestrationPlanWorkflowPayload,
   type OrchestrationRun,
   type RealtimeEvent,
+  ValidationError,
 } from "@goatcitadel/contracts";
 import type { OrchestrationEngine } from "@goatcitadel/orchestration";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
@@ -26,6 +29,7 @@ import {
 
 const DEFAULT_WORKSPACE_ID = "default";
 const DEFAULT_WORKTREE_BASE_REF = "HEAD";
+const WORKSPACE_ID_PATTERN = /^[a-zA-Z0-9._-]{1,80}$/;
 
 type OrchestrationRunHookPatch = {
   maxIterations?: number;
@@ -63,6 +67,10 @@ export interface OrchestrationLifecycleHost {
       createRun(run: OrchestrationRun): OrchestrationRun;
       findLatestRunByPlan(planId: string): OrchestrationRun | undefined;
       updateRun(run: OrchestrationRun): OrchestrationRun;
+      updateRunIfCurrentState(
+        run: OrchestrationRun,
+        expected: Pick<OrchestrationRun, "status" | "executionState">,
+      ): OrchestrationRun | undefined;
       appendRunEvent(runId: string, event: string, payload: Record<string, unknown>): void;
       listCheckpoints(runId: string): OrchestrationCheckpoint[];
       getRun(runId: string): OrchestrationRun;
@@ -435,6 +443,7 @@ export async function runOrchestrationPlan(
   planId: string,
 ): Promise<OrchestrationRun> {
   let plan = host.storage.orchestration.getPlan(planId);
+  host.orchestrationEngine.validate(plan);
   const run = await createOrchestrationPlan(host, plan);
   if (run.status === "failed") {
     return run;
@@ -470,6 +479,7 @@ export async function runOrchestrationPlan(
         : {}),
       ...(runBeforeHook.patch.maxCostUsd !== undefined ? { maxCostUsd: runBeforeHook.patch.maxCostUsd } : {}),
     };
+    host.orchestrationEngine.validate(plan);
     host.storage.orchestration.upsertPlan(plan);
   }
 
@@ -508,9 +518,11 @@ export async function approvePhase(
   phaseId: string,
   approvedBy: string,
   costIncrementUsd = 0,
+  workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
-  const run = host.storage.orchestration.getRun(runId);
+  const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
   let plan = host.storage.orchestration.getPlan(run.planId);
+  host.orchestrationEngine.validate(plan);
   const currentPhase = findPhaseInPlan(plan, phaseId);
 
   if (run.status !== "paused") {
@@ -555,13 +567,24 @@ export async function approvePhase(
     }
   }
 
-  const persisted = host.storage.orchestration.updateRun({
+  const nextRun: OrchestrationRun = {
     ...run,
     executionState: "resume_requested",
     pendingApprovalPhaseId: phaseId,
     pendingApprovedBy: approvedBy,
     pendingCostIncrementUsd: costIncrementUsd,
+  };
+  const persisted = host.storage.orchestration.updateRunIfCurrentState(nextRun, {
+    status: run.status,
+    executionState: run.executionState,
   });
+  if (!persisted) {
+    throw new ConflictError({
+      code: "STATE_CONFLICT",
+      message: `Run ${run.runId} approval was already requested or the run state changed.`,
+      details: { runId: run.runId, phaseId },
+    });
+  }
 
   if (persisted.durableRunId) {
     host.updateDurableRunState({
@@ -631,6 +654,7 @@ export async function executeDurableOrchestrationRun(
     throw new Error("Durable orchestration payload is invalid or incomplete.");
   }
   const plan = host.storage.orchestration.getPlan(payload.planId);
+  host.orchestrationEngine.validate(plan);
   let run = host.storage.orchestration.getRun(payload.orchestrationRunId);
   if (run.durableRunId !== durableRun.runId) {
     throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
@@ -778,10 +802,35 @@ function findPhaseInPlan(plan: OrchestrationPlan, phaseId: string) {
   throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
 }
 
-export function getRun(host: OrchestrationLifecycleHost, runId: string): OrchestrationRun {
-  return host.storage.orchestration.getRun(runId);
+export function getRun(host: OrchestrationLifecycleHost, runId: string, workspaceId?: string): OrchestrationRun {
+  return assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
 }
 
-export function listRunCheckpoints(host: OrchestrationLifecycleHost, runId: string): OrchestrationCheckpoint[] {
+export function listRunCheckpoints(
+  host: OrchestrationLifecycleHost,
+  runId: string,
+  workspaceId?: string,
+): OrchestrationCheckpoint[] {
+  assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
   return host.storage.orchestration.listCheckpoints(runId);
+}
+
+function assertRunWorkspaceAccess(run: OrchestrationRun, workspaceId?: string): OrchestrationRun {
+  const expectedWorkspaceId = normalizeRouteWorkspaceId(workspaceId);
+  const actualWorkspaceId = normalizeRouteWorkspaceId(run.workspaceId);
+  if (actualWorkspaceId !== expectedWorkspaceId) {
+    throw new NotFoundError({ entity: "Orchestration run", id: run.runId });
+  }
+  return run;
+}
+
+function normalizeRouteWorkspaceId(workspaceId?: string): string {
+  if (!workspaceId?.trim()) {
+    return DEFAULT_WORKSPACE_ID;
+  }
+  const normalized = workspaceId.trim();
+  if (!WORKSPACE_ID_PATTERN.test(normalized)) {
+    throw new ValidationError({ field: "workspaceId", message: "workspaceId contains unsupported characters" });
+  }
+  return normalized;
 }

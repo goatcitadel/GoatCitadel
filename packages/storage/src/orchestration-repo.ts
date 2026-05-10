@@ -68,6 +68,7 @@ export class OrchestrationRepository {
   private readonly getPlanStmt;
   private readonly createRunStmt;
   private readonly updateRunStmt;
+  private readonly updateRunIfCurrentStateStmt;
   private readonly getRunStmt;
   private readonly getLatestRunByPlanStmt;
   private readonly insertCheckpointStmt;
@@ -122,6 +123,32 @@ export class OrchestrationRepository {
         pending_cost_increment_usd = @pendingCostIncrementUsd,
         last_error = @lastError
       WHERE run_id = @runId
+    `);
+
+    this.updateRunIfCurrentStateStmt = db.prepare(`
+      UPDATE orchestration_runs SET
+        status = @status,
+        ended_at = @endedAt,
+        current_wave_id = @currentWaveId,
+        current_phase_id = @currentPhaseId,
+        total_cost_usd = @totalCostUsd,
+        total_iterations = @totalIterations,
+        workspace_id = @workspaceId,
+        durable_run_id = @durableRunId,
+        execution_state = @executionState,
+        worktree_path = @worktreePath,
+        worktree_status = @worktreeStatus,
+        worktree_base_ref = @worktreeBaseRef,
+        pending_approval_phase_id = @pendingApprovalPhaseId,
+        pending_approved_by = @pendingApprovedBy,
+        pending_cost_increment_usd = @pendingCostIncrementUsd,
+        last_error = @lastError
+      WHERE run_id = @runId
+        AND status = @expectedStatus
+        AND (
+          (@expectedExecutionState IS NULL AND execution_state IS NULL)
+          OR execution_state = @expectedExecutionState
+        )
     `);
 
     this.getRunStmt = db.prepare("SELECT * FROM orchestration_runs WHERE run_id = ?");
@@ -227,6 +254,35 @@ export class OrchestrationRepository {
     });
 
     return this.getRun(run.runId);
+  }
+
+  public updateRunIfCurrentState(
+    run: OrchestrationRun,
+    expected: Pick<OrchestrationRun, "status" | "executionState">,
+  ): OrchestrationRun | undefined {
+    const result = this.updateRunIfCurrentStateStmt.run({
+      runId: run.runId,
+      status: run.status,
+      endedAt: run.endedAt ?? null,
+      currentWaveId: run.currentWaveId ?? null,
+      currentPhaseId: run.currentPhaseId ?? null,
+      totalCostUsd: run.totalCostUsd,
+      totalIterations: run.totalIterations,
+      workspaceId: run.workspaceId ?? null,
+      durableRunId: run.durableRunId ?? null,
+      executionState: run.executionState ?? null,
+      worktreePath: run.worktreePath ?? null,
+      worktreeStatus: run.worktreeStatus ?? null,
+      worktreeBaseRef: run.worktreeBaseRef ?? null,
+      pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,
+      pendingApprovedBy: run.pendingApprovedBy ?? null,
+      pendingCostIncrementUsd: run.pendingCostIncrementUsd ?? null,
+      lastError: run.lastError ?? null,
+      expectedStatus: expected.status,
+      expectedExecutionState: expected.executionState ?? null,
+    });
+
+    return result.changes > 0 ? this.getRun(run.runId) : undefined;
   }
 
   public getRun(runId: string): OrchestrationRun {

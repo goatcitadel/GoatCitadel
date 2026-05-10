@@ -7,7 +7,7 @@ const plan: OrchestrationPlan = {
   goal: "test",
   mode: "hitl",
   maxIterations: 2,
-  maxRuntimeMinutes: 100000,
+  maxRuntimeMinutes: 1000,
   maxCostUsd: 100,
   waves: [
     {
@@ -137,6 +137,61 @@ describe("OrchestrationEngine", () => {
     );
   });
 
+  it("rejects verify entries that point at the same or a later wave", () => {
+    const engine = new OrchestrationEngine();
+    const invalidPlan: OrchestrationPlan = {
+      ...plan,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          verify: ["phase-1"],
+        },
+      ],
+    };
+
+    expect(() => engine.validate(invalidPlan)).toThrow(
+      "verify entry phase-1 must reference a phase from a preceding wave",
+    );
+  });
+
+  it("accepts verify entries for phases in preceding waves", () => {
+    const engine = new OrchestrationEngine();
+    const validPlan: OrchestrationPlan = {
+      ...plan,
+      waves: [
+        plan.waves[0]!,
+        {
+          waveId: "wave-2",
+          verify: ["phase-1"],
+          budgetUsd: 10,
+          ownership: [{ agentId: "agent-b", paths: ["packages/**"] }],
+          phases: [
+            {
+              phaseId: "phase-3",
+              ownerAgentId: "agent-b",
+              specPath: "phases/3.md",
+              loopMode: "fresh-context",
+              requiresApproval: false,
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => engine.validate(validPlan)).not.toThrow();
+  });
+
+  it("rejects unbounded plan limits and strings", () => {
+    const engine = new OrchestrationEngine();
+    const invalidPlan: OrchestrationPlan = {
+      ...plan,
+      goal: "x".repeat(2049),
+      maxIterations: Number.POSITIVE_INFINITY,
+    };
+
+    expect(() => engine.validate(invalidPlan)).toThrow();
+  });
+
   it("starts hitl runs in paused state and advances phases", () => {
     const engine = new OrchestrationEngine();
     const run: OrchestrationRun = {
@@ -261,6 +316,31 @@ describe("OrchestrationEngine", () => {
     expect(() => engine.advancePhase(plan, run, "phase-1")).toThrow("requires approval");
   });
 
+  it("revalidates plans before advancing phases", () => {
+    const engine = new OrchestrationEngine();
+    const invalidPlan: OrchestrationPlan = {
+      ...plan,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [],
+        },
+      ],
+    };
+    const run: OrchestrationRun = {
+      runId: "run-invalid-plan",
+      planId: invalidPlan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    expect(() => engine.advancePhase(invalidPlan, run, "phase-1")).toThrow();
+  });
+
   it("stops by limit after advancement when the next phase would exceed iteration budget", () => {
     const engine = new OrchestrationEngine();
     const limitedPlan: OrchestrationPlan = {
@@ -300,5 +380,48 @@ describe("OrchestrationEngine", () => {
     expect(advanced.status).toBe("stopped_by_limit");
     expect(advanced.currentPhaseId).toBe("phase-2");
     expect(advanced.endedAt).toBeDefined();
+  });
+
+  it("stops by limit after advancement when cost or runtime budgets are reached", () => {
+    const engine = new OrchestrationEngine();
+    const autoPlan: OrchestrationPlan = {
+      ...plan,
+      mode: "auto",
+      maxIterations: 10,
+      maxRuntimeMinutes: 1,
+      maxCostUsd: 0.25,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [
+            {
+              ...plan.waves[0]!.phases[0]!,
+              phaseId: "phase-1",
+              requiresApproval: false,
+            },
+            {
+              ...plan.waves[0]!.phases[1]!,
+              phaseId: "phase-2",
+              requiresApproval: false,
+            },
+          ],
+        },
+      ],
+    };
+    const run: OrchestrationRun = {
+      runId: "run-limit",
+      planId: autoPlan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    expect(engine.advancePhase(autoPlan, run, "phase-1", { costIncrementUsd: 0.25 }).status).toBe("stopped_by_limit");
+    expect(engine.advancePhase(autoPlan, run, "phase-1", { now: "2026-02-27T00:02:00.000Z" }).status).toBe(
+      "stopped_by_limit",
+    );
   });
 });

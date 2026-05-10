@@ -5,6 +5,7 @@ import {
   approvePhase,
   createOrchestrationPlan,
   executeDurableOrchestrationRun,
+  getRun as getOrchestrationRun,
   runOrchestrationPlan,
   type OrchestrationLifecycleHost,
 } from "./orchestration-lifecycle-service.js";
@@ -84,6 +85,10 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       }),
       findLatestRunByPlan: vi.fn(() => undefined),
       updateRun: vi.fn((value: OrchestrationRun) => {
+        run = value;
+        return value;
+      }),
+      updateRunIfCurrentState: vi.fn((value: OrchestrationRun) => {
         run = value;
         return value;
       }),
@@ -320,6 +325,13 @@ describe("orchestration-lifecycle-service", () => {
     expect(result.run.executionState).toBe("resume_requested");
     expect(result.run.pendingApprovalPhaseId).toBe("phase-1");
     expect(host.orchestrationEngine.approvePhase).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRunIfCurrentState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executionState: "resume_requested",
+        pendingApprovalPhaseId: "phase-1",
+      }),
+      { status: "paused", executionState: "paused_for_approval" },
+    );
     expect(host.resumeDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
     expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-run-1");
     expect(host.createCheckpoint).toHaveBeenCalledWith(
@@ -373,8 +385,11 @@ describe("orchestration-lifecycle-service", () => {
       } as OrchestrationLifecycleHost["storage"],
       orchestrationEngine: {
         ...base.orchestrationEngine,
-        validate: vi.fn(() => {
-          throw validationError;
+        validate: vi.fn((currentPlan: OrchestrationPlan) => {
+          const owner = currentPlan.waves[0]?.phases[0]?.ownerAgentId;
+          if (owner === "agent-missing") {
+            throw validationError;
+          }
         }),
       },
       hooksService: {
@@ -415,6 +430,49 @@ describe("orchestration-lifecycle-service", () => {
     });
 
     await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toThrow("not waiting for approval");
+  });
+
+  it("returns a conflict when approval resume intent loses the state race", async () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            status: "paused",
+            executionState: "paused_for_approval",
+            currentWaveId: "wave-1",
+            currentPhaseId: "phase-1",
+            durableRunId: "durable-run-1",
+          })),
+          updateRunIfCurrentState: vi.fn(() => undefined),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    await expect(approvePhase(host, "run-1", "phase-1", "operator", 0.5)).rejects.toMatchObject({
+      code: "STATE_CONFLICT",
+      httpStatus: 409,
+    });
+    expect(host.resumeDurableRun).not.toHaveBeenCalled();
+    expect(host.requestDurableRunProcessing).not.toHaveBeenCalled();
+  });
+
+  it("hides orchestration runs outside the requested workspace scope", () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            workspaceId: "workspace-a",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    expect(() => getOrchestrationRun(host, "run-1", "workspace-b")).toThrow("Orchestration run run-1 not found");
   });
 
   it("rejects approvals for non-approval phases in auto mode", async () => {
