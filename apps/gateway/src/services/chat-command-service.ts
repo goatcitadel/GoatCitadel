@@ -15,6 +15,8 @@ import type {
   ChatSessionRecord,
   ChatThinkingLevel,
   ChatWebMode,
+  LearnedMemoryConflictRecord,
+  LearnedMemoryItemRecord,
   McpServerRecord,
   McpServerTemplateRecord,
   PersonalityCatalogResponse,
@@ -22,6 +24,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { getPersonalityPreset, normalizePersonalityId } from "./channel-personalities.js";
 import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
+import { handleGoalCommand } from "./chat-goal-command.js";
 import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 
@@ -76,7 +79,16 @@ export interface ChatCommandDependencies {
     };
   };
   getPersonalityCatalog(): PersonalityCatalogResponse;
+  extractAndPersistLearnedMemory(
+    sessionId: string,
+    content: string,
+    source: { role: "user" | "assistant"; sourceRef: string },
+  ): void;
   installSkillImport(input: { sourceRef: string; confirmHighRisk?: boolean }): Promise<{ installedSkillId?: string }>;
+  listChatSessionLearnedMemory(
+    sessionId: string,
+    limit?: number,
+  ): { items: LearnedMemoryItemRecord[]; conflicts: LearnedMemoryConflictRecord[] };
   listMcpServers(): McpServerRecord[];
   listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
   listSkills(): Array<{ skillId: string; state: string; note?: string }>;
@@ -123,8 +135,20 @@ export interface ChatCommandDependencies {
       objective: string;
       roles: string[];
       mode: "sequential";
+      surfaceMode?: ChatMode;
+      steps?: Array<{
+        stepId: string;
+        index: number;
+        role: string;
+        dependsOnStepIds?: string[];
+      }>;
     },
-  ): Promise<{ runId: string; steps: unknown[] }>;
+  ): Promise<{
+    runId: string;
+    taskId?: string;
+    steps: import("@goatcitadel/contracts").ChatDelegationStepRecord[];
+    stitchedOutput?: string;
+  }>;
   runChatResearch(
     sessionId: string,
     input: {
@@ -152,6 +176,11 @@ export interface ChatCommandDependencies {
   setDefaultPersonality(id: string): PersonalityCatalogResponse;
   updateChatSessionPrefs(sessionId: string, patch: Record<string, unknown>): ChatSessionPrefsRecord;
   updateChatSessionProactivePolicy(sessionId: string, patch: Record<string, unknown>): { mode: ChatProactiveMode };
+  updateChatSessionLearnedMemory(
+    sessionId: string,
+    itemId: string,
+    input: { status?: "active" | "superseded" | "disabled"; content?: string; confidence?: number },
+  ): LearnedMemoryItemRecord;
   validateSkillImport(input: { sourceRef: string }): Promise<{
     valid: boolean;
     errors: string[];
@@ -188,6 +217,11 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
     },
     { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
     { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
+    {
+      command: "/goal",
+      usage: "/goal [pause|resume|clear|<objective>] [--max-iterations N] [--budget-usd N]",
+      description: "Run a bounded implement-and-test loop toward a verifiable goal.",
+    },
     {
       command: "/personality",
       usage: "/personality [id|none]",
@@ -398,6 +432,16 @@ export async function parseChatCommand(
     }
     const prefs = deps.updateChatSessionPrefs(sessionId, { memoryMode });
     return { ok: true, command, args, prefs, message: `Memory mode set to ${prefs.memoryMode}.` };
+  }
+
+  if (command === "/goal") {
+    const result = await handleGoalCommand(deps, sessionId, args);
+    return {
+      ok: result.ok,
+      command,
+      args,
+      message: result.message,
+    };
   }
 
   if (command === "/personality") {

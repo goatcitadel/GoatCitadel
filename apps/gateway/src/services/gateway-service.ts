@@ -2921,6 +2921,24 @@ export class GatewayService {
     return this.memoryLifecycleService.extractLearnedMemory(sessionId, content, source);
   }
 
+  public listChatSessionLearnedMemory(
+    sessionId: string,
+    limit = 200,
+  ): {
+    items: LearnedMemoryItemRecord[];
+    conflicts: LearnedMemoryConflictRecord[];
+  } {
+    return this.memoryLifecycleService.listSessionLearnedMemory(sessionId, limit);
+  }
+
+  public updateChatSessionLearnedMemory(
+    sessionId: string,
+    itemId: string,
+    input: LearnedMemoryUpdateInput,
+  ): LearnedMemoryItemRecord {
+    return this.memoryLifecycleService.updateSessionLearnedMemory(sessionId, itemId, input);
+  }
+
   private getPromptRunnerModelDefaults(): { providerId?: string; model?: string } {
     const runtime = this.llmService.getRuntimeConfig({
       includeKeychainForActiveProvider: true,

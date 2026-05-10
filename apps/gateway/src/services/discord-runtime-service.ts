@@ -1001,6 +1001,10 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
       return `/web ${interaction.options.getString("mode", true)}`;
     case "memory":
       return `/memory ${interaction.options.getString("mode", true)}`;
+    case "goal": {
+      const goal = interaction.options.getString("goal");
+      return goal ? `/goal ${goal}` : "/goal";
+    }
     case "think":
       return `/think ${interaction.options.getString("level", true)}`;
     case "tool":
@@ -1166,6 +1170,10 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
           .setRequired(true)
           .addChoices(stringChoice("auto"), stringChoice("on"), stringChoice("off")),
       ),
+    new SlashCommandBuilder()
+      .setName("goal")
+      .setDescription("Run or list bounded session goal loops.")
+      .addStringOption((option) => option.setName("goal").setDescription("Goal objective. Leave blank to list goals.")),
     new SlashCommandBuilder()
       .setName("think")
       .setDescription("Set thinking depth.")
