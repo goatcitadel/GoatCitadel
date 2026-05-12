@@ -128,24 +128,28 @@ export class ChatDelegationRunRepository {
     return this.get(input.runId);
   }
 
-  public patch(runId: string, input: {
-    status?: ChatDelegationRunStatus;
-    visibility?: ChatOrchestrationVisibility;
-    workflowTemplate?: string;
-    executionPlanId?: string;
-    routeDecision?: ChatOrchestrationRouteDecision;
-    finalSummary?: string;
-    stitchedOutput?: string;
-    citations?: ChatCitationRecord[];
-    trace?: ChatTurnTraceRecord["routing"];
-    finishedAt?: string;
-  }): ChatDelegationRunRecord {
+  public patch(
+    runId: string,
+    input: {
+      status?: ChatDelegationRunStatus;
+      visibility?: ChatOrchestrationVisibility;
+      workflowTemplate?: string;
+      executionPlanId?: string;
+      routeDecision?: ChatOrchestrationRouteDecision;
+      finalSummary?: string;
+      stitchedOutput?: string;
+      citations?: ChatCitationRecord[];
+      trace?: ChatTurnTraceRecord["routing"];
+      finishedAt?: string;
+    },
+  ): ChatDelegationRunRecord {
     const current = this.get(runId);
     this.patchStmt.run({
       runId,
       status: input.status ?? current.status,
       visibility: input.visibility !== undefined ? input.visibility : (current.visibility ?? null),
-      workflowTemplate: input.workflowTemplate !== undefined ? input.workflowTemplate : (current.workflowTemplate ?? null),
+      workflowTemplate:
+        input.workflowTemplate !== undefined ? input.workflowTemplate : (current.workflowTemplate ?? null),
       executionPlanId: input.executionPlanId !== undefined ? input.executionPlanId : (current.executionPlanId ?? null),
       routeDecisionJson: JSON.stringify(input.routeDecision ?? current.routeDecision ?? null),
       finalSummary: input.finalSummary !== undefined ? input.finalSummary : (current.finalSummary ?? null),
@@ -158,41 +162,57 @@ export class ChatDelegationRunRepository {
   }
 
   public listBySession(sessionId: string, limit = 100): ChatDelegationRunRecord[] {
-    const rows = toChatDelegationRunRows(this.listBySessionStmt.all({
-      sessionId,
-      limit: Math.max(1, Math.min(limit, 1000)),
-    }));
+    const rows = toChatDelegationRunRows(
+      this.listBySessionStmt.all({
+        sessionId,
+        limit: Math.max(1, Math.min(limit, 1000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatDelegationRunRow(value: unknown): value is ChatDelegationRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.run_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.task_id === "string"
-    && typeof value.objective === "string"
-    && typeof value.roles_json === "string"
-    && typeof value.mode === "string"
-    && (typeof value.provider_id === "string" || value.provider_id === null)
-    && (typeof value.model === "string" || value.model === null)
-    && typeof value.status === "string"
-    && (typeof value.visibility === "string" || value.visibility === null)
-    && (typeof value.workflow_template === "string" || value.workflow_template === null)
-    && (typeof value.execution_plan_id === "string" || value.execution_plan_id === null)
-    && (typeof value.route_decision_json === "string" || value.route_decision_json === null)
-    && (typeof value.final_summary === "string" || value.final_summary === null)
-    && (typeof value.stitched_output === "string" || value.stitched_output === null)
-    && typeof value.citations_json === "string"
-    && (typeof value.trace_json === "string" || value.trace_json === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    typeof value.run_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.task_id === "string" &&
+    typeof value.objective === "string" &&
+    typeof value.roles_json === "string" &&
+    isDelegationMode(value.mode) &&
+    (typeof value.provider_id === "string" || value.provider_id === null) &&
+    (typeof value.model === "string" || value.model === null) &&
+    isDelegationStatus(value.status) &&
+    (isVisibility(value.visibility) || value.visibility === null) &&
+    (typeof value.workflow_template === "string" || value.workflow_template === null) &&
+    (typeof value.execution_plan_id === "string" || value.execution_plan_id === null) &&
+    (typeof value.route_decision_json === "string" || value.route_decision_json === null) &&
+    (typeof value.final_summary === "string" || value.final_summary === null) &&
+    (typeof value.stitched_output === "string" || value.stitched_output === null) &&
+    typeof value.citations_json === "string" &&
+    (typeof value.trace_json === "string" || value.trace_json === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
+}
+
+function isDelegationMode(value: unknown): value is ChatDelegationMode {
+  return value === "sequential" || value === "parallel";
+}
+
+function isDelegationStatus(value: unknown): value is ChatDelegationRunStatus {
+  return value === "running" || value === "completed" || value === "failed" || value === "partial";
+}
+
+function isVisibility(value: unknown): value is ChatOrchestrationVisibility {
+  return value === "hidden" || value === "summarized" || value === "expandable" || value === "explicit";
 }
 
 function toChatDelegationRunRow(value: unknown): ChatDelegationRunRow | undefined {
@@ -209,7 +229,7 @@ function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {
     sessionId: row.session_id,
     taskId: row.task_id,
     objective: row.objective,
-    roles: safeJsonParse<string[]>(row.roles_json, []),
+    roles: parseArray<string>(row.roles_json),
     mode: row.mode,
     providerId: row.provider_id ?? undefined,
     model: row.model ?? undefined,
@@ -217,16 +237,25 @@ function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {
     visibility: row.visibility ?? undefined,
     workflowTemplate: row.workflow_template ?? undefined,
     executionPlanId: row.execution_plan_id ?? undefined,
-    routeDecision: row.route_decision_json
-      ? safeJsonParse<ChatOrchestrationRouteDecision | undefined>(row.route_decision_json, undefined)
-      : undefined,
+    routeDecision: parseOptionalRecord<ChatOrchestrationRouteDecision>(row.route_decision_json),
     finalSummary: row.final_summary ?? undefined,
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
     stitchedOutput: row.stitched_output ?? undefined,
-    citations: safeJsonParse<ChatCitationRecord[]>(row.citations_json, []),
-    trace: row.trace_json ? safeJsonParse<ChatTurnTraceRecord["routing"]>(row.trace_json, {}) : undefined,
+    citations: parseArray<ChatCitationRecord>(row.citations_json),
+    trace: parseOptionalRecord<ChatTurnTraceRecord["routing"]>(row.trace_json),
   };
 }
 
+function parseArray<T>(raw: string): T[] {
+  const parsed = safeJsonParse<unknown>(raw, []);
+  return Array.isArray(parsed) ? (parsed as T[]) : [];
+}
 
+function parseOptionalRecord<T>(raw: string | null): T | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  return isRecord(parsed) ? (parsed as T) : undefined;
+}

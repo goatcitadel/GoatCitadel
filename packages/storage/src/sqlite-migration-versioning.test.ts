@@ -28,9 +28,10 @@ describe("sqlite schema migrations", () => {
     createdFiles.push(dbPath);
     const db = createDatabase({ dbPath });
 
-    const rows = db
-      .prepare("SELECT version, name FROM schema_migrations ORDER BY version ASC")
-      .all() as Array<{ version: number; name: string }>;
+    const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version ASC").all() as Array<{
+      version: number;
+      name: string;
+    }>;
 
     assert.equal(rows.length >= 4, true);
     assert.equal(rows[0]?.version, 1);
@@ -43,36 +44,48 @@ describe("sqlite schema migrations", () => {
     createdFiles.push(dbPath);
     const db = createDatabase({ dbPath });
 
-    const chatMessagesColumns = db
-      .prepare("PRAGMA table_info(chat_messages)")
-      .all() as Array<{ name: string }>;
+    const chatMessagesColumns = db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
     assert.ok(chatMessagesColumns.some((column) => column.name === "message_id"));
 
-    const approvalsIndexes = db
-      .prepare("PRAGMA index_list(approvals)")
-      .all() as Array<{ name: string }>;
+    const approvalsIndexes = db.prepare("PRAGMA index_list(approvals)").all() as Array<{ name: string }>;
     assert.ok(approvalsIndexes.some((index) => index.name === "idx_approvals_status_created"));
 
-    const toolInvocationIndexes = db
-      .prepare("PRAGMA index_list(tool_invocations)")
-      .all() as Array<{ name: string }>;
+    const toolInvocationIndexes = db.prepare("PRAGMA index_list(tool_invocations)").all() as Array<{ name: string }>;
     assert.ok(toolInvocationIndexes.some((index) => index.name === "idx_tool_invocations_session_time"));
 
-    const policyBlockIndexes = db
-      .prepare("PRAGMA index_list(policy_blocks)")
-      .all() as Array<{ name: string }>;
+    const policyBlockIndexes = db.prepare("PRAGMA index_list(policy_blocks)").all() as Array<{ name: string }>;
     assert.ok(policyBlockIndexes.some((index) => index.name === "idx_policy_blocks_session_time"));
 
-    const authDeviceRequestColumns = db
-      .prepare("PRAGMA table_info(auth_device_requests)")
-      .all() as Array<{ name: string }>;
+    const authDeviceRequestColumns = db.prepare("PRAGMA table_info(auth_device_requests)").all() as Array<{
+      name: string;
+    }>;
     assert.ok(authDeviceRequestColumns.some((column) => column.name === "approval_id"));
 
-    const authDeviceGrantColumns = db
-      .prepare("PRAGMA table_info(auth_device_grants)")
-      .all() as Array<{ name: string }>;
+    const authDeviceGrantColumns = db.prepare("PRAGMA table_info(auth_device_grants)").all() as Array<{ name: string }>;
     assert.ok(authDeviceGrantColumns.some((column) => column.name === "token_hash"));
 
+    db.close();
+  });
+
+  it("applies requested SQLite tuning pragmas", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-tuning-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({
+      dbPath,
+      tuning: {
+        cacheSizeKb: 2_048,
+        tempStoreMemory: true,
+        walAutoCheckpointPages: 500,
+      },
+    });
+
+    const cacheSize = db.prepare("PRAGMA cache_size;").get() as { cache_size: number };
+    const tempStore = db.prepare("PRAGMA temp_store;").get() as { temp_store: number };
+    const walAutoCheckpoint = db.prepare("PRAGMA wal_autocheckpoint;").get() as { wal_autocheckpoint: number };
+
+    assert.equal(cacheSize.cache_size, -4096);
+    assert.equal(tempStore.temp_store, 2);
+    assert.equal(walAutoCheckpoint.wal_autocheckpoint, 1000);
     db.close();
   });
 
@@ -111,10 +124,7 @@ describe("sqlite schema migrations", () => {
 
     const journalModeRow = db.prepare("PRAGMA journal_mode;").get() as { journal_mode: string };
     assert.equal(journalModeRow.journal_mode, "wal");
-    assert.ok(
-      elapsedMs >= 500,
-      `expected createDatabase to wait for the lock to clear, observed ${elapsedMs}ms`,
-    );
+    assert.ok(elapsedMs >= 500, `expected createDatabase to wait for the lock to clear, observed ${elapsedMs}ms`);
 
     db.close();
     const [exitCode] = await once(lockHolder, "exit");

@@ -202,7 +202,7 @@ function sanitizeOptional(value: string | undefined): string | null {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatThreadKnowledgeAttachmentRow(value: unknown): value is ChatThreadKnowledgeAttachmentRow {
@@ -215,8 +215,8 @@ function isChatThreadKnowledgeAttachmentRow(value: unknown): value is ChatThread
     (value.source_type === "file" || value.source_type === "url") &&
     typeof value.source_ref === "string" &&
     typeof value.title === "string" &&
-    typeof value.retrieval_mode === "string" &&
-    typeof value.ingest_status === "string" &&
+    isRetrievalMode(value.retrieval_mode) &&
+    isIngestStatus(value.ingest_status) &&
     (typeof value.chunk_count === "number" || value.chunk_count === null) &&
     (typeof value.namespace === "string" || value.namespace === null) &&
     (typeof value.chat_attachment_id === "string" || value.chat_attachment_id === null) &&
@@ -226,6 +226,14 @@ function isChatThreadKnowledgeAttachmentRow(value: unknown): value is ChatThread
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );
+}
+
+function isRetrievalMode(value: unknown): value is ThreadKnowledgeRetrievalMode {
+  return value === "full_text" || value === "retrieval";
+}
+
+function isIngestStatus(value: unknown): value is ChatThreadKnowledgeAttachmentRow["ingest_status"] {
+  return value === "queued" || value === "running" || value === "ready" || value === "failed";
 }
 
 function toChatThreadKnowledgeAttachmentRow(value: unknown): ChatThreadKnowledgeAttachmentRow | undefined {

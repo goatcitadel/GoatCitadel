@@ -378,6 +378,14 @@ function toTaskStatusCountRows(value: unknown): Array<{ status: string; count: n
     : [];
 }
 
+function toTaskStatusCountRowsForTest(value: unknown): Array<{ status: string; count: number }> {
+  return toTaskStatusCountRows(value);
+}
+
+export const __taskRepoInternals = {
+  toTaskStatusCountRowsForTest,
+};
+
 function isTaskRow(value: unknown): value is TaskRow {
   return (
     isRecord(value) &&
@@ -385,8 +393,8 @@ function isTaskRow(value: unknown): value is TaskRow {
     typeof value.workspace_id === "string" &&
     typeof value.title === "string" &&
     (typeof value.description === "string" || value.description === null) &&
-    typeof value.status === "string" &&
-    typeof value.priority === "string" &&
+    isTaskStatus(value.status) &&
+    isTaskPriority(value.priority) &&
     (typeof value.assigned_agent_id === "string" || value.assigned_agent_id === null) &&
     (typeof value.created_by === "string" || value.created_by === null) &&
     (typeof value.due_at === "string" || value.due_at === null) &&
@@ -400,5 +408,22 @@ function isTaskRow(value: unknown): value is TaskRow {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTaskStatus(value: unknown): value is TaskStatus {
+  return (
+    value === "planning" ||
+    value === "inbox" ||
+    value === "assigned" ||
+    value === "in_progress" ||
+    value === "testing" ||
+    value === "review" ||
+    value === "done" ||
+    value === "blocked"
+  );
+}
+
+function isTaskPriority(value: unknown): value is TaskRecord["priority"] {
+  return value === "low" || value === "normal" || value === "high" || value === "urgent";
 }

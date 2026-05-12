@@ -5,7 +5,34 @@ import path from "node:path";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { createDatabase } from "./sqlite.js";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
+
+function makeBenchmarkRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    rowid: 1,
+    item_id: "item-1",
+    benchmark_run_id: "bench-1",
+    pack_id: "pack-1",
+    test_id: "test-1",
+    test_code: "TEST-1",
+    provider_id: "openai",
+    model: "gpt-5.4",
+    run_id: null,
+    score_id: null,
+    auto_score_id: null,
+    run_status: "queued",
+    total_score: null,
+    weighted_score: null,
+    verdict: null,
+    score_state: null,
+    failure_signal: null,
+    created_at: null,
+    original_rowid: null,
+    source_created_at: null,
+    archived_at: null,
+    ...overrides,
+  };
+}
 
 test("SQLite benchmark dedup migration preserves the newest complete duplicate before enforcing uniqueness", () => {
   const dbPath = path.join(os.tmpdir(), `goatcitadel-sqlite-migration-${randomUUID()}.db`);
@@ -21,8 +48,9 @@ test("SQLite benchmark dedup migration preserves the newest complete duplicate b
       DELETE FROM prompt_pack_benchmark_items;
       DELETE FROM prompt_pack_benchmark_runs;
     `);
-    seed.prepare(
-      `
+    seed
+      .prepare(
+        `
         INSERT INTO prompt_pack_benchmark_runs (
           benchmark_run_id,
           pack_id,
@@ -40,21 +68,8 @@ test("SQLite benchmark dedup migration preserves the newest complete duplicate b
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-    ).run(
-      "bench-1",
-      "pack-1",
-      "queued",
-      "[]",
-      "[]",
-      2,
-      0,
-      null,
-      null,
-      null,
-      null,
-      "2026-04-16T00:00:00.000Z",
-      null,
-    );
+      )
+      .run("bench-1", "pack-1", "queued", "[]", "[]", 2, 0, null, null, null, null, "2026-04-16T00:00:00.000Z", null);
     const insertItem = seed.prepare(
       `
         INSERT INTO prompt_pack_benchmark_items (
@@ -170,8 +185,9 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
       DELETE FROM prompt_pack_benchmark_runs;
       DELETE FROM prompt_pack_benchmark_item_dedup_audit;
     `);
-    seed.prepare(
-      `
+    seed
+      .prepare(
+        `
         INSERT INTO prompt_pack_benchmark_runs (
           benchmark_run_id,
           pack_id,
@@ -189,23 +205,11 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-    ).run(
-      "bench-1",
-      "pack-1",
-      "queued",
-      "[]",
-      "[]",
-      1,
-      0,
-      null,
-      null,
-      null,
-      null,
-      "2026-04-16T00:00:00.000Z",
-      null,
-    );
-    seed.prepare(
-      `
+      )
+      .run("bench-1", "pack-1", "queued", "[]", "[]", 1, 0, null, null, null, null, "2026-04-16T00:00:00.000Z", null);
+    seed
+      .prepare(
+        `
         INSERT INTO prompt_pack_benchmark_items (
           item_id,
           benchmark_run_id,
@@ -227,27 +231,29 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-    ).run(
-      "item-live-old",
-      "bench-1",
-      "pack-1",
-      "test-1",
-      "TEST-1",
-      "openai",
-      "gpt-5.4",
-      "run-old",
-      null,
-      null,
-      "completed",
-      2,
-      null,
-      null,
-      null,
-      null,
-      "2026-04-16T00:01:00.000Z",
-    );
-    seed.prepare(
-      `
+      )
+      .run(
+        "item-live-old",
+        "bench-1",
+        "pack-1",
+        "test-1",
+        "TEST-1",
+        "openai",
+        "gpt-5.4",
+        "run-old",
+        null,
+        null,
+        "completed",
+        2,
+        null,
+        null,
+        null,
+        null,
+        "2026-04-16T00:01:00.000Z",
+      );
+    seed
+      .prepare(
+        `
         INSERT INTO prompt_pack_benchmark_item_dedup_audit (
           item_id,
           benchmark_run_id,
@@ -271,27 +277,28 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-    ).run(
-      "item-archived-better",
-      "bench-1",
-      "pack-1",
-      "test-1",
-      "TEST-1",
-      "openai",
-      "gpt-5.4",
-      "run-better",
-      null,
-      "auto-better",
-      "completed",
-      4,
-      1,
-      "pass",
-      "auto_valid",
-      null,
-      2,
-      "2026-04-16T00:03:00.000Z",
-      "2026-04-16T00:03:00.000Z",
-    );
+      )
+      .run(
+        "item-archived-better",
+        "bench-1",
+        "pack-1",
+        "test-1",
+        "TEST-1",
+        "openai",
+        "gpt-5.4",
+        "run-better",
+        null,
+        "auto-better",
+        "completed",
+        4,
+        1,
+        "pass",
+        "auto_valid",
+        null,
+        2,
+        "2026-04-16T00:03:00.000Z",
+        "2026-04-16T00:03:00.000Z",
+      );
     seed.close();
 
     const repaired = createDatabase({ dbPath });
@@ -316,4 +323,356 @@ test("SQLite benchmark dedup repair restores the archived winner for databases t
       // ignore cleanup failures in tests
     }
   }
+});
+
+test("SQLite migration runner rolls back the active migration when migration SQL fails", () => {
+  const execCalls: string[] = [];
+  const fakeDb = {
+    exec(sql: string) {
+      const normalized = sql.trim();
+      execCalls.push(normalized);
+      if (
+        normalized.includes("CREATE TABLE IF NOT EXISTS schema_migrations") ||
+        normalized === "BEGIN IMMEDIATE" ||
+        normalized === "ROLLBACK"
+      ) {
+        return;
+      }
+      throw new Error("migration failed");
+    },
+    prepare(sql: string) {
+      if (sql.includes("SELECT version FROM schema_migrations")) {
+        return { all: () => [] };
+      }
+      if (sql.includes("INSERT INTO schema_migrations")) {
+        return {
+          run: () => {
+            throw new Error("failed migration should not be marked applied");
+          },
+        };
+      }
+      throw new Error(`unexpected prepare: ${sql}`);
+    },
+  } as unknown as DatabaseSync;
+
+  assert.throws(() => __sqliteInternals.migrate(fakeDb), /migration failed/);
+  assert.equal(execCalls.includes("ROLLBACK"), true);
+});
+
+test("SQLite schema blueprint handles unavailable sqlite reflection APIs", () => {
+  const blueprint = __sqliteInternals.createSqliteSchemaBlueprintFromDatabase({
+    close() {
+      throw new Error("fallback should return before closing an unavailable sqlite database");
+    },
+  } as unknown as DatabaseSync);
+
+  assert.deepEqual(blueprint, { tables: [] });
+});
+
+test("SQLite approval effects pipeline migration creates its base table when migration 58 was skipped", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    __sqliteInternals.applySchemaMigrationForTest(59, db);
+
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("approval_effects") as { name: string } | undefined;
+    assert.equal(table?.name, "approval_effects");
+
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(approval_effects)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    assert.equal(columns.has("target_kind"), true);
+    assert.equal(columns.has("idempotency_key"), true);
+    assert.equal(columns.has("payload_json"), true);
+    assert.equal(columns.has("version"), true);
+  } finally {
+    db.close();
+  }
+});
+
+test("SQLite subagent column migration no-ops without the legacy openclaw column", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("CREATE TABLE task_subagent_sessions (subagent_session_id TEXT PRIMARY KEY);");
+
+    __sqliteInternals.migrateTaskSubagentSessionColumns(db);
+
+    const columns = new Set(
+      (db.prepare("PRAGMA table_info(task_subagent_sessions)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    assert.equal(columns.has("agent_session_id"), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("SQLite subagent column migration rebuilds the table when rename column is unavailable", () => {
+  const execCalls: string[] = [];
+  const fakeDb = {
+    prepare(sql: string) {
+      assert.match(sql, /PRAGMA table_info\(task_subagent_sessions\)/);
+      return {
+        all: () => [
+          { name: "subagent_session_id" },
+          { name: "task_id" },
+          { name: "openclaw_session_id" },
+          { name: "agent_name" },
+          { name: "status" },
+          { name: "created_at" },
+          { name: "updated_at" },
+          { name: "ended_at" },
+        ],
+      };
+    },
+    exec(sql: string) {
+      execCalls.push(sql);
+      if (sql.includes("RENAME COLUMN openclaw_session_id TO agent_session_id")) {
+        throw new Error("rename column unavailable");
+      }
+    },
+  } as unknown as DatabaseSync;
+
+  __sqliteInternals.migrateTaskSubagentSessionColumns(fakeDb);
+
+  assert.equal(
+    execCalls.some((sql) => sql.includes("CREATE TABLE task_subagent_sessions_new")),
+    true,
+  );
+  assert.equal(
+    execCalls.some((sql) => sql.includes("openclaw_session_id, agent_name")),
+    true,
+  );
+});
+
+test("SQLite benchmark dedup pass releases cleanly when a reported group has no duplicate live rows", () => {
+  const execCalls: string[] = [];
+  const fakeDb = {
+    exec(sql: string) {
+      execCalls.push(sql.trim());
+    },
+    prepare(sql: string) {
+      if (sql.includes("GROUP BY benchmark_run_id, provider_id, model, test_id")) {
+        return {
+          all: () => [
+            {
+              benchmark_run_id: "bench-1",
+              provider_id: "openai",
+              model: "gpt-5.4",
+              test_id: "test-1",
+            },
+          ],
+        };
+      }
+      if (sql.includes("SELECT rowid, *")) {
+        return { all: () => [makeBenchmarkRow()] };
+      }
+      return {
+        run: () => {
+          throw new Error(`unexpected write for non-duplicate group: ${sql}`);
+        },
+      };
+    },
+  } as unknown as DatabaseSync;
+
+  __sqliteInternals.runPromptPackBenchmarkDedupPass(fakeDb);
+
+  assert.deepEqual(execCalls, [
+    "SAVEPOINT prompt_pack_benchmark_dedup_pass",
+    "RELEASE SAVEPOINT prompt_pack_benchmark_dedup_pass",
+  ]);
+});
+
+test("SQLite benchmark dedup pass rolls back when archiving a duplicate fails", () => {
+  const execCalls: string[] = [];
+  const fakeDb = {
+    exec(sql: string) {
+      execCalls.push(sql.trim());
+    },
+    prepare(sql: string) {
+      if (sql.includes("GROUP BY benchmark_run_id, provider_id, model, test_id")) {
+        return {
+          all: () => [
+            {
+              benchmark_run_id: "bench-1",
+              provider_id: "openai",
+              model: "gpt-5.4",
+              test_id: "test-1",
+            },
+          ],
+        };
+      }
+      if (sql.includes("SELECT rowid, *")) {
+        return {
+          all: () => [
+            makeBenchmarkRow({ item_id: "item-old", rowid: 1, created_at: "2026-04-16T00:01:00.000Z" }),
+            makeBenchmarkRow({
+              item_id: "item-winner",
+              rowid: 2,
+              run_status: "completed",
+              total_score: 4,
+              created_at: "2026-04-16T00:02:00.000Z",
+            }),
+          ],
+        };
+      }
+      if (sql.includes("INSERT OR IGNORE INTO prompt_pack_benchmark_item_dedup_audit")) {
+        return {
+          run: () => {
+            throw new Error("dedup insert failed");
+          },
+        };
+      }
+      return {
+        run: () => {
+          throw new Error(`unexpected write after failed archive: ${sql}`);
+        },
+      };
+    },
+  } as unknown as DatabaseSync;
+
+  assert.throws(() => __sqliteInternals.runPromptPackBenchmarkDedupPass(fakeDb), /dedup insert failed/);
+  assert.equal(execCalls.includes("ROLLBACK TO SAVEPOINT prompt_pack_benchmark_dedup_pass"), true);
+  assert.equal(execCalls.includes("RELEASE SAVEPOINT prompt_pack_benchmark_dedup_pass"), true);
+});
+
+test("SQLite benchmark dedup repair returns before work when the audit table is absent", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    __sqliteInternals.repairPromptPackBenchmarkDedupWinners(db);
+  } finally {
+    db.close();
+  }
+});
+
+test("SQLite benchmark dedup repair skips live rows with no archived partner", () => {
+  const execCalls: string[] = [];
+  const fakeDb = {
+    exec(sql: string) {
+      execCalls.push(sql.trim());
+    },
+    prepare(sql: string) {
+      if (sql.includes("sqlite_master")) {
+        return { get: () => ({ name: "prompt_pack_benchmark_item_dedup_audit" }) };
+      }
+      if (sql.includes("SELECT rowid, * FROM prompt_pack_benchmark_items")) {
+        return { all: () => [makeBenchmarkRow({ item_id: "item-live" })] };
+      }
+      if (sql.includes("FROM prompt_pack_benchmark_item_dedup_audit") && sql.includes("WHERE")) {
+        return { all: () => [] };
+      }
+      return {
+        run: () => {
+          throw new Error(`unexpected repair write without archived rows: ${sql}`);
+        },
+      };
+    },
+  } as unknown as DatabaseSync;
+
+  __sqliteInternals.repairPromptPackBenchmarkDedupWinners(fakeDb);
+
+  assert.deepEqual(execCalls, [
+    "SAVEPOINT prompt_pack_benchmark_dedup_repair",
+    "RELEASE SAVEPOINT prompt_pack_benchmark_dedup_repair",
+  ]);
+});
+
+test("SQLite benchmark dedup repair rolls back when replacing the live winner fails", () => {
+  const execCalls: string[] = [];
+  const fakeDb = {
+    exec(sql: string) {
+      execCalls.push(sql.trim());
+    },
+    prepare(sql: string) {
+      if (sql.includes("sqlite_master")) {
+        return { get: () => ({ name: "prompt_pack_benchmark_item_dedup_audit" }) };
+      }
+      if (sql.includes("SELECT rowid, * FROM prompt_pack_benchmark_items")) {
+        return { all: () => [makeBenchmarkRow({ item_id: "item-live", rowid: 1 })] };
+      }
+      if (sql.includes("FROM prompt_pack_benchmark_item_dedup_audit") && sql.includes("WHERE")) {
+        return {
+          all: () => [
+            makeBenchmarkRow({
+              item_id: "item-archived-better",
+              original_rowid: 2,
+              source_created_at: "2026-04-16T00:03:00.000Z",
+              run_status: "completed",
+              auto_score_id: "auto-1",
+            }),
+          ],
+        };
+      }
+      if (sql.includes("INSERT OR IGNORE INTO prompt_pack_benchmark_item_dedup_audit")) {
+        return {
+          run: () => {
+            throw new Error("repair insert failed");
+          },
+        };
+      }
+      return { run: () => undefined };
+    },
+  } as unknown as DatabaseSync;
+
+  assert.throws(() => __sqliteInternals.repairPromptPackBenchmarkDedupWinners(fakeDb), /repair insert failed/);
+  assert.equal(execCalls.includes("ROLLBACK TO SAVEPOINT prompt_pack_benchmark_dedup_repair"), true);
+  assert.equal(execCalls.includes("RELEASE SAVEPOINT prompt_pack_benchmark_dedup_repair"), true);
+});
+
+test("SQLite benchmark dedup ranking orders completeness, timestamp, and row ordinal", () => {
+  const {
+    comparePromptPackBenchmarkDedupRowsForTest,
+    getPromptPackBenchmarkDedupCompletenessRankForTest,
+    getPromptPackBenchmarkDedupTimestampForTest,
+    getPromptPackBenchmarkDedupOrdinalForTest,
+  } = __sqliteInternals;
+
+  assert.equal(
+    getPromptPackBenchmarkDedupCompletenessRankForTest(
+      makeBenchmarkRow({ run_status: "completed", auto_score_id: "auto-1" }),
+    ),
+    3,
+  );
+  assert.equal(getPromptPackBenchmarkDedupCompletenessRankForTest(makeBenchmarkRow({ run_status: "completed" })), 2);
+  assert.equal(getPromptPackBenchmarkDedupCompletenessRankForTest(makeBenchmarkRow({ run_status: "failed" })), 1);
+  assert.equal(getPromptPackBenchmarkDedupCompletenessRankForTest(makeBenchmarkRow({ run_status: "queued" })), 0);
+
+  assert.equal(
+    getPromptPackBenchmarkDedupTimestampForTest(
+      makeBenchmarkRow({ created_at: null, source_created_at: "2026-04-16T00:03:00.000Z" }),
+    ),
+    Date.parse("2026-04-16T00:03:00.000Z"),
+  );
+  assert.equal(getPromptPackBenchmarkDedupTimestampForTest(makeBenchmarkRow({ created_at: "not-a-date" })), -Infinity);
+  assert.equal(
+    getPromptPackBenchmarkDedupTimestampForTest(makeBenchmarkRow({ created_at: undefined, source_created_at: null })),
+    -Infinity,
+  );
+
+  assert.equal(getPromptPackBenchmarkDedupOrdinalForTest(makeBenchmarkRow({ original_rowid: 7, rowid: 1 })), 7);
+  assert.equal(getPromptPackBenchmarkDedupOrdinalForTest(makeBenchmarkRow({ original_rowid: Infinity, rowid: 3 })), 3);
+  assert.equal(getPromptPackBenchmarkDedupOrdinalForTest(makeBenchmarkRow({ original_rowid: null, rowid: null })), 0);
+  assert.throws(
+    () => __sqliteInternals.applySchemaMigrationForTest(9999, {} as unknown as DatabaseSync),
+    /Unknown SQLite schema migration version/,
+  );
+
+  assert.ok(
+    comparePromptPackBenchmarkDedupRowsForTest(
+      makeBenchmarkRow({ item_id: "failed", run_status: "failed" }),
+      makeBenchmarkRow({ item_id: "completed", run_status: "completed" }),
+    ) < 0,
+  );
+  assert.ok(
+    comparePromptPackBenchmarkDedupRowsForTest(
+      makeBenchmarkRow({ item_id: "old", run_status: "completed", created_at: "2026-04-16T00:01:00.000Z" }),
+      makeBenchmarkRow({ item_id: "new", run_status: "completed", created_at: "2026-04-16T00:02:00.000Z" }),
+    ) < 0,
+  );
+  assert.ok(
+    comparePromptPackBenchmarkDedupRowsForTest(
+      makeBenchmarkRow({ item_id: "row-1", run_status: "completed", rowid: 1 }),
+      makeBenchmarkRow({ item_id: "row-2", run_status: "completed", rowid: 2 }),
+    ) < 0,
+  );
 });

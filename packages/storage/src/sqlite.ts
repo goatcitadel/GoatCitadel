@@ -775,6 +775,10 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
   const db = new DatabaseSync(":memory:");
+  return createSqliteSchemaBlueprintFromDatabase(db);
+}
+
+function createSqliteSchemaBlueprintFromDatabase(db: DatabaseSync): SqliteSchemaBlueprint {
   if (typeof db.exec !== "function" || typeof db.prepare !== "function") {
     return { tables: [] };
   }
@@ -3275,10 +3279,7 @@ function runPromptPackBenchmarkDedupPass(db: DatabaseSync): void {
       if (rows.length < 2) {
         continue;
       }
-      const winner = [...rows].sort(comparePromptPackBenchmarkDedupRows).at(-1);
-      if (!winner) {
-        continue;
-      }
+      const winner = [...rows].sort(comparePromptPackBenchmarkDedupRows)[rows.length - 1]!;
       const archivedAt = new Date().toISOString();
       for (const row of rows) {
         if (row.item_id === winner.item_id) {
@@ -3523,9 +3524,10 @@ function comparePromptPackBenchmarkDedupRows(
   if (completenessDelta !== 0) {
     return completenessDelta;
   }
-  const createdAtDelta = getPromptPackBenchmarkDedupTimestamp(left) - getPromptPackBenchmarkDedupTimestamp(right);
-  if (createdAtDelta !== 0) {
-    return createdAtDelta;
+  const leftCreatedAt = getPromptPackBenchmarkDedupTimestamp(left);
+  const rightCreatedAt = getPromptPackBenchmarkDedupTimestamp(right);
+  if (leftCreatedAt !== rightCreatedAt) {
+    return leftCreatedAt < rightCreatedAt ? -1 : 1;
   }
   return getPromptPackBenchmarkDedupOrdinal(left) - getPromptPackBenchmarkDedupOrdinal(right);
 }
@@ -3569,6 +3571,49 @@ function getPromptPackBenchmarkDedupOrdinal(row: PromptPackBenchmarkDedupRow): n
   }
   return 0;
 }
+
+function applySchemaMigrationForTest(version: number, db: DatabaseSync): void {
+  const migration = SCHEMA_MIGRATIONS.find((candidate) => candidate.version === version);
+  if (!migration) {
+    throw new Error(`Unknown SQLite schema migration version: ${version}`);
+  }
+  migration.up(db);
+}
+
+function comparePromptPackBenchmarkDedupRowsForTest(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+): number {
+  return comparePromptPackBenchmarkDedupRows(
+    left as unknown as PromptPackBenchmarkDedupRow,
+    right as unknown as PromptPackBenchmarkDedupRow,
+  );
+}
+
+function getPromptPackBenchmarkDedupCompletenessRankForTest(row: Record<string, unknown>): number {
+  return getPromptPackBenchmarkDedupCompletenessRank(row as unknown as PromptPackBenchmarkDedupRow);
+}
+
+function getPromptPackBenchmarkDedupTimestampForTest(row: Record<string, unknown>): number {
+  return getPromptPackBenchmarkDedupTimestamp(row as unknown as PromptPackBenchmarkDedupRow);
+}
+
+function getPromptPackBenchmarkDedupOrdinalForTest(row: Record<string, unknown>): number {
+  return getPromptPackBenchmarkDedupOrdinal(row as unknown as PromptPackBenchmarkDedupRow);
+}
+
+export const __sqliteInternals = {
+  migrate,
+  createSqliteSchemaBlueprintFromDatabase,
+  applySchemaMigrationForTest,
+  migrateTaskSubagentSessionColumns,
+  runPromptPackBenchmarkDedupPass,
+  repairPromptPackBenchmarkDedupWinners,
+  comparePromptPackBenchmarkDedupRowsForTest,
+  getPromptPackBenchmarkDedupCompletenessRankForTest,
+  getPromptPackBenchmarkDedupTimestampForTest,
+  getPromptPackBenchmarkDedupOrdinalForTest,
+};
 
 function createWorkspaceIsolationSchema(db: DatabaseSync): void {
   db.exec(`

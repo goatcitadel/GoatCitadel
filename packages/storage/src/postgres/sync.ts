@@ -79,7 +79,7 @@ export class PostgresSyncDatabaseClient implements DatabaseClient {
       }
     }
 
-    const savepointName = `gc_nested_${this.nestedTransactionDepth += 1}`;
+    const savepointName = `gc_nested_${(this.nestedTransactionDepth += 1)}`;
     this.exec(`SAVEPOINT ${savepointName}`);
     try {
       const result = callback();
@@ -217,5 +217,12 @@ function deserializeWorkerError(error: SerializedWorkerError): Error {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+export const __postgresSyncInternals = {
+  translateSql,
+  resolveWorkerUrl,
+  deserializeWorkerError,
+  isRecord,
+};

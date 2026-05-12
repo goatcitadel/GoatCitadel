@@ -5,10 +5,11 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
-import { TaskRepository } from "./task-repo.js";
+import { __taskRepoInternals, TaskRepository } from "./task-repo.js";
 import { TaskActivityRepository } from "./task-activity-repo.js";
 import { TaskDeliverableRepository } from "./task-deliverable-repo.js";
 import { TaskSubagentRepository } from "./task-subagent-repo.js";
+import type { DatabaseClient } from "./db.js";
 
 const createdFiles: string[] = [];
 
@@ -29,11 +30,16 @@ function createRepos() {
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
   return {
+    db,
     tasks: new TaskRepository(db),
     activities: new TaskActivityRepository(db),
     deliverables: new TaskDeliverableRepository(db),
     subagents: new TaskSubagentRepository(db),
   };
+}
+
+function setTaskRawField(db: DatabaseClient, taskId: string, field: string, value: unknown): void {
+  db.prepare(`UPDATE tasks SET ${field} = ? WHERE task_id = ?`).run(value, taskId);
 }
 
 describe("task repositories", () => {
@@ -92,6 +98,10 @@ describe("task repositories", () => {
 
     const cleared = repos.tasks.update(first.taskId, { assignedAgentId: null });
     assert.equal(cleared.assignedAgentId, undefined);
+
+    assert.equal(repos.tasks.list({ limit: 10, cursor: `${timestamp}|` }).length, 3);
+    assert.equal(repos.tasks.list({ limit: 10, cursor: "|missing-key" }).length, 3);
+    assert.equal(repos.tasks.list({ limit: 10, cursor: timestamp }).length, 1);
   });
 
   it("supports soft delete, trash view, restore, and hard delete", () => {
@@ -118,6 +128,9 @@ describe("task repositories", () => {
     const hardDeleted = repos.tasks.hardDelete(task.taskId);
     assert.equal(hardDeleted, true);
     assert.equal(repos.tasks.find(task.taskId), undefined);
+    assert.equal(repos.tasks.softDelete(task.taskId), false);
+    assert.equal(repos.tasks.restore(task.taskId), false);
+    assert.equal(repos.tasks.hardDelete(task.taskId), false);
   });
 
   it("round-trips proactive task context and allows clearing it", () => {
@@ -220,5 +233,58 @@ describe("task repositories", () => {
 
     const cleared = repos.tasks.update(task.taskId, { agenticContext: null });
     assert.equal(cleared.agenticContext, undefined);
+  });
+
+  it("filters by workspace, status, and deletion view while reporting workspace counts", () => {
+    const repos = createRepos();
+    const defaultTask = repos.tasks.create({
+      title: "Default workspace task",
+      description: "default task",
+      status: "planning",
+      priority: "urgent",
+      createdBy: "operator",
+      dueAt: "2026-03-26T12:00:00.000Z",
+    });
+    const workspaceTask = repos.tasks.create({
+      workspaceId: " workspace-a ",
+      title: "Workspace task",
+      status: "blocked",
+      priority: "low",
+    });
+    repos.tasks.softDelete(defaultTask.taskId, "operator", "cleanup", "2026-03-26T13:00:00.000Z");
+
+    assert.equal(repos.tasks.get(defaultTask.taskId).description, "default task");
+    assert.equal(repos.tasks.get(defaultTask.taskId).createdBy, "operator");
+    assert.equal(repos.tasks.get(defaultTask.taskId).dueAt, "2026-03-26T12:00:00.000Z");
+    assert.deepEqual(
+      repos.tasks
+        .list({ workspaceId: "workspace-a", status: "blocked", view: "all", limit: 10 })
+        .map((task) => task.taskId),
+      [workspaceTask.taskId],
+    );
+    assert.deepEqual(repos.tasks.statusCountsByWorkspace("workspace-a"), [{ status: "blocked", count: 1 }]);
+    assert.throws(
+      () => repos.tasks.statusCountsByWorkspace("bad workspace"),
+      /workspaceId contains unsupported characters/,
+    );
+    assert.throws(() => repos.tasks.create({ workspaceId: " ", title: "bad" }), /workspaceId is required/);
+    assert.deepEqual(__taskRepoInternals.toTaskStatusCountRowsForTest(undefined), []);
+  });
+
+  it("filters malformed task rows defensively", () => {
+    const repos = createRepos();
+    const task = repos.tasks.create({ title: "Malformed row target" });
+
+    setTaskRawField(repos.db, task.taskId, "metadata_json", "[]");
+    assert.equal(repos.tasks.get(task.taskId).proactiveContext, undefined);
+
+    setTaskRawField(repos.db, task.taskId, "status", "cancelled");
+    assert.equal(repos.tasks.find(task.taskId), undefined);
+    assert.deepEqual(repos.tasks.list({ view: "all", limit: 10 }), []);
+    assert.throws(() => repos.tasks.get(task.taskId), /Task .* not found/);
+
+    setTaskRawField(repos.db, task.taskId, "status", "inbox");
+    setTaskRawField(repos.db, task.taskId, "priority", "critical");
+    assert.equal(repos.tasks.find(task.taskId), undefined);
   });
 });

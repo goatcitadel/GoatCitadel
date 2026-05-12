@@ -313,7 +313,7 @@ function mapRow(row: ApprovalInboxRow): ApprovalInboxItemRecord {
     approvalKind: row.approval_kind,
     riskLevel: row.risk_level,
     approvalStatus: row.approval_status,
-    preview: safeJsonParse<Record<string, unknown>>(row.preview_json, {}),
+    preview: parsePreview(row.preview_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
@@ -323,6 +323,11 @@ function mapRow(row: ApprovalInboxRow): ApprovalInboxItemRecord {
     deliveryCount: row.delivery_count,
     lastDeliveredAt: row.last_delivered_at,
   };
+}
+
+function parsePreview(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(raw, {});
+  return isRecord(parsed) ? parsed : {};
 }
 
 function normalizeObject(value: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -347,6 +352,14 @@ function toApprovalInboxRows(value: unknown): ApprovalInboxRow[] {
   return value.filter(isApprovalInboxRow);
 }
 
+function toApprovalInboxRowsForTest(value: unknown): unknown[] {
+  return toApprovalInboxRows(value);
+}
+
+export const __approvalInboxInternals = {
+  toApprovalInboxRowsForTest,
+};
+
 function isApprovalInboxRow(value: unknown): value is ApprovalInboxRow {
   if (!isRecord(value)) {
     return false;
@@ -360,10 +373,10 @@ function isApprovalInboxRow(value: unknown): value is ApprovalInboxRow {
     typeof value.token_id === "string" &&
     typeof value.token === "string" &&
     value.action_type === "approval.resolve" &&
-    typeof value.state === "string" &&
+    isInboxState(value.state) &&
     typeof value.approval_kind === "string" &&
-    typeof value.risk_level === "string" &&
-    typeof value.approval_status === "string" &&
+    isRiskLevel(value.risk_level) &&
+    isApprovalStatus(value.approval_status) &&
     typeof value.preview_json === "string" &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string" &&
@@ -377,5 +390,24 @@ function isApprovalInboxRow(value: unknown): value is ApprovalInboxRow {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isInboxState(value: unknown): value is ApprovalInboxItemState {
+  return (
+    value === "pending" ||
+    value === "approved" ||
+    value === "rejected" ||
+    value === "edited" ||
+    value === "expired" ||
+    value === "failed"
+  );
+}
+
+function isRiskLevel(value: unknown): value is ApprovalRequest["riskLevel"] {
+  return value === "safe" || value === "caution" || value === "danger" || value === "nuclear";
+}
+
+function isApprovalStatus(value: unknown): value is ApprovalRequest["status"] {
+  return value === "pending" || value === "approved" || value === "rejected" || value === "edited";
 }
