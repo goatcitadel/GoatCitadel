@@ -332,6 +332,74 @@ describe("browser tools coverage sweep", () => {
     ]);
   });
 
+  it("executes the browser search page-evaluator against a DOM-like page", async () => {
+    const config = createConfig(tempRoot);
+    const globalWithDocument = globalThis as unknown as { document?: unknown };
+    const priorDocument = globalWithDocument.document;
+    const anchors = [
+      {
+        getAttribute: (name: string) => (name === "href" ? "javascript:alert(1)" : undefined),
+        textContent: "Skip script",
+        closest: () => ({ textContent: "Skip script" }),
+      },
+      {
+        getAttribute: (name: string) => (name === "href" ? "https://example.com/dom-result" : undefined),
+        textContent: " DOM Result ",
+        closest: () => ({ textContent: "DOM Result snippet text" }),
+      },
+      {
+        getAttribute: (name: string) => (name === "href" ? "https://example.com/dom-result" : undefined),
+        textContent: "Duplicate Result",
+        closest: () => ({ textContent: "Duplicate" }),
+      },
+      {
+        getAttribute: (name: string) => (name === "href" ? "https://example.com/empty-title" : undefined),
+        textContent: "   ",
+        closest: () => ({ textContent: "Empty title" }),
+      },
+    ];
+    globalWithDocument.document = {
+      querySelector: (selector: string) =>
+        selector === "main"
+          ? {
+              querySelectorAll: () => anchors,
+            }
+          : null,
+      querySelectorAll: () => anchors,
+    };
+    try {
+      mocked.launch.mockResolvedValueOnce({
+        newContext: async () => ({
+          newPage: async () => ({
+            goto: async (url: string) => ({ status: () => (url ? 200 : undefined) }),
+            waitForLoadState: async () => undefined,
+            waitForTimeout: async () => undefined,
+            evaluate: async (fn: unknown, arg: unknown) => (fn as (maxItems: number) => unknown)(Number(arg ?? 0)),
+            url: () => "https://lite.duckduckgo.com/lite/?q=coverage",
+            title: async () => "Search",
+          }),
+        }),
+        close: async () => undefined,
+      } as never);
+
+      const response = await executeBrowserTool(
+        "browser.search",
+        { query: "coverage", engine: "duckduckgo", limit: 2 },
+        config,
+      );
+
+      expect(response.results).toEqual([
+        {
+          title: "DOM Result",
+          url: "https://example.com/dom-result",
+          snippet: "DOM Result snippet text",
+        },
+      ]);
+    } finally {
+      globalWithDocument.document = priorDocument;
+    }
+  });
+
   it("falls back from empty DuckDuckGo results to Bing and decodes Bing redirect targets", async () => {
     const config = createConfig(tempRoot);
     globalThis.fetch = vi.fn(
@@ -575,6 +643,56 @@ describe("browser tools coverage sweep", () => {
     );
     expect(extract.backend).toBe("firecrawl");
     expect(extract.extractionMode).toBe("firecrawl-html-selector");
+  });
+
+  it("throws Firecrawl errors when fallback is disabled", async () => {
+    const config = createConfig(tempRoot);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "firecrawl down" }), {
+          status: 503,
+          statusText: "Unavailable",
+          headers: { "content-type": "application/json" },
+        }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool(
+        "browser.search",
+        {
+          query: "coverage",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Firecrawl search failed/i);
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "https://example.com/article",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: "false",
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Firecrawl scrape failed/i);
+    await expect(
+      executeBrowserTool(
+        "browser.extract",
+        {
+          url: "https://example.com/article",
+          selector: "main",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Firecrawl scrape failed/i);
   });
 
   it("falls back to native browser reads when Firecrawl fails and fallback is enabled", async () => {
@@ -825,6 +943,293 @@ describe("browser tools coverage sweep", () => {
 
     const clearedCookies = await executeBrowserTool("browser.cookies.clear", { name: "sid" }, config, executionContext);
     expect(clearedCookies.removed).toBe(1);
+  });
+
+  it("validates cookie input and filters cookies by domain, path, and URL", async () => {
+    const config = createConfig(tempRoot);
+    const executionContext = { sessionId: "sess-browser-cookie-filter" };
+
+    await expect(
+      executeBrowserTool("browser.cookies.set", { cookies: [{ name: "bad" }] }, config, executionContext),
+    ).rejects.toThrow(/value is required/i);
+    await expect(
+      executeBrowserTool("browser.cookies.set", { cookies: [{ name: "bad", value: "1" }] }, config, executionContext),
+    ).rejects.toThrow(/requires url or domain/i);
+    await expect(
+      executeBrowserTool(
+        "browser.cookies.set",
+        { cookies: [{ name: "bad", value: "1", url: "https://example.com", expires: "nope" }] },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/expires must be a finite number/i);
+    await expect(
+      executeBrowserTool(
+        "browser.cookies.set",
+        { cookies: [{ name: "bad", value: "1", url: "https://example.com", sameSite: "Loose" }] },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/sameSite must be/i);
+
+    await executeBrowserTool(
+      "browser.cookies.set",
+      {
+        cookies: [
+          {
+            name: "sid",
+            value: "abc123",
+            domain: ".example.com",
+            path: "/app",
+            expires: 1_900_000_000,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Strict",
+          },
+          { name: "other", value: "zzz", url: "https://example.com" },
+        ],
+      },
+      config,
+      executionContext,
+    );
+
+    const byDomain = await executeBrowserTool(
+      "browser.cookies.get",
+      { domain: "https://example.com", path: "/app" },
+      config,
+      executionContext,
+    );
+    expect(byDomain.cookies).toEqual([
+      expect.objectContaining({
+        name: "sid",
+        domain: ".example.com",
+        path: "/app",
+        sameSite: "Strict",
+      }),
+    ]);
+
+    const byUrl = await executeBrowserTool(
+      "browser.cookies.get",
+      { name: "sid", url: "https://example.com/account" },
+      config,
+      executionContext,
+    );
+    expect(byUrl.cookies).toEqual([expect.objectContaining({ name: "sid" })]);
+
+    const removed = await executeBrowserTool(
+      "browser.cookies.clear",
+      { domain: "example.com", path: "/app" },
+      config,
+      executionContext,
+    );
+    expect(removed.removed).toBe(1);
+  });
+
+  it("covers browser state validation, clearing, and eviction edges", async () => {
+    const config = createConfig(tempRoot);
+    const executionContext = { sessionId: "sess-browser-state-edges" };
+
+    await expect(executeBrowserTool("browser.cookies.get", {}, config)).rejects.toThrow(/requires browserSessionId/i);
+    await expect(executeBrowserTool("browser.cookies.set", { cookies: [] }, config, executionContext)).rejects.toThrow(
+      /requires a cookie object/i,
+    );
+    await expect(
+      executeBrowserTool("browser.cookies.set", { cookies: ["bad"] }, config, executionContext),
+    ).rejects.toThrow(/must be an object/i);
+
+    await executeBrowserTool(
+      "browser.cookies.set",
+      { name: "url-domain", value: "1", domain: "https://example.com", path: "/edge" },
+      config,
+      executionContext,
+    );
+    expect(
+      (await executeBrowserTool("browser.cookies.get", { domain: ".example.com" }, config, executionContext)).count,
+    ).toBe(1);
+    expect((await executeBrowserTool("browser.cookies.clear", {}, config, executionContext)).remaining).toBe(0);
+
+    await executeBrowserTool(
+      "browser.storage.set",
+      { origin: "https://example.com", storage: "local", key: "count", value: 1 },
+      config,
+      executionContext,
+    );
+    await executeBrowserTool(
+      "browser.storage.set",
+      { origin: "https://example.com", storage: "session", entries: { flag: true, mode: "edge" } },
+      config,
+      executionContext,
+    );
+    expect(
+      (await executeBrowserTool("browser.storage.get", { storage: "session" }, config, executionContext)).localStorage,
+    ).toEqual({});
+    expect(
+      (await executeBrowserTool("browser.storage.get", { storage: "local" }, config, executionContext)).sessionStorage,
+    ).toEqual({});
+    await expect(
+      executeBrowserTool("browser.storage.clear", { key: "count" }, config, executionContext),
+    ).rejects.toThrow(/requires origin/i);
+    expect(
+      (
+        await executeBrowserTool(
+          "browser.storage.clear",
+          { origin: "https://example.com", storage: "local" },
+          config,
+          executionContext,
+        )
+      ).removed,
+    ).toBe(1);
+    expect(
+      (await executeBrowserTool("browser.storage.clear", { storage: "both" }, config, executionContext)).removed,
+    ).toBe(2);
+
+    await expect(
+      executeBrowserTool(
+        "browser.storage.set",
+        { origin: "https://example.com", storage: "both", key: "bad", value: "x" },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/storage must be local or session/i);
+    await expect(
+      executeBrowserTool(
+        "browser.storage.set",
+        { origin: "https://example.com", entries: { " ": "x" } },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/empty key/i);
+    await expect(
+      executeBrowserTool(
+        "browser.storage.set",
+        { origin: "https://example.com", key: "object", value: { nested: true } },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/must be a string, number, or boolean/i);
+
+    await executeBrowserTool(
+      "browser.context.configure",
+      {
+        reset: true,
+        geolocation: null,
+        extraHTTPHeaders: null,
+        httpCredentials: null,
+      },
+      config,
+      executionContext,
+    );
+    await expect(
+      executeBrowserTool("browser.context.configure", { geolocation: "nearby" }, config, executionContext),
+    ).rejects.toThrow(/geolocation must be an object/i);
+    await expect(
+      executeBrowserTool(
+        "browser.context.configure",
+        { geolocation: { latitude: -100, longitude: 0 } },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/latitude/i);
+    await expect(
+      executeBrowserTool(
+        "browser.context.configure",
+        { geolocation: { latitude: 0, longitude: 181 } },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/longitude/i);
+    await expect(
+      executeBrowserTool(
+        "browser.context.configure",
+        { geolocation: { latitude: 0, longitude: 0, accuracy: -1 } },
+        config,
+        executionContext,
+      ),
+    ).rejects.toThrow(/accuracy/i);
+    await expect(
+      executeBrowserTool("browser.context.configure", { extraHTTPHeaders: [] }, config, executionContext),
+    ).rejects.toThrow(/extraHTTPHeaders must be an object/i);
+    await expect(
+      executeBrowserTool("browser.context.configure", { httpCredentials: "basic" }, config, executionContext),
+    ).rejects.toThrow(/httpCredentials must be an object/i);
+
+    for (let index = 0; index < 130; index += 1) {
+      await executeBrowserTool(
+        "browser.context.configure",
+        { locale: `en-${String(index).padStart(2, "0")}` },
+        config,
+        { sessionId: `sess-evict-${index}` },
+      );
+    }
+  });
+
+  it("uses visual accessibility text when DOM weather extraction is empty", async () => {
+    const config = createConfig(tempRoot);
+    const page = {
+      goto: async () => ({ status: () => 200 }),
+      waitForLoadState: async () => undefined,
+      waitForTimeout: async () => undefined,
+      title: async () => "Forecast",
+      url: () => "https://example.com/forecast",
+      locator: () => ({
+        first: () => ({
+          innerText: async () => "ordinary page text",
+        }),
+      }),
+      accessibility: {
+        snapshot: async () => ({
+          name: "Austin 72°F sunny",
+          value: "Current conditions",
+          children: [{ name: "Clear skies" }],
+        }),
+      },
+    };
+    mocked.launch.mockResolvedValueOnce({
+      newContext: async () => ({
+        newPage: async () => page,
+      }),
+      close: async () => undefined,
+    } as never);
+
+    const result = await executeBrowserTool(
+      "browser.navigate",
+      { url: "https://example.com/forecast", maxChars: 500 },
+      config,
+    );
+
+    expect(result.extractionMode).toBe("visual");
+    expect(result.weather).toMatchObject({
+      temperature: "72°F",
+      condition: "Sunny",
+    });
+    expect(String(result.visualTextSnippet)).toContain("Clear skies");
+  });
+
+  it("decodes HTML entities from fallback search result markup", async () => {
+    const config = createConfig(tempRoot);
+    mocked.launch.mockRejectedValue(new Error("missing browser runtime"));
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          ['<a href="https://example.com/entity">', "A &amp; &quot; &#39; &lt; &gt; &#x27; &#x2F; &#65;", "</a>"].join(
+            "",
+          ),
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    const result = await executeBrowserTool("browser.search", { query: "entities", engine: "duckduckgo" }, config);
+
+    expect(result.results).toEqual([
+      {
+        title: "A & \" ' ' / A",
+        url: "https://example.com/entity",
+        snippet: "A & \" ' ' / A",
+      },
+    ]);
   });
 
   it("applies stored browser session state to playwright contexts", async () => {

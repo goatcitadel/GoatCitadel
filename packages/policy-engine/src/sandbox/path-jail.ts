@@ -84,9 +84,6 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
       const relativeTail = path.relative(probe, absoluteTarget);
       const resolvedPath = path.resolve(realExisting, relativeTail);
       if (rootGuard) {
-        if (!isWithinAnyRoot(resolvedPath, rootGuard.roots) && canCreateMissingJailRoot(probe, lexicalRoots)) {
-          return absoluteTarget;
-        }
         assertWithinRoots(resolvedPath, rootGuard.roots, rootGuard.scope);
       }
       return resolvedPath;

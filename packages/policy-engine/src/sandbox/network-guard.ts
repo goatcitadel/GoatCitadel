@@ -1,17 +1,10 @@
 import { isIP } from "node:net";
 import type { EgressDecision } from "@goatcitadel/contracts";
 
-const DISALLOWED_HOSTS = new Set([
-  "0.0.0.0",
-  "169.254.169.254",
-  "metadata.google.internal",
-  "100.100.100.200",
-]);
+const DISALLOWED_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
 
 function wildcardToRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*");
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`, "i");
 }
 
@@ -63,7 +56,7 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
     };
   }
 
-  if (isLoopbackHost(hostname) && isExplicitLoopbackPattern(matchedPattern, hostname)) {
+  if (isExplicitLoopbackPattern(matchedPattern, hostname)) {
     return {
       target: hostOrUrl,
       hostname,
@@ -91,7 +84,10 @@ export function assertHostAllowed(hostOrUrl: string, allowlist: string[]): void 
   }
 }
 
-export function evaluateDangerousHostBypass(hostOrUrl: string, allowlist: string[]): {
+export function evaluateDangerousHostBypass(
+  hostOrUrl: string,
+  allowlist: string[],
+): {
   blocked: boolean;
   shouldAudit: boolean;
   hostname: string;
@@ -194,9 +190,6 @@ function isPrivateOrReservedHost(hostname: string): boolean {
 
 function isPrivateOrReservedIpv4(host: string): boolean {
   const parts = host.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
-    return true;
-  }
   const [a = -1, b = -1] = parts;
   if (a === 10 || a === 127 || a === 0) {
     return true;
@@ -230,11 +223,6 @@ function isBlockedIpv6(host: string): boolean {
   );
 }
 
-function isLoopbackHost(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  return lower === "localhost" || lower === "127.0.0.1" || lower === "::1";
-}
-
 function isExplicitLoopbackPattern(pattern: string, hostname: string): boolean {
   const normalizedPattern = pattern.toLowerCase().trim();
   const normalizedHost = hostname.toLowerCase();
@@ -245,11 +233,7 @@ function isExplicitLoopbackPattern(pattern: string, hostname: string): boolean {
     return normalizedPattern === "127.0.0.1" || normalizedPattern.startsWith("127.0.0.1:");
   }
   if (normalizedHost === "::1") {
-    return (
-      normalizedPattern === "::1"
-      || normalizedPattern === "[::1]"
-      || normalizedPattern.startsWith("[::1]:")
-    );
+    return normalizedPattern === "::1" || normalizedPattern === "[::1]" || normalizedPattern.startsWith("[::1]:");
   }
   return false;
 }

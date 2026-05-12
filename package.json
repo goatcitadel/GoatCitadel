@@ -44,6 +44,7 @@
     "inventory:inline-sql": "node scripts/inventory-inline-sql.mjs",
     "dependency:risk": "node scripts/dependency-risk-report.mjs",
     "coverage:collect": "node scripts/coverage-collect.mjs",
+    "coverage:uncovered": "node scripts/coverage-uncovered-lines.mjs",
     "coverage:gate": "node scripts/coverage-gate.mjs",
     "coverage:gate:production": "node scripts/coverage-gate.mjs --profile=production",
     "coverage:gate:line100": "node scripts/coverage-gate.mjs --profile=line100",

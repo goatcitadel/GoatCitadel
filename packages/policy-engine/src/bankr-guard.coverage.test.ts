@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BankrActionPreviewRequest, BankrActionType } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
   appendBankrActionAudit,
@@ -139,21 +140,29 @@ describe("bankr guard coverage sweep", () => {
       blockedSymbols: [],
     });
 
-    const tooLarge = evaluateBankrActionPreview(storage, {
-      actionType: "trade",
-      chain: "base",
-      symbol: "ETH",
-      usdEstimate: 55,
-    }, testDay);
+    const tooLarge = evaluateBankrActionPreview(
+      storage,
+      {
+        actionType: "trade",
+        chain: "base",
+        symbol: "ETH",
+        usdEstimate: 55,
+      },
+      testDay,
+    );
     expect(tooLarge.allowed).toBe(false);
     expect(tooLarge.reasonCode).toBe("per_action_cap_exceeded");
 
-    const writeAllowed = evaluateBankrActionPreview(storage, {
-      actionType: "trade",
-      chain: "base",
-      symbol: "ETH",
-      usdEstimate: 35,
-    }, testDay);
+    const writeAllowed = evaluateBankrActionPreview(
+      storage,
+      {
+        actionType: "trade",
+        chain: "base",
+        symbol: "ETH",
+        usdEstimate: 35,
+      },
+      testDay,
+    );
     expect(writeAllowed.allowed).toBe(true);
     expect(writeAllowed.remainingPerActionUsd).toBe(5);
 
@@ -161,12 +170,16 @@ describe("bankr guard coverage sweep", () => {
     expect(afterUsage).toBe(70);
     expect(readBankrDailyUsage(storage, "2026-03-05")).toBe(70);
 
-    const dailyExceeded = evaluateBankrActionPreview(storage, {
-      actionType: "trade",
-      chain: "base",
-      symbol: "ETH",
-      usdEstimate: 40,
-    }, testDay);
+    const dailyExceeded = evaluateBankrActionPreview(
+      storage,
+      {
+        actionType: "trade",
+        chain: "base",
+        symbol: "ETH",
+        usdEstimate: 40,
+      },
+      testDay,
+    );
     expect(dailyExceeded.allowed).toBe(false);
     expect(dailyExceeded.reasonCode).toBe("daily_cap_exceeded");
   });
@@ -186,12 +199,16 @@ describe("bankr guard coverage sweep", () => {
     });
 
     applyBankrBudgetUsage(storage, 80, boundary);
-    const preview = evaluateBankrActionPreview(storage, {
-      actionType: "trade",
-      chain: "base",
-      symbol: "ETH",
-      usdEstimate: 25,
-    }, boundary);
+    const preview = evaluateBankrActionPreview(
+      storage,
+      {
+        actionType: "trade",
+        chain: "base",
+        symbol: "ETH",
+        usdEstimate: 25,
+      },
+      boundary,
+    );
 
     expect(preview.allowed).toBe(false);
     expect(preview.reasonCode).toBe("daily_cap_exceeded");
@@ -341,5 +358,142 @@ describe("bankr guard coverage sweep", () => {
     expect(audit.actionId.length).toBeGreaterThan(10);
     expect(auditRows.length).toBe(1);
     expect(auditRows[0]?.detailsJson).toContain("coverage");
+  });
+
+  it("covers disabled, action, chain, and missing-estimate preview blocks", () => {
+    const { storage } = createStorageStub();
+
+    writeBankrSafetyPolicy(storage, { enabled: false });
+    expect(evaluateBankrActionPreview(storage, { actionType: "read" }).reasonCode).toBe("policy_disabled");
+
+    writeBankrSafetyPolicy(storage, {
+      enabled: true,
+      mode: "read_write",
+      allowedActionTypes: ["read"],
+    });
+    expect(evaluateBankrActionPreview(storage, { actionType: "trade", chain: "base", usdEstimate: 1 }).reasonCode).toBe(
+      "action_type_not_allowed",
+    );
+
+    writeBankrSafetyPolicy(storage, {
+      enabled: true,
+      mode: "read_write",
+      allowedActionTypes: ["trade"],
+      allowedChains: ["base"],
+    });
+    expect(
+      evaluateBankrActionPreview(storage, { actionType: "trade", chain: "polygon", usdEstimate: 1 }).reasonCode,
+    ).toBe("chain_not_allowed");
+    expect(evaluateBankrActionPreview(storage, { actionType: "trade", chain: "base" }).reasonCode).toBe(
+      "usd_estimate_required",
+    );
+
+    writeBankrSafetyPolicy(storage, {
+      enabled: true,
+      mode: "read_write",
+      allowedActionTypes: ["read", "trade"],
+      allowedChains: ["base"],
+    });
+    expect(evaluateBankrActionPreview(storage, { actionType: "read", chain: "base" })).toMatchObject({
+      allowed: true,
+      reason: "Bankr read action passed policy checks.",
+    });
+
+    expect(evaluateBankrActionPreview(storage, [] as unknown as BankrActionPreviewRequest)).toMatchObject({
+      normalized: {
+        actionType: "read",
+      },
+    });
+  });
+
+  it("returns current daily usage for invalid apply/release amounts", () => {
+    const { storage } = createStorageStub();
+    const testDay = new Date("2026-03-20T12:00:00.000Z");
+
+    applyBankrBudgetUsage(storage, 30, testDay);
+
+    expect(applyBankrBudgetUsage(storage, 0, testDay)).toBe(30);
+    expect(applyBankrBudgetUsage(storage, Number.NaN, testDay)).toBe(30);
+    expect(releaseBankrBudgetReservation(storage, 0, testDay)).toBe(30);
+    expect(releaseBankrBudgetReservation(storage, Number.NaN, testDay)).toBe(30);
+  });
+
+  it("normalizes prompt fallbacks for write action types and chains", () => {
+    expect(normalizeBankrAction([] as unknown as Record<string, unknown>)).toEqual({
+      actionType: "read",
+      chain: undefined,
+      symbol: undefined,
+      usdEstimate: undefined,
+      prompt: undefined,
+    });
+
+    expect(normalizeBankrAction({ prompt: "deploy on mainnet" })).toMatchObject({
+      actionType: "deploy",
+      chain: "ethereum",
+    });
+    expect(normalizeBankrAction({ prompt: "submit raw transaction on polygon" })).toMatchObject({
+      actionType: "submit",
+      chain: "polygon",
+    });
+    expect(normalizeBankrAction({ prompt: "sign message on solana" })).toMatchObject({
+      actionType: "sign",
+      chain: "solana",
+    });
+    expect(normalizeBankrAction({ prompt: "send funds to unichain" })).toMatchObject({
+      actionType: "transfer",
+      chain: "unichain",
+    });
+    expect(normalizeBankrAction({ prompt: "look up holdings" })).toMatchObject({
+      actionType: "read",
+      chain: undefined,
+      usdEstimate: undefined,
+    });
+    expect(normalizeBankrAction({ prompt: "buy ETH with $12.50", usdEstimate: "42" })).toMatchObject({
+      actionType: "trade",
+      symbol: "ETH",
+      usdEstimate: 42,
+    });
+  });
+
+  it("falls back when policy array and currency inputs are malformed", () => {
+    const normalized = normalizeBankrSafetyPolicy(
+      {
+        dailyUsdCap: -1,
+        perActionUsdCap: "nope" as unknown as number,
+        allowedChains: [null, ""] as unknown as string[],
+        allowedActionTypes: [null, "nope"] as unknown as BankrActionType[],
+        blockedSymbols: [null, ""] as unknown as string[],
+      },
+      {
+        enabled: true,
+        mode: "read_only",
+        dailyUsdCap: 9,
+        perActionUsdCap: 3,
+        requireApprovalEveryWrite: true,
+        allowedChains: ["base"],
+        allowedActionTypes: ["read"],
+        blockedSymbols: ["ETH"],
+      },
+    );
+
+    expect(normalized.dailyUsdCap).toBe(9);
+    expect(normalized.perActionUsdCap).toBe(3);
+    expect(normalized.allowedChains).toEqual(["base", "ethereum", "polygon", "solana", "unichain"]);
+    expect(normalized.allowedActionTypes).toEqual(["read", "trade", "transfer", "sign", "submit", "deploy"]);
+    expect(normalized.blockedSymbols).toEqual([]);
+  });
+
+  it("stores null USD estimates in audit rows when amounts are invalid", () => {
+    const { storage, auditRows } = createStorageStub();
+
+    appendBankrActionAudit(storage, {
+      sessionId: "session-2",
+      actorId: "operator",
+      actionType: "read",
+      status: "preview_allowed",
+      usdEstimate: Number.NaN,
+    });
+
+    expect(auditRows[0]?.usdEstimate).toBeNull();
   });
 });

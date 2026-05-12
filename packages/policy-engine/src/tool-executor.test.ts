@@ -4100,4 +4100,301 @@ describe("executeTool", () => {
     });
     expect(String((result.document as Record<string, unknown>).text)).toContain("Normalized markdown content");
   });
+
+  it("covers filesystem metadata, artifact, find, copy, move, and delete tools", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    const sourcePath = path.join(testWorkspaceRoot, "source.txt");
+    const copiedPath = path.join(testWorkspaceRoot, "nested", "copied.txt");
+    const movedPath = path.join(testWorkspaceRoot, "nested", "moved.txt");
+    const artifactPath = path.join(testWorkspaceRoot, "artifact.md");
+    await fs.writeFile(sourcePath, "needle\nsecond line\n", "utf8");
+
+    const list = await executeTool(toolRequest("fs.list", { path: testWorkspaceRoot }), policyConfig, storageStub);
+    expect((list.items as Array<Record<string, unknown>>).some((item) => item.name === "source.txt")).toBe(true);
+
+    const stat = await executeTool(toolRequest("fs.stat", { path: sourcePath }), policyConfig, storageStub);
+    expect(stat).toMatchObject({ path: sourcePath, isFile: true });
+
+    const found = await executeTool(
+      toolRequest("file.find", { path: testWorkspaceRoot, pattern: "needle" }),
+      policyConfig,
+      storageStub,
+    );
+    expect(found).toMatchObject({ count: 1, pattern: "needle" });
+
+    const copied = await executeTool(
+      toolRequest("fs.copy", { from: sourcePath, to: copiedPath }),
+      policyConfig,
+      storageStub,
+    );
+    expect(copied).toMatchObject({ from: sourcePath, to: copiedPath });
+
+    const moved = await executeTool(
+      toolRequest("fs.move", { from: copiedPath, to: movedPath }),
+      policyConfig,
+      storageStub,
+    );
+    expect(moved).toMatchObject({ from: copiedPath, to: movedPath });
+
+    const artifact = await executeTool(
+      toolRequest("artifacts.create", { path: artifactPath, title: "Coverage Artifact", body: "Proof" }),
+      policyConfig,
+      storageStub,
+    );
+    expect(artifact).toMatchObject({ path: artifactPath, template: "report" });
+
+    const deleted = await executeTool(toolRequest("fs.delete", { path: movedPath }), policyConfig, storageStub);
+    expect(deleted).toMatchObject({ path: movedPath, deleted: true });
+  });
+
+  it("covers plain filesystem read/write and safe git read-only tools", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    const writePath = path.join(testWorkspaceRoot, "plain", "read-write.txt");
+
+    const written = await executeTool(
+      toolRequest("fs.write", { path: writePath, content: "plain filesystem coverage" }),
+      policyConfig,
+      storageStub,
+    );
+    expect(written).toMatchObject({ path: writePath, bytesWritten: 25 });
+
+    const read = await executeTool(toolRequest("fs.read", { path: writePath }), policyConfig, storageStub);
+    expect(read).toMatchObject({ path: writePath, content: "plain filesystem coverage" });
+
+    const gitStatusResult = await executeTool(toolRequest("git.status", {}), policyConfig, storageStub);
+    expect(gitStatusResult.summary).toEqual(expect.any(String));
+
+    const gitDiffResult = await executeTool(toolRequest("git.diff", { staged: false }), policyConfig, storageStub);
+    expect(gitDiffResult).toMatchObject({ staged: false, truncated: expect.any(Boolean) });
+  });
+
+  it("covers HTTP POST execution and sanitizes leaked tool output", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("Bearer abcdefghijklmnopqrstuvwxyz", { status: 201 })) as typeof fetch,
+    );
+
+    const result = await executeTool(
+      toolRequest("http.post", { url: "https://example.com/api", body: { ok: true } }),
+      policyConfig,
+      storageStub,
+    );
+
+    expect(result).toMatchObject({
+      url: "https://example.com/api",
+      status: 201,
+      body: "[REDACTED]",
+      security: {
+        sanitizedForModel: true,
+        leakDetections: ["bearer_token"],
+      },
+    });
+  });
+
+  it("covers memory write, read, search, and embeddings tools", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const harness = createExecutorKnowledgeHarness();
+
+    const written = await executeTool(
+      toolRequest("memory.write", {
+        namespace: "project",
+        title: "Operator Notes",
+        content: "GoatCitadel prefers native ingestion and visible operator truth.",
+        tags: ["coverage", "memory"],
+        metadata: { source: "test" },
+      }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(written).toMatchObject({ mode: "write", chunksSaved: 1 });
+
+    const upserted = await executeTool(
+      toolRequest("memory.upsert", {
+        namespace: "project",
+        title: "Operator Notes",
+        content: "Updated memory keeps operator truth visible.",
+      }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(upserted).toMatchObject({ mode: "upsert" });
+
+    const listed = await executeTool(
+      toolRequest("memory.read", { namespace: "project" }),
+      policyConfig,
+      harness.storage,
+    );
+    expect((listed.items as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+
+    const queried = await executeTool(
+      toolRequest("memory.read", { namespace: "project", query: "operator truth" }),
+      policyConfig,
+      harness.storage,
+    );
+    expect((queried.items as Array<Record<string, unknown>>)[0]?.score).toBeGreaterThan(0);
+
+    const searched = await executeTool(
+      toolRequest("memory.search", { namespace: "project", query: "native" }),
+      policyConfig,
+      harness.storage,
+    );
+    expect((searched.items as Array<Record<string, unknown>>)[0]?.snippet).toContain("native ingestion");
+
+    const indexed = await executeTool(
+      toolRequest("embeddings.index", { namespace: "project", force: true }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(indexed).toMatchObject({ namespace: "project", indexed: 2 });
+
+    const embeddingResults = await executeTool(
+      toolRequest("embeddings.query", { namespace: "project", query: "operator truth" }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(embeddingResults).toMatchObject({ method: "pseudo-embedding" });
+    expect((embeddingResults.items as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+
+    const docId = String((written.document as Record<string, unknown>).docId);
+    const indexedByDocument = await executeTool(
+      toolRequest("embeddings.index", { documentId: docId }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(indexedByDocument).toMatchObject({ documentId: docId, indexed: 0 });
+  });
+
+  it("covers docs file ingestion, docs search, restricted validation, and shell failures", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    await fs.mkdir(testWorkspaceRoot, { recursive: true });
+    const sourcePath = path.join(testWorkspaceRoot, "docs-source.md");
+    await fs.writeFile(sourcePath, "# Operator Truth\n\nVisible routing and provenance matter.", "utf8");
+    const harness = createExecutorKnowledgeHarness();
+
+    const ingested = await executeTool(
+      toolRequest("docs.ingest", {
+        sourceType: "file",
+        source: sourcePath,
+        namespace: "docs",
+        title: "Operator Truth",
+      }),
+      policyConfig,
+      harness.storage,
+    );
+    expect(ingested).toMatchObject({ backend: { backend: "native" }, chunksSaved: expect.any(Number) });
+
+    const searched = await executeTool(
+      toolRequest("docs.search", { namespace: "docs", query: "provenance" }),
+      policyConfig,
+      harness.storage,
+    );
+    expect((searched.items as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+
+    await expect(
+      executeTool(toolRequest("tests.run", { manager: "pnpm", filter: "bad filter" }), policyConfig, storageStub),
+    ).rejects.toThrow(/Invalid filter/i);
+    await expect(executeTool(toolRequest("lint.run", { manager: "yarn" }), policyConfig, storageStub)).rejects.toThrow(
+      /Only pnpm\/npm are allowed/i,
+    );
+
+    const shellFailure = await executeTool(
+      toolRequest("shell.exec", {
+        command: `"${process.execPath}" -e "process.stdout.write('/etc/secret-token'); process.stderr.write('boom'); process.exit(7)"`,
+      }),
+      policyConfig,
+      storageStub,
+    );
+    expect(shellFailure).toMatchObject({
+      exitCode: 7,
+      stdout: "[REDACTED]",
+      stderr: "boom",
+    });
+  });
+
+  it("covers top-level time, secret rejection, and disabled optional Bankr paths", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+
+    const now = await executeTool(toolRequest("time.now", {}), policyConfig, storageStub);
+    expect(now).toMatchObject({ timezone: expect.any(String), epochMs: expect.any(Number) });
+
+    await expect(
+      executeTool(toolRequest("session.status", { token: "sk-123456789012345678901234" }), policyConfig, storageStub),
+    ).rejects.toThrow(/secret-like material/i);
+
+    await expect(
+      executeTool(toolRequest("bankr.status", {}), policyConfig, storageStub, { bankrBuiltinEnabled: false }),
+    ).rejects.toThrow(/Bankr built-in is disabled/i);
+  });
 });
+
+function toolRequest(toolName: string, args: Record<string, unknown>): ToolInvokeRequest {
+  return {
+    toolName,
+    args,
+    agentId: "agent",
+    sessionId: "sess-coverage",
+  };
+}
+
+function createExecutorKnowledgeHarness(): { storage: Storage } {
+  const documents: Array<Record<string, unknown>> = [];
+  const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
+  let documentSeq = 0;
+  let chunkSeq = 0;
+
+  const storage = {
+    knowledge: {
+      listDocuments: vi.fn((namespace?: string) =>
+        documents.filter((doc) => !namespace || doc.namespace === namespace),
+      ),
+      createDocument: vi.fn((input: Record<string, unknown>) => {
+        const doc = {
+          docId: `doc-${++documentSeq}`,
+          namespace: input.namespace,
+          sourceType: input.sourceType,
+          sourceRef: input.sourceRef,
+          title: input.title,
+          metadata: input.metadata ?? {},
+          createdAt: new Date().toISOString(),
+        };
+        documents.unshift(doc);
+        return doc;
+      }),
+      appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
+        const saved = entries.map((entry, index) => ({
+          chunkId: `chunk-${++chunkSeq}`,
+          docId,
+          seq: index,
+          content: String(entry.content ?? ""),
+          embedding: entry.embedding as number[] | undefined,
+          tokenEstimate: 1,
+          createdAt: new Date().toISOString(),
+        }));
+        chunksByDocId.set(docId, [...(chunksByDocId.get(docId) ?? []), ...saved]);
+        return saved;
+      }),
+      listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
+      listChunksByNamespace: vi.fn((namespace?: string) => {
+        const matchingDocIds = documents
+          .filter((doc) => !namespace || doc.namespace === namespace)
+          .map((doc) => String(doc.docId));
+        return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
+      }),
+      updateChunkEmbedding: vi.fn((chunkId: string, embedding: number[]) => {
+        for (const chunks of chunksByDocId.values()) {
+          const chunk = chunks.find((entry) => entry.chunkId === chunkId);
+          if (chunk) {
+            chunk.embedding = embedding;
+            return chunk;
+          }
+        }
+        return undefined;
+      }),
+    },
+  } as unknown as Storage;
+
+  return { storage };
+}
