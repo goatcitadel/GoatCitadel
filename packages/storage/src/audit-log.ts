@@ -85,7 +85,9 @@ export class AuditLog {
       .flatMap((line) => {
         try {
           const parsed = JSON.parse(line);
-          return parsed && typeof parsed === "object" ? [parsed as Record<string, unknown>] : [];
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? [parsed as Record<string, unknown>]
+            : [];
         } catch {
           return [];
         }
