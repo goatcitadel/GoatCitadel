@@ -237,7 +237,7 @@ export class ChatDelegationStepRepository {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow {
@@ -306,6 +306,14 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
     durableRunId: row.durable_run_id ?? undefined,
     childSessionId: row.child_session_id ?? undefined,
     childTurnId: row.child_turn_id ?? undefined,
-    citations: row.citations_json ? safeJsonParse<ChatCitationRecord[]>(row.citations_json, []) : undefined,
+    citations: parseCitations(row.citations_json),
   };
+}
+
+function parseCitations(raw: string | null): ChatCitationRecord[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, []);
+  return Array.isArray(parsed) ? (parsed as ChatCitationRecord[]) : [];
 }
