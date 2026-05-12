@@ -37,7 +37,7 @@ export class CapabilityCatalogSnapshotRepository {
   }
 
   public get(snapshotId: string): CapabilityCatalogSnapshotRecord {
-    const row = this.getStmt.get(snapshotId) as CapabilityCatalogSnapshotRow | undefined;
+    const row = toSnapshotRow(this.getStmt.get(snapshotId));
     if (!row) {
       throw new NotFoundError({ entity: "capability catalog snapshot", id: snapshotId });
     }
@@ -45,7 +45,7 @@ export class CapabilityCatalogSnapshotRepository {
   }
 
   public find(snapshotId: string): CapabilityCatalogSnapshotRecord | undefined {
-    const row = this.getStmt.get(snapshotId) as CapabilityCatalogSnapshotRow | undefined;
+    const row = toSnapshotRow(this.getStmt.get(snapshotId));
     return row ? mapSnapshotRow(row) : undefined;
   }
 }
@@ -53,10 +53,33 @@ export class CapabilityCatalogSnapshotRepository {
 function mapSnapshotRow(row: CapabilityCatalogSnapshotRow): CapabilityCatalogSnapshotRecord {
   return {
     snapshotId: row.snapshot_id,
-    inspectableEntries: safeJsonParse(row.inspectable_json, []),
-    callableEntries: safeJsonParse(row.callable_json, []),
+    inspectableEntries: parseEntries(row.inspectable_json),
+    callableEntries: parseEntries(row.callable_json),
     createdAt: row.created_at,
   };
 }
 
+function parseEntries(raw: string): CapabilityCatalogSnapshotRecord["inspectableEntries"] {
+  const parsed = safeJsonParse<unknown>(raw, []);
+  return Array.isArray(parsed) ? parsed : [];
+}
 
+function toSnapshotRow(value: unknown): CapabilityCatalogSnapshotRow | undefined {
+  return isSnapshotRow(value) ? value : undefined;
+}
+
+function isSnapshotRow(value: unknown): value is CapabilityCatalogSnapshotRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.snapshot_id === "string" &&
+    typeof value.inspectable_json === "string" &&
+    typeof value.callable_json === "string" &&
+    typeof value.created_at === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
