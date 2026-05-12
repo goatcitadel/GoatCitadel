@@ -300,9 +300,7 @@ async function executeBrowserSearchNative(
         engine,
         query,
         finalUrl: String(snapshot.finalUrl ?? searchUrl),
-        results: Array.isArray(snapshot.results)
-          ? (snapshot.results as Array<{ title: string; url: string; snippet: string }>)
-          : [],
+        results: snapshot.results as Array<{ title: string; url: string; snippet: string }>,
       };
 
       if (normalizedSnapshot.results.length) {
@@ -913,16 +911,13 @@ function storeBrowserSessionState(sessionId: string, state: BrowserSessionState)
 
 function evictOldestBrowserSessionStates(): void {
   while (browserSessionStates.size > MAX_BROWSER_SESSION_STATES) {
-    let oldestKey: string | undefined;
+    let oldestKey = "";
     let oldestLastAccess = Number.POSITIVE_INFINITY;
     for (const [sessionId, entry] of browserSessionStates.entries()) {
       if (entry.lastAccess < oldestLastAccess) {
         oldestLastAccess = entry.lastAccess;
         oldestKey = sessionId;
       }
-    }
-    if (!oldestKey) {
-      break;
     }
     browserSessionStates.delete(oldestKey);
   }
@@ -1864,9 +1859,6 @@ async function applySearchBackend(
   if (!input.requestedBackend || base.results.length === 0) {
     return base;
   }
-  if (input.requestedBackend !== "ollama") {
-    return base;
-  }
 
   try {
     const summary = await summarizeSearchResultsWithOllama(base.query, base.results, input);
@@ -2279,9 +2271,6 @@ function normalizeBrowserSearchResults(
       continue;
     }
     const title = raw.title.replace(/\s+/g, " ").trim();
-    if (!title) {
-      continue;
-    }
     out.push({
       title: title.slice(0, 240),
       url: resolvedUrl,
@@ -2434,13 +2423,9 @@ function decodeBingRedirectUrl(value: string | null): string | undefined {
     return undefined;
   }
   const raw = value.startsWith("a1") ? value.slice(2) : value;
-  try {
-    const decoded = Buffer.from(raw, "base64").toString("utf8").trim();
-    if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
-      return decoded;
-    }
-  } catch {
-    return undefined;
+  const decoded = Buffer.from(raw, "base64").toString("utf8").trim();
+  if (decoded.startsWith("http://") || decoded.startsWith("https://")) {
+    return decoded;
   }
   return normalizeExternalResultTarget(value);
 }
@@ -2475,31 +2460,25 @@ function stripHtmlNoise(input: string): string {
 }
 
 function decodeHtmlEntities(input: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    quot: '"',
+    lt: "<",
+    gt: ">",
+  };
   return input.replace(/&(?:amp|quot|#39|lt|gt|#x27|#x2F|#\d+);/gi, (entity) => {
     const normalized = entity.slice(1, -1).toLowerCase();
-    if (normalized === "amp") {
-      return "&";
-    }
-    if (normalized === "quot") {
-      return '"';
-    }
-    if (normalized === "#39" || normalized === "#x27") {
-      return "'";
-    }
-    if (normalized === "lt") {
-      return "<";
-    }
-    if (normalized === "gt") {
-      return ">";
-    }
-    if (normalized === "#x2f") {
-      return "/";
-    }
     if (normalized.startsWith("#")) {
+      if (normalized === "#39" || normalized === "#x27") {
+        return "'";
+      }
+      if (normalized === "#x2f") {
+        return "/";
+      }
       const numeric = Number(normalized.slice(1));
       return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
     }
-    return entity;
+    return namedEntities[normalized] ?? "";
   });
 }
 

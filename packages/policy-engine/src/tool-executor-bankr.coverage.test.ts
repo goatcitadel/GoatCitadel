@@ -1,6 +1,6 @@
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeBankrSafetyPolicy } from "./bankr-guard.js";
 
 const mocked = vi.hoisted(() => {
@@ -45,6 +45,7 @@ const policyConfig: ToolPolicyConfig = {
 
 describe("tool executor Bankr coverage", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     mocked.execFile.mockClear();
     mocked.spawn.mockClear();
     mocked.execFileAsync.mockReset();
@@ -54,6 +55,10 @@ describe("tool executor Bankr coverage", () => {
       }
       return { stdout: "bankr response\n", stderr: "bankr warning\n" };
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("reports Bankr CLI availability through bankr.status", async () => {
@@ -188,6 +193,52 @@ describe("tool executor Bankr coverage", () => {
     ).rejects.toThrow(/Bankr command failed: rejected/i);
 
     expect(readDailyUsage(storage, "2026-03-22")).toBe(0);
+  });
+
+  it("blocks write prompts when an atomic daily budget reservation would exceed the cap", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T12:00:00.000Z"));
+    const storage = createBankrStorage();
+    writeBankrSafetyPolicy(storage, {
+      enabled: true,
+      mode: "read_write",
+      dailyUsdCap: 10,
+      perActionUsdCap: 10,
+      allowedActionTypes: ["trade", "read"],
+      allowedChains: ["base"],
+    });
+    const originalPrepare = storage.db.prepare.bind(storage.db);
+    let budgetReadCount = 0;
+    storage.db.prepare = ((sql: string) => {
+      const statement = originalPrepare(sql);
+      if (sql.includes("FROM bankr_budget_usage_daily")) {
+        return {
+          ...statement,
+          get: (params: Record<string, unknown>) => {
+            budgetReadCount += 1;
+            return budgetReadCount === 1 ? { usdTotal: 0 } : { usdTotal: 9, day: params.day };
+          },
+        };
+      }
+      return statement;
+    }) as Storage["db"]["prepare"];
+
+    await expect(
+      executeTool(
+        bankrRequest("bankr.write", {
+          prompt: "trade $5 ETH on base",
+          actionType: "trade",
+          chain: "base",
+          symbol: "ETH",
+          usdEstimate: 5,
+        }),
+        policyConfig,
+        storage,
+      ),
+    ).rejects.toThrow(/remaining daily cap \(\$1\)/i);
+
+    expect(readDailyUsage(storage, "2026-03-22")).toBe(9);
+    expect(mocked.execFileAsync).toHaveBeenCalledTimes(1);
   });
 });
 
