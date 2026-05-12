@@ -12,12 +12,7 @@
  */
 
 import { getColorizedSprite } from "./colorize";
-import type {
-  FloorColor,
-  FurnitureInstance,
-  SpriteData,
-  TileType as TileTypeVal,
-} from "./types";
+import type { FloorColor, FurnitureInstance, SpriteData, TileType as TileTypeVal } from "./types";
 import { TILE_SIZE, TileType } from "./types";
 
 /** Wall tile sets: each set has 16 sprites indexed by bitmask (0-15) */
@@ -125,9 +120,7 @@ export function getWallInstances(
       if (tileMap[r][c] !== TileType.WALL) continue;
       const colorIdx = r * layoutCols + c;
       const wallColor = tileColors?.[colorIdx];
-      const wallInfo = wallColor
-        ? getColorizedWallSprite(c, r, tileMap, wallColor)
-        : getWallSprite(c, r, tileMap);
+      const wallInfo = wallColor ? getColorizedWallSprite(c, r, tileMap, wallColor) : getWallSprite(c, r, tileMap);
       if (!wallInfo) continue;
       instances.push({
         sprite: wallInfo.sprite,
@@ -174,31 +167,25 @@ export function wallColorToHex(color: FloorColor): string {
   if (hp < 1) {
     r1 = ch;
     g1 = x;
-    b1 = 0;
   } else if (hp < 2) {
     r1 = x;
     g1 = ch;
-    b1 = 0;
   } else if (hp < 3) {
-    r1 = 0;
     g1 = ch;
     b1 = x;
   } else if (hp < 4) {
-    r1 = 0;
     g1 = x;
     b1 = ch;
   } else if (hp < 5) {
     r1 = x;
-    g1 = 0;
     b1 = ch;
   } else {
     r1 = ch;
-    g1 = 0;
     b1 = x;
   }
 
   const m = lightness - ch / 2;
   const clamp = (v: number) => Math.max(0, Math.min(255, Math.round((v + m) * 255)));
 
-  return `#${clamp(r1).toString(16).padStart(2, '0')}${clamp(g1).toString(16).padStart(2, '0')}${clamp(b1).toString(16).padStart(2, '0')}`;
+  return `#${clamp(r1).toString(16).padStart(2, "0")}${clamp(g1).toString(16).padStart(2, "0")}${clamp(b1).toString(16).padStart(2, "0")}`;
 }

@@ -19,6 +19,7 @@ const skipDirs = [
   "apps/gateway/coverage-exercise",
   "apps/gateway/coverage-smoke",
   "apps/gateway/dist",
+  "apps/mission-control-desktop/src-tauri/target",
   "apps/mission-control/coverage",
   "apps/mission-control/dist",
   "apps/mission-control/dist-node",

@@ -739,7 +739,8 @@ function sortObjectByKey(record) {
 function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gatewayServiceSource) {
   let violations = 0;
   const privateDependencyAlias =
-    routeCompositionSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;\n/)?.[0] ?? "";
+    routeCompositionSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;\r?\n/)?.[0] ??
+    "";
   if (
     normalizeTypeAlias(privateDependencyAlias) !==
     normalizeTypeAlias(EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS)

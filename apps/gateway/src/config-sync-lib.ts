@@ -56,7 +56,7 @@ export async function syncUnifiedConfig(
   const materializedExamples = await materializeConfigFilesFromExamples(configDir, SPLIT_CONFIG_FILENAMES);
   let createdUnified = false;
   let unifiedRaw: string;
-  let unifiedMtimeMs = 0;
+  let unifiedMtimeMs: number;
 
   try {
     unifiedRaw = await fs.readFile(unifiedPath, "utf8");
@@ -79,7 +79,7 @@ export async function syncUnifiedConfig(
     await writeJsonIfChanged(unifiedPath, initialUnified);
     createdUnified = true;
     unifiedRaw = JSON.stringify(initialUnified);
-    unifiedMtimeMs = Date.now();
+    unifiedMtimeMs = (await fs.stat(unifiedPath)).mtimeMs;
   }
 
   const parsed = parseJson(unifiedRaw, unifiedPath);
@@ -131,7 +131,7 @@ function parseJson(raw: string, filePath: string): unknown {
     return JSON.parse(raw);
   } catch (error) {
     const reason = (error as Error).message;
-    throw new Error(`Invalid JSON in ${filePath}: ${reason}`);
+    throw new Error(`Invalid JSON in ${filePath}: ${reason}`, { cause: error });
   }
 }
 
@@ -141,17 +141,13 @@ function normalizeSection(value: unknown, filename: string): unknown {
       return { jobs: value };
     }
     if (!isRecord(value)) {
-      throw new Error(
-        `Invalid section for ${filename} in config/goatcitadel.json (expected object or array)`,
-      );
+      throw new Error(`Invalid section for ${filename} in config/goatcitadel.json (expected object or array)`);
     }
     return value;
   }
 
   if (!isRecord(value)) {
-    throw new Error(
-      `Invalid section for ${filename} in config/goatcitadel.json (expected object)`,
-    );
+    throw new Error(`Invalid section for ${filename} in config/goatcitadel.json (expected object)`);
   }
   return value;
 }
@@ -258,9 +254,9 @@ async function warnIfSplitIsNewer(
   }
 
   const detail = `${path.basename(splitPath)} is newer than ${path.basename(unifiedPath)}; unified config values are being applied`;
+  // Config drift is intentionally terminal-visible during bootstrap and sync.
+  // eslint-disable-next-line no-console
   console.warn(
-    isVerboseLoggingEnabled()
-      ? `[goatcitadel:config] warning: ${detail}`
-      : `[goatcitadel] config override: ${detail}`,
+    isVerboseLoggingEnabled() ? `[goatcitadel:config] warning: ${detail}` : `[goatcitadel] config override: ${detail}`,
   );
 }

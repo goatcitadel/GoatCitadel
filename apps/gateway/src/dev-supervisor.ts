@@ -489,7 +489,6 @@ function scheduleRestartAfter(delayMs: number, reason: string): void {
     restartTimer = null;
     void restartGateway(reason);
   }, delay);
-  restartTimer.unref();
 }
 
 function clearRestartTimer(): void {

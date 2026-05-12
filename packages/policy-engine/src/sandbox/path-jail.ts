@@ -51,6 +51,10 @@ function isWithinAnyRoot(target: string, roots: string[]): boolean {
   return roots.some((root) => isWithin(path.resolve(root), target));
 }
 
+function matchingLexicalRoots(target: string, roots: string[]): string[] {
+  return roots.map((root) => path.resolve(root)).filter((root) => isWithin(root, target));
+}
+
 function assertWithinRoots(target: string, roots: string[], scope: string): void {
   const allowed = isWithinAnyRoot(target, roots);
   if (!allowed) {
@@ -60,6 +64,7 @@ function assertWithinRoots(target: string, roots: string[], scope: string): void
 
 function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots: string[]; scope: string }): string {
   const absoluteTarget = path.resolve(targetPath);
+  const lexicalRoots = rootGuard ? matchingLexicalRoots(absoluteTarget, rootGuard.roots) : [];
 
   // Resolve symlinks for the closest existing ancestor so read/write checks
   // cannot escape via links inside an otherwise allowed directory.
@@ -68,6 +73,9 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
     if (fs.existsSync(probe)) {
       const realExisting = fs.realpathSync(probe);
       if (rootGuard) {
+        if (!isWithinAnyRoot(realExisting, rootGuard.roots) && canCreateMissingJailRoot(probe, lexicalRoots)) {
+          return absoluteTarget;
+        }
         assertWithinRoots(realExisting, rootGuard.roots, rootGuard.scope);
       }
       if (probe === absoluteTarget) {
@@ -76,6 +84,9 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
       const relativeTail = path.relative(probe, absoluteTarget);
       const resolvedPath = path.resolve(realExisting, relativeTail);
       if (rootGuard) {
+        if (!isWithinAnyRoot(resolvedPath, rootGuard.roots) && canCreateMissingJailRoot(probe, lexicalRoots)) {
+          return absoluteTarget;
+        }
         assertWithinRoots(resolvedPath, rootGuard.roots, rootGuard.scope);
       }
       return resolvedPath;
@@ -92,4 +103,8 @@ function resolvePathViaExistingAncestor(targetPath: string, rootGuard?: { roots:
     assertWithinRoots(absoluteTarget, rootGuard.roots, rootGuard.scope);
   }
   return absoluteTarget;
+}
+
+function canCreateMissingJailRoot(existingAncestor: string, lexicalRoots: string[]): boolean {
+  return lexicalRoots.some((root) => !isWithin(root, existingAncestor) && isWithin(existingAncestor, root));
 }

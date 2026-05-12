@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment, no-console */
+/* eslint-disable no-console */
 // @ts-nocheck
 import type { FurnitureCatalogEntry, SpriteData } from "../types";
 

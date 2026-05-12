@@ -16,11 +16,7 @@ const colorizeCache = new Map<string, SpriteData>();
  * Dispatches to colorize or adjust mode based on `color.colorize`.
  * Caller provides a unique cache key that must include the colorize flag.
  */
-export function getColorizedSprite(
-  cacheKey: string,
-  sprite: SpriteData,
-  color: FloorColor,
-): SpriteData {
+export function getColorizedSprite(cacheKey: string, sprite: SpriteData, color: FloorColor): SpriteData {
   const cached = colorizeCache.get(cacheKey);
   if (cached) return cached;
   const result = color.colorize ? colorizeSprite(sprite, color) : adjustSprite(sprite, color);
@@ -50,8 +46,8 @@ export function colorizeSprite(sprite: SpriteData, color: FloorColor): SpriteDat
   for (const row of sprite) {
     const newRow: string[] = [];
     for (const pixel of row) {
-      if (pixel === '') {
-        newRow.push('');
+      if (pixel === "") {
+        newRow.push("");
         continue;
       }
 
@@ -98,7 +94,7 @@ function extractAlpha(pixel: string): number {
 /** Append alpha to a #RRGGBB hex string, omitting if fully opaque. */
 function appendAlpha(hex: string, alpha: number): string {
   if (alpha >= 255) return hex;
-  return `${hex}${alpha.toString(16).padStart(2, '0').toUpperCase()}`;
+  return `${hex}${alpha.toString(16).padStart(2, "0").toUpperCase()}`;
 }
 
 /** Convert HSL (h: 0-360, s: 0-1, l: 0-1) to #RRGGBB hex string */
@@ -113,26 +109,20 @@ function hslToHex(h: number, s: number, l: number): string {
   if (hp < 1) {
     r1 = c;
     g1 = x;
-    b1 = 0;
   } else if (hp < 2) {
     r1 = x;
     g1 = c;
-    b1 = 0;
   } else if (hp < 3) {
-    r1 = 0;
     g1 = c;
     b1 = x;
   } else if (hp < 4) {
-    r1 = 0;
     g1 = x;
     b1 = c;
   } else if (hp < 5) {
     r1 = x;
-    g1 = 0;
     b1 = c;
   } else {
     r1 = c;
-    g1 = 0;
     b1 = x;
   }
 
@@ -141,7 +131,7 @@ function hslToHex(h: number, s: number, l: number): string {
   const g = Math.round((g1 + m) * 255);
   const bOut = Math.round((b1 + m) * 255);
 
-  return `#${clamp255(r).toString(16).padStart(2, '0')}${clamp255(g).toString(16).padStart(2, '0')}${clamp255(bOut).toString(16).padStart(2, '0')}`.toUpperCase();
+  return `#${clamp255(r).toString(16).padStart(2, "0")}${clamp255(g).toString(16).padStart(2, "0")}${clamp255(bOut).toString(16).padStart(2, "0")}`.toUpperCase();
 }
 
 function clamp255(v: number): number {
@@ -159,7 +149,7 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   if (max === min) return [0, 0, l];
   const d = max - min;
   const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h = 0;
+  let h: number;
   if (max === rf) h = ((gf - bf) / d + (gf < bf ? 6 : 0)) * 60;
   else if (max === gf) h = ((bf - rf) / d + 2) * 60;
   else h = ((rf - gf) / d + 4) * 60;
@@ -181,8 +171,8 @@ export function adjustSprite(sprite: SpriteData, color: FloorColor): SpriteData 
   for (const row of sprite) {
     const newRow: string[] = [];
     for (const pixel of row) {
-      if (pixel === '') {
-        newRow.push('');
+      if (pixel === "") {
+        newRow.push("");
         continue;
       }
 

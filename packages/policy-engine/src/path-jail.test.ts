@@ -25,6 +25,26 @@ describe("assertWritePathInJail", () => {
     expect(() => assertWritePathInJail("./workspace/../secret.txt", ["./workspace"])).toThrow(/outside write jail/i);
   });
 
+  it("allows writes under a configured jail root that does not exist yet", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-missing-root-"));
+    tempDirs.push(root);
+
+    const jailRoot = path.join(root, "workspace");
+    const attemptedWritePath = path.join(jailRoot, "verification", "proof.md");
+
+    expect(() => assertWritePathInJail(attemptedWritePath, [jailRoot])).not.toThrow();
+  });
+
+  it("still blocks siblings of a missing configured jail root", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-missing-root-"));
+    tempDirs.push(root);
+
+    const jailRoot = path.join(root, "workspace");
+    const attemptedWritePath = path.join(root, "workspace-sibling", "proof.md");
+
+    expect(() => assertWritePathInJail(attemptedWritePath, [jailRoot])).toThrow(/outside write jail/i);
+  });
+
   it("blocks writes through symlink escape paths", () => {
     const fixture = createSymlinkFixture();
     if (!fixture) {

@@ -175,7 +175,7 @@ function isWhitespace(char: string): boolean {
 }
 
 function isWordLike(char: string): boolean {
-  return /[\p{L}\p{N}_/\\:.\-]/u.test(char);
+  return /[\p{L}\p{N}_/\\:.-]/u.test(char);
 }
 
 function isDensePunctuation(char: string): boolean {

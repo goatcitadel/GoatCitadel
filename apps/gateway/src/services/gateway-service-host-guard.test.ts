@@ -325,8 +325,9 @@ describe("gateway service host guard", () => {
     expect(portSource).not.toMatch(/\bGatewayRouteCompositionPort\s+(?:extends|=)[^;\n]*GatewayService\b/);
     expect(portSource).not.toMatch(/\bGatewayRouteCompositionPort\s+(?:extends|=)[^;\n]*ServiceContext\b/);
     const compositionPrivateDependencyType =
-      portSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;\n/)?.[0] ?? "";
-    const compositionHostType = portSource.match(/export type GatewayRouteCompositionHost\s*=[\s\S]*?;\n/)?.[0] ?? "";
+      portSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;\r?\n/)?.[0] ?? "";
+    const compositionHostType =
+      portSource.match(/export type GatewayRouteCompositionHost\s*=[\s\S]*?;\r?\n/)?.[0] ?? "";
     expect(compositionPrivateDependencyType).not.toMatch(/\b(?:any|unknown|Partial\s*<|Record\s*<)/);
     expect(compositionHostType).not.toMatch(/\b(?:any|unknown|Partial\s*<|Record\s*<)/);
     expect(normalizeTypeAlias(compositionPrivateDependencyType)).toBe(

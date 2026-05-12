@@ -21,7 +21,7 @@ export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLo
     return { applied: [], skipped: [] };
   }
 
-  let raw = "";
+  let raw: string;
   try {
     raw = fs.readFileSync(envPath, "utf8");
   } catch {
@@ -100,7 +100,7 @@ export function upsertLocalEnvVar(
   }
 
   const nextLine = `${validatedKey}=${serializeEnvValue(value)}`;
-  let raw = "";
+  let raw: string;
   try {
     raw = fs.readFileSync(envPath, "utf8");
   } catch {
@@ -114,9 +114,7 @@ export function upsertLocalEnvVar(
     if (!trimmed || trimmed.startsWith("#")) {
       return line;
     }
-    const candidate = trimmed.startsWith("export ")
-      ? trimmed.slice("export ".length).trimStart()
-      : trimmed;
+    const candidate = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trimStart() : trimmed;
     const splitIndex = candidate.indexOf("=");
     if (splitIndex <= 0) {
       return line;
@@ -131,15 +129,14 @@ export function upsertLocalEnvVar(
 
   const normalized = replaced
     ? updatedLines.join("\n")
-    : [...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")), nextLine, ""].join("\n");
+    : [...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")), nextLine, ""].join(
+        "\n",
+      );
   fs.writeFileSync(envPath, normalized, "utf8");
   return { path: envPath, updated: true };
 }
 
-export function deleteLocalEnvVar(
-  key: string,
-  options?: { rootDir?: string },
-): { path?: string; updated: boolean } {
+export function deleteLocalEnvVar(key: string, options?: { rootDir?: string }): { path?: string; updated: boolean } {
   const envPath = resolveWritableEnvFilePath(options);
   if (!envPath || !fs.existsSync(envPath)) {
     return { path: envPath, updated: false };
@@ -158,9 +155,7 @@ export function deleteLocalEnvVar(
     if (!trimmed || trimmed.startsWith("#")) {
       return true;
     }
-    const candidate = trimmed.startsWith("export ")
-      ? trimmed.slice("export ".length).trimStart()
-      : trimmed;
+    const candidate = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trimStart() : trimmed;
     const splitIndex = candidate.indexOf("=");
     if (splitIndex <= 0) {
       return true;
@@ -177,7 +172,10 @@ export function deleteLocalEnvVar(
     return { path: envPath, updated: false };
   }
 
-  const normalized = [...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")), ""].join("\n");
+  const normalized = [
+    ...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")),
+    "",
+  ].join("\n");
   fs.writeFileSync(envPath, normalized, "utf8");
   return { path: envPath, updated: true };
 }
@@ -192,9 +190,7 @@ function parseEnv(raw: string): Record<string, string> {
       continue;
     }
 
-    const candidate = trimmed.startsWith("export ")
-      ? trimmed.slice("export ".length).trimStart()
-      : trimmed;
+    const candidate = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trimStart() : trimmed;
 
     const splitIndex = candidate.indexOf("=");
     if (splitIndex <= 0) {
@@ -207,13 +203,13 @@ function parseEnv(raw: string): Record<string, string> {
     }
 
     let value = candidate.slice(splitIndex + 1).trim();
-    if (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) {
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
       value = value
         .slice(1, -1)
         .replace(/\\n/g, "\n")
         .replace(/\\r/g, "\r")
         .replace(/\\t/g, "\t")
-        .replace(/\\"/g, "\"")
+        .replace(/\\"/g, '"')
         .replace(/\\\\/g, "\\");
     } else if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
       value = value.slice(1, -1);
@@ -233,7 +229,7 @@ function parseEnv(raw: string): Record<string, string> {
 function serializeEnvValue(value: string): string {
   const escaped = value
     .replace(/\\/g, "\\\\")
-    .replace(/"/g, "\\\"")
+    .replace(/"/g, '\\"')
     .replace(/\n/g, "\\n")
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t");

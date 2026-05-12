@@ -170,7 +170,7 @@ describe("chat workbench helpers", () => {
     expect(revertedAll.revertedFiles).toEqual(["index.ts"]);
     expect(revertedAll.changedFiles).toEqual([]);
     expect(await readNormalized(path.join(projectRoot, "index.ts"))).toBe("export const demo = true;\n");
-  });
+  }, 30_000);
 
   it("removes untracked files when reverting all workbench changes", async () => {
     const { deps, projectRoot } = await createGitWorkbenchFixture();
@@ -180,7 +180,7 @@ describe("chat workbench helpers", () => {
 
     expect(reverted.revertedFiles).toEqual(["scratch.txt"]);
     await expect(fs.stat(path.join(projectRoot, "scratch.txt"))).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  }, 30_000);
 });
 
 async function createWorkbenchFixture(

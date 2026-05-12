@@ -15,9 +15,10 @@ export default tseslint.config(
       "**/.codex-smoke/**",
       "**/.worktrees/**",
       "**/src-tauri/target/**",
+      "**/artifacts/**",
       "vendor/**",
-      "*.mjs",
-      "*.cjs",
+      "**/*.mjs",
+      "**/*.cjs",
     ],
   },
   js.configs.recommended,
@@ -30,6 +31,18 @@ export default tseslint.config(
         caches: "readonly",
         self: "readonly",
       },
+    },
+  },
+  {
+    files: ["scripts/lib/**/*.js"],
+    languageOptions: {
+      globals: {
+        exports: "writable",
+        require: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
   {
@@ -50,6 +63,12 @@ export default tseslint.config(
       "no-console": "off",
       "max-lines": "off",
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
+    files: ["apps/mission-control/src/pixel-office/**/*.ts"],
+    rules: {
+      "@typescript-eslint/ban-ts-comment": "off",
     },
   },
   {

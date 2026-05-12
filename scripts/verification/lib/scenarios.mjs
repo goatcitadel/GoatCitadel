@@ -128,6 +128,16 @@ function buildVerificationUiUrl(uiUrl, href) {
   return href.startsWith("/") ? `${uiUrl}${href}` : `${uiUrl}/${href}`;
 }
 
+function withVerificationRouteParams(href, params) {
+  const url = new URL(href, "http://goatcitadel.local");
+  for (const [key, value] of Object.entries(params)) {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 export async function runFastLane(context) {
   for (const command of FAST_LANE_COMMANDS) {
     await runScenario(
@@ -469,6 +479,8 @@ export async function runDeepCoreLane(context, options = {}) {
     }
     const onboardingCompleted = Boolean(onboardingStateResponse.body?.completed);
     const shellLandingTab = onboardingCompleted ? "dashboard" : "onboarding";
+    const verificationTarget = resolveVerificationTargetContext();
+    const verificationPackageName = verificationTarget.packageName;
 
     await runGatewayApiSurfaceScenarios(context, stack.gatewayUrl, seedResponse.body);
 
@@ -491,12 +503,23 @@ export async function runDeepCoreLane(context, options = {}) {
         },
         async ({ correlationId }) => {
           const metrics = {};
-          for (const target of TAB_ROUTES) {
-            await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(target.tab)}`, { waitUntil: "domcontentloaded" });
-            await waitForMissionControlShell(page);
-            await waitForTabReady(page, target.tab === "dashboard" ? shellLandingTab : target.tab);
-            await page.waitForTimeout(800);
-            metrics[target.tab] = "ok";
+          if (verificationTarget.isNext) {
+            for (const target of getNextCoreNavigationRoutes(verificationTarget)) {
+              await page.goto(buildVerificationUiUrl(stack.uiUrl, target.href), { waitUntil: "domcontentloaded" });
+              await waitForVerificationRouteReady(page, target, verificationPackageName);
+              await page.waitForTimeout(800);
+              metrics[target.slug] = "ok";
+            }
+          } else {
+            for (const target of TAB_ROUTES) {
+              await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(target.tab)}`, {
+                waitUntil: "domcontentloaded",
+              });
+              await waitForMissionControlShell(page);
+              await waitForTabReady(page, target.tab === "dashboard" ? shellLandingTab : target.tab);
+              await page.waitForTimeout(800);
+              metrics[target.tab] = "ok";
+            }
           }
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "core-browser-navigation",
@@ -526,17 +549,33 @@ export async function runDeepCoreLane(context, options = {}) {
           await page.evaluate((workspaceId) => {
             window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", String(workspaceId));
           }, seedResponse.body.workspaceId);
-          await page.goto(`${stack.uiUrl}/?tab=chat`, { waitUntil: "domcontentloaded" });
-          await waitForMissionControlShell(page);
-          await waitForTabReady(page, "chat");
-          await setBrowserCorrelation(page, correlationId, seedResponse.body.sessionId);
-          const seededSessionButton = page.locator(".chat-v11-session-row button").first();
-          await seededSessionButton.waitFor({ timeout: 15000 });
-          await seededSessionButton.click();
-          await page.waitForTimeout(1000);
-          await page.waitForSelector(".chat-v11-turn-surface", { timeout: 15000 });
-          await page.getByText("Review run details", { exact: true }).first().click();
-          await page.waitForSelector(".chat-v11-turn-details[open]", { timeout: 10000 });
+          if (verificationTarget.isNext) {
+            const chatRoute = getVerificationRoute(verificationTarget, "chat");
+            const seededChatHref = withVerificationRouteParams(chatRoute.href, {
+              sessionId: seedResponse.body.sessionId,
+            });
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, seededChatHref), { waitUntil: "domcontentloaded" });
+            await waitForVerificationRouteReady(page, chatRoute, verificationPackageName);
+            await setBrowserCorrelation(page, correlationId, seedResponse.body.sessionId);
+            await page.waitForSelector(".mc-next-thread-turn-surface", { timeout: 15000 });
+            const detailButton = page.locator(".mc-next-thread-inline-button", { hasText: /Details|Run details/i }).first();
+            if (await detailButton.isVisible().catch(() => false)) {
+              await detailButton.click();
+              await page.waitForTimeout(500);
+            }
+          } else {
+            await page.goto(`${stack.uiUrl}/?tab=chat`, { waitUntil: "domcontentloaded" });
+            await waitForMissionControlShell(page);
+            await waitForTabReady(page, "chat");
+            await setBrowserCorrelation(page, correlationId, seedResponse.body.sessionId);
+            const seededSessionButton = page.locator(".chat-v11-session-row button").first();
+            await seededSessionButton.waitFor({ timeout: 15000 });
+            await seededSessionButton.click();
+            await page.waitForTimeout(1000);
+            await page.waitForSelector(".chat-v11-turn-surface", { timeout: 15000 });
+            await page.getByText("Review run details", { exact: true }).first().click();
+            await page.waitForSelector(".chat-v11-turn-details[open]", { timeout: 10000 });
+          }
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "core-chat-thread",
             page,
@@ -564,24 +603,34 @@ export async function runDeepCoreLane(context, options = {}) {
           subsystem: "shell",
         },
         async ({ correlationId }) => {
-          await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(shellLandingTab)}`, {
-            waitUntil: "domcontentloaded",
-          });
-          await waitForMissionControlShell(page);
-          await waitForTabReady(page, shellLandingTab);
-          await setBrowserCorrelation(page, correlationId);
-          await page.getByRole("button", { name: "Command Palette" }).click();
-          await page.getByPlaceholder("Type a page or action...").fill("chat");
-          await page.locator(".command-palette-action", { hasText: "Open Chat" }).first().waitFor({ timeout: 15000 });
-          await page.keyboard.press("Escape");
-          await page.getByRole("button", { name: "Command Palette" }).click();
-          await page.getByPlaceholder("Type a page or action...").fill("diagnostics");
-          const diagnosticsAction = page
-            .locator(".command-palette-action", { hasText: "Show developer diagnostics" })
-            .first();
-          await diagnosticsAction.waitFor({ timeout: 15000 });
-          await diagnosticsAction.click();
-          await page.waitForSelector('[aria-label="Developer diagnostics"]', { timeout: 15000 });
+          if (verificationTarget.isNext) {
+            const diagnosticsRoute = getVerificationRoute(verificationTarget, "ops-diagnostics");
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, diagnosticsRoute.href), {
+              waitUntil: "domcontentloaded",
+            });
+            await waitForVerificationRouteReady(page, diagnosticsRoute, verificationPackageName);
+            await setBrowserCorrelation(page, correlationId);
+            await performVerificationInteraction(page, "open-inspector", verificationPackageName);
+          } else {
+            await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(shellLandingTab)}`, {
+              waitUntil: "domcontentloaded",
+            });
+            await waitForMissionControlShell(page);
+            await waitForTabReady(page, shellLandingTab);
+            await setBrowserCorrelation(page, correlationId);
+            await page.getByRole("button", { name: "Command Palette" }).click();
+            await page.getByPlaceholder("Type a page or action...").fill("chat");
+            await page.locator(".command-palette-action", { hasText: "Open Chat" }).first().waitFor({ timeout: 15000 });
+            await page.keyboard.press("Escape");
+            await page.getByRole("button", { name: "Command Palette" }).click();
+            await page.getByPlaceholder("Type a page or action...").fill("diagnostics");
+            const diagnosticsAction = page
+              .locator(".command-palette-action", { hasText: "Show developer diagnostics" })
+              .first();
+            await diagnosticsAction.waitFor({ timeout: 15000 });
+            await diagnosticsAction.click();
+            await page.waitForSelector('[aria-label="Developer diagnostics"]', { timeout: 15000 });
+          }
           const artifacts = await captureBrowserArtifacts(context, {
             slug: "core-command-palette-diagnostics",
             page,
@@ -607,41 +656,77 @@ export async function runDeepCoreLane(context, options = {}) {
           subsystem: "core-browser",
         },
         async ({ correlationId }) => {
-          await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(shellLandingTab)}`, {
-            waitUntil: "domcontentloaded",
-          });
-          await waitForMissionControlShell(page);
-          await waitForTabReady(page, shellLandingTab);
-          await page.getByRole("button", { name: "Command Palette" }).click();
-          await page.getByPlaceholder("Type a page or action...").fill("reduced effects");
-          const reducedEffectsAction = page
-            .locator(".command-palette-action", { hasText: "Use reduced effects" })
-            .first();
-          await reducedEffectsAction.waitFor({ timeout: 15000 });
-          await reducedEffectsAction.click();
-          await page.waitForFunction(
-            () => {
-              const shell = document.querySelector(".layout-shell");
-              return shell?.getAttribute("data-effective-effects-mode") === "reduced";
-            },
-            { timeout: 15000 },
-          );
-          await page.waitForTimeout(400);
-          const dashboardPerf = await measureLongTaskProfile(page, async () => {
-            await page.evaluate(async () => {
-              for (let index = 0; index < 8; index += 1) {
-                window.scrollTo(0, index % 2 === 0 ? document.body.scrollHeight : 0);
-                await new Promise((resolve) => setTimeout(resolve, 80));
-              }
+          let dashboardPerf;
+          let chatPerf;
+          if (verificationTarget.isNext) {
+            await page.evaluate((workspaceId) => {
+              window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", String(workspaceId));
+              window.localStorage.setItem("goatcitadel.ui.effects_mode.v1", "reduced");
+            }, seedResponse.body.workspaceId);
+            const opsRoute = getVerificationRoute(verificationTarget, "ops-activity");
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, opsRoute.href), {
+              waitUntil: "domcontentloaded",
             });
-          });
-          await page.goto(`${stack.uiUrl}/?tab=chat`, { waitUntil: "domcontentloaded" });
-          await waitForMissionControlShell(page);
-          await waitForTabReady(page, "chat");
-          const chatPerf = await measureLongTaskProfile(page, async () => {
+            await waitForVerificationRouteReady(page, opsRoute, verificationPackageName);
+            await page.waitForFunction(
+              () => document.querySelector(".mc-next-shell")?.classList.contains("ui-effects-reduced"),
+              undefined,
+              { timeout: 15000 },
+            );
+            await page.waitForTimeout(400);
+            dashboardPerf = await measureLongTaskProfile(page, async () => {
+              await page.evaluate(async () => {
+                for (let index = 0; index < 8; index += 1) {
+                  window.scrollTo(0, index % 2 === 0 ? document.body.scrollHeight : 0);
+                  await new Promise((resolve) => setTimeout(resolve, 80));
+                }
+              });
+            });
+            const chatRoute = getVerificationRoute(verificationTarget, "chat");
+            const seededChatHref = withVerificationRouteParams(chatRoute.href, {
+              sessionId: seedResponse.body.sessionId,
+            });
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, seededChatHref), { waitUntil: "domcontentloaded" });
+            await waitForVerificationRouteReady(page, chatRoute, verificationPackageName);
+          } else {
+            await page.goto(`${stack.uiUrl}/?tab=${encodeURIComponent(shellLandingTab)}`, {
+              waitUntil: "domcontentloaded",
+            });
+            await waitForMissionControlShell(page);
+            await waitForTabReady(page, shellLandingTab);
+            await page.getByRole("button", { name: "Command Palette" }).click();
+            await page.getByPlaceholder("Type a page or action...").fill("reduced effects");
+            const reducedEffectsAction = page
+              .locator(".command-palette-action", { hasText: "Use reduced effects" })
+              .first();
+            await reducedEffectsAction.waitFor({ timeout: 15000 });
+            await reducedEffectsAction.click();
+            await page.waitForFunction(
+              () => {
+                const shell = document.querySelector(".layout-shell");
+                return shell?.getAttribute("data-effective-effects-mode") === "reduced";
+              },
+              { timeout: 15000 },
+            );
+            await page.waitForTimeout(400);
+            dashboardPerf = await measureLongTaskProfile(page, async () => {
+              await page.evaluate(async () => {
+                for (let index = 0; index < 8; index += 1) {
+                  window.scrollTo(0, index % 2 === 0 ? document.body.scrollHeight : 0);
+                  await new Promise((resolve) => setTimeout(resolve, 80));
+                }
+              });
+            });
+            await page.goto(`${stack.uiUrl}/?tab=chat`, { waitUntil: "domcontentloaded" });
+            await waitForMissionControlShell(page);
+            await waitForTabReady(page, "chat");
+          }
+          chatPerf = await measureLongTaskProfile(page, async () => {
             await page.evaluate(async () => {
-              const rail = document.querySelector(".chat-v11-session-rail");
-              const thread = document.querySelector(".chat-v11-thread-view");
+              const rail =
+                document.querySelector(".chat-v11-session-rail") ?? document.querySelector(".mc-next-threaded-rail");
+              const thread =
+                document.querySelector(".chat-v11-thread-view") ?? document.querySelector(".mc-next-thread-scroll");
               for (const element of [rail, thread]) {
                 if (!(element instanceof HTMLElement)) {
                   continue;
@@ -2712,6 +2797,8 @@ export async function runVisualRegressionLane(context, options = {}) {
 }
 
 export async function runDeepEcosystemLane(context, options = {}) {
+  const verificationTarget = resolveVerificationTargetContext();
+  const verificationPackageName = verificationTarget.packageName;
   const stack = await startVerificationStack(context, {
     includeUi: true,
   });
@@ -2882,9 +2969,17 @@ export async function runDeepEcosystemLane(context, options = {}) {
           await page.addInitScript(() => {
             window.localStorage.setItem("goatcitadel.ui.effects_mode.v1", "reduced");
           });
-          await page.goto(`${stack.uiUrl}/?tab=office`, { waitUntil: "domcontentloaded" });
+          if (verificationTarget.isNext) {
+            const officeSuccessorRoute = getVerificationRoute(verificationTarget, "cowork-board");
+            await page.goto(buildVerificationUiUrl(stack.uiUrl, officeSuccessorRoute.href), {
+              waitUntil: "domcontentloaded",
+            });
+            await waitForVerificationRouteReady(page, officeSuccessorRoute, verificationPackageName);
+          } else {
+            await page.goto(`${stack.uiUrl}/?tab=office`, { waitUntil: "domcontentloaded" });
+            await page.waitForSelector(".office-stage-panel", { timeout: 25000 });
+          }
           await setBrowserCorrelation(page, correlationId);
-          await page.waitForSelector(".office-stage-panel", { timeout: 25000 });
           await page.waitForTimeout(3500);
           const perf = await measureLongTaskProfile(page, async () => {
             await page.evaluate(async () => {
@@ -2910,7 +3005,11 @@ export async function runDeepEcosystemLane(context, options = {}) {
               longTaskCount: perf.longTaskCount,
               maxLongTaskMs: perf.maxLongTaskMs,
             },
-            notes: ["Office route rendered with reduced effects enabled."],
+            notes: [
+              verificationTarget.isNext
+                ? "Office successor route rendered with reduced effects enabled."
+                : "Office route rendered with reduced effects enabled.",
+            ],
             artifacts,
           };
         },
@@ -4266,6 +4365,27 @@ async function waitForTabReady(page, tab, timeoutMs = 30000) {
       await page.waitForSelector(".shell-bar", { timeout: timeoutMs });
       break;
   }
+}
+
+function getVerificationRoute(verificationTarget, slug) {
+  const route = verificationTarget.surfaceRoutes.find((item) => item.slug === slug);
+  if (!route) {
+    throw new Error(`Verification route ${slug} is not available for ${verificationTarget.packageName}.`);
+  }
+  return route;
+}
+
+function getNextCoreNavigationRoutes(verificationTarget) {
+  return [
+    "chat",
+    "cowork",
+    "code",
+    "library-memory",
+    "library-prompt-packs",
+    "ops-activity",
+    "ops-approvals",
+    "settings-providers",
+  ].map((slug) => getVerificationRoute(verificationTarget, slug));
 }
 
 function deriveProviderStatus(payload) {

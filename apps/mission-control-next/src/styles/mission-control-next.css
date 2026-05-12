@@ -1740,7 +1740,6 @@
     font-size: 0;
   }
 
-  .mc-next-topbar-right > button.mc-next-wa-button,
   .mc-next-topbar-right > button.mc-next-button-ghost {
     display: none;
   }
