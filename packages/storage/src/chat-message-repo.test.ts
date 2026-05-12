@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import type { ChatMessageRecord } from "@goatcitadel/contracts";
+import type { DatabaseClient, DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
 
@@ -30,6 +32,86 @@ function createRepoWithDb(): { repo: ChatMessageRepository; db: ReturnType<typeo
   createdFiles.push(dbPath);
   const db = createDatabase({ dbPath });
   return { repo: new ChatMessageRepository(db), db };
+}
+
+function message(overrides: Partial<ChatMessageRecord> = {}): ChatMessageRecord {
+  return {
+    messageId: "m1",
+    sessionId: "sess-1",
+    role: "user",
+    actorType: "user",
+    actorId: "operator",
+    content: "hello",
+    timestamp: "2026-03-05T01:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function setRawMessageField(db: DatabaseClient, messageId: string, field: string, value: unknown): void {
+  db.prepare(`UPDATE chat_messages SET ${field} = ? WHERE message_id = ?`).run(value, messageId);
+}
+
+function createFailingBatchRepo(execLog: string[]): ChatMessageRepository {
+  const statement: DbStatement = {
+    run: () => {
+      throw new Error("insert failed");
+    },
+    get: () => undefined,
+    all: () => [],
+  };
+  const db: DatabaseClient = {
+    dialect: "sqlite",
+    prepare: () => statement,
+    exec: (sql) => {
+      execLog.push(sql);
+    },
+    close: () => undefined,
+    transaction: (_mode, callback) => callback(),
+  };
+  return new ChatMessageRepository(db);
+}
+
+function createGuardRepo(options: {
+  countRow?: unknown;
+  cursorRow?: unknown;
+  latestRows?: unknown;
+}): ChatMessageRepository {
+  const noopStatement: DbStatement = {
+    run: () => ({ changes: 0 }),
+    get: () => undefined,
+    all: () => [],
+  };
+  const countStatement: DbStatement = {
+    ...noopStatement,
+    get: <T = unknown>() => options.countRow as T | undefined,
+  };
+  const cursorStatement: DbStatement = {
+    ...noopStatement,
+    get: <T = unknown>() => options.cursorRow as T | undefined,
+  };
+  const latestStatement: DbStatement = {
+    ...noopStatement,
+    all: () => options.latestRows as never[],
+  };
+  const db: DatabaseClient = {
+    dialect: "sqlite",
+    prepare(sql) {
+      if (sql.includes("SELECT COUNT(1)")) {
+        return countStatement;
+      }
+      if (sql.includes("SELECT seq")) {
+        return cursorStatement;
+      }
+      if (sql.includes("ORDER BY seq DESC")) {
+        return latestStatement;
+      }
+      return noopStatement;
+    },
+    exec: () => undefined,
+    close: () => undefined,
+    transaction: (_mode, callback) => callback(),
+  };
+  return new ChatMessageRepository(db);
 }
 
 describe("ChatMessageRepository", () => {
@@ -192,5 +274,111 @@ describe("ChatMessageRepository", () => {
       | undefined;
     assert.equal(item?.content, "updated");
     assert.equal(row?.created_at, "2026-03-05T01:00:00.000Z");
+  });
+
+  it("round-trips counts, get lookups, usage, multimodal parts, and attachments", () => {
+    const { repo, db } = createRepoWithDb();
+    repo.upsert(
+      message({
+        messageId: "m-rich",
+        parts: [
+          { type: "text", text: "hello" },
+          { type: "image_ref", attachmentId: "img-1", mimeType: "image/png", detail: "auto" },
+          { type: "audio_ref", attachmentId: "aud-1", mimeType: "audio/wav" },
+          { type: "video_ref", attachmentId: "vid-1", mimeType: "video/mp4" },
+          { type: "file_ref", attachmentId: "file-1", mimeType: "application/pdf" },
+        ],
+        tokenInput: 12,
+        tokenOutput: 34,
+        costUsd: 0.056,
+        attachments: [
+          {
+            attachmentId: "file-1",
+            fileName: "notes.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 1234,
+          },
+        ],
+      }),
+      "2026-03-05T01:00:10.000Z",
+    );
+
+    const loaded = repo.get("m-rich");
+    assert.equal(repo.countBySession("sess-1"), 1);
+    assert.equal(loaded?.tokenInput, 12);
+    assert.equal(loaded?.tokenOutput, 34);
+    assert.equal(loaded?.costUsd, 0.056);
+    assert.deepEqual(
+      loaded?.parts?.map((part) => part.type),
+      ["text", "image_ref", "audio_ref", "video_ref", "file_ref"],
+    );
+    assert.deepEqual(loaded?.attachments, [
+      {
+        attachmentId: "file-1",
+        fileName: "notes.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1234,
+      },
+    ]);
+    assert.equal(repo.get("missing-message"), undefined);
+
+    setRawMessageField(db, "m-rich", "parts_json", '{"not":"array"}');
+    assert.equal(repo.get("m-rich")?.parts, undefined);
+    setRawMessageField(db, "m-rich", "parts_json", "{bad json");
+    assert.equal(repo.get("m-rich")?.parts, undefined);
+    setRawMessageField(db, "m-rich", "parts_json", '[{"type":"image_ref","attachmentId":"img-1","detail":"bad"}]');
+    assert.equal(repo.get("m-rich")?.parts, undefined);
+
+    setRawMessageField(db, "m-rich", "attachments_json", '{"not":"array"}');
+    assert.equal(repo.get("m-rich")?.attachments, undefined);
+    setRawMessageField(db, "m-rich", "attachments_json", "{bad json");
+    assert.equal(repo.get("m-rich")?.attachments, undefined);
+    setRawMessageField(
+      db,
+      "m-rich",
+      "attachments_json",
+      '[null, {"attachmentId":"file-1"}, {"attachmentId":"file-2","fileName":"bad","mimeType":"text/plain","sizeBytes":"big"}]',
+    );
+    assert.equal(repo.get("m-rich")?.attachments, undefined);
+  });
+
+  it("handles empty, large, and failed batch upserts", () => {
+    const { repo } = createRepoWithDb();
+    repo.upsertMany([]);
+    assert.equal(repo.countBySession("sess-empty"), 0);
+
+    repo.upsertMany(
+      Array.from({ length: 51 }, (_, index) =>
+        message({
+          messageId: `batch-${index}`,
+          sessionId: "sess-batch",
+          content: `message-${index}`,
+          timestamp: `2026-03-05T01:00:${String(index).padStart(2, "0")}.000Z`,
+        }),
+      ),
+    );
+    assert.equal(repo.countBySession("sess-batch"), 51);
+
+    const execLog: string[] = [];
+    assert.throws(() => createFailingBatchRepo(execLog).upsertMany([message()]), /insert failed/);
+    assert.equal(
+      execLog.some((entry) => entry.startsWith("SAVEPOINT chat_messages_upsert_many_")),
+      true,
+    );
+    assert.equal(
+      execLog.some((entry) => entry.startsWith("ROLLBACK TO SAVEPOINT chat_messages_upsert_many_")),
+      true,
+    );
+    assert.equal(
+      execLog.some((entry) => entry.startsWith("RELEASE SAVEPOINT chat_messages_upsert_many_")),
+      true,
+    );
+  });
+
+  it("falls back on malformed count, cursor, and list rows", () => {
+    assert.equal(createGuardRepo({ countRow: "not a row" }).countBySession("sess-1"), 0);
+    assert.equal(createGuardRepo({ countRow: { count: "bad" } }).countBySession("sess-1"), 0);
+    assert.deepEqual(createGuardRepo({ cursorRow: "not a row", latestRows: "not rows" }).list("sess-1", 0, "m1"), []);
+    assert.deepEqual(createGuardRepo({ cursorRow: { seq: "bad" }, latestRows: [null] }).list("sess-1", 1001, "m1"), []);
   });
 });
