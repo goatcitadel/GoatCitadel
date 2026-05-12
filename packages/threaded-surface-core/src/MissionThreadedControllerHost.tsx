@@ -16,6 +16,7 @@ import type {
   ChatGeneratedArtifactRecord,
   ChatMode,
   ChatModePresetRecord,
+  ChatSessionPrefsRecord,
   ChatSessionRecord,
   RoutingPreflightResult,
   ChatSessionPrefsPatch,
@@ -322,6 +323,71 @@ function canReadAttachmentInFull(attachment: ChatAttachmentRecord): boolean {
   );
 }
 
+export type PendingAttachmentDocumentMode = "message" | ThreadKnowledgeRetrievalMode;
+
+export function reconcilePendingAttachmentModes(
+  current: Record<string, PendingAttachmentDocumentMode>,
+  pendingAttachments: ChatAttachmentRecord[],
+): Record<string, PendingAttachmentDocumentMode> {
+  const next: Record<string, PendingAttachmentDocumentMode> = {};
+  for (const attachment of pendingAttachments) {
+    const currentMode = current[attachment.attachmentId];
+    if (!isDocumentAttachment(attachment)) {
+      continue;
+    }
+    if (currentMode === "retrieval") {
+      next[attachment.attachmentId] = "retrieval";
+      continue;
+    }
+    if (currentMode === "full_text" && canReadAttachmentInFull(attachment)) {
+      next[attachment.attachmentId] = "full_text";
+      continue;
+    }
+    next[attachment.attachmentId] = "message";
+  }
+  return next;
+}
+
+export function resolveExecutionRoutePrefs(
+  prefs: ChatSessionPrefsRecord | null,
+  executionSurfaceMode: ChatMode,
+  selectedProviderId?: string,
+  selectedModel?: string,
+): ChatSessionPrefsRecord | null {
+  if (!prefs) {
+    return prefs;
+  }
+  if (!selectedProviderId && !selectedModel) {
+    return { ...prefs, mode: executionSurfaceMode };
+  }
+  return {
+    ...prefs,
+    mode: executionSurfaceMode,
+    providerId: prefs.providerId ?? selectedProviderId,
+    model: prefs.model ?? selectedModel,
+  };
+}
+
+export function runWithSelectedSessionId<T>(
+  selectedSessionId: string | null | undefined,
+  run: (sessionId: string) => T,
+): T | undefined {
+  if (!selectedSessionId) {
+    return undefined;
+  }
+  return run(selectedSessionId);
+}
+
+export function runWithSelectedSession<T>(
+  selectedSession: ChatSessionRecord | null | undefined,
+  run: (session: ChatSessionRecord) => T,
+): T | undefined {
+  if (!selectedSession) {
+    return undefined;
+  }
+  return run(selectedSession);
+}
+
 export function MissionThreadedControllerHost({
   workspaceId = "default",
   workspaceName = workspaceId,
@@ -354,7 +420,6 @@ export function MissionThreadedControllerHost({
   ) => void;
   renderSurface: (input: MissionThreadedRenderSurfaceInput) => ReactNode;
 }) {
-  type PendingAttachmentDocumentMode = "message" | ThreadKnowledgeRetrievalMode;
   const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
   const [selectedFolderId, setSelectedFolderId] = useState<string>("all");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -711,9 +776,7 @@ export function MissionThreadedControllerHost({
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
-  const composerSendHandlerRef = useRef<() => Promise<void>>(async () => {
-    await handleSend();
-  });
+  const composerSendHandlerRef = useRef<() => Promise<void>>(handleSend);
   const handleComposerSend = useCallback(() => composerSendHandlerRef.current(), []);
 
   useEffect(() => {
@@ -749,17 +812,7 @@ export function MissionThreadedControllerHost({
   const executionSurfaceMode: ChatMode =
     lockSurface && surface ? surface : (selectedSession?.mode ?? fallbackSessionMode);
   const executionRoutePrefs = useMemo(
-    () =>
-      prefs && (selectedProviderId || selectedModel)
-        ? {
-            ...prefs,
-            mode: executionSurfaceMode,
-            providerId: prefs.providerId ?? selectedProviderId,
-            model: prefs.model ?? selectedModel,
-          }
-        : prefs
-          ? { ...prefs, mode: executionSurfaceMode }
-          : prefs,
+    () => resolveExecutionRoutePrefs(prefs, executionSurfaceMode, selectedProviderId, selectedModel),
     [executionSurfaceMode, prefs, selectedModel, selectedProviderId],
   );
   const routePreflight = useChatRoutePreflight({
@@ -1014,25 +1067,7 @@ export function MissionThreadedControllerHost({
   }, [selectedSessionId, workspaceId, setQueuedOutbound]);
 
   useEffect(() => {
-    setPendingAttachmentModes((current) => {
-      const next: Record<string, PendingAttachmentDocumentMode> = {};
-      for (const attachment of pendingAttachments) {
-        const currentMode = current[attachment.attachmentId];
-        if (!isDocumentAttachment(attachment)) {
-          continue;
-        }
-        if (currentMode === "retrieval") {
-          next[attachment.attachmentId] = "retrieval";
-          continue;
-        }
-        if (currentMode === "full_text" && canReadAttachmentInFull(attachment)) {
-          next[attachment.attachmentId] = "full_text";
-          continue;
-        }
-        next[attachment.attachmentId] = "message";
-      }
-      return next;
-    });
+    setPendingAttachmentModes((current) => reconcilePendingAttachmentModes(current, pendingAttachments));
   }, [pendingAttachments]);
 
   useEffect(() => {
@@ -1494,17 +1529,16 @@ export function MissionThreadedControllerHost({
   const handleOpenGeneratedArtifactFromTurn = useCallback(
     async (turnId: string) => {
       try {
-        if (!selectedSessionId) {
-          return;
-        }
-        const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
-        const existingArtifactId = targetTurn?.generatedArtifacts?.[0]?.artifactId;
-        if (!existingArtifactId) {
-          pushLocalNotice("Create an artifact from this turn before opening it.", "warning");
-          return;
-        }
-        const artifact = (await fetchChatGeneratedArtifact(existingArtifactId, workspaceId)).item;
-        await revealGeneratedArtifact(artifact);
+        await runWithSelectedSessionId(selectedSessionId, async () => {
+          const targetTurn = thread?.turns.find((turn) => turn.turnId === turnId) ?? null;
+          const existingArtifactId = targetTurn?.generatedArtifacts?.[0]?.artifactId;
+          if (!existingArtifactId) {
+            pushLocalNotice("Create an artifact from this turn before opening it.", "warning");
+            return;
+          }
+          const artifact = (await fetchChatGeneratedArtifact(existingArtifactId, workspaceId)).item;
+          await revealGeneratedArtifact(artifact);
+        });
       } catch (err) {
         setUiError((err as Error).message);
       }
@@ -1515,19 +1549,18 @@ export function MissionThreadedControllerHost({
   const handleCreateGeneratedArtifactFromTurn = useCallback(
     async (turnId: string, options?: { supersedeLatest?: boolean }) => {
       try {
-        if (!selectedSessionId) {
-          return;
-        }
-        const artifact = (
-          await createChatGeneratedArtifact(selectedSessionId, turnId, {
-            supersedeLatest: options?.supersedeLatest ?? false,
-          })
-        ).item;
-        await revealGeneratedArtifact(artifact);
-        pushLocalNotice(
-          options?.supersedeLatest ? "Saved a new generated artifact version." : "Created a generated artifact.",
-          "success",
-        );
+        await runWithSelectedSessionId(selectedSessionId, async (sessionId) => {
+          const artifact = (
+            await createChatGeneratedArtifact(sessionId, turnId, {
+              supersedeLatest: options?.supersedeLatest ?? false,
+            })
+          ).item;
+          await revealGeneratedArtifact(artifact);
+          pushLocalNotice(
+            options?.supersedeLatest ? "Saved a new generated artifact version." : "Created a generated artifact.",
+            "success",
+          );
+        });
       } catch (err) {
         setUiError((err as Error).message);
       }
@@ -1537,22 +1570,21 @@ export function MissionThreadedControllerHost({
 
   const handleRemoveThreadKnowledge = useCallback(
     async (attachmentId: string) => {
-      if (!selectedSessionId) {
-        return;
-      }
-      await removeThreadKnowledgeAttachment(selectedSessionId, attachmentId);
-      await loadSessionCoreState(selectedSessionId, {
-        background: true,
-        includeThread: false,
+      await runWithSelectedSessionId(selectedSessionId, async (sessionId) => {
+        await removeThreadKnowledgeAttachment(sessionId, attachmentId);
+        await loadSessionCoreState(sessionId, {
+          background: true,
+          includeThread: false,
+        });
+        setThreadKnowledgeAttachments((current) =>
+          current
+            ? {
+                items: current.items.filter((item) => item.attachmentId !== attachmentId),
+              }
+            : current,
+        );
+        pushLocalNotice("Removed thread knowledge attachment.", "success");
       });
-      setThreadKnowledgeAttachments((current) =>
-        current
-          ? {
-              items: current.items.filter((item) => item.attachmentId !== attachmentId),
-            }
-          : current,
-      );
-      pushLocalNotice("Removed thread knowledge attachment.", "success");
     },
     [loadSessionCoreState, pushLocalNotice, selectedSessionId, setThreadKnowledgeAttachments],
   );
@@ -1612,34 +1644,33 @@ export function MissionThreadedControllerHost({
 
   const handleRunCodeHelper = useCallback(
     async (language: string, source: string) => {
-      if (!selectedSessionId) {
-        return;
-      }
-      const normalizedLanguage = language.toLowerCase();
-      if (
-        normalizedLanguage !== "ts" &&
-        normalizedLanguage !== "tsx" &&
-        normalizedLanguage !== "typescript" &&
-        normalizedLanguage !== "js" &&
-        normalizedLanguage !== "jsx" &&
-        normalizedLanguage !== "javascript"
-      ) {
-        pushLocalNotice("Code helper currently supports JavaScript and TypeScript snippets.", "warning");
-        return;
-      }
-      try {
-        await createCodeModeRun({
-          language: normalizedLanguage.startsWith("ts") ? "typescript" : "javascript",
-          source,
-          sessionId: selectedSessionId,
-          turnId: selectedTurn?.turnId,
-          requestedOutputIntent: "workbench_helper",
-        });
-        pushLocalNotice("Queued a code helper run for this snippet.", "success");
-        await refreshWorkbench();
-      } catch (cause) {
-        setUiError(cause instanceof Error ? cause.message : "Unable to start code helper run.");
-      }
+      await runWithSelectedSessionId(selectedSessionId, async (sessionId) => {
+        const normalizedLanguage = language.toLowerCase();
+        if (
+          normalizedLanguage !== "ts" &&
+          normalizedLanguage !== "tsx" &&
+          normalizedLanguage !== "typescript" &&
+          normalizedLanguage !== "js" &&
+          normalizedLanguage !== "jsx" &&
+          normalizedLanguage !== "javascript"
+        ) {
+          pushLocalNotice("Code helper currently supports JavaScript and TypeScript snippets.", "warning");
+          return;
+        }
+        try {
+          await createCodeModeRun({
+            language: normalizedLanguage.startsWith("ts") ? "typescript" : "javascript",
+            source,
+            sessionId,
+            turnId: selectedTurn?.turnId,
+            requestedOutputIntent: "workbench_helper",
+          });
+          pushLocalNotice("Queued a code helper run for this snippet.", "success");
+          await refreshWorkbench();
+        } catch (cause) {
+          setUiError(cause instanceof Error ? cause.message : "Unable to start code helper run.");
+        }
+      });
     },
     [pushLocalNotice, refreshWorkbench, selectedSessionId, selectedTurn?.turnId],
   );
@@ -1701,42 +1732,40 @@ export function MissionThreadedControllerHost({
   }, [handlePrefPatch, planningMode]);
   const applyThreadModelPatch = useCallback(
     async (patch: ChatSessionPrefsPatch) => {
-      if (!selectedSession) {
-        return;
-      }
-      try {
-        await applyPrefPatchToSession(selectedSession.sessionId, patch);
-        setUiError(null);
-      } catch {
-        // Errors already surface through page state.
-      }
+      await runWithSelectedSession(selectedSession, async (session) => {
+        try {
+          await applyPrefPatchToSession(session.sessionId, patch);
+          setUiError(null);
+        } catch {
+          // Errors already surface through page state.
+        }
+      });
     },
     [applyPrefPatchToSession, selectedSession],
   );
   const requestThreadModelPatch = useCallback(
     (patch: ChatSessionPrefsPatch) => {
-      if (!selectedSession) {
-        return;
-      }
-      const nextProviderId = patch.providerId ?? selectedProviderId ?? "";
-      const nextModel = patch.model ?? selectedModel ?? "";
-      const providerChanged = patch.providerId !== undefined && patch.providerId !== (selectedProviderId ?? "");
-      const modelChanged = patch.model !== undefined && patch.model !== (selectedModel ?? "");
-      if (!providerChanged && !modelChanged) {
-        return;
-      }
-      const nextProviderLabel =
-        providerOptions.find((item) => item.providerId === nextProviderId)?.label ?? selectedProviderLabel;
-      const nextRoutingSummary = formatWorkProviderModelSummary(nextProviderLabel, nextModel || undefined);
-      const turnCount = thread?.turns.length ?? 0;
-      if (turnCount === 0) {
-        void applyThreadModelPatch(patch);
-        return;
-      }
-      setThreadModelSwitchConfirm({
-        title: "Switch thread model?",
-        message: `This conversation already has ${turnCount} turn${turnCount === 1 ? "" : "s"}. Switching to ${nextRoutingSummary} can reduce continuity because the new model will not share the same hidden reasoning state. Important context stays in the thread, but you may want to restate key instructions after the switch.`,
-        patch,
+      runWithSelectedSession(selectedSession, () => {
+        const nextProviderId = patch.providerId ?? selectedProviderId ?? "";
+        const nextModel = patch.model ?? selectedModel ?? "";
+        const providerChanged = patch.providerId !== undefined && patch.providerId !== (selectedProviderId ?? "");
+        const modelChanged = patch.model !== undefined && patch.model !== (selectedModel ?? "");
+        if (!providerChanged && !modelChanged) {
+          return;
+        }
+        const nextProviderLabel =
+          providerOptions.find((item) => item.providerId === nextProviderId)?.label ?? selectedProviderLabel;
+        const nextRoutingSummary = formatWorkProviderModelSummary(nextProviderLabel, nextModel || undefined);
+        const turnCount = thread?.turns.length ?? 0;
+        if (turnCount === 0) {
+          void applyThreadModelPatch(patch);
+          return;
+        }
+        setThreadModelSwitchConfirm({
+          title: "Switch thread model?",
+          message: `This conversation already has ${turnCount} turn${turnCount === 1 ? "" : "s"}. Switching to ${nextRoutingSummary} can reduce continuity because the new model will not share the same hidden reasoning state. Important context stays in the thread, but you may want to restate key instructions after the switch.`,
+          patch,
+        });
       });
     },
     [

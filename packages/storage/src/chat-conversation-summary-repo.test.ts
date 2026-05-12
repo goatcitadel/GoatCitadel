@@ -77,4 +77,56 @@ describe("ChatConversationSummaryRepository", () => {
     assert.equal(repo.listByBranch("sess-1", "turn-12").length, 1);
     assert.equal(repo.listBySession("sess-1", 10).length, 2);
   });
+
+  it("handles not-found summaries, malformed turn ids, and unexpected adapter rows", () => {
+    const repo = createRepo();
+
+    assert.throws(() => repo.get("missing-summary"), /Chat conversation summary missing-summary not found/);
+
+    const created = repo.upsert({
+      summaryId: "summary-1",
+      sessionId: "sess-1",
+      branchHeadTurnId: "turn-9",
+      startTurnId: "turn-1",
+      endTurnId: "turn-8",
+      turnIds: ["turn-1", "turn-2"],
+      sourceHash: "hash-1",
+      tokenEstimate: 120,
+      summary: "Summary",
+      createdAt: "2026-03-12T09:00:00.000Z",
+      updatedAt: "2026-03-12T09:00:00.000Z",
+    });
+
+    const db = (repo as unknown as { db: ReturnType<typeof createDatabase> }).db;
+    db.prepare("UPDATE chat_conversation_summaries SET turn_ids_json = @json WHERE summary_id = @summaryId").run({
+      json: "{bad-json",
+      summaryId: created.summaryId,
+    });
+    assert.deepEqual(repo.get(created.summaryId).turnIds, []);
+
+    const internal = repo as unknown as {
+      listByBranchStmt: { all: (...args: unknown[]) => unknown };
+      listBySessionStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listByBranchStmt = { all: () => [] };
+    assert.throws(
+      () =>
+        repo.upsert({
+          sessionId: "sess-2",
+          branchHeadTurnId: "turn-2",
+          startTurnId: "turn-1",
+          endTurnId: "turn-1",
+          turnIds: ["turn-1"],
+          sourceHash: "hash-2",
+          tokenEstimate: 20,
+          summary: "Unreadable",
+        }),
+      /Failed to read chat conversation summary after upsert/,
+    );
+
+    internal.listByBranchStmt = { all: () => [null] };
+    internal.listBySessionStmt = { all: () => ({ not: "an array" }) };
+    assert.deepEqual(repo.listByBranch("sess-1", "turn-9"), []);
+    assert.deepEqual(repo.listBySession("sess-1"), []);
+  });
 });

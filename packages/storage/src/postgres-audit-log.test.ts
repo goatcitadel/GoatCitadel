@@ -9,7 +9,7 @@ interface StoredAuditRow {
   event_sequence: number;
   occurred_at: string;
   actor_id: string | null;
-  payload: string;
+  payload: unknown;
 }
 
 test("PostgresAuditLog strips null bytes from JSONB payloads before insert", async () => {
@@ -27,7 +27,7 @@ test("PostgresAuditLog strips null bytes from JSONB payloads before insert", asy
   assert.equal(db.rows.length, 1);
   const stored = db.rows[0];
   assert.ok(stored);
-  assert.equal(stored.payload.includes("\\u0000"), false);
+  assert.equal(String(stored.payload).includes("\\u0000"), false);
 });
 
 test("PostgresAuditLog strips lone surrogate escapes from JSONB payloads before insert", async () => {
@@ -46,10 +46,52 @@ test("PostgresAuditLog strips lone surrogate escapes from JSONB payloads before 
   assert.equal(db.rows.length, 1);
   const stored = db.rows[0];
   assert.ok(stored);
-  assert.equal(stored.payload.includes("\\ud800"), false);
-  assert.equal(stored.payload.includes("\\udc00"), false);
-  assert.equal(stored.payload.includes("😀"), true);
+  assert.equal(String(stored.payload).includes("\\ud800"), false);
+  assert.equal(String(stored.payload).includes("\\udc00"), false);
+  assert.equal(String(stored.payload).includes("😀"), true);
 });
+
+test("PostgresAuditLog lists JSON strings, object payloads, and skips malformed payload rows", async () => {
+  const db = new InMemoryAuditDb();
+  const log = new PostgresAuditLog(db);
+
+  db.rows.push(
+    auditRow({ event_id: "event-empty", event_sequence: 1, payload: "" }),
+    auditRow({ event_id: "event-object", event_sequence: 2, payload: { direct: true } }),
+    auditRow({ event_id: "event-json", event_sequence: 3, payload: '{"parsed":true}' }),
+    auditRow({ event_id: "event-scalar", event_sequence: 4, payload: '"scalar"' }),
+    auditRow({ event_id: "event-bad-json", event_sequence: 5, payload: "{not-json" }),
+  );
+
+  const listed = await log.list("tool_invocations");
+
+  assert.deepEqual(listed, [{ direct: true }, { parsed: true }]);
+});
+
+test("PostgresAuditLog appends without actor attribution and sanitizes arrays", async () => {
+  const db = new InMemoryAuditDb();
+  const log = new PostgresAuditLog(db);
+
+  await log.append("tool_invocations", {
+    eventId: "event-array",
+    values: ["ok", "bad\u0000value"],
+  });
+
+  assert.equal(db.rows[0]?.actor_id, null);
+  assert.equal(String(db.rows[0]?.payload).includes("\\u0000"), false);
+});
+
+function auditRow(overrides: Partial<StoredAuditRow>): StoredAuditRow {
+  return {
+    stream_name: "tool_invocations",
+    event_id: "event",
+    event_sequence: 1,
+    occurred_at: "2026-02-27T10:00:00.000Z",
+    actor_id: null,
+    payload: "{}",
+    ...overrides,
+  };
+}
 
 class InMemoryAuditDb implements DatabaseClient {
   public readonly dialect = "postgres" as const;
@@ -59,11 +101,13 @@ class InMemoryAuditDb implements DatabaseClient {
     if (sql.includes("COALESCE(MAX(event_sequence), 0) + 1")) {
       return {
         run: () => ({ changes: 0 }),
-        get: <T = unknown>(streamName: unknown) => ({
-          next_sequence: this.rows
-            .filter((row) => row.stream_name === streamName)
-            .reduce((max, row) => Math.max(max, row.event_sequence), 0) + 1,
-        }) as T,
+        get: <T = unknown>(streamName: unknown) =>
+          ({
+            next_sequence:
+              this.rows
+                .filter((row) => row.stream_name === streamName)
+                .reduce((max, row) => Math.max(max, row.event_sequence), 0) + 1,
+          }) as T,
         all: () => [],
       };
     }

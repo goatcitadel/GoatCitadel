@@ -114,4 +114,110 @@ describe("AgentProfileRepository", () => {
       });
     }, /already exists/);
   });
+
+  it("covers validation, idempotent lifecycle edges, and defensive JSON mapping", () => {
+    const repo = createRepo();
+    const db = (repo as unknown as { db: ReturnType<typeof createDatabase> }).db;
+
+    assert.throws(() => repo.get("missing-agent"), /Agent profile missing-agent not found/);
+    assert.equal(repo.find("missing-agent"), undefined);
+    assert.equal(repo.getByRoleId("missing-role"), undefined);
+    assert.equal(repo.hardDelete("missing-agent"), false);
+    assert.throws(
+      () =>
+        repo.create({
+          roleId: "   ",
+          name: "Role",
+          title: "Role",
+          summary: "Role",
+        }),
+      /roleId is required/,
+    );
+    assert.throws(
+      () =>
+        repo.create({
+          roleId: "qa",
+          name: "   ",
+          title: "QA",
+          summary: "QA",
+        }),
+      /name is required/,
+    );
+
+    const created = repo.create({
+      roleId: `${"A".repeat(90)}!!!`,
+      name: "QA Goat",
+      title: "Quality Analyst",
+      summary: "Checks release quality",
+      specialties: [" QA ", "QA", "", "Regression"],
+      defaultTools: ["browser.open", "browser.open", " "],
+      aliases: ["qa", "qa", " tester "],
+      presetDefaults: {
+        presetLabel: "   ",
+        presetSummary: "",
+        preferredProviderId: " ",
+        preferredModel: "",
+        knowledgeAttachmentIds: [" ", ""],
+        promptFraming: " ",
+      },
+    });
+
+    assert.equal(created.roleId.length, 80);
+    assert.deepEqual(created.specialties, ["QA", "Regression"]);
+    assert.deepEqual(created.defaultTools, ["browser.open"]);
+    assert.deepEqual(created.aliases, ["qa", "tester"]);
+    assert.equal(created.presetDefaults, undefined);
+
+    const realDefaults = repo.update(created.agentId, {
+      presetDefaults: {
+        presetLabel: "  QA preset ",
+        presetSummary: "  Verify the change ",
+        preferredProviderId: " openai ",
+        preferredModel: " gpt-5 ",
+        knowledgeAttachmentIds: [" doc-1 ", "", "doc-2"],
+        promptFraming: "  Be strict ",
+      },
+    });
+    assert.deepEqual(realDefaults.presetDefaults, {
+      presetLabel: "QA preset",
+      presetSummary: "Verify the change",
+      routeHint: undefined,
+      preferredProviderId: "openai",
+      preferredModel: "gpt-5",
+      toolsPosture: undefined,
+      knowledgeAttachmentIds: ["doc-1", "doc-2"],
+      promptFraming: "Be strict",
+    });
+
+    db.prepare(
+      `
+      UPDATE agent_profiles
+      SET specialties_json = ?,
+          default_tools_json = ?,
+          aliases_json = ?,
+          preset_defaults_json = ?
+      WHERE agent_id = ?
+    `,
+    ).run(
+      '"not-array"',
+      JSON.stringify([1, " shell.exec ", "shell.exec", " "]),
+      "{bad",
+      '"not-object"',
+      created.agentId,
+    );
+
+    const defensive = repo.get(created.agentId);
+    assert.deepEqual(defensive.specialties, []);
+    assert.deepEqual(defensive.defaultTools, ["shell.exec"]);
+    assert.deepEqual(defensive.aliases, []);
+    assert.equal(defensive.presetDefaults, undefined);
+
+    const archived = repo.archive(created.agentId, { archivedBy: " ", archiveReason: "" });
+    assert.equal(archived.archivedBy, undefined);
+    assert.equal(repo.archive(created.agentId, {}).archivedAt, archived.archivedAt);
+    const restored = repo.restore(created.agentId);
+    assert.equal(restored.lifecycleStatus, "active");
+    assert.equal(repo.restore(created.agentId).updatedAt, restored.updatedAt);
+    assert.ok(repo.list("all", 0).some((agent) => agent.agentId === created.agentId));
+  });
 });

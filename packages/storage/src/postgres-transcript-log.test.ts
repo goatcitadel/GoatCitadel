@@ -14,7 +14,7 @@ interface StoredTranscriptRow {
   event_type: TranscriptEvent["type"];
   actor_type: TranscriptEvent["actorType"];
   actor_id: string;
-  payload: string;
+  payload: unknown;
   token_input: number | null;
   token_output: number | null;
   cost_usd: number | null;
@@ -46,6 +46,7 @@ test("PostgresTranscriptLog strips null bytes from payloads before JSONB persist
         content: "hello\u0000world",
       },
       labels: ["ok", "nu\u0000ll"],
+      optional: null,
       nested: {
         "bad\u0000key": "va\u0000lue",
       },
@@ -57,13 +58,14 @@ test("PostgresTranscriptLog strips null bytes from payloads before JSONB persist
   const readBack = await log.read(event.sessionId);
 
   assert.ok(stored);
-  assert.equal(stored.payload.includes("\\u0000"), false);
+  assert.equal(String(stored.payload).includes("\\u0000"), false);
   assert.deepEqual(readBack[0]?.payload, {
     message: {
       role: "assistant",
       content: "helloworld",
     },
     labels: ["ok", "null"],
+    optional: null,
     nested: {
       badkey: "value",
     },
@@ -91,7 +93,7 @@ test("PostgresTranscriptLog preserves literal null escape sequences in JSON text
   const readBack = await log.read(event.sessionId);
 
   assert.ok(stored);
-  assert.equal(stored.payload.includes(String.raw`\u0000`), true);
+  assert.equal(String(stored.payload).includes(String.raw`\u0000`), true);
   assert.deepEqual(readBack[0]?.payload, {
     message: {
       role: "assistant",
@@ -126,9 +128,9 @@ test("PostgresTranscriptLog strips lone surrogate code points before JSONB persi
   const readBack = await log.read(event.sessionId);
 
   assert.ok(stored);
-  assert.equal(stored.payload.includes("\\ud800"), false);
-  assert.equal(stored.payload.includes("\\udc00"), false);
-  assert.equal(stored.payload.includes("😀"), true);
+  assert.equal(String(stored.payload).includes("\\ud800"), false);
+  assert.equal(String(stored.payload).includes("\\udc00"), false);
+  assert.equal(String(stored.payload).includes("😀"), true);
   assert.deepEqual(readBack[0]?.payload, {
     message: {
       role: "assistant",
@@ -142,19 +144,45 @@ test("PostgresTranscriptLog strips lone surrogate code points before JSONB persi
   });
 });
 
+test("PostgresTranscriptLog handles insert races, object payload rows, malformed JSON, and deletes", async () => {
+  const db = new InMemoryTranscriptDb();
+  const log = new PostgresTranscriptLog(db);
+
+  db.forceInsertNoop = true;
+  assert.equal(await log.append(buildEvent({ eventId: "evt-noop" })), 1);
+  db.forceInsertNoop = false;
+
+  db.rows.push(
+    buildStoredRow({ event_id: "evt-object", event_sequence: 1, payload: { direct: true } }),
+    buildStoredRow({ event_id: "evt-malformed", event_sequence: 2, payload: "{bad-json" }),
+  );
+
+  const readBack = await log.read("sess-1");
+  assert.deepEqual(
+    readBack.map((event) => event.payload),
+    [{ direct: true }, {}],
+  );
+
+  await log.delete("sess-1");
+  assert.deepEqual(await log.read("sess-1"), []);
+});
+
 class InMemoryTranscriptDb implements DatabaseClient {
   public readonly dialect = "postgres" as const;
   public readonly rows: StoredTranscriptRow[] = [];
+  public forceInsertNoop = false;
 
   public prepare(sql: string): DbStatement {
     if (sql.includes("COALESCE(MAX(event_sequence), 0) + 1")) {
       return {
         run: () => ({ changes: 0 }),
-        get: <T = unknown>(sessionId: unknown) => ({
-          next_sequence: this.rows
-            .filter((row) => row.session_id === sessionId)
-            .reduce((max, row) => Math.max(max, row.event_sequence), 0) + 1,
-        }) as T,
+        get: <T = unknown>(sessionId: unknown) =>
+          ({
+            next_sequence:
+              this.rows
+                .filter((row) => row.session_id === sessionId)
+                .reduce((max, row) => Math.max(max, row.event_sequence), 0) + 1,
+          }) as T,
         all: () => [],
       };
     }
@@ -174,6 +202,9 @@ class InMemoryTranscriptDb implements DatabaseClient {
       return {
         run: (params: unknown) => {
           const input = params as Record<string, unknown>;
+          if (this.forceInsertNoop) {
+            return { changes: 0 };
+          }
           const existing = this.rows.find(
             (row) => row.session_id === input.sessionId && row.event_id === input.eventId,
           );
@@ -237,6 +268,26 @@ class InMemoryTranscriptDb implements DatabaseClient {
   public transaction<T>(_mode: DbTransactionMode, callback: () => T): T {
     return callback();
   }
+}
+
+function buildStoredRow(overrides: Partial<StoredTranscriptRow>): StoredTranscriptRow {
+  return {
+    event_id: "evt-1",
+    action_id: null,
+    idempotency_key: null,
+    session_id: "sess-1",
+    session_key: null,
+    occurred_at: "2026-04-15T22:00:00.000Z",
+    event_type: "message.assistant",
+    actor_type: "agent",
+    actor_id: "assistant:test",
+    payload: "{}",
+    token_input: null,
+    token_output: null,
+    cost_usd: null,
+    event_sequence: 1,
+    ...overrides,
+  };
 }
 
 function buildEvent(overrides: Partial<TranscriptEvent> = {}): TranscriptEvent {

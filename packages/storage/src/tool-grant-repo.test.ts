@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { ToolGrantRepository } from "./tool-grant-repo.js";
+import type { DbStatement } from "./db.js";
 
 const createdFiles: string[] = [];
 
@@ -32,13 +33,16 @@ describe("ToolGrantRepository", () => {
   it("creates scoped grants with defaults and lists them back", () => {
     const repo = createRepo();
 
-    const grant = repo.create({
-      toolPattern: "shell.*",
-      decision: "allow",
-      scope: "session",
-      scopeRef: "sess-1",
-      createdBy: "operator",
-    }, "2026-03-05T10:00:00.000Z");
+    const grant = repo.create(
+      {
+        toolPattern: "shell.*",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "sess-1",
+        createdBy: "operator",
+      },
+      "2026-03-05T10:00:00.000Z",
+    );
 
     assert.equal(grant.scopeRef, "sess-1");
     assert.equal(grant.grantType, "persistent");
@@ -48,13 +52,16 @@ describe("ToolGrantRepository", () => {
   it("supports one-time grants and revocation", () => {
     const repo = createRepo();
 
-    const grant = repo.create({
-      toolPattern: "browser.interact",
-      decision: "allow",
-      scope: "global",
-      grantType: "one_time",
-      createdBy: "operator",
-    }, "2026-03-05T10:00:00.000Z");
+    const grant = repo.create(
+      {
+        toolPattern: "browser.interact",
+        decision: "allow",
+        scope: "global",
+        grantType: "one_time",
+        createdBy: "operator",
+      },
+      "2026-03-05T10:00:00.000Z",
+    );
 
     assert.equal(grant.usesRemaining, 1);
     repo.consumeOne(grant.grantId);
@@ -79,22 +86,25 @@ describe("ToolGrantRepository", () => {
   it("round-trips read-only reference root constraints", () => {
     const repo = createRepo();
 
-    const grant = repo.create({
-      toolPattern: "fs.read",
-      decision: "allow",
-      scope: "session",
-      scopeRef: "sess-1",
-      createdBy: "operator",
-      constraints: {
-        referenceRoots: [
-          {
-            label: "claude-code-reference",
-            rootPath: "F:\\code\\claude-code",
-            access: "read_only",
-          },
-        ],
+    const grant = repo.create(
+      {
+        toolPattern: "fs.read",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "sess-1",
+        createdBy: "operator",
+        constraints: {
+          referenceRoots: [
+            {
+              label: "claude-code-reference",
+              rootPath: "F:\\code\\claude-code",
+              access: "read_only",
+            },
+          ],
+        },
       },
-    }, "2026-04-04T10:00:00.000Z");
+      "2026-04-04T10:00:00.000Z",
+    );
 
     assert.deepEqual(grant.constraints?.referenceRoots, [
       {
@@ -103,5 +113,32 @@ describe("ToolGrantRepository", () => {
         access: "read_only",
       },
     ]);
+  });
+
+  it("reports missing and malformed grant rows", () => {
+    const repo = createRepo();
+
+    assert.throws(() => repo.get("missing-grant"), /Tool grant missing-grant not found/);
+    assert.equal(repo.revoke("missing-grant"), false);
+
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+      db: ReturnType<typeof createDatabase>;
+    };
+    internal.getStmt = { get: () => ({ grant_id: "bad" }) };
+    assert.throws(() => repo.get("bad-grant"), /Unexpected tool_grants row shape/);
+
+    const originalPrepare = internal.db.prepare.bind(internal.db);
+    internal.db.prepare = (sql: string): DbStatement => {
+      if (sql.includes("FROM tool_grants")) {
+        return {
+          run: () => ({ changes: 0 }),
+          get: () => undefined,
+          all: <T = unknown>() => [null] as T[],
+        };
+      }
+      return originalPrepare(sql);
+    };
+    assert.throws(() => repo.list(), /Unexpected tool_grants row shape/);
   });
 });

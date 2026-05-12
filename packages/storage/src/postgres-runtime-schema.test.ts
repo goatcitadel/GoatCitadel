@@ -1,7 +1,24 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import type { SqliteSchemaTableBlueprint } from "./sqlite.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
+import {
+  buildPostgresRuntimeSchemaSqlFromBlueprint,
+  renderColumn,
+  renderForeignKey,
+} from "./postgres/runtime-schema.internal.js";
+
+function table(input: Partial<SqliteSchemaTableBlueprint> & { name: string }): SqliteSchemaTableBlueprint {
+  return {
+    name: input.name,
+    sql: input.sql ?? `CREATE TABLE ${input.name} ()`,
+    columns: input.columns ?? [],
+    foreignKeys: input.foreignKeys ?? [],
+    indexes: input.indexes ?? [],
+    seedRows: input.seedRows ?? [],
+  };
+}
 
 describe("Postgres runtime schema generation", () => {
   it("preserves SQLite inline UNIQUE constraints as Postgres unique indexes", () => {
@@ -225,5 +242,208 @@ describe("Postgres runtime schema generation", () => {
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_pack_benchmark_items_unique/,
     );
     assert.match(repairMigration?.sql ?? "", /benchmark_run_id, provider_id, model, test_id/);
+  });
+
+  it("renders edge-case SQLite blueprint shapes into Postgres schema SQL", () => {
+    const sql = buildPostgresRuntimeSchemaSqlFromBlueprint({
+      tables: [
+        table({
+          name: "schema_migrations",
+          columns: [
+            {
+              name: "version",
+              type: "INTEGER",
+              notNull: true,
+              defaultValue: null,
+              primaryKeyPosition: 1,
+              autoIncrement: false,
+            },
+          ],
+          seedRows: [{ version: 1 }],
+        }),
+        table({
+          name: "parent",
+          columns: [
+            {
+              name: "id",
+              type: "INTEGER",
+              notNull: true,
+              defaultValue: null,
+              primaryKeyPosition: 1,
+              autoIncrement: true,
+            },
+            {
+              name: "name",
+              type: "TEXT",
+              notNull: true,
+              defaultValue: "'unknown'",
+              primaryKeyPosition: 0,
+              autoIncrement: false,
+            },
+            {
+              name: "created_at",
+              type: "TEXT",
+              notNull: true,
+              defaultValue: "current_timestamp",
+              primaryKeyPosition: 0,
+              autoIncrement: false,
+            },
+            {
+              name: "score",
+              type: "REAL",
+              notNull: false,
+              defaultValue: null,
+              primaryKeyPosition: 0,
+              autoIncrement: false,
+            },
+            {
+              name: "payload",
+              type: "BLOB",
+              notNull: false,
+              defaultValue: null,
+              primaryKeyPosition: 0,
+              autoIncrement: false,
+            },
+          ],
+          indexes: [
+            { name: "idx_parent_empty", unique: false, origin: "c", columns: [] },
+            { name: "sqlite_autoindex_parent_1", unique: true, origin: "pk", columns: ["id"] },
+            { name: "idx_parent_name", unique: true, origin: "c", columns: ["name"] },
+          ],
+          seedRows: [
+            {
+              id: 1,
+              name: "O'Hare",
+              created_at: undefined,
+              score: Number.POSITIVE_INFINITY,
+              payload: null,
+            },
+          ],
+        }),
+        table({
+          name: "child",
+          columns: [
+            {
+              name: "parent_id",
+              type: "INTEGER",
+              notNull: true,
+              defaultValue: null,
+              primaryKeyPosition: 1,
+              autoIncrement: false,
+            },
+            {
+              name: "locale",
+              type: "TEXT",
+              notNull: true,
+              defaultValue: null,
+              primaryKeyPosition: 2,
+              autoIncrement: false,
+            },
+          ],
+          foreignKeys: [
+            {
+              id: 0,
+              seq: 0,
+              from: "parent_id",
+              to: "id",
+              referencedTable: "parent",
+              onUpdate: "CASCADE",
+              onDelete: "CASCADE",
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.doesNotMatch(sql, /schema_migrations/);
+    assert.match(sql, /id BIGSERIAL PRIMARY KEY/);
+    assert.match(sql, /created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP/);
+    assert.match(sql, /score DOUBLE PRECISION/);
+    assert.match(sql, /payload BYTEA/);
+    assert.match(sql, /PRIMARY KEY \(parent_id, locale\)/);
+    assert.match(sql, /FOREIGN KEY \(parent_id\) REFERENCES parent\(id\) ON DELETE CASCADE ON UPDATE CASCADE/);
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_parent_name ON parent\(name\);/);
+    assert.doesNotMatch(sql, /idx_parent_empty/);
+    assert.doesNotMatch(sql, /sqlite_autoindex_parent_1/);
+    assert.match(
+      sql,
+      /INSERT INTO parent \(id, name, created_at, score, payload\) VALUES \(1, 'O''Hare', NULL, NULL, NULL\) ON CONFLICT \(id\) DO NOTHING;/,
+    );
+  });
+
+  it("falls back to deterministic table ordering for circular foreign keys", () => {
+    const sql = buildPostgresRuntimeSchemaSqlFromBlueprint({
+      tables: [
+        table({
+          name: "cycle_b",
+          columns: [
+            {
+              name: "id",
+              type: "TEXT",
+              notNull: true,
+              defaultValue: null,
+              primaryKeyPosition: 1,
+              autoIncrement: false,
+            },
+          ],
+          foreignKeys: [
+            {
+              id: 0,
+              seq: 0,
+              from: "id",
+              to: "id",
+              referencedTable: "cycle_a",
+              onUpdate: "NO ACTION",
+              onDelete: "NO ACTION",
+            },
+          ],
+        }),
+        table({
+          name: "cycle_a",
+          columns: [
+            {
+              name: "id",
+              type: "TEXT",
+              notNull: true,
+              defaultValue: null,
+              primaryKeyPosition: 1,
+              autoIncrement: false,
+            },
+          ],
+          foreignKeys: [
+            {
+              id: 0,
+              seq: 0,
+              from: "id",
+              to: "id",
+              referencedTable: "cycle_b",
+              onUpdate: "NO ACTION",
+              onDelete: "NO ACTION",
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.ok(sql.indexOf("CREATE TABLE IF NOT EXISTS cycle_a") < sql.indexOf("CREATE TABLE IF NOT EXISTS cycle_b"));
+  });
+
+  it("reports invalid internal render requests explicitly", () => {
+    const sampleTable = table({
+      name: "sample",
+      columns: [
+        {
+          name: "id",
+          type: "TEXT",
+          notNull: true,
+          defaultValue: null,
+          primaryKeyPosition: 1,
+          autoIncrement: false,
+        },
+      ],
+    });
+
+    assert.throws(() => renderColumn(sampleTable, "missing", ["id"]), /Unknown SQLite column missing on sample/);
+    assert.throws(() => renderForeignKey([]), /Expected at least one foreign key/);
   });
 });

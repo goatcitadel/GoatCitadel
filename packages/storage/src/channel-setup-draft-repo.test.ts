@@ -92,5 +92,52 @@ describe("ChannelSetupDraftRepository", () => {
     const deleted = repo.delete(created.draftId);
     assert.equal(deleted, true);
     assert.equal(repo.listByCatalog("channel.discord").length, 0);
+    assert.equal(repo.delete(created.draftId), false);
+    assert.throws(() => repo.get(created.draftId), /Channel setup draft .* not found/);
+  });
+
+  it("preserves update defaults and rejects malformed adapter rows", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      catalogId: "channel.telegram",
+      lifecycleMode: "create",
+      enabled: false,
+      draft: {
+        mode: "bot",
+      },
+      contentVersion: "content.v1",
+      adapterVersion: "adapter.v1",
+      validationVersion: "validation.v1",
+      testVersion: "test.v1",
+    });
+
+    assert.equal(created.connectionId, undefined);
+    assert.equal(created.hydration, undefined);
+
+    const failed = repo.update(created.draftId, {
+      lastFailureCategory: "platform_unavailable",
+    });
+    const cleared = repo.update(created.draftId, {
+      label: null,
+      enabled: true,
+      hydration: null,
+      lastFailureCategory: null,
+    } as unknown as Parameters<ChannelSetupDraftRepository["update"]>[1]);
+    assert.equal(failed.lastFailureCategory, "platform_unavailable");
+    assert.equal(cleared.label, undefined);
+    assert.equal(cleared.enabled, true);
+    assert.equal(cleared.lastFailureCategory, undefined);
+
+    const internal = repo as unknown as {
+      listByCatalogStmt: { all: (...args: unknown[]) => unknown };
+      listByConnectionStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listByCatalogStmt = { all: () => [null] };
+    internal.listByConnectionStmt = { all: () => ({ not: "an array" }) };
+    assert.throws(() => repo.listByCatalog("channel.telegram"), /Unexpected channel setup draft row shape/);
+    assert.throws(
+      () => repo.listByConnection("11111111-1111-1111-1111-111111111111"),
+      /Unexpected channel setup draft row shape/,
+    );
   });
 });

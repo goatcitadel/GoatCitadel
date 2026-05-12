@@ -1,5 +1,5 @@
-import { parentPort, workerData } from "node:worker_threads";
-import { Pool, types, type PoolClient } from "pg";
+import { parentPort, workerData, type MessagePort } from "node:worker_threads";
+import { Pool, types } from "pg";
 import type { PostgresConnectionOptions } from "./client.js";
 import type { PostgresWorkerRequest, PostgresWorkerResponse } from "./protocol.js";
 import { sanitizeParamsForServerEncoding } from "./server-encoding.js";
@@ -10,28 +10,79 @@ types.setTypeParser(23, (value) => Number(value));
 types.setTypeParser(700, (value) => Number(value));
 types.setTypeParser(701, (value) => Number(value));
 
-const pool = new Pool(buildPoolConfig(workerData as PostgresConnectionOptions));
-const transactions = new Map<string, PoolClient>();
-let serverEncodingPromise: Promise<string | undefined> | undefined;
+export interface PostgresSyncWorkerQueryExecutor {
+  query<T extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ): Promise<{
+    rowCount: number | null;
+    rows: T[];
+  }>;
+}
 
-parentPort?.on("message", async (message: {
+export interface PostgresSyncWorkerTransactionClient extends PostgresSyncWorkerQueryExecutor {
+  release(): void;
+}
+
+export interface PostgresSyncWorkerPool extends PostgresSyncWorkerQueryExecutor {
+  connect(): Promise<PostgresSyncWorkerTransactionClient>;
+  end(): Promise<void>;
+}
+
+export interface PostgresSyncWorkerRuntime {
+  pool: PostgresSyncWorkerPool;
+  transactions: Map<string, PostgresSyncWorkerTransactionClient>;
+  serverEncodingPromise?: Promise<string | undefined>;
+}
+
+export function createPostgresSyncWorkerRuntime(
+  options: PostgresConnectionOptions,
+  input: {
+    pool?: PostgresSyncWorkerPool;
+  } = {},
+): PostgresSyncWorkerRuntime {
+  return {
+    pool: input.pool ?? (new Pool(buildPostgresSyncWorkerPoolConfig(options)) as unknown as PostgresSyncWorkerPool),
+    transactions: new Map(),
+  };
+}
+
+export interface PostgresSyncWorkerMessageSource {
+  on(event: "message", listener: (message: unknown) => void): unknown;
+}
+
+export function registerPostgresSyncWorkerMessageHandler(
+  workerPort: PostgresSyncWorkerMessageSource,
+  runtime: PostgresSyncWorkerRuntime,
+): void {
+  workerPort.on("message", (message) => {
+    void respondToPostgresSyncWorkerMessage(runtime, message as PostgresSyncWorkerMessage);
+  });
+}
+
+export interface PostgresSyncWorkerMessage {
   request: PostgresWorkerRequest;
-  port: MessagePort;
+  port: Pick<MessagePort, "postMessage" | "close">;
   signal: SharedArrayBuffer;
-}) => {
+}
+
+export async function respondToPostgresSyncWorkerMessage(
+  runtime: PostgresSyncWorkerRuntime,
+  message: PostgresSyncWorkerMessage,
+): Promise<void> {
   const { request, port, signal } = message;
   const state = new Int32Array(signal);
   let response: PostgresWorkerResponse;
   try {
     response = {
       ok: true,
-      result: await handleRequest(request),
+      result: await handlePostgresSyncWorkerRequest(runtime, request),
     };
   } catch (error) {
     const sql = request.kind === "query" || request.kind === "exec" ? request.sql : undefined;
     response = {
       ok: false,
-      error: serializeError(error, sql),
+      error: serializePostgresSyncWorkerError(error, sql),
     };
   }
 
@@ -39,15 +90,18 @@ parentPort?.on("message", async (message: {
   Atomics.store(state, 0, 1);
   Atomics.notify(state, 0, 1);
   port.close();
-});
+}
 
-async function handleRequest(request: PostgresWorkerRequest): Promise<unknown> {
+export async function handlePostgresSyncWorkerRequest(
+  runtime: PostgresSyncWorkerRuntime,
+  request: PostgresWorkerRequest,
+): Promise<unknown> {
   switch (request.kind) {
     case "query": {
-      const executor = request.txId ? getTransactionClient(request.txId) : pool;
+      const executor = request.txId ? getTransactionClient(runtime, request.txId) : runtime.pool;
       const result = await executor.query(
         request.sql,
-        sanitizeParamsForServerEncoding(request.params, await getServerEncoding(), request.sql),
+        sanitizeParamsForServerEncoding(request.params, await getServerEncoding(runtime), request.sql),
       );
       if (request.mode === "run") {
         return {
@@ -61,7 +115,7 @@ async function handleRequest(request: PostgresWorkerRequest): Promise<unknown> {
       return result.rows;
     }
     case "exec": {
-      const executor = request.txId ? getTransactionClient(request.txId) : pool;
+      const executor = request.txId ? getTransactionClient(runtime, request.txId) : runtime.pool;
       const result = await executor.query(request.sql);
       return {
         changes: result.rowCount ?? 0,
@@ -69,55 +123,55 @@ async function handleRequest(request: PostgresWorkerRequest): Promise<unknown> {
       };
     }
     case "tx_begin": {
-      const client = await pool.connect();
+      const client = await runtime.pool.connect();
       await client.query("BEGIN");
-      transactions.set(request.txId, client);
+      runtime.transactions.set(request.txId, client);
       return true;
     }
     case "tx_commit": {
-      const client = getTransactionClient(request.txId);
+      const client = getTransactionClient(runtime, request.txId);
       try {
         await client.query("COMMIT");
       } finally {
-        transactions.delete(request.txId);
+        runtime.transactions.delete(request.txId);
         client.release();
       }
       return true;
     }
     case "tx_rollback": {
-      const client = getTransactionClient(request.txId);
+      const client = getTransactionClient(runtime, request.txId);
       try {
         await client.query("ROLLBACK");
       } finally {
-        transactions.delete(request.txId);
+        runtime.transactions.delete(request.txId);
         client.release();
       }
       return true;
     }
     case "close": {
-      for (const [txId, client] of transactions.entries()) {
+      for (const [txId, client] of runtime.transactions.entries()) {
         try {
           await client.query("ROLLBACK");
         } finally {
-          transactions.delete(txId);
+          runtime.transactions.delete(txId);
           client.release();
         }
       }
-      await pool.end();
+      await runtime.pool.end();
       return true;
     }
   }
 }
 
-function getTransactionClient(txId: string): PoolClient {
-  const client = transactions.get(txId);
+function getTransactionClient(runtime: PostgresSyncWorkerRuntime, txId: string): PostgresSyncWorkerTransactionClient {
+  const client = runtime.transactions.get(txId);
   if (!client) {
     throw new Error(`Missing active Postgres transaction ${txId}`);
   }
   return client;
 }
 
-function buildPoolConfig(options: PostgresConnectionOptions) {
+export function buildPostgresSyncWorkerPoolConfig(options: PostgresConnectionOptions) {
   if (options.connectionString?.trim()) {
     return {
       connectionString: options.connectionString.trim(),
@@ -147,17 +201,17 @@ function buildPoolConfig(options: PostgresConnectionOptions) {
   };
 }
 
-async function getServerEncoding(): Promise<string | undefined> {
-  if (!serverEncodingPromise) {
-    serverEncodingPromise = pool
+async function getServerEncoding(runtime: PostgresSyncWorkerRuntime): Promise<string | undefined> {
+  if (!runtime.serverEncodingPromise) {
+    runtime.serverEncodingPromise = runtime.pool
       .query<{ server_encoding: string }>("SELECT current_setting('server_encoding') AS server_encoding")
       .then((result) => result.rows[0]?.server_encoding)
       .catch(() => undefined);
   }
-  return serverEncodingPromise;
+  return runtime.serverEncodingPromise;
 }
 
-function serializeError(error: unknown, sql?: string) {
+export function serializePostgresSyncWorkerError(error: unknown, sql?: string) {
   if (error instanceof Error) {
     return {
       name: error.name,
@@ -170,3 +224,7 @@ function serializeError(error: unknown, sql?: string) {
     message: sql ? `${String(error)}\nSQL: ${sql}` : String(error),
   };
 }
+
+const runtime = parentPort && createPostgresSyncWorkerRuntime(workerData as PostgresConnectionOptions);
+
+if (parentPort && runtime) registerPostgresSyncWorkerMessageHandler(parentPort, runtime);

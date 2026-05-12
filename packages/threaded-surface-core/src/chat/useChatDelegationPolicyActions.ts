@@ -134,7 +134,10 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
   };
 }
 
-function inferDelegationRunStatus(steps: ActiveChatDelegationStep[], fallback: ChatDelegationRunStatus = "running") {
+export function inferDelegationRunStatus(
+  steps: ActiveChatDelegationStep[],
+  fallback: ChatDelegationRunStatus = "running",
+) {
   if (steps.length === 0) {
     return fallback;
   }
@@ -190,7 +193,50 @@ function mergeDelegationStep(
   return nextSteps.sort((left, right) => left.index - right.index);
 }
 
-function resolveSelectedTurn(
+export function applyDelegationStatusChunk(
+  current: ActiveChatDelegationRun | null,
+  chunk: { runId?: string; taskId?: string },
+): ActiveChatDelegationRun | null {
+  return current
+    ? {
+        ...current,
+        runId: chunk.runId ?? current.runId,
+        taskId: chunk.taskId ?? current.taskId,
+      }
+    : current;
+}
+
+export function applyDelegationStepChunk(
+  current: ActiveChatDelegationRun | null,
+  chunk: { runId?: string; taskId?: string },
+  nextStep: ActiveChatDelegationStep,
+): ActiveChatDelegationRun | null {
+  if (!current) {
+    return current;
+  }
+  const steps = mergeDelegationStep(current.steps, nextStep);
+  return {
+    ...current,
+    runId: chunk.runId ?? current.runId,
+    taskId: chunk.taskId ?? current.taskId,
+    steps,
+    status: inferDelegationRunStatus(steps, "running"),
+  };
+}
+
+export function applyDelegationStreamFailure(current: ActiveChatDelegationRun | null): ActiveChatDelegationRun | null {
+  return current
+    ? {
+        ...current,
+        status: inferDelegationRunStatus(
+          current.steps,
+          current.steps.some((step) => step.status === "completed") ? "partial" : "failed",
+        ),
+      }
+    : current;
+}
+
+export function resolveSelectedTurn(
   thread: ChatThreadResponse | null,
   selectedTurnId: string | null,
 ): ChatThreadTurnRecord | null {
@@ -468,15 +514,7 @@ export function useChatDelegationPolicyActions(input: {
       try {
         await streamChatDelegation(sessionId, request, (chunk) => {
           if (chunk.type === "status") {
-            setActiveDelegationRun((current) =>
-              current
-                ? {
-                    ...current,
-                    runId: chunk.runId ?? current.runId,
-                    taskId: chunk.taskId ?? current.taskId,
-                  }
-                : current,
-            );
+            setActiveDelegationRun((current) => applyDelegationStatusChunk(current, chunk));
             if (chunk.message) {
               pushLocalNotice(chunk.message);
             }
@@ -497,19 +535,7 @@ export function useChatDelegationPolicyActions(input: {
               output: chunk.step.output,
               error: chunk.step.error,
             };
-            setActiveDelegationRun((current) => {
-              if (!current) {
-                return current;
-              }
-              const steps = mergeDelegationStep(current.steps, nextStep);
-              return {
-                ...current,
-                runId: chunk.runId ?? current.runId,
-                taskId: chunk.taskId ?? current.taskId,
-                steps,
-                status: inferDelegationRunStatus(steps, "running"),
-              };
-            });
+            setActiveDelegationRun((current) => applyDelegationStepChunk(current, chunk, nextStep));
             if (chunk.step.status === "running") {
               pushLocalNotice(
                 `${toTitleCase(chunk.step.role)} started ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}.`,
@@ -552,17 +578,7 @@ export function useChatDelegationPolicyActions(input: {
           }
         });
       } catch (error) {
-        setActiveDelegationRun((current) =>
-          current
-            ? {
-                ...current,
-                status: inferDelegationRunStatus(
-                  current.steps,
-                  current.steps.some((step) => step.status === "completed") ? "partial" : "failed",
-                ),
-              }
-            : current,
-        );
+        setActiveDelegationRun((current) => applyDelegationStreamFailure(current));
         throw error;
       }
 

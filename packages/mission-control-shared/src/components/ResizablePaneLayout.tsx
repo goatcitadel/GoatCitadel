@@ -132,6 +132,17 @@ function joinClassNames(...values: Array<string | undefined | null | false>): st
   return values.filter(Boolean).join(" ");
 }
 
+function shouldRenderReflexLayout(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return (
+    import.meta.env.MODE !== "test" ||
+    (globalThis as typeof globalThis & { __GOATCITADEL_TEST_REFLEX_LAYOUT?: boolean })
+      .__GOATCITADEL_TEST_REFLEX_LAYOUT === true
+  );
+}
+
 export function ResizablePaneLayout({
   panes,
   orientation = "vertical",
@@ -141,7 +152,7 @@ export function ResizablePaneLayout({
 }: ResizablePaneLayoutProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [storedFlexes, setStoredFlexes] = useState<Record<string, number>>(() => readStoredPaneFlexes(storageKey));
-  const shouldRenderReflex = typeof window !== "undefined" && import.meta.env.MODE !== "test";
+  const shouldRenderReflex = shouldRenderReflexLayout();
   const defaultFlexes = resolveDefaultPaneFlexes(panes);
 
   useEffect(() => {

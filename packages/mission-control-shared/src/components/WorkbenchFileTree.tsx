@@ -65,7 +65,15 @@ function nextExpandedPaths(current: string[], path: string): string[] {
 }
 
 function shouldRenderArborist(): boolean {
-  return typeof window !== "undefined" && import.meta.env.MODE !== "test";
+  if (typeof window === "undefined") {
+    return false;
+  }
+  if (import.meta.env.MODE !== "test") {
+    return true;
+  }
+  return Boolean(
+    (globalThis as typeof globalThis & { __GOATCITADEL_TEST_ARBORIST_TREE?: boolean }).__GOATCITADEL_TEST_ARBORIST_TREE,
+  );
 }
 
 export function WorkbenchFileTree({

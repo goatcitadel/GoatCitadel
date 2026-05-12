@@ -121,8 +121,9 @@ function Harness(props: {
 
 describe("useChatThreadController", () => {
   it("applies route session and turn selection once thread data is available", async () => {
+    let renderer: ReturnType<typeof create>;
     await act(async () => {
-      create(<Harness routeSearch="?sessionId=session-2&turnId=turn-2" showAllModes />);
+      renderer = create(<Harness routeSearch="?sessionId=session-2&turnId=turn-2" showAllModes />);
     });
 
     expect(latest!.selectedSessionId).toBe("session-2");
@@ -131,6 +132,16 @@ describe("useChatThreadController", () => {
     expect(latest!.selectedProject).toBeNull();
     expect(latest!.followThreadOutput).toBe(true);
     expect(latest!.messages.map((message) => message.messageId)).toEqual(["message-1", "message-2", "message-3"]);
+
+    await act(async () => {
+      renderer!.update(<Harness routeSearch="?sessionId=session-2&turnId=turn-2&nonce=1" showAllModes />);
+    });
+    expect(latest!.selectedSessionId).toBe("session-2");
+
+    await act(async () => {
+      renderer!.update(<Harness routeSearch="?turnId=turn-1" showAllModes />);
+    });
+    expect(latest!.selectedSessionId).toBe("session-2");
   });
 
   it("derives folders, tags, visible sessions, labels, and mission counts", async () => {
@@ -151,5 +162,22 @@ describe("useChatThreadController", () => {
     expect(latest!.workspaceMissionSessionCount).toBe(1);
     expect(latest!.boundMissionSessionCount).toBe(1);
     expect(latest!.visibleSessionLabelById.get("session-1")).toBe("Launch Room");
+
+    await act(async () => {
+      create(<Harness selectedProjectId="none" showAllModes />);
+    });
+    expect(latest!.visibleSessions.map((session) => session.sessionId)).toContain("session-2");
+    expect(latest!.visibleSessions.map((session) => session.sessionId)).not.toContain("session-1");
+
+    await act(async () => {
+      create(<Harness selectedProjectId="project-missing" showAllModes />);
+    });
+    expect(latest!.visibleSessions).toEqual([]);
+
+    await act(async () => {
+      create(<Harness selectedFolderId="none" showAllModes />);
+    });
+    expect(latest!.visibleSessions.map((session) => session.sessionId)).toContain("session-3");
+    expect(latest!.visibleSessions.map((session) => session.sessionId)).not.toContain("session-1");
   });
 });

@@ -58,4 +58,24 @@ describe("ChatSessionBranchStateRepository", () => {
     assert.equal(repo.get("sess-1")?.activeLeafTurnId, "turn-1");
     assert.equal(repo.get("sess-1")?.updatedAt, "2026-03-07T00:02:00.000Z");
   });
+
+  it("sets active leaves directly and reports unreadable post-write rows", () => {
+    const repo = createRepo();
+
+    assert.deepEqual(repo.setActiveLeaf("sess-1", "turn-1", "2026-03-07T00:00:00.000Z"), {
+      sessionId: "sess-1",
+      activeLeafTurnId: "turn-1",
+      updatedAt: "2026-03-07T00:00:00.000Z",
+    });
+
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+    };
+    internal.getStmt = { get: () => undefined };
+
+    assert.throws(
+      () => repo.setActiveLeaf("sess-2", "turn-2", "2026-03-07T00:01:00.000Z"),
+      /chat session branch state sess-2 not found/,
+    );
+  });
 });

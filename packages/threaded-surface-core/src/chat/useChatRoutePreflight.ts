@@ -62,11 +62,8 @@ export function useChatRoutePreflight(input: {
   );
 
   const fetchPreflight = useCallback(
-    async (request: RoutingPreflightRequest, options?: { force?: boolean; sessionId?: string | null }) => {
-      const targetSessionId = options?.sessionId ?? sessionId;
-      if (!targetSessionId) {
-        return null;
-      }
+    async (request: RoutingPreflightRequest, options: { force?: boolean; sessionId: string }) => {
+      const targetSessionId = options.sessionId;
       const cacheKey = `${targetSessionId}:${stableHash(request)}`;
       const cached = cacheRef.current.get(cacheKey);
       if (!options?.force && cached && Date.now() - cached.fetchedAt < PREFLIGHT_TTL_MS) {
@@ -81,11 +78,12 @@ export function useChatRoutePreflight(input: {
       });
       return next;
     },
-    [sessionId],
+    [],
   );
 
   useEffect(() => {
-    if (!displayRequest || !displayKey || !enabled) {
+    const displaySessionId = sessionId;
+    if (!displayRequest || !displayKey || !enabled || !displaySessionId) {
       setResult(null);
       setError(null);
       setLoading(false);
@@ -95,7 +93,7 @@ export function useChatRoutePreflight(input: {
     setResult(null);
     setError(null);
     setLoading(true);
-    void fetchPreflight(displayRequest)
+    void fetchPreflight(displayRequest, { sessionId: displaySessionId })
       .then((next) => {
         if (cancelled) {
           return;

@@ -486,4 +486,261 @@ describe("ThreadedWorkflowPanel", () => {
     expect(openConfirm).toBeTruthy();
     expect(openConfirm?.props.title).toBe("Revert all worktree changes?");
   });
+
+  it("binds existing projects and imports code sources from the unbound workbench state", async () => {
+    const onBindExistingProject = vi.fn(async () => undefined);
+    const onImportProjectSource = vi.fn(async () => undefined);
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            needsProjectBinding: true,
+            workbenchState: null,
+            workbenchTree: null,
+            diff: null,
+            output: null,
+            availableProjects: [
+              { projectId: "project-1", name: "Existing one", workspacePath: "F:\\code\\one" },
+              { projectId: "project-2", name: "Existing two", workspacePath: "F:\\code\\two" },
+            ],
+            onBindExistingProject,
+            onImportProjectSource,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const select = renderer!.root.findByType("select");
+    await act(async () => {
+      select.props.onChange({ target: { value: "project-2" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Bind project"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onBindExistingProject).toHaveBeenCalledWith("project-2");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Local folder"))
+        ?.props.onClick();
+    });
+    const localInputs = renderer!.root.findAllByType("input");
+    act(() => {
+      localInputs
+        .find((input) => input.props.placeholder?.includes("my-project"))
+        ?.props.onChange({
+          target: { value: "  F:\\code\\local-app  " },
+        });
+      localInputs
+        .find((input) => input.props.placeholder === "Use folder name by default")
+        ?.props.onChange({
+          target: { value: "  Local App  " },
+        });
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Import folder"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onImportProjectSource).toHaveBeenCalledWith({
+      sourceType: "local_folder",
+      sourcePath: "F:\\code\\local-app",
+      name: "Local App",
+    });
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("GitHub repo"))
+        ?.props.onClick();
+    });
+    const repoInputs = renderer!.root.findAllByType("input");
+    act(() => {
+      repoInputs
+        .find((input) => input.props.placeholder === "https://github.com/owner/repo.git")
+        ?.props.onChange({
+          target: { value: "  https://github.com/goat/app.git  " },
+        });
+      repoInputs
+        .find((input) => input.props.placeholder === "main")
+        ?.props.onChange({
+          target: { value: "  feature/coverage  " },
+        });
+      repoInputs
+        .find((input) => input.props.placeholder === "Use repo name by default")
+        ?.props.onChange({
+          target: { value: "  Goat App  " },
+        });
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Clone repo"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onImportProjectSource).toHaveBeenCalledWith({
+      sourceType: "github_repo",
+      repoUrl: "https://github.com/goat/app.git",
+      ref: "feature/coverage",
+      name: "Goat App",
+    });
+  });
+
+  it("renders cowork run maps, blockers, tabs, and operator action callbacks", async () => {
+    const onOpenDetails = vi.fn();
+    const onRefreshRunState = vi.fn();
+    const panel = buildCoworkPanel();
+    Object.assign(panel.props, {
+      onOpenDetails,
+      onRefreshRunState,
+      agenticControlPending: "pause",
+      agenticControlStatus: "Pause intent recorded.",
+    });
+    Object.assign(panel.props.viewModel, {
+      stageCards: [{ label: "Phase", value: "Review" }],
+      now: {
+        label: "Now",
+        title: "Waiting",
+        summary: "Operator review is pending.",
+        facts: [{ label: "Queue", value: "2 approvals" }],
+      },
+      nextAction: {
+        kind: "refresh_run_state",
+        label: "Refresh run state",
+        note: "Reload the durable state before continuing.",
+      },
+      blockers: [{ id: "blocker-1", title: "Missing evidence", summary: "The run needs proof." }],
+      operatorActionItems: {
+        items: [{ id: "operator-1", title: "Review output", status: "pending", meta: "Owner needed" }],
+        overflow: 0,
+      },
+      planItems: {
+        items: [{ id: "plan-1", title: "Check tests", status: "done", note: "Tests passed." }],
+        overflow: 0,
+      },
+      roleItems: { items: [{ id: "role-1", title: "QA", status: "active", meta: "Coverage" }], overflow: 0 },
+      timelineItems: {
+        items: [{ id: "timeline-1", title: "Checkpoint", status: "saved", meta: "10:00" }],
+        overflow: 0,
+      },
+      outputItems: {
+        items: [{ id: "output-1", title: "Report", status: "ready", note: "Ready to inspect." }],
+        overflow: 0,
+      },
+      continuationGate: {
+        decision: "checkpoint",
+        reasonCodes: ["needs_review"],
+        summary: "Checkpoint before continuing.",
+        metrics: {
+          stepsSinceCheckpoint: 3,
+          toolRunCount: 4,
+          failedToolRunCount: 1,
+          retryFailureStreak: 0,
+          approvalWait: true,
+          userInputWait: false,
+          evidenceGapCount: 2,
+        },
+        recommendedAction: "Inspect evidence.",
+        createdAt: "2026-05-05T12:00:00.000Z",
+      },
+      runMap: {
+        objective: "Finish coverage",
+        currentState: "Checkpointed",
+        nextAction: "Inspect evidence",
+        planNodes: [
+          { id: "node-1", label: "Plan", status: "done", meta: "Ready" },
+          { id: "node-2", label: "Test", status: "active", meta: "Running" },
+        ],
+        checkpoints: [
+          { id: "checkpoint-1", title: "Started", createdAt: "2026-05-05T12:00:00.000Z" },
+          { id: "checkpoint-2", title: "Validated", createdAt: "2026-05-05T12:05:00.000Z" },
+        ],
+      },
+      stateGaps: ["coverage evidence"],
+      evidenceSummary: {
+        label: "Evidence",
+        detail: "2 gaps",
+        toolCallCount: 4,
+        checkpointCount: 2,
+        evidenceGapCount: 2,
+      },
+      agenticRuntime: {
+        ...panel.props.viewModel.agenticRuntime!,
+        treeNodes: [{ id: "tree-1", label: "Coordinator", status: "running", meta: "root" }],
+        diagnostics: [{ id: "diag-1", title: "Slow lane", status: "warning", meta: "Coverage wait" }],
+        controls: [
+          ...panel.props.viewModel.agenticRuntime!.controls,
+          {
+            id: "resume",
+            action: "resume",
+            title: "Resume run",
+            enabled: true,
+            status: "available",
+            runtimeEffect: "executor",
+            meta: "live",
+            note: "Executor supports resume.",
+          },
+        ],
+      },
+    });
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={panel} />);
+      await Promise.resolve();
+    });
+
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Pause intent recorded.");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Refresh run state"))
+        ?.props.onClick();
+    });
+    expect(onRefreshRunState).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run Map"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Gate: ");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("coverage evidence");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Inspect evidence"))
+        ?.props.onClick();
+    });
+    expect(onOpenDetails).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Timeline"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Checkpoint");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Operator actions"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Review output");
+  });
 });

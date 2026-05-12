@@ -16,6 +16,21 @@
       "pattern": "packages/mission-control-shared/src/test/setup.ts",
       "reasonCategory": "test-harness-setup",
       "reason": "Vitest/react-test-renderer setup shim, not runtime-owned shared behavior."
+    },
+    {
+      "pattern": "apps/gateway/src/coverage-exercise.ts",
+      "reasonCategory": "test-harness-setup",
+      "reason": "Coverage-only gateway route/service/CLI exercise harness invoked by the coverage:exercise script."
+    },
+    {
+      "pattern": "apps/gateway/src/smoke.ts",
+      "reasonCategory": "test-harness-setup",
+      "reason": "Explicit gateway smoke runner invoked by smoke and verification scripts, not production runtime behavior."
+    },
+    {
+      "pattern": "packages/storage/src/postgres/protocol.ts",
+      "reasonCategory": "type-only-barrel",
+      "reason": "Type-only worker request/response protocol definitions erased at runtime; behavior is covered through sync-worker request handling tests."
     }
   ]
 }

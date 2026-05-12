@@ -396,10 +396,7 @@ export class AssemblyRepository {
     if (records.length === 0) {
       return [];
     }
-    const first = records[0];
-    if (!first) {
-      return [];
-    }
+    const first = records[0]!;
     return this.listArtifacts(first.runId);
   }
 

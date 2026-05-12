@@ -161,14 +161,15 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
       try {
         setSummary(null);
         const result = await resolveAction.run(async () => resolveApproval(approvalId, decision));
+        const followUpSummary = result.approval.followUp
+          ? formatApprovalFollowUpSummary(result.approval.followUp.status)
+          : null;
         if (result.executedAction) {
           setSummary(
             `Approval ${approvalId} resolved and action ${result.executedAction.outcome}: ${result.executedAction.policyReason}`,
           );
-        } else if (result.approval.followUp && result.approval.followUp.status !== "none") {
-          setSummary(
-            `Approval ${approvalId} resolved. ${formatApprovalFollowUpSummary(result.approval.followUp.status)}.`,
-          );
+        } else if (result.approval.followUp && result.approval.followUp.status !== "none" && followUpSummary) {
+          setSummary(`Approval ${approvalId} resolved. ${followUpSummary}.`);
         } else if (result.effects.length > 0) {
           setSummary(`Approval ${approvalId} resolved. ${result.effects.length} follow-on effects queued.`);
         } else {

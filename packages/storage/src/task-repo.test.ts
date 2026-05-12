@@ -201,6 +201,12 @@ describe("task repositories", () => {
       },
     });
     assert.equal(subagent.metadata?.parentRunId, "run-1");
+    assert.equal(repos.subagents.findByAgentSessionId("agent:main:subagent:researcher")?.taskId, task.taskId);
+    assert.equal(repos.subagents.findByAgentSessionId("missing-subagent"), undefined);
+    assert.throws(
+      () => repos.subagents.getByAgentSessionId("missing-subagent"),
+      /Sub-agent session missing-subagent not found/,
+    );
 
     const completed = repos.subagents.updateByAgentSessionId("agent:main:subagent:researcher", {
       status: "completed",
@@ -215,6 +221,7 @@ describe("task repositories", () => {
       },
     });
     assert.equal(completed.metadata?.handoffEvidence?.summary, "Research complete");
+    assert.equal(repos.subagents.listAll(10)[0]?.agentSessionId, "agent:main:subagent:researcher");
 
     const patched = repos.tasks.update(task.taskId, {
       agenticContext: {
@@ -233,6 +240,15 @@ describe("task repositories", () => {
 
     const cleared = repos.tasks.update(task.taskId, { agenticContext: null });
     assert.equal(cleared.agenticContext, undefined);
+
+    const internal = repos.subagents as unknown as {
+      listByTaskStmt: { all: (...args: unknown[]) => unknown };
+      listAllStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listByTaskStmt = { all: () => [null] };
+    internal.listAllStmt = { all: () => ({ not: "an array" }) };
+    assert.deepEqual(repos.subagents.listByTask(task.taskId), []);
+    assert.deepEqual(repos.subagents.listAll(), []);
   });
 
   it("filters by workspace, status, and deletion view while reporting workspace counts", () => {

@@ -350,7 +350,8 @@ function ChatTurnCard({
             <p>
               {isChatTurnActiveStatus(turn.trace.status) ||
               turn.trace.status === "cancelled" ||
-              turn.trace.status === "failed"
+              turn.trace.status === "failed" ||
+              turn.trace.status === "partial"
                 ? getTurnPendingLabel(turn.trace)
                 : "No assistant output yet."}
             </p>

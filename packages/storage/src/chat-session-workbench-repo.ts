@@ -161,10 +161,7 @@ function normalizeValidationStatus(value: string): ChatSessionWorkbenchValidatio
   }
 }
 
-function sanitizeOptional(value?: string): string | null {
-  if (value === undefined) {
-    return null;
-  }
+function sanitizeOptional(value: string): string | null {
   const trimmed = value.trim();
   return trimmed || null;
 }

@@ -39,6 +39,7 @@ describe("Mission Control Next main entrypoint", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -49,5 +50,24 @@ describe("Mission Control Next main entrypoint", () => {
     expect(createRootMock).toHaveBeenCalledTimes(1);
     expect(renderMock).toHaveBeenCalledTimes(1);
     expect(navigator.serviceWorker.getRegistrations).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks visual-regression mode when requested", async () => {
+    vi.stubEnv("VITE_GOATCITADEL_VISUAL_REGRESSION_MODE", " TRUE ");
+
+    await import("./main");
+
+    expect(document.documentElement.dataset.visualRegression).toBe("true");
+  });
+
+  it("throws when the root element is missing", async () => {
+    vi.stubGlobal("document", {
+      documentElement: {
+        dataset: {},
+      },
+      getElementById: vi.fn(() => null),
+    } as unknown as Document);
+
+    await expect(import("./main")).rejects.toThrow("Root element not found");
   });
 });

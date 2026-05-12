@@ -75,7 +75,7 @@ function Harness(props: {
   const controller = useChatSurfaceOrchestration({
     draft,
     pendingAttachments: pendingAttachments as never,
-    selectedSessionId: props.selectedSessionId ?? "session-1",
+    selectedSessionId: props.selectedSessionId === undefined ? "session-1" : props.selectedSessionId,
     thread: {
       turns: [
         {
@@ -142,6 +142,12 @@ describe("useChatSurfaceOrchestration", () => {
   });
 
   it("sends immediately when execution can begin and queues when it cannot", async () => {
+    mountHarness({ initialDraft: "   " });
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+    expect(latest!.executeOutbound).not.toHaveBeenCalled();
+
     mountHarness({ initialDraft: " Coordinate rollout ", initialAttachments: [{ attachmentId: "a1" }] });
     await act(async () => {
       await latest!.controller.handleSend();
@@ -197,6 +203,14 @@ describe("useChatSurfaceOrchestration", () => {
       targetTurnId: "turn-1",
     });
     expect(latest!.pushNotice).toHaveBeenCalledWith("Retry queued while the current turn finishes.");
+
+    mountHarness({ canBegin: true });
+    await act(async () => {
+      await latest!.controller.handleRetryTurn("turn-1");
+    });
+    expect(latest!.executeOutbound).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "retry", targetTurnId: "turn-1" }),
+    );
   });
 
   it("drains unpaused queue items when sending stops and execution can begin", async () => {
@@ -266,6 +280,23 @@ describe("useChatSurfaceOrchestration", () => {
       await latest!.controller.handleStopActiveTurn();
     });
     expect(latest!.setError).toHaveBeenCalledWith("cancel failed");
+
+    mountHarness({ selectedSessionId: null });
+    await act(async () => {
+      await latest!.controller.handleStopActiveTurn();
+    });
+    expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
+
+    mountHarness();
+    await act(async () => {
+      await latest!.controller.handleStopActiveTurn();
+    });
+    expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
+
+    act(() => {
+      latest!.controller.handleBeginEditTurn("missing-turn");
+    });
+    expect(latest!.snapshot().editingTurnId).toBeNull();
   });
 
   it("records resume and remove queue diagnostics", async () => {

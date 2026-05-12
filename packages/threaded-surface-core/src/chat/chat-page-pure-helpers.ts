@@ -238,8 +238,6 @@ export function getCapabilitySuggestionConfirmationCopy(
         confirmLabel: "Add template",
         danger: false,
       };
-    default:
-      return null;
   }
 }
 

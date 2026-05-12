@@ -81,6 +81,7 @@ describe("ChatSessionBindingRepository", () => {
       () => repo.upsert({ sessionId: "session-b", workspaceId: "bad workspace", transport: "llm" }),
       /workspaceId contains unsupported characters/,
     );
+    assert.throws(() => repo.listBySessionIds(["session-a"], " "), /workspaceId is required/);
   });
 
   it("fails clearly on malformed stored rows and malformed targets", () => {
@@ -98,5 +99,19 @@ describe("ChatSessionBindingRepository", () => {
     setRawField(db, "session-a", "writable", new Uint8Array([1]));
     assert.throws(() => repo.get("session-a"), /Unexpected chat_session_bindings row shape/);
     assert.throws(() => repo.listBySessionIds(["session-a"]), /Unexpected chat_session_bindings row shape/);
+
+    const unreadableStore = createStore();
+    const internal = unreadableStore.repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+    };
+    internal.getStmt = { get: () => undefined };
+    assert.throws(
+      () =>
+        unreadableStore.repo.upsert({
+          sessionId: "session-unreadable",
+          transport: "llm",
+        }),
+      /chat_session_bindings upsert did not return a row/,
+    );
   });
 });

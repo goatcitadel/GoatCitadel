@@ -330,4 +330,56 @@ describe("PromptPackRepository", () => {
       likelyFailureClasses: ["routing", "tool-policy"],
     });
   });
+
+  it("lists packs, reports missing rows, generates ids, and falls back on malformed metadata", () => {
+    const repo = createRepo();
+    const db = (repo as unknown as { db: ReturnType<typeof createDatabase> }).db;
+
+    assert.throws(() => repo.getPack("missing-pack"), /Prompt pack missing-pack not found/);
+    assert.throws(() => repo.getTest("missing-test"), /Prompt pack test missing-test not found/);
+
+    const generated = repo.replacePackTests({
+      name: "Generated Pack",
+      sourceLabel: "operator",
+      tests: [
+        {
+          code: "TEST-GEN-01",
+          title: "Generated test",
+          prompt: "Prompt",
+          orderIndex: 0,
+          mode: "code",
+          toolTier: "explicit-tools",
+          diagnosticMetadata: {
+            capabilityTargets: ["runtime"],
+            expectedRuntimeSignals: ["test row"],
+            likelyFailureClasses: ["storage"],
+          },
+        },
+      ],
+    });
+
+    assert.equal(generated.pack.packId.startsWith("pack-"), true);
+    assert.equal(repo.listPacks(0)[0]?.packId, generated.pack.packId);
+    assert.equal(repo.getTest(generated.tests[0]!.testId).mode, "code");
+
+    db.prepare("UPDATE prompt_pack_tests SET diagnostic_metadata_json = ? WHERE test_id = ?").run(
+      "{bad",
+      generated.tests[0]!.testId,
+    );
+    assert.equal(repo.getTest(generated.tests[0]!.testId).diagnosticMetadata, undefined);
+
+    db.prepare("UPDATE prompt_packs SET policy_v2_json = ?, policy_v2_source = ? WHERE pack_id = ?").run(
+      "{bad",
+      "pack_override",
+      generated.pack.packId,
+    );
+    const fallback = repo.replacePackTests({
+      packId: generated.pack.packId,
+      name: "Generated Pack Updated",
+      tests: [],
+    });
+    assert.equal(fallback.pack.policySource, "pack_override");
+    assert.deepEqual(fallback.pack.policyV2, DEFAULT_PROMPT_PACK_POLICY_V2);
+    assert.deepEqual(repo.listTests(generated.pack.packId, 0), []);
+  });
 });

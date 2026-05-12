@@ -42,17 +42,31 @@ const commandCatalog = [
 let latest: ReturnType<typeof useChatProviderRoutingController> | null = null;
 const loadModelsForProvider = vi.fn(async () => ["gpt-5.5"]);
 
-function Harness(props: { draft: string; prefs?: Record<string, unknown> | null }) {
+function Harness(props: {
+  draft: string;
+  prefs?: Record<string, unknown> | null;
+  runtimeLlmConfig?: Record<string, unknown> | null;
+  settings?: Record<string, unknown> | null;
+  catalog?: typeof runtimeProviderCatalog;
+  getCachedModels?: (providerId: string) => string[];
+}) {
   latest = useChatProviderRoutingController({
-    runtimeLlmConfig: { activeProviderId: "local", activeModel: "local-model" } as never,
-    runtimeProviderCatalog,
-    getCachedModels: (providerId) => (providerId === "openai" ? ["gpt-5.5", "gpt-image-2"] : []),
+    runtimeLlmConfig:
+      props.runtimeLlmConfig === undefined
+        ? ({ activeProviderId: "local", activeModel: "local-model" } as never)
+        : (props.runtimeLlmConfig as never),
+    runtimeProviderCatalog: (props.catalog ?? runtimeProviderCatalog) as never,
+    getCachedModels:
+      props.getCachedModels ?? ((providerId) => (providerId === "openai" ? ["gpt-5.5", "gpt-image-2"] : [])),
     loadModelsForProvider,
     prefs:
       props.prefs === undefined
         ? ({ sessionId: "session-1", providerId: "openai", model: "gpt-image-2" } as never)
         : (props.prefs as never),
-    settings: { llm: { activeProviderId: "google", activeModel: "gemini-3-pro-image-preview" } } as never,
+    settings:
+      props.settings === undefined
+        ? ({ llm: { activeProviderId: "google", activeModel: "gemini-3-pro-image-preview" } } as never)
+        : (props.settings as never),
     draft: props.draft,
     commandCatalog: commandCatalog as never,
     installedSkills: [
@@ -142,5 +156,152 @@ describe("useChatProviderRoutingController", () => {
     expect(latest!.selectionSource).toBe("global");
     expect(latest!.runtimeStatus).toBe("unreachable");
     expect(latest!.commandSuggestions[0]?.command).toBe("/memory");
+  });
+
+  it("covers manual selection, disabled providers, and runtime probe variants", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          draft="plain"
+          prefs={null}
+          runtimeLlmConfig={null}
+          settings={null}
+          catalog={[
+            {
+              providerId: "anthropic",
+              label: "Anthropic",
+              hasApiKey: false,
+              models: ["claude"],
+              modelProbeState: "empty",
+            },
+          ]}
+          getCachedModels={() => []}
+        />,
+      );
+    });
+    expect(latest).toMatchObject({
+      selectedProviderId: undefined,
+      selectedProviderLabel: "Provider auto",
+      selectedModelLabel: "Model auto",
+      requestedProviderLabel: "Provider auto",
+      requestedModelLabel: "Model auto",
+      selectionSource: "manual",
+      selectionSourceLabel: "Selection: manual",
+      runtimeStatus: "not_checked",
+      runtimeSummary: "Runtime not checked",
+      runtimeTone: "muted",
+      commandSuggestions: [],
+    });
+
+    await act(async () => {
+      renderer.update(
+        <Harness
+          draft="$"
+          prefs={{ sessionId: "session-1", providerId: "anthropic", model: "claude" }}
+          runtimeLlmConfig={null}
+          settings={null}
+          catalog={[
+            {
+              providerId: "anthropic",
+              label: "Anthropic",
+              hasApiKey: false,
+              models: ["claude"],
+              modelProbeState: "empty",
+            },
+          ]}
+          getCachedModels={() => []}
+        />,
+      );
+    });
+    expect(latest).toMatchObject({
+      runtimeStatus: "degraded",
+      runtimeSummary: "Provider setup required",
+      runtimeTone: "critical",
+    });
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual(["$reviewer", "$writer"]);
+
+    await act(async () => {
+      renderer.update(
+        <Harness
+          draft="/model gpt"
+          prefs={{ sessionId: "session-1", providerId: "local", model: "missing-model" }}
+          settings={null}
+          catalog={[
+            {
+              providerId: "local",
+              label: "Local Runtime",
+              baseUrl: "http://127.0.0.1:8080",
+              hasApiKey: false,
+              models: ["local-model"],
+              modelProbeState: "empty",
+              modelProbeCheckedAt: "not-a-date",
+            },
+            {
+              providerId: "openai",
+              label: "OpenAI",
+              hasApiKey: true,
+              models: ["gpt-5.5"],
+              modelProbeState: "fallback",
+              modelProbeCheckedAt: "2026-05-01T10:15:00.000Z",
+            },
+          ]}
+          getCachedModels={() => []}
+        />,
+      );
+    });
+    expect(latest).toMatchObject({
+      runtimeStatus: "degraded",
+      runtimeSummary: "Local runtime degraded",
+      runtimeTone: "warning",
+    });
+    expect(latest!.commandSuggestions[0]?.command).toContain("/model openai/gpt-5.5");
+
+    await act(async () => {
+      renderer.update(
+        <Harness
+          draft="/model gpt"
+          prefs={{ sessionId: "session-1", providerId: "openai", model: "gpt-5.5" }}
+          settings={null}
+          catalog={[
+            {
+              providerId: "openai",
+              label: "OpenAI",
+              hasApiKey: true,
+              models: ["gpt-5.5"],
+              modelProbeState: "fallback",
+              modelProbeCheckedAt: "2026-05-01T10:15:00.000Z",
+            },
+          ]}
+          getCachedModels={() => []}
+        />,
+      );
+    });
+    expect(latest!.runtimeSummary).toContain("Model list suggested");
+
+    await act(async () => {
+      renderer.update(
+        <Harness
+          draft=""
+          prefs={{ sessionId: "session-1", providerId: "mystery", model: "mystery-model" }}
+          settings={null}
+          catalog={[
+            {
+              providerId: "mystery",
+              label: "Mystery",
+              hasApiKey: true,
+              models: ["mystery-model"],
+              modelProbeState: "unknown_state",
+            },
+          ]}
+          getCachedModels={() => []}
+        />,
+      );
+    });
+    expect(latest).toMatchObject({
+      runtimeStatus: "not_checked",
+      runtimeSummary: "Runtime not checked",
+      runtimeTone: "muted",
+    });
   });
 });

@@ -114,4 +114,19 @@ describe("useChatLocalPersistence", () => {
     });
     expect(storage.setItem).toHaveBeenLastCalledWith("draft-3", "four");
   });
+
+  it("skips cleanup persistence when browser storage is unavailable", () => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: undefined });
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(<PersistenceHarness storageKey="draft-1" initialValue="one" delayMs={100} />);
+    });
+    act(() => {
+      latestSetValue?.("two");
+    });
+    act(() => {
+      renderer!.unmount();
+    });
+  });
 });

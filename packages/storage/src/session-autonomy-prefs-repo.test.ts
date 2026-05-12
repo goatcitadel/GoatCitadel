@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
+import type { DbStatement } from "./db.js";
 
 const createdFiles: string[] = [];
 
@@ -71,5 +72,48 @@ describe("SessionAutonomyPrefsRepository", () => {
     const reloaded = repo.get("sess-1");
     assert.equal(reloaded?.retrievalMode, "layered");
     assert.equal(reloaded?.reflectionMode, "on");
+  });
+
+  it("touches proactive run state, clamps budgets, and handles empty or malformed adapter reads", () => {
+    const repo = createRepo();
+
+    const touched = repo.touch("sess-touch", "run-1", "2026-03-08T00:00:00.000Z");
+    assert.equal(touched.lastProactiveAt, "2026-03-08T00:00:00.000Z");
+    assert.equal(touched.lastProactiveRunId, "run-1");
+
+    const clamped = repo.patch("sess-touch", {
+      maxActionsPerHour: 999,
+      maxActionsPerTurn: -1,
+      cooldownSeconds: -5,
+    });
+    assert.equal(clamped.maxActionsPerHour, 200);
+    assert.equal(clamped.maxActionsPerTurn, 1);
+    assert.equal(clamped.cooldownSeconds, 0);
+
+    assert.equal(repo.listBySessionIds([" ", ""]).size, 0);
+
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+      upsertStmt: { run: (...args: unknown[]) => unknown };
+      db: ReturnType<typeof createDatabase>;
+    };
+    internal.getStmt = { get: () => null };
+    assert.equal(repo.get("malformed"), undefined);
+
+    internal.upsertStmt = { run: () => ({ changes: 1 }) };
+    assert.throws(() => repo.ensure("unreadable", "2026-03-08T00:00:00.000Z"), /session autonomy prefs/);
+
+    const originalPrepare = internal.db.prepare.bind(internal.db);
+    internal.db.prepare = (sql: string): DbStatement => {
+      if (sql.includes("FROM session_autonomy_prefs") && sql.includes("IN")) {
+        return {
+          run: () => ({ changes: 0 }),
+          get: () => undefined,
+          all: <T = unknown>() => [{ session_id: "bad", proactive_mode: 42 }] as T[],
+        };
+      }
+      return originalPrepare(sql);
+    };
+    assert.equal(repo.listBySessionIds(["sess-touch"]).size, 0);
   });
 });

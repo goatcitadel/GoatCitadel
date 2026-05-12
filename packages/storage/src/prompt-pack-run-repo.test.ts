@@ -176,4 +176,76 @@ describe("PromptPackRunRepository", () => {
       responseChecksumSha256: "def456",
     });
   });
+
+  it("lists, deletes, reports missing runs, and handles malformed stored JSON", () => {
+    const repo = createRepo();
+    const db = (repo as unknown as { db: ReturnType<typeof createDatabase> }).db;
+    const trace = { traceId: "trace-1", status: "completed" } as unknown as NonNullable<
+      Parameters<PromptPackRunRepository["create"]>[0]["trace"]
+    >;
+    const citations = [{ sourceId: "doc-1", title: "Doc" }] as unknown as NonNullable<
+      Parameters<PromptPackRunRepository["create"]>[0]["citations"]
+    >;
+
+    assert.throws(() => repo.get("missing-run"), /Prompt pack run missing-run not found/);
+    assert.throws(() => repo.patch("missing-run", { status: "completed" }), /Prompt pack run missing-run not found/);
+
+    repo.create({
+      runId: "run-old",
+      packId: "pack-1",
+      testId: "test-1",
+      startedAt: "2026-03-02T00:00:00.000Z",
+    });
+    repo.create({
+      runId: "run-new",
+      packId: "pack-1",
+      testId: "test-1",
+      sessionId: "session-1",
+      providerId: "openai",
+      model: "gpt-5",
+      mode: "code",
+      toolTier: "explicit-tools",
+      toolAutonomy: "manual",
+      webMode: "deep",
+      memoryMode: "on",
+      thinkingLevel: "deep",
+      trace,
+      citations,
+      startedAt: "2026-03-02T00:01:00.000Z",
+      finishedAt: "2026-03-02T00:02:00.000Z",
+    });
+
+    const [latest] = repo.listByPack("pack-1", 1);
+    assert.equal(latest?.runId, "run-new");
+    assert.equal(latest?.providerId, "openai");
+    assert.deepEqual(latest?.trace, trace);
+    assert.deepEqual(latest?.citations, citations);
+    assert.deepEqual(
+      repo.listByTest("test-1", 10).map((run) => run.runId),
+      ["run-new", "run-old"],
+    );
+
+    db.prepare(
+      `
+      UPDATE prompt_pack_runs
+      SET
+        diagnostic_metadata_json = ?,
+        derived_response_signals_json = ?,
+        trace_json = ?,
+        citations_json = ?,
+        integrity_json = ?
+      WHERE run_id = ?
+    `,
+    ).run("{bad", "{bad", "{bad", "{bad", "{bad", "run-new");
+
+    const malformed = repo.get("run-new");
+    assert.equal(malformed.diagnosticMetadata, undefined);
+    assert.equal(malformed.derivedResponseSignals, undefined);
+    assert.equal(malformed.trace, undefined);
+    assert.equal(malformed.citations, undefined);
+    assert.equal(malformed.integrity, undefined);
+
+    assert.equal(repo.deleteByPack("pack-1"), 2);
+    assert.deepEqual(repo.listByPack("pack-1"), []);
+  });
 });

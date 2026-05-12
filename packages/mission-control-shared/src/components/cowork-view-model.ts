@@ -506,6 +506,8 @@ export function deriveCoworkRunViewModel(input: {
   const runFailureSummary = formatCoworkFriendlyError(orchestrationRun?.lastError ?? currentTrace?.failure?.message);
   const delegationFailure = delegationSteps.find((step) => step.error);
   const delegationFailureSummary = formatCoworkFriendlyError(delegationFailure?.error);
+  const durableRecoveryState = currentTrace?.durable?.recoveryState;
+  const durableRecoverySummary = currentTrace?.durable?.recoverySummary;
 
   const blockers = [
     waitingForUserInput
@@ -536,6 +538,15 @@ export function deriveCoworkRunViewModel(input: {
           title: "Run failed",
           summary: runFailureSummary.summary,
           raw: runFailureSummary.raw,
+        }
+      : null,
+    durableRecoveryState && durableRecoveryState !== "none"
+      ? {
+          id: "durable-recovery",
+          title: "Durable worker needs attention",
+          summary:
+            durableRecoverySummary ??
+            `Worker state is ${humanizeStatus(durableRecoveryState)} for the linked durable run.`,
         }
       : null,
     delegationFailureSummary
@@ -630,6 +641,9 @@ export function deriveCoworkRunViewModel(input: {
       : null,
     phaseLabel ? { label: "Current phase", value: phaseLabel } : null,
     waveLabel ? { label: "Current wave", value: waveLabel } : null,
+    currentTrace?.durable?.workerHealth
+      ? { label: "Durable worker", value: humanizeStatus(currentTrace.durable.workerHealth) }
+      : null,
   ].filter((value): value is { label: string; value: string } => Boolean(value));
 
   const sourceLabel = orchestrationRun
@@ -752,6 +766,9 @@ export function deriveCoworkRunViewModel(input: {
     orchestration?.runId && !orchestrationRun && !delegationRunLoaded ? "Canonical run not loaded" : null,
     waitingForApproval ? "Approval unresolved" : null,
     waitingForUserInput ? "Operator answer required" : null,
+    durableRecoveryState && durableRecoveryState !== "none"
+      ? `Durable worker recovery: ${humanizeStatus(durableRecoveryState)}`
+      : null,
     orchestrationRun?.status === "completed" && outputItemsMissingProof(workbenchState)
       ? "Manual UI proof not attached"
       : null,

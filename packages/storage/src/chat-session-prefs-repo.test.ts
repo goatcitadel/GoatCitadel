@@ -113,4 +113,95 @@ describe("ChatSessionPrefsRepository", () => {
     assert.equal(reloaded?.orchestrationParallelism, "parallel");
     assert.equal(reloaded?.codeAutoApply, "manual");
   });
+
+  it("preserves existing prefs, clears dependent model fields, and handles legacy nullable controls", () => {
+    const repo = createRepo();
+    const created = repo.ensure("sess-1", "2026-03-07T00:00:00.000Z");
+
+    assert.equal(repo.ensure("sess-1", "2026-03-07T00:01:00.000Z").createdAt, created.createdAt);
+
+    repo.patch(
+      "sess-1",
+      {
+        providerId: "openai",
+        model: "gpt-5.2",
+        imageProviderId: "google",
+        imageModel: "gemini-image",
+        visionFallbackModel: "vision-model",
+        orchestrationEnabled: false,
+      },
+      "2026-03-07T00:02:00.000Z",
+    );
+
+    const cleared = repo.patch(
+      "sess-1",
+      {
+        providerId: "   ",
+        imageProviderId: "   ",
+        visionFallbackModel: "   ",
+      },
+      "2026-03-07T00:03:00.000Z",
+    );
+
+    assert.equal(cleared.providerId, undefined);
+    assert.equal(cleared.model, undefined);
+    assert.equal(cleared.imageProviderId, undefined);
+    assert.equal(cleared.imageModel, undefined);
+    assert.equal(cleared.visionFallbackModel, undefined);
+    assert.equal(cleared.orchestrationEnabled, false);
+
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+    };
+    internal.getStmt = {
+      get: () => ({
+        session_id: "legacy",
+        mode: "chat",
+        planning_mode: "off",
+        provider_id: null,
+        model: null,
+        image_provider_id: null,
+        image_model: null,
+        web_mode: "auto",
+        memory_mode: "auto",
+        thinking_level: "standard",
+        speed_mode: undefined,
+        subagent_policy: undefined,
+        tool_autonomy: "safe_auto",
+        vision_fallback_model: null,
+        orchestration_enabled: 1,
+        orchestration_intensity: "balanced",
+        orchestration_visibility: "summarized",
+        orchestration_provider_preference: "balanced",
+        orchestration_review_depth: "standard",
+        orchestration_parallelism: "auto",
+        code_auto_apply: "aggressive_auto",
+        created_at: "2026-03-07T00:00:00.000Z",
+        updated_at: "2026-03-07T00:00:00.000Z",
+      }),
+    };
+    assert.equal(repo.get("legacy")?.speedMode, "standard");
+    assert.equal(repo.get("legacy")?.subagentPolicy, "ask_when_useful");
+
+    internal.getStmt = { get: () => null };
+    assert.equal(repo.get("malformed"), undefined);
+  });
+
+  it("throws when an adapter write cannot be read back", () => {
+    const repo = createRepo();
+    let reads = 0;
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+      upsertStmt: { run: (...args: unknown[]) => unknown };
+    };
+    internal.getStmt = {
+      get: () => {
+        reads += 1;
+        return reads === 1 ? undefined : { malformed: true };
+      },
+    };
+    internal.upsertStmt = { run: () => ({ changes: 1 }) };
+
+    assert.throws(() => repo.ensure("sess-unreadable", "2026-03-07T00:00:00.000Z"), /chat session prefs/);
+  });
 });

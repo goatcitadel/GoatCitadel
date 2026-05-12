@@ -37,18 +37,15 @@ function normalizeWorkbenchPaths(paths: string[]): string[] {
   );
 }
 
-function buildWorkbenchStorageKey(sessionId: string | null): string | null {
-  return sessionId ? `${WORKBENCH_UI_STORAGE_PREFIX}${sessionId}` : null;
+function buildWorkbenchStorageKey(sessionId: string): string {
+  return `${WORKBENCH_UI_STORAGE_PREFIX}${sessionId}`;
 }
 
-function readWorkbenchUiState(sessionId: string | null): StoredWorkbenchUiState {
+function readWorkbenchUiState(sessionId: string): StoredWorkbenchUiState {
   if (typeof window === "undefined") {
     return { expandedPaths: [] };
   }
   const storageKey = buildWorkbenchStorageKey(sessionId);
-  if (!storageKey) {
-    return { expandedPaths: [] };
-  }
   try {
     const raw = window.localStorage.getItem(storageKey);
     if (!raw) {
@@ -69,10 +66,10 @@ function writeWorkbenchUiState(sessionId: string | null, patch: Partial<StoredWo
   if (typeof window === "undefined") {
     return;
   }
-  const storageKey = buildWorkbenchStorageKey(sessionId);
-  if (!storageKey) {
+  if (!sessionId) {
     return;
   }
+  const storageKey = buildWorkbenchStorageKey(sessionId);
   const current = readWorkbenchUiState(sessionId);
   const next: StoredWorkbenchUiState = {
     expandedPaths: normalizeWorkbenchPaths(patch.expandedPaths ?? current.expandedPaths),

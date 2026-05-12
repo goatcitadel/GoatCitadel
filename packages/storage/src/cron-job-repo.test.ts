@@ -49,4 +49,51 @@ describe("CronJobRepository", () => {
     assert.equal(second.updatedAt, first.updatedAt);
     assert.deepEqual(repo.list(), [first]);
   });
+
+  it("updates changed jobs, maps optional fields, deletes rows, and guards malformed adapter output", () => {
+    const repo = createRepo();
+    const job = {
+      jobId: "daily-summary",
+      name: "Daily Summary",
+      action: "watchdog" as const,
+      actionConfig: { watchdog: { checkId: "runtime_health" as const, notifyHomeChannel: true } },
+      description: "Send a summary",
+      schedule: "0 8 * * * America/Los_Angeles",
+      enabled: false,
+      endAt: "2026-04-01T00:00:00.000Z",
+      lastRunAt: undefined,
+      nextRunAt: "2026-03-30T08:00:00.000Z",
+    };
+
+    const first = repo.upsert(job, "2026-03-29T10:30:00.000Z");
+    const changed = repo.upsertIfChanged(
+      {
+        ...job,
+        enabled: true,
+        lastRunAt: "2026-03-30T08:00:00.000Z",
+      },
+      "2026-03-30T08:01:00.000Z",
+    );
+
+    assert.equal(changed.enabled, true);
+    assert.equal(changed.updatedAt, "2026-03-30T08:01:00.000Z");
+    assert.deepEqual(repo.get(job.jobId)?.actionConfig, {
+      watchdog: { checkId: "runtime_health", notifyHomeChannel: true },
+    });
+    assert.equal(repo.delete(job.jobId), true);
+    assert.equal(repo.delete(job.jobId), false);
+    assert.equal(repo.get(job.jobId), undefined);
+
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+      listStmt: { all: (...args: unknown[]) => unknown[] };
+    };
+    internal.getStmt = { get: () => ({ job_id: "bad" }) };
+    assert.throws(() => repo.get("bad-job"), /cron_jobs query returned an unexpected row shape/);
+
+    internal.listStmt = { all: () => [null] };
+    assert.throws(() => repo.list(), /cron_jobs query returned an unexpected row shape/);
+
+    assert.equal(first.updatedAt, "2026-03-29T10:30:00.000Z");
+  });
 });

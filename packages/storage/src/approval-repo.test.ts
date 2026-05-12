@@ -199,4 +199,92 @@ describe("ApprovalRepository", () => {
     assert.deepEqual(merged.payload, { command: "dir" });
     assert.deepEqual(merged.preview, { command: "dir" });
   });
+
+  it("lists statuses, supports alternate resolutions, and validates defensive linkage paths", () => {
+    const repo = createRepo();
+    const db = (repo as unknown as { db: ReturnType<typeof createDatabase> }).db;
+
+    assert.throws(() => repo.get("missing-approval"), /Approval missing-approval not found/);
+    assert.throws(() => repo.mergeLinkage("missing-approval", { sessionId: "session-1" }), /Approval missing-approval/);
+
+    const blankLinkage = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+      linkage: {
+        sessionId: "   ",
+        taskId: "",
+      } as NonNullable<Parameters<ApprovalRepository["create"]>[0]["linkage"]>,
+    });
+    assert.equal(blankLinkage.linkage, undefined);
+
+    const edited = repo.create({
+      kind: "fs.write",
+      riskLevel: "danger",
+      payload: { path: "notes.md", content: "draft" },
+      preview: { path: "notes.md" },
+    });
+    const rejected = repo.create({
+      kind: "browser.click",
+      riskLevel: "caution",
+      payload: { selector: "#delete" },
+      preview: { selector: "#delete" },
+    });
+
+    assert.equal(repo.list("pending", 10).length, 3);
+    assert.ok(repo.list(undefined, 10).some((approval) => approval.approvalId === edited.approvalId));
+
+    const editedResult = repo.resolve(edited.approvalId, {
+      decision: "edit",
+      editedPayload: { path: "notes.md", content: "final" },
+      resolvedBy: "operator",
+      resolutionNote: "reduced scope",
+    });
+    assert.equal(editedResult.status, "edited");
+    assert.deepEqual(editedResult.payload, { path: "notes.md", content: "final" });
+    assert.equal(editedResult.resolutionNote, "reduced scope");
+
+    const rejectedResult = repo.resolve(rejected.approvalId, {
+      decision: "reject",
+      resolvedBy: "operator",
+    });
+    assert.equal(rejectedResult.status, "rejected");
+    assert.equal(repo.list("rejected", 10)[0]?.approvalId, rejected.approvalId);
+
+    db.prepare(
+      `
+      UPDATE approvals
+      SET linkage_json = NULL,
+          payload_json = ?,
+          preview_json = ?,
+          explanation_json = ?
+      WHERE approval_id = ?
+    `,
+    ).run(
+      JSON.stringify({ command: "dir", __gcApprovalLinkage: { sessionId: "embedded-session" } }),
+      JSON.stringify({ command: "dir", __gcApprovalLinkage: { taskId: "embedded-task" } }),
+      "{bad",
+      blankLinkage.approvalId,
+    );
+
+    const embedded = repo.get(blankLinkage.approvalId);
+    assert.deepEqual(embedded.linkage, { sessionId: "embedded-session" });
+    assert.deepEqual(embedded.payload, { command: "dir" });
+    assert.deepEqual(embedded.preview, { command: "dir" });
+    assert.equal(embedded.explanation, undefined);
+
+    const internal = repo as unknown as {
+      getStmt: { get: (...args: unknown[]) => unknown };
+      listStmt: { all: (...args: unknown[]) => unknown };
+      listByStatusStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.getStmt = { get: () => ({ approval_id: "bad" }) };
+    assert.throws(() => repo.get("bad-row"), /Unexpected approvals row shape/);
+
+    internal.listStmt = { all: () => ({ not: "an array" }) };
+    internal.listByStatusStmt = { all: () => [null] };
+    assert.throws(() => repo.list(undefined, 10), /Unexpected approvals row shape/);
+    assert.throws(() => repo.list("pending", 10), /Unexpected approvals row shape/);
+  });
 });

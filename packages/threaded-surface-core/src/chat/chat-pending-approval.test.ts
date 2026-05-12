@@ -23,6 +23,9 @@ describe("chat-pending-approval", () => {
     expect(deriveThreadPendingApproval(null)).toBeNull();
     expect(deriveThreadPendingApproval(threadWithStatus("completed", []) as never)).toBeNull();
     expect(deriveThreadPendingApproval(threadWithStatus("waiting_for_approval", []) as never)).toBeNull();
+    expect(
+      deriveThreadPendingApproval({ selectedTurnId: null, activeLeafTurnId: null, turns: [] } as never),
+    ).toBeNull();
 
     expect(
       deriveThreadPendingApproval(
@@ -46,6 +49,8 @@ describe("chat-pending-approval", () => {
 
     expect(
       deriveThreadPendingApproval({
+        selectedTurnId: "missing",
+        activeLeafTurnId: "also-missing",
         turns: [
           {
             turnId: "turn-last",

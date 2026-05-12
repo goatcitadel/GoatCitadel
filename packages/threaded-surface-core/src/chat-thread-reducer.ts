@@ -316,12 +316,7 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
       deduped.push(citation);
       continue;
     }
-    const existing = deduped[existingIndex];
-    if (!existing) {
-      seen.set(key, deduped.length);
-      deduped.push(citation);
-      continue;
-    }
+    const existing = deduped[existingIndex]!;
     deduped = deduped.map((item, i) =>
       i === existingIndex
         ? {

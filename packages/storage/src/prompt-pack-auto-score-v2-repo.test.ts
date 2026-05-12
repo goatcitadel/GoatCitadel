@@ -94,4 +94,32 @@ describe("PromptPackAutoScoreV2Repository", () => {
     assert.equal(second.weightedScore, 88);
     assert.equal(repo.listByRun("run-1").length, 1);
   });
+
+  it("lists, deletes, reports missing scores, and fails clearly on malformed stored records", () => {
+    const repo = createRepo();
+    const db = (repo as unknown as { db: DatabaseClient }).db;
+
+    assert.throws(() => repo.get("missing-score"), /Prompt pack auto score missing-score not found/);
+
+    repo.create(
+      createScore({
+        autoScoreId: "score-1",
+        judgeRubricVersion: "rubric-current",
+        weightedScore: 90,
+      }),
+    );
+
+    assert.equal(repo.listByPack("pack-1", 0)[0]?.autoScoreId, "score-1");
+    assert.equal(repo.listByTest("test-1", 0)[0]?.autoScoreId, "score-1");
+    assert.equal(repo.listByRun("run-1", 0)[0]?.autoScoreId, "score-1");
+
+    db.prepare("UPDATE prompt_pack_auto_scores_v2 SET record_json = ? WHERE auto_score_id = ?").run(
+      "{bad-json",
+      "score-1",
+    );
+    assert.throws(() => repo.get("score-1"), /Stored prompt pack auto score score-1 is malformed/);
+
+    assert.equal(repo.deleteByPack("pack-1"), 1);
+    assert.deepEqual(repo.listByPack("pack-1"), []);
+  });
 });

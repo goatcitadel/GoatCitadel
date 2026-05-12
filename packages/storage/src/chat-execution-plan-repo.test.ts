@@ -447,4 +447,81 @@ describe("ChatExecutionPlanRepository", () => {
     assert.equal(execSql.length, 0);
     assert.ok(prepareSql.some((sql) => sql.includes("INSERT INTO chat_execution_plans")));
   });
+
+  it("reports missing plans, rolls back failed step replacement, and tolerates malformed adapter rows", () => {
+    const { repo, db } = createRepoWithDb();
+
+    assert.throws(() => repo.get("missing-plan"), /Chat execution plan missing-plan not found/);
+    assert.throws(
+      () => repo.patch("missing-plan", { status: "running" }),
+      /Chat execution plan missing-plan not found/,
+    );
+    assert.deepEqual(repo.listBySession("missing-session"), []);
+
+    const internal = repo as unknown as {
+      insertStepStmt: { run: (...args: unknown[]) => unknown };
+      listPlansBySessionStmt: { all: (...args: unknown[]) => unknown };
+      getPlanStmt: { get: (...args: unknown[]) => unknown };
+      listStepsByPlanStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.insertStepStmt = {
+      run: () => {
+        throw new Error("step insert failed");
+      },
+    };
+
+    assert.throws(
+      () =>
+        repo.create({
+          planId: "plan-rollback",
+          sessionId: "sess-rollback",
+          turnId: "turn-rollback",
+          mode: "cowork",
+          planningMode: "off",
+          source: "planner",
+          objective: "Rollback failed step writes",
+          summary: "No partial plan should remain.",
+          steps: [
+            {
+              stepId: "step-1",
+              index: 0,
+              objective: "Fail",
+              parallelizable: false,
+              status: "pending",
+            },
+          ],
+        }),
+      /step insert failed/,
+    );
+    assert.equal(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM chat_execution_plans WHERE plan_id = ?")
+        .get<{ count: number }>("plan-rollback")?.count,
+      0,
+    );
+
+    internal.listPlansBySessionStmt = { all: () => [null] };
+    assert.deepEqual(repo.listBySession("sess-malformed"), []);
+
+    internal.getPlanStmt = {
+      get: () => ({
+        plan_id: "plan-malformed-steps",
+        session_id: "sess-1",
+        turn_id: "turn-1",
+        mode: "cowork",
+        planning_mode: "off",
+        status: "drafted",
+        source: "planner",
+        advisory_only: 0,
+        objective: "Read malformed steps",
+        summary: "Drop malformed steps.",
+        created_at: "2026-03-12T10:00:00.000Z",
+        updated_at: "2026-03-12T10:00:00.000Z",
+        started_at: null,
+        finished_at: null,
+      }),
+    };
+    internal.listStepsByPlanStmt = { all: () => [null] };
+    assert.deepEqual(repo.get("plan-malformed-steps").steps, []);
+  });
 });

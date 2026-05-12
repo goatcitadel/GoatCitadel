@@ -109,6 +109,11 @@ function installWindow() {
 
 function Harness(props: {
   draft?: string;
+  providerOptions?: (typeof openaiProvider)[];
+  selectedProviderId?: string;
+  routePreflight?: any;
+  selectedSessionId?: string | null;
+  activeThreadSessionId?: string | null;
   pendingAttachments?: ChatAttachmentRecord[];
   latestAssistantMessageId?: string;
   latestAssistantContent?: string;
@@ -121,13 +126,13 @@ function Harness(props: {
   const errorsRef = React.useRef<Array<{ value: string | null; source?: string }>>([]);
   const noticesRef = React.useRef<Array<{ message: string; tone?: string }>>([]);
   const controls = useChatMultimodalControls({
-    providerOptions: [openaiProvider, googleProvider] as never,
-    selectedProviderId: "openai",
+    providerOptions: (props.providerOptions ?? [openaiProvider, googleProvider]) as never,
+    selectedProviderId: props.selectedProviderId ?? "openai",
     preferredImageProviderId: props.preferredImageProviderId,
     preferredImageModel: props.preferredImageModel,
-    routePreflight: null,
-    selectedSessionId: "session-1",
-    activeThreadSessionId: "session-1",
+    routePreflight: props.routePreflight ?? null,
+    selectedSessionId: props.selectedSessionId === undefined ? "session-1" : props.selectedSessionId,
+    activeThreadSessionId: props.activeThreadSessionId === undefined ? "session-1" : props.activeThreadSessionId,
     pendingAttachments: props.pendingAttachments ?? [],
     draft,
     latestAssistantMessageId: props.latestAssistantMessageId ?? "assistant-1",
@@ -363,5 +368,279 @@ describe("useChatMultimodalControls", () => {
       await expect(latest!.controls.handleGenerateImage()).resolves.toBe(false);
     });
     expect(latest!.snapshot().errors).toContainEqual({ value: "Add an image prompt first.", source: undefined });
+  });
+
+  it("handles no-window setup, unavailable image routes, and provider model edge cases", async () => {
+    Reflect.deleteProperty(globalThis, "window");
+    await act(async () => {
+      create(
+        <Harness
+          providerOptions={
+            [
+              {
+                providerId: "disabled",
+                label: "Disabled",
+                disabled: true,
+                models: [],
+                capabilities: { imageGenerate: true },
+              },
+              {
+                providerId: "text-only",
+                label: "Text only",
+                defaultModel: "text-model",
+                models: [],
+                capabilities: { imageGenerate: true },
+              },
+              {
+                providerId: "blocked",
+                label: "Blocked",
+                defaultModel: "blocked-image",
+                models: [],
+                capabilities: { imageGenerate: false },
+              },
+            ] as never
+          }
+          selectedProviderId="text-only"
+        />,
+      );
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.speakResponsesEnabled).toBe(false);
+    expect(latest!.controls.imageGenerationAvailable).toBe(false);
+    await act(async () => {
+      await expect(latest!.controls.handleGenerateImage()).resolves.toBe(false);
+    });
+    expect(latest!.snapshot().errors).toContainEqual({
+      value: "Image generation is unavailable on the current routes.",
+      source: "image_generate",
+    });
+
+    installWindow();
+    await act(async () => {
+      create(
+        <Harness
+          providerOptions={
+            [
+              {
+                providerId: "openai-codex",
+                label: "OpenAI Codex",
+                defaultModel: "codex-text",
+                models: [],
+                capabilities: { imageGenerate: true, imageEdit: true },
+              },
+            ] as never
+          }
+          selectedProviderId="openai-codex"
+          preferredImageProviderId="openai-codex"
+          preferredImageModel="custom-image-model"
+        />,
+      );
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.imageRouteLabel).toBe("OpenAI Codex / custom-image-model");
+
+    await act(async () => {
+      create(
+        <Harness
+          providerOptions={
+            [
+              {
+                providerId: "custom",
+                label: "Custom",
+                defaultModel: "custom-image-model",
+                models: [],
+                capabilities: { imageGenerate: true },
+              },
+            ] as never
+          }
+          selectedProviderId="custom"
+        />,
+      );
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.imageGenerationAvailable).toBe(false);
+  });
+
+  it("covers voice runtime failures, unavailable states, cleanup, audio guards, and voice errors", async () => {
+    apiMocks.fetchVoiceRuntimeStatus.mockRejectedValueOnce(new Error("voice down"));
+    await act(async () => {
+      create(<Harness activeThreadSessionId="other-session" />);
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.voiceInputAvailable).toBe(false);
+
+    apiMocks.fetchVoiceRuntimeStatus.mockResolvedValueOnce({ readiness: "ready" });
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.voiceStatusLabel).toBe("Voice runtime ready");
+
+    apiMocks.fetchVoiceRuntimeStatus.mockResolvedValueOnce({ readiness: "broken" });
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.voiceStatusLabel).toBe("Voice runtime needs repair");
+    expect(latest!.controls.voiceUnavailableReason).toContain("incomplete");
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness latestAssistantMessageId="assistant-cleanup-1" latestAssistantContent="First" />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      renderer.update(<Harness latestAssistantMessageId="assistant-cleanup-2" latestAssistantContent="Second" />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      renderer.unmount();
+      await flushAsyncEffects();
+    });
+    expect(speechSynthesis.cancel).toHaveBeenCalled();
+
+    apiMocks.startVoiceTalkSession.mockRejectedValueOnce(new Error("talk failed"));
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await latest!.controls.handleToggleVoiceTalk();
+      await flushAsyncEffects();
+    });
+    expect(latest!.snapshot().errors).toContainEqual({ value: "talk failed", source: undefined });
+
+    await act(async () => {
+      await latest!.controls.handleAudioFileSelected(null);
+    });
+    latest!.controls.audioInputRef.current = { click: vi.fn(), value: "selected" } as never;
+    latest!.controls.handleOpenAudioTranscribe();
+    expect(latest!.controls.audioInputRef.current.click).toHaveBeenCalled();
+
+    apiMocks.transcribeVoice.mockRejectedValueOnce(new Error("transcribe failed"));
+    const audioFile = new File(["audio"], "broken.wav", { type: "" });
+    await act(async () => {
+      await latest!.controls.handleAudioFileSelected({ item: () => audioFile } as unknown as FileList);
+      await flushAsyncEffects();
+    });
+    expect(latest!.snapshot().errors).toContainEqual({ value: "transcribe failed", source: undefined });
+    expect(latest!.controls.audioInputRef.current?.value).toBe("");
+  });
+
+  it("covers image route success labels and generation failure variants", async () => {
+    await act(async () => {
+      create(<Harness preferredImageProviderId="google" preferredImageModel="gemini-3-pro-image-preview" />);
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.imageRouteLabel).toBe("Google / gemini-3-pro-image-preview");
+    await act(async () => {
+      await expect(latest!.controls.handleGenerateImage()).resolves.toBe(true);
+      await flushAsyncEffects();
+    });
+    expect(latest!.snapshot().notices.at(-1)).toEqual({
+      message: "Generated image added to the draft attachments via Google / gemini-3-pro-image-preview.",
+      tone: "success",
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleEditImage()).resolves.toBe(false);
+    });
+    expect(latest!.snapshot().errors).toContainEqual({
+      value: "Image editing is unavailable on the current image route.",
+      source: "image_edit",
+    });
+
+    await act(async () => {
+      create(<Harness preferredImageProviderId="openai" preferredImageModel="gpt-image-1" />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleGenerateImage()).resolves.toBe(true);
+      await flushAsyncEffects();
+    });
+    expect(latest!.snapshot().notices.at(-1)).toEqual({
+      message: "Generated image added to the draft attachments.",
+      tone: "success",
+    });
+
+    apiMocks.generateLlmImage
+      .mockRejectedValueOnce(new Error("verify organization before using gpt-image-2"))
+      .mockResolvedValueOnce({
+        operation: "generate",
+        data: [{ b64Json: "aW1hZ2U=" }],
+      });
+    await act(async () => {
+      create(<Harness preferredImageProviderId="openai" preferredImageModel="gpt-image-2" />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleGenerateImage()).resolves.toBe(true);
+      await flushAsyncEffects();
+    });
+    expect(latest!.snapshot().notices.some((notice) => notice.message.includes("Retrying via Google"))).toBe(true);
+
+    apiMocks.generateLlmImage.mockRejectedValueOnce(new Error("provider offline"));
+    await act(async () => {
+      create(<Harness preferredImageProviderId="openai" preferredImageModel="gpt-image-2" />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleGenerateImage()).resolves.toBe(false);
+    });
+    expect(latest!.snapshot().errors).toContainEqual({ value: "provider offline", source: "image_generate" });
+
+    apiMocks.generateLlmImage.mockResolvedValueOnce({ operation: "generate", data: [] });
+    await act(async () => {
+      create(<Harness preferredImageProviderId="openai" preferredImageModel="gpt-image-2" />);
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleGenerateImage()).resolves.toBe(false);
+    });
+    expect(latest!.snapshot().errors).toContainEqual({
+      value: "Image generation returned no image payload.",
+      source: "image_generate",
+    });
+  });
+
+  it("reports binary read failures while preparing image edit references", async () => {
+    class NonStringFileReader {
+      result: string | ArrayBuffer | null = new ArrayBuffer(1);
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL() {
+        this.onload?.();
+      }
+    }
+    Object.defineProperty(globalThis, "FileReader", {
+      configurable: true,
+      value: NonStringFileReader,
+    });
+    await act(async () => {
+      create(
+        <Harness
+          draft="edit failure"
+          preferredImageProviderId="openai"
+          preferredImageModel="gpt-image-2"
+          pendingAttachments={[
+            {
+              attachmentId: "attachment-binary",
+              fileName: "source.png",
+              mimeType: "image/png",
+              mediaType: "image",
+              sizeBytes: 10,
+              createdAt: "2026-05-01T00:00:00.000Z",
+            } as ChatAttachmentRecord,
+          ]}
+        />,
+      );
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleEditImage()).resolves.toBe(false);
+    });
+    expect(latest!.snapshot().errors).toContainEqual({
+      value: "Unable to read binary content.",
+      source: "image_edit",
+    });
   });
 });

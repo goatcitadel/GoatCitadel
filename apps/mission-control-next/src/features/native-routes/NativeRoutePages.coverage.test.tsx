@@ -1,0 +1,791 @@
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NativeRoutePages } from "./NativeRoutePages";
+
+const routeMocks = vi.hoisted(() => {
+  const fn = (value: unknown = {}) => vi.fn(async () => value);
+  return {
+    activateImprovementCandidate: fn(),
+    addTaskDeliverable: fn(),
+    approveImprovementCandidate: fn(),
+    archiveAgentProfile: fn(),
+    createAgentProfile: fn(),
+    createFileFromTemplate: fn(),
+    createSkillEvaluationProposal: fn(),
+    createTask: fn(),
+    deleteTask: fn(),
+    downloadFile: fn(),
+    fetchAgents: fn(),
+    fetchCapabilityCatalog: vi.fn(),
+    fetchCapabilityProposal: fn(),
+    fetchChatGeneratedArtifacts: fn(),
+    fetchCuratorReviewItem: fn(),
+    fetchFileTemplates: fn(),
+    fetchFilesList: fn(),
+    fetchImportedAgentCatalog: fn(),
+    fetchMemoryFiles: fn(),
+    fetchMemoryQmdStats: fn(),
+    fetchOperators: fn(),
+    fetchSkillActivationPolicies: fn(),
+    fetchSkillEvaluations: fn(),
+    fetchSkillImportHistory: fn(),
+    fetchSkillSources: fn(),
+    fetchSkills: fn(),
+    fetchTaskDeliverables: fn(),
+    fetchTasksByView: vi.fn(),
+    previewSkillEvaluation: fn(),
+    promoteImprovementCandidate: fn(),
+    rejectImprovementCandidate: fn(),
+    reloadSkills: fn(),
+    restoreAgentProfile: fn(),
+    restoreTask: fn(),
+    runSkillEvaluation: fn(),
+    snoozeImprovementCandidate: fn(),
+    updateAgentProfile: fn(),
+    updateSkillState: fn(),
+    updateTask: fn(),
+    validateImprovementCandidate: fn(),
+  };
+});
+
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  activateImprovementCandidate: routeMocks.activateImprovementCandidate,
+  addTaskDeliverable: routeMocks.addTaskDeliverable,
+  approveImprovementCandidate: routeMocks.approveImprovementCandidate,
+  archiveAgentProfile: routeMocks.archiveAgentProfile,
+  createAgentProfile: routeMocks.createAgentProfile,
+  createFileFromTemplate: routeMocks.createFileFromTemplate,
+  createSkillEvaluationProposal: routeMocks.createSkillEvaluationProposal,
+  createTask: routeMocks.createTask,
+  deleteTask: routeMocks.deleteTask,
+  downloadFile: routeMocks.downloadFile,
+  fetchAgents: routeMocks.fetchAgents,
+  fetchCapabilityCatalog: routeMocks.fetchCapabilityCatalog,
+  fetchCapabilityProposal: routeMocks.fetchCapabilityProposal,
+  fetchChatGeneratedArtifacts: routeMocks.fetchChatGeneratedArtifacts,
+  fetchCuratorReviewItem: routeMocks.fetchCuratorReviewItem,
+  fetchFileTemplates: routeMocks.fetchFileTemplates,
+  fetchFilesList: routeMocks.fetchFilesList,
+  fetchImportedAgentCatalog: routeMocks.fetchImportedAgentCatalog,
+  fetchMemoryFiles: routeMocks.fetchMemoryFiles,
+  fetchMemoryQmdStats: routeMocks.fetchMemoryQmdStats,
+  fetchOperators: routeMocks.fetchOperators,
+  fetchSkillActivationPolicies: routeMocks.fetchSkillActivationPolicies,
+  fetchSkillEvaluations: routeMocks.fetchSkillEvaluations,
+  fetchSkillImportHistory: routeMocks.fetchSkillImportHistory,
+  fetchSkillSources: routeMocks.fetchSkillSources,
+  fetchSkills: routeMocks.fetchSkills,
+  fetchTaskDeliverables: routeMocks.fetchTaskDeliverables,
+  fetchTasksByView: routeMocks.fetchTasksByView,
+  previewSkillEvaluation: routeMocks.previewSkillEvaluation,
+  promoteImprovementCandidate: routeMocks.promoteImprovementCandidate,
+  rejectImprovementCandidate: routeMocks.rejectImprovementCandidate,
+  reloadSkills: routeMocks.reloadSkills,
+  restoreAgentProfile: routeMocks.restoreAgentProfile,
+  restoreTask: routeMocks.restoreTask,
+  runSkillEvaluation: routeMocks.runSkillEvaluation,
+  snoozeImprovementCandidate: routeMocks.snoozeImprovementCandidate,
+  updateAgentProfile: routeMocks.updateAgentProfile,
+  updateSkillState: routeMocks.updateSkillState,
+  updateTask: routeMocks.updateTask,
+  validateImprovementCandidate: routeMocks.validateImprovementCandidate,
+}));
+
+vi.mock("./SettingsNativePage", () => ({
+  SettingsNativePage: () => "Settings child route",
+}));
+
+vi.mock("./library/MemoryRoutePage", () => ({
+  MemoryRoutePage: () => "Memory child route",
+}));
+
+vi.mock("./ops/ApprovalsRoutePage", () => ({
+  ApprovalsRoutePage: () => "Approvals child route",
+}));
+
+vi.mock("./ops/RuntimeRoutePage", () => ({
+  RuntimeRoutePage: () => "Runtime child route",
+}));
+
+vi.mock("./projects/ProjectsRoutePage", () => ({
+  ProjectsRoutePage: () => "Projects child route",
+}));
+
+const agent = {
+  agentId: "agent-1",
+  roleId: "architect",
+  name: "Architect",
+  title: "Systems architect",
+  summary: "Reviews architecture and tradeoffs.",
+  specialties: ["architecture", "interfaces"],
+  aliases: ["design"],
+  defaultTools: ["browser.search"],
+  editable: true,
+  lifecycleStatus: "active",
+  sessionCount: 3,
+};
+
+const skill = {
+  skillId: "skill-1",
+  name: "Safe improvement",
+  state: "enabled",
+  callable: true,
+  source: "bundled",
+  requires: ["filesystem"],
+  declaredTools: ["shell"],
+  instructionBody: "Review evidence before changing skills.",
+  dir: "skills/safe-improvement",
+  trustLabel: "trusted",
+  lifecycleState: "active",
+  capabilityCategory: "review",
+};
+
+const evaluationRun = {
+  runId: "eval-1",
+  skillId: "skill-1",
+  skillName: "Safe improvement",
+  status: "proposal_created",
+  targetPassRate: 0.8,
+  baselineResult: { score: { passRate: 0.5 } },
+  candidateResult: { score: { passRate: 0.82 } },
+  improvementDelta: 0.32,
+  accepted: true,
+  scenarios: [{ title: "Trace", prompt: "Trace it", expectedOutcome: "Grounded evidence" }],
+  criteria: [{ label: "Grounded", description: "Uses evidence", requiredTerms: ["evidence"] }],
+  mutation: { summary: "Tighten evidence review.", patchPreview: "- old\n+ new" },
+  operatorTruth: "Review-first.",
+  improvementCandidateId: "candidate-1",
+  proposalId: "proposal-1",
+  updatedAt: "2026-05-02T19:00:00.000Z",
+};
+
+const evaluationRunWithoutProposal = {
+  ...evaluationRun,
+  runId: "eval-ready",
+  status: "completed",
+  proposalId: null,
+};
+
+const curatorReview = {
+  candidate: { candidateId: "candidate-1", status: "approved" },
+  observedIssue: "Evidence handling was too weak.",
+  proposedChange: "Require traceable proof.",
+  risk: "medium",
+  callableImpact: "skill callable remains gated",
+  rollbackRef: "snapshot-1",
+  mutationApplied: false,
+  approvalRequired: true,
+  runtimeProvenCallable: false,
+  corruptionStatus: "clean",
+  evidence: [{ refType: "run", refId: "eval-ready", hash: "abc123", metadata: { score: 0.82 } }],
+  disabledReasons: {},
+  actionStatuses: {
+    validate: "ready",
+    approve: "ready",
+    reject: "ready",
+    snooze: "ready",
+    activate: "ready",
+    promote: "ready",
+  },
+  latestActivation: {
+    activationId: "activation-1",
+    status: "approved",
+    approvalId: "approval-1",
+    preActivationSnapshot: { refId: "snapshot-1" },
+  },
+};
+
+function setupResponses() {
+  routeMocks.fetchAgents.mockResolvedValue({ items: [agent] });
+  routeMocks.fetchImportedAgentCatalog.mockResolvedValue({
+    workspaceId: "default",
+    divisions: [],
+    items: [
+      {
+        entryId: "imported-1",
+        division: "engineering",
+        state: "available",
+        definition: {
+          frontmatter: {
+            name: "Imported reviewer",
+            description: "Imported review specialist",
+          },
+        },
+      },
+    ],
+  });
+  routeMocks.createAgentProfile.mockResolvedValue({ ...agent, agentId: "agent-created", name: "Operator" });
+  routeMocks.updateAgentProfile.mockResolvedValue({ ...agent, name: "Architect Updated" });
+  routeMocks.archiveAgentProfile.mockResolvedValue({ ...agent, lifecycleStatus: "archived" });
+  routeMocks.restoreAgentProfile.mockResolvedValue({ ...agent, lifecycleStatus: "active" });
+  routeMocks.fetchOperators.mockResolvedValue({
+    items: [
+      {
+        operatorId: "operator-1",
+        sessionCount: 4,
+        activeSessions: 2,
+        lastActivityAt: "2026-05-02T00:00:00.000Z",
+      },
+    ],
+  });
+  routeMocks.fetchTasksByView.mockImplementation(async (view: string) => ({
+    view,
+    items:
+      view === "trash"
+        ? [
+            {
+              taskId: "task-deleted",
+              title: "Deleted task",
+              description: "Restore me",
+              status: "blocked",
+              priority: "urgent",
+              deletedAt: "2026-05-01T00:00:00.000Z",
+              assignedAgentId: "agent-1",
+            },
+          ]
+        : [
+            {
+              taskId: "task-planning",
+              title: "Plan coverage",
+              description: "Plan the remaining coverage work.",
+              status: "planning",
+              priority: "normal",
+              assignedAgentId: "agent-1",
+            },
+            {
+              taskId: "task-active",
+              title: "Run tests",
+              description: "Run the coverage lane.",
+              status: "in_progress",
+              priority: "high",
+            },
+            {
+              taskId: "task-review",
+              title: "Review gates",
+              description: "Review failing gates.",
+              status: "review",
+              priority: "urgent",
+            },
+            {
+              taskId: "task-done",
+              title: "Storage tail",
+              description: "",
+              status: "done",
+              priority: "low",
+            },
+          ],
+  }));
+  routeMocks.createTask.mockResolvedValue({
+    taskId: "task-created",
+    title: "Created task",
+    description: "Created from test.",
+    status: "planning",
+    priority: "high",
+  });
+  routeMocks.updateTask.mockResolvedValue({ taskId: "task-planning", title: "Updated task" });
+  routeMocks.deleteTask.mockResolvedValue({ taskId: "task-planning", deletedAt: "2026-05-02T00:00:00.000Z" });
+  routeMocks.restoreTask.mockResolvedValue({ taskId: "task-deleted", deletedAt: null });
+  routeMocks.fetchTaskDeliverables.mockResolvedValue({
+    items: [
+      {
+        deliverableId: "deliverable-1",
+        taskId: "task-planning",
+        title: "Coverage proof",
+        deliverableType: "artifact",
+        path: "artifacts/coverage.md",
+        description: "Coverage proof",
+      },
+    ],
+  });
+  routeMocks.addTaskDeliverable.mockResolvedValue({ deliverableId: "deliverable-2" });
+  routeMocks.fetchSkills.mockResolvedValue({ items: [skill] });
+  routeMocks.fetchSkillSources.mockResolvedValue({
+    generatedAt: "2026-05-02T00:00:00.000Z",
+    providers: ["local"],
+    items: [
+      {
+        sourceUrl: "local://skills/review",
+        name: "Review skill",
+        description: "Review source",
+        sourceProvider: "local",
+        installability: "installable",
+      },
+    ],
+  });
+  routeMocks.fetchSkillImportHistory.mockResolvedValue({
+    items: [
+      {
+        importId: "import-1",
+        sourceRef: "local://skills/review",
+        sourceProvider: "local",
+        action: "install",
+        outcome: "success",
+        createdAt: "2026-05-02T00:00:00.000Z",
+      },
+    ],
+  });
+  routeMocks.fetchSkillActivationPolicies.mockResolvedValue({
+    policies: [],
+    guardedAutoThreshold: 0.9,
+    requireFirstUseConfirmation: true,
+  });
+  routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRun] });
+  routeMocks.reloadSkills.mockResolvedValue({ reloaded: true });
+  routeMocks.updateSkillState.mockResolvedValue({ updated: true });
+  routeMocks.previewSkillEvaluation.mockResolvedValue({
+    run: {
+      ...evaluationRunWithoutProposal,
+      runId: "preview-1",
+      status: "previewed",
+    },
+  });
+  routeMocks.runSkillEvaluation.mockResolvedValue({
+    run: {
+      ...evaluationRunWithoutProposal,
+      runId: "run-2",
+      status: "completed",
+    },
+  });
+  routeMocks.createSkillEvaluationProposal.mockResolvedValue({
+    run: { ...evaluationRun, proposalId: "proposal-2" },
+    proposal: {
+      proposalId: "proposal-2",
+      candidateId: "candidate-1",
+      status: "draft",
+      title: "Evidence proposal",
+      summary: "Tighten evidence handling.",
+      activationTargetId: "skill-1",
+      payload: { observedIssue: "Weak evidence", proposedChange: "Add evidence checks" },
+    },
+  });
+  routeMocks.fetchCapabilityProposal.mockResolvedValue({
+    proposal: {
+      proposalId: "proposal-1",
+      candidateId: "candidate-1",
+      status: "draft",
+      title: "Evidence proposal",
+      summary: "Tighten evidence handling.",
+      activationTargetId: "skill-1",
+      payload: {
+        observedIssue: "Weak evidence",
+        proposedChange: "Add evidence checks",
+        risk: "medium",
+        evidenceRefs: [{ refType: "run", refId: "eval-ready", metadata: { score: 0.82 } }],
+      },
+    },
+    events: [],
+    candidate: undefined,
+  });
+  routeMocks.fetchCuratorReviewItem.mockResolvedValue(curatorReview);
+  for (const action of [
+    routeMocks.validateImprovementCandidate,
+    routeMocks.approveImprovementCandidate,
+    routeMocks.rejectImprovementCandidate,
+    routeMocks.snoozeImprovementCandidate,
+    routeMocks.activateImprovementCandidate,
+    routeMocks.promoteImprovementCandidate,
+  ]) {
+    action.mockResolvedValue({ review: curatorReview, mutationApplied: true });
+  }
+  routeMocks.fetchCapabilityCatalog.mockImplementation(async (scope: string) => ({
+    scope,
+    items:
+      scope === "callable"
+        ? [
+            {
+              capabilityId: "tool-shell",
+              title: "Shell tool",
+              kind: "tool",
+              category: "filesystem",
+              summary: "Runs approved commands.",
+              callable: true,
+              toolName: "shell.run",
+              trustLabel: "trusted",
+              lifecycleState: "active",
+              declaredTools: [],
+              requires: [],
+            },
+          ]
+        : [
+            {
+              capabilityId: "proposal-1",
+              title: "Review proposal",
+              kind: "proposal",
+              category: "skills",
+              summary: "Candidate skill revision awaiting review.",
+              callable: false,
+              proposalId: "proposal-1",
+              candidateId: "candidate-1",
+              lifecycleState: "active",
+              reviewWarning: "Needs operator review.",
+              declaredTools: ["shell"],
+              requires: ["approval"],
+            },
+            {
+              capabilityId: "provider-openai",
+              title: "OpenAI provider",
+              kind: "provider",
+              category: "llm",
+              summary: "Configured provider lane.",
+              callable: false,
+              sourceProvider: "openai",
+              lifecycleState: "active",
+              declaredTools: [],
+              requires: [],
+            },
+          ],
+  }));
+  routeMocks.fetchMemoryFiles.mockResolvedValue({
+    items: [{ relativePath: "memory/workspace.md", size: 512, modifiedAt: "2026-05-01T00:00:00.000Z" }],
+  });
+  routeMocks.fetchMemoryQmdStats.mockResolvedValue({
+    totalRuns: 2,
+    generatedRuns: 2,
+    cacheHitRuns: 1,
+    fallbackRuns: 0,
+    compressionPercent: 45,
+    efficiencyLabel: "reduced",
+    recent: [
+      {
+        contextId: "ctx-1",
+        scope: "chat",
+        contextText: "Distilled context.",
+        quality: { status: "ok" },
+        citations: [{ sourceId: "src-1" }],
+      },
+    ],
+  });
+  routeMocks.fetchFilesList.mockResolvedValue({
+    items: [{ relativePath: "docs/brief.md", size: 1024, modifiedAt: "2026-05-01T00:00:00.000Z" }],
+  });
+  routeMocks.fetchFileTemplates.mockResolvedValue({
+    items: [
+      {
+        templateId: "brief",
+        title: "Mission brief",
+        description: "Create a mission brief",
+        defaultPath: "docs/mission-brief.md",
+      },
+    ],
+  });
+  routeMocks.downloadFile.mockResolvedValue({ content: "# Mission brief\nEvidence.", contentType: "text/markdown" });
+  routeMocks.createFileFromTemplate.mockResolvedValue({ relativePath: "docs/new-brief.md" });
+  routeMocks.fetchChatGeneratedArtifacts.mockResolvedValue({
+    items: [
+      {
+        artifactId: "artifact-1",
+        title: "Release notes",
+        kind: "markdown",
+        sourceSurface: "cowork",
+        content: "# Release\nProof.",
+        version: 2,
+        providerId: "openai",
+        model: "gpt-5",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        updatedAt: "2026-05-01T00:00:00.000Z",
+      },
+    ],
+  });
+}
+
+function renderRoute(area: string, section?: string, extras: Record<string, unknown> = {}) {
+  return create(
+    <NativeRoutePages
+      route={{ area, section, theme: "ops" } as any}
+      activeWorkspaceId="default"
+      activeWorkspaceName="Default"
+      pendingApprovals={1}
+      navigate={vi.fn()}
+      setActiveWorkspaceId={vi.fn()}
+      {...extras}
+    />,
+  );
+}
+
+async function mount(area: string, section?: string, extras: Record<string, unknown> = {}) {
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = renderRoute(area, section, extras);
+  });
+  await flush();
+  return renderer;
+}
+
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function collectText(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      return collectText(child as ReactTestInstance);
+    })
+    .join(" ");
+}
+
+function findButton(root: ReactTestInstance, label: string) {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
+  if (!button) {
+    throw new Error(`Missing button ${label}`);
+  }
+  return button;
+}
+
+function exactButton(root: ReactTestInstance, label: string) {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).trim() === label)[0];
+  if (!button) {
+    throw new Error(`Missing exact button ${label}`);
+  }
+  return button;
+}
+
+function field(root: ReactTestInstance, label: string, control: "input" | "textarea" | "select") {
+  const wrapper = root.findAll((node) => node.type === "label" && collectText(node).includes(label))[0];
+  if (!wrapper) {
+    throw new Error(`Missing field ${label}`);
+  }
+  return wrapper.findByType(control);
+}
+
+async function click(button: ReactTestInstance) {
+  await act(async () => {
+    button.props.onClick();
+  });
+  await flush();
+}
+
+async function change(node: ReactTestInstance, value: string) {
+  await act(async () => {
+    node.props.onChange({ target: { value } });
+  });
+  await flush();
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  setupResponses();
+});
+
+describe("NativeRoutePages library coverage", () => {
+  it("covers agent profile maintenance and route dispatch fallbacks", async () => {
+    const navigate = vi.fn();
+    const agents = await mount("library", "agents", { navigate });
+    expect(collectText(agents.root)).toContain("Agent profiles");
+    await click(findButton(agents.root, "Save changes"));
+    expect(routeMocks.updateAgentProfile).toHaveBeenCalledWith(
+      "agent-1",
+      expect.objectContaining({ name: "Architect" }),
+    );
+    await click(findButton(agents.root, "Archive"));
+    expect(routeMocks.archiveAgentProfile).toHaveBeenCalledWith("agent-1");
+    await click(findButton(agents.root, "New profile"));
+    await change(field(agents.root, "Role ID", "input"), "operator");
+    await change(field(agents.root, "Name", "input"), "Operator");
+    await change(field(agents.root, "Title", "input"), "Mission operator");
+    await change(field(agents.root, "Summary", "textarea"), "Coordinates missions.");
+    await click(findButton(agents.root, "Create agent"));
+    expect(routeMocks.createAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ roleId: "operator", name: "Operator" }),
+    );
+    await click(findButton(agents.root, "Skills"));
+    expect(navigate).toHaveBeenCalledWith({ area: "library", section: "skills", theme: "ops" });
+
+    expect(collectText((await mount("ops", "approvals")).root)).toContain("Approvals child route");
+    expect(collectText((await mount("ops", "runtime")).root)).toContain("Runtime child route");
+    expect(collectText((await mount("projects", "alpha")).root)).toContain("Projects child route");
+    expect(collectText((await mount("settings", "general")).root)).toContain("Settings child route");
+    expect(collectText((await mount("library", "memory")).root)).toContain("Memory child route");
+  });
+
+  it("covers skills, capability browsing, knowledge, files, and artifacts", async () => {
+    const skills = await mount("library", "skills");
+    expect(collectText(skills.root)).toContain("Installed skills");
+    await click(findButton(skills.root, "Reload skills"));
+    await click(exactButton(skills.root, "Enable"));
+    await click(exactButton(skills.root, "Sleep"));
+    await click(exactButton(skills.root, "Disable"));
+    expect(routeMocks.reloadSkills).toHaveBeenCalledTimes(1);
+    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { state: "enabled" });
+    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { state: "sleep" });
+    expect(routeMocks.updateSkillState).toHaveBeenCalledWith("skill-1", { state: "disabled" });
+
+    const capabilities = await mount("library", "capabilities");
+    expect(collectText(capabilities.root)).toContain("Capability browser");
+    await click(findButton(capabilities.root, "Degraded"));
+    expect(collectText(capabilities.root)).toContain("Review proposal");
+    await click(findButton(capabilities.root, "Review proposal"));
+    expect(collectText(capabilities.root)).toContain("Needs operator review.");
+    await click(findButton(capabilities.root, "Available"));
+    expect(collectText(capabilities.root)).toContain("Shell tool");
+    await click(findButton(capabilities.root, "Refresh catalog"));
+    expect(routeMocks.fetchCapabilityCatalog).toHaveBeenCalledWith("inspectable");
+
+    const knowledge = await mount("library", "knowledge");
+    await flush();
+    expect(collectText(knowledge.root)).toContain("Knowledge sources");
+    expect(collectText(knowledge.root)).toContain("Distilled context.");
+    expect(routeMocks.downloadFile).toHaveBeenCalledWith("memory/workspace.md");
+    await change(knowledge.root.findByProps({ placeholder: "Search the knowledge file list" }), "workspace");
+    expect(collectText(knowledge.root)).toContain("memory/workspace.md");
+
+    const files = await mount("library", "files");
+    await flush();
+    expect(collectText(files.root)).toContain("Workspace files");
+    await change(files.root.findByProps({ placeholder: "Optional target path override" }), "docs/new-brief.md");
+    await click(findButton(files.root, "Create file"));
+    expect(routeMocks.createFileFromTemplate).toHaveBeenCalledWith("brief", "docs/new-brief.md");
+
+    const artifacts = await mount("library", "artifacts");
+    expect(collectText(artifacts.root)).toContain("Generated artifacts");
+    expect(collectText(artifacts.root)).toContain("Release notes");
+    await click(findButton(artifacts.root, "Cowork"));
+    await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
+    expect(collectText(artifacts.root)).toContain("# Release");
+    await click(findButton(artifacts.root, "Refresh"));
+    expect(routeMocks.fetchChatGeneratedArtifacts).toHaveBeenCalledWith({ workspaceId: "default", limit: 80 });
+  });
+
+  it("covers Cowork task creation, editing, deliverables, trash restore, and board lanes", async () => {
+    const navigate = vi.fn();
+    const cowork = await mount("cowork", undefined, { navigate });
+    expect(collectText(cowork.root)).toContain("Task board");
+    expect(collectText(cowork.root)).toContain("Plan coverage");
+
+    await click(findButton(cowork.root, "Create task"));
+    expect(collectText(cowork.root)).toContain("Task title is required.");
+
+    await change(cowork.root.findByProps({ placeholder: "Write release notes" }), "Created task");
+    await change(field(cowork.root, "Description", "textarea"), "Created from the native task board.");
+    await change(field(cowork.root, "Priority", "select"), "high");
+    await click(findButton(cowork.root, "Create task"));
+    expect(routeMocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "default", title: "Created task", priority: "high" }),
+    );
+
+    await change(field(cowork.root, "Title", "input"), "Plan coverage updated");
+    await change(field(cowork.root, "Status", "select"), "testing");
+    await change(field(cowork.root, "Priority", "select"), "urgent");
+    await click(findButton(cowork.root, "Save task"));
+    expect(routeMocks.updateTask).toHaveBeenCalledWith(
+      "task-planning",
+      expect.objectContaining({ title: "Plan coverage updated", status: "testing", priority: "normal" }),
+    );
+
+    await click(findButton(cowork.root, "Add deliverable"));
+    expect(collectText(cowork.root)).toContain("Deliverable title is required.");
+    await change(field(cowork.root, "Deliverable title", "input"), "Coverage report");
+    await change(field(cowork.root, "Type", "select"), "file");
+    await change(field(cowork.root, "Path or link", "input"), "artifacts/coverage.md");
+    await click(findButton(cowork.root, "Add deliverable"));
+    expect(routeMocks.addTaskDeliverable).toHaveBeenCalledWith(
+      "task-planning",
+      expect.objectContaining({ title: "Coverage report", deliverableType: "file", path: "artifacts/coverage.md" }),
+    );
+
+    await click(findButton(cowork.root, "Move to trash"));
+    expect(routeMocks.deleteTask).toHaveBeenCalledWith("task-planning", { mode: "soft", deletedBy: "operator" });
+
+    await click(findButton(cowork.root, "Open approvals"));
+    expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "approvals", theme: "ops" });
+
+    routeMocks.restoreTask.mockClear();
+    routeMocks.fetchTasksByView.mockImplementation(async (view: string) => ({
+      view,
+      items:
+        view === "trash"
+          ? [
+              {
+                taskId: "task-deleted",
+                title: "Deleted task",
+                description: "Restore me",
+                status: "blocked",
+                priority: "urgent",
+                deletedAt: "2026-05-01T00:00:00.000Z",
+              },
+            ]
+          : [],
+    }));
+    const trashOnly = await mount("cowork");
+    await click(exactButton(trashOnly.root, "Restore"));
+    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted");
+
+    setupResponses();
+    const board = await mount("cowork", "board");
+    expect(collectText(board.root)).toContain("Agent Board");
+    expect(collectText(board.root)).toContain("operator-1");
+    await click(findButton(board.root, "Review gates"));
+    expect(collectText(board.root)).toContain("Review gates");
+  });
+
+  it("covers skill evaluation proposal creation, review, and lifecycle actions", async () => {
+    routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRunWithoutProposal] });
+    const skills = await mount("library", "skills");
+    expect(collectText(skills.root)).toContain("Safe improvement");
+
+    await click(findButton(skills.root, "Generate scenarios"));
+    expect(routeMocks.previewSkillEvaluation).toHaveBeenCalledWith("skill-1");
+
+    await click(findButton(skills.root, "Run baseline"));
+    expect(routeMocks.previewSkillEvaluation).toHaveBeenCalledWith(
+      "skill-1",
+      expect.objectContaining({ scenarios: expect.any(Array), criteria: expect.any(Array) }),
+    );
+
+    await click(findButton(skills.root, "Run improvement"));
+    expect(routeMocks.runSkillEvaluation).toHaveBeenCalledWith(
+      "skill-1",
+      expect.objectContaining({ scenarios: expect.any(Array), criteria: expect.any(Array) }),
+    );
+
+    await click(findButton(skills.root, "Create proposal"));
+    expect(routeMocks.createSkillEvaluationProposal).toHaveBeenCalledWith("eval-ready");
+
+    routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRun] });
+    const skillsWithProposal = await mount("library", "skills");
+    await click(findButton(skillsWithProposal.root, "Open proposal"));
+    expect(routeMocks.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-1");
+    await click(findButton(skillsWithProposal.root, "Trust review"));
+    expect(routeMocks.fetchCuratorReviewItem).toHaveBeenCalledWith("candidate-1");
+    expect(collectText(skillsWithProposal.root)).toContain("Evidence handling was too weak.");
+
+    await click(exactButton(skillsWithProposal.root, "Validate"));
+    await click(exactButton(skillsWithProposal.root, "Approve"));
+    await click(exactButton(skillsWithProposal.root, "Reject"));
+    await click(exactButton(skillsWithProposal.root, "Snooze"));
+    await click(exactButton(skillsWithProposal.root, "Activate"));
+    await click(exactButton(skillsWithProposal.root, "Promote"));
+
+    expect(routeMocks.validateImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.objectContaining({ reason: expect.stringContaining("validate") }),
+    );
+    expect(routeMocks.approveImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.objectContaining({ reason: expect.stringContaining("approve") }),
+    );
+    expect(routeMocks.rejectImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.objectContaining({ reason: expect.stringContaining("reject") }),
+    );
+    expect(routeMocks.snoozeImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.objectContaining({ snoozeUntil: expect.any(String) }),
+    );
+    expect(routeMocks.activateImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.objectContaining({ reason: expect.stringContaining("activate") }),
+    );
+    expect(routeMocks.promoteImprovementCandidate).toHaveBeenCalledWith(
+      "candidate-1",
+      expect.objectContaining({ reason: expect.stringContaining("promote") }),
+    );
+  });
+});

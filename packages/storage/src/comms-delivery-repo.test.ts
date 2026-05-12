@@ -124,4 +124,87 @@ describe("CommsDeliveryRepository", () => {
     assert.equal(record?.deliveryStatus, "degraded");
     assert.equal(record?.staleReason, "Delivery became stale before it could be sent.");
   });
+
+  it("covers sent state, missing idempotency, list-all, and malformed optional payload fields", () => {
+    const repo = createRepo();
+    const db = (repo as unknown as { db: ReturnType<typeof createDatabase> }).db;
+    const queued = repo.createQueued(
+      {
+        connectionId: "conn-3",
+        channelKey: "email",
+        target: "operator@example.com",
+        payload: { nested: { b: 2, a: 1 }, list: [2, { z: true, a: false }] },
+      },
+      "2026-05-05T00:00:00.000Z",
+    );
+
+    assert.equal(repo.findByIdempotencyKey("missing-idempotency"), undefined);
+
+    repo.markSent(queued.deliveryId, undefined, "2026-05-05T00:01:00.000Z");
+    const sent = repo.list(undefined, 1)[0];
+    assert.equal(sent?.deliveryId, queued.deliveryId);
+    assert.equal(sent?.status, "sent");
+    assert.equal(sent?.providerMessageId, undefined);
+    assert.equal(sent?.deliveryStatus, "sent");
+
+    db.prepare(
+      `
+      UPDATE comms_deliveries
+      SET payload_json = ?,
+          delivery_status = ?,
+          stale_after_ms = NULL,
+          base_backoff_ms = NULL,
+          max_backoff_ms = NULL,
+          error = NULL,
+          stale_reason = ?
+      WHERE delivery_id = ?
+    `,
+    ).run("{bad", "mystery", "stale-only", queued.deliveryId);
+
+    const malformed = repo.list("conn-3", 1)[0];
+    assert.equal(malformed?.payload, undefined);
+    assert.equal(malformed?.deliveryStatus, undefined);
+    assert.equal(malformed?.attempts, 0);
+    assert.equal(malformed?.maxAttempts, 3);
+    assert.equal(malformed?.fallbackReason, "stale-only");
+
+    const internal = repo as unknown as {
+      listStmt: { all: (...args: unknown[]) => unknown };
+      listByConnectionStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listStmt = { all: () => ({ not: "an array" }) };
+    assert.deepEqual(repo.list(), []);
+
+    internal.listByConnectionStmt = {
+      all: () => [
+        {
+          delivery_id: "delivery-legacy",
+          connection_id: "conn-legacy",
+          channel_key: "email",
+          target: "operator@example.com",
+          payload_hash: "hash",
+          payload_json: undefined,
+          status: "queued",
+          delivery_status: undefined,
+          idempotency_key: undefined,
+          attempts: undefined,
+          max_attempts: undefined,
+          next_attempt_at: undefined,
+          stale_after_ms: undefined,
+          base_backoff_ms: undefined,
+          max_backoff_ms: undefined,
+          provider_msg_id: null,
+          error: null,
+          stale_reason: undefined,
+          created_at: "2026-05-05T00:00:00.000Z",
+          updated_at: "2026-05-05T00:00:00.000Z",
+        },
+      ],
+    };
+    const legacy = repo.list("conn-legacy")[0];
+    assert.equal(legacy?.payload, undefined);
+    assert.equal(legacy?.deliveryStatus, undefined);
+    assert.equal(legacy?.idempotencyKey, undefined);
+    assert.equal(legacy?.nextAttemptAt, undefined);
+  });
 });

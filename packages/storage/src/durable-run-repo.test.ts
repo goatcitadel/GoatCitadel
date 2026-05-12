@@ -75,12 +75,23 @@ describe("DurableRunRepository", () => {
     assert.equal(preserved.finishedAt, "2026-03-03T12:00:00.000Z");
     assert.equal(preserved.lastError, "provider failed");
 
+    const replaced = repo.updateRun({
+      runId: run.runId,
+      status: "failed",
+      finishedAt: "2026-03-03T12:05:00.000Z",
+      lastError: " provider failed again ",
+      expectedVersion: preserved.version,
+    });
+
+    assert.equal(replaced.finishedAt, "2026-03-03T12:05:00.000Z");
+    assert.equal(replaced.lastError, "provider failed again");
+
     const cleared = repo.updateRun({
       runId: run.runId,
       status: "queued",
       clearFinishedAt: true,
       clearLastError: true,
-      expectedVersion: preserved.version,
+      expectedVersion: replaced.version,
     });
 
     assert.equal(cleared.finishedAt, undefined);
@@ -299,6 +310,20 @@ describe("DurableRunRepository", () => {
       repo.listDeadLetters(5).map((item) => item.deadLetterId),
       ["dead-edge"],
     );
+
+    const internal = repo as unknown as {
+      listCheckpointsStmt: { all: (...args: unknown[]) => unknown };
+      listRetriesStmt: { all: (...args: unknown[]) => unknown };
+      countRunsStmt: { get: (...args: unknown[]) => unknown };
+    };
+    internal.listCheckpointsStmt = { all: () => [null] };
+    internal.listRetriesStmt = { all: () => ({ not: "an array" }) };
+    internal.countRunsStmt = { get: () => null };
+    assert.deepEqual(repo.listCheckpoints(queued.runId), []);
+    assert.deepEqual(repo.listRetries(queued.runId), []);
+    assert.equal(repo.countRuns(), 0);
+    internal.countRunsStmt = { get: () => ({ count: "bad" }) };
+    assert.equal(repo.countRuns(), 0);
   });
 });
 

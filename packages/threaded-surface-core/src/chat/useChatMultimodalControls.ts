@@ -141,10 +141,7 @@ function buildImageRoute(
     return null;
   }
   const model = resolveImageModel(provider, preferredModel);
-  if (!model) {
-    return null;
-  }
-  if (provider.providerId === "openai" || provider.providerId === "openai-codex") {
+  if (model && (provider.providerId === "openai" || provider.providerId === "openai-codex")) {
     return {
       providerId: provider.providerId,
       model,
@@ -152,7 +149,7 @@ function buildImageRoute(
       supportsEdit: true,
     };
   }
-  if (provider.providerId === "google") {
+  if (model && provider.providerId === "google") {
     return {
       providerId: "google",
       model,

@@ -2,9 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
+  groupDelegatedSessionsForRail,
   isConfirmableCapabilityAction,
   resolveChatRefreshPlan,
+  resolveOptimisticChatPrefs,
+  resolveSelectedTurnId,
   revealGeneratedArtifactInSurface,
+  shouldApplyFetchedMessagesAfterStream,
+  shouldExecuteLocalChatCommand,
 } from "./chat-page-pure-helpers";
 
 describe("chat-page-pure-helpers coverage", () => {
@@ -90,8 +95,176 @@ describe("chat-page-pure-helpers coverage", () => {
         title: "Docs MCP",
       } as never)?.message,
     ).toContain("Docs MCP");
-    expect(getCapabilitySuggestionConfirmationCopy({ recommendedAction: "none" } as never)).toBeNull();
+    expect(getCapabilitySuggestionConfirmationCopy({ recommendedAction: "unsupported_action" } as never)).toBeNull();
     expect(getDeleteSessionConfirmationMessage("Launch chat")).toContain('Delete "Launch chat" permanently?');
+  });
+
+  it("groups delegated sessions and applies stable ordering fallbacks", () => {
+    const groups = groupDelegatedSessionsForRail([
+      { sessionId: "root", updatedAt: "2026-05-04T12:00:00.000Z" },
+      {
+        sessionId: "child-b",
+        updatedAt: "2026-05-04T12:03:00.000Z",
+        delegationParent: { parentSessionId: "root", index: 2 },
+      },
+      {
+        sessionId: "child-a",
+        updatedAt: "2026-05-04T12:02:00.000Z",
+        delegationParent: { parentSessionId: "root", index: 1 },
+      },
+      {
+        sessionId: "orphan-new",
+        updatedAt: "2026-05-04T12:10:00.000Z",
+        delegationParent: { parentSessionId: "missing" },
+      },
+      {
+        sessionId: "orphan-old",
+        updatedAt: "2026-05-04T12:05:00.000Z",
+        delegationParent: { parentSessionId: "missing" },
+      },
+      {
+        sessionId: "child-c",
+        updatedAt: "not-a-date",
+        delegationParent: { parentSessionId: "root" },
+      },
+      {
+        sessionId: "child-d",
+        updatedAt: "not-a-date",
+        delegationParent: { parentSessionId: "root" },
+      },
+    ]);
+
+    expect(groups.topLevelSessions.map((session) => session.sessionId)).toEqual(["root"]);
+    expect(groups.delegatedChildrenByParentId.root?.map((session) => session.sessionId)).toEqual([
+      "child-a",
+      "child-b",
+      "child-c",
+      "child-d",
+    ]);
+    expect(groups.orphanDelegatedSessions.map((session) => session.sessionId)).toEqual(["orphan-new", "orphan-old"]);
+    expect(groups.delegatedChildSessionIds).toEqual([
+      "child-b",
+      "child-a",
+      "orphan-new",
+      "orphan-old",
+      "child-c",
+      "child-d",
+    ]);
+  });
+
+  it("resolves optimistic prefs, selected turns, and post-stream reconciliation", () => {
+    const currentPrefs = {
+      sessionId: "session-1",
+      mode: "chat",
+      planningMode: "off",
+      providerId: "openai",
+      model: "gpt-5.5",
+      imageProviderId: "google",
+      imageModel: "imagen",
+      visionFallbackModel: "gpt-vision",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "ask_when_useful",
+      toolAutonomy: "safe_auto",
+      orchestrationEnabled: false,
+      orchestrationIntensity: "minimal",
+      orchestrationVisibility: "summarized",
+      orchestrationProviderPreference: "speed",
+      orchestrationReviewDepth: "off",
+      orchestrationParallelism: "auto",
+      codeAutoApply: "manual",
+      proactiveMode: "off",
+      retrievalMode: "auto",
+      reflectionMode: "auto",
+      createdAt: "2026-05-04T12:00:00.000Z",
+      updatedAt: "2026-05-04T12:00:00.000Z",
+    } as never;
+
+    expect(
+      resolveOptimisticChatPrefs(currentPrefs, {
+        providerId: " anthropic ",
+        imageProviderId: " ",
+        visionFallbackModel: " ",
+        autonomyBudget: { maxToolCalls: 4 },
+      } as never),
+    ).toMatchObject({
+      providerId: "anthropic",
+      model: undefined,
+      imageProviderId: undefined,
+      imageModel: undefined,
+      visionFallbackModel: undefined,
+      autonomyBudget: expect.objectContaining({ maxToolCalls: 4 }),
+    });
+
+    expect(resolveSelectedTurnId(null, "turn-1")).toBeNull();
+    expect(resolveSelectedTurnId({ turns: [{ turnId: "turn-1" }, { turnId: "turn-2" }] }, null, "turn-2")).toBe(
+      "turn-2",
+    );
+    expect(
+      resolveSelectedTurnId(
+        { selectedTurnId: "missing", activeLeafTurnId: "turn-1", turns: [{ turnId: "turn-1" }] },
+        null,
+      ),
+    ).toBe("missing");
+
+    const currentMessages = [{ messageId: "placeholder-1", role: "assistant", content: "Draft answer" }] as never;
+    expect(shouldApplyFetchedMessagesAfterStream([], [], null)).toBe(true);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(currentMessages, [], {
+        sessionId: "session-1",
+        placeholderId: "placeholder-1",
+        content: "",
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(
+        currentMessages,
+        [{ messageId: "message-1", role: "assistant", content: "Done" }] as never,
+        {
+          sessionId: "session-1",
+          placeholderId: "placeholder-1",
+          messageId: "message-1",
+          content: "Done",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(
+        currentMessages,
+        [{ messageId: "other", role: "assistant", content: "Draft   answer" }] as never,
+        {
+          sessionId: "session-1",
+          placeholderId: "placeholder-1",
+          content: "Draft answer",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(
+        [{ messageId: "other-placeholder", role: "assistant", content: "Draft answer" }] as never,
+        [{ messageId: "message-1", role: "assistant", content: "Done" }] as never,
+        {
+          sessionId: "session-1",
+          placeholderId: "missing-placeholder",
+          content: "Done",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      shouldApplyFetchedMessagesAfterStream(
+        currentMessages,
+        [{ messageId: "other", role: "assistant", content: "Different" }] as never,
+        {
+          sessionId: "session-1",
+          placeholderId: "placeholder-1",
+          content: "Draft answer",
+        },
+      ),
+    ).toBe(false);
+    expect(shouldExecuteLocalChatCommand("send" as never, " /memory rebuild")).toBe(true);
+    expect(shouldExecuteLocalChatCommand("retry" as never, "/memory rebuild")).toBe(false);
   });
 
   it("reveals generated artifacts and keeps recent artifacts first", async () => {

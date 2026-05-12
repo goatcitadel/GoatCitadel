@@ -73,6 +73,20 @@ describe("ChatToolRunRepository", () => {
       reused: false,
       startedAt: "not-a-date",
     });
+    repo.create({
+      toolRunId: "tool-run-d",
+      turnId: "turn-c",
+      sessionId: "session-a",
+      toolName: "file.read",
+      startedAt: "2026-03-26T00:00:04.000Z",
+    });
+    repo.create({
+      toolRunId: "tool-run-e",
+      turnId: "turn-c",
+      sessionId: "session-a",
+      toolName: "file.write",
+      startedAt: "2026-03-26T00:00:03.000Z",
+    });
 
     assert.equal(full.status, "approval_required");
     assert.equal(full.approvalId, "approval-a");
@@ -105,12 +119,19 @@ describe("ChatToolRunRepository", () => {
     assert.equal(preserved.reused, false);
     assert.equal(preserved.finishedAt, "2026-03-26T00:00:03.000Z");
 
+    const minimalPreserved = repo.patch("tool-run-a", {});
+    assert.equal(minimalPreserved.result, undefined);
+    assert.equal(minimalPreserved.reused, undefined);
+    const minimalReused = repo.patch("tool-run-a", { reused: true });
+    assert.equal(minimalReused.reused, true);
+    assert.equal(repo.patch("tool-run-a", {}).reused, true);
+
     assert.deepEqual(
       repo.listByTurn("turn-a").map((item) => item.toolRunId),
       ["tool-run-b", "tool-run-a"],
     );
     assert.equal(repo.listBySession("session-a", 0).length, 1);
-    assert.equal(repo.listBySession("session-a", 3000).length, 3);
+    assert.equal(repo.listBySession("session-a", 3000).length, 5);
 
     assert.equal(repo.listByTurnIds([]).size, 0);
     const grouped = repo.listByTurnIds([" turn-b ", "turn-a", "", "turn-a"]);
@@ -121,6 +142,13 @@ describe("ChatToolRunRepository", () => {
     assert.deepEqual(
       grouped.get("turn-b")?.map((item) => item.toolRunId),
       ["tool-run-c"],
+    );
+    assert.deepEqual(
+      repo
+        .listByTurnIds(["turn-c"])
+        .get("turn-c")
+        ?.map((item) => item.toolRunId),
+      ["tool-run-e", "tool-run-d"],
     );
     assert.deepEqual(
       repo

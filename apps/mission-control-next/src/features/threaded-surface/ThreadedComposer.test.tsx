@@ -1,10 +1,41 @@
 import React, { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadedComposer } from "./ThreadedComposer";
 
-function buildMarkup(overrides: Partial<any> = {}) {
-  const props = {
+vi.mock("@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu", async () => {
+  const ReactModule = await import("react");
+  return {
+    ChatComposerPlusMenu: ({ disabled, actions = [], children }: any) =>
+      ReactModule.createElement(
+        "div",
+        { className: "chat-plus-menu" },
+        ReactModule.createElement(
+          "button",
+          { type: "button", disabled, "aria-label": "Open chat actions", onClick: () => undefined },
+          "+",
+        ),
+        ...actions.map((action: any) =>
+          ReactModule.createElement(
+            "button",
+            {
+              key: action.label,
+              type: "button",
+              disabled: action.disabled,
+              className: `chat-plus-action${action.active ? " active" : ""}`,
+              onClick: action.onSelect,
+            },
+            action.label,
+          ),
+        ),
+        children,
+      ),
+  };
+});
+
+function buildProps(overrides: Partial<any> = {}) {
+  return {
     mode: "chat",
     queueItems: [],
     editingTurnId: null,
@@ -85,11 +116,89 @@ function buildMarkup(overrides: Partial<any> = {}) {
     imageBusy: false,
     knowledgeUrlDraft: "",
     knowledgeUrlMode: "retrieval",
+    currentThinkingLevel: "standard",
+    currentSpeedMode: "standard",
+    currentSubagentPolicy: "off",
+    onSetThinkingLevel: vi.fn(),
+    onSetSpeedMode: vi.fn(),
+    onSetSubagentPolicy: vi.fn(),
     ...overrides,
-  };
+  } as any;
+}
+
+function buildMarkup(overrides: Partial<any> = {}) {
+  const props = buildProps(overrides);
 
   return renderToStaticMarkup(<ThreadedComposer props={props as any} />);
 }
+
+async function renderComposer(overrides: Partial<any> = {}): Promise<ReactTestRenderer> {
+  let renderer: ReactTestRenderer | null = null;
+  await act(async () => {
+    renderer = create(<ThreadedComposer props={buildProps(overrides)} />);
+  });
+  return renderer!;
+}
+
+function collectText(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      return collectText(child);
+    })
+    .join(" ");
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
+  if (!button) {
+    const available = root
+      .findAll((node) => node.type === "button")
+      .map((node) => collectText(node) || node.props["aria-label"])
+      .join(", ");
+    throw new Error(`Unable to find button: ${label}. Available buttons: ${available}`);
+  }
+  return button;
+}
+
+function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
+  return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
+}
+
+function findSelect(root: ReactTestInstance, ariaLabel: string): ReactTestInstance {
+  return root.findByProps({ "aria-label": ariaLabel });
+}
+
+async function click(node: ReactTestInstance): Promise<void> {
+  await act(async () => {
+    node.props.onClick({
+      defaultPrevented: false,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    });
+  });
+}
+
+function stubObjectUrls() {
+  const createObjectURL = vi.fn(() => "blob:preview");
+  const revokeObjectURL = vi.fn();
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: createObjectURL,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: revokeObjectURL,
+  });
+  return { createObjectURL, revokeObjectURL };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("ThreadedComposer", () => {
   it("renders an inline preview shell for pending image attachments", () => {
@@ -152,7 +261,6 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain(">Delegate<");
     expect(markup).not.toContain(">Implement<");
     expect(markup).not.toContain("Start talk");
-    expect(markup).not.toContain("Create image");
     expect(markup).not.toContain("Planning mode is on");
   });
 
@@ -186,5 +294,449 @@ describe("ThreadedComposer", () => {
   it("uses surface-specific primary action labels", () => {
     expect(buildMarkup({ mode: "cowork" })).toContain("Delegate");
     expect(buildMarkup({ mode: "code" })).toContain("Implement");
+  });
+
+  it("covers residual route, mode, and primary label branches", async () => {
+    expect(buildMarkup({ editingTurnId: "turn-chat-edit" })).toContain("Edit and resend");
+    expect(buildMarkup({ currentWebMode: "deep" })).toContain("Deep web");
+    expect(buildMarkup({ currentWebMode: "quick" })).toContain("Quick web");
+    expect(
+      buildMarkup({
+        routePreflight: {
+          effectiveProviderId: "local",
+          effectiveModel: "llama-3.1",
+        },
+      }),
+    ).toContain("local / llama-3.1");
+    expect(buildMarkup({ imageEditAvailable: false })).not.toContain("Edit image");
+
+    const onRetryTurn = vi.fn();
+    const onSetDeepMode = vi.fn();
+    const withoutSelectedTurn = buildMarkup({
+      selectedTurn: null,
+      selectedTurnRecovery: {
+        label: "Retry unavailable",
+        summary: "No selected turn is available.",
+        action: "retry_narrower",
+      },
+      onReviewRunDetails: undefined,
+    });
+    expect(withoutSelectedTurn).not.toContain("Retry turn");
+
+    let renderer = await renderComposer({
+      selectedTurn: {
+        turnId: "turn-narrow",
+        trace: { status: "completed" },
+      },
+      selectedTurnRecovery: {
+        label: "Retry narrower",
+        summary: "Try a narrower request.",
+        action: "retry_narrower",
+      },
+      onRetryTurn,
+      onReviewRunDetails: undefined,
+    });
+    await click(findButton(renderer.root, "Retry turn"));
+    expect(onRetryTurn).toHaveBeenCalledWith("turn-narrow");
+
+    renderer = await renderComposer({
+      currentWebMode: "quick",
+      selectedTurnRecovery: {
+        label: "Deep mode needed",
+        summary: "The next attempt needs broader retrieval.",
+        action: "switch_to_deep_mode",
+      },
+      onSetDeepMode,
+      onReviewRunDetails: undefined,
+    });
+    await click(findButton(renderer.root, "Set Deep mode"));
+    expect(onSetDeepMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires queue, draft, suggestion, recovery, editing, and attachment actions", async () => {
+    const callbacks = {
+      onResumeAll: vi.fn(),
+      onRemoveQueuedItem: vi.fn(),
+      onCancelEdit: vi.fn(),
+      onRetryTurn: vi.fn(),
+      onReviewRunDetails: vi.fn(),
+      onDraftChange: vi.fn(),
+      onComposerKeyDown: vi.fn(),
+      onComposerPaste: vi.fn(),
+      onApplyDraftCommand: vi.fn(),
+      onRemoveAttachment: vi.fn(),
+      onRemoveThreadKnowledgeAttachment: vi.fn(),
+      onSend: vi.fn(),
+    };
+    const renderer = await renderComposer({
+      mode: "cowork",
+      queueItems: [
+        {
+          id: "queue-1",
+          action: "retry",
+          label: "Retry the plan",
+          createdAt: "2026-05-01T00:00:00.000Z",
+          paused: true,
+        },
+      ],
+      editingTurnId: "turn-edit-abcdef",
+      draft: "Coordinate the work",
+      commandSuggestions: [
+        {
+          key: "mention-research",
+          command: "$researcher",
+          description: "enabled · Researcher",
+          applyValue: "$researcher",
+        },
+      ],
+      selectedTurn: {
+        turnId: "turn-failed-123456",
+        trace: {
+          status: "failed",
+        },
+      },
+      selectedTurnRecovery: {
+        label: "Recover this run",
+        summary: "The previous step failed after a provider timeout.",
+        action: "retry",
+      },
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-note",
+          sessionId: "session-1",
+          fileName: "notes.txt",
+          mimeType: "text/plain",
+          mediaType: "file",
+          sizeBytes: 300,
+          sha256: "hash-note",
+          storageRelPath: "chat/default/notes.txt",
+          extractStatus: "ready",
+          createdAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+      threadKnowledgeAttachments: [
+        {
+          attachmentId: "knowledge-1",
+          title: "Project brief",
+          retrievalMode: "full_text",
+          ingestStatus: "ready",
+        },
+      ],
+      thread: {
+        sessionId: "session-1",
+        turns: [
+          {
+            turnId: "turn-1",
+            userMessage: { tokenInput: 1200, tokenOutput: 0, costUsd: 0.002 },
+            assistantMessage: { tokenInput: 0, tokenOutput: 600, costUsd: 0.003 },
+          },
+        ],
+      },
+      ...callbacks,
+    });
+
+    expect(collectText(renderer.root)).toContain("Queued messages");
+    expect(collectText(renderer.root)).toContain("1,800 tokens / <$0.01");
+    expect(collectText(renderer.root)).toContain("Edit and delegate");
+
+    await click(findButton(renderer.root, "Resume queued messages"));
+    await click(findButton(renderer.root, "Cancel edit"));
+    await click(findButton(renderer.root, "Retry run step"));
+    await click(findButton(renderer.root, "Review run details"));
+
+    const textarea = renderer.root.findByType("textarea");
+    await act(async () => {
+      textarea.props.onChange({ target: { value: "Next prompt" } });
+      textarea.props.onKeyDown({ key: "Enter" });
+      textarea.props.onPaste({ clipboardData: "image" });
+    });
+
+    await click(findButton(renderer.root, "$researcher"));
+    for (const button of findButtons(renderer.root, "Remove")) {
+      await click(button);
+    }
+    await click(findButton(renderer.root, "Edit and delegate"));
+
+    expect(callbacks.onResumeAll).toHaveBeenCalledTimes(1);
+    expect(callbacks.onRemoveQueuedItem).toHaveBeenCalledWith("queue-1");
+    expect(callbacks.onCancelEdit).toHaveBeenCalledTimes(1);
+    expect(callbacks.onRetryTurn).toHaveBeenCalledWith("turn-failed-123456");
+    expect(callbacks.onReviewRunDetails).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDraftChange).toHaveBeenCalledWith("Next prompt");
+    expect(callbacks.onComposerKeyDown).toHaveBeenCalledWith({ key: "Enter" });
+    expect(callbacks.onComposerPaste).toHaveBeenCalledWith({ clipboardData: "image" });
+    expect(callbacks.onApplyDraftCommand).toHaveBeenCalledWith("$researcher");
+    expect(callbacks.onRemoveAttachment).toHaveBeenCalledWith("attachment-note");
+    expect(callbacks.onRemoveThreadKnowledgeAttachment).toHaveBeenCalledWith("knowledge-1");
+    expect(callbacks.onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires route banners, preset controls, plus-menu actions, and composer selectors", async () => {
+    const callbacks = {
+      onDismissPresetWarning: vi.fn(),
+      onAcknowledgeRouteBoundary: vi.fn(),
+      onToggleVoiceTalk: vi.fn(),
+      onOpenAudioTranscribe: vi.fn(),
+      onToggleSpeakResponses: vi.fn(),
+      onGenerateImage: vi.fn(),
+      onEditImage: vi.fn(),
+      onRunQuickResearch: vi.fn(),
+      onAttachFiles: vi.fn(),
+      onAudioFileSelected: vi.fn(),
+      onPresetChange: vi.fn(),
+      onApplyPreset: vi.fn(),
+      onKnowledgeUrlDraftChange: vi.fn(),
+      onKnowledgeUrlModeChange: vi.fn(),
+      onAttachKnowledgeUrl: vi.fn(),
+      onSetThinkingLevel: vi.fn(),
+      onSetSpeedMode: vi.fn(),
+      onSetSubagentPolicy: vi.fn(),
+      onTogglePlanningMode: vi.fn(),
+    };
+    const renderer = await renderComposer({
+      draft: "Draw the diagram",
+      selectedSessionId: null,
+      currentWebMode: "off",
+      routePreflightLoading: true,
+      routeBoundaryAckRequired: true,
+      routeBoundaryAcknowledged: false,
+      presetApplyWarning: "Preset changed the composer.",
+      presetOptions: [{ value: "review", label: "Review preset" }],
+      selectedPresetId: "review",
+      voiceInputAvailable: true,
+      voiceOutputAvailable: true,
+      speakResponsesEnabled: true,
+      knowledgeUrlDraft: "https://example.test/source",
+      knowledgeUrlMode: "retrieval",
+      ...callbacks,
+    });
+
+    expect(collectText(renderer.root)).toContain("New thread");
+    expect(collectText(renderer.root)).toContain("Checking the selected provider/model route before send.");
+
+    await click(findButton(renderer.root, "Dismiss"));
+    await click(findButton(renderer.root, "Acknowledge fallback"));
+    await click(renderer.root.findByProps({ "aria-label": "Open chat actions" }));
+    await click(findButton(renderer.root, "Start voice talk"));
+    await click(findButton(renderer.root, "Transcribe audio"));
+    await click(findButton(renderer.root, "Stop speaking replies"));
+    await click(findButton(renderer.root, "Create image"));
+    await click(findButton(renderer.root, "Edit image"));
+    await click(findButton(renderer.root, "Quick web research"));
+    await click(renderer.root.findByProps({ "aria-label": "Attach files" }));
+    await click(findButton(renderer.root, "Apply"));
+    await click(findButton(renderer.root, "Attach source"));
+    await click(findButton(renderer.root, "Plan"));
+
+    const presetSelect = renderer.root.findByProps({ id: "threaded-composer-preset" });
+    const knowledgeInput = renderer.root.findByProps({ id: "threaded-composer-knowledge-url" });
+    const knowledgeModeSelect = renderer.root.findAllByType("select").find((node) => node.props.value === "retrieval")!;
+    const audioInput = renderer.root.findByProps({ accept: "audio/*" });
+    await act(async () => {
+      presetSelect.props.onChange({ target: { value: "daily" } });
+      knowledgeInput.props.onChange({ target: { value: "https://example.test/next" } });
+      knowledgeModeSelect.props.onChange({ target: { value: "full_text" } });
+      audioInput.props.onChange({ target: { files: ["audio-file"] } });
+      findSelect(renderer.root, "Thinking level").props.onChange({ target: { value: "deep" } });
+      findSelect(renderer.root, "Speed mode").props.onChange({ target: { value: "fast" } });
+      findSelect(renderer.root, "Subagent policy").props.onChange({ target: { value: "auto_when_useful" } });
+    });
+
+    expect(callbacks.onDismissPresetWarning).toHaveBeenCalledTimes(1);
+    expect(callbacks.onAcknowledgeRouteBoundary).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleVoiceTalk).toHaveBeenCalledTimes(1);
+    expect(callbacks.onOpenAudioTranscribe).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleSpeakResponses).toHaveBeenCalledTimes(1);
+    expect(callbacks.onGenerateImage).toHaveBeenCalledTimes(1);
+    expect(callbacks.onEditImage).toHaveBeenCalledTimes(1);
+    expect(callbacks.onRunQuickResearch).toHaveBeenCalledTimes(1);
+    expect(callbacks.onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(callbacks.onPresetChange).toHaveBeenCalledWith("daily");
+    expect(callbacks.onApplyPreset).toHaveBeenCalledTimes(1);
+    expect(callbacks.onKnowledgeUrlDraftChange).toHaveBeenCalledWith("https://example.test/next");
+    expect(callbacks.onKnowledgeUrlModeChange).toHaveBeenCalledWith("full_text");
+    expect(callbacks.onAttachKnowledgeUrl).toHaveBeenCalledTimes(1);
+    expect(callbacks.onAudioFileSelected).toHaveBeenCalledWith(["audio-file"]);
+    expect(callbacks.onSetThinkingLevel).toHaveBeenCalledWith("deep");
+    expect(callbacks.onSetSpeedMode).toHaveBeenCalledWith("fast");
+    expect(callbacks.onSetSubagentPolicy).toHaveBeenCalledWith("auto_when_useful");
+    expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses blocker, sending, and stream-stop labels for primary actions", async () => {
+    const onSend = vi.fn();
+    const onStopActiveTurn = vi.fn();
+    const waitingForApproval = {
+      turnId: "turn-blocked",
+      trace: { status: "waiting_for_approval" },
+    };
+
+    let renderer = await renderComposer({
+      mode: "cowork",
+      selectedTurn: waitingForApproval,
+      onSend,
+    });
+    await click(findButton(renderer.root, "Resolve blocker"));
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    renderer = await renderComposer({
+      mode: "code",
+      editingTurnId: "turn-edit",
+      onSend,
+    });
+    expect(collectText(renderer.root)).toContain("Edit and implement");
+
+    renderer = await renderComposer({
+      mode: "code",
+      sending: true,
+      hasActiveStream: false,
+      onSend,
+    });
+    expect(collectText(renderer.root)).toContain("Implementing...");
+
+    renderer = await renderComposer({
+      sending: true,
+      hasActiveStream: true,
+      activeStreamTurnAssigned: false,
+      onStopActiveTurn,
+    });
+    await click(findButton(renderer.root, "Stop stream"));
+
+    renderer = await renderComposer({
+      sending: true,
+      hasActiveStream: true,
+      activeStreamTurnAssigned: true,
+      onStopActiveTurn,
+    });
+    await click(findButton(renderer.root, "Stop turn"));
+    expect(onStopActiveTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to authenticated image loading and surfaces preview failures", async () => {
+    const { createObjectURL } = stubObjectUrls();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      blob: async () => new Blob(["image"], { type: "image/png" }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const renderer = await renderComposer({
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-image-2",
+          sessionId: "session-1",
+          fileName: "screenshot.png",
+          mimeType: "",
+          mediaType: "file",
+          sizeBytes: 2048,
+          sha256: "hash-image",
+          storageRelPath: "chat/default/screenshot.png",
+          extractStatus: "ready",
+          createdAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await act(async () => {
+      renderer.root.findByType("img").props.onError();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/chat/attachments/attachment-image-2/content?disposition=inline"),
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findByType("img").props.src).toBe("blob:preview");
+
+    await act(async () => {
+      renderer.root.findByType("img").props.onError();
+    });
+
+    expect(collectText(renderer.root)).toContain("Preview unavailable: Preview unavailable.");
+  });
+
+  it("surfaces authenticated image fetch errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 503,
+        text: async () => "preview unavailable",
+      })),
+    );
+
+    const renderer = await renderComposer({
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-image-error",
+          sessionId: "session-1",
+          fileName: "failed.webp",
+          mimeType: "image/webp",
+          mediaType: "image",
+          sizeBytes: 2048,
+          sha256: "hash-image",
+          storageRelPath: "chat/default/failed.webp",
+          extractStatus: "ready",
+          createdAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await act(async () => {
+      renderer.root.findByType("img").props.onError();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(collectText(renderer.root)).toContain("Preview unavailable: API error 503: preview unavailable");
+  });
+
+  it("revokes authenticated image object URLs when a preview resolves after unmount", async () => {
+    const { revokeObjectURL } = stubObjectUrls();
+    let resolveBlob: ((blob: Blob) => void) | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        blob: () =>
+          new Promise<Blob>((resolve) => {
+            resolveBlob = resolve;
+          }),
+      })),
+    );
+
+    const renderer = await renderComposer({
+      pendingAttachments: [
+        {
+          attachmentId: "attachment-image-late",
+          sessionId: "session-1",
+          fileName: "late.png",
+          mimeType: "image/png",
+          mediaType: "image",
+          sizeBytes: 2048,
+          sha256: "hash-image",
+          storageRelPath: "chat/default/late.png",
+          extractStatus: "ready",
+          createdAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await act(async () => {
+      renderer.root.findByType("img").props.onError();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer.unmount();
+    });
+    await act(async () => {
+      resolveBlob?.(new Blob(["late"], { type: "image/png" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
   });
 });

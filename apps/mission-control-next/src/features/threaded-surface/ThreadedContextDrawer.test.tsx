@@ -10,6 +10,10 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return match;
 }
 
+function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
+  return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
+}
+
 function collectText(node: ReactTestInstance): string {
   return node.children
     .map((child) => {
@@ -22,6 +26,58 @@ function collectText(node: ReactTestInstance): string {
       return collectText(child);
     })
     .join(" ");
+}
+
+function baseProps(overrides: Record<string, unknown> = {}) {
+  return {
+    selectedProviderId: "openai",
+    selectedModel: "gpt-5.4-mini",
+    streamEnabled: true,
+    planningMode: "advisory",
+    routePreflight: { selectionSource: "session_prefs" },
+    onStreamEnabledChange: vi.fn(),
+    onPrefPatch: vi.fn(),
+    activeGeneratedArtifact: null,
+    onCloseGeneratedArtifact: vi.fn(),
+    selectedTurn: null,
+    capabilitySuggestions: [],
+    specialistSuggestions: [],
+    learnedMemory: [],
+    delegationSuggestion: null,
+    onCapabilitySuggestionAction: vi.fn(),
+    onAcceptDelegation: vi.fn(),
+    onCreateSpecialistDraft: vi.fn(),
+    onActivateCatalogSpecialist: vi.fn(),
+    onUpdateMemoryStatus: vi.fn(),
+    onRebuildLearnedMemory: vi.fn(),
+    renameTitle: "",
+    folderName: "",
+    tagsValue: "",
+    selectedSessionProjectValue: "",
+    projectOptions: [],
+    selectedSession: {
+      sessionId: "session-1",
+      title: "Session title",
+      pinned: false,
+      lifecycleStatus: "active",
+    },
+    onRenameTitleChange: vi.fn(),
+    onFolderNameChange: vi.fn(),
+    onTagsValueChange: vi.fn(),
+    onAssignProject: vi.fn(),
+    onRenameSession: vi.fn(),
+    onSaveOrganization: vi.fn(),
+    onTogglePinSession: vi.fn(),
+    onToggleArchiveSession: vi.fn(),
+    onExportSnapshot: vi.fn(),
+    onDeleteSession: vi.fn(),
+    integrationConnectionId: "",
+    integrationTarget: "",
+    onIntegrationConnectionIdChange: vi.fn(),
+    onIntegrationTargetChange: vi.fn(),
+    onSaveExternalBinding: vi.fn(),
+    ...overrides,
+  } as any;
 }
 
 describe("ThreadedContextDrawer", () => {
@@ -147,5 +203,274 @@ describe("ThreadedContextDrawer", () => {
     });
 
     expect(onExportRunBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders context route controls, route warnings, and generated artifact actions", async () => {
+    const onStreamEnabledChange = vi.fn();
+    const onPrefPatch = vi.fn();
+    const onCloseGeneratedArtifact = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="code"
+          props={baseProps({
+            streamEnabled: false,
+            planningMode: "off",
+            routePreflight: {
+              selectionSource: null,
+              degradedReason: "Provider is degraded.",
+              blockedReason: "Route requires credentials.",
+            },
+            onStreamEnabledChange,
+            onPrefPatch,
+            activeGeneratedArtifact: {
+              artifactId: "artifact-1",
+              title: "Generated report",
+              kind: "markdown",
+              content: "# Report",
+              version: 1,
+              sourceSurface: "code",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+            onCloseGeneratedArtifact,
+          })}
+        />,
+      );
+    });
+
+    expect(collectText(renderer!.root)).toContain("Route requires credentials.");
+    await act(async () => {
+      findButton(renderer!.root, "Enable streaming").props.onClick();
+      findButton(renderer!.root, "Reapply route").props.onClick();
+      findButton(renderer!.root, "Close").props.onClick();
+    });
+
+    expect(onStreamEnabledChange).toHaveBeenCalledWith(true);
+    expect(onPrefPatch).toHaveBeenCalledWith({ providerId: "openai", model: "gpt-5.4-mini" });
+    expect(onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders failed fallback trace state and the no-selection trace placeholder", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            selectedProviderId: null,
+            selectedModel: null,
+            selectedTurn: {
+              turnId: "turn-failed",
+              trace: {
+                status: "failed",
+                failure: { message: "Tool execution failed." },
+                routing: {
+                  fallbackUsed: true,
+                  primaryProviderId: null,
+                  primaryModel: null,
+                  effectiveProviderId: "anthropic",
+                  effectiveModel: "claude",
+                  fallbackReason: "Primary timed out.",
+                },
+              },
+            },
+          })}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Trace").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Fallback used");
+    expect(collectText(renderer!.root)).toContain("Tool execution failed.");
+    expect(collectText(renderer!.root)).toMatch(/Primary:\s+n\/a/);
+
+    await act(async () => {
+      renderer!.update(<ThreadedContextDrawer surface="chat" props={baseProps({ selectedProviderId: null })} />);
+    });
+    expect(collectText(renderer!.root)).toContain("No turn is selected yet.");
+  });
+
+  it("renders optional context sections without close handlers or assist suggestions", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="chat"
+          props={baseProps({
+            activeGeneratedArtifact: {
+              artifactId: "artifact-optional",
+              title: "Readonly artifact",
+              kind: "markdown",
+              content: "Readonly content",
+              version: 1,
+              sourceSurface: "chat",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+            onCloseGeneratedArtifact: undefined,
+            selectedTurn: {
+              turnId: "turn-running",
+              trace: {
+                status: "running",
+                failure: null,
+                routing: {
+                  fallbackUsed: false,
+                  primaryProviderId: "openai",
+                  primaryModel: "gpt",
+                  effectiveProviderId: "openai",
+                  effectiveModel: "gpt",
+                  fallbackReason: null,
+                },
+              },
+            },
+          })}
+        />,
+      );
+    });
+
+    expect(collectText(renderer!.root)).toContain("Readonly artifact");
+    expect(findButtons(renderer!.root, "Close")).toHaveLength(0);
+
+    await act(async () => {
+      findButton(renderer!.root, "Trace").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("running");
+
+    await act(async () => {
+      findButton(renderer!.root, "Assist").props.onClick();
+    });
+    expect(collectText(renderer!.root)).not.toContain("Review suggestion");
+    expect(collectText(renderer!.root)).not.toContain("Use subagents");
+    expect(collectText(renderer!.root)).not.toContain("Rebuild learned memory");
+  });
+
+  it("drives assist suggestions, delegation, specialists, and learned memory actions", async () => {
+    const onCapabilitySuggestionAction = vi.fn();
+    const onAcceptDelegation = vi.fn();
+    const onCreateSpecialistDraft = vi.fn();
+    const onActivateCatalogSpecialist = vi.fn();
+    const onUpdateMemoryStatus = vi.fn();
+    const onRebuildLearnedMemory = vi.fn();
+    const capability = { kind: "tool", title: "Use browser", summary: "Inspect a source." };
+    const specialist = { candidateId: "specialist-1", title: "Researcher", summary: "Research support." };
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedContextDrawer
+          surface="cowork"
+          props={baseProps({
+            capabilitySuggestions: [capability],
+            delegationSuggestion: { mode: "parallel", objective: "Split the work.", roles: ["Researcher", "QA"] },
+            specialistSuggestions: [specialist],
+            learnedMemory: [{ itemId: "memory-1", content: "User prefers concise reviews.", status: "draft" }],
+            onCapabilitySuggestionAction,
+            onAcceptDelegation,
+            onCreateSpecialistDraft,
+            onActivateCatalogSpecialist,
+            onUpdateMemoryStatus,
+            onRebuildLearnedMemory,
+          })}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Assist").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Review suggestion").props.onClick();
+      findButton(renderer!.root, "Use subagents").props.onClick();
+      findButton(renderer!.root, "Draft").props.onClick();
+      findButton(renderer!.root, "Activate").props.onClick();
+      findButton(renderer!.root, "Keep active").props.onClick();
+      findButton(renderer!.root, "Mark stale").props.onClick();
+      findButton(renderer!.root, "Rebuild learned memory").props.onClick();
+    });
+
+    expect(onCapabilitySuggestionAction).toHaveBeenCalledWith(capability);
+    expect(onAcceptDelegation).toHaveBeenCalledTimes(1);
+    expect(onCreateSpecialistDraft).toHaveBeenCalledWith(specialist);
+    expect(onActivateCatalogSpecialist).toHaveBeenCalledWith(specialist);
+    expect(onUpdateMemoryStatus).toHaveBeenCalledWith("memory-1", "active");
+    expect(onUpdateMemoryStatus).toHaveBeenCalledWith("memory-1", "superseded");
+    expect(onRebuildLearnedMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it("drives session organization, project assignment, binding, export, and destructive actions", async () => {
+    const props = baseProps({
+      renameTitle: "Draft title",
+      folderName: "Ops",
+      tagsValue: "coverage",
+      selectedSessionProjectValue: "project-1",
+      projectOptions: [
+        { value: "", label: "No project" },
+        { value: "project-1", label: "Project One" },
+        { value: "project-2", label: "Project Two" },
+      ],
+      selectedSession: {
+        sessionId: "session-1",
+        title: null,
+        pinned: true,
+        lifecycleStatus: "archived",
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={props} />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Session").props.onClick();
+    });
+
+    const inputs = renderer!.root.findAllByType("input");
+    const select = renderer!.root.findByType("select");
+    await act(async () => {
+      inputs.find((input) => input.props.placeholder === "Session title")?.props.onChange({ target: { value: "New" } });
+      inputs.find((input) => input.props.placeholder === "Folder")?.props.onChange({ target: { value: "Archive" } });
+      inputs
+        .find((input) => input.props.placeholder === "tag-one, tag-two")
+        ?.props.onChange({
+          target: { value: "one,two" },
+        });
+      inputs
+        .find((input) => input.props.placeholder === "Connection id")
+        ?.props.onChange({
+          target: { value: "connection-1" },
+        });
+      inputs
+        .find((input) => input.props.placeholder === "Target thread / channel")
+        ?.props.onChange({
+          target: { value: "target-1" },
+        });
+      select.props.onChange({ target: { value: "project-2" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save title").props.onClick();
+      findButton(renderer!.root, "Save organization").props.onClick();
+      findButton(renderer!.root, "Unpin").props.onClick();
+      findButton(renderer!.root, "Restore").props.onClick();
+      findButton(renderer!.root, "Export snapshot").props.onClick();
+      findButton(renderer!.root, "Delete session").props.onClick();
+      findButton(renderer!.root, "Save binding").props.onClick();
+    });
+
+    expect(props.onRenameTitleChange).toHaveBeenCalledWith("New");
+    expect(props.onFolderNameChange).toHaveBeenCalledWith("Archive");
+    expect(props.onTagsValueChange).toHaveBeenCalledWith("one,two");
+    expect(props.onIntegrationConnectionIdChange).toHaveBeenCalledWith("connection-1");
+    expect(props.onIntegrationTargetChange).toHaveBeenCalledWith("target-1");
+    expect(props.onAssignProject).toHaveBeenCalledWith("project-2");
+    expect(props.onRenameSession).toHaveBeenCalledTimes(1);
+    expect(props.onSaveOrganization).toHaveBeenCalledTimes(1);
+    expect(props.onTogglePinSession).toHaveBeenCalledTimes(1);
+    expect(props.onToggleArchiveSession).toHaveBeenCalledTimes(1);
+    expect(props.onExportSnapshot).toHaveBeenCalledTimes(1);
+    expect(props.onDeleteSession).toHaveBeenCalledTimes(1);
+    expect(props.onSaveExternalBinding).toHaveBeenCalledTimes(1);
   });
 });

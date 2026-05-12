@@ -85,15 +85,19 @@ describe("MemoryContextRepository", () => {
       expiresAt: "2099-01-01T00:00:00.000Z",
     });
 
-    const fetched = repo.findFreshByCacheKey({
-      cacheKey: "cache-1",
-      scope: "chat",
-      sessionId: "session-1",
-    }, "2026-01-01T00:00:00.000Z");
+    const fetched = repo.findFreshByCacheKey(
+      {
+        cacheKey: "cache-1",
+        scope: "chat",
+        sessionId: "session-1",
+      },
+      "2026-01-01T00:00:00.000Z",
+    );
     assert.ok(fetched);
     assert.equal(fetched.contextId, inserted.contextId);
     assert.equal(fetched.citations.length, 1);
     assert.equal(repo.get(inserted.contextId).contextText, "distilled context");
+    assert.equal(repo.listByRun("missing-run").length, 0);
   });
 
   it("keeps same raw cache keys isolated across sessions", () => {
@@ -125,16 +129,22 @@ describe("MemoryContextRepository", () => {
       expiresAt: "2099-01-01T00:00:00.000Z",
     });
 
-    const sessionOne = repo.findFreshByCacheKey({
-      cacheKey: "cache-shared",
-      scope: "chat",
-      sessionId: "session-1",
-    }, "2026-01-01T00:00:00.000Z");
-    const sessionTwo = repo.findFreshByCacheKey({
-      cacheKey: "cache-shared",
-      scope: "chat",
-      sessionId: "session-2",
-    }, "2026-01-01T00:00:00.000Z");
+    const sessionOne = repo.findFreshByCacheKey(
+      {
+        cacheKey: "cache-shared",
+        scope: "chat",
+        sessionId: "session-1",
+      },
+      "2026-01-01T00:00:00.000Z",
+    );
+    const sessionTwo = repo.findFreshByCacheKey(
+      {
+        cacheKey: "cache-shared",
+        scope: "chat",
+        sessionId: "session-2",
+      },
+      "2026-01-01T00:00:00.000Z",
+    );
 
     assert.equal(sessionOne?.contextText, "session one context");
     assert.equal(sessionTwo?.contextText, "session two context");
@@ -179,5 +189,41 @@ describe("MemoryContextRepository", () => {
     const oldRemoved = repo.pruneOlderThan("2026-03-02T00:00:00.000Z");
     assert.equal(oldRemoved, 1);
     assert.equal(repo.listRecent(10).length, 0);
+  });
+
+  it("reports missing reads and filters malformed adapter rows", () => {
+    const repo = createRepo();
+
+    assert.throws(() => repo.get("missing-context"), /Memory context missing-context not found/);
+    assert.equal(repo.findFreshByCacheKey({ cacheKey: "missing", scope: "chat", sessionId: "session-1" }), undefined);
+
+    const internal = repo as unknown as {
+      getByCacheKeyStmt: { get: (...args: unknown[]) => unknown };
+      listRecentStmt: { all: (...args: unknown[]) => unknown };
+      listByRunStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.getByCacheKeyStmt = { get: () => null };
+    assert.throws(
+      () =>
+        repo.upsert({
+          cacheKey: "unreadable",
+          scope: "chat",
+          sessionId: "session-1",
+          queryHash: "q",
+          sourcesHash: "s",
+          contextText: "context",
+          citations: [],
+          quality: { status: "generated" },
+          originalTokenEstimate: 100,
+          distilledTokenEstimate: 50,
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        }),
+      /Failed to read memory context pack after upsert/,
+    );
+
+    internal.listRecentStmt = { all: () => [null] };
+    internal.listByRunStmt = { all: () => ({ not: "an array" }) };
+    assert.deepEqual(repo.listRecent(), []);
+    assert.deepEqual(repo.listByRun("run-1"), []);
   });
 });

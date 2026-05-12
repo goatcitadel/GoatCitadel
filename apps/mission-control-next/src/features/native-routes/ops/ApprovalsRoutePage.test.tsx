@@ -1,110 +1,547 @@
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ApprovalsRoutePage } from "./ApprovalsRoutePage";
 
-vi.mock("@goatcitadel/mission-control-shared/hooks/useApprovalQueue", () => ({
-  useApprovalQueue: () => ({
-    loading: false,
-    error: null,
-    view: "pending",
-    setView: vi.fn(),
-    pendingItems: [
-      {
-        approvalId: "11111111-1111-4111-8111-111111111111",
-        kind: "tool.invoke",
-        status: "pending",
-        riskLevel: "danger",
-        payload: {},
-        preview: {},
-        createdAt: "2026-04-22T00:00:00.000Z",
-        explanation: { summary: "Review the tool request." },
-        explanationError:
-          'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
-        linkage: { durableRunId: "durable-run-42", sessionId: "session-1" },
-      },
-    ],
-    historyItems: [],
-    recoveryItems: [],
-    visibleItems: [
-      {
-        approvalId: "11111111-1111-4111-8111-111111111111",
-        kind: "tool.invoke",
-        status: "pending",
-        riskLevel: "danger",
-        payload: {},
-        preview: {},
-        createdAt: "2026-04-22T00:00:00.000Z",
-        explanation: { summary: "Review the tool request." },
-        explanationError:
-          'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
-        linkage: { durableRunId: "durable-run-42", sessionId: "session-1" },
-      },
-    ],
-    selectedApproval: {
-      approvalId: "11111111-1111-4111-8111-111111111111",
-      kind: "tool.invoke",
-      status: "pending",
-      riskLevel: "danger",
-      payload: {},
-      preview: {},
-      createdAt: "2026-04-22T00:00:00.000Z",
-      explanation: { summary: "Review the tool request." },
-      explanationError:
-        'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
-      linkage: { durableRunId: "durable-run-42", sessionId: "session-1" },
+const approvalHarness = vi.hoisted(() => {
+  const approval = {
+    approvalId: "11111111-1111-4111-8111-111111111111",
+    kind: "tool.invoke",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { traceMeta: { traceId: "trace-from-payload", correlationId: "corr-from-payload" } },
+    preview: {
+      targets: ["workspace/file.ts"],
+      commands: ["pnpm test"],
+      supporting: ["Operator confirmed preconditions."],
+      changes: [{ label: "Patch", content: "- old\n+ new" }],
     },
+    createdAt: "2026-04-22T00:00:00.000Z",
+    explanation: { summary: "Review the tool request.", riskExplanation: "Touches workspace files." },
+    explanationStatus: "failed",
+    explanationError:
+      'chat completion failed (401 Unauthorized): {"error":{"code":"1001","message":"Authentication parameter not received in Header, unable to authenticate"}}',
+    followUp: {
+      status: "queued",
+      reason: "Worker will resume when approved.",
+      effectKind: "durable.resume",
+      targetKind: "durable_run",
+      targetId: "durable-run-42",
+    },
+    linkage: {
+      durableRunId: "durable-run-42",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      taskId: "task-1",
+      originSurface: "cowork",
+      correlationId: "corr-1",
+      traceId: "trace-1",
+      proactiveRunId: "proactive-1",
+    },
+  };
+  const expired = {
+    ...approval,
+    approvalId: "22222222-2222-4222-8222-222222222222",
+    status: "approved",
+    riskLevel: "nuclear",
+    explanation: { summary: "Already approved." },
+    explanationStatus: "completed",
+    explanationError: "",
+    followUp: { status: "completed", reason: "Worker resumed." },
+    expiresAt: "expired",
+  };
+  return {
+    approval,
+    expired,
+    overrides: {} as Record<string, unknown>,
+    setView: vi.fn(),
     setSelectedApprovalId: vi.fn(),
-    replayById: {},
-    lifecycleByApprovalId: {},
-    durableByApprovalId: {},
-    durableBusyByApprovalId: {},
-    tracePreviewByApprovalId: {},
-    resolvePending: false,
-    replayCount: 1,
-    pendingRiskCounts: { safe: 0, caution: 0, danger: 1, nuclear: 0 },
-    hasPendingApprovals: true,
-    bulkResolvePending: false,
     onResolve: vi.fn(),
     onReplay: vi.fn(),
     loadTracePreview: vi.fn(),
     loadDurableStatus: vi.fn(),
     resumeFromCheckpoint: vi.fn(),
     onRejectAllPending: vi.fn(async () => undefined),
+  };
+});
+
+function buildQueue() {
+  const approval = approvalHarness.approval as any;
+  const expired = approvalHarness.expired as any;
+  return {
+    loading: false,
+    error: null,
+    view: "pending",
+    setView: approvalHarness.setView,
+    pendingItems: [approval],
+    historyItems: [expired],
+    recoveryItems: [approval],
+    visibleItems: [approval, expired],
+    selectedApproval: approval,
+    setSelectedApprovalId: approvalHarness.setSelectedApprovalId,
+    replayById: {
+      [approval.approvalId]: {
+        approval,
+        pendingAction: {
+          actionId: "pending-action-1",
+          request: { traceMeta: { correlationId: "corr-from-replay", traceId: "trace-from-replay" } },
+        },
+        events: [{ eventId: "event-1", eventType: "approval.created", actorId: "operator", timestamp: "" }],
+        effects: [
+          {
+            effectId: "effect-replay",
+            effectKind: "durable.resume",
+            status: "queued",
+            targetKind: "durable_run",
+            targetId: "durable-run-42",
+            attemptCount: 1,
+            lastError: "retry later",
+          },
+        ],
+      },
+    },
+    lifecycleByApprovalId: {
+      [approval.approvalId]: {
+        approval,
+        canonical: { sessionId: "session-1", taskId: "task-1" },
+        linked: { sessionIds: ["session-1", "session-2"], taskIds: ["task-1", "task-2"], runIds: ["durable-run-42"] },
+        approvalWaitDurableRun: { runId: "durable-run-42", status: "paused" },
+        proactiveRuns: [{ runId: "proactive-2" }],
+        approvalEffects: [
+          {
+            effectId: "effect-1",
+            effectKind: "durable.resume",
+            status: "failed",
+            targetKind: "durable_run",
+            targetId: "durable-run-42",
+            attemptCount: 2,
+            lastError: "resume failed",
+          },
+        ],
+      },
+    },
+    durableByApprovalId: {
+      [approval.approvalId]: {
+        runId: "durable-run-42",
+        status: "paused",
+        blockedStep: "approval",
+        blockedReason: "waiting for operator",
+        updatedAt: "bad-date",
+      },
+    },
+    durableBusyByApprovalId: {},
+    tracePreviewByApprovalId: { [approval.approvalId]: ["trace breadcrumb"] },
+    resolvePending: false,
+    replayCount: 1,
+    pendingRiskCounts: { safe: 1, caution: 1, danger: 1, nuclear: 1 },
+    hasPendingApprovals: true,
+    bulkResolvePending: false,
+    onResolve: approvalHarness.onResolve,
+    onReplay: approvalHarness.onReplay,
+    loadTracePreview: approvalHarness.loadTracePreview,
+    loadDurableStatus: approvalHarness.loadDurableStatus,
+    resumeFromCheckpoint: approvalHarness.resumeFromCheckpoint,
+    onRejectAllPending: approvalHarness.onRejectAllPending,
     summary: "Approvals stay in the canonical next shell now.",
-  }),
+    ...approvalHarness.overrides,
+  };
+}
+
+vi.mock("@goatcitadel/mission-control-shared/hooks/useApprovalQueue", () => ({
+  useApprovalQueue: () => buildQueue(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/content/approval-helpers", () => ({
-  buildApprovalEvidenceModel: () => ({
-    targets: ["workspace/file.ts"],
-    commands: ["pnpm test"],
-    supporting: ["Operator confirmed preconditions."],
-    changes: [],
-  }),
-  findTraceMetadata: () => undefined,
-  formatInferredIds: (items: string[] = []) => (items.length ? items.join(", ") : "none"),
+  buildApprovalEvidenceModel: (preview: any) =>
+    preview?.noEvidence
+      ? null
+      : {
+          targets: preview?.targets ?? [],
+          commands: preview?.commands ?? [],
+          supporting: preview?.supporting ?? [],
+          changes: preview?.changes ?? [],
+        },
+  findTraceMetadata: (value: any) => value?.traceMeta,
+  formatInferredIds: (items: string[] = [], canonical?: string) =>
+    items.filter((item) => item !== canonical).length ? items.filter((item) => item !== canonical).join(", ") : "none",
   getCanonicalDurableRunId: () => "durable-run-42",
-  isExpiredApproval: () => false,
+  isExpiredApproval: (approval: any) => approval.expiresAt === "expired",
 }));
 
-describe("ApprovalsRoutePage", () => {
-  it("renders the canonical queue and inspector surfaces", () => {
-    const markup = renderToStaticMarkup(
-      <ApprovalsRoutePage
-        route={{ area: "ops", section: "approvals", theme: "ops" } as any}
-        activeWorkspaceId="default"
-        activeWorkspaceName="Default"
-        pendingApprovals={1}
-        navigate={vi.fn()}
-        setActiveWorkspaceId={vi.fn()}
-      />,
-    );
+function renderPage(extras: Record<string, unknown> = {}) {
+  return (
+    <ApprovalsRoutePage
+      route={{ area: "ops", section: "approvals", theme: "ops", approvalId: "approval-route" } as any}
+      activeWorkspaceId="default"
+      activeWorkspaceName="Default"
+      pendingApprovals={1}
+      navigate={vi.fn()}
+      setActiveWorkspaceId={vi.fn()}
+      {...extras}
+    />
+  );
+}
 
-    expect(markup).toContain("Approval queue");
-    expect(markup).toContain("Replay trail, durable recovery, and runtime linkage");
-    expect(markup).toContain("Review the tool request.");
-    expect(markup).toContain("Approval summary unavailable");
-    expect(markup).toContain("optional explainer could not authenticate");
-    expect(markup).toContain("Approvals stay in the canonical next shell now.");
+function collectText(node: ReactTestInstance | unknown): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (!node || typeof node !== "object" || !("children" in node)) {
+    return "";
+  }
+  return (node as ReactTestInstance).children.map(collectText).join(" ");
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
+  if (!button) {
+    throw new Error(`Missing button ${label}`);
+  }
+  return button;
+}
+
+function findExactButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).trim() === label)[0];
+  if (!button) {
+    throw new Error(`Missing exact button ${label}`);
+  }
+  return button;
+}
+
+function findLink(root: ReactTestInstance, label: string): ReactTestInstance {
+  const link = root.findAll((node) => node.type === "a" && collectText(node).includes(label))[0];
+  if (!link) {
+    throw new Error(`Missing link ${label}`);
+  }
+  return link;
+}
+
+function renderText(element = renderPage()): string {
+  let renderer: ReactTestRenderer | undefined;
+  act(() => {
+    renderer = create(element);
+  });
+  const text = collectText(renderer!.root);
+  act(() => {
+    renderer!.unmount();
+  });
+  return text;
+}
+
+beforeEach(() => {
+  approvalHarness.overrides = {};
+  approvalHarness.setView.mockClear();
+  approvalHarness.setSelectedApprovalId.mockClear();
+  approvalHarness.onResolve.mockClear();
+  approvalHarness.onReplay.mockClear();
+  approvalHarness.loadTracePreview.mockClear();
+  approvalHarness.loadDurableStatus.mockClear();
+  approvalHarness.resumeFromCheckpoint.mockClear();
+  approvalHarness.onRejectAllPending.mockClear();
+});
+
+describe("ApprovalsRoutePage", () => {
+  it("renders the canonical queue, inspector, evidence, recovery, trace, lifecycle, and replay surfaces", () => {
+    const text = renderText();
+
+    expect(text).toContain("Approval queue");
+    expect(text).toContain("Replay trail, durable recovery, and runtime linkage");
+    expect(text).toContain("Review the tool request.");
+    expect(text).toContain("Approval summary unavailable");
+    expect(text).toContain("optional explainer could not authenticate");
+    expect(text).toContain("Worker will resume when approved.");
+    expect(text).toContain("workspace/file.ts");
+    expect(text).toContain("trace breadcrumb");
+    expect(text).toContain("Runtime linkage");
+    expect(text).toContain("Approval effects");
+    expect(text).toContain("Replay trail and pending action");
+    expect(text).toContain("Approvals stay in the canonical next shell now.");
+  });
+
+  it("drives view switching, queue selection, decisions, recovery, trace, live lane, and bulk rejection", async () => {
+    const navigate = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(renderPage({ navigate }));
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "History").props.onClick();
+      findButton(renderer!.root, "Recovery").props.onClick();
+      findButton(renderer!.root, "tool.invoke").props.onClick();
+      findButton(renderer!.root, "Approve now").props.onClick();
+      findExactButton(renderer!.root, "Reject").props.onClick();
+      findButton(renderer!.root, "Load replay trail").props.onClick();
+      findButton(renderer!.root, "Load durable status").props.onClick();
+      findButton(renderer!.root, "Resume paused run").props.onClick();
+      findButton(renderer!.root, "Refresh trace detail").props.onClick();
+    });
+
+    expect(approvalHarness.setView).toHaveBeenCalledWith("history");
+    expect(approvalHarness.setView).toHaveBeenCalledWith("recovery");
+    expect(approvalHarness.setSelectedApprovalId).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(approvalHarness.onResolve).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "approve");
+    expect(approvalHarness.onResolve).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "reject");
+    expect(approvalHarness.onReplay).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(approvalHarness.loadDurableStatus).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(approvalHarness.resumeFromCheckpoint).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    expect(approvalHarness.loadTracePreview).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "corr-1");
+
+    const liveLink = findLink(renderer!.root, "Open live session");
+    await act(async () => {
+      liveLink.props.onClick({ preventDefault: vi.fn() });
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "cowork",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      approvalId: "11111111-1111-4111-8111-111111111111",
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Reject all pending").props.onClick();
+    });
+    const modal = renderer!.root.findByType(ConfirmModal);
+    expect(modal.props.open).toBe(true);
+    await act(async () => {
+      await modal.props.onConfirm();
+    });
+    expect(approvalHarness.onRejectAllPending).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders empty, loading, error, busy, and alternate explainer states", () => {
+    approvalHarness.overrides = {
+      visibleItems: [],
+      selectedApproval: null,
+      pendingItems: [],
+      historyItems: [],
+      recoveryItems: [],
+      hasPendingApprovals: false,
+      bulkResolvePending: true,
+      loading: true,
+      error: "approval queue failed",
+      summary: "",
+    };
+    let text = renderText();
+    expect(text).toContain("approval queue failed");
+
+    approvalHarness.overrides = {
+      visibleItems: [],
+      selectedApproval: null,
+      pendingItems: [],
+      historyItems: [],
+      recoveryItems: [],
+      hasPendingApprovals: false,
+      bulkResolvePending: true,
+      loading: false,
+      error: null,
+      summary: "",
+    };
+    text = renderText();
+    expect(text).toContain("No approvals in this view.");
+    expect(text).toContain("Select a queue item");
+    expect(text).toContain("Rejecting...");
+
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...(approvalHarness.approval as any),
+        explanationError: "unsupported parameter: temperature",
+        followUp: { status: "failed", effectKind: "durable.resume", targetKind: "run", targetId: "run-1" },
+        linkage: {},
+      },
+      replayById: {},
+      lifecycleByApprovalId: {},
+      durableByApprovalId: {},
+      tracePreviewByApprovalId: {},
+    };
+    text = renderText();
+    expect(text).toContain("parameter this model provider does not accept");
+    expect(text).toContain("Wake failed");
+    expect(text).not.toContain("Open live session");
+
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...(approvalHarness.approval as any),
+        explanationError: "provider timed out",
+        followUp: { status: "skipped", effectKind: "noop", targetKind: "run", targetId: "run-2" },
+      },
+      durableByApprovalId: { [(approvalHarness.approval as any).approvalId]: { runId: "run-2", status: "running" } },
+      durableBusyByApprovalId: { [(approvalHarness.approval as any).approvalId]: true },
+    };
+    text = renderText();
+    expect(text).toContain("Explainer detail: provider timed out");
+    expect(text).toContain("Wake skipped");
+    expect(text).toContain("Loading...");
+  });
+
+  it("renders alternate approval states, metadata fallbacks, and optional inspector sections", async () => {
+    const navigate = vi.fn();
+    const base = approvalHarness.approval as any;
+    const approved = {
+      ...base,
+      approvalId: "approval-approved",
+      kind: "safe.operation",
+      status: "approved",
+      riskLevel: "safe",
+      explanationStatus: "pending",
+      explanationError: "   ",
+      followUp: {
+        status: "running",
+        effectKind: "durable.resume",
+        targetKind: "run",
+        targetId: "run-7",
+      },
+      linkage: {
+        sessionId: "session-chat",
+        turnId: "turn-chat",
+        originSurface: "email",
+      },
+    };
+    const rejected = {
+      ...base,
+      approvalId: "approval-rejected",
+      kind: "caution.operation",
+      status: "rejected",
+      riskLevel: "caution",
+      explanationStatus: "completed",
+      explanationError: "",
+      explanation: null,
+      resolutionNote: "Rejected after review.",
+      followUp: null,
+      linkage: {},
+      preview: { noEvidence: true },
+      payload: {},
+    };
+    approvalHarness.overrides = {
+      view: "history",
+      visibleItems: [approved, rejected],
+      selectedApproval: approved,
+      replayById: {
+        [approved.approvalId]: {
+          approval: {
+            ...approved,
+            linkage: { correlationId: "corr-from-replay-approval", traceId: "trace-from-replay-approval" },
+          },
+          pendingAction: null,
+          events: [],
+          effects: [],
+        },
+      },
+      lifecycleByApprovalId: {
+        [approved.approvalId]: {
+          approval: approved,
+          canonical: null,
+          linked: { sessionIds: [], taskIds: [], runIds: [] },
+          approvalEffects: [],
+        },
+      },
+      durableByApprovalId: {},
+      tracePreviewByApprovalId: {},
+    };
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(renderPage({ navigate }));
+    });
+    let text = collectText(renderer!.root);
+    expect(text).toContain("approved");
+    expect(text).toContain("rejected");
+    expect(text).toContain("safe");
+    expect(text).toContain("caution");
+    expect(text).toContain("Approval summary unavailable");
+    expect(text).toContain("optional plain-English summary");
+    expect(text).toContain("Worker wake running");
+    expect(text).not.toContain("Reject all pending");
+    expect(text).not.toContain("Approve now");
+
+    const liveLink = findLink(renderer!.root, "Open live session");
+    await act(async () => {
+      liveLink.props.onClick({ preventDefault: vi.fn() });
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "chat",
+      sessionId: "session-chat",
+      turnId: "turn-chat",
+      approvalId: "approval-approved",
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Load trace detail").props.onClick();
+    });
+    expect(approvalHarness.loadTracePreview).toHaveBeenCalledWith("approval-approved", "corr-from-replay-approval");
+
+    approvalHarness.overrides = {
+      view: "pending",
+      visibleItems: [rejected],
+      selectedApproval: rejected,
+      replayById: {},
+      lifecycleByApprovalId: {},
+      durableByApprovalId: {},
+      tracePreviewByApprovalId: {},
+    };
+    text = renderText();
+    expect(text).toContain("Rejected after review.");
+    expect(text).not.toContain("Operator evidence");
+
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...base,
+        approvalId: "approval-weird-follow-up",
+        status: "pending",
+        riskLevel: "danger",
+        explanationStatus: "unknown",
+        explanationError: "",
+        followUp: { status: "mystery" },
+        linkage: {},
+        payload: { traceMeta: { correlationId: "corr-from-payload-only", traceId: "trace-from-payload-only" } },
+        preview: {},
+      },
+      replayById: {},
+      lifecycleByApprovalId: {},
+      durableByApprovalId: {},
+      tracePreviewByApprovalId: {},
+    };
+    text = renderText();
+    expect(text).toContain("Follow-up status unknown");
+    expect(text).toContain("unknown");
+
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...base,
+        approvalId: "approval-trace-without-correlation",
+        explanationError: "",
+        linkage: {},
+        payload: { traceMeta: { traceId: "trace-only" } },
+        preview: {},
+      },
+      replayById: {},
+      lifecycleByApprovalId: {},
+      durableByApprovalId: {},
+      tracePreviewByApprovalId: {},
+    };
+    text = renderText();
+    expect(text).toContain("trace-only");
+    expect(text).not.toContain("Load trace detail");
+
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...base,
+        approvalId: "approval-expired",
+        status: "pending",
+        riskLevel: "nuclear",
+        explanationStatus: undefined,
+        explanationError: "",
+        followUp: { status: "none" },
+        expiresAt: "expired",
+      },
+      replayById: {},
+      lifecycleByApprovalId: {},
+      durableByApprovalId: {},
+      tracePreviewByApprovalId: {},
+    };
+    text = renderText();
+    expect(text).toContain("expired");
+    expect(text).not.toContain("No follow-up");
   });
 });

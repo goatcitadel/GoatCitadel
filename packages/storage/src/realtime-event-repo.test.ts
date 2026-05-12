@@ -418,4 +418,55 @@ describe("RealtimeEventRepository", () => {
     }
     assert.equal(repo.list(200).length, 100);
   });
+
+  it("defensively filters malformed adapter rows and stored realtime envelopes", () => {
+    const repo = createRepo();
+    const internal = repo as unknown as {
+      allocateSequenceStmt: { get: (...args: unknown[]) => unknown };
+      listLatestStmt: { all: (...args: unknown[]) => unknown };
+      boundsStmt: { get: (...args: unknown[]) => unknown };
+      countStmt: { get: (...args: unknown[]) => unknown };
+    };
+
+    internal.allocateSequenceStmt = { get: () => null };
+    const first = repo.append(
+      "connector_sync_completed",
+      "integrations",
+      { connectorId: "connector-1" },
+      undefined,
+      "2026-02-28T00:00:00.000Z",
+    );
+    assert.equal(first.sequence, 1);
+
+    internal.listLatestStmt = {
+      all: () => [
+        null,
+        {
+          event_id: "event-invalid-envelope",
+          sequence: 10,
+          event_type: "custom",
+          source: "test",
+          payload_json: JSON.stringify({
+            __gcEventClass: "unknown",
+            __gcEventAuthority: "unknown",
+            __gcEventLinks: ["bad"],
+            keep: true,
+          }),
+          created_at: "2026-02-28T00:00:01.000Z",
+        },
+      ],
+    };
+    const listed = repo.list(10);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.eventClass, undefined);
+    assert.equal(listed[0]?.eventAuthority, undefined);
+    assert.equal(listed[0]?.links, undefined);
+    assert.deepEqual(listed[0]?.payload, { keep: true });
+
+    internal.boundsStmt = { get: () => undefined };
+    assert.deepEqual(repo.getSequenceBounds(), { oldestSequence: undefined, newestSequence: undefined });
+
+    internal.countStmt = { get: () => ({ count: "bad" }) };
+    assert.equal(repo.pruneToMaxRows(10), 0);
+  });
 });

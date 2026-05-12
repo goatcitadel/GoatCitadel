@@ -70,5 +70,12 @@ describe("buildModelCommandSuggestions", () => {
         providers,
       }).map((item) => item.command),
     ).toEqual(["/model anthropic/claude-sonnet-4.5"]);
+
+    expect(
+      buildModelCommandSuggestions({
+        draft: "/model claude-",
+        providers,
+      }).map((item) => item.command),
+    ).toEqual(["/model anthropic/claude-sonnet-4.5", "/model anthropic/claude-opus-4.1"]);
   });
 });

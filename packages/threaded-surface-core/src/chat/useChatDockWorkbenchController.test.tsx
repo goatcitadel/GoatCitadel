@@ -90,13 +90,17 @@ const thread = {
 
 let latest: ReturnType<typeof useChatDockWorkbenchController> | null = null;
 
-function Harness(props: { messageMode?: "chat" | "cowork" | "code"; selectedSessionId?: string | null }) {
+function Harness(props: {
+  messageMode?: "chat" | "cowork" | "code";
+  selectedSessionId?: string | null;
+  selectedTurn?: ChatThreadResponse["turns"][number] | null;
+}) {
   const selectedSessionId = props.selectedSessionId === undefined ? "session-1" : props.selectedSessionId;
   latest = useChatDockWorkbenchController({
     messageMode: props.messageMode ?? "code",
     selectedSessionId,
     selectedSession: selectedSessionId ? { projectId: "project-1" } : null,
-    selectedTurn: null,
+    selectedTurn: props.selectedTurn ?? null,
     thread,
     messages: [
       { messageId: "message-1", role: "user", content: "Plan", createdAt: "2026-05-01T00:00:00Z" },
@@ -137,6 +141,11 @@ describe("useChatDockWorkbenchController", () => {
     expect(latest!.dockSectionStyle("session" as never)).toEqual({ order: 0 });
     expect(latest!.dockSectionStyle("artifact" as never)).toEqual({ order: 0 });
     expect(latest!.coworkItems.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      await hookMocks.useRefreshSubscription.mock.calls[0]?.[1]?.();
+    });
+    expect(latest!.orchestrationRun).toBeNull();
   });
 
   it("resets dock state when the message mode changes and disables workbench outside work surfaces", async () => {
@@ -162,5 +171,25 @@ describe("useChatDockWorkbenchController", () => {
     expect(latest!.orchestrationCheckpoints).toEqual([]);
     expect(latest!.orchestrationLoading).toBe(false);
     expect(latest!.orchestrationError).toBeNull();
+  });
+
+  it("uses the selected orchestration turn ahead of the latest workflow turn", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          messageMode="cowork"
+          selectedTurn={{
+            ...thread.turns[0],
+            trace: {
+              ...thread.turns[0]!.trace,
+              orchestration: { runId: "selected-run", status: "completed", steps: [] },
+            },
+          }}
+        />,
+      );
+    });
+
+    expect(latest!.activeWorkflowTurn?.turnId).toBe("turn-1");
+    expect(latest!.latestOrchestration).toMatchObject({ runId: "selected-run" });
   });
 });

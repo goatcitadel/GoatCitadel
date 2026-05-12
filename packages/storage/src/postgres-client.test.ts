@@ -163,6 +163,25 @@ describe("PostgresDatabaseClient", () => {
     ]);
   });
 
+  it("skips required schema checks before the chat prefs repair migration is present", async () => {
+    const pool = new FakePool([
+      [],
+      [{ server_encoding: "UTF8" }],
+      [{ ok: 1 }],
+      [{ version: 1, name: POSTGRES_MIGRATIONS[0]!.name }],
+    ]);
+    const client = new PostgresDatabaseClient({ database: "goatcitadel" }, { pool: asPool(pool) });
+
+    const result = await client.healthCheck();
+
+    assert.equal(result.reachable, true);
+    assert.deepEqual(result.issues, []);
+    assert.equal(
+      pool.calls.some((call) => call.sql.includes("information_schema.columns")),
+      false,
+    );
+  });
+
   it("returns unreachable health results and closes pools cleanly", async () => {
     const pool = new FakePool([new Error("offline")]);
     const client = new PostgresDatabaseClient({ database: "goatcitadel" }, { pool: asPool(pool) });

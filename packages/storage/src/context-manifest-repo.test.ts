@@ -102,4 +102,54 @@ describe("ContextManifestRepository", () => {
     const repo = createRepo();
     assert.equal(repo.maybeGetDetailByTurn("missing-turn"), undefined);
   });
+
+  it("throws for missing required reads and filters malformed manifest adapter rows", () => {
+    const repo = createRepo();
+
+    assert.throws(() => repo.getByTurn("missing-turn"), /Context manifest missing-turn not found/);
+
+    const manifest = repo.ensure({
+      scope: "chat_turn",
+      turnId: "turn-malformed",
+      sessionId: "session-1",
+      createdAt: "2026-04-01T01:00:00.000Z",
+    });
+    repo.appendEntry({
+      manifestId: manifest.manifestId,
+      kind: "memory_context",
+      entryIndex: 0,
+      title: "Tool result",
+      sourceRef: "tool:1",
+      contentText: "Output",
+      metadata: { ok: true },
+      createdAt: "2026-04-01T01:00:01.000Z",
+    });
+
+    const detail = repo.maybeGetDetailByTurn("turn-malformed");
+    assert.equal(detail?.entries[0]?.title, "Tool result");
+    assert.equal(detail?.entries[0]?.metadata.ok, true);
+
+    const internal = repo as unknown as {
+      getByTurnStmt: { get: (...args: unknown[]) => unknown };
+      listEntriesStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.getByTurnStmt = { get: () => null };
+    assert.equal(repo.maybeGetDetailByTurn("bad-row"), undefined);
+
+    internal.getByTurnStmt = {
+      get: () => ({
+        manifest_id: "manifest-1",
+        scope: "chat_turn",
+        turn_id: "turn-1",
+        session_id: null,
+        task_id: null,
+        created_at: "2026-04-01T01:00:00.000Z",
+        updated_at: "2026-04-01T01:00:00.000Z",
+        entry_count: 1,
+      }),
+    };
+    internal.listEntriesStmt = { all: () => [null] };
+    assert.deepEqual(repo.maybeGetDetailByTurn("turn-1")?.entries, []);
+    assert.deepEqual(repo.listEntries("manifest-1"), []);
+  });
 });

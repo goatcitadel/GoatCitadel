@@ -342,5 +342,17 @@ describe("AssemblyRepository", () => {
     };
     assert.equal(repo.upsertReputation(reputation).modelRef, reputation.modelRef);
     assert.equal(repo.listReputations(0)[0]?.modelRef, reputation.modelRef);
+
+    const internal = repo as unknown as {
+      listRoundsStmt: { all: (...args: unknown[]) => unknown };
+      listArtifactsStmt: { all: (...args: unknown[]) => unknown };
+      listReputationsStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listRoundsStmt = { all: () => [null] };
+    internal.listArtifactsStmt = { all: () => [null] };
+    internal.listReputationsStmt = { all: () => ({ not: "an array" }) };
+    assert.deepEqual(repo.listRounds(runId), []);
+    assert.deepEqual(repo.listArtifacts(runId), []);
+    assert.deepEqual(repo.listReputations(), []);
   });
 });

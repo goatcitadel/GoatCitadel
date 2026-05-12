@@ -153,13 +153,10 @@ export class RealtimeEventRepository {
   public list(limit: number, cursor?: string): RealtimeEvent[] {
     const sequenceCursor = parseSequenceCursor(cursor);
     if (sequenceCursor !== undefined) {
-      const rows =
-        sequenceCursor > 0
-          ? this.listBySequenceStmt.all({
-              limit,
-              cursorSequence: sequenceCursor,
-            })
-          : this.listLatestStmt.all({ limit });
+      const rows = this.listBySequenceStmt.all({
+        limit,
+        cursorSequence: sequenceCursor,
+      });
       return toRealtimeEventRows(rows).map(mapRealtimeEventRow);
     }
 
@@ -513,12 +510,9 @@ function normalizeRealtimeLinks(links?: RealtimeEvent["links"]): RealtimeEvent["
 }
 
 function pickString(payload: Record<string, unknown>, keys: string[]): string | undefined {
-  const stack: unknown[] = [payload];
+  const stack: object[] = [payload];
   while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || typeof current !== "object") {
-      continue;
-    }
+    const current = stack.pop()!;
     const record = current as Record<string, unknown>;
     for (const key of keys) {
       const candidate = record[key];

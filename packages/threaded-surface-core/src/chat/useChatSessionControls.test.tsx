@@ -184,6 +184,34 @@ describe("useChatSessionControls", () => {
       renderer.update(<Harness key="selected" session={selectedSession} />);
     });
     await expect(latest!.controls.ensureSession()).resolves.toBe(selectedSession);
+
+    await act(async () => {
+      renderer.update(<Harness key="new" session={null} selectedSessionId={null} historyView="archived" />);
+    });
+    let created: ChatSessionRecord | null = null;
+    await act(async () => {
+      created = await latest!.controls.ensureSession();
+    });
+    expect(created).toMatchObject({ sessionId: "session-new" });
+    expect(apiMocks.createChatSession).toHaveBeenLastCalledWith(
+      { workspaceId: "workspace-1", mode: "chat" },
+      { originSurface: "chat" },
+    );
+    expect(latest!.snapshot()).toMatchObject({ selectedSessionId: "session-new", historyView: "active" });
+
+    await act(async () => {
+      renderer.update(
+        <Harness key="new-project" session={null} selectedSessionId={null} selectedProjectId="project-1" />,
+      );
+    });
+    await act(async () => {
+      created = await latest!.controls.ensureSession();
+    });
+    expect(created).toMatchObject({ sessionId: "session-new" });
+    expect(apiMocks.createChatSession).toHaveBeenLastCalledWith(
+      { workspaceId: "workspace-1", projectId: "project-1", mode: "chat" },
+      { originSurface: "chat" },
+    );
   });
 
   it("creates projects, archives workspace chats, and persists session metadata controls", async () => {
@@ -313,5 +341,105 @@ describe("useChatSessionControls", () => {
     await expect(
       latest!.controls.handleImportCodeProject({ sourceType: "local_folder", sourcePath: "F:/code/repo" }),
     ).rejects.toThrow("Select a Code session before importing a project source.");
+  });
+
+  it("surfaces repository failures for session organization controls", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness session={selectedSession} />);
+    });
+
+    await act(async () => {
+      latest!.controls.handleCreateProject();
+      await Promise.resolve();
+    });
+    expect(apiMocks.createChatProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      latest!.controls.setProjectName("Broken Project");
+      await Promise.resolve();
+    });
+    apiMocks.createChatProject.mockRejectedValueOnce(new Error("project failed"));
+    await act(async () => {
+      latest!.controls.handleCreateProject();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("project failed");
+
+    apiMocks.archiveWorkspaceChatSessions.mockRejectedValueOnce(new Error("workspace archive failed"));
+    await act(async () => {
+      await latest!.controls.handleArchiveWorkspaceMissionChats();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("workspace archive failed");
+
+    apiMocks.updateChatSession.mockRejectedValueOnce(new Error("rename failed"));
+    await act(async () => {
+      await latest!.controls.handleRenameSession();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("rename failed");
+
+    apiMocks.updateChatSession.mockRejectedValueOnce(new Error("organization failed"));
+    await act(async () => {
+      await latest!.controls.handleSaveOrganization();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("organization failed");
+
+    apiMocks.pinChatSession.mockRejectedValueOnce(new Error("pin failed"));
+    await act(async () => {
+      await latest!.controls.handleTogglePinSession();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("pin failed");
+
+    apiMocks.archiveChatSession.mockRejectedValueOnce(new Error("archive failed"));
+    await act(async () => {
+      await latest!.controls.handleToggleArchiveSession();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("archive failed");
+
+    act(() => {
+      latest!.controls.handleDeleteSession("Launch Room");
+    });
+    apiMocks.deleteChatSession.mockRejectedValueOnce(new Error("delete failed"));
+    await act(async () => {
+      await latest!.controls.confirmDeleteSession();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("delete failed");
+
+    apiMocks.assignChatSessionProject.mockRejectedValueOnce(new Error("assign failed"));
+    await act(async () => {
+      await latest!.controls.handleAssignProject("project-2");
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("assign failed");
+
+    apiMocks.importChatProject.mockRejectedValueOnce(new Error("import failed"));
+    await act(async () => {
+      await expect(
+        latest!.controls.handleImportCodeProject({ sourceType: "local_folder", sourcePath: "F:/code/repo" }),
+      ).rejects.toThrow("import failed");
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("import failed");
+
+    apiMocks.setChatSessionBinding.mockRejectedValueOnce(new Error("binding failed"));
+    await act(async () => {
+      await latest!.controls.handleSaveExternalBinding();
+    });
+    expect(latest!.setError).toHaveBeenCalledWith("binding failed");
+
+    await act(async () => {
+      renderer.update(<Harness session={null} selectedSessionId={null} />);
+    });
+    act(() => {
+      latest!.controls.handleDeleteSession("No session");
+    });
+    await act(async () => {
+      await latest!.controls.confirmDeleteSession();
+      await latest!.controls.handleRenameSession();
+      await latest!.controls.handleSaveOrganization();
+      await latest!.controls.handleTogglePinSession();
+      await latest!.controls.handleToggleArchiveSession();
+      await latest!.controls.handleAssignProject("project-2");
+      await latest!.controls.handleSaveExternalBinding();
+    });
   });
 });

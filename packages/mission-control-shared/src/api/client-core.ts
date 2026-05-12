@@ -163,11 +163,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
               status: res.status,
             },
           });
-          await sleep(
-            SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ??
-              SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ??
-              250,
-          );
+          await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? 250);
           continue;
         }
         setDevDiagnosticsLastRequestError(`${method} ${path}: ${res.status}`);
@@ -222,11 +218,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
             error: lastError.message,
           },
         });
-        await sleep(
-          SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ??
-            SAFE_REQUEST_RETRY_DELAYS_MS[SAFE_REQUEST_RETRY_DELAYS_MS.length - 1] ??
-            250,
-        );
+        await sleep(SAFE_REQUEST_RETRY_DELAYS_MS[attempt] ?? 250);
         continue;
       }
       if (lastError.kind === "network") {
@@ -683,6 +675,7 @@ function normalizeStoredGatewayAuthState(value: unknown): GatewayAuthState | und
         : undefined,
     token: trimStoredAuthField(candidate.token),
     username: trimStoredAuthField(candidate.username),
+    password: trimStoredAuthField(candidate.password),
     tokenQueryParam: trimStoredAuthField(candidate.tokenQueryParam) ?? "access_token",
   };
   return normalized.mode || normalized.token || normalized.username ? normalized : undefined;
@@ -693,6 +686,7 @@ function buildPersistedGatewayAuthState(state: GatewayAuthState): GatewayAuthSta
     mode: state.mode,
     token: trimStoredAuthField(state.token),
     username: trimStoredAuthField(state.username),
+    password: trimStoredAuthField(state.password),
     tokenQueryParam: trimStoredAuthField(state.tokenQueryParam) ?? "access_token",
   };
 }

@@ -66,5 +66,45 @@ describe("IntegrationConnectionRepository", () => {
     const deleted = repo.delete(created.connectionId);
     assert.equal(deleted, true);
     assert.equal(repo.list("channel").length, 0);
+    assert.equal(repo.delete(created.connectionId), false);
+    assert.throws(() => repo.get(created.connectionId), /Integration connection .* not found/);
+  });
+
+  it("maps plugin fields and filters malformed adapter rows", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      catalogId: "tool.github",
+      kind: "productivity",
+      key: "github",
+      label: "GitHub",
+      enabled: false,
+      status: "disconnected",
+      config: { scopes: ["repo"] },
+      pluginId: "github",
+      pluginVersion: "1.0.0",
+      pluginEnabled: true,
+    });
+
+    assert.equal(created.pluginId, "github");
+    assert.equal(created.pluginVersion, "1.0.0");
+    assert.equal(created.pluginEnabled, true);
+
+    const updated = repo.update(created.connectionId, {
+      enabled: true,
+      status: "connected",
+      lastSyncAt: "2026-03-29T00:00:00.000Z",
+      lastError: null as unknown as string | undefined,
+    });
+    assert.equal(updated.lastSyncAt, "2026-03-29T00:00:00.000Z");
+    assert.equal(updated.lastError, undefined);
+
+    const internal = repo as unknown as {
+      listStmt: { all: (...args: unknown[]) => unknown };
+      listByKindStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listStmt = { all: () => ({ not: "an array" }) };
+    internal.listByKindStmt = { all: () => [null] };
+    assert.deepEqual(repo.list(), []);
+    assert.deepEqual(repo.list("productivity"), []);
   });
 });

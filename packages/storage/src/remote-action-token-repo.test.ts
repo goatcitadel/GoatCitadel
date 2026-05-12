@@ -64,5 +64,35 @@ describe("RemoteActionTokenRepository", () => {
     assert.equal(consumed.state, "consumed");
     assert.equal(consumed.consumedAt, "2026-03-20T10:00:00.000Z");
     assert.equal(consumed.consumedBy, "connector:mission-control");
+    const expired = repo.updateState(created.tokenId, "expired");
+    assert.equal(expired.consumedAt, "2026-03-20T10:00:00.000Z");
+    assert.equal(expired.consumedBy, "connector:mission-control");
+  });
+
+  it("validates required token fields and reports missing reads", () => {
+    const repo = createRepo();
+
+    assert.throws(
+      () =>
+        repo.create({
+          tokenHash: "   ",
+          actionType: "approval.resolve",
+          connectorId: "mission-control",
+          expiresAt: "2026-03-21T00:00:00.000Z",
+        }),
+      /tokenHash is required/,
+    );
+    assert.throws(
+      () =>
+        repo.create({
+          tokenHash: "hash-missing-connector",
+          actionType: "approval.resolve",
+          connectorId: "   ",
+          expiresAt: "2026-03-21T00:00:00.000Z",
+        }),
+      /connectorId is required/,
+    );
+    assert.throws(() => repo.get("missing-token"), /Remote action token missing-token not found/);
+    assert.throws(() => repo.updateState("missing-token", "consumed"), /Remote action token missing-token not found/);
   });
 });

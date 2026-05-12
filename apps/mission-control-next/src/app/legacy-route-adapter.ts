@@ -55,9 +55,6 @@ export function adaptLegacyUrl(input: string | URL): AppRoute | null {
     if (legacyTab === "scheduler") {
       return normalizeAppRoute({ area: "ops", section: "schedules", ...ids });
     }
-    if (legacyTab === "improvement") {
-      return normalizeAppRoute({ area: "ops", section: "improvement", ...ids });
-    }
     return normalizeAppRoute({ area: "ops", section: "activity", ...ids });
   }
 
@@ -66,12 +63,6 @@ export function adaptLegacyUrl(input: string | URL): AppRoute | null {
   }
 
   if (space === "observe" && page === "artifacts") {
-    if (legacyTab === "files") {
-      return normalizeAppRoute({ area: "library", section: "files", ...ids });
-    }
-    if (legacyTab === "generated") {
-      return normalizeAppRoute({ area: "library", section: "artifacts", ...ids });
-    }
     return normalizeAppRoute({ area: "library", section: "memory", ...ids });
   }
 
@@ -102,14 +93,8 @@ export function adaptLegacyUrl(input: string | URL): AppRoute | null {
   }
 
   if (space === "configure" && page === "agents") {
-    if (legacyTab === "board" || legacyTab === "herd-live" || legacyTab === "herd-lab") {
+    if (legacyTab === "board") {
       return normalizeAppRoute({ area: "cowork", section: "board", ...ids });
-    }
-    if (legacyTab === "skills") {
-      return normalizeAppRoute({ area: "library", section: "skills", ...ids });
-    }
-    if (legacyTab === "catalog") {
-      return normalizeAppRoute({ area: "library", section: "agents", view: "catalog", ...ids });
     }
     return normalizeAppRoute({ area: "library", section: "agents", ...ids });
   }
@@ -210,14 +195,8 @@ function translateSettingsTab(tab?: string): AppRoute["section"] {
       return "access";
     case "budget":
       return "budget";
-    case "onboarding":
-      return "onboarding";
     case "runtime":
       return "runtime";
-    case "workspaces":
-      return "workspaces";
-    case "addons":
-      return "addons";
     default:
       return "general";
   }

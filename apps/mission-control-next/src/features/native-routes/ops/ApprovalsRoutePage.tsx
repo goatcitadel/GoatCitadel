@@ -654,8 +654,6 @@ function formatApprovalFollowUp(status: NonNullable<ApprovalRequest["followUp"]>
       return "Wake skipped";
     case "failed":
       return "Wake failed";
-    case "none":
-      return "No follow-up";
   }
   return "Follow-up status unknown";
 }

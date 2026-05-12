@@ -224,4 +224,45 @@ describe("ApprovalEffectRepository", () => {
     assert.equal(claimedRecovered?.effectId, expired.effectId);
     assert.equal(claimedRecovered?.attemptCount, 1);
   });
+
+  it("maps legacy wake-effect rows into current approval effect records", () => {
+    const { repo } = createRepoWithDb();
+    (repo as unknown as { getByIdStmt: { get: () => unknown } }).getByIdStmt = {
+      get: () => ({
+        effect_id: "effect-legacy",
+        approval_id: "approval-legacy",
+        effect_kind: "wake_durable_run",
+        target_kind: null,
+        target_id: "run-legacy",
+        idempotency_key: null,
+        status: "pending",
+        outcome: "resumed",
+        detail: "legacy detail",
+        details_json: '{"source":"legacy"}',
+        attempt_count: 0,
+        payload_json: '{"payload":true}',
+        result_json: null,
+        last_error: null,
+        claimed_by: null,
+        claimed_at: null,
+        lease_expires_at: null,
+        version: null,
+        created_at: "2026-03-21T11:00:00.000Z",
+        updated_at: "2026-03-21T11:00:00.000Z",
+        completed_at: null,
+      }),
+    };
+
+    const legacy = repo.get("effect-legacy");
+
+    assert.equal(legacy.effectKind, "approval_wait_wake");
+    assert.equal(legacy.targetKind, "durable_run");
+    assert.equal(legacy.idempotencyKey, "approval-legacy:approval_wait_wake:durable_run:run-legacy");
+    assert.deepEqual(legacy.payload, { payload: true });
+    assert.deepEqual(legacy.result, {
+      source: "legacy",
+      outcome: "resumed",
+      detail: "legacy detail",
+    });
+  });
 });

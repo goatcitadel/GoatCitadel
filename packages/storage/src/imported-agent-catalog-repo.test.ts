@@ -137,4 +137,42 @@ describe("ImportedAgentCatalogRepository", () => {
     assert.equal(retired.state, "retired");
     assert.equal(retired.retiredAt, "2026-04-20T14:00:00.000Z");
   });
+
+  it("filters by lifecycle and parse status while validating missing or unsafe inputs", () => {
+    const repo = createRepo();
+    repo.upsertMany([
+      buildRecord(),
+      buildRecord({
+        entryId: "catalog-active",
+        state: "active",
+        activatedAt: "2026-04-20T13:00:00.000Z",
+        definition: {
+          ...buildRecord().definition,
+          definitionId: "definition-active",
+          slug: "active-agent",
+          provenance: {
+            ...buildRecord().definition.provenance,
+            path: "engineering/active-agent.md",
+            sha256: "sha-active",
+          },
+        },
+      }),
+    ]);
+
+    assert.throws(
+      () => repo.get("missing-catalog-entry"),
+      /Imported agent catalog entry missing-catalog-entry not found/,
+    );
+    assert.equal(repo.list({ state: "active" }).length, 1);
+    assert.equal(repo.list({ parseStatus: "supported" }).length, 2);
+    assert.equal(repo.list({ state: "all", parseStatus: "all", limit: Number.NaN }).length, 2);
+    assert.throws(() => repo.list({ workspaceId: "bad/workspace" }), /workspaceId contains unsupported characters/);
+    assert.throws(() => repo.upsertMany([buildRecord({ entryId: " " })]), /entryId is required/);
+
+    const internal = repo as unknown as {
+      listDivisionsStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listDivisionsStmt = { all: () => [{ division: " engineering " }, { division: "" }, { division: 42 }] };
+    assert.deepEqual(repo.listDivisions("default"), ["engineering"]);
+  });
 });

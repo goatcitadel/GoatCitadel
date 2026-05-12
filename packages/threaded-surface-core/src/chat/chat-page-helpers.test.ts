@@ -125,6 +125,13 @@ describe("chat-page-helpers", () => {
     expect(resolveProviderModelSelection({ provider, loadedModels: [], selectedModel: "custom-model" })).toMatchObject({
       model: "custom-model",
     });
+    expect(
+      resolveProviderModelSelection({
+        provider: { providerId: "openrouter", label: "OpenRouter", models: ["openrouter/default"] },
+        loadedModels: [],
+        selectedModel: "anthropic/claude-sonnet-4",
+      }),
+    ).toMatchObject({ model: "anthropic/claude-sonnet-4" });
     expect(resolveProviderModelSelection({ provider, loadedModels: [], selectedModel: " " })).toMatchObject({
       model: "gpt-5.5",
       modelNormalized: true,

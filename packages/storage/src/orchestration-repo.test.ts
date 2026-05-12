@@ -29,6 +29,13 @@ function createRepo(): OrchestrationRepository {
   return new OrchestrationRepository(db);
 }
 
+function createRepoWithDb(): { db: ReturnType<typeof createDatabase>; repo: OrchestrationRepository } {
+  const dbPath = path.join(os.tmpdir(), `goatcitadel-orch-${randomUUID()}.db`);
+  createdFiles.push(dbPath);
+  const db = createDatabase({ dbPath });
+  return { db, repo: new OrchestrationRepository(db) };
+}
+
 const plan: OrchestrationPlan = {
   planId: "plan-1",
   goal: "test",
@@ -147,5 +154,76 @@ describe("OrchestrationRepository", () => {
     assert.equal(updated?.executionState, "resume_requested");
     assert.equal(stale, undefined);
     assert.equal(repo.getRun("run-cas").pendingApprovedBy, undefined);
+  });
+
+  it("handles missing lookups, corrupted JSON fallbacks, cursors, and run events", () => {
+    const { db, repo } = createRepoWithDb();
+
+    assert.throws(() => repo.getPlan("missing-plan"), /Orchestration plan missing-plan not found/);
+    assert.throws(() => repo.getRun("missing-run"), /Orchestration run missing-run not found/);
+    assert.equal(repo.findLatestRunByPlan("missing-plan"), undefined);
+
+    repo.upsertPlan(plan);
+    db.prepare("UPDATE orchestration_plans SET plan_json = ? WHERE plan_id = ?").run("{bad", plan.planId);
+    assert.equal(repo.getPlan(plan.planId).goal, "[corrupted orchestration plan payload]");
+
+    const run: OrchestrationRun = {
+      runId: "run-cursor",
+      planId: "plan-1",
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      endedAt: "2026-02-27T00:10:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 1.25,
+      totalIterations: 2,
+      pendingCostIncrementUsd: undefined,
+      lastError: "previous warning",
+    };
+    repo.createRun(run);
+    assert.equal(repo.findLatestRunByPlan("plan-1")?.runId, "run-cursor");
+
+    const firstCheckpoint = repo.createCheckpoint({
+      runId: run.runId,
+      planId: run.planId,
+      waveId: "wave-1",
+      phaseId: "phase-1",
+      checkpointKind: "phase_executed",
+      gitRef: "abc123",
+      details: { ok: true },
+    });
+    const secondCheckpoint = repo.createCheckpoint({
+      runId: run.runId,
+      planId: run.planId,
+      checkpointKind: "run_completed",
+      details: { ok: true },
+    });
+    db.prepare("UPDATE orchestration_checkpoints SET created_at = ? WHERE checkpoint_id = ?").run(
+      "2026-02-27T00:00:01.000Z",
+      firstCheckpoint.checkpointId,
+    );
+    db.prepare("UPDATE orchestration_checkpoints SET created_at = ? WHERE checkpoint_id = ?").run(
+      "2026-02-27T00:00:02.000Z",
+      secondCheckpoint.checkpointId,
+    );
+    db.prepare("UPDATE orchestration_checkpoints SET details_json = ? WHERE checkpoint_id = ?").run(
+      "{bad",
+      secondCheckpoint.checkpointId,
+    );
+
+    assert.deepEqual(
+      repo.listCheckpoints(run.runId, { limit: 0 }).map((item) => item.checkpointId),
+      [firstCheckpoint.checkpointId],
+    );
+    const afterCursor = repo.listCheckpoints(run.runId, { cursor: "2026-02-27T00:00:01.000Z", limit: 10 });
+    assert.deepEqual(afterCursor[0]?.details, {});
+
+    repo.appendRunEvent(run.runId, "coverage.event", { ok: true });
+    assert.equal(
+      db
+        .prepare("SELECT COUNT(1) AS count FROM orchestration_events WHERE run_id = ?")
+        .get<{ count: number }>(run.runId)?.count,
+      1,
+    );
   });
 });

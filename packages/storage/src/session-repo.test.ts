@@ -197,4 +197,37 @@ describe("SessionRepository", () => {
       },
     ]);
   });
+
+  it("guards missing sessions, malformed cursors, and unexpected statement row shapes", () => {
+    const repo = createRepo();
+    const now = "2026-02-27T10:00:00.000Z";
+
+    assert.throws(() => repo.getBySessionKey("missing-key"), /Session missing-key not found/);
+    assert.throws(() => repo.getBySessionId("missing-id"), /Session missing-id not found/);
+
+    repo.upsert({
+      sessionId: "session-a",
+      sessionKey: "discord:me:a",
+      kind: "dm",
+      channel: "discord",
+      account: "me",
+      timestamp: now,
+    });
+
+    assert.equal(repo.list(10, now).length, 0);
+    assert.equal(repo.list(10, `${now}|`).length, 1);
+
+    const internal = repo as unknown as {
+      listStmt: { all: (...args: unknown[]) => unknown };
+      listOperatorSummariesStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listStmt = { all: () => [null] };
+    assert.throws(() => repo.list(10), /Unexpected sessions row shape/);
+
+    internal.listOperatorSummariesStmt = { all: () => [{ operator_id: "operator-a", session_count: "1" }] };
+    assert.throws(
+      () => repo.listOperatorSummaries("2026-02-27T09:00:00.000Z"),
+      /Unexpected operator summary row shape/,
+    );
+  });
 });
