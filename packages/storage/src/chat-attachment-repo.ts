@@ -204,20 +204,39 @@ function isChatAttachmentRow(value: unknown): value is ChatAttachmentRow {
     (typeof value.project_id === "string" || value.project_id === null) &&
     typeof value.file_name === "string" &&
     typeof value.mime_type === "string" &&
-    (typeof value.media_type === "string" || value.media_type === null) &&
+    (isMediaType(value.media_type) || value.media_type === null) &&
     typeof value.size_bytes === "number" &&
     typeof value.sha256 === "string" &&
     typeof value.storage_rel_path === "string" &&
-    typeof value.extract_status === "string" &&
+    isExtractStatus(value.extract_status) &&
     (typeof value.extract_preview === "string" || value.extract_preview === null) &&
     (typeof value.thumbnail_rel_path === "string" || value.thumbnail_rel_path === null) &&
     (typeof value.ocr_text === "string" || value.ocr_text === null) &&
     (typeof value.transcript_text === "string" || value.transcript_text === null) &&
-    (typeof value.analysis_status === "string" || value.analysis_status === null) &&
+    (isAnalysisStatus(value.analysis_status) || value.analysis_status === null) &&
     typeof value.created_at === "string"
   );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMediaType(value: unknown): value is NonNullable<ChatAttachmentRow["media_type"]> {
+  return value === "text" || value === "image" || value === "audio" || value === "video" || value === "binary";
+}
+
+function isExtractStatus(value: unknown): value is ChatAttachmentRow["extract_status"] {
+  return value === "ready" || value === "unsupported" || value === "failed";
+}
+
+function isAnalysisStatus(value: unknown): value is NonNullable<ChatAttachmentRow["analysis_status"]> {
+  return (
+    value === "queued" ||
+    value === "running" ||
+    value === "pending" ||
+    value === "ready" ||
+    value === "failed" ||
+    value === "unsupported"
+  );
 }

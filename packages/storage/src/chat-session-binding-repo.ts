@@ -55,11 +55,13 @@ export class ChatSessionBindingRepository {
     const existing = existingRow ? mapRow(existingRow) : undefined;
     this.upsertStmt.run({
       sessionId: input.sessionId,
-      workspaceId: input.workspaceId ? sanitizeWorkspaceId(input.workspaceId) : (existingRow?.workspace_id ?? "default"),
+      workspaceId: input.workspaceId
+        ? sanitizeWorkspaceId(input.workspaceId)
+        : (existingRow?.workspace_id ?? "default"),
       transport: input.transport,
       connectionId: input.connectionId ?? null,
       targetJson: input.target ? JSON.stringify({ target: input.target }) : null,
-      writable: input.writable === undefined ? (existing?.writable === false ? 0 : 1) : (input.writable ? 1 : 0),
+      writable: input.writable === undefined ? (existing?.writable === false ? 0 : 1) : input.writable ? 1 : 0,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
@@ -110,18 +112,20 @@ function isChatSessionBindingRow(value: unknown): value is ChatSessionBindingRow
     return false;
   }
 
-  return typeof value.session_id === "string"
-    && typeof value.workspace_id === "string"
-    && (value.transport === "llm" || value.transport === "integration")
-    && (typeof value.connection_id === "string" || value.connection_id === null)
-    && (typeof value.target_json === "string" || value.target_json === null)
-    && typeof value.writable === "number"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.session_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    (value.transport === "llm" || value.transport === "integration") &&
+    (typeof value.connection_id === "string" || value.connection_id === null) &&
+    (typeof value.target_json === "string" || value.target_json === null) &&
+    typeof value.writable === "number" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function mapRow(row: ChatSessionBindingRow): ChatSessionBindingRecord {
@@ -154,5 +158,3 @@ function sanitizeWorkspaceId(value: string): string {
   }
   return trimmed;
 }
-
-
