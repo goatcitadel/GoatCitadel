@@ -94,19 +94,23 @@ export class ChatStreamEventRepository {
   }
 
   public listByTurn(turnId: string, afterSequence = 0, limit = 500): ChatStreamEventRecord[] {
-    const rows = toChatStreamEventRows(this.listByTurnStmt.all({
-      turnId,
-      afterSequence,
-      limit: Math.max(1, Math.min(limit, 5_000)),
-    }));
+    const rows = toChatStreamEventRows(
+      this.listByTurnStmt.all({
+        turnId,
+        afterSequence,
+        limit: Math.max(1, Math.min(limit, 5_000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
   public get(turnId: string, sequence: number): ChatStreamEventRecord | undefined {
-    const row = toChatStreamEventRow(this.getStmt.get({
-      turnId,
-      sequence,
-    }));
+    const row = toChatStreamEventRow(
+      this.getStmt.get({
+        turnId,
+        sequence,
+      }),
+    );
     return row ? mapRow(row) : undefined;
   }
 
@@ -126,21 +130,23 @@ export class ChatStreamEventRepository {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatStreamEventRow(value: unknown): value is ChatStreamEventRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.event_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.turn_id === "string"
-    && typeof value.sequence === "number"
-    && (typeof value.run_id === "string" || value.run_id === null)
-    && typeof value.chunk_type === "string"
-    && typeof value.payload_json === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.event_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.turn_id === "string" &&
+    typeof value.sequence === "number" &&
+    (typeof value.run_id === "string" || value.run_id === null) &&
+    typeof value.chunk_type === "string" &&
+    typeof value.payload_json === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function toChatStreamEventRow(value: unknown): ChatStreamEventRow | undefined {
@@ -168,9 +174,12 @@ function mapRow(row: ChatStreamEventRow): ChatStreamEventRecord {
     sequence: row.sequence,
     runId: row.run_id ?? undefined,
     chunkType: row.chunk_type,
-    payload: safeJsonParse<Record<string, unknown>>(row.payload_json, {}),
+    payload: parsePayload(row.payload_json),
     createdAt: row.created_at,
   };
 }
 
-
+function parsePayload(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(raw, {});
+  return isRecord(parsed) ? parsed : {};
+}
