@@ -61,26 +61,32 @@ export class ChatSessionProjectRepository {
       return new Map();
     }
     const placeholders = sessionIds.map(() => "?").join(", ");
-    const rows = this.db.prepare(`
+    const rows = this.db
+      .prepare(
+        `
       SELECT * FROM chat_session_projects
       WHERE session_id IN (${placeholders})
-    `).all(...sessionIds);
+    `,
+      )
+      .all(...sessionIds);
     const mappedRows = toChatSessionProjectRows(rows);
     return new Map(mappedRows.map((row) => [row.session_id, mapRow(row)]));
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatSessionProjectRow(value: unknown): value is ChatSessionProjectRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.session_id === "string"
-    && typeof value.project_id === "string"
-    && typeof value.assigned_at === "string";
+  return (
+    typeof value.session_id === "string" &&
+    typeof value.project_id === "string" &&
+    typeof value.assigned_at === "string"
+  );
 }
 
 function toChatSessionProjectRow(value: unknown): ChatSessionProjectRow | undefined {
@@ -98,5 +104,3 @@ function mapRow(row: ChatSessionProjectRow): ChatSessionProjectRecord {
     assignedAt: row.assigned_at,
   };
 }
-
-

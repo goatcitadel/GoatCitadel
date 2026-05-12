@@ -79,12 +79,15 @@ export class ResearchRunRepository {
     return this.get(input.runId);
   }
 
-  public patch(runId: string, input: {
-    status?: "running" | "completed" | "failed";
-    summary?: string;
-    error?: string;
-    finishedAt?: string;
-  }): ResearchRunRecord {
+  public patch(
+    runId: string,
+    input: {
+      status?: "running" | "completed" | "failed";
+      summary?: string;
+      error?: string;
+      finishedAt?: string;
+    },
+  ): ResearchRunRecord {
     const current = this.get(runId);
     this.patchStmt.run({
       runId,
@@ -97,10 +100,12 @@ export class ResearchRunRepository {
   }
 
   public listBySession(sessionId: string, limit = 50): ResearchRunRecord[] {
-    const rows = toResearchRunRows(this.listBySessionStmt.all({
-      sessionId,
-      limit: Math.max(1, Math.min(limit, 500)),
-    }));
+    const rows = toResearchRunRows(
+      this.listBySessionStmt.all({
+        sessionId,
+        limit: Math.max(1, Math.min(limit, 500)),
+      }),
+    );
     return rows.map(mapRow);
   }
 }
@@ -134,19 +139,27 @@ function isResearchRunRow(value: unknown): value is ResearchRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.run_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.query === "string"
-    && typeof value.mode === "string"
-    && typeof value.status === "string"
-    && (typeof value.summary === "string" || value.summary === null)
-    && (typeof value.error === "string" || value.error === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    typeof value.run_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.query === "string" &&
+    isResearchMode(value.mode) &&
+    isResearchStatus(value.status) &&
+    (typeof value.summary === "string" || value.summary === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isResearchMode(value: unknown): value is ResearchRunRow["mode"] {
+  return value === "quick" || value === "deep";
+}
 
+function isResearchStatus(value: unknown): value is ResearchRunRow["status"] {
+  return value === "running" || value === "completed" || value === "failed";
+}
