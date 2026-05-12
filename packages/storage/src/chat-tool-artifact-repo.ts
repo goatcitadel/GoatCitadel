@@ -92,31 +92,31 @@ export class ChatToolArtifactRepository {
   }
 
   public listBySession(sessionId: string, limit = 500): ChatToolArtifactRecord[] {
-    const rows = toChatToolArtifactRows(
-      this.listBySessionStmt.all(sessionId, Math.max(1, Math.min(limit, 5_000))),
-    );
+    const rows = toChatToolArtifactRows(this.listBySessionStmt.all(sessionId, Math.max(1, Math.min(limit, 5_000))));
     return rows.map(mapRow);
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatToolArtifactRow(value: unknown): value is ChatToolArtifactRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.artifact_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.turn_id === "string"
-    && typeof value.tool_run_id === "string"
-    && typeof value.tool_name === "string"
-    && (typeof value.content_type === "string" || value.content_type === null)
-    && typeof value.byte_length === "number"
-    && (typeof value.snippet === "string" || value.snippet === null)
-    && typeof value.storage_rel_path === "string"
-    && typeof value.created_at === "string";
+  return (
+    typeof value.artifact_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.turn_id === "string" &&
+    typeof value.tool_run_id === "string" &&
+    typeof value.tool_name === "string" &&
+    (typeof value.content_type === "string" || value.content_type === null) &&
+    typeof value.byte_length === "number" &&
+    (typeof value.snippet === "string" || value.snippet === null) &&
+    typeof value.storage_rel_path === "string" &&
+    typeof value.created_at === "string"
+  );
 }
 
 function toChatToolArtifactRow(value: unknown): ChatToolArtifactRow | undefined {
@@ -141,5 +141,3 @@ function mapRow(row: ChatToolArtifactRow): ChatToolArtifactRecord {
     createdAt: row.created_at,
   };
 }
-
-
