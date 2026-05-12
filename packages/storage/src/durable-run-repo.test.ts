@@ -194,4 +194,119 @@ describe("DurableRunRepository", () => {
     assert.equal(resolved.resolvedAt, "2026-04-10T00:00:00.000Z");
     assert.equal(resolved.resolutionNote, "recovered by operator");
   });
+
+  it("covers run validation, lease lifecycle, indexes, and dead-letter edge cases", () => {
+    const repo = createRepo();
+
+    assert.throws(() => repo.createRun({ workflowKey: "   " }), /workflowKey is required/);
+    assert.throws(() => repo.getRun("missing-run"), /Durable run missing-run not found/);
+
+    const queued = repo.createRun({
+      runId: "run-queued",
+      workflowKey: "workflow.queued",
+      attemptCount: -3,
+      maxAttempts: 0,
+      payload: [] as unknown as Record<string, unknown>,
+      metadata: [] as unknown as Record<string, unknown>,
+      lastError: "   ",
+      leaseOwnerId: "   ",
+      now: "2026-04-21T00:00:00.000Z",
+    });
+    const completed = repo.createRun({
+      runId: "run-completed",
+      workflowKey: "workflow.completed",
+      status: "completed",
+      startedAt: "2026-04-21T00:01:00.000Z",
+      finishedAt: "2026-04-21T00:02:00.000Z",
+      now: "2026-04-21T00:01:00.000Z",
+    });
+
+    assert.equal(queued.attemptCount, 0);
+    assert.equal(queued.maxAttempts, 1);
+    assert.deepEqual(queued.payload, {});
+    assert.equal(queued.metadata, undefined);
+    assert.equal(queued.lastError, undefined);
+    assert.equal(queued.leaseOwnerId, undefined);
+    assert.equal(
+      repo.tryClaimQueuedRun({ ...leaseInput("run-completed", "worker-a"), updatedAt: "2026-04-21T00:03:00.000Z" }),
+      undefined,
+    );
+
+    assert.throws(
+      () =>
+        repo.updateRun({
+          runId: queued.runId,
+          status: "running",
+          expectedVersion: queued.version + 99,
+        }),
+      /update conflict/,
+    );
+
+    const claimed = repo.tryClaimQueuedRun(leaseInput(queued.runId, "worker-a"));
+    assert.equal(claimed?.status, "running");
+    assert.equal(claimed?.startedAt, "2026-04-21T00:03:00.000Z");
+    assert.equal(claimed?.leaseOwnerId, "worker-a");
+    assert.equal(repo.renewLease(leaseInput(queued.runId, "worker-b")), undefined);
+    const renewed = repo.renewLease({
+      ...leaseInput(queued.runId, "worker-a"),
+      leaseHeartbeatAt: "2026-04-21T00:04:00.000Z",
+      leaseExpiresAt: "2026-04-21T00:09:00.000Z",
+    });
+    assert.equal(renewed?.leaseHeartbeatAt, "2026-04-21T00:04:00.000Z");
+    assert.equal(repo.releaseLease(queued.runId, "worker-b"), undefined);
+    const released = repo.releaseLease(queued.runId, "worker-a", "2026-04-21T00:05:00.000Z");
+    assert.equal(released?.leaseOwnerId, undefined);
+    assert.equal(released?.leaseExpiresAt, undefined);
+    assert.equal(released?.leaseHeartbeatAt, undefined);
+
+    const running = repo.updateRun({
+      runId: queued.runId,
+      status: "running",
+      leaseOwnerId: "worker-c",
+      leaseHeartbeatAt: "2026-04-21T00:06:00.000Z",
+      leaseExpiresAt: "2026-04-21T00:07:00.000Z",
+      expectedVersion: released!.version,
+    });
+    assert.equal(running.leaseOwnerId, "worker-c");
+    assert.deepEqual(repo.listExpiredRunningRunIds("2026-04-21T00:08:00.000Z"), [queued.runId]);
+    assert.deepEqual(repo.listRunIdsByStatus("completed"), [completed.runId]);
+    assert.equal(repo.countRuns(), 2);
+    assert.deepEqual(repo.statusCounts(), { completed: 1, running: 1 });
+    assert.deepEqual(
+      repo.listRuns(1).map((run) => run.runId),
+      [completed.runId],
+    );
+
+    assert.throws(() => repo.upsertRetry({ runId: queued.runId, attemptNo: 0, reason: "   " }), /reason is required/);
+    assert.throws(() => repo.upsertDeadLetter({ runId: queued.runId, reason: "   " }), /reason is required/);
+    assert.equal(repo.getDeadLetterByRun("missing-run"), undefined);
+    assert.throws(
+      () => repo.getDeadLetterById("missing-dead-letter"),
+      /Durable dead letter missing-dead-letter not found/,
+    );
+
+    const deadLetter = repo.upsertDeadLetter({
+      deadLetterId: "dead-edge",
+      runId: queued.runId,
+      reason: "first failure",
+      payload: [] as unknown as Record<string, unknown>,
+      resolutionNote: "   ",
+      createdAt: "2026-04-21T00:10:00.000Z",
+    });
+    assert.deepEqual(deadLetter.payload, {});
+    assert.equal(deadLetter.resolutionNote, undefined);
+    assert.deepEqual(
+      repo.listDeadLetters(5).map((item) => item.deadLetterId),
+      ["dead-edge"],
+    );
+  });
 });
+
+function leaseInput(runId: string, workerId: string) {
+  return {
+    runId,
+    workerId,
+    leaseHeartbeatAt: "2026-04-21T00:03:00.000Z",
+    leaseExpiresAt: "2026-04-21T00:08:00.000Z",
+  };
+}

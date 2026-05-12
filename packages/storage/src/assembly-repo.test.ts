@@ -191,4 +191,156 @@ describe("AssemblyRepository", () => {
     assert.equal(reputations.length, 1);
     assert.equal(reputations[0]?.byDomain.coding?.sampleCount, 5);
   });
+
+  it("covers optional run fields, artifact variants, typed filters, and missing rows", () => {
+    const repo = createRepo();
+    const runId = "assembly-run-edge";
+    const run: AssemblyRunRecord = {
+      runId,
+      workspaceId: "workspace-1",
+      sourceSessionId: "session-1",
+      sourceTaskId: "task-1",
+      title: "Assembly edge run",
+      status: "queued",
+      currentStage: "S0_normalize",
+      currentRoundIndex: 0,
+      problem: buildProblem(runId),
+      settings: buildSettings(),
+      adversarialSettings: buildAdversarialSettings(),
+      createdAt: "2026-03-17T00:00:00.000Z",
+      startedAt: "2026-03-17T00:00:30.000Z",
+      updatedAt: "2026-03-17T00:00:00.000Z",
+    };
+    repo.createRun(run);
+
+    assert.throws(() => repo.getRun("missing-run"), /Assembly run missing-run not found/);
+    assert.deepEqual(
+      repo.listRuns(0).map((item) => item.runId),
+      [runId],
+    );
+
+    const updated = repo.updateRun(runId, {
+      status: "failed",
+      currentStage: "S5_synthesis",
+      currentRoundIndex: 3,
+      stopReason: "budget_exhausted",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        costUsd: 0.12,
+      } as AssemblyRunRecord["usage"],
+      error: "provider unavailable",
+      finishedAt: "2026-03-17T00:10:00.000Z",
+      updatedAt: "2026-03-17T00:10:00.000Z",
+    });
+    assert.equal(updated.workspaceId, "workspace-1");
+    assert.equal(updated.sourceSessionId, "session-1");
+    assert.equal(updated.sourceTaskId, "task-1");
+    assert.equal(updated.stopReason, "budget_exhausted");
+    assert.equal(updated.error, "provider unavailable");
+    assert.equal(updated.usage?.inputTokens, 10);
+    assert.equal(updated.usage?.outputTokens, 20);
+
+    const round: AssemblyRound = {
+      roundId: "round-edge",
+      runId,
+      roundIndex: 2,
+      stage: "S4_convergence",
+      status: "running",
+      participantIds: ["p1"],
+      artifactIds: [],
+      convergenceSnapshot: {
+        compositeScore: 0.5,
+        stagnationDelta: 0.1,
+      } as AssemblyRound["convergenceSnapshot"],
+      stopCheck: {
+        shouldStop: false,
+        reason: "stagnated",
+      } as AssemblyRound["stopCheck"],
+      startedAt: "2026-03-17T00:03:00.000Z",
+    };
+    repo.saveRound(round);
+    repo.completeRound("round-edge", {
+      status: "completed",
+      convergenceSnapshot: {
+        compositeScore: 0.75,
+        stagnationDelta: 0.02,
+      } as AssemblyRound["convergenceSnapshot"],
+      stopCheck: {
+        shouldStop: true,
+        reason: "converged",
+      } as AssemblyRound["stopCheck"],
+      finishedAt: "2026-03-17T00:04:00.000Z",
+    });
+    const loadedRound = repo.listRounds(runId)[0];
+    assert.equal(loadedRound?.convergenceSnapshot?.compositeScore, 0.75);
+    assert.equal(loadedRound?.stopCheck?.shouldStop, true);
+
+    assert.deepEqual(repo.saveArtifacts([]), []);
+    const artifactTypes = [
+      "problem",
+      "convergence_score",
+      "proposal",
+      "peer_review",
+      "adversarial_review",
+      "defense_response",
+    ] as const;
+    const artifacts = artifactTypes.map((artifactType, index): AssemblyArtifactRecord => {
+      const artifactId = `artifact-${artifactType}`;
+      return {
+        artifactId,
+        runId,
+        roundIndex: 2,
+        stage: "S4_convergence",
+        artifactType,
+        participantModelRef: index % 2 === 0 ? "openai:gpt-5.4" : undefined,
+        blindedAuthorToken: index % 2 === 1 ? `blind-${index}` : undefined,
+        payload: { runId, marker: artifactType } as unknown as AssemblyArtifactRecord["payload"],
+        createdAt: `2026-03-17T00:05:0${index}.000Z`,
+      };
+    });
+    repo.saveArtifacts(artifacts);
+    repo.updateRoundArtifacts(
+      "round-edge",
+      artifacts.map((artifact) => artifact.artifactId),
+    );
+
+    assert.equal(repo.listArtifacts(runId).length, artifactTypes.length);
+    assert.deepEqual(
+      repo.listArtifacts(runId, "peer_review").map((artifact) => artifact.artifactType),
+      ["peer_review"],
+    );
+    assert.deepEqual(
+      repo.listRounds(runId)[0]?.artifactIds,
+      artifacts.map((artifact) => artifact.artifactId),
+    );
+
+    const reputation: ModelReputation = {
+      modelRef: "anthropic:claude-sonnet-4.5",
+      providerId: "anthropic",
+      modelId: "claude-sonnet-4.5",
+      overall: 0.91,
+      byDomain: {
+        analysis: {
+          accuracy: 0.9,
+          reasoningStrength: 0.92,
+          critiqueQuality: 0.91,
+          consensusLeadership: 0.88,
+          stability: 0.93,
+          adversarialUsefulness: 0.87,
+          sampleCount: 2,
+        },
+      },
+      accuracy: 0.9,
+      reasoningStrength: 0.92,
+      critiqueQuality: 0.91,
+      consensusLeadership: 0.88,
+      stability: 0.93,
+      adversarialUsefulness: 0.87,
+      sampleCount: 2,
+      updatedAt: "2026-03-17T00:06:00.000Z",
+    };
+    assert.equal(repo.upsertReputation(reputation).modelRef, reputation.modelRef);
+    assert.equal(repo.listReputations(0)[0]?.modelRef, reputation.modelRef);
+  });
 });
