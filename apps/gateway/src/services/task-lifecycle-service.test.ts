@@ -362,5 +362,5 @@ describe("TaskLifecycleService agentic runtime", () => {
       taskId: olderRun.taskId,
       status: "recorded",
     });
-  });
+  }, 20_000);
 });

@@ -108,19 +108,23 @@ export class WorkspaceHookRepository {
   }
 
   public list(workspaceId: string, limit = 200): HookRecord[] {
-    const rows = toHookRows(this.listStmt.all({
-      workspaceId,
-      limit: clampLimit(limit),
-    }));
+    const rows = toHookRows(
+      this.listStmt.all({
+        workspaceId,
+        limit: clampLimit(limit),
+      }),
+    );
     return rows.map(mapHookRow);
   }
 
   public listByTrigger(workspaceId: string, trigger: HookTrigger, limit = 200): HookRecord[] {
-    const rows = toHookRows(this.getByTriggerStmt.all({
-      workspaceId,
-      trigger,
-      limit: clampLimit(limit),
-    }));
+    const rows = toHookRows(
+      this.getByTriggerStmt.all({
+        workspaceId,
+        trigger,
+        limit: clampLimit(limit),
+      }),
+    );
     return rows.map(mapHookRow);
   }
 
@@ -151,13 +155,18 @@ export class WorkspaceHookRepository {
     return this.get(input.workspaceId, hookId);
   }
 
-  public update(workspaceId: string, hookId: string, input: HookUpdateInput, now = new Date().toISOString()): HookRecord {
+  public update(
+    workspaceId: string,
+    hookId: string,
+    input: HookUpdateInput,
+    now = new Date().toISOString(),
+  ): HookRecord {
     const current = this.get(workspaceId, hookId);
     this.updateStmt.run({
       workspaceId,
       hookId,
       label: input.label !== undefined ? normalizeLabel(input.label) : current.label,
-      enabled: input.enabled !== undefined ? (input.enabled ? 1 : 0) : (current.enabled ? 1 : 0),
+      enabled: input.enabled !== undefined ? (input.enabled ? 1 : 0) : current.enabled ? 1 : 0,
       priority: input.priority !== undefined ? normalizePriority(input.priority) : current.priority,
       timeoutMs: input.timeoutMs !== undefined ? normalizeTimeoutMs(input.timeoutMs) : current.timeoutMs,
       failPolicy: input.failPolicy !== undefined ? normalizeFailPolicy(input.failPolicy) : current.failPolicy,
@@ -174,8 +183,8 @@ export class WorkspaceHookRepository {
 }
 
 function mapHookRow(row: HookRow): HookRecord {
-  const action = safeJsonParse<HookActionConfig | undefined>(row.action_json, undefined);
-  if (!action || typeof action !== "object") {
+  const action = parseHookAction(row.action_json);
+  if (!action) {
     throw new ValidationError({ message: `Hook ${row.hook_id} has invalid action config` });
   }
   return {
@@ -192,6 +201,27 @@ function mapHookRow(row: HookRow): HookRecord {
     action,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function parseHookAction(raw: string): HookActionConfig | undefined {
+  const action = safeJsonParse<unknown>(raw, undefined);
+  if (!isRecord(action) || action.type !== "webhook" || !isRecord(action.webhook)) {
+    return undefined;
+  }
+
+  const url = action.webhook.url;
+  const secret = action.webhook.secret;
+  if (typeof url !== "string" || (secret !== undefined && typeof secret !== "string")) {
+    return undefined;
+  }
+
+  return {
+    type: "webhook",
+    webhook: {
+      url,
+      ...(secret ? { secret } : {}),
+    },
   };
 }
 
@@ -219,7 +249,9 @@ function normalizeFailPolicy(value?: HookFailPolicy): HookFailPolicy {
 
 function normalizeAction(value: HookActionConfig): HookActionConfig {
   if (value.type !== "webhook") {
-    throw new ValidationError({ message: `Unsupported hook action type: ${String((value as { type?: unknown }).type)}` });
+    throw new ValidationError({
+      message: `Unsupported hook action type: ${String((value as { type?: unknown }).type)}`,
+    });
   }
   const url = value.webhook?.url?.trim();
   if (!url) {
@@ -236,6 +268,9 @@ function normalizeAction(value: HookActionConfig): HookActionConfig {
 }
 
 function clampLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 200;
+  }
   return Math.max(1, Math.min(1_000, Math.floor(value)));
 }
 
@@ -254,22 +289,22 @@ function isHookRow(value: unknown): value is HookRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.hook_id === "string"
-    && typeof value.workspace_id === "string"
-    && typeof value.label === "string"
-    && typeof value.trigger === "string"
-    && typeof value.mode === "string"
-    && typeof value.enabled === "number"
-    && typeof value.priority === "number"
-    && typeof value.timeout_ms === "number"
-    && typeof value.fail_policy === "string"
-    && typeof value.action_json === "string"
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string";
+  return (
+    typeof value.hook_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    typeof value.label === "string" &&
+    typeof value.trigger === "string" &&
+    typeof value.mode === "string" &&
+    typeof value.enabled === "number" &&
+    typeof value.priority === "number" &&
+    typeof value.timeout_ms === "number" &&
+    typeof value.fail_policy === "string" &&
+    typeof value.action_json === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-

@@ -135,7 +135,10 @@ export class HookRunRepository {
     `);
   }
 
-  public create(input: Omit<HookRunRecord, "runId" | "createdAt" | "updatedAt">, now = new Date().toISOString()): HookRunRecord {
+  public create(
+    input: Omit<HookRunRecord, "runId" | "createdAt" | "updatedAt">,
+    now = new Date().toISOString(),
+  ): HookRunRecord {
     const runId = `hookrun_${randomUUID().replaceAll("-", "").slice(0, 24)}`;
     this.insertStmt.run({
       runId,
@@ -176,19 +179,25 @@ export class HookRunRepository {
   }
 
   public listByWorkspace(workspaceId: string, limit = 200): HookRunRecord[] {
-    const rows = toHookRunRows(this.listByWorkspaceStmt.all({
-      workspaceId,
-      limit: Math.max(1, Math.min(1_000, Math.floor(limit))),
-    }));
+    const rows = toHookRunRows(
+      this.listByWorkspaceStmt.all({
+        workspaceId,
+        limit: clampLimit(limit),
+      }),
+    );
     return rows.map(mapHookRunRow);
   }
 
-  public markAttempt(runId: string, input: {
-    status: HookDeliveryStatus;
-    attemptCount: number;
-    errorText?: string;
-    requestPayload?: Record<string, unknown>;
-  }, now = new Date().toISOString()): HookRunRecord {
+  public markAttempt(
+    runId: string,
+    input: {
+      status: HookDeliveryStatus;
+      attemptCount: number;
+      errorText?: string;
+      requestPayload?: Record<string, unknown>;
+    },
+    now = new Date().toISOString(),
+  ): HookRunRecord {
     this.updateAttemptStmt.run({
       runId,
       status: input.status,
@@ -200,15 +209,19 @@ export class HookRunRepository {
     return this.get(runId);
   }
 
-  public markOutcome(runId: string, input: {
-    status: HookDeliveryStatus;
-    decision?: HookDecision;
-    patchSummary?: HookPatchSummary;
-    errorText?: string;
-    latencyMs?: number;
-    responsePayload?: Record<string, unknown>;
-    completedAt?: string;
-  }, now = new Date().toISOString()): HookRunRecord {
+  public markOutcome(
+    runId: string,
+    input: {
+      status: HookDeliveryStatus;
+      decision?: HookDecision;
+      patchSummary?: HookPatchSummary;
+      errorText?: string;
+      latencyMs?: number;
+      responsePayload?: Record<string, unknown>;
+      completedAt?: string;
+    },
+    now = new Date().toISOString(),
+  ): HookRunRecord {
     this.updateOutcomeStmt.run({
       runId,
       status: input.status,
@@ -265,6 +278,13 @@ function serializeJson(value: unknown): string | null {
   return JSON.stringify(value);
 }
 
+function clampLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 200;
+  }
+  return Math.max(1, Math.min(1_000, Math.floor(value)));
+}
+
 function toHookRunRow(value: unknown): HookRunRow | undefined {
   return isHookRunRow(value) ? value : undefined;
 }
@@ -274,31 +294,31 @@ function toHookRunRows(value: unknown): HookRunRow[] {
 }
 
 function isHookRunRow(value: unknown): value is HookRunRow {
-  return isRecord(value)
-    && typeof value.run_id === "string"
-    && typeof value.hook_id === "string"
-    && typeof value.workspace_id === "string"
-    && typeof value.trigger === "string"
-    && typeof value.entity_type === "string"
-    && typeof value.entity_id === "string"
-    && typeof value.mode === "string"
-    && typeof value.status === "string"
-    && typeof value.idempotency_key === "string"
-    && typeof value.attempt_count === "number"
-    && (typeof value.durable_run_id === "string" || value.durable_run_id === null)
-    && (typeof value.decision_json === "string" || value.decision_json === null)
-    && (typeof value.patch_summary_json === "string" || value.patch_summary_json === null)
-    && (typeof value.error_text === "string" || value.error_text === null)
-    && (typeof value.latency_ms === "number" || value.latency_ms === null)
-    && (typeof value.request_payload_json === "string" || value.request_payload_json === null)
-    && (typeof value.response_payload_json === "string" || value.response_payload_json === null)
-    && typeof value.created_at === "string"
-    && typeof value.updated_at === "string"
-    && (typeof value.completed_at === "string" || value.completed_at === null);
+  return (
+    isRecord(value) &&
+    typeof value.run_id === "string" &&
+    typeof value.hook_id === "string" &&
+    typeof value.workspace_id === "string" &&
+    typeof value.trigger === "string" &&
+    typeof value.entity_type === "string" &&
+    typeof value.entity_id === "string" &&
+    typeof value.mode === "string" &&
+    typeof value.status === "string" &&
+    typeof value.idempotency_key === "string" &&
+    typeof value.attempt_count === "number" &&
+    (typeof value.durable_run_id === "string" || value.durable_run_id === null) &&
+    (typeof value.decision_json === "string" || value.decision_json === null) &&
+    (typeof value.patch_summary_json === "string" || value.patch_summary_json === null) &&
+    (typeof value.error_text === "string" || value.error_text === null) &&
+    (typeof value.latency_ms === "number" || value.latency_ms === null) &&
+    (typeof value.request_payload_json === "string" || value.request_payload_json === null) &&
+    (typeof value.response_payload_json === "string" || value.response_payload_json === null) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string" &&
+    (typeof value.completed_at === "string" || value.completed_at === null)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-
