@@ -238,6 +238,10 @@ export class ChatTurnTraceRepository {
       routingJson: serializeRoutingJson(
         input.routing ?? current.routing,
         input.effectiveToolAutonomy ?? current.effectiveToolAutonomy,
+        {
+          speedMode: current.speedMode,
+          subagentPolicy: current.subagentPolicy,
+        },
       ),
       retrievalJson: JSON.stringify(input.retrieval ?? current.retrieval ?? null),
       reflectionJson: JSON.stringify(input.reflection ?? current.reflection ?? null),
@@ -297,28 +301,23 @@ function mapRow(row: ChatTurnTraceRow): ChatTurnTraceRecord {
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
     toolRuns: [],
-    citations: safeJsonParse<ChatCitationRecord[]>(row.citations_json ?? "", []),
-    failure: safeJsonParse<ChatTurnTraceRecord["failure"] | undefined>(row.failure_json ?? "", undefined),
+    citations: parseArrayJson<ChatCitationRecord>(row.citations_json),
+    failure: parseOptionalObjectJson<ChatTurnTraceRecord["failure"]>(row.failure_json),
     routing,
-    retrieval: safeJsonParse<ChatTurnTraceRecord["retrieval"] | undefined>(row.retrieval_json ?? "", undefined),
-    reflection: safeJsonParse<ChatTurnTraceRecord["reflection"] | undefined>(row.reflection_json ?? "", undefined),
-    proactive: safeJsonParse<ChatTurnTraceRecord["proactive"] | undefined>(row.proactive_json ?? "", undefined),
-    completion: safeJsonParse<ChatTurnTraceRecord["completion"] | undefined>(row.completion_json ?? "", undefined),
-    durable: safeJsonParse<ChatTurnTraceRecord["durable"] | undefined>(row.durable_json ?? "", undefined),
-    orchestration: safeJsonParse<ChatOrchestrationSummary | undefined>(row.orchestration_json ?? "", undefined),
-    guidance: safeJsonParse<ChatTurnTraceRecord["guidance"] | undefined>(row.guidance_json ?? "", undefined),
-    loopGuard: safeJsonParse<ChatTurnTraceRecord["loopGuard"] | undefined>(row.loop_guard_json ?? "", undefined),
-    pendingUserInput: safeJsonParse<ChatUserInputPromptRecord | undefined>(
-      row.pending_user_input_json ?? "",
-      undefined,
+    retrieval: parseOptionalObjectJson<ChatTurnTraceRecord["retrieval"]>(row.retrieval_json),
+    reflection: parseOptionalObjectJson<ChatTurnTraceRecord["reflection"]>(row.reflection_json),
+    proactive: parseOptionalObjectJson<ChatTurnTraceRecord["proactive"]>(row.proactive_json),
+    completion: parseOptionalObjectJson<ChatTurnTraceRecord["completion"]>(row.completion_json),
+    durable: parseOptionalObjectJson<ChatTurnTraceRecord["durable"]>(row.durable_json),
+    orchestration: parseOptionalObjectJson<ChatOrchestrationSummary>(row.orchestration_json),
+    guidance: parseOptionalObjectJson<ChatTurnTraceRecord["guidance"]>(row.guidance_json),
+    loopGuard: parseOptionalObjectJson<ChatTurnTraceRecord["loopGuard"]>(row.loop_guard_json),
+    pendingUserInput: parseOptionalObjectJson<ChatUserInputPromptRecord>(row.pending_user_input_json),
+    capabilityUpgradeSuggestions: parseOptionalArrayJson<ChatCapabilityUpgradeSuggestion>(
+      row.capability_upgrade_suggestions_json,
     ),
-    capabilityUpgradeSuggestions: safeJsonParse<ChatCapabilityUpgradeSuggestion[] | undefined>(
-      row.capability_upgrade_suggestions_json ?? "",
-      undefined,
-    ),
-    specialistCandidateSuggestions: safeJsonParse<ChatSpecialistCandidateSuggestionRecord[] | undefined>(
-      row.specialist_candidate_suggestions_json ?? "",
-      undefined,
+    specialistCandidateSuggestions: parseOptionalArrayJson<ChatSpecialistCandidateSuggestionRecord>(
+      row.specialist_candidate_suggestions_json,
     ),
   };
 }
@@ -351,13 +350,16 @@ function parseRoutingJson(raw: string): {
   speedMode?: ChatTurnTraceRecord["speedMode"];
   subagentPolicy?: ChatTurnTraceRecord["subagentPolicy"];
 } {
-  const parsed = safeJsonParse<PersistedRoutingJson>(raw, {});
+  const parsed = safeJsonParse<unknown>(raw, {});
+  if (!isRecord(parsed)) {
+    return { routing: {} };
+  }
   const {
     __effectiveToolAutonomy: effectiveToolAutonomy,
     __speedMode: speedMode,
     __subagentPolicy: subagentPolicy,
     ...routing
-  } = parsed;
+  } = parsed as PersistedRoutingJson;
   return {
     routing,
     effectiveToolAutonomy,
@@ -372,6 +374,27 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function parseArrayJson<T>(raw: string | null): T[] {
+  const parsed = safeJsonParse<unknown>(raw ?? "", []);
+  return Array.isArray(parsed) ? (parsed as T[]) : [];
+}
+
+function parseOptionalArrayJson<T>(raw: string | null): T[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  return Array.isArray(parsed) ? (parsed as T[]) : undefined;
+}
+
+function parseOptionalObjectJson<T>(raw: string | null): T | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<unknown>(raw, undefined);
+  return isRecord(parsed) ? (parsed as T) : undefined;
 }
 
 export function attachTurnTraceDetails(
@@ -439,5 +462,5 @@ function isChatTurnTraceRow(value: unknown): value is ChatTurnTraceRow {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
