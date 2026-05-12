@@ -115,7 +115,7 @@ export class ChatToolRunRepository {
       approvalId: input.approvalId ?? null,
       argsJson: input.args ? JSON.stringify(input.args) : null,
       resultJson: input.result ? JSON.stringify(input.result) : null,
-      reused: input.reused === undefined ? null : (input.reused ? 1 : 0),
+      reused: input.reused === undefined ? null : input.reused ? 1 : 0,
       reusedFromToolRunId: input.reusedFromToolRunId ?? null,
       reuseReason: input.reuseReason ?? null,
       error: input.error ?? null,
@@ -132,8 +132,22 @@ export class ChatToolRunRepository {
       toolRunId,
       status: input.status ?? current.status,
       approvalId: input.approvalId !== undefined ? input.approvalId : (current.approvalId ?? null),
-      resultJson: input.result !== undefined ? JSON.stringify(input.result) : (current.result ? JSON.stringify(current.result) : null),
-      reused: input.reused !== undefined ? (input.reused ? 1 : 0) : current.reused === undefined ? null : (current.reused ? 1 : 0),
+      resultJson:
+        input.result !== undefined
+          ? JSON.stringify(input.result)
+          : current.result
+            ? JSON.stringify(current.result)
+            : null,
+      reused:
+        input.reused !== undefined
+          ? input.reused
+            ? 1
+            : 0
+          : current.reused === undefined
+            ? null
+            : current.reused
+              ? 1
+              : 0,
       reusedFromToolRunId:
         input.reusedFromToolRunId !== undefined ? input.reusedFromToolRunId : (current.reusedFromToolRunId ?? null),
       reuseReason: input.reuseReason !== undefined ? input.reuseReason : (current.reuseReason ?? null),
@@ -150,10 +164,12 @@ export class ChatToolRunRepository {
   }
 
   public listBySession(sessionId: string, limit = 200): ChatToolRunRecord[] {
-    const rows = toChatToolRunRows(this.listBySessionStmt.all({
-      sessionId,
-      limit: Math.max(1, Math.min(limit, 2000)),
-    }));
+    const rows = toChatToolRunRows(
+      this.listBySessionStmt.all({
+        sessionId,
+        limit: Math.max(1, Math.min(limit, 2000)),
+      }),
+    );
     return rows.map(mapRow);
   }
 
@@ -208,28 +224,30 @@ export class ChatToolRunRepository {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isChatToolRunRow(value: unknown): value is ChatToolRunRow {
   if (!isRecord(value)) {
     return false;
   }
-  return typeof value.tool_run_id === "string"
-    && typeof value.turn_id === "string"
-    && typeof value.session_id === "string"
-    && typeof value.tool_name === "string"
-    && typeof value.status === "string"
-    && (typeof value.approval_id === "string" || value.approval_id === null)
-    && (typeof value.args_json === "string" || value.args_json === null)
-    && (typeof value.result_json === "string" || value.result_json === null)
-    && (typeof value.reused === "number" || value.reused === null)
-    && (typeof value.reused_from_tool_run_id === "string" || value.reused_from_tool_run_id === null)
-    && (typeof value.reuse_reason === "string" || value.reuse_reason === null)
-    && (typeof value.error === "string" || value.error === null)
-    && (typeof value.failure_guidance === "string" || value.failure_guidance === null)
-    && typeof value.started_at === "string"
-    && (typeof value.finished_at === "string" || value.finished_at === null);
+  return (
+    typeof value.tool_run_id === "string" &&
+    typeof value.turn_id === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.tool_name === "string" &&
+    typeof value.status === "string" &&
+    (typeof value.approval_id === "string" || value.approval_id === null) &&
+    (typeof value.args_json === "string" || value.args_json === null) &&
+    (typeof value.result_json === "string" || value.result_json === null) &&
+    (typeof value.reused === "number" || value.reused === null) &&
+    (typeof value.reused_from_tool_run_id === "string" || value.reused_from_tool_run_id === null) &&
+    (typeof value.reuse_reason === "string" || value.reuse_reason === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    (typeof value.failure_guidance === "string" || value.failure_guidance === null) &&
+    typeof value.started_at === "string" &&
+    (typeof value.finished_at === "string" || value.finished_at === null)
+  );
 }
 
 function toChatToolRunRow(value: unknown): ChatToolRunRow | undefined {
@@ -267,5 +285,3 @@ function mapRow(row: ChatToolRunRow): ChatToolRunRecord {
     finishedAt: row.finished_at ?? undefined,
   };
 }
-
-
