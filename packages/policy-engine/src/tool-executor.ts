@@ -472,10 +472,7 @@ async function codeSearchFiles(request: ToolInvokeRequest, config: ToolPolicyCon
   const pending = [fullRoot];
 
   while (pending.length > 0 && matches.length < limit) {
-    const current = pending.pop();
-    if (!current) {
-      continue;
-    }
+    const current = pending.pop() as string;
     const stat = await fs.stat(current);
     if (stat.isFile()) {
       const name = path.basename(current);
@@ -1216,7 +1213,7 @@ async function executeCommsTool(
   if (toolName.endsWith(".unsend") || toolName === "channel.unsend") {
     return commsUnsend(toolName, connectionKey, connectionConfig, args, allowlist, target);
   }
-  const channelKey = resolveChannelKey(toolName, connectionKey);
+  const channelKey = toolName === "channel.send" ? connectionKey : toolName.slice(0, -".send".length);
   const attachments = normalizeChannelAttachments(args.attachments);
   const renderedMessage = renderChannelMessage(message, attachments);
   switch (channelKey) {
@@ -1256,10 +1253,7 @@ async function executeCommsTool(
   if (!webhookUrl) {
     throw new Error("Missing webhook URL");
   }
-  const payload =
-    channelKey === "discord"
-      ? { content: renderedMessage }
-      : { text: renderedMessage, target, payload: record(args.payload) };
+  const payload = { text: renderedMessage, target, payload: record(args.payload) };
   const res = await fetchAllowlisted(
     webhookUrl,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
@@ -1279,7 +1273,7 @@ async function commsReact(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const channelKey = resolveChannelKey(toolName, connectionKey);
+  const channelKey = toolName === "channel.react" ? connectionKey : toolName.slice(0, -".react".length);
   switch (channelKey) {
     case "slack":
       return slackReact(connectionConfig, args, allowlist, target);
@@ -1308,7 +1302,7 @@ async function commsUnsend(
   allowlist: string[],
   target: string,
 ): Promise<string> {
-  const channelKey = resolveChannelKey(toolName, connectionKey);
+  const channelKey = toolName === "channel.unsend" ? connectionKey : toolName.slice(0, -".unsend".length);
   switch (channelKey) {
     case "slack":
       return slackUnsend(connectionConfig, args, allowlist, target);
@@ -1323,28 +1317,6 @@ async function commsUnsend(
     default:
       throw new Error(`${toolName} is not supported for ${channelKey}`);
   }
-}
-
-function resolveChannelKey(toolName: string, connectionKey: string): string {
-  if (toolName === "channel.send") {
-    return connectionKey;
-  }
-  if (toolName.endsWith(".send")) {
-    return toolName.slice(0, -".send".length);
-  }
-  if (toolName === "channel.react") {
-    return connectionKey;
-  }
-  if (toolName.endsWith(".react")) {
-    return toolName.slice(0, -".react".length);
-  }
-  if (toolName === "channel.unsend") {
-    return connectionKey;
-  }
-  if (toolName.endsWith(".unsend")) {
-    return toolName.slice(0, -".unsend".length);
-  }
-  return connectionKey;
 }
 
 function resolveDefaultChannelTarget(connectionKey: string, config: Record<string, unknown>): string | undefined {
@@ -1807,9 +1779,6 @@ function buildSlackMessageBlocks(
 
   for (const [index, attachment] of attachments.entries()) {
     const url = attachment.url?.trim();
-    if (!url) {
-      continue;
-    }
     const title = attachment.title?.trim() || resolveChannelAttachmentName(attachment, index);
     if (isImageChannelAttachment(attachment)) {
       const imageBlock: Record<string, unknown> = {
@@ -2378,10 +2347,7 @@ async function whatsappSend(
   }
 
   for (let index = 0; index < richAttachments.length; index += 1) {
-    const attachment = richAttachments[index];
-    if (!attachment) {
-      continue;
-    }
+    const attachment = richAttachments[index] as ChannelAttachment;
     providerMessageId = await whatsappSendAttachment(
       baseUrl,
       phoneNumberId,
@@ -2581,8 +2547,8 @@ async function signalSend(
     params.account = account;
   }
 
-  const result = await signalRpcRequest<Record<string, unknown>>(baseUrl, "send", params, allowlist);
-  return result.timestamp != null ? String(result.timestamp) : `signal-${Date.now()}`;
+  const result = await signalRpcRequest<Record<string, unknown> | undefined>(baseUrl, "send", params, allowlist);
+  return result?.timestamp != null ? String(result.timestamp) : `signal-${Date.now()}`;
 }
 
 async function imessageSend(
@@ -2662,10 +2628,7 @@ async function imessageSend(
 
   const uploadedAttachments: BlueBubblesMultipartAttachmentPart[] = [];
   for (let index = 0; index < richAttachments.length; index += 1) {
-    const attachment = richAttachments[index];
-    if (!attachment) {
-      continue;
-    }
+    const attachment = richAttachments[index] as ChannelAttachment;
     uploadedAttachments.push(await blueBubblesUploadAttachment(baseUrl, password, attachment, allowlist, index));
   }
 
@@ -2872,10 +2835,6 @@ async function zaloSend(
   }
 
   const chunks = chunkText(outboundMessage, 2000, 0, 20);
-  if (chunks.length === 0) {
-    throw new Error("Missing Zalo message");
-  }
-
   let messageId: string | undefined;
   for (const chunk of chunks) {
     const res = await fetchAllowlisted(
@@ -3195,11 +3154,8 @@ function stripZalouserTargetPrefix(target: string): string {
     .trim();
 }
 
-function normalizeZalouserTarget(target: string | undefined): string | undefined {
-  const trimmed = asString(target);
-  if (!trimmed) {
-    return undefined;
-  }
+function normalizeZalouserTarget(target: string): string | undefined {
+  const trimmed = target.trim();
   const stripped = stripZalouserTargetPrefix(trimmed);
   if (!stripped) {
     return undefined;
@@ -3415,13 +3371,7 @@ function normalizeBlueBubblesHandle(raw: string): string {
 
 function stripBlueBubblesPrefix(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (!trimmed.toLowerCase().startsWith("bluebubbles:")) {
-    return trimmed;
-  }
-  return trimmed.slice("bluebubbles:".length).trim();
+  return trimmed.toLowerCase().startsWith("bluebubbles:") ? trimmed.slice("bluebubbles:".length).trim() : trimmed;
 }
 
 function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
@@ -3638,11 +3588,6 @@ async function resolveBlueBubblesChatGuid(
         const guidIdentifier = guid ? extractBlueBubblesChatIdentifierFromGuid(guid) : null;
         if (guidIdentifier && guidIdentifier === target.chatIdentifier) {
           return guid;
-        }
-        const directIdentifier =
-          asString(chat.identifier) ?? asString(chat.chatIdentifier) ?? asString(chat.chat_identifier);
-        if (directIdentifier && directIdentifier === target.chatIdentifier) {
-          return guid ?? directIdentifier;
         }
       }
       if (normalizedHandle) {
@@ -3986,10 +3931,6 @@ async function blueBubblesSendMultipart(
     });
     partIndex += 1;
   }
-  if (parts.length === 0) {
-    throw new Error("BlueBubbles multipart send requires at least one text or attachment part");
-  }
-
   const requestBody: Record<string, unknown> = {
     chatGuid: payload.chatGuid,
     parts,
@@ -4061,10 +4002,7 @@ function isImageChannelAttachment(attachment: ChannelAttachment): boolean {
   if (mimeType?.startsWith("image/")) {
     return true;
   }
-  const candidate = asString(attachment.title) ?? asString(attachment.url);
-  if (!candidate) {
-    return false;
-  }
+  const candidate = asString(attachment.title) ?? asString(attachment.url) ?? "";
   return /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)(?:$|[?#])/i.test(candidate);
 }
 
@@ -4664,7 +4602,7 @@ async function fetchAllowlisted(
   let current = url;
   for (let hop = 0; hop <= MAX_HTTP_REDIRECTS; hop += 1) {
     assertHostAllowed(current, allowlist);
-    let response: Response | undefined;
+    let response: Response;
     for (let attempt = 0; ; attempt += 1) {
       response = await fetch(current, {
         ...init,
@@ -4675,9 +4613,6 @@ async function fetchAllowlisted(
         break;
       }
       await waitForHttpRetry(response, attempt, signal);
-    }
-    if (!response) {
-      throw new Error(`No response received for ${current}`);
     }
     if (!(response.status >= 300 && response.status < 400)) {
       return { response, finalUrl: current };
@@ -4696,6 +4631,9 @@ async function waitForHttpRetry(response: Response, attempt: number, signal?: Ab
   const delayMs = Math.min(retryAfterMs ?? 25 * (attempt + 1), MAX_HTTP_RETRY_DELAY_MS);
   if (delayMs <= 0) {
     return;
+  }
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("request aborted");
   }
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, delayMs);
@@ -4837,9 +4775,6 @@ function stringArray(value: unknown): string[] {
 
 function parseExecFileCommand(command: string): { file: string; args: string[] } {
   const input = command.trim();
-  if (!input) {
-    throw new Error("shell.exec command is required");
-  }
   if (input.includes("\u0000")) {
     throw new Error("shell.exec command contains invalid null byte");
   }
@@ -4891,14 +4826,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
   if (current.length > 0) {
     tokens.push(current);
   }
-  if (tokens.length === 0) {
-    throw new Error("shell.exec command is required");
-  }
-
-  const file = tokens[0];
-  if (!file) {
-    throw new Error("shell.exec command is required");
-  }
+  const file = tokens[0] as string;
   const args = tokens.slice(1);
   return { file, args };
 }
@@ -4924,10 +4852,7 @@ async function searchFileContents(input: {
   const pending = [fullRoot];
 
   while (pending.length > 0 && matches.length < input.limit) {
-    const current = pending.pop();
-    if (!current) {
-      continue;
-    }
+    const current = pending.pop() as string;
     const stat = await fs.stat(current);
     if (stat.isDirectory()) {
       const entries = await fs.readdir(current, { withFileTypes: true });

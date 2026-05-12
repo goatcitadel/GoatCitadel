@@ -1556,6 +1556,57 @@ describe("tool executor channel failure coverage", () => {
       ),
       /chatGuid not found/i,
     );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.react", {
+          connectionId: "imessage-react-missing-base",
+          messageId: "msg-1",
+          reaction: "love",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "imessage-react-missing-base",
+          key: "imessage",
+          config: { password: "bb-password", defaultHandle: "+15551234567" },
+        }),
+      ),
+      /Missing iMessage bridge URL/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.react", {
+          connectionId: "imessage-react-missing-password",
+          messageId: "msg-1",
+          reaction: "love",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "imessage-react-missing-password",
+          key: "imessage",
+          config: { bridgeUrl: "127.0.0.1:1234", defaultHandle: "+15551234567" },
+        }),
+      ),
+      /Missing iMessage bridge password/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.react", {
+          connectionId: "imessage-react-missing-target",
+          messageId: "msg-1",
+          reaction: "love",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "imessage-react-missing-target",
+          key: "imessage",
+          config: { bridgeUrl: "127.0.0.1:1234", password: "bb-password" },
+        }),
+      ),
+      /Missing iMessage target/i,
+    );
   });
 
   it("covers Signal RPC error envelopes, malformed responses, empty responses, and non-ok results", async () => {
@@ -1623,6 +1674,1280 @@ describe("tool executor channel failure coverage", () => {
         new Response(JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 123 } }), { status: 500 }),
       ),
       /signal\.send failed \(500\)/i,
+    );
+  });
+
+  it("covers generic webhook, Slack, Teams, and Google Chat attachment edge branches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://example.com/hook") {
+        expect(String(init?.body ?? "")).toContain('"text":"No visible attachment lines"');
+        return new Response("ok", { status: 200 });
+      }
+      if (url === "https://slack.com/api/chat.postMessage") {
+        expect(String(init?.body ?? "")).toContain("https://example.com/readme.txt");
+        return new Response(JSON.stringify({ ok: true, ts: "1712345678.000200", channel: "C123" }), { status: 200 });
+      }
+      if (url === "https://slack.com/api/files.getUploadURLExternal") {
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://uploads.slack.com/file", file_id: "F1" }), {
+          status: 200,
+        });
+      }
+      if (url === "https://uploads.slack.com/file") {
+        return new Response("uploaded", { status: 200 });
+      }
+      if (url === "https://slack.com/api/files.completeUploadExternal") {
+        expect(String(init?.body ?? "")).toContain('"thread_ts":"1712345678.000200"');
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url === "https://outlook.office.com/webhook/example") {
+        const body = String(init?.body ?? "");
+        expect(body).toContain('"type":"Image"');
+        expect(body).toContain("[readme.txt](https://example.com/readme.txt)");
+        return new Response("ok", { status: 200 });
+      }
+      if (url === "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=test&token=test") {
+        const body = String(init?.body ?? "");
+        expect(body).toContain("imageUrl");
+        expect(body).toContain("openLink");
+        return new Response("ok", { status: 200 });
+      }
+      throw new Error(`Unexpected edge attachment URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(
+      config,
+      "example.com",
+      "slack.com",
+      "uploads.slack.com",
+      "outlook.office.com",
+      "chat.googleapis.com",
+    );
+
+    const genericWebhook = await executeTool(
+      request("webhook.send", {
+        connectionId: "generic-webhook",
+        message: "No visible attachment lines",
+        attachments: [{ mimeType: "text/plain" }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "generic-webhook",
+        key: "generic",
+        config: { webhookUrl: "https://example.com/hook" },
+      }),
+    );
+    expect(genericWebhook).toMatchObject({ status: "sent" });
+
+    const slackBot = await executeTool(
+      request("slack.send", {
+        connectionId: "slack-bot-edge",
+        message: "",
+        attachments: [
+          { title: "ignored-without-url" },
+          { url: "https://example.com/readme.txt", mimeType: "text/plain" },
+          { dataBase64: Buffer.from("inline").toString("base64"), mimeType: "text/plain" },
+        ],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "slack-bot-edge",
+        key: "slack",
+        config: { botToken: "xoxb-test", defaultChannel: "C123" },
+      }),
+    );
+    expect(slackBot).toMatchObject({ status: "sent", providerMessageId: "1712345678.000200" });
+
+    const teams = await executeTool(
+      request("teams.send", {
+        connectionId: "teams-urls",
+        message: "urls",
+        attachments: [
+          { title: "skip-me" },
+          { title: "dash.png", url: "https://example.com/dash.png", mimeType: "image/png" },
+          { url: "https://example.com/readme.txt", mimeType: "text/plain" },
+        ],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "teams-urls",
+        key: "teams",
+        config: { webhookUrl: "https://outlook.office.com/webhook/example" },
+      }),
+    );
+    expect(teams).toMatchObject({ status: "sent" });
+
+    const googleChat = await executeTool(
+      request("google-chat.send", {
+        connectionId: "google-chat-urls",
+        message: "",
+        attachments: [
+          { title: "skip-me" },
+          { title: "dash.png", url: "https://example.com/dash.png", mimeType: "image/png" },
+          { url: "https://example.com/readme.txt", mimeType: "text/plain" },
+        ],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "google-chat-urls",
+        key: "google-chat",
+        config: { webhookUrl: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=test&token=test" },
+      }),
+    );
+    expect(googleChat).toMatchObject({ status: "sent" });
+  });
+
+  it("covers WhatsApp upload success, target normalization, and malformed Zalo failures", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/media")) {
+        return new Response(JSON.stringify({ id: "media-1" }), { status: 200 });
+      }
+      if (url.endsWith("/messages")) {
+        const body = String(init?.body ?? "");
+        if (body.includes("wa-error-body")) {
+          return new Response(JSON.stringify({ error: { message: "body denied" } }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ messages: [{}] }), { status: 200 });
+      }
+      if (url.startsWith("https://bot-api.zaloplatforms.com/")) {
+        return new Response("{malformed", { status: 500 });
+      }
+      throw new Error(`Unexpected WhatsApp/Zalo URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "graph.facebook.com", "bot-api.zaloplatforms.com");
+
+    const inlineUpload = await executeTool(
+      request("whatsapp.send", {
+        connectionId: "wa-inline-upload",
+        message: "",
+        target: "whatsapp:15551234567@s.whatsapp.net",
+        attachments: [{ mimeType: "video/mp4", dataBase64: Buffer.from("video").toString("base64") }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "wa-inline-upload",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1", baseUrl: "https://graph.facebook.com/v23.0/" },
+      }),
+    );
+    expect(inlineUpload).toMatchObject({ status: "sent" });
+
+    const lidTarget = await executeTool(
+      request("whatsapp.react", { connectionId: "wa-lid", messageId: "msg-1", reaction: "ok", target: "12345@lid" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "wa-lid",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1" },
+      }),
+    );
+    expect(lidTarget).toMatchObject({ status: "sent" });
+
+    await expectFailed(
+      executeTool(
+        request("whatsapp.react", {
+          connectionId: "wa-invalid-address",
+          messageId: "msg-1",
+          reaction: "ok",
+          target: "person@example.com",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "wa-invalid-address",
+          key: "whatsapp",
+          config: { accessToken: "wa-token", phoneNumberId: "phone-1" },
+        }),
+      ),
+      /Missing WhatsApp target/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("whatsapp.send", { connectionId: "wa-error-body", message: "wa-error-body" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "wa-error-body",
+          key: "whatsapp",
+          config: { accessToken: "wa-token", phoneNumberId: "phone-1", defaultRecipient: "+15551234567" },
+        }),
+      ),
+      /body denied/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("zalo.send", { connectionId: "zalo-malformed-error", message: "zalo failure" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "zalo-malformed-error",
+          key: "zalo",
+          config: { accessToken: "zalo-token", defaultRecipientId: "recipient-1" },
+        }),
+      ),
+      /zalo\.send failed \(500\)/i,
+    );
+  });
+
+  it("covers Mattermost channel-name, team lookup, upload, and channel-not-found paths", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v4/users/me")) {
+        return new Response(JSON.stringify({ id: "bot-user" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/teams/name/ops")) {
+        return new Response(JSON.stringify({ id: "team-ops" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/teams/team-ops/channels/name/town-square")) {
+        return new Response(JSON.stringify({ id: "channel-town" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/files")) {
+        return new Response(JSON.stringify({ file_infos: [{ id: "file-1" }] }), { status: 201 });
+      }
+      if (url.endsWith("/api/v4/posts")) {
+        return new Response(JSON.stringify({ id: "mattermost-file-post" }), { status: 201 });
+      }
+      if (url.endsWith("/api/v4/users/bot-user/teams")) {
+        return new Response(JSON.stringify([{ id: "team-a" }, { id: "team-b" }, {}]), { status: 200 });
+      }
+      if (
+        url.endsWith("/api/v4/teams/team-a/channels/name/missing") ||
+        url.endsWith("/api/v4/teams/team-b/channels/name/missing")
+      ) {
+        return new Response("not found", { status: 404 });
+      }
+      if (url.endsWith("/api/v4/teams/team-a/channels/name/broken")) {
+        return new Response("boom", { status: 500 });
+      }
+      throw new Error(`Unexpected Mattermost edge URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "mattermost.example.com");
+
+    const uploaded = await executeTool(
+      request("mattermost.send", {
+        connectionId: "mm-upload",
+        message: "with file",
+        target: "channel:#town-square",
+        attachments: [{ mimeType: "text/plain", dataBase64: Buffer.from("log").toString("base64") }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "mm-upload",
+        key: "mattermost",
+        config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token", defaultTeam: "ops" },
+      }),
+    );
+    expect(uploaded).toMatchObject({ status: "sent", providerMessageId: "mattermost-file-post" });
+
+    const channelName = await executeTool(
+      request("mattermost.send", {
+        connectionId: "mm-channel-name",
+        message: "channel name",
+        target: "channel:town-square",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "mm-channel-name",
+        key: "mattermost",
+        config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token", defaultTeam: "ops" },
+      }),
+    );
+    expect(channelName).toMatchObject({ status: "sent", providerMessageId: "mattermost-file-post" });
+
+    await expectFailed(
+      executeTool(
+        request("mattermost.send", {
+          connectionId: "mm-missing-channel-name",
+          message: "missing",
+          target: "#missing",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "mm-missing-channel-name",
+          key: "mattermost",
+          config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token" },
+        }),
+      ),
+      /Mattermost channel "#missing" not found/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("mattermost.send", {
+          connectionId: "mm-channel-lookup-error",
+          message: "broken",
+          target: "#broken",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "mm-channel-lookup-error",
+          key: "mattermost",
+          config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token" },
+        }),
+      ),
+      /mattermost\.send failed \(500\)/i,
+    );
+  });
+
+  it("covers Zalo User target, attachment classification, fallback IDs, and attachment failures", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = String(init?.body ?? "");
+      if (url.endsWith("/messages/text")) {
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.endsWith("/messages/image")) {
+        if (body.includes("fail-image")) {
+          return new Response(JSON.stringify({ error: { message: "image denied" } }), { status: 500 });
+        }
+        return new Response(JSON.stringify({ data: { messageId: "image-1" } }), { status: 200 });
+      }
+      throw new Error(`Unexpected Zalo User edge URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "zca.example.com");
+
+    await expectFailed(
+      executeTool(
+        request("zalouser.send", { connectionId: "zca-empty-target", message: "empty target", target: "zlu:" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "zca-empty-target",
+          key: "zalouser",
+          config: { baseUrl: "https://zca.example.com" },
+        }),
+      ),
+      /Zalo User target is required/i,
+    );
+
+    const fallbackText = await executeTool(
+      request("zalouser.send", { connectionId: "zca-fallback-id", message: "fallback", target: "friend-raw" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "zca-fallback-id",
+        key: "zalouser",
+        config: { baseUrl: "https://zca.example.com" },
+      }),
+    );
+    expect(fallbackText).toMatchObject({ status: "sent" });
+    expect(String(fallbackText.providerMessageId)).toMatch(/^zalouser-/);
+
+    const image = await executeTool(
+      request("zalouser.send", {
+        connectionId: "zca-image",
+        message: "image",
+        target: "group:team-1",
+        attachments: [{ title: "picture", url: "https://example.com/picture", mimeType: "image/png" }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "zca-image",
+        key: "zalouser",
+        config: { baseUrl: "https://zca.example.com" },
+      }),
+    );
+    expect(image).toMatchObject({ status: "sent", providerMessageId: "image-1" });
+
+    await expectFailed(
+      executeTool(
+        request("zalouser.send", {
+          connectionId: "zca-image-fail",
+          message: "fail-image",
+          target: "user:friend-1",
+          attachments: [{ url: "https://example.com/picture.png" }],
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "zca-image-fail",
+          key: "zalouser",
+          config: { baseUrl: "https://zca.example.com" },
+        }),
+      ),
+      /image denied/i,
+    );
+  });
+
+  it("covers BlueBubbles lookup, text, multipart, reaction, unsend, and failure paths", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const queryBodies: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = String(init?.body ?? "");
+      if (url.endsWith("/api/v1/chat/query?password=bb-password")) {
+        queryBodies.push(body);
+        if (body.includes('"offset":0')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 42, guid: "chat-guid-42" },
+                { identifier: "direct-identifier" },
+                { guid: "iMessage;-;friend@example.com" },
+                { guid: "iMessage;-;group-chat", participants: [{ address: "group@example.com" }] },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/message/text?password=bb-password")) {
+        if (body.includes("fail-text")) {
+          return new Response("text denied", { status: 500 });
+        }
+        expect(body).toContain("tempGuid");
+        return new Response(JSON.stringify({ data: { messageGuid: "text-message" } }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/attachment/upload?password=bb-password")) {
+        if (String(init?.body ?? "").includes("never")) {
+          return new Response("unused", { status: 500 });
+        }
+        return new Response(JSON.stringify({ data: { hash: "hash-1" } }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/message/multipart?password=bb-password")) {
+        if (body.includes("fail-multipart")) {
+          return new Response("multipart denied", { status: 500 });
+        }
+        expect(body).toContain('"subject":"Subject"');
+        return new Response(JSON.stringify({ data: [{ message_guid: "multipart-message" }] }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/message/react?password=bb-password")) {
+        if (body.includes("fail-react")) {
+          return new Response("react denied", { status: 500 });
+        }
+        expect(body).toContain('"partIndex":2');
+        expect(body).toContain("selected text");
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/v1/message/msg/with/slash/unsend?password=bb-password")) {
+        expect(body).toContain('"partIndex":1');
+        return new Response("", { status: 200 });
+      }
+      if (url.endsWith("/api/v1/chat/new?password=bb-password")) {
+        return new Response("create denied", { status: 500 });
+      }
+      if (url === "https://files.example.com/missing.png") {
+        return new Response("missing", { status: 404 });
+      }
+      throw new Error(`Unexpected BlueBubbles URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "127.0.0.1", "files.example.com");
+    const blueBubblesConnection = {
+      key: "imessage",
+      config: { bridgeUrl: "127.0.0.1:1234", password: "bb-password" },
+    };
+
+    const byChatId = await executeTool(
+      request("imessage.send", {
+        connectionId: "imessage-chat-id",
+        message: "chat id",
+        target: "chat_id:42",
+        replyToMessageGuid: "reply-guid",
+        effectId: "impact",
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-chat-id", ...blueBubblesConnection }),
+    );
+    expect(byChatId).toMatchObject({ status: "sent", providerMessageId: "text-message" });
+
+    const byIdentifier = await executeTool(
+      request("imessage.send", {
+        connectionId: "imessage-direct-identifier",
+        message: "identifier",
+        target: "chat_identifier:direct-identifier",
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-direct-identifier", ...blueBubblesConnection }),
+    );
+    expect(byIdentifier).toMatchObject({ status: "sent", providerMessageId: "text-message" });
+
+    const byParticipant = await executeTool(
+      request("imessage.send", {
+        connectionId: "imessage-participant",
+        message: "participant",
+        target: "imessage:group@example.com",
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-participant", ...blueBubblesConnection }),
+    );
+    expect(byParticipant).toMatchObject({ status: "sent", providerMessageId: "text-message" });
+
+    const multipart = await executeTool(
+      request("imessage.send", {
+        connectionId: "imessage-multipart",
+        message: "multipart",
+        target: "guid:chat-guid-42",
+        subject: "Subject",
+        replyTo: "reply-guid",
+        partIndex: "2",
+        effect: "impact",
+        attachments: [{ title: "inline.txt", dataBase64: Buffer.from("inline").toString("base64") }],
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-multipart", ...blueBubblesConnection }),
+    );
+    expect(multipart).toMatchObject({ status: "sent", providerMessageId: "multipart-message" });
+
+    const reacted = await executeTool(
+      request("imessage.react", {
+        connectionId: "imessage-react-success",
+        target: "guid:chat-guid-42",
+        messageGuid: "message-1",
+        reaction: "love",
+        partIndex: "2",
+        selectedMessageText: "selected text",
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-react-success", ...blueBubblesConnection }),
+    );
+    expect(reacted).toMatchObject({ status: "sent", providerMessageId: "message-1" });
+
+    const unsent = await executeTool(
+      request("imessage.unsend", {
+        connectionId: "imessage-unsend-success",
+        messageGuid: "msg/with/slash",
+        partIndex: "1",
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-unsend-success", ...blueBubblesConnection }),
+    );
+    expect(unsent).toMatchObject({ status: "sent", providerMessageId: "msg/with/slash" });
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-text-fail",
+          message: "fail-text",
+          target: "guid:chat-guid-42",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-text-fail", ...blueBubblesConnection }),
+      ),
+      /text denied/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.react", {
+          connectionId: "imessage-react-fail",
+          target: "guid:chat-guid-42",
+          messageId: "fail-react",
+          reaction: "fail-react",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-react-fail", ...blueBubblesConnection }),
+      ),
+      /react denied/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-multipart-fail",
+          message: "fail-multipart",
+          target: "guid:chat-guid-42",
+          attachments: [{ title: "inline.txt", dataBase64: Buffer.from("inline").toString("base64") }],
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-multipart-fail", ...blueBubblesConnection }),
+      ),
+      /multipart denied/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-attachment-fetch-fail",
+          message: "remote",
+          target: "guid:chat-guid-42",
+          attachments: [{ title: "missing.png", url: "https://files.example.com/missing.png" }],
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-attachment-fetch-fail", ...blueBubblesConnection }),
+      ),
+      /attachment fetch failed \(404\)/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-create-fail",
+          message: "create fail",
+          target: "sms:+15550001111",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-create-fail", ...blueBubblesConnection }),
+      ),
+      /create denied/i,
+    );
+
+    expect(queryBodies.some((body) => body.includes('"with":["participants"]'))).toBe(true);
+  });
+
+  it("covers Signal accepted responses, base URL normalization, and target variants", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const bodies: string[] = [];
+    const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body ?? ""));
+      if (bodies.length === 1) {
+        return new Response("", { status: 201 });
+      }
+      return new Response(JSON.stringify({ jsonrpc: "2.0", result: { timestamp: 456 } }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "signal.example.com");
+
+    const accepted = await executeTool(
+      request("signal.send", {
+        connectionId: "signal-accepted",
+        target: "username:alice",
+        message: "accepted",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "signal-accepted",
+        key: "signal",
+        config: { baseUrl: "signal.example.com", accountId: "+15550001111" },
+      }),
+    );
+    expect(accepted).toMatchObject({ status: "sent" });
+    expect(String(accepted.providerMessageId)).toMatch(/^signal-/);
+
+    const usernameAlias = await executeTool(
+      request("signal.send", {
+        connectionId: "signal-username-alias",
+        target: "u:bob",
+        message: "timestamp",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "signal-username-alias",
+        key: "signal",
+        config: { bridgeUrl: "signal.example.com" },
+      }),
+    );
+    expect(usernameAlias).toMatchObject({ status: "sent", providerMessageId: "456" });
+    expect(bodies.some((body) => body.includes('"username":["alice"]'))).toBe(true);
+    expect(bodies.some((body) => body.includes('"username":["bob"]'))).toBe(true);
+  });
+
+  it("covers Gmail and Calendar validation and provider failure branches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")) {
+        return new Response("send denied", { status: 500 });
+      }
+      if (url.startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages")) {
+        return new Response("read denied", { status: 500 });
+      }
+      if (url.includes("/calendar/v3/calendars/primary/events") && url.includes("singleEvents=true")) {
+        return new Response("calendar denied", { status: 500 });
+      }
+      if (url.includes("/calendar/v3/calendars/primary/events")) {
+        return new Response("create denied", { status: 500 });
+      }
+      throw new Error(`Unexpected Google failure URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "gmail.googleapis.com", "www.googleapis.com");
+
+    await expectFailed(
+      executeTool(
+        request("gmail.read", { connectionId: "gmail-missing-token" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "gmail-missing-token",
+          key: "gmail",
+          config: { accessTokenEnv: "MISSING_GMAIL_TOKEN" },
+        }),
+      ),
+      /Missing Gmail access token/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("gmail.read", { connectionId: "gmail-read-fail" }),
+        commsConfig,
+        commsStorage({ connectionId: "gmail-read-fail", key: "gmail", config: { accessToken: "gmail-token" } }),
+      ),
+      /gmail\.read failed \(500\)/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("gmail.send", { connectionId: "gmail-send-missing-token", to: ["ops@example.com"] }),
+        commsConfig,
+        commsStorage({ connectionId: "gmail-send-missing-token", key: "gmail", config: {} }),
+      ),
+      /Missing Gmail access token/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("gmail.send", { connectionId: "gmail-send-missing-to", subject: "No recipient", bodyText: "Body" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "gmail-send-missing-to",
+          key: "gmail",
+          config: { accessToken: "gmail-token" },
+        }),
+      ),
+      /gmail\.send requires args\.to/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("gmail.send", {
+          connectionId: "gmail-send-fail",
+          to: ["ops@example.com"],
+          subject: "Fail",
+          bodyText: "Body",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "gmail-send-fail", key: "gmail", config: { accessToken: "gmail-token" } }),
+      ),
+      /gmail\.send failed \(500\)/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("calendar.list", { connectionId: "calendar-missing-token" }),
+        commsConfig,
+        commsStorage({ connectionId: "calendar-missing-token", key: "calendar", config: {} }),
+      ),
+      /Missing Calendar access token/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("calendar.list", { connectionId: "calendar-list-fail" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "calendar-list-fail",
+          key: "calendar",
+          config: { accessToken: "calendar-token" },
+        }),
+      ),
+      /calendar\.list failed \(500\)/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("calendar.create_event", {
+          connectionId: "calendar-create-missing-token",
+          title: "No token",
+          startIso: "2026-03-22T17:00:00.000Z",
+          endIso: "2026-03-22T17:30:00.000Z",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "calendar-create-missing-token", key: "calendar", config: {} }),
+      ),
+      /Missing Calendar access token/i,
+    );
+    await expectFailed(
+      executeTool(
+        request("calendar.create_event", {
+          connectionId: "calendar-create-fail",
+          title: "Fail",
+          startIso: "2026-03-22T17:00:00.000Z",
+          endIso: "2026-03-22T17:30:00.000Z",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "calendar-create-fail",
+          key: "calendar",
+          config: { accessToken: "calendar-token" },
+        }),
+      ),
+      /calendar\.create_event failed \(500\)/i,
+    );
+  });
+
+  it("covers Slack inline upload failure stages", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    let mode: "metadata" | "upload" | "complete" = "metadata";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === "https://slack.com/api/files.getUploadURLExternal") {
+        if (mode === "metadata") {
+          return new Response(JSON.stringify({ ok: false, error: "metadata denied" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ ok: true, upload_url: "https://uploads.slack.com/file", file_id: "F1" }), {
+          status: 200,
+        });
+      }
+      if (url === "https://uploads.slack.com/file") {
+        return mode === "upload" ? new Response("upload denied", { status: 500 }) : new Response("ok", { status: 200 });
+      }
+      if (url === "https://slack.com/api/files.completeUploadExternal") {
+        return mode === "complete"
+          ? new Response(JSON.stringify({ ok: false, error: "complete denied" }), { status: 200 })
+          : new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      throw new Error(`Unexpected Slack upload URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "slack.com", "uploads.slack.com");
+    const runSlackUpload = (connectionId: string, mimeType: string) =>
+      executeTool(
+        request("slack.send", {
+          connectionId,
+          message: "",
+          attachments: [{ mimeType, dataBase64: Buffer.from("inline").toString("base64") }],
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId,
+          key: "slack",
+          config: { botToken: "xoxb-test", defaultChannel: "C123" },
+        }),
+      );
+
+    await expectFailed(runSlackUpload("slack-upload-metadata-fail", "image/jpeg"), /metadata denied/i);
+    mode = "upload";
+    await expectFailed(runSlackUpload("slack-upload-body-fail", "text/"), /upload denied/i);
+    mode = "complete";
+    await expectFailed(runSlackUpload("slack-upload-complete-fail", "text"), /complete denied/i);
+  });
+
+  it("covers Mattermost empty-team and file-upload failure branches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    let mode: "empty-teams" | "file-fail" | "file-empty" | "file-object" = "empty-teams";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v4/users/me")) {
+        return new Response(JSON.stringify({ id: "bot-user" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/users/bot-user/teams")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/files")) {
+        if (mode === "file-fail") {
+          return new Response("file denied", { status: 500 });
+        }
+        if (mode === "file-object") {
+          return new Response(JSON.stringify({ file_infos: {} }), { status: 201 });
+        }
+        return new Response(JSON.stringify({ file_infos: [] }), { status: 201 });
+      }
+      throw new Error(`Unexpected Mattermost upload failure URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "mattermost.example.com");
+
+    await expectFailed(
+      executeTool(
+        request("mattermost.send", { connectionId: "mm-empty-teams", message: "teamless", target: "#town-square" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "mm-empty-teams",
+          key: "mattermost",
+          config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token" },
+        }),
+      ),
+      /not a member of any team/i,
+    );
+
+    const runMattermostUpload = (connectionId: string) =>
+      executeTool(
+        request("mattermost.send", {
+          connectionId,
+          message: "file",
+          target: "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          attachments: [{ mimeType: "text/plain", dataBase64: Buffer.from("log").toString("base64") }],
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId,
+          key: "mattermost",
+          config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token" },
+        }),
+      );
+
+    mode = "file-fail";
+    await expectFailed(runMattermostUpload("mm-file-fail"), /file denied/i);
+    mode = "file-empty";
+    await expectFailed(runMattermostUpload("mm-file-empty"), /uploaded file id is required/i);
+    mode = "file-object";
+    await expectFailed(runMattermostUpload("mm-file-object"), /uploaded file id is required/i);
+  });
+
+  it("covers additional BlueBubbles target and provider failure branches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    let uploadMode: "missing-hash" | "http-error" = "missing-hash";
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = String(init?.body ?? "");
+      if (url.endsWith("/api/v1/chat/query?password=bb-password")) {
+        if (body.includes('"offset":0')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 123, guid: "chat-guid-123" },
+                { id: 777 },
+                { guid: "chat123" },
+                { guid: "iMessage;-;group-chat" },
+                { identifier: "direct-only" },
+                { guid: "iMessage;-;user@example.com" },
+                { guid: "iMessage;-;imessage:prefixed@example.com" },
+                { guid: "iMessage;-;sms:sms-prefixed@example.com" },
+                { guid: "iMessage;-;auto:auto-prefixed@example.com" },
+                {
+                  guid: "iMessage;-;handle-group",
+                  handles: ["string@example.com", null, { id: "object@example.com" }],
+                },
+                { guid: "iMessage;-;participant-handle-group", participantHandles: ["participant@example.com"] },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }
+      if (url.endsWith("/api/v1/message/text?password=bb-password")) {
+        return new Response(JSON.stringify({ id: 789 }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/chat/new?password=bb-password")) {
+        return new Response("", { status: 200 });
+      }
+      if (url.includes("/api/v1/message/fail-unsend/unsend?password=bb-password")) {
+        return new Response("unsend denied", { status: 500 });
+      }
+      if (url.endsWith("/api/v1/attachment/upload?password=bb-password")) {
+        if (uploadMode === "http-error") {
+          return new Response("upload denied", { status: 500 });
+        }
+        return new Response("{}", { status: 200 });
+      }
+      throw new Error(`Unexpected BlueBubbles extra URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "127.0.0.1");
+    const blueBubblesConnection = {
+      key: "imessage",
+      config: { bridgeUrl: "127.0.0.1:1234", password: "bb-password" },
+    };
+
+    for (const [connectionId, target] of [
+      ["imessage-group-number", "group:123"],
+      ["imessage-group-guid", "group:chat-guid-raw"],
+      ["imessage-semicolon-guid", "iMessage;-;raw@example.com"],
+      ["imessage-chat-identifier", "chat123"],
+      ["imessage-guid-identifier", "chat_identifier:group-chat"],
+      ["imessage-direct-identifier-extra", "chat_identifier:direct-only"],
+      ["imessage-bluebubbles-prefix", "bluebubbles:auto:user@example.com"],
+      ["imessage-service-chat-prefix", "auto:chat:123"],
+      ["imessage-string-handles", "string@example.com"],
+      ["imessage-object-handles", "object@example.com"],
+      ["imessage-participant-handles", "participant@example.com"],
+      ["imessage-prefixed-direct-handle", "prefixed@example.com"],
+      ["imessage-sms-prefixed-direct-handle", "sms-prefixed@example.com"],
+      ["imessage-auto-prefixed-direct-handle", "auto-prefixed@example.com"],
+      ["imessage-default-handle", "person@example.com"],
+    ] as const) {
+      const result = await executeTool(
+        request("imessage.send", { connectionId, message: "target", target }),
+        commsConfig,
+        commsStorage({ connectionId, ...blueBubblesConnection }),
+      );
+      expect(result).toMatchObject({ status: "sent" });
+    }
+
+    const createdUnknown = await executeTool(
+      request("imessage.send", {
+        connectionId: "imessage-create-empty",
+        message: "create",
+        target: "sms:+15550002222",
+      }),
+      commsConfig,
+      commsStorage({ connectionId: "imessage-create-empty", ...blueBubblesConnection }),
+    );
+    expect(createdUnknown).toMatchObject({ status: "sent", providerMessageId: "unknown" });
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", { connectionId: "imessage-missing-guid", message: "missing", target: "chat:777" }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-missing-guid", ...blueBubblesConnection }),
+      ),
+      /chatGuid not found/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", { connectionId: "imessage-missing-chat-id", message: "missing", target: "chat:999" }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-missing-chat-id", ...blueBubblesConnection }),
+      ),
+      /chatGuid not found/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-empty-bluebubbles-prefix",
+          message: "bad",
+          target: "bluebubbles:",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-empty-bluebubbles-prefix", ...blueBubblesConnection }),
+      ),
+      /iMessage handle is required/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-invalid-chat-id",
+          message: "bad",
+          target: "chat_id:not-a-number",
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-invalid-chat-id", ...blueBubblesConnection }),
+      ),
+      /Invalid BlueBubbles chat_id target/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.unsend", { connectionId: "imessage-unsend-fail", messageId: "fail-unsend" }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-unsend-fail", ...blueBubblesConnection }),
+      ),
+      /unsend denied/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-upload-missing-hash",
+          message: "hash",
+          target: "guid:chat-guid-123",
+          attachments: [{ title: "inline.txt", dataBase64: Buffer.from("inline").toString("base64") }],
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-upload-missing-hash", ...blueBubblesConnection }),
+      ),
+      /missing attachment hash/i,
+    );
+
+    uploadMode = "http-error";
+    await expectFailed(
+      executeTool(
+        request("imessage.send", {
+          connectionId: "imessage-upload-http-fail",
+          message: "upload",
+          target: "guid:chat-guid-123",
+          attachments: [{ title: "inline.txt", dataBase64: Buffer.from("inline").toString("base64") }],
+        }),
+        commsConfig,
+        commsStorage({ connectionId: "imessage-upload-http-fail", ...blueBubblesConnection }),
+      ),
+      /upload denied/i,
+    );
+  });
+
+  it("covers remaining Telegram, WhatsApp, Zalo User, and Mattermost normalization branches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    let telegramMode: "string-id" | "fallback-id" = "string-id";
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = String(init?.body ?? "");
+      if (url.endsWith("/sendMessage")) {
+        return telegramMode === "string-id"
+          ? new Response(JSON.stringify({ ok: true, result: { message_id: "telegram-string" } }), { status: 200 })
+          : new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+      }
+      if (url.endsWith("/messages/video")) {
+        return new Response(JSON.stringify({ data: { id: "zca-video-mime" } }), { status: 200 });
+      }
+      if (url.endsWith("/messages/voice")) {
+        return new Response(JSON.stringify({ data: { id: "zca-audio-mime" } }), { status: 200 });
+      }
+      if (url.endsWith("/messages")) {
+        if (body.includes("audio/mpeg")) {
+          return new Response(JSON.stringify({ messages: [{ id: "wa-audio" }] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      if (url.endsWith("/media")) {
+        return new Response(JSON.stringify({ id: "media-audio" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/users/me")) {
+        return new Response(JSON.stringify({ id: "bot-user" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/channels/direct")) {
+        return new Response(JSON.stringify({ id: "direct-channel" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v4/posts")) {
+        return new Response(JSON.stringify({ id: "mattermost-target-post" }), { status: 201 });
+      }
+      throw new Error(`Unexpected remaining normalization URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(
+      config,
+      "api.telegram.org",
+      "graph.facebook.com",
+      "zca.example.com",
+      "mattermost.example.com",
+    );
+
+    const telegramStringId = await executeTool(
+      request("telegram.send", { connectionId: "telegram-string-id", message: "telegram" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "telegram-string-id",
+        key: "telegram",
+        config: { botToken: "tg-token", defaultChatId: "-1001" },
+      }),
+    );
+    expect(telegramStringId).toMatchObject({ status: "sent", providerMessageId: "telegram-string" });
+
+    telegramMode = "fallback-id";
+    const telegramFallback = await executeTool(
+      request("telegram.send", { connectionId: "telegram-fallback-id", message: "telegram" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "telegram-fallback-id",
+        key: "telegram",
+        config: { botToken: "tg-token", defaultChatId: "-1001" },
+      }),
+    );
+    expect(telegramFallback).toMatchObject({ status: "sent" });
+    expect(String(telegramFallback.providerMessageId)).toMatch(/^telegram-/);
+
+    await expectFailed(
+      executeTool(
+        request("whatsapp.send", { connectionId: "wa-empty-prefix", message: "empty", target: "whatsapp:" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "wa-empty-prefix",
+          key: "whatsapp",
+          config: { accessToken: "wa-token", phoneNumberId: "phone-1" },
+        }),
+      ),
+      /Missing WhatsApp target/i,
+    );
+
+    const whatsappAudio = await executeTool(
+      request("whatsapp.send", {
+        connectionId: "wa-audio-mime",
+        message: "",
+        target: "+15551234567",
+        attachments: [{ mimeType: "audio/mpeg", dataBase64: Buffer.from("audio").toString("base64") }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "wa-audio-mime",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1" },
+      }),
+    );
+    expect(whatsappAudio).toMatchObject({ status: "sent" });
+    expect(String(whatsappAudio.providerMessageId)).toMatch(/^whatsapp-/);
+
+    const whatsappFallback = await executeTool(
+      request("whatsapp.send", { connectionId: "wa-messages-fallback", message: "fallback", target: "+15551234567" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "wa-messages-fallback",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1" },
+      }),
+    );
+    expect(whatsappFallback).toMatchObject({ status: "sent" });
+    expect(String(whatsappFallback.providerMessageId)).toMatch(/^whatsapp-/);
+
+    const whatsappInvalidAttachmentName = await executeTool(
+      request("whatsapp.send", {
+        connectionId: "wa-invalid-attachment-name",
+        message: "",
+        target: "+15551234567",
+        attachments: [{ url: "not a url", mimeType: "application/pdf" }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "wa-invalid-attachment-name",
+        key: "whatsapp",
+        config: { accessToken: "wa-token", phoneNumberId: "phone-1" },
+      }),
+    );
+    expect(whatsappInvalidAttachmentName).toMatchObject({ status: "sent" });
+
+    const zcaVideoMime = await executeTool(
+      request("zalouser.send", {
+        connectionId: "zca-video-mime",
+        message: "video",
+        target: "group:team-1",
+        attachments: [{ url: "https://example.com/media", mimeType: "video/mp4" }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "zca-video-mime",
+        key: "zalouser",
+        config: { baseUrl: "https://zca.example.com" },
+      }),
+    );
+    expect(zcaVideoMime).toMatchObject({ status: "sent", providerMessageId: "zca-video-mime" });
+
+    const zcaAudioMime = await executeTool(
+      request("zalouser.send", {
+        connectionId: "zca-audio-mime",
+        message: "audio",
+        target: "user:friend-1",
+        attachments: [{ url: "https://example.com/media", mimeType: "audio/ogg" }],
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "zca-audio-mime",
+        key: "zalouser",
+        config: { baseUrl: "https://zca.example.com" },
+      }),
+    );
+    expect(zcaAudioMime).toMatchObject({ status: "sent", providerMessageId: "zca-audio-mime" });
+
+    for (const [connectionId, target] of [
+      ["mm-channel-id-target", "channel:aaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      ["mm-user-id-target", "user:user-1"],
+      ["mm-mattermost-id-target", "mattermost:user-2"],
+    ] as const) {
+      const result = await executeTool(
+        request("mattermost.send", { connectionId, message: "mattermost target", target }),
+        commsConfig,
+        commsStorage({
+          connectionId,
+          key: "mattermost",
+          config: { serverUrl: "https://mattermost.example.com", botToken: "mm-token" },
+        }),
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "mattermost-target-post" });
+    }
+  });
+
+  it("covers BlueBubbles query provider errors", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    globalThis.fetch = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/chat/query?password=bb-password")) {
+        return new Response("query denied", { status: 500 });
+      }
+      throw new Error(`Unexpected BlueBubbles query error URL: ${url}`);
+    }) as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "127.0.0.1");
+
+    await expectFailed(
+      executeTool(
+        request("imessage.send", { connectionId: "imessage-query-error", message: "query", target: "chat:123" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "imessage-query-error",
+          key: "imessage",
+          config: { bridgeUrl: "127.0.0.1:1234", password: "bb-password" },
+        }),
+      ),
+      /chatGuid not found/i,
     );
   });
 });

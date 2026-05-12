@@ -621,6 +621,172 @@ describe("tool executor edge coverage", () => {
     );
     expect(unsupportedUnsend).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
   });
+
+  it("covers HTTP redirect, retry-after, and abort retry branches", async () => {
+    let mode: "missing-location" | "too-many" | "retry-date" | "retry-invalid" | "abort-retry" | "abort-event" =
+      "missing-location";
+    let calls = 0;
+    const eventAbortController = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      calls += 1;
+      if (mode === "missing-location") {
+        return new Response("", { status: 302 });
+      }
+      if (mode === "too-many") {
+        return new Response("", { status: 302, headers: { location: "/again" } });
+      }
+      if (mode === "retry-date" && calls === 1) {
+        return new Response("retry", {
+          status: 503,
+          headers: { "retry-after": new Date(Date.now() - 1000).toUTCString() },
+        });
+      }
+      if (mode === "retry-invalid" && calls === 1) {
+        return new Response("retry", { status: 503, headers: { "retry-after": "not-a-date" } });
+      }
+      if (mode === "abort-retry") {
+        return new Response("retry", { status: 503, headers: { "retry-after": "1" } });
+      }
+      if (mode === "abort-event") {
+        setTimeout(() => eventAbortController?.abort(new Error("event abort")), 0);
+        return new Response("retry", { status: 503, headers: { "retry-after": "1" } });
+      }
+      return new Response("ok", { status: 200, headers: { "content-type": "text/plain" } });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const httpConfig = withAllowlist(config, "example.com");
+
+    await expect(
+      executeTool(request("http.get", { url: "https://example.com/start" }), httpConfig, storageStub()),
+    ).rejects.toThrow(/Redirect missing location/i);
+
+    mode = "too-many";
+    calls = 0;
+    await expect(
+      executeTool(request("http.get", { url: "https://example.com/start" }), httpConfig, storageStub()),
+    ).rejects.toThrow(/Too many redirects/i);
+
+    mode = "retry-date";
+    calls = 0;
+    await expect(
+      executeTool(request("http.get", { url: "https://example.com/retry" }), httpConfig, storageStub()),
+    ).resolves.toMatchObject({ status: 200, body: "ok" });
+
+    mode = "retry-invalid";
+    calls = 0;
+    await expect(
+      executeTool(request("http.get", { url: "https://example.com/retry-invalid" }), httpConfig, storageStub()),
+    ).resolves.toMatchObject({ status: 200, body: "ok" });
+
+    mode = "abort-retry";
+    calls = 0;
+    const controller = new AbortController();
+    controller.abort(new Error("stop retry"));
+    const aborted = executeTool(
+      { ...request("http.get", { url: "https://example.com/abort" }), signal: controller.signal },
+      httpConfig,
+      storageStub(),
+    );
+    await expect(aborted).rejects.toThrow(/stop retry/i);
+
+    mode = "abort-event";
+    calls = 0;
+    await expect(
+      executeTool(
+        { ...request("http.get", { url: "https://example.com/abort-event" }), signal: eventAbortController.signal },
+        httpConfig,
+        storageStub(),
+      ),
+    ).rejects.toThrow(/event abort/i);
+  });
+
+  it("covers shell command parsing and boolean coercion edge cases", async () => {
+    mocked.execFileAsync.mockResolvedValue({ stdout: "shell-ok", stderr: "" });
+
+    await expect(
+      executeTool(request("shell.exec", { command: "node\u0000bad" }), config, storageStub()),
+    ).rejects.toThrow(/invalid null byte/i);
+    await expect(
+      executeTool(request("shell.exec", { command: 'node "unterminated' }), config, storageStub()),
+    ).rejects.toThrow(/unmatched quotes/i);
+
+    const parsed = await executeTool(
+      request("shell.exec", { command: "node 'two words' \\\"quoted\\\" path\\x" }),
+      config,
+      storageStub(),
+    );
+    expect(parsed).toMatchObject({
+      executable: "node",
+      argv: ["two words", '"quoted"', "path\\x"],
+      exitCode: 0,
+    });
+
+    const deleteRoot = path.join(tempRoot, "delete-bool");
+    const nestedFile = path.join(deleteRoot, "nested", "file.txt");
+    await fs.mkdir(path.dirname(nestedFile), { recursive: true });
+    await fs.writeFile(nestedFile, "delete me\n", "utf8");
+    await expect(
+      executeTool(request("fs.delete", { path: deleteRoot, recursive: "true" }), config, storageStub()),
+    ).resolves.toMatchObject({ deleted: true });
+
+    const fileDelete = path.join(tempRoot, "delete-file.txt");
+    await fs.writeFile(fileDelete, "delete file\n", "utf8");
+    await expect(
+      executeTool(request("fs.delete", { path: fileDelete, recursive: "false" }), config, storageStub()),
+    ).resolves.toMatchObject({ deleted: true });
+  });
+
+  it("covers content search skips, code-only filtering, and full-disk read bypass", async () => {
+    const searchRoot = path.join(tempRoot, "content-search");
+    await fs.mkdir(path.join(searchRoot, ".git"), { recursive: true });
+    await fs.mkdir(path.join(searchRoot, "src"), { recursive: true });
+    await fs.writeFile(path.join(searchRoot, ".git", "ignored.ts"), "needle ignored\n", "utf8");
+    await fs.writeFile(path.join(searchRoot, "notes.txt"), "needle notes\n", "utf8");
+    await fs.writeFile(path.join(searchRoot, "src", "a-no-match.ts"), "nothing here\n", "utf8");
+    await fs.writeFile(path.join(searchRoot, "src", "feature.ts"), "needle code\n", "utf8");
+    await fs.writeFile(path.join(searchRoot, "src", "other.ts"), "needle other\n", "utf8");
+
+    const contentMatches = await executeTool(
+      request("code.search", { path: searchRoot, query: "needle", limit: 1 }),
+      config,
+      storageStub(),
+    );
+    expect(contentMatches).toMatchObject({ count: 1 });
+    const matchPath = String((contentMatches.matches as Array<Record<string, unknown>>)[0]?.path ?? "");
+    expect(matchPath).toMatch(/\.ts$/);
+    expect(matchPath).not.toContain(`${path.sep}.git${path.sep}`);
+
+    const skippedNonCodeFile = await executeTool(
+      request("code.search", { path: path.join(searchRoot, "notes.txt"), query: "needle" }),
+      config,
+      storageStub(),
+    );
+    expect(skippedNonCodeFile).toMatchObject({ count: 0 });
+
+    const longDoc = `${"x".repeat(1300)} needle ${"y".repeat(1300)}`;
+    await expect(
+      executeTool(
+        request("memory.write", { namespace: "long-doc", title: "Long Doc", content: longDoc }),
+        config,
+        knowledgeStorage(),
+      ),
+    ).resolves.toMatchObject({ chunksSaved: expect.any(Number) });
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-executor-full-disk-"));
+    const outsideFile = path.join(outsideDir, "outside.txt");
+    await fs.writeFile(outsideFile, "full disk read\n", "utf8");
+    try {
+      await expect(
+        executeTool(
+          request("file.read_range", { path: outsideFile, startLine: 1, endLine: 1 }),
+          { ...config, sandbox: { ...config.sandbox, readAccessMode: "full_disk" } },
+          storageStub(),
+        ),
+      ).resolves.toMatchObject({ content: "full disk read" });
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function createConfig(root: string): ToolPolicyConfig {
