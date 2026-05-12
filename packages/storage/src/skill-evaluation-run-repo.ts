@@ -81,7 +81,7 @@ export class SkillEvaluationRunRepository {
   }
 
   public get(runId: string): SkillEvaluationRunRecord {
-    const row = this.getStmt.get(runId) as SkillEvaluationRunRow | undefined;
+    const row = toSkillEvaluationRunRow(this.getStmt.get(runId));
     if (!row) {
       throw new NotFoundError({ entity: "skill evaluation run", id: runId });
     }
@@ -89,20 +89,24 @@ export class SkillEvaluationRunRepository {
   }
 
   public find(runId: string): SkillEvaluationRunRecord | undefined {
-    const row = this.getStmt.get(runId) as SkillEvaluationRunRow | undefined;
+    const row = toSkillEvaluationRunRow(this.getStmt.get(runId));
     return row ? mapSkillEvaluationRunRow(row) : undefined;
   }
 
   public listBySkill(skillId: string, limit = 100): SkillEvaluationRunRecord[] {
     const boundedLimit = Math.max(1, Math.min(limit, 300));
-    return (this.listBySkillStmt.all({ skillId, limit: boundedLimit }) as unknown as SkillEvaluationRunRow[]).map(
+    return toSkillEvaluationRunRows(this.listBySkillStmt.all({ skillId, limit: boundedLimit })).map(
       mapSkillEvaluationRunRow,
     );
   }
 }
 
 function mapSkillEvaluationRunRow(row: SkillEvaluationRunRow): SkillEvaluationRunRecord {
-  return safeJsonParse(row.record_json, {
+  const parsed = safeJsonParse<unknown>(row.record_json, undefined);
+  if (isSkillEvaluationRunRecord(parsed)) {
+    return parsed;
+  }
+  return {
     runId: row.run_id,
     skillId: row.skill_id,
     skillName: row.skill_name,
@@ -129,5 +133,67 @@ function mapSkillEvaluationRunRow(row: SkillEvaluationRunRow): SkillEvaluationRu
       writesSkillFile: false,
       proposalOnly: true,
     },
-  });
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSkillEvaluationRunRow(value: unknown): value is SkillEvaluationRunRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.run_id === "string" &&
+    typeof value.skill_id === "string" &&
+    typeof value.skill_name === "string" &&
+    typeof value.status === "string" &&
+    typeof value.target_pass_rate === "number" &&
+    typeof value.max_rounds === "number" &&
+    typeof value.accepted === "number" &&
+    typeof value.improvement_delta === "number" &&
+    (typeof value.proposal_id === "string" || value.proposal_id === null) &&
+    (typeof value.improvement_candidate_id === "string" || value.improvement_candidate_id === null) &&
+    (typeof value.ledger_signal_id === "string" || value.ledger_signal_id === null) &&
+    typeof value.record_json === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function toSkillEvaluationRunRow(value: unknown): SkillEvaluationRunRow | undefined {
+  return isSkillEvaluationRunRow(value) ? value : undefined;
+}
+
+function toSkillEvaluationRunRows(value: unknown): SkillEvaluationRunRow[] {
+  return Array.isArray(value) ? value.filter(isSkillEvaluationRunRow) : [];
+}
+
+function isSkillEvaluationRunRecord(value: unknown): value is SkillEvaluationRunRecord {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.runId === "string" &&
+    typeof value.skillId === "string" &&
+    typeof value.skillName === "string" &&
+    typeof value.status === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    Array.isArray(value.scenarios) &&
+    Array.isArray(value.criteria) &&
+    isRecord(value.baselineResult) &&
+    (value.candidateResult === undefined || isRecord(value.candidateResult)) &&
+    (value.mutation === undefined || isRecord(value.mutation)) &&
+    typeof value.accepted === "boolean" &&
+    typeof value.improvementDelta === "number" &&
+    typeof value.targetPassRate === "number" &&
+    typeof value.maxRounds === "number" &&
+    (value.proposalId === undefined || typeof value.proposalId === "string") &&
+    (value.improvementCandidateId === undefined || typeof value.improvementCandidateId === "string") &&
+    (value.ledgerSignalId === undefined || typeof value.ledgerSignalId === "string") &&
+    Array.isArray(value.warnings) &&
+    isRecord(value.operatorTruth)
+  );
 }
