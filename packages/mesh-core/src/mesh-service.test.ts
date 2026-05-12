@@ -62,15 +62,113 @@ describe("MeshService", () => {
     expect(storage.mesh.join).not.toHaveBeenCalled();
   });
 
+  it("accepts joins and exposes status/listing delegates", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, baseOptions);
+
+    const joined = service.join({
+      token: "join-token",
+      nodeId: "node-peer",
+      label: "Peer",
+      transport: "tailnet",
+      tlsFingerprint: "fingerprint",
+    });
+
+    expect(joined).toMatchObject({
+      accepted: true,
+      node: {
+        nodeId: "node-peer",
+      },
+    });
+    expect(service.status()).toMatchObject({ enabled: true, localNodeId: "node-local" });
+    expect(service.listNodes()).toEqual([]);
+    expect(service.listNodes(10)).toEqual([]);
+    expect(storage.mesh.listNodes).toHaveBeenCalledWith(200);
+    expect(storage.mesh.listNodes).toHaveBeenCalledWith(10);
+  });
+
+  it("updates runtime options, trims replacement node ids, and reinitializes", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, {
+      ...baseOptions,
+      joinToken: "   ",
+    });
+
+    service.init();
+    expect(storage.mesh.issueJoinToken).not.toHaveBeenCalled();
+
+    service.updateOptions({
+      enabled: false,
+      mode: "lan",
+      localNodeId: " node-next ",
+      localNodeLabel: "Next",
+      advertiseAddress: "https://node-next.example",
+      requireMtls: true,
+      tailnetEnabled: false,
+      defaultLeaseTtlSeconds: 5,
+      joinToken: "next-token",
+    });
+
+    expect(storage.mesh.upsertNode).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        nodeId: "node-next",
+        label: "Next",
+        advertiseAddress: "https://node-next.example",
+        transport: "lan",
+      }),
+    );
+    expect(storage.mesh.issueJoinToken).toHaveBeenCalledWith("next-token", expect.any(String));
+    expect(() =>
+      service.join({
+        token: "next-token",
+        nodeId: "node-peer",
+        label: "Peer",
+        transport: "lan",
+      }),
+    ).toThrow(/Mesh is disabled/);
+
+    service.updateOptions({ enabled: true, localNodeId: " " });
+    expect(storage.mesh.upsertNode).toHaveBeenLastCalledWith(expect.objectContaining({ nodeId: "node-next" }));
+  });
+
   it("uses the service default lease ttl unless the request overrides it", () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
     service.acquireLease({ leaseKey: "session:1", holderNodeId: "node-local" });
     service.renewLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7, ttlSeconds: 120 });
+    service.releaseLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7 });
+    service.listLeases();
+    service.listLeases(20);
 
     expect(storage.mesh.acquireLease).toHaveBeenCalledWith("session:1", "node-local", 60);
     expect(storage.mesh.renewLease).toHaveBeenCalledWith("session:1", "node-local", 7, 120);
+    expect(storage.mesh.releaseLease).toHaveBeenCalledWith("session:1", "node-local", 7);
+    expect(storage.mesh.listLeases).toHaveBeenCalledWith(200);
+    expect(storage.mesh.listLeases).toHaveBeenCalledWith(20);
+  });
+
+  it("delegates session ownership helpers to storage", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, baseOptions);
+
+    service.claimSessionOwner("sess-1", {
+      ownerNodeId: "node-local",
+      expectedEpoch: 1,
+      force: true,
+    });
+    service.getSessionOwner("sess-1");
+    service.listSessionOwners();
+    service.listSessionOwners(25);
+
+    expect(storage.mesh.claimSessionOwner).toHaveBeenCalledWith("sess-1", {
+      ownerNodeId: "node-local",
+      expectedEpoch: 1,
+      force: true,
+    });
+    expect(storage.mesh.getSessionOwner).toHaveBeenCalledWith("sess-1");
+    expect(storage.mesh.listSessionOwners).toHaveBeenCalledWith(500);
+    expect(storage.mesh.listSessionOwners).toHaveBeenCalledWith(25);
   });
 
   it("delegates replication ingestion, listing, and offset state to storage", () => {
@@ -85,6 +183,8 @@ describe("MeshService", () => {
     });
     service.listReplicationEvents(10, "cursor-1");
     service.setReplicationOffset("consumer-1", "node-local", "repl-1");
+    service.listReplicationOffsets();
+    service.listReplicationOffsets(15);
 
     expect(storage.mesh.appendReplicationEvent).toHaveBeenCalledWith({
       sourceNodeId: "node-local",
@@ -94,6 +194,8 @@ describe("MeshService", () => {
     });
     expect(storage.mesh.listReplicationEvents).toHaveBeenCalledWith(10, "cursor-1");
     expect(storage.mesh.setReplicationOffset).toHaveBeenCalledWith("consumer-1", "node-local", "repl-1");
+    expect(storage.mesh.listReplicationOffsets).toHaveBeenCalledWith(500);
+    expect(storage.mesh.listReplicationOffsets).toHaveBeenCalledWith(15);
   });
 });
 

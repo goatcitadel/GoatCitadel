@@ -11,10 +11,16 @@ export function collectMemoryCandidates(
   options: CandidateCollectorOptions,
 ): MemoryCandidate[] {
   const out: MemoryCandidate[] = [];
+  const maxTranscriptEvents = Math.max(0, Math.floor(options.maxTranscriptEvents));
+  const maxFileCandidates = Math.max(0, Math.floor(options.maxFileCandidates));
+  const maxCharsPerCandidate = Math.max(1, Math.floor(options.maxCharsPerCandidate));
 
   for (const source of sources) {
     if (source.type === "transcript") {
-      const recent = source.events.slice(-Math.max(0, options.maxTranscriptEvents));
+      if (maxTranscriptEvents === 0) {
+        continue;
+      }
+      const recent = source.events.slice(-maxTranscriptEvents);
       for (const event of recent) {
         const content = extractTranscriptText(event.payload);
         if (!content) {
@@ -24,26 +30,23 @@ export function collectMemoryCandidates(
           candidateId: `t:${event.eventId}`,
           sourceType: "transcript",
           sourceRef: event.eventId,
-          text: trimCandidate(content, options.maxCharsPerCandidate),
+          text: trimCandidate(content, maxCharsPerCandidate),
           timestamp: event.timestamp,
         });
       }
       continue;
     }
 
-    if (out.filter((candidate) => candidate.sourceType === "file").length >= options.maxFileCandidates) {
+    if (out.filter((candidate) => candidate.sourceType === "file").length >= maxFileCandidates) {
       continue;
     }
 
-    const chunks = splitIntoChunks(source.content, options.maxCharsPerCandidate);
+    const chunks = splitIntoChunks(source.content, maxCharsPerCandidate);
     for (let index = 0; index < chunks.length; index += 1) {
-      if (out.filter((candidate) => candidate.sourceType === "file").length >= options.maxFileCandidates) {
+      if (out.filter((candidate) => candidate.sourceType === "file").length >= maxFileCandidates) {
         break;
       }
-      const chunk = chunks[index];
-      if (!chunk) {
-        continue;
-      }
+      const chunk = chunks[index]!;
       out.push({
         candidateId: `f:${source.relativePath}#${index}`,
         sourceType: "file",

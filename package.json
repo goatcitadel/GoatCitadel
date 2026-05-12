@@ -46,6 +46,7 @@
     "coverage:collect": "node scripts/coverage-collect.mjs",
     "coverage:gate": "node scripts/coverage-gate.mjs",
     "coverage:gate:production": "node scripts/coverage-gate.mjs --profile=production",
+    "coverage:gate:line100": "node scripts/coverage-gate.mjs --profile=line100",
     "docs:check": "node scripts/validate-governance-docs.mjs && node scripts/check-button-types.mjs && node scripts/check-no-inline-sql.mjs && node scripts/check-memory-ownership.mjs && node scripts/check-no-empty-catch.mjs && node scripts/check-launcher-ui-target.mjs && node scripts/check-docker-secret-docs.mjs && pnpm check:docker-secrets",
     "verify:repo:hygiene": "node --test scripts/verify-repo-hygiene.test.mjs scripts/release/release-certificate-proof.test.mjs && node scripts/verify-repo-hygiene.mjs",
     "verify:artifacts:redaction": "node --test scripts/verify-artifact-redaction.test.mjs && node scripts/verify-artifact-redaction.mjs",

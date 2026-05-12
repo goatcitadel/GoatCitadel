@@ -135,9 +135,6 @@ function heuristicEstimateTokens(input: string): number {
 }
 
 function estimateWordTokenCost(word: string): number {
-  if (!word) {
-    return 0;
-  }
   if (looksLikeUrl(word)) {
     return Math.max(2, Math.ceil(word.length / 3));
   }

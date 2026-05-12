@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  GatewayEventInput,
-  InboundEventIndexRow,
-  SessionMeta,
-  TranscriptEvent,
-} from "@goatcitadel/contracts";
+import type { GatewayEventInput, InboundEventIndexRow, SessionMeta, TranscriptEvent } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { EventIngestService } from "./event-ingest.js";
 
@@ -117,13 +112,15 @@ describe("EventIngestService", () => {
       },
       transcriptOutbox: {
         enqueue: vi.fn(() => undefined),
-        listPending: vi.fn(() => [{
-          eventId: transcriptEvent.eventId,
-          sessionId: transcriptEvent.sessionId,
-          event: transcriptEvent,
-          enqueuedAt: transcriptEvent.timestamp,
-          attemptCount: 0,
-        }]),
+        listPending: vi.fn(() => [
+          {
+            eventId: transcriptEvent.eventId,
+            sessionId: transcriptEvent.sessionId,
+            event: transcriptEvent,
+            enqueuedAt: transcriptEvent.timestamp,
+            attemptCount: 0,
+          },
+        ]),
         markDelivered: vi.fn(() => undefined),
         markFailed: vi.fn(() => undefined),
       },
@@ -210,13 +207,15 @@ describe("EventIngestService", () => {
       },
       transcriptOutbox: {
         enqueue: vi.fn(() => undefined),
-        listPending: vi.fn(() => [{
-          eventId: transcriptEvent.eventId,
-          sessionId: transcriptEvent.sessionId,
-          event: transcriptEvent,
-          enqueuedAt: transcriptEvent.timestamp,
-          attemptCount: 0,
-        }]),
+        listPending: vi.fn(() => [
+          {
+            eventId: transcriptEvent.eventId,
+            sessionId: transcriptEvent.sessionId,
+            event: transcriptEvent,
+            enqueuedAt: transcriptEvent.timestamp,
+            attemptCount: 0,
+          },
+        ]),
         markDelivered: vi.fn(() => undefined),
         markFailed: vi.fn(() => ({
           eventId: transcriptEvent.eventId,
@@ -276,20 +275,24 @@ describe("EventIngestService", () => {
       transcriptOutbox: {
         listPending: vi
           .fn()
-          .mockReturnValueOnce([{
-            eventId: sessionEvent.eventId,
-            sessionId: sessionEvent.sessionId,
-            event: sessionEvent,
-            enqueuedAt: sessionEvent.timestamp,
-            attemptCount: 0,
-          }])
-          .mockReturnValueOnce([{
-            eventId: sessionEvent.eventId,
-            sessionId: sessionEvent.sessionId,
-            event: sessionEvent,
-            enqueuedAt: sessionEvent.timestamp,
-            attemptCount: 0,
-          }]),
+          .mockReturnValueOnce([
+            {
+              eventId: sessionEvent.eventId,
+              sessionId: sessionEvent.sessionId,
+              event: sessionEvent,
+              enqueuedAt: sessionEvent.timestamp,
+              attemptCount: 0,
+            },
+          ])
+          .mockReturnValueOnce([
+            {
+              eventId: sessionEvent.eventId,
+              sessionId: sessionEvent.sessionId,
+              event: sessionEvent,
+              enqueuedAt: sessionEvent.timestamp,
+              attemptCount: 0,
+            },
+          ]),
         markDelivered: vi.fn(() => undefined),
       },
       transcripts: {
@@ -306,5 +309,256 @@ describe("EventIngestService", () => {
     expect(delivered).toBe(1);
     expect(storage.transcripts.append).toHaveBeenCalledTimes(1);
     expect(storage.transcriptOutbox.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes existing idempotency rows before opening a write transaction", async () => {
+    const session: SessionMeta = {
+      sessionId: "sess_existing",
+      sessionKey: "chat:local:operator",
+      kind: "dm",
+      channel: "chat",
+      account: "local",
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
+      costUsdTotal: 0,
+      budgetState: "ok",
+    };
+    const storage = {
+      runImmediateTransaction: vi.fn(),
+      idempotency: {
+        find: vi.fn(() => ({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-1",
+          eventId: "evt-1",
+          sessionKey: session.sessionKey,
+          payloadHash: "hash",
+          receivedAt: "2026-03-22T00:00:00.000Z",
+          status: "accepted",
+        })),
+        markProcessed: vi.fn(),
+      },
+      sessions: {
+        getBySessionKey: vi.fn(() => session),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+    const result = await service.ingest({
+      endpoint: "/api/v1/gateway/events",
+      idempotencyKey: "idem-1",
+      payload: buildPayload(),
+    });
+
+    expect(result).toMatchObject({ accepted: true, deduped: true, session });
+    expect(storage.runImmediateTransaction).not.toHaveBeenCalled();
+    expect(storage.idempotency.markProcessed).toHaveBeenCalledWith(
+      "/api/v1/gateway/events",
+      "idem-1",
+      "deduped",
+      expect.any(String),
+    );
+  });
+
+  it("dedupes when a concurrent transaction wins the idempotency insert", async () => {
+    const session: SessionMeta = {
+      sessionId: "sess_concurrent",
+      sessionKey: "chat:local:operator",
+      kind: "dm",
+      channel: "chat",
+      account: "local",
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
+      costUsdTotal: 0,
+      budgetState: "ok",
+    };
+    const storage = {
+      runImmediateTransaction: vi.fn((callback: () => unknown) => callback()),
+      idempotency: {
+        find: vi.fn().mockReturnValueOnce(undefined).mockReturnValueOnce({
+          endpoint: "/api/v1/gateway/events",
+          idempotencyKey: "idem-1",
+          eventId: "evt-1",
+          sessionKey: session.sessionKey,
+          payloadHash: "hash",
+          receivedAt: "2026-03-22T00:00:00.000Z",
+          status: "accepted",
+        }),
+        insertPendingIfAbsent: vi.fn(() => false),
+        markProcessed: vi.fn(),
+      },
+      sessions: {
+        getBySessionKey: vi.fn(() => session),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+    const result = await service.ingest({
+      endpoint: "/api/v1/gateway/events",
+      idempotencyKey: "idem-1",
+      payload: buildPayload(),
+    });
+
+    expect(result).toMatchObject({ accepted: true, deduped: true, session });
+    expect(storage.idempotency.insertPendingIfAbsent).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists assistant messages with structured parts, attachments, and usage", async () => {
+    const session: SessionMeta = {
+      sessionId: "sess_assistant",
+      sessionKey: "chat:local:room",
+      kind: "group",
+      channel: "chat",
+      account: "local",
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
+      costUsdTotal: 0,
+      budgetState: "ok",
+    };
+    const storage = {
+      runImmediateTransaction: vi.fn((callback: () => unknown) => callback()),
+      idempotency: {
+        find: vi.fn(() => undefined),
+        insertPendingIfAbsent: vi.fn(() => true),
+        markProcessed: vi.fn(),
+      },
+      sessions: {
+        upsert: vi.fn(),
+        getBySessionId: vi.fn(() => session),
+        applyUsage: vi.fn(),
+      },
+      chatMessages: {
+        upsert: vi.fn(),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+      transcriptOutbox: {
+        enqueue: vi.fn(),
+        listPending: vi.fn(() => []),
+      },
+      transcripts: {
+        append: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+    await service.ingest({
+      endpoint: "/api/v1/gateway/events",
+      idempotencyKey: "idem-assistant",
+      payload: {
+        ...buildPayload(),
+        eventId: "evt-assistant",
+        route: { channel: "chat", account: "local", room: "room" },
+        actor: { type: "agent", id: "agent-1" },
+        taskId: "task-1",
+        message: {
+          role: "assistant",
+          content: "done",
+          parts: [{ type: "text", text: "done" }],
+          attachments: [{ attachmentId: "att-1", mimeType: "text/plain", fileName: "notes.txt", sizeBytes: 42 }],
+        },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 20,
+          cachedInputTokens: 3,
+          costUsd: 0.01,
+        },
+      },
+    });
+
+    expect(storage.chatMessages.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "assistant",
+        content: "done",
+        parts: [{ type: "text", text: "done" }],
+        attachments: [{ attachmentId: "att-1", mimeType: "text/plain", fileName: "notes.txt", sizeBytes: 42 }],
+        tokenInput: 10,
+        tokenOutput: 20,
+        costUsd: 0.01,
+      }),
+    );
+    expect(storage.costLedger.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+        taskId: "task-1",
+        tokenCachedInput: 3,
+      }),
+    );
+  });
+
+  it("stops outbox flush after non-Error append failures", async () => {
+    const event = {
+      eventId: "evt-fail",
+      sessionId: "sess_fail",
+      sessionKey: "chat:local:operator",
+      timestamp: "2026-03-22T00:00:00.000Z",
+      actionId: "action-fail",
+      idempotencyKey: "idem-fail",
+      type: "message.user",
+      actorType: "user",
+      actorId: "operator",
+      payload: { message: { role: "user", content: "fail" } },
+    } as TranscriptEvent;
+    const storage = {
+      transcriptOutbox: {
+        listPending: vi
+          .fn()
+          .mockReturnValueOnce([
+            { eventId: event.eventId, sessionId: event.sessionId, event, enqueuedAt: event.timestamp, attemptCount: 4 },
+          ])
+          .mockReturnValueOnce([
+            { eventId: event.eventId, sessionId: event.sessionId, event, enqueuedAt: event.timestamp, attemptCount: 4 },
+          ]),
+        markFailed: vi.fn(() => undefined),
+      },
+      transcripts: {
+        append: vi.fn(async () => {
+          throw "string failure";
+        }),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+    } as unknown as Storage;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const service = new EventIngestService(storage);
+    await expect(service.flushPendingTranscriptOutbox()).resolves.toBe(0);
+
+    expect(storage.transcriptOutbox.markFailed).toHaveBeenCalledWith(
+      event.eventId,
+      expect.objectContaining({
+        lastError: "string failure",
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[goatcitadel] transcript append failed after event commit",
+      expect.objectContaining({
+        attemptCount: 5,
+        error: "string failure",
+      }),
+    );
+    warnSpy.mockRestore();
   });
 });

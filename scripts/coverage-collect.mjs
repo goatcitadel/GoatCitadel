@@ -8,8 +8,14 @@ const repoRoot = process.cwd();
 const artifactsDir = path.join(repoRoot, "artifacts", "coverage");
 const summaryJsonPath = path.join(artifactsDir, "coverage-summary.json");
 const summaryMdPath = path.join(artifactsDir, "coverage-summary.md");
+const coveragePolicyPath = path.join(repoRoot, "coverage-policy.json");
 const DEFAULT_LINE_THRESHOLD = 65;
 const DEFAULT_BRANCH_THRESHOLD = 45;
+const ALLOWED_EXCLUSION_CATEGORIES = new Set([
+  "generated-static-adapter",
+  "test-harness-setup",
+  "type-only-barrel",
+]);
 const PRODUCTION_RISK_TIERS = [
   {
     id: "storage-policy-security-critical",
@@ -93,6 +99,12 @@ try {
 const coverageFiles = await findCoverageFinalFiles(repoRoot);
 const coverageMap = await loadCoverageMap(coverageFiles, warnings);
 const sourceFiles = await collectSourceFiles(repoRoot);
+const coveragePolicy = await loadCoveragePolicy(sourceFiles);
+const excludedSourceFileSet = new Set(coveragePolicy.excludedFiles.map((item) => item.path));
+const includedSourceFiles = sourceFiles.filter((filePath) => {
+  const relativePath = path.relative(repoRoot, filePath).replaceAll("\\", "/");
+  return !excludedSourceFileSet.has(relativePath);
+});
 const moduleLoadSmokeTests = await findModuleLoadSmokeTests(repoRoot);
 
 if (moduleLoadSmokeTests.length > 0) {
@@ -109,10 +121,11 @@ let lineCovered = 0;
 let branchTotal = 0;
 let branchCovered = 0;
 const uncoveredSample = [];
+const topUncoveredFiles = [];
 const packageBuckets = new Map();
 const riskTierBuckets = new Map(PRODUCTION_RISK_TIERS.map((tier) => [tier.id, createCoverageBucket()]));
 
-for (const filePath of sourceFiles) {
+for (const filePath of includedSourceFiles) {
   const relativePath = path.relative(repoRoot, filePath).replaceAll("\\", "/");
   const normalized = normalizePathForLookup(filePath);
   const entry = coverageMap.get(normalized);
@@ -122,9 +135,10 @@ for (const filePath of sourceFiles) {
       lineTotal: await countRelevantLines(filePath),
       lineCovered: 0,
     branchTotal: 0,
-    branchCovered: 0,
+      branchCovered: 0,
   };
   const fileCovered = metrics.lineCovered > 0 || metrics.branchCovered > 0;
+  const uncoveredLines = Math.max(0, metrics.lineTotal - metrics.lineCovered);
 
   lineTotal += metrics.lineTotal;
   lineCovered += metrics.lineCovered;
@@ -138,6 +152,16 @@ for (const filePath of sourceFiles) {
     if (uncoveredSample.length < 200) {
       uncoveredSample.push(relativePath);
     }
+  }
+
+  if (uncoveredLines > 0) {
+    topUncoveredFiles.push({
+      path: relativePath,
+      uncoveredLines,
+      coveredLines: metrics.lineCovered,
+      totalLines: metrics.lineTotal,
+      linePercent: percent(metrics.lineCovered, metrics.lineTotal, 0),
+    });
   }
 
   const packageKey = getPackageKey(relativePath);
@@ -154,9 +178,18 @@ for (const filePath of sourceFiles) {
   }
 }
 
-const fileCoveragePercent = sourceFiles.length === 0
+topUncoveredFiles.sort((left, right) => {
+  if (right.uncoveredLines !== left.uncoveredLines) {
+    return right.uncoveredLines - left.uncoveredLines;
+  }
+  return left.path.localeCompare(right.path);
+});
+
+const excludedSourceFiles = await buildExcludedSourceFileSummary(coveragePolicy.excludedFiles, coverageMap);
+
+const fileCoveragePercent = includedSourceFiles.length === 0
   ? 0
-  : Number(((coveredFiles / sourceFiles.length) * 100).toFixed(2));
+  : Number(((coveredFiles / includedSourceFiles.length) * 100).toFixed(2));
 const linePercent = lineTotal === 0
   ? 0
   : Number(((lineCovered / lineTotal) * 100).toFixed(2));
@@ -190,7 +223,9 @@ const summary = {
   sourceRunId,
   runStartedAt,
   runFinishedAt: new Date().toISOString(),
-  sourceFiles: sourceFiles.length,
+  sourceFiles: includedSourceFiles.length,
+  totalSourceFiles: sourceFiles.length,
+  excludedSourceFiles,
   coveredFiles,
   uncoveredFiles,
   fileCoveragePercent,
@@ -221,6 +256,13 @@ const summary = {
   warnings,
   coverageFinalFiles: coverageFiles.map((filePath) => path.relative(repoRoot, filePath).replaceAll("\\", "/")),
   uncoveredSample,
+  topUncoveredFiles: topUncoveredFiles.slice(0, 100),
+  coveragePolicy: {
+    path: path.relative(repoRoot, coveragePolicyPath).replaceAll("\\", "/"),
+    allowedReasonCategories: [...ALLOWED_EXCLUSION_CATEGORIES].sort(),
+    exclusionCount: coveragePolicy.exclusions.length,
+    excludedSourceFileCount: excludedSourceFiles.length,
+  },
   syntheticCoverageNotes: {
     moduleLoadSmokeTests,
   },
@@ -531,6 +573,8 @@ function addFileMetrics(bucket, metrics, fileCovered, relativePath) {
 }
 
 function formatCoverageBucket(id, label, bucket) {
+  const lineUncovered = Math.max(0, bucket.lineTotal - bucket.lineCovered);
+  const branchUncovered = Math.max(0, bucket.branchTotal - bucket.branchCovered);
   return {
     id,
     label,
@@ -542,14 +586,159 @@ function formatCoverageBucket(id, label, bucket) {
     branchPercent: percent(bucket.branchCovered, bucket.branchTotal, 100),
     lineTotals: {
       covered: bucket.lineCovered,
+      uncovered: lineUncovered,
       total: bucket.lineTotal,
     },
     branchTotals: {
       covered: bucket.branchCovered,
+      uncovered: branchUncovered,
       total: bucket.branchTotal,
     },
     uncoveredSample: bucket.uncoveredSample,
   };
+}
+
+async function loadCoveragePolicy(sourceFilePaths) {
+  let raw = "";
+  try {
+    raw = await fs.readFile(coveragePolicyPath, "utf8");
+  } catch (error) {
+    if ((error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      return {
+        exclusions: [],
+        excludedFiles: [],
+      };
+    }
+    throw error;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${path.relative(repoRoot, coveragePolicyPath)}.`, { cause: error });
+  }
+
+  if (!parsed || typeof parsed !== "object" || parsed.version !== 1) {
+    throw new Error("coverage-policy.json must be an object with version 1.");
+  }
+  if (!Array.isArray(parsed.exclusions)) {
+    throw new Error("coverage-policy.json must define an exclusions array.");
+  }
+
+  const declaredCategories = Array.isArray(parsed.allowedReasonCategories) ? parsed.allowedReasonCategories : [];
+  for (const category of declaredCategories) {
+    if (!ALLOWED_EXCLUSION_CATEGORIES.has(category)) {
+      throw new Error(`coverage-policy.json declares unsupported exclusion category ${JSON.stringify(category)}.`);
+    }
+  }
+
+  const sourceRelativePaths = sourceFilePaths.map((filePath) => path.relative(repoRoot, filePath).replaceAll("\\", "/"));
+  const excludedFileMap = new Map();
+  const exclusions = parsed.exclusions.map((entry, index) => validateCoveragePolicyEntry(entry, index));
+  for (const exclusion of exclusions) {
+    const matcher = globToRegExp(exclusion.pattern);
+    const matches = sourceRelativePaths.filter((relativePath) => matcher.test(relativePath));
+    if (matches.length === 0) {
+      throw new Error(`coverage-policy.json exclusion ${JSON.stringify(exclusion.pattern)} does not match any source file.`);
+    }
+    for (const match of matches) {
+      const existing = excludedFileMap.get(match);
+      if (existing) {
+        throw new Error(
+          `coverage-policy.json excludes ${match} more than once `
+          + `(${existing.pattern} and ${exclusion.pattern}).`,
+        );
+      }
+      excludedFileMap.set(match, {
+        path: match,
+        pattern: exclusion.pattern,
+        reasonCategory: exclusion.reasonCategory,
+        reason: exclusion.reason,
+      });
+    }
+  }
+
+  return {
+    exclusions,
+    excludedFiles: [...excludedFileMap.values()].sort((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
+function validateCoveragePolicyEntry(entry, index) {
+  if (!entry || typeof entry !== "object") {
+    throw new Error(`coverage-policy.json exclusions[${index}] must be an object.`);
+  }
+  const pattern = typeof entry.pattern === "string" ? entry.pattern.trim() : "";
+  const reasonCategory = typeof entry.reasonCategory === "string" ? entry.reasonCategory.trim() : "";
+  const reason = typeof entry.reason === "string" ? entry.reason.trim() : "";
+  if (!pattern) {
+    throw new Error(`coverage-policy.json exclusions[${index}] must define pattern.`);
+  }
+  if (!ALLOWED_EXCLUSION_CATEGORIES.has(reasonCategory)) {
+    throw new Error(
+      `coverage-policy.json exclusions[${index}] has unsupported reasonCategory ${JSON.stringify(reasonCategory)}.`,
+    );
+  }
+  if (reason.length < 20) {
+    throw new Error(`coverage-policy.json exclusions[${index}] must include a specific reason.`);
+  }
+  return { pattern, reasonCategory, reason };
+}
+
+function globToRegExp(pattern) {
+  const normalized = pattern.replaceAll("\\", "/");
+  let source = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    const next = normalized[index + 1];
+    if (char === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    if (char === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    source += escapeRegExp(char);
+  }
+  source += "$";
+  return new RegExp(source);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+async function buildExcludedSourceFileSummary(excludedFiles, coverageMap) {
+  const out = [];
+  for (const item of excludedFiles) {
+    const fullPath = path.join(repoRoot, item.path);
+    const entry = coverageMap.get(normalizePathForLookup(fullPath));
+    const metrics = entry
+      ? computeCoverageMetrics(entry)
+      : {
+        lineTotal: await countRelevantLines(fullPath),
+        lineCovered: 0,
+        branchTotal: 0,
+        branchCovered: 0,
+      };
+    out.push({
+      ...item,
+      lineTotals: {
+        covered: metrics.lineCovered,
+        uncovered: Math.max(0, metrics.lineTotal - metrics.lineCovered),
+        total: metrics.lineTotal,
+      },
+      branchTotals: {
+        covered: metrics.branchCovered,
+        uncovered: Math.max(0, metrics.branchTotal - metrics.branchCovered),
+        total: metrics.branchTotal,
+      },
+    });
+  }
+  return out;
 }
 
 function getPackageKey(relativePath) {
@@ -714,6 +903,8 @@ function buildMarkdownSummary(summary) {
   const uncoveredSample = Array.isArray(summary.uncoveredSample) ? summary.uncoveredSample : [];
   const packageCoverage = Array.isArray(summary.packageCoverage) ? summary.packageCoverage : [];
   const riskTierCoverage = Array.isArray(summary.riskTierCoverage) ? summary.riskTierCoverage : [];
+  const excludedSourceFiles = Array.isArray(summary.excludedSourceFiles) ? summary.excludedSourceFiles : [];
+  const topUncoveredFiles = Array.isArray(summary.topUncoveredFiles) ? summary.topUncoveredFiles : [];
   const lineTotals = summary.lineTotals ?? { covered: 0, total: 0 };
   const branchTotals = summary.branchTotals ?? { covered: 0, total: 0 };
   const effectiveThresholds = summary.effectiveThresholds ?? { line: DEFAULT_LINE_THRESHOLD, branch: DEFAULT_BRANCH_THRESHOLD };
@@ -738,7 +929,7 @@ function buildMarkdownSummary(summary) {
       ...packageCoverage.map((item) => {
         const lines = item.lineTotals ?? { covered: 0, total: 0 };
         const branches = item.branchTotals ?? { covered: 0, total: 0 };
-        return `| \`${item.id}\` | ${item.coveredFiles ?? 0}/${item.sourceFiles ?? 0} (${item.fileCoveragePercent ?? 0}%) | ${item.linePercent ?? 0}% (${lines.covered}/${lines.total}) | ${item.branchPercent ?? 0}% (${branches.covered}/${branches.total}) |`;
+        return `| \`${item.id}\` | ${item.coveredFiles ?? 0}/${item.sourceFiles ?? 0} (${item.fileCoveragePercent ?? 0}%) | ${item.linePercent ?? 0}% (${lines.covered}/${lines.total}, ${lines.uncovered ?? 0} uncovered) | ${item.branchPercent ?? 0}% (${branches.covered}/${branches.total}, ${branches.uncovered ?? 0} uncovered) |`;
       }),
     ].join("\n")
     : "- none";
@@ -753,6 +944,25 @@ function buildMarkdownSummary(summary) {
       }),
     ].join("\n")
     : "- none";
+  const excludedSection = excludedSourceFiles.length > 0
+    ? [
+      "| File | Reason | Lines removed |",
+      "| --- | --- | ---: |",
+      ...excludedSourceFiles.map((item) => {
+        const lines = item.lineTotals ?? { total: 0 };
+        return `| \`${item.path}\` | ${item.reasonCategory}: ${item.reason} | ${lines.total ?? 0} |`;
+      }),
+    ].join("\n")
+    : "- none";
+  const topUncoveredSection = topUncoveredFiles.length > 0
+    ? [
+      "| File | Lines | Coverage |",
+      "| --- | ---: | ---: |",
+      ...topUncoveredFiles.map((item) => (
+        `| \`${item.path}\` | ${item.uncoveredLines}/${item.totalLines} uncovered | ${item.linePercent}% |`
+      )),
+    ].join("\n")
+    : "- none";
 
   return [
     "# Coverage Summary",
@@ -762,7 +972,7 @@ function buildMarkdownSummary(summary) {
     `- Run ID: ${summary.sourceRunId ?? "unknown"}`,
     `- Run started: ${summary.runStartedAt ?? "unknown"}`,
     `- Run finished: ${summary.runFinishedAt ?? "n/a"}`,
-    `- File coverage: ${summary.fileCoveragePercent ?? 0}% (${summary.coveredFiles ?? 0}/${summary.sourceFiles ?? 0})`,
+    `- File coverage: ${summary.fileCoveragePercent ?? 0}% (${summary.coveredFiles ?? 0}/${summary.sourceFiles ?? 0} included; ${summary.totalSourceFiles ?? summary.sourceFiles ?? 0} total source files)`,
     `- Line coverage: ${summary.linePercent ?? 0}% (${lineTotals.covered}/${lineTotals.total})`,
     `- Branch coverage: ${summary.branchPercent ?? 0}% (${branchTotals.covered}/${branchTotals.total})`,
     `- Effective thresholds: line ${effectiveThresholds.line}%, branch ${effectiveThresholds.branch}%`,
@@ -782,6 +992,12 @@ function buildMarkdownSummary(summary) {
     "",
     "## Production Risk Tiers",
     riskTierSection,
+    "",
+    "## Coverage Policy Exclusions",
+    excludedSection,
+    "",
+    "## Top Uncovered Files",
+    topUncoveredSection,
     "",
     "## Synthetic Coverage Notes",
     syntheticSection,

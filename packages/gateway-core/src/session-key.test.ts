@@ -36,4 +36,23 @@ describe("resolveSessionRoute", () => {
     expect(route.kind).toBe("thread");
     expect(route.sessionKey).toBe("slack:me:eng:123");
   });
+
+  it("validates required route segments and normalizes separators", () => {
+    expect(() => resolveSessionRoute({ channel: "", account: "me", peer: "alice" })).toThrow(
+      "route.channel and route.account are required",
+    );
+    expect(() => resolveSessionRoute({ channel: "slack", account: "me", threadId: "1" })).toThrow(
+      "route.room is required when route.threadId is provided",
+    );
+    expect(() => resolveSessionRoute({ channel: "slack", account: "me" })).toThrow(
+      "route.peer is required for DM sessions",
+    );
+    expect(() => resolveSessionRoute({ channel: "slack", account: "   ", peer: "alice" })).toThrow(
+      "session key segments cannot be empty",
+    );
+
+    expect(resolveSessionRoute({ channel: "slack:prod", account: " me ", peer: "alice:bob" }).sessionKey).toBe(
+      "slack_prod:me:alice_bob",
+    );
+  });
 });

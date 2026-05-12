@@ -120,6 +120,33 @@ describe("OrchestrationEngine", () => {
     expect(() => engine.validate(invalidPlan)).toThrow("Duplicate owner agentId agent-a in wave wave-1");
   });
 
+  it("rejects overlapping ownership across different agents", () => {
+    const engine = new OrchestrationEngine();
+    const invalidPlan: OrchestrationPlan = {
+      ...plan,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          ownership: [
+            { agentId: "agent-a", paths: ["apps/mission-control/**"] },
+            { agentId: "agent-b", paths: ["apps/mission-control/src"] },
+          ],
+          phases: [
+            plan.waves[0]!.phases[0]!,
+            {
+              ...plan.waves[0]!.phases[1]!,
+              ownerAgentId: "agent-b",
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(() => engine.validate(invalidPlan)).toThrow(
+      "Wave wave-1 ownership conflict: agent-a:apps/mission-control overlaps agent-b:apps/mission-control/src",
+    );
+  });
+
   it("rejects verify entries that do not point at a declared phase", () => {
     const engine = new OrchestrationEngine();
     const invalidPlan: OrchestrationPlan = {
@@ -194,14 +221,13 @@ describe("OrchestrationEngine", () => {
 
   it("starts hitl runs in paused state and advances phases", () => {
     const engine = new OrchestrationEngine();
-    const run: OrchestrationRun = {
-      runId: "run-1",
+    const run = engine.createRun(plan);
+    expect(run).toMatchObject({
       planId: plan.planId,
       status: "queued",
-      startedAt: "2026-02-27T00:00:00.000Z",
       totalCostUsd: 0,
       totalIterations: 0,
-    };
+    });
 
     const started = engine.startRun(plan, run);
     expect(started.status).toBe("paused");
@@ -213,6 +239,7 @@ describe("OrchestrationEngine", () => {
 
     const afterPhase2 = engine.approvePhase(plan, afterPhase1, "phase-2", { now: testNow });
     expect(afterPhase2.status).toBe("completed");
+    expect(afterPhase2.endedAt).toBe(testNow);
   });
 
   it("starts auto runs in running state for non-approval phases and pauses only on approval-gated phases", () => {
@@ -220,6 +247,7 @@ describe("OrchestrationEngine", () => {
     const autoPlan: OrchestrationPlan = {
       ...plan,
       mode: "auto",
+      maxIterations: 10,
       waves: [
         {
           ...plan.waves[0]!,
@@ -258,6 +286,13 @@ describe("OrchestrationEngine", () => {
     };
     const afterApproval = engine.approvePhase(autoPlan, waitingForApproval, "phase-2", { now: testNow });
     expect(afterApproval.status).toBe("completed");
+
+    expect(() =>
+      engine.approvePhase(autoPlan, { ...waitingForApproval, currentPhaseId: "phase-1" }, "phase-2"),
+    ).toThrow("expected phase phase-1");
+    expect(() =>
+      engine.approvePhase(autoPlan, { ...waitingForApproval, currentPhaseId: "phase-1" }, "phase-1"),
+    ).toThrow("is not approval-gated");
   });
 
   it("advances non-approval phases and pauses when the next phase needs approval", () => {
@@ -298,6 +333,11 @@ describe("OrchestrationEngine", () => {
     expect(advanced.status).toBe("paused");
     expect(advanced.currentPhaseId).toBe("phase-2");
     expect(advanced.totalIterations).toBe(1);
+
+    expect(() => engine.advancePhase(autoPlan, { ...started, status: "paused" }, "phase-1")).toThrow(
+      "not actively running",
+    );
+    expect(() => engine.advancePhase(autoPlan, started, "phase-2")).toThrow("expected phase phase-1");
   });
 
   it("rejects advancing approval-gated phases without approval", () => {
@@ -423,5 +463,88 @@ describe("OrchestrationEngine", () => {
     expect(engine.advancePhase(autoPlan, run, "phase-1", { now: "2026-02-27T00:02:00.000Z" }).status).toBe(
       "stopped_by_limit",
     );
+  });
+
+  it("advances across waves and exposes direct limit checks", () => {
+    const engine = new OrchestrationEngine();
+    const multiWavePlan: OrchestrationPlan = {
+      ...plan,
+      mode: "auto",
+      maxIterations: 10,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [
+            {
+              ...plan.waves[0]!.phases[0]!,
+              requiresApproval: false,
+            },
+          ],
+        },
+        {
+          waveId: "wave-2",
+          verify: ["phase-1"],
+          budgetUsd: 5,
+          ownership: [{ agentId: "agent-b", paths: ["packages/**"] }],
+          phases: [
+            {
+              phaseId: "phase-3",
+              ownerAgentId: "agent-b",
+              specPath: "phases/3.md",
+              loopMode: "fresh-context",
+              requiresApproval: false,
+            },
+          ],
+        },
+      ],
+    };
+    const run: OrchestrationRun = {
+      runId: "run-wave",
+      planId: multiWavePlan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 1,
+      totalIterations: 1,
+    };
+
+    const nextWave = engine.advancePhase(multiWavePlan, run, "phase-1", { costIncrementUsd: 2, now: testNow });
+    expect(nextWave).toMatchObject({
+      status: "running",
+      currentWaveId: "wave-2",
+      currentPhaseId: "phase-3",
+      totalCostUsd: 3,
+      totalIterations: 2,
+    });
+    expect(engine.shouldStopByLimits(multiWavePlan, { iterations: 9, runtimeMinutes: 0, costUsd: 0 })).toBe(false);
+    expect(engine.shouldStopByLimits(multiWavePlan, { iterations: 10, runtimeMinutes: 0, costUsd: 0 })).toBe(true);
+    expect(engine.shouldStopByLimits(multiWavePlan, { iterations: 0, runtimeMinutes: 1000, costUsd: 0 })).toBe(true);
+    expect(engine.shouldStopByLimits(multiWavePlan, { iterations: 0, runtimeMinutes: 0, costUsd: 100 })).toBe(true);
+  });
+
+  it("keeps defensive private helpers explicit for malformed internal calls", () => {
+    const engine = new OrchestrationEngine();
+    const internals = engine as unknown as {
+      nextPhase(input: OrchestrationPlan, phaseId: string): { waveId: string; phaseId: string } | undefined;
+    };
+
+    expect(() => internals.nextPhase(plan, "missing-phase")).toThrow("Phase missing-phase not found");
+    expect(() =>
+      engine.advancePhase(
+        plan,
+        {
+          runId: "run-missing",
+          planId: plan.planId,
+          status: "running",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          currentWaveId: "wave-missing",
+          currentPhaseId: "missing-phase",
+          totalCostUsd: 0,
+          totalIterations: 0,
+        },
+        "missing-phase",
+      ),
+    ).toThrow("Phase missing-phase not found");
   });
 });

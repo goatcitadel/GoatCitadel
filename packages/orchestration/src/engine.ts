@@ -23,10 +23,7 @@ export class OrchestrationEngine {
     for (const wave of plan.waves) {
       const conflicts = findOwnershipConflicts(wave);
       if (conflicts.length > 0) {
-        const first = conflicts[0];
-        if (!first) {
-          throw new Error(`Wave ${wave.waveId} has ownership conflicts`);
-        }
+        const first = conflicts[0]!;
         throw new Error(
           `Wave ${wave.waveId} ownership conflict: ${first.agentA}:${first.pathA} overlaps ${first.agentB}:${first.pathB}`,
         );
@@ -50,14 +47,6 @@ export class OrchestrationEngine {
     this.validate(plan);
 
     const first = this.firstPhase(plan);
-    if (!first) {
-      return {
-        ...run,
-        status: "completed",
-        endedAt: new Date().toISOString(),
-      };
-    }
-
     return {
       ...run,
       status: this.shouldPauseAtPhase(plan, first.phaseId) ? "paused" : "running",
@@ -122,12 +111,9 @@ export class OrchestrationEngine {
     );
   }
 
-  private firstPhase(plan: OrchestrationPlan): { waveId: string; phaseId: string } | undefined {
-    const firstWave = plan.waves[0];
-    const firstPhase = firstWave?.phases[0];
-    if (!firstWave || !firstPhase) {
-      return undefined;
-    }
+  private firstPhase(plan: OrchestrationPlan): { waveId: string; phaseId: string } {
+    const firstWave = plan.waves[0]!;
+    const firstPhase = firstWave.phases[0]!;
 
     return {
       waveId: firstWave.waveId,
@@ -137,11 +123,7 @@ export class OrchestrationEngine {
 
   private nextPhase(plan: OrchestrationPlan, currentPhaseId: string): { waveId: string; phaseId: string } | undefined {
     for (let waveIndex = 0; waveIndex < plan.waves.length; waveIndex += 1) {
-      const wave = plan.waves[waveIndex];
-      if (!wave) {
-        continue;
-      }
-
+      const wave = plan.waves[waveIndex]!;
       const phaseIndex = wave.phases.findIndex((phase) => phase.phaseId === currentPhaseId);
       if (phaseIndex === -1) {
         continue;

@@ -11,13 +11,9 @@ describe("describeChannelCapabilities", () => {
       guildPolicy: "allowlist",
     });
 
-    expect(capabilities.supportedActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-      "channel.unsend",
-      "channel.typing",
-    ]));
+    expect(capabilities.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]),
+    );
     expect(capabilities.inboundModes).toEqual(["gateway"]);
     expect(capabilities.runtimePosture).toMatchObject({
       outboundTransport: "api",
@@ -41,10 +37,7 @@ describe("describeChannelCapabilities", () => {
       webhookUrl: "https://discord.com/api/webhooks/123/test",
     });
 
-    expect(capabilities.supportedActions).toEqual([
-      "channel.send",
-      "channel.unsend",
-    ]);
+    expect(capabilities.supportedActions).toEqual(["channel.send", "channel.unsend"]);
     expect(capabilities.inboundModes).toEqual(["none"]);
     expect(capabilities.runtimePosture).toMatchObject({
       outboundTransport: "webhook",
@@ -61,10 +54,12 @@ describe("describeChannelCapabilities", () => {
     });
 
     expect(capabilities.setupReady).toBe(false);
-    expect(capabilities.setupDiagnostics).toEqual(expect.arrayContaining([
-      "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
-      "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
-    ]));
+    expect(capabilities.setupDiagnostics).toEqual(
+      expect.arrayContaining([
+        "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
+        "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
+      ]),
+    );
   });
 
   it("adds explicit reply support for channels that already support threaded replies", () => {
@@ -74,12 +69,9 @@ describe("describeChannelCapabilities", () => {
       defaultChannel: "#ops",
     });
 
-    expect(capabilities.supportedActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-      "channel.unsend",
-    ]));
+    expect(capabilities.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
+    );
     expect(capabilities.runtimePosture).toMatchObject({
       outboundTransport: "api",
       inboundTransport: "webhook",
@@ -101,13 +93,9 @@ describe("describeChannelCapabilities", () => {
       webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
     });
 
-    expect(capabilities.supportedActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-      "channel.unsend",
-      "channel.typing",
-    ]));
+    expect(capabilities.supportedActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]),
+    );
     expect(capabilities.inboundModes).toEqual(["webhook"]);
     expect(capabilities.runtimePosture).toMatchObject({
       outboundTransport: "api",
@@ -116,10 +104,12 @@ describe("describeChannelCapabilities", () => {
       inboundReadiness: "ready",
     });
     expect(capabilities.runtimePolicy.typing).toBe(true);
-    expect(capabilities.supportNotes).toEqual(expect.arrayContaining([
-      "Telegram bot connections can add reactions, delete sent messages, and emit typing indicators when the bot has access to the target chat.",
-      "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
-    ]));
+    expect(capabilities.supportNotes).toEqual(
+      expect.arrayContaining([
+        "Telegram bot connections can add reactions, delete sent messages, and emit typing indicators when the bot has access to the target chat.",
+        "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
+      ]),
+    );
   });
 
   it("advertises WhatsApp webhook ingress when the verification secret pair is configured", () => {
@@ -138,9 +128,11 @@ describe("describeChannelCapabilities", () => {
       lifecycle: "stateless",
       inboundReadiness: "ready",
     });
-    expect(capabilities.supportNotes).toEqual(expect.arrayContaining([
-      "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured.",
-    ]));
+    expect(capabilities.supportNotes).toEqual(
+      expect.arrayContaining([
+        "WhatsApp inbound routing is enabled through the signed Cloud API webhook path when both the app secret and webhook verify token are configured.",
+      ]),
+    );
   });
 
   it("advertises LINE webhook ingress when the channel secret is configured", () => {
@@ -157,8 +149,110 @@ describe("describeChannelCapabilities", () => {
       lifecycle: "stateless",
       inboundReadiness: "ready",
     });
-    expect(capabilities.supportNotes).toEqual(expect.arrayContaining([
-      "LINE inbound routing is enabled through the signed Messaging API webhook path when a channel secret is configured.",
-    ]));
+    expect(capabilities.supportNotes).toEqual(
+      expect.arrayContaining([
+        "LINE inbound routing is enabled through the signed Messaging API webhook path when a channel secret is configured.",
+      ]),
+    );
+  });
+
+  it("covers outbound-only and partial-runtime channel capability variants", () => {
+    const slackWebhook = describeChannelCapabilities("slack", { webhookUrl: "https://hooks.slack.test/1" });
+    expect(slackWebhook.supportedActions).toEqual(["channel.send"]);
+    expect(slackWebhook.supportedAttachmentSources).toEqual(["url"]);
+    expect(slackWebhook.runtimePosture).toMatchObject({
+      outboundTransport: "webhook",
+      inboundReadiness: "unsupported",
+    });
+
+    const slackWebhookWithIngress = describeChannelCapabilities("slack", {
+      webhookUrl: "https://hooks.slack.test/1",
+      signingSecret: "secret",
+    });
+    expect(slackWebhookWithIngress.inboundModes).toEqual(["webhook"]);
+    expect(slackWebhookWithIngress.runtimePosture.inboundTransport).toBe("webhook");
+
+    const slackBotNoIngress = describeChannelCapabilities("slack", { botToken: "token" });
+    expect(slackBotNoIngress.runtimePosture.operatorSummary).toContain("inbound routing is still disabled");
+    expect(slackBotNoIngress.supportNotes).toEqual(
+      expect.arrayContaining(["Slack inbound routing remains disabled until a signing secret is configured."]),
+    );
+
+    const discordBridge = describeChannelCapabilities("discord", { botToken: "token" });
+    expect(discordBridge.supportedActions).toEqual(expect.arrayContaining(["channel.react", "channel.unsend"]));
+    expect(discordBridge.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      inboundReadiness: "unsupported",
+    });
+
+    const discordUnconfigured = describeChannelCapabilities("discord", {});
+    expect(discordUnconfigured.supportedActions).toEqual(["channel.send"]);
+    expect(discordUnconfigured.supportNotes).toEqual([]);
+
+    const telegramOutbound = describeChannelCapabilities("telegram", { token: "token" });
+    expect(telegramOutbound.inboundModes).toEqual(["none"]);
+    expect(telegramOutbound.runtimePosture.inboundTransport).toBeUndefined();
+    expect(telegramOutbound.supportNotes).toEqual(
+      expect.arrayContaining(["Telegram inbound routing remains disabled until a webhook secret is configured."]),
+    );
+
+    const whatsappOutbound = describeChannelCapabilities("whatsapp", {
+      accessToken: "token",
+      phoneNumberId: "phone",
+    });
+    expect(whatsappOutbound.inboundModes).toEqual(["none"]);
+    expect(whatsappOutbound.runtimePosture.inboundReadiness).toBe("unsupported");
+    expect(whatsappOutbound.supportNotes).toEqual(
+      expect.arrayContaining([
+        "WhatsApp inbound routing remains disabled until both the app secret and webhook verify token are configured.",
+      ]),
+    );
+
+    const lineOutbound = describeChannelCapabilities("line", { accessToken: "token" });
+    expect(lineOutbound.inboundModes).toEqual(["none"]);
+    expect(lineOutbound.supportNotes).toEqual([
+      "LINE inbound routing remains disabled until a channel secret is configured.",
+    ]);
+  });
+
+  it("describes static channel rules and setup diagnostics", () => {
+    const staticChannels = [
+      ["google-chat", { webhookUrl: "https://chat.test" }],
+      ["teams", { url: "https://teams.test" }],
+      ["signal", { baseUrl: "http://127.0.0.1:8080" }],
+      ["mattermost", { serverUrl: "https://mattermost.test", botTokenEnv: "MATTERMOST_TOKEN" }],
+      ["imessage", { bridgeUrl: "http://127.0.0.1:1234", password: "pass" }],
+      ["nextcloud-talk", { baseUrl: "https://cloud.test", token: "token" }],
+      ["zalo", { token: "token" }],
+      ["zalouser", { bridgeUrl: "http://127.0.0.1:4545", authToken: "token" }],
+    ] as const;
+
+    for (const [channelKey, config] of staticChannels) {
+      const capabilities = describeChannelCapabilities(channelKey, config);
+      expect(capabilities.channelKey).toBe(channelKey);
+      expect(capabilities.setupReady).toBe(true);
+      expect(capabilities.chunkingMode).toBe("fallback");
+      expect(capabilities.supportedDeliveryActions).toEqual(capabilities.supportedActions);
+      expect(capabilities.runtimePosture.operatorSummary.length).toBeGreaterThan(0);
+    }
+
+    const whatsappMissing = describeChannelCapabilities("whatsapp", {});
+    expect(whatsappMissing.setupDiagnostics).toEqual([
+      "Missing one of: config.phoneNumberId.",
+      "Missing one of: config.accessTokenEnv, config.accessToken, config.tokenEnv, config.token.",
+    ]);
+  });
+
+  it("falls back to default channel capabilities for unknown adapters", () => {
+    const capabilities = describeChannelCapabilities("custom-channel", {});
+
+    expect(capabilities.supportedActions).toEqual(["channel.send"]);
+    expect(capabilities.inboundModes).toEqual(["none"]);
+    expect(capabilities.runtimePosture).toMatchObject({
+      outboundTransport: "api",
+      lifecycle: "stateless",
+      inboundReadiness: "unsupported",
+    });
+    expect(capabilities.setupReady).toBe(true);
   });
 });

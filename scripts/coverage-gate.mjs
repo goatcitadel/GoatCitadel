@@ -5,6 +5,7 @@ const repoRoot = process.cwd();
 const summaryPath = path.join(repoRoot, "artifacts", "coverage", "coverage-summary.json");
 const DEFAULT_LINE_THRESHOLD = 65;
 const DEFAULT_BRANCH_THRESHOLD = 45;
+const LINE_100_THRESHOLD = 100;
 const profile = resolveGateProfile();
 
 let summaryRaw = "";
@@ -88,6 +89,63 @@ if (profile === "production") {
   }
 }
 
+if (profile === "line100") {
+  if (linePercent < LINE_100_THRESHOLD) {
+    console.error(`[coverage:gate] line100 failed: line ${linePercent}% (required 100%).`);
+    failed = true;
+  }
+
+  const packageCoverage = Array.isArray(summary.packageCoverage) ? summary.packageCoverage : [];
+  if (packageCoverage.length === 0) {
+    console.error("[coverage:gate] line100 failed: packageCoverage is missing. Run pnpm coverage:collect with current tooling.");
+    failed = true;
+  }
+  for (const item of packageCoverage) {
+    const line = Number(item.linePercent ?? NaN);
+    if (!Number.isFinite(line)) {
+      console.error(`[coverage:gate] line100 failed: invalid package line coverage for ${JSON.stringify(item.id)}.`);
+      failed = true;
+      continue;
+    }
+    if (line < LINE_100_THRESHOLD) {
+      const totals = item.lineTotals ?? {};
+      console.error(
+        `[coverage:gate] line100 package ${item.id} failed: line ${line}% `
+        + `(${totals.covered ?? "?"}/${totals.total ?? "?"}, required 100%).`,
+      );
+      failed = true;
+    }
+  }
+
+  const riskTierCoverage = Array.isArray(summary.riskTierCoverage) ? summary.riskTierCoverage : [];
+  for (const tier of riskTierCoverage) {
+    const line = Number(tier.linePercent ?? NaN);
+    if (!Number.isFinite(line)) {
+      console.error(`[coverage:gate] line100 failed: invalid risk tier line coverage for ${JSON.stringify(tier.id)}.`);
+      failed = true;
+      continue;
+    }
+    if (line < LINE_100_THRESHOLD) {
+      const totals = tier.lineTotals ?? {};
+      console.error(
+        `[coverage:gate] line100 risk tier ${tier.id} failed: line ${line}% `
+        + `(${totals.covered ?? "?"}/${totals.total ?? "?"}, required 100%).`,
+      );
+      failed = true;
+    }
+  }
+
+  const topUncoveredFiles = Array.isArray(summary.topUncoveredFiles) ? summary.topUncoveredFiles : [];
+  if (topUncoveredFiles.length > 0) {
+    console.error("[coverage:gate] top uncovered files:");
+    for (const item of topUncoveredFiles.slice(0, 20)) {
+      console.error(
+        `  - ${item.path}: ${item.uncoveredLines}/${item.totalLines} uncovered lines (${item.linePercent}%)`,
+      );
+    }
+  }
+}
+
 if (failed) {
   process.exit(1);
 }
@@ -100,7 +158,7 @@ console.log(
 function resolveGateProfile() {
   const arg = process.argv.find((item) => item.startsWith("--profile="));
   const raw = arg?.slice("--profile=".length) || process.env.GOATCITADEL_COVERAGE_GATE_PROFILE || "default";
-  if (raw === "default" || raw === "production") {
+  if (raw === "default" || raw === "production" || raw === "line100") {
     return raw;
   }
   console.warn(`[coverage:gate] warning: unknown profile ${JSON.stringify(raw)}. Using default.`);
