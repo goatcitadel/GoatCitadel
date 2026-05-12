@@ -96,7 +96,7 @@ export class CapabilityProposalRepository {
   }
 
   public get(proposalId: string): CapabilityProposalRecord {
-    const row = this.getStmt.get(proposalId) as CapabilityProposalRow | undefined;
+    const row = toCapabilityProposalRow(this.getStmt.get(proposalId));
     if (!row) {
       throw new NotFoundError({ entity: "capability proposal", id: proposalId });
     }
@@ -104,12 +104,12 @@ export class CapabilityProposalRepository {
   }
 
   public find(proposalId: string): CapabilityProposalRecord | undefined {
-    const row = this.getStmt.get(proposalId) as CapabilityProposalRow | undefined;
+    const row = toCapabilityProposalRow(this.getStmt.get(proposalId));
     return row ? mapCapabilityProposalRow(row) : undefined;
   }
 
   public list(limit = 100): CapabilityProposalRecord[] {
-    return (this.listStmt.all({ limit }) as unknown as CapabilityProposalRow[]).map(mapCapabilityProposalRow);
+    return toCapabilityProposalRows(this.listStmt.all({ limit })).map(mapCapabilityProposalRow);
   }
 }
 
@@ -145,15 +145,56 @@ export class CapabilityProposalEventRepository {
   }
 
   public listByProposalId(proposalId: string): CapabilityProposalEventRecord[] {
-    return (this.listStmt.all({ proposalId }) as unknown as CapabilityProposalEventRow[]).map((row) => ({
-      eventId: row.event_id,
-      proposalId: row.proposal_id,
-      eventType: row.event_type,
-      actorId: row.actor_id,
-      payload: safeJsonParse(row.payload_json, {}),
-      createdAt: row.created_at,
-    }));
+    return toCapabilityProposalEventRows(this.listStmt.all({ proposalId })).map(mapCapabilityProposalEventRow);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCapabilityProposalRow(value: unknown): value is CapabilityProposalRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.proposal_id === "string" &&
+    typeof value.proposal_kind === "string" &&
+    typeof value.status === "string" &&
+    typeof value.title === "string" &&
+    typeof value.summary === "string" &&
+    (typeof value.candidate_id === "string" || value.candidate_id === null) &&
+    (typeof value.activation_target_id === "string" || value.activation_target_id === null) &&
+    typeof value.payload_json === "string" &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function toCapabilityProposalRow(value: unknown): CapabilityProposalRow | undefined {
+  return isCapabilityProposalRow(value) ? value : undefined;
+}
+
+function toCapabilityProposalRows(value: unknown): CapabilityProposalRow[] {
+  return Array.isArray(value) ? value.filter(isCapabilityProposalRow) : [];
+}
+
+function isCapabilityProposalEventRow(value: unknown): value is CapabilityProposalEventRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.event_id === "string" &&
+    typeof value.proposal_id === "string" &&
+    typeof value.event_type === "string" &&
+    typeof value.actor_id === "string" &&
+    typeof value.payload_json === "string" &&
+    typeof value.created_at === "string"
+  );
+}
+
+function toCapabilityProposalEventRows(value: unknown): CapabilityProposalEventRow[] {
+  return Array.isArray(value) ? value.filter(isCapabilityProposalEventRow) : [];
 }
 
 function mapCapabilityProposalRow(row: CapabilityProposalRow): CapabilityProposalRecord {
@@ -165,10 +206,24 @@ function mapCapabilityProposalRow(row: CapabilityProposalRow): CapabilityProposa
     summary: row.summary,
     candidateId: row.candidate_id ?? undefined,
     activationTargetId: row.activation_target_id ?? undefined,
-    payload: safeJsonParse(row.payload_json, {}),
+    payload: parsePayload(row.payload_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
+function mapCapabilityProposalEventRow(row: CapabilityProposalEventRow): CapabilityProposalEventRecord {
+  return {
+    eventId: row.event_id,
+    proposalId: row.proposal_id,
+    eventType: row.event_type,
+    actorId: row.actor_id,
+    payload: parsePayload(row.payload_json),
+    createdAt: row.created_at,
+  };
+}
 
+function parsePayload(raw: string): Record<string, unknown> {
+  const parsed = safeJsonParse<unknown>(raw, {});
+  return isRecord(parsed) ? parsed : {};
+}
