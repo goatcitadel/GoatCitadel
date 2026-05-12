@@ -334,4 +334,88 @@ describe("RealtimeEventRepository", () => {
       false,
     );
   });
+
+  it("covers inferred metadata, sequence bounds, older pruning, and maintenance pruning", () => {
+    const repo = createRepo();
+    const notification = repo.append(
+      "approval_remote_action_ready",
+      "gateway",
+      {
+        approvalId: "approval-1",
+        nested: {
+          durableRunId: "run-1",
+          task: { taskId: "task-1" },
+        },
+        tokenId: "token-1",
+        messageId: "message-1",
+        blank: "   ",
+      },
+      undefined,
+      "2026-02-27T09:00:00.000Z",
+    );
+    assert.equal(notification.eventClass, "ui_notification");
+    assert.equal(notification.eventAuthority, "retained_stream");
+    assert.deepEqual(notification.links, {
+      approvalId: "approval-1",
+      runId: "run-1",
+      taskId: "task-1",
+      tokenId: "token-1",
+      messageId: "message-1",
+    });
+
+    const projection = repo.append(
+      "chat_summary_projection",
+      "summary",
+      {
+        session: {
+          sessionId: "session-1",
+        },
+      },
+      undefined,
+      "2026-02-27T09:01:00.000Z",
+    );
+    assert.equal(projection.eventClass, "domain_fact");
+    assert.equal(projection.eventAuthority, "derived_projection");
+    assert.deepEqual(projection.links, { sessionId: "session-1" });
+
+    const operational = repo.append(
+      "connector_sync_completed",
+      "integrations",
+      { connectorId: "connector-1", workspaceId: "workspace-1" },
+      undefined,
+      "2026-02-27T09:02:00.000Z",
+    );
+    assert.equal(operational.eventClass, "operational_signal");
+    assert.deepEqual(operational.links, { workspaceId: "workspace-1", connectorId: "connector-1" });
+
+    assert.deepEqual(repo.getSequenceBounds(), {
+      oldestSequence: notification.sequence,
+      newestSequence: operational.sequence,
+    });
+    assert.deepEqual(
+      repo.list(10, `${operational.timestamp}|${operational.eventId}`).map((event) => event.eventId),
+      [projection.eventId, notification.eventId],
+    );
+    assert.equal(repo.list(10, `${operational.timestamp}|`).length, 3);
+    assert.equal(repo.list(10, "not-a-composite-cursor").length, 3);
+    assert.deepEqual(repo.list(10, "0"), []);
+    assert.deepEqual(repo.listAfterSequence(operational.sequence, 10), []);
+    assert.equal(repo.pruneOlderThan("2026-02-27T08:00:00.000Z"), 0);
+    assert.equal(repo.pruneOlderThan("2026-02-27T09:01:30.000Z"), 2);
+    assert.deepEqual(
+      repo.list(10).map((event) => event.eventId),
+      [operational.eventId],
+    );
+
+    for (let index = 0; index < 99; index += 1) {
+      repo.append(
+        "memory_maintenance_tick",
+        "memory",
+        { runId: `maintenance-${index}` },
+        undefined,
+        `2026-02-27T10:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      );
+    }
+    assert.equal(repo.list(200).length, 100);
+  });
 });
