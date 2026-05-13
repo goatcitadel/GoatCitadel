@@ -728,7 +728,8 @@ async function countBoundGatewayRoutePortMethods(source, serviceFiles) {
 }
 
 async function findExportedConstArrayDeclaration(name, serviceFiles) {
-  const pattern = new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const;`);
+  const escapedName = escapeRegExp(name);
+  const pattern = new RegExp(`export const ${escapedName} = \\[([\\s\\S]*?)\\] as const;`);
   for (const filePath of serviceFiles) {
     const source = await fs.readFile(filePath, "utf8");
     const match = source.match(pattern);
@@ -762,10 +763,14 @@ function sortObjectByKey(record) {
   return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gatewayServiceSource) {
   let violations = 0;
   const privateDependencyAlias =
-    routeCompositionSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;\r?\n/)?.[0] ??
+    routeCompositionSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;/)?.[0] ??
     "";
   if (
     normalizeTypeAlias(privateDependencyAlias) !==
@@ -774,11 +779,14 @@ function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gat
     violations += 1;
   }
 
-  if (
-    !/export type GatewayRouteCompositionHost\s*=\s*Omit<\s*GatewayRouteCompositionPort,\s*keyof GatewayRouteCompositionPrivateDependencies\s*>;/.test(
-      routeCompositionSource,
-    )
-  ) {
+  const hostAlias = routeCompositionSource.match(/export type GatewayRouteCompositionHost\s*=[\s\S]*?;/)?.[0] ?? "";
+  const expectedHostAlias = [
+    "export type GatewayRouteCompositionHost = Omit<",
+    "  GatewayRouteCompositionPort,",
+    "  keyof GatewayRouteCompositionPrivateDependencies",
+    ">;",
+  ].join("\n");
+  if (normalizeTypeAlias(hostAlias) !== normalizeTypeAlias(expectedHostAlias)) {
     violations += 1;
   }
   if (
@@ -791,7 +799,11 @@ function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gat
   if (/<\s*GatewayRouteComposition(?:PrivateDependencies|Host)\s*>/.test(gatewayServiceSource)) {
     violations += 1;
   }
-  if (!/createGatewayRouteCompositionPort\(\s*this,\s*\{/.test(gatewayServiceSource)) {
+  const layout = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
+  const createPortCallPattern = new RegExp(
+    String.raw`createGatewayRouteCompositionPort\(${layout}this${layout},${layout}\{`,
+  );
+  if (!createPortCallPattern.test(gatewayServiceSource)) {
     violations += 1;
   }
   return violations;
