@@ -45,6 +45,10 @@ const EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS = [
   ">;",
 ].join("\n");
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function extractInterfaceBody(source, interfaceName) {
   const declarationPattern = new RegExp(String.raw`\bexport\s+interface\s+${escapeRegExp(interfaceName)}\b`);
   const declarationMatch = declarationPattern.exec(source);
@@ -619,123 +623,98 @@ function collectGatewayPublicMethods(source) {
   return methods;
 }
 
+const GATEWAY_METHOD_REGION_PATTERNS = [
+  {
+    region: "lifecycle",
+    pattern: /^(init|initCritical|startDeferredInit|close|attachDevDiagnosticsLogger|isDevDiagnosticsEnabled)$/,
+  },
+  {
+    region: "approvals",
+    pattern:
+      /^(createApproval|resolveApproval|listApprovals|getApproval|ensureApproval|enqueueApproval|primeApproval|buildApproval|findProactiveDurableRunIdsForApproval|consumeRemoteActionToken)/,
+  },
+  {
+    region: "chat-turn-runtime",
+    pattern:
+      /^(agentSendChatMessage|retryChatTurn|editChatTurn|cancelChatTurn|routePreflight|resumeAgentChatTurnStream|answerChatUserInputPrompt|prepareAgentChatTurn|beginActiveChatTurn|endActiveChatTurn|getActiveChatTurn|registerActiveChatTurn|completeActiveChatTurn|closeActiveChatTurn|persistChatStreamChunk|createHydratedChatTurnTrace|markChatTurnCancelled|loadChatTurn|requireChatTurn|buildChat|resolvePreparedTurn|collectSpecialist|extractAndPersistLearnedMemory|ensureChatSessionRuntimeGrants|inheritDelegatedSessionToolGrants|runPromptPackFromChat)/,
+  },
+  {
+    region: "chat-sessions",
+    pattern:
+      /^(listChat|createChat|updateChat|pinChat|unpinChat|archiveChat|restoreChat|deleteChat|assignChat|getChatSession|getChatThread|selectChatBranch|setChatSession|respondToExistingChatMessage|uploadChatAttachment|getChatAttachment|readChatAttachment|listChatGenerated|createChatGenerated|getChatGenerated|attachChatThread|removeChatThread|listChatThread)/,
+  },
+  {
+    region: "prompt-packs",
+    pattern:
+      /^(listPromptPack|importPromptPack|runPromptPack|scorePromptPack|reviewPromptPack|autoScorePromptPack|getPromptPack|cancelPromptPack|exportPromptPack|resetPromptPack)/,
+  },
+  {
+    region: "durable",
+    pattern:
+      /^(getDurable|listDurable|createDurable|pauseDurable|resumeDurable|cancelDurable|retryDurable|wakeDurable|recoverDurable|beginDurable|finalizeDurable|requestDurable|updateDurable|computeDurable|recordDurable|createCheckpoint)/,
+  },
+  {
+    region: "memory",
+    pattern:
+      /^(getMemory|patchMemory|listMemory|runMemory|acceptMemory|rejectMemory|forgetMemory|composeMemory|listRunContexts|listRecentMemory|persistContext|resolveMemory)/,
+  },
+  {
+    region: "settings-auth",
+    pattern:
+      /^(getSettings|updateSettings|getAuth|updateAuth|resolveGatewayInstallToken|createDeviceAccess|getDeviceAccess|listDeviceAccess|revokeDeviceAccess|validateDeviceAccess|exchangeCompanion|rotateCompanion|getCompanion|listCompanion|revokeCompanion|validateCompanion|verifyCompanion|resolveDeviceAccess|expireDeviceAccess|recordApprovalResolution)/,
+  },
+  {
+    region: "integrations",
+    pattern:
+      /^(listIntegration|getIntegration|createIntegration|updateIntegration|deleteIntegration|invokeIntegration|runIntegration|listChannel|createChannel|updateChannel|validateChannel|testChannel|finalizeChannel|retestChannel|listDiscord|approveDiscord|revokeDiscord|getDiscord|reconnectDiscord|emitDiscord|emitTelegram|syncDiscord|ingestChannel|assertDiscord|readDiscord|writeDiscord|resolveDiscord|ensureDiscord|startNewDiscord|handleDiscord|readConnection|resolveConnection|recordConnector|pickConnector|buildIntegration|runIntegrationConnectionLiveChecks|listConnector)/,
+  },
+  {
+    region: "mcp",
+    pattern:
+      /^(listMcp|runMcp|createMcp|updateMcp|deleteMcp|connectMcp|disconnectMcp|startMcp|completeMcp|invokeMcp|readMcp|writeMcp|requireMcp|patchMcp|resolveConnectedMcp)/,
+  },
+  {
+    region: "tools-comms",
+    pattern:
+      /^(invokeTool|listTool|evaluateTool|createToolGrant|revokeToolGrant|ensureSessionInternalToolGrant|requireExecutedToolResult|comms|knowledge)/,
+  },
+  {
+    region: "skills",
+    pattern:
+      /^(listSkills|reloadSkills|executeCodeMode|listChatPendingApprovals|getSkill|updateSkill|setSkill|bulkSetSkill|resolveSkill|listSkill|lookupSkill|validateSkill|installSkill|getBankr|updateBankr|previewBankr|listBankr)/,
+  },
+  {
+    region: "dashboard-workspace",
+    pattern:
+      /^(getDashboard|getSystem|listOperators|listCron|getCron|createCron|updateCron|setCron|deleteCron|runCron|retryCron|uploadWorkspace|listWorkspace|createWorkspace|updateWorkspace|archiveWorkspace|restoreWorkspace|listFile|createWorkspaceFile|downloadWorkspace|listGlobalGuidance|listWorkspaceGuidance|updateGlobalGuidance|updateWorkspaceGuidance|getTranscript|getSessionSummary|listSessionTimeline|getRuntimeLifecycle|listSessions|getSession|getLatestFollowOn|rememberFollowOn|getPackaging|getVoice)/,
+  },
+  {
+    region: "runtime-provider",
+    pattern:
+      /^(listLlm|getLlm|updateLlm|previewLlm|createChatCompletion|resolveFallbackTargets|saveProviderSecret|deleteProviderSecret|getProviderSecret|listLlama|getLlama|startLlama|stopLlama|refreshLlama|detectLlama|adviseLlama|cancelLlama|listNpu|getNpu|startNpu|stopNpu|refreshNpu|generateImage|createAssembly|listAssembly|getAssembly)/,
+  },
+  {
+    region: "realtime-events",
+    pattern:
+      /^(publishRealtime|subscribeRealtime|listRealtime|getRealtime|openRealtime|touchRealtime|closeRealtime|ingestEvent|listDev|subscribeDev|recordDev)/,
+  },
+  {
+    region: "orchestration",
+    pattern:
+      /^(createOrchestration|runOrchestration|approvePhase|getRun|listRunCheckpoints|allocateOrchestration|executeDurableOrchestration|scheduleOrchestration|parseOrchestration|applyOrchestration)/,
+  },
+  {
+    region: "composition-helpers",
+    pattern:
+      /^(isFeatureEnabled|requireFeatureEnabled|updateFeatureFlags|readFeatureFlags|persist|assert|runCheaper|fetchWithDiagnosticsTimeout|isConnectionUrlAllowlisted|isUrlAllowlistedInList|normalizeWorkspaceId|resolveChatCompletionHookWorkspaceId|resolveApprovalHookWorkspaceId|parseLlm|mergeLlm|applyLlm|resolveRuntimeGuidance|routeFromSession|buildLlmMessagesFromBranchPath|gatewaySql)$/,
+  },
+];
+
 function classifyGatewayMethodRegion(methodName) {
-  if (
-    /^(init|initCritical|startDeferredInit|close|attachDevDiagnosticsLogger|isDevDiagnosticsEnabled)$/.test(methodName)
-  ) {
-    return "lifecycle";
-  }
-  if (
-    /^(createApproval|resolveApproval|listApprovals|getApproval|ensureApproval|enqueueApproval|primeApproval|buildApproval|findProactiveDurableRunIdsForApproval|consumeRemoteActionToken)/.test(
-      methodName,
-    )
-  ) {
-    return "approvals";
-  }
-  if (
-    /^(agentSendChatMessage|retryChatTurn|editChatTurn|cancelChatTurn|routePreflight|resumeAgentChatTurnStream|answerChatUserInputPrompt|prepareAgentChatTurn|beginActiveChatTurn|endActiveChatTurn|getActiveChatTurn|registerActiveChatTurn|completeActiveChatTurn|closeActiveChatTurn|persistChatStreamChunk|createHydratedChatTurnTrace|markChatTurnCancelled|loadChatTurn|requireChatTurn|buildChat|resolvePreparedTurn|collectSpecialist|extractAndPersistLearnedMemory|ensureChatSessionRuntimeGrants|inheritDelegatedSessionToolGrants|runPromptPackFromChat)/.test(
-      methodName,
-    )
-  ) {
-    return "chat-turn-runtime";
-  }
-  if (
-    /^(listChat|createChat|updateChat|pinChat|unpinChat|archiveChat|restoreChat|deleteChat|assignChat|getChatSession|getChatThread|selectChatBranch|setChatSession|respondToExistingChatMessage|uploadChatAttachment|getChatAttachment|readChatAttachment|listChatGenerated|createChatGenerated|getChatGenerated|attachChatThread|removeChatThread|listChatThread)/.test(
-      methodName,
-    )
-  ) {
-    return "chat-sessions";
-  }
-  if (
-    /^(listPromptPack|importPromptPack|runPromptPack|scorePromptPack|reviewPromptPack|autoScorePromptPack|getPromptPack|cancelPromptPack|exportPromptPack|resetPromptPack)/.test(
-      methodName,
-    )
-  ) {
-    return "prompt-packs";
-  }
-  if (
-    /^(getDurable|listDurable|createDurable|pauseDurable|resumeDurable|cancelDurable|retryDurable|wakeDurable|recoverDurable|beginDurable|finalizeDurable|requestDurable|updateDurable|computeDurable|recordDurable|createCheckpoint)/.test(
-      methodName,
-    )
-  ) {
-    return "durable";
-  }
-  if (
-    /^(getMemory|patchMemory|listMemory|runMemory|acceptMemory|rejectMemory|forgetMemory|composeMemory|listRunContexts|listRecentMemory|persistContext|resolveMemory)/.test(
-      methodName,
-    )
-  ) {
-    return "memory";
-  }
-  if (
-    /^(getSettings|updateSettings|getAuth|updateAuth|resolveGatewayInstallToken|createDeviceAccess|getDeviceAccess|listDeviceAccess|revokeDeviceAccess|validateDeviceAccess|exchangeCompanion|rotateCompanion|getCompanion|listCompanion|revokeCompanion|validateCompanion|verifyCompanion|resolveDeviceAccess|expireDeviceAccess|recordApprovalResolution)/.test(
-      methodName,
-    )
-  ) {
-    return "settings-auth";
-  }
-  if (
-    /^(listIntegration|getIntegration|createIntegration|updateIntegration|deleteIntegration|invokeIntegration|runIntegration|listChannel|createChannel|updateChannel|validateChannel|testChannel|finalizeChannel|retestChannel|listDiscord|approveDiscord|revokeDiscord|getDiscord|reconnectDiscord|emitDiscord|emitTelegram|syncDiscord|ingestChannel|assertDiscord|readDiscord|writeDiscord|resolveDiscord|ensureDiscord|startNewDiscord|handleDiscord|readConnection|resolveConnection|recordConnector|pickConnector|buildIntegration|runIntegrationConnectionLiveChecks|listConnector)/.test(
-      methodName,
-    )
-  ) {
-    return "integrations";
-  }
-  if (
-    /^(listMcp|runMcp|createMcp|updateMcp|deleteMcp|connectMcp|disconnectMcp|startMcp|completeMcp|invokeMcp|readMcp|writeMcp|requireMcp|patchMcp|resolveConnectedMcp)/.test(
-      methodName,
-    )
-  ) {
-    return "mcp";
-  }
-  if (
-    /^(invokeTool|listTool|evaluateTool|createToolGrant|revokeToolGrant|ensureSessionInternalToolGrant|requireExecutedToolResult|comms|knowledge)/.test(
-      methodName,
-    )
-  ) {
-    return "tools-comms";
-  }
-  if (
-    /^(listSkills|reloadSkills|executeCodeMode|listChatPendingApprovals|getSkill|updateSkill|setSkill|bulkSetSkill|resolveSkill|listSkill|lookupSkill|validateSkill|installSkill|getBankr|updateBankr|previewBankr|listBankr)/.test(
-      methodName,
-    )
-  ) {
-    return "skills";
-  }
-  if (
-    /^(getDashboard|getSystem|listOperators|listCron|getCron|createCron|updateCron|setCron|deleteCron|runCron|retryCron|uploadWorkspace|listWorkspace|createWorkspace|updateWorkspace|archiveWorkspace|restoreWorkspace|listFile|createWorkspaceFile|downloadWorkspace|listGlobalGuidance|listWorkspaceGuidance|updateGlobalGuidance|updateWorkspaceGuidance|getTranscript|getSessionSummary|listSessionTimeline|getRuntimeLifecycle|listSessions|getSession|getLatestFollowOn|rememberFollowOn|getPackaging|getVoice)/.test(
-      methodName,
-    )
-  ) {
-    return "dashboard-workspace";
-  }
-  if (
-    /^(listLlm|getLlm|updateLlm|previewLlm|createChatCompletion|resolveFallbackTargets|saveProviderSecret|deleteProviderSecret|getProviderSecret|listLlama|getLlama|startLlama|stopLlama|refreshLlama|detectLlama|adviseLlama|cancelLlama|listNpu|getNpu|startNpu|stopNpu|refreshNpu|generateImage|createAssembly|listAssembly|getAssembly)/.test(
-      methodName,
-    )
-  ) {
-    return "runtime-provider";
-  }
-  if (
-    /^(publishRealtime|subscribeRealtime|listRealtime|getRealtime|openRealtime|touchRealtime|closeRealtime|ingestEvent|listDev|subscribeDev|recordDev)/.test(
-      methodName,
-    )
-  ) {
-    return "realtime-events";
-  }
-  if (
-    /^(createOrchestration|runOrchestration|approvePhase|getRun|listRunCheckpoints|allocateOrchestration|executeDurableOrchestration|scheduleOrchestration|parseOrchestration|applyOrchestration)/.test(
-      methodName,
-    )
-  ) {
-    return "orchestration";
-  }
-  if (
-    /^(isFeatureEnabled|requireFeatureEnabled|updateFeatureFlags|readFeatureFlags|persist|assert|runCheaper|fetchWithDiagnosticsTimeout|isConnectionUrlAllowlisted|isUrlAllowlistedInList|normalizeWorkspaceId|resolveChatCompletionHookWorkspaceId|resolveApprovalHookWorkspaceId|parseLlm|mergeLlm|applyLlm|resolveRuntimeGuidance|routeFromSession|buildLlmMessagesFromBranchPath|gatewaySql)$/.test(
-      methodName,
-    )
-  ) {
-    return "composition-helpers";
+  for (const { region, pattern } of GATEWAY_METHOD_REGION_PATTERNS) {
+    if (pattern.test(methodName)) {
+      return region;
+    }
   }
   return "other";
 }
@@ -793,10 +772,6 @@ function sortObjectByKey(record) {
   return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gatewayServiceSource) {
   let violations = 0;
   const privateDependencyAlias =
@@ -829,9 +804,9 @@ function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gat
   if (/<\s*GatewayRouteComposition(?:PrivateDependencies|Host)\s*>/.test(gatewayServiceSource)) {
     violations += 1;
   }
-  const layout = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
+  const whitespaceAndCommentsPattern = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
   const createPortCallPattern = new RegExp(
-    String.raw`createGatewayRouteCompositionPort\(${layout}this${layout},${layout}\{`,
+    String.raw`createGatewayRouteCompositionPort\(${whitespaceAndCommentsPattern}this${whitespaceAndCommentsPattern},${whitespaceAndCommentsPattern}\{`,
   );
   if (!createPortCallPattern.test(gatewayServiceSource)) {
     violations += 1;
