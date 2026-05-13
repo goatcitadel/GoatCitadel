@@ -33,8 +33,14 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "taskLifecycleService",
   "toolInvocationCoordinator",
 ];
-const GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE =
-  String.raw`^\s*(?<internal>/\*\* @internal \*/\s*)?public\s+(?:async\s+)?(?:(?:get|set)\s+)?(?<name>[$A-Z_a-z][$\w]*)\s*\(`;
+const METHOD_LEADING_WHITESPACE_PATTERN_SOURCE = String.raw`^\s*`;
+const METHOD_INTERNAL_MARKER_PATTERN_SOURCE = String.raw`(?<internal>/\*\* @internal \*/\s*)?`;
+const METHOD_PUBLIC_KEYWORD_PATTERN_SOURCE = String.raw`public\s+`;
+const METHOD_ASYNC_KEYWORD_PATTERN_SOURCE = String.raw`(?:async\s+)?`;
+const METHOD_ACCESSOR_KEYWORD_PATTERN_SOURCE = String.raw`(?:(?:get|set)\s+)?`;
+const METHOD_NAME_PATTERN_SOURCE = String.raw`(?<name>[$A-Z_a-z][$\w]*)`;
+const METHOD_OPEN_PAREN_PATTERN_SOURCE = String.raw`\s*\(`;
+const GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE = String.raw`${METHOD_LEADING_WHITESPACE_PATTERN_SOURCE}${METHOD_INTERNAL_MARKER_PATTERN_SOURCE}${METHOD_PUBLIC_KEYWORD_PATTERN_SOURCE}${METHOD_ASYNC_KEYWORD_PATTERN_SOURCE}${METHOD_ACCESSOR_KEYWORD_PATTERN_SOURCE}${METHOD_NAME_PATTERN_SOURCE}${METHOD_OPEN_PAREN_PATTERN_SOURCE}`;
 const SETTINGS_AUTH_SERVICE_PATH_KEY = path
   .join("apps", "gateway", "src", "services", "settings-auth-service.ts")
   .replaceAll("\\", "/");
@@ -94,15 +100,11 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const serviceContextPath = path.join(servicesDir, "service-context.ts");
   const buildServiceContextPath = path.join(servicesDir, "gateway", "build-service-context.ts");
 
-  const routeFiles = await listFiles(routesDir, (filePath) => filePath.endsWith(".ts"));
-  const gatewaySourceFiles = await listFiles(
-    gatewaySrcDir,
-    (filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts"),
-  );
-  const serviceFiles = await listFiles(
-    servicesDir,
-    (filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts"),
-  );
+  const [routeFiles, gatewaySourceFiles, serviceFiles] = await Promise.all([
+    listFiles(routesDir, (filePath) => filePath.endsWith(".ts")),
+    listFiles(gatewaySrcDir, (filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts")),
+    listFiles(servicesDir, (filePath) => filePath.endsWith(".ts") && !filePath.endsWith(".test.ts")),
+  ]);
   const routeFacingServiceFiles = serviceFiles.filter((filePath) => filePath.endsWith("-route-service.ts"));
   const gatewayServiceSource = await fs.readFile(gatewayServicePath, "utf8");
   const gatewayRuntimeFactorySource = await fs.readFile(gatewayRuntimeFactoryPath, "utf8");
@@ -630,92 +632,162 @@ function collectGatewayPublicMethods(source) {
   return methods;
 }
 
-const GATEWAY_METHOD_REGION_PATTERNS = [
+function splitMethodNames(value) {
+  return value.trim().split(/\s+/);
+}
+
+function buildMethodPrefixPattern(methodNames, { exact = false } = {}) {
+  const alternation = methodNames.map(escapeRegExp).join("|");
+  return new RegExp(`^(?:${alternation})${exact ? "$" : ""}`);
+}
+
+const GATEWAY_METHOD_REGION_PATTERN_SOURCES = [
   {
     region: "lifecycle",
-    pattern: /^(init|initCritical|startDeferredInit|close|attachDevDiagnosticsLogger|isDevDiagnosticsEnabled)$/,
+    exact: true,
+    methodNames: splitMethodNames(`
+      init initCritical startDeferredInit close attachDevDiagnosticsLogger isDevDiagnosticsEnabled
+    `),
   },
   {
     region: "approvals",
-    pattern:
-      /^(createApproval|resolveApproval|listApprovals|getApproval|ensureApproval|enqueueApproval|primeApproval|buildApproval|findProactiveDurableRunIdsForApproval|consumeRemoteActionToken)/,
+    methodNames: splitMethodNames(`
+      createApproval resolveApproval listApprovals getApproval ensureApproval enqueueApproval primeApproval
+      buildApproval findProactiveDurableRunIdsForApproval consumeRemoteActionToken
+    `),
   },
   {
     region: "chat-turn-runtime",
-    pattern:
-      /^(agentSendChatMessage|retryChatTurn|editChatTurn|cancelChatTurn|routePreflight|resumeAgentChatTurnStream|answerChatUserInputPrompt|prepareAgentChatTurn|beginActiveChatTurn|endActiveChatTurn|getActiveChatTurn|registerActiveChatTurn|completeActiveChatTurn|closeActiveChatTurn|persistChatStreamChunk|createHydratedChatTurnTrace|markChatTurnCancelled|loadChatTurn|requireChatTurn|buildChat|resolvePreparedTurn|collectSpecialist|extractAndPersistLearnedMemory|ensureChatSessionRuntimeGrants|inheritDelegatedSessionToolGrants|runPromptPackFromChat)/,
+    methodNames: splitMethodNames(`
+      agentSendChatMessage retryChatTurn editChatTurn cancelChatTurn routePreflight resumeAgentChatTurnStream
+      answerChatUserInputPrompt prepareAgentChatTurn beginActiveChatTurn endActiveChatTurn getActiveChatTurn
+      registerActiveChatTurn completeActiveChatTurn closeActiveChatTurn persistChatStreamChunk
+      createHydratedChatTurnTrace markChatTurnCancelled loadChatTurn requireChatTurn buildChat resolvePreparedTurn
+      collectSpecialist extractAndPersistLearnedMemory ensureChatSessionRuntimeGrants inheritDelegatedSessionToolGrants
+      runPromptPackFromChat
+    `),
   },
   {
     region: "chat-sessions",
-    pattern:
-      /^(listChat|createChat|updateChat|pinChat|unpinChat|archiveChat|restoreChat|deleteChat|assignChat|getChatSession|getChatThread|selectChatBranch|setChatSession|respondToExistingChatMessage|uploadChatAttachment|getChatAttachment|readChatAttachment|listChatGenerated|createChatGenerated|getChatGenerated|attachChatThread|removeChatThread|listChatThread)/,
+    methodNames: splitMethodNames(`
+      listChat createChat updateChat pinChat unpinChat archiveChat restoreChat deleteChat assignChat getChatSession
+      getChatThread selectChatBranch setChatSession respondToExistingChatMessage uploadChatAttachment
+      getChatAttachment readChatAttachment listChatGenerated createChatGenerated getChatGenerated attachChatThread
+      removeChatThread listChatThread
+    `),
   },
   {
     region: "prompt-packs",
-    pattern:
-      /^(listPromptPack|importPromptPack|runPromptPack|scorePromptPack|reviewPromptPack|autoScorePromptPack|getPromptPack|cancelPromptPack|exportPromptPack|resetPromptPack)/,
+    methodNames: splitMethodNames(`
+      listPromptPack importPromptPack runPromptPack scorePromptPack reviewPromptPack autoScorePromptPack
+      getPromptPack cancelPromptPack exportPromptPack resetPromptPack
+    `),
   },
   {
     region: "durable",
-    pattern:
-      /^(getDurable|listDurable|createDurable|pauseDurable|resumeDurable|cancelDurable|retryDurable|wakeDurable|recoverDurable|beginDurable|finalizeDurable|requestDurable|updateDurable|computeDurable|recordDurable|createCheckpoint)/,
+    methodNames: splitMethodNames(`
+      getDurable listDurable createDurable pauseDurable resumeDurable cancelDurable retryDurable wakeDurable
+      recoverDurable beginDurable finalizeDurable requestDurable updateDurable computeDurable recordDurable
+      createCheckpoint
+    `),
   },
   {
     region: "memory",
-    pattern:
-      /^(getMemory|patchMemory|listMemory|runMemory|acceptMemory|rejectMemory|forgetMemory|composeMemory|listRunContexts|listRecentMemory|persistContext|resolveMemory)/,
+    methodNames: splitMethodNames(`
+      getMemory patchMemory listMemory runMemory acceptMemory rejectMemory forgetMemory composeMemory listRunContexts
+      listRecentMemory persistContext resolveMemory
+    `),
   },
   {
     region: "settings-auth",
-    pattern:
-      /^(getSettings|updateSettings|getAuth|updateAuth|resolveGatewayInstallToken|createDeviceAccess|getDeviceAccess|listDeviceAccess|revokeDeviceAccess|validateDeviceAccess|exchangeCompanion|rotateCompanion|getCompanion|listCompanion|revokeCompanion|validateCompanion|verifyCompanion|resolveDeviceAccess|expireDeviceAccess|recordApprovalResolution)/,
+    methodNames: splitMethodNames(`
+      getSettings updateSettings getAuth updateAuth resolveGatewayInstallToken createDeviceAccess getDeviceAccess
+      listDeviceAccess revokeDeviceAccess validateDeviceAccess exchangeCompanion rotateCompanion getCompanion
+      listCompanion revokeCompanion validateCompanion verifyCompanion resolveDeviceAccess expireDeviceAccess
+      recordApprovalResolution
+    `),
   },
   {
     region: "integrations",
-    pattern:
-      /^(listIntegration|getIntegration|createIntegration|updateIntegration|deleteIntegration|invokeIntegration|runIntegration|listChannel|createChannel|updateChannel|validateChannel|testChannel|finalizeChannel|retestChannel|listDiscord|approveDiscord|revokeDiscord|getDiscord|reconnectDiscord|emitDiscord|emitTelegram|syncDiscord|ingestChannel|assertDiscord|readDiscord|writeDiscord|resolveDiscord|ensureDiscord|startNewDiscord|handleDiscord|readConnection|resolveConnection|recordConnector|pickConnector|buildIntegration|runIntegrationConnectionLiveChecks|listConnector)/,
+    methodNames: splitMethodNames(`
+      listIntegration getIntegration createIntegration updateIntegration deleteIntegration invokeIntegration runIntegration
+      listChannel createChannel updateChannel validateChannel testChannel finalizeChannel retestChannel listDiscord
+      approveDiscord revokeDiscord getDiscord reconnectDiscord emitDiscord emitTelegram syncDiscord ingestChannel
+      assertDiscord readDiscord writeDiscord resolveDiscord ensureDiscord startNewDiscord handleDiscord readConnection
+      resolveConnection recordConnector pickConnector buildIntegration runIntegrationConnectionLiveChecks listConnector
+    `),
   },
   {
     region: "mcp",
-    pattern:
-      /^(listMcp|runMcp|createMcp|updateMcp|deleteMcp|connectMcp|disconnectMcp|startMcp|completeMcp|invokeMcp|readMcp|writeMcp|requireMcp|patchMcp|resolveConnectedMcp)/,
+    methodNames: splitMethodNames(`
+      listMcp runMcp createMcp updateMcp deleteMcp connectMcp disconnectMcp startMcp completeMcp invokeMcp
+      readMcp writeMcp requireMcp patchMcp resolveConnectedMcp
+    `),
   },
   {
     region: "tools-comms",
-    pattern:
-      /^(invokeTool|listTool|evaluateTool|createToolGrant|revokeToolGrant|ensureSessionInternalToolGrant|requireExecutedToolResult|comms|knowledge)/,
+    methodNames: splitMethodNames(`
+      invokeTool listTool evaluateTool createToolGrant revokeToolGrant ensureSessionInternalToolGrant
+      requireExecutedToolResult comms knowledge
+    `),
   },
   {
     region: "skills",
-    pattern:
-      /^(listSkills|reloadSkills|executeCodeMode|listChatPendingApprovals|getSkill|updateSkill|setSkill|bulkSetSkill|resolveSkill|listSkill|lookupSkill|validateSkill|installSkill|getBankr|updateBankr|previewBankr|listBankr)/,
+    methodNames: splitMethodNames(`
+      listSkills reloadSkills executeCodeMode listChatPendingApprovals getSkill updateSkill setSkill bulkSetSkill
+      resolveSkill listSkill lookupSkill validateSkill installSkill getBankr updateBankr previewBankr listBankr
+    `),
   },
   {
     region: "dashboard-workspace",
-    pattern:
-      /^(getDashboard|getSystem|listOperators|listCron|getCron|createCron|updateCron|setCron|deleteCron|runCron|retryCron|uploadWorkspace|listWorkspace|createWorkspace|updateWorkspace|archiveWorkspace|restoreWorkspace|listFile|createWorkspaceFile|downloadWorkspace|listGlobalGuidance|listWorkspaceGuidance|updateGlobalGuidance|updateWorkspaceGuidance|getTranscript|getSessionSummary|listSessionTimeline|getRuntimeLifecycle|listSessions|getSession|getLatestFollowOn|rememberFollowOn|getPackaging|getVoice)/,
+    methodNames: splitMethodNames(`
+      getDashboard getSystem listOperators listCron getCron createCron updateCron setCron deleteCron runCron retryCron
+      uploadWorkspace listWorkspace createWorkspace updateWorkspace archiveWorkspace restoreWorkspace listFile
+      createWorkspaceFile downloadWorkspace listGlobalGuidance listWorkspaceGuidance updateGlobalGuidance
+      updateWorkspaceGuidance getTranscript getSessionSummary listSessionTimeline getRuntimeLifecycle listSessions
+      getSession getLatestFollowOn rememberFollowOn getPackaging getVoice
+    `),
   },
   {
     region: "runtime-provider",
-    pattern:
-      /^(listLlm|getLlm|updateLlm|previewLlm|createChatCompletion|resolveFallbackTargets|saveProviderSecret|deleteProviderSecret|getProviderSecret|listLlama|getLlama|startLlama|stopLlama|refreshLlama|detectLlama|adviseLlama|cancelLlama|listNpu|getNpu|startNpu|stopNpu|refreshNpu|generateImage|createAssembly|listAssembly|getAssembly)/,
+    methodNames: splitMethodNames(`
+      listLlm getLlm updateLlm previewLlm createChatCompletion resolveFallbackTargets saveProviderSecret
+      deleteProviderSecret getProviderSecret listLlama getLlama startLlama stopLlama refreshLlama detectLlama adviseLlama
+      cancelLlama listNpu getNpu startNpu stopNpu refreshNpu generateImage createAssembly listAssembly getAssembly
+    `),
   },
   {
     region: "realtime-events",
-    pattern:
-      /^(publishRealtime|subscribeRealtime|listRealtime|getRealtime|openRealtime|touchRealtime|closeRealtime|ingestEvent|listDev|subscribeDev|recordDev)/,
+    methodNames: splitMethodNames(`
+      publishRealtime subscribeRealtime listRealtime getRealtime openRealtime touchRealtime closeRealtime ingestEvent
+      listDev subscribeDev recordDev
+    `),
   },
   {
     region: "orchestration",
-    pattern:
-      /^(createOrchestration|runOrchestration|approvePhase|getRun|listRunCheckpoints|allocateOrchestration|executeDurableOrchestration|scheduleOrchestration|parseOrchestration|applyOrchestration)/,
+    methodNames: splitMethodNames(`
+      createOrchestration runOrchestration approvePhase getRun listRunCheckpoints allocateOrchestration
+      executeDurableOrchestration scheduleOrchestration parseOrchestration applyOrchestration
+    `),
   },
   {
     region: "composition-helpers",
-    pattern:
-      /^(isFeatureEnabled|requireFeatureEnabled|updateFeatureFlags|readFeatureFlags|persist|assert|runCheaper|fetchWithDiagnosticsTimeout|isConnectionUrlAllowlisted|isUrlAllowlistedInList|normalizeWorkspaceId|resolveChatCompletionHookWorkspaceId|resolveApprovalHookWorkspaceId|parseLlm|mergeLlm|applyLlm|resolveRuntimeGuidance|routeFromSession|buildLlmMessagesFromBranchPath|gatewaySql)$/,
+    exact: true,
+    methodNames: splitMethodNames(`
+      isFeatureEnabled requireFeatureEnabled updateFeatureFlags readFeatureFlags persist assert runCheaper
+      fetchWithDiagnosticsTimeout isConnectionUrlAllowlisted isUrlAllowlistedInList normalizeWorkspaceId
+      resolveChatCompletionHookWorkspaceId resolveApprovalHookWorkspaceId parseLlm mergeLlm applyLlm
+      resolveRuntimeGuidance routeFromSession buildLlmMessagesFromBranchPath gatewaySql
+    `),
   },
 ];
+
+const GATEWAY_METHOD_REGION_PATTERNS = GATEWAY_METHOD_REGION_PATTERN_SOURCES.map(
+  ({ exact = false, methodNames, region }) => ({
+    region,
+    pattern: buildMethodPrefixPattern(methodNames, { exact }),
+  }),
+);
 
 function classifyGatewayMethodRegion(methodName) {
   for (const { region, pattern } of GATEWAY_METHOD_REGION_PATTERNS) {
@@ -765,7 +837,7 @@ async function countFastifyGatewayDecoratorReferences(gatewaySrcDir) {
   for (const filePath of files) {
     const content = await fs.readFile(filePath, "utf8");
     total += countMatches(content, /\b(?:fastify|app|built|next)\.gateway\b/g);
-    total += countMatches(content, /\bFastifyInstance\s*&\s*\{\s*gateway\??\s*:/g);
+    total += countMatches(content, /\bFastifyInstance\s*&\s*\{\s*gateway(?:\?)?\s*:/g);
     total += countMatches(content, /decorate\(\s*["']gateway["']/g);
   }
   return total;
