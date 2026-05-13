@@ -74,6 +74,38 @@ const VALID_LANES = new Set([
   "all",
 ]);
 
+const REVIEW_LANES = new Set([
+  "deep-core",
+  "deep-ecosystem",
+  "catalog-parity",
+  "api-compat",
+  "operator-proof",
+  "durable-recovery",
+  "surface-regression",
+  "visual-regression",
+  "visual-rebaseline",
+  "backup-roundtrip",
+  "runtime-truth",
+  "auth-matrix",
+  "ui-parity",
+  "memory-truth",
+  "realtime-truth",
+  "architecture-metrics",
+  "code-mode-sandbox",
+  "agentic-contracts",
+  "agentic-governance",
+  "agentic-harnesses",
+  "agentic-workbench-loop",
+  "agentic-channels-runtime",
+  "agentic-harness-availability",
+  "agentic-plugins-marketplace",
+  "agentic-self-improvement-trust",
+  "agentic-proof",
+  "agentic-parity",
+  "all",
+  "soak",
+]);
+
 async function main() {
   const { positional, options } = parseCliArgs(process.argv.slice(2));
   const lane = positional[0] ?? "fast";
@@ -227,34 +259,5 @@ main().catch((error) => {
 });
 
 function shouldGenerateReview(lane) {
-  return (
-    lane === "deep-core" ||
-    lane === "deep-ecosystem" ||
-    lane === "catalog-parity" ||
-    lane === "api-compat" ||
-    lane === "operator-proof" ||
-    lane === "durable-recovery" ||
-    lane === "surface-regression" ||
-    lane === "visual-regression" ||
-    lane === "visual-rebaseline" ||
-    lane === "backup-roundtrip" ||
-    lane === "runtime-truth" ||
-    lane === "auth-matrix" ||
-    lane === "ui-parity" ||
-    lane === "memory-truth" ||
-    lane === "realtime-truth" ||
-    lane === "architecture-metrics" ||
-    lane === "code-mode-sandbox" ||
-    lane === "agentic-contracts" ||
-    lane === "agentic-governance" ||
-    lane === "agentic-harnesses" ||
-    lane === "agentic-workbench-loop" ||
-    lane === "agentic-channels-runtime" ||
-    lane === "agentic-harness-availability" ||
-    lane === "agentic-plugins-marketplace" ||
-    lane === "agentic-self-improvement-trust" ||
-    lane === "agentic-parity" ||
-    lane === "all" ||
-    lane === "soak"
-  );
+  return REVIEW_LANES.has(lane);
 }
