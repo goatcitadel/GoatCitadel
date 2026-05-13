@@ -35,6 +35,7 @@ workspace/chat/
 .worktrees/*
 !.worktrees/.gitkeep
 .claude/settings.local.json
+docs/review/r*-*.md
 apps/gateway/backups/
 backups/
 data/postgres/
