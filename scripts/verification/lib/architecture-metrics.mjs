@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import ts from "typescript";
 import { repoRoot } from "./shared.mjs";
 
 function getArchitectureBaselinePath(rootDir = repoRoot) {
@@ -31,6 +32,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "taskLifecycleService",
   "toolInvocationCoordinator",
 ];
+const WHITESPACE_AND_COMMENTS_PATTERN = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
 const METHOD_LEADING_WHITESPACE_PATTERN_SOURCE = String.raw`^\s*`;
 const METHOD_INTERNAL_MARKER_PATTERN_SOURCE = String.raw`(?<internal>/\*\* @internal \*/\s*)?`;
 const METHOD_PUBLIC_KEYWORD_PATTERN_SOURCE = String.raw`public\s+`;
@@ -57,38 +59,39 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Extracts a complete exported TypeScript type alias declaration, or an empty string when missing. */
-function extractExportedTypeAlias(source, aliasName) {
-  const aliasPattern = new RegExp(String.raw`export type ${escapeRegExp(aliasName)}\s*=[\s\S]*?;`);
-  return source.match(aliasPattern)?.[0] ?? "";
+function createMetricsSourceFile(source) {
+  return ts.createSourceFile("architecture-metrics-source.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
-/** Extracts the body of an exported TypeScript interface by matching the outer brace pair. */
-function extractInterfaceBody(source, interfaceName) {
-  const declarationPattern = new RegExp(String.raw`\bexport\s+interface\s+${escapeRegExp(interfaceName)}\b`);
-  const declarationMatch = declarationPattern.exec(source);
-  if (!declarationMatch) {
-    return "";
-  }
+function hasExportModifier(node) {
+  return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+}
 
-  const openBraceIndex = source.indexOf("{", declarationMatch.index);
-  if (openBraceIndex === -1) {
-    return "";
-  }
-
-  let depth = 0;
-  for (let index = openBraceIndex; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return source.slice(openBraceIndex + 1, index);
-      }
+/** Extracts a complete exported TypeScript type alias declaration, or an empty string when missing. */
+function extractExportedTypeAlias(source, aliasName) {
+  const sourceFile = createMetricsSourceFile(source);
+  for (const statement of sourceFile.statements) {
+    if (ts.isTypeAliasDeclaration(statement) && hasExportModifier(statement) && statement.name.text === aliasName) {
+      return source.slice(statement.getStart(sourceFile), statement.end);
     }
   }
+  return "";
+}
 
+/** Extracts the body of an exported TypeScript interface by slicing its parsed declaration braces. */
+function extractInterfaceBody(source, interfaceName) {
+  const sourceFile = createMetricsSourceFile(source);
+  for (const statement of sourceFile.statements) {
+    if (ts.isInterfaceDeclaration(statement) && hasExportModifier(statement) && statement.name.text === interfaceName) {
+      const start = statement.getStart(sourceFile);
+      const openBraceIndex = source.indexOf("{", start);
+      const closeBraceIndex = source.lastIndexOf("}", statement.end);
+      if (openBraceIndex === -1 || closeBraceIndex <= openBraceIndex) {
+        return "";
+      }
+      return source.slice(openBraceIndex + 1, closeBraceIndex);
+    }
+  }
   return "";
 }
 
@@ -818,14 +821,47 @@ async function countBoundGatewayRoutePortMethods(source, serviceFiles) {
 }
 
 async function findExportedConstArrayDeclaration(name, serviceFiles) {
-  const escapedName = escapeRegExp(name);
-  const pattern = new RegExp(`export const ${escapedName} = \\[([\\s\\S]*?)\\] as const;`);
   for (const filePath of serviceFiles) {
     const source = await fs.readFile(filePath, "utf8");
-    const match = source.match(pattern);
-    if (match) {
-      return match[1];
+    const declaration = extractExportedConstArrayInitializer(source, name);
+    if (declaration !== undefined) {
+      return declaration;
     }
+  }
+  return undefined;
+}
+
+function extractExportedConstArrayInitializer(source, constName) {
+  const sourceFile = createMetricsSourceFile(source);
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement) || !hasExportModifier(statement)) {
+      continue;
+    }
+
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== constName || !declaration.initializer) {
+        continue;
+      }
+      const arrayInitializer = unwrapArrayExpression(declaration.initializer);
+      if (arrayInitializer) {
+        return source.slice(arrayInitializer.getStart(sourceFile) + 1, arrayInitializer.end - 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+function unwrapArrayExpression(expression) {
+  if (ts.isArrayLiteralExpression(expression)) {
+    return expression;
+  }
+  if (
+    ts.isAsExpression(expression) ||
+    ts.isSatisfiesExpression(expression) ||
+    ts.isParenthesizedExpression(expression) ||
+    ts.isTypeAssertionExpression(expression)
+  ) {
+    return unwrapArrayExpression(expression.expression);
   }
   return undefined;
 }
@@ -886,9 +922,8 @@ function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gat
   if (/<\s*GatewayRouteComposition(?:PrivateDependencies|Host)\s*>/.test(gatewayServiceSource)) {
     violations += 1;
   }
-  const whitespaceAndCommentsPattern = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
   const createPortCallPattern = new RegExp(
-    String.raw`createGatewayRouteCompositionPort\(${whitespaceAndCommentsPattern}this${whitespaceAndCommentsPattern},${whitespaceAndCommentsPattern}\{`,
+    String.raw`createGatewayRouteCompositionPort\(${WHITESPACE_AND_COMMENTS_PATTERN}this${WHITESPACE_AND_COMMENTS_PATTERN},${WHITESPACE_AND_COMMENTS_PATTERN}\{`,
   );
   if (!createPortCallPattern.test(gatewayServiceSource)) {
     violations += 1;
@@ -905,8 +940,17 @@ function normalizeTypeAlias(source) {
 }
 
 function countMatches(content, pattern) {
-  const matches = content.match(pattern);
-  return Array.isArray(matches) ? matches.length : 0;
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const regex = new RegExp(pattern.source, flags);
+  let count = 0;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    count += 1;
+    if (match[0] === "") {
+      regex.lastIndex += 1;
+    }
+  }
+  return count;
 }
 
 function deltaOrCurrentFallback(current, baselineValue) {
