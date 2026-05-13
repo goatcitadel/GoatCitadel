@@ -135,7 +135,7 @@ async function main() {
     } else if (lane === "backup-roundtrip") {
       await runBackupRoundtripLane(context, { profile });
     } else if (lane === "soak") {
-      await runSoakLane(context, { profile, durationMs });
+      await runSoakLane(context, { durationMs });
     } else if (lane === "runtime-truth") {
       await runRuntimeTruthLane(context, { profile });
     } else if (lane === "auth-matrix") {
@@ -147,9 +147,9 @@ async function main() {
     } else if (lane === "realtime-truth") {
       await runRealtimeTruthLane(context, { profile });
     } else if (lane === "architecture-metrics") {
-      await runArchitectureMetricsLane(context, { profile });
+      await runArchitectureMetricsLane(context);
     } else if (lane === "code-mode-sandbox") {
-      await runCodeModeSandboxRequiredLane(context, { profile });
+      await runCodeModeSandboxRequiredLane(context);
     } else if (lane === "agentic-contracts") {
       await runAgenticContractsLane(context);
     } else if (lane === "agentic-governance") {
@@ -172,7 +172,7 @@ async function main() {
       await runAgenticHarnessesLane(context);
     } else if (lane === "all") {
       await runFastLane(context);
-      await runCodeModeSandboxRequiredLane(context, { profile });
+      await runCodeModeSandboxRequiredLane(context);
       await runAgenticContractsLane(context);
       await runAgenticGovernanceLane(context);
       await runAgenticHarnessesLane(context);
@@ -190,9 +190,9 @@ async function main() {
       await runUiParityLane(context, { profile });
       await runMemoryTruthLane(context, { profile });
       await runRealtimeTruthLane(context, { profile });
-      await runArchitectureMetricsLane(context, { profile });
+      await runArchitectureMetricsLane(context);
       if (includeSoak) {
-        await runSoakLane(context, { profile, durationMs });
+        await runSoakLane(context, { durationMs });
       }
     }
 
