@@ -397,7 +397,7 @@ async function checkConfigIntegrity(
     if (!beforeUnified.exists || beforeSplits.some((item) => !item.exists)) {
       try {
         const syncResult = await syncUnifiedConfig(context.rootDir, { createUnifiedIfMissing: true });
-        repaired = repaired || syncResult.createdUnified || syncResult.syncedSections.length > 0;
+        repaired = syncResult.createdUnified || syncResult.syncedSections.length > 0;
         if (syncResult.createdUnified) {
           repairLog.push(`Created ${path.relative(context.rootDir, syncResult.unifiedPath)}.`);
         }

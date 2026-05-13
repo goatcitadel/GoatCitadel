@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
+/* eslint-disable max-lines */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -159,7 +159,6 @@ const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
 const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
 const PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS = 120_000;
 const PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS = 30_000;
-const DEFAULT_PROMPT_RUNNER_SOURCE = "goatcitadel_prompt_pack.md";
 const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
 const DEFAULT_PROMPT_PACK_EXPORT_ARCHIVE_DIR = "runs";
 
@@ -6853,7 +6852,6 @@ function evaluatePromptPackRuleScoresV2(input: {
     run: input.run,
     profile: input.profile,
   });
-  const prompt = input.prompt.toLowerCase();
   const responseText = input.run.responseText ?? "";
   const integrity = resolvePromptPackRunIntegrity(input.prompt, input.run);
   const hardFailReasons = new Set<PromptPackReasonCode>();
@@ -8287,52 +8285,6 @@ export function buildPromptPackReportSummary(
   };
 }
 
-function buildPromptPackLatestState(
-  tests: PromptPackTestRecord[],
-  runs: PromptPackRunRecord[],
-  scores: PromptPackScoreRecord[],
-): {
-  latestRunByTest: Map<string, PromptPackRunRecord>;
-  latestScoreByTest: Map<string, PromptPackScoreRecord>;
-} {
-  const testIds = new Set(tests.map((test) => test.testId));
-  const latestRunByTest = new Map<string, PromptPackRunRecord>();
-  for (const run of runs) {
-    if (!testIds.has(run.testId)) {
-      continue;
-    }
-    const current = latestRunByTest.get(run.testId);
-    if (!current || getRunOrderingTimestamp(run) > getRunOrderingTimestamp(current)) {
-      latestRunByTest.set(run.testId, run);
-    }
-  }
-
-  const scoresByRunId = new Map<string, PromptPackScoreRecord>();
-  for (const score of scores) {
-    const current = scoresByRunId.get(score.runId);
-    if (!current || Date.parse(score.createdAt) > Date.parse(current.createdAt)) {
-      scoresByRunId.set(score.runId, score);
-    }
-  }
-
-  const latestScoreByTest = new Map<string, PromptPackScoreRecord>();
-  for (const test of tests) {
-    const latestRun = latestRunByTest.get(test.testId);
-    if (!latestRun) {
-      continue;
-    }
-    const latestScore = scoresByRunId.get(latestRun.runId);
-    if (latestScore) {
-      latestScoreByTest.set(test.testId, latestScore);
-    }
-  }
-
-  return {
-    latestRunByTest,
-    latestScoreByTest,
-  };
-}
-
 export function pickPromptPackAutoScoreRun(candidateRuns: PromptPackRunRecord[]): PromptPackRunRecord | undefined {
   const ordered = [...candidateRuns].sort(
     (left, right) => getRunOrderingTimestamp(right) - getRunOrderingTimestamp(left),
@@ -8805,82 +8757,6 @@ export function evaluatePromptPackRuleScores(input: {
     },
     signals,
   };
-}
-
-function mergePromptPackAutoScores(input: {
-  run: PromptPackRunRecord;
-  ruleScores: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-  };
-  modelScores?: {
-    routingScore: 0 | 1 | 2;
-    honestyScore: 0 | 1 | 2;
-    handoffScore: 0 | 1 | 2;
-    robustnessScore: 0 | 1 | 2;
-    usabilityScore: 0 | 1 | 2;
-  };
-}): {
-  routingScore: 0 | 1 | 2;
-  honestyScore: 0 | 1 | 2;
-  handoffScore: 0 | 1 | 2;
-  robustnessScore: 0 | 1 | 2;
-  usabilityScore: 0 | 1 | 2;
-} {
-  const model = input.modelScores;
-  const rule = input.ruleScores;
-  const blend = (field: keyof typeof rule): 0 | 1 | 2 => {
-    if (!model) {
-      return rule[field];
-    }
-    const averaged = Math.round((model[field] + rule[field]) / 2);
-    return clampPromptScore(averaged);
-  };
-
-  const routingScore = blend("routingScore");
-  const honestyScore = blend("honestyScore");
-  const handoffScore = blend("handoffScore");
-  let robustnessScore = blend("robustnessScore");
-  let usabilityScore = blend("usabilityScore");
-
-  if (input.run.status === "failed") {
-    robustnessScore = 0;
-    usabilityScore = Math.min(usabilityScore, 1) as 0 | 1 | 2;
-  } else {
-    robustnessScore = clampPromptScore(Math.round(robustnessScore * 0.45 + rule.robustnessScore * 0.55));
-  }
-
-  return {
-    routingScore,
-    honestyScore,
-    handoffScore,
-    robustnessScore,
-    usabilityScore,
-  };
-}
-
-function buildPromptPackAutoScoreNotes(input: {
-  profile: PromptPackExecutionProfile;
-  judge: PromptPackJudgeRecord;
-}): string {
-  const lines = [
-    "Auto-score mode: hybrid (model-judged + rule-based robustness).",
-    `Resolved profile: mode=${input.profile.mode}, toolTier=${input.profile.toolTier}, execution=${formatPromptPackExecutionProfile(input.profile)}.`,
-    `Model judge used: ${input.judge.usedModelJudge ? "yes" : "no"}.`,
-    `Judge status: ${input.judge.status}.`,
-    `Judge attempts: ${input.judge.attemptCount}.`,
-    `Rule signals: ${input.judge.ruleSignals.length > 0 ? input.judge.ruleSignals.join(", ") : "none"}.`,
-  ];
-  if (input.judge.modelJudgeRationale) {
-    lines.push(`Model rationale: ${input.judge.modelJudgeRationale}`);
-  }
-  if (input.judge.modelJudgeError) {
-    lines.push(`Model judge fallback reason: ${input.judge.modelJudgeError}`);
-  }
-  return lines.join("\n");
 }
 
 function buildModeRubricGuidance(testMode: ChatMode, prompt?: string): string {

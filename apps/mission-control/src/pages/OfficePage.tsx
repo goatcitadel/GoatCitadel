@@ -33,16 +33,12 @@ import { OFFICE_ZONE_ORDER, inferOfficeZone, officeZoneLabel, type OfficeZoneId 
 
 import {
   ACTIVITY_TRANSITION_WINDOW_MS,
-  DEFAULT_OPERATOR_PREFS,
-  EVENTS_PER_MINUTE_WINDOW_MS,
   HOT_AGENT_WINDOW_MS,
   INITIAL_EVENT_LIMIT,
-  LAB_OPERATOR_PREFS,
   MAX_EVENTS,
   MAX_VISIBLE_COLLAB_EDGES,
   MAX_VISIBLE_ZONE_LANES,
   OFFICE_PAGE_VARIANTS,
-  PRESET_OPTIONS,
   SNAPSHOT_INTERVAL_MS,
   WARM_AGENT_WINDOW_MS,
   type OfficeDockTab,
@@ -52,7 +48,6 @@ import {
 import {
   asRecord,
   asString,
-  buildOperatorThought,
   classifyAgentHeat,
   extractSessionId,
   extractTaskId,

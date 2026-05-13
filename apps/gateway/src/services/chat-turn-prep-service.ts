@@ -180,8 +180,8 @@ export async function prepareAgentChatTurn(
   const route = host.routeFromSession(session);
   const ingestUserMessage = options?.ingestUserMessage ?? !options?.existingUserMessage;
   let userEventId = options?.existingUserMessage?.messageId ?? "";
-  let userMessage = options?.existingUserMessage;
-  if (ingestUserMessage || !userMessage) {
+  let userMessage: ChatMessageRecord;
+  if (ingestUserMessage || !options?.existingUserMessage) {
     const uploadAttachments = host.storage.chatAttachments.listByIds(input.attachments ?? [], workspaceId);
     const inputParts = normalizeChatInputParts(content, input.parts, uploadAttachments);
     userEventId = randomUUID();
@@ -221,9 +221,8 @@ export async function prepareAgentChatTurn(
       timestamp: new Date().toISOString(),
       attachments: attachments.length > 0 ? attachments : undefined,
     };
-  }
-  if (!userMessage) {
-    throw new Error("user message is required");
+  } else {
+    userMessage = options.existingUserMessage;
   }
 
   const prefsOverride = applyChatModePresetToPatch({

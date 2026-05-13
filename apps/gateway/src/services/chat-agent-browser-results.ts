@@ -289,7 +289,7 @@ export function classifyBrowserToolResult(
   }
   const status = readBrowserStatusNumber(result.status);
   const normalizedText = readBrowserResultText(result).toLowerCase();
-  const errorText = (typeof result.error === "string" ? result.error : (error ?? "")).toLowerCase();
+  const errorText = typeof result.error === "string" ? result.error.toLowerCase() : "";
   if (status === 429 || errorText.includes("429") || errorText.includes("rate limit")) {
     return {
       failureClass: "rate_limited",

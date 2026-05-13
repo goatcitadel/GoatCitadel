@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
+/* eslint-disable max-lines, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useState } from "react";
 import type {
   ChannelSetupDefinition,
@@ -40,7 +40,6 @@ import {
   findResumeStepId,
   findStartStepId,
   getStepCompletionState,
-  isFieldSatisfied,
   isStepVisible,
   lifecycleDescription,
   titleCaseLifecycle,
@@ -342,7 +341,7 @@ export function ChannelSetupPage() {
     try {
       await saveDraftState();
       setPageNotice("Draft saved.");
-      if (draft && definition) {
+      if (definition) {
         trackWizardEvent("channel_step_completed", {
           draftId: draft.draftId,
           catalogId: draft.catalogId,
@@ -369,7 +368,7 @@ export function ChannelSetupPage() {
     setPageNotice(null);
     setPageError(null);
     try {
-      if (draft && definition) {
+      if (definition) {
         trackWizardEvent("channel_validation_started", {
           draftId: draft.draftId,
           catalogId: draft.catalogId,
@@ -416,7 +415,7 @@ export function ChannelSetupPage() {
     setPageNotice(null);
     setPageError(null);
     try {
-      if (draft && definition) {
+      if (definition) {
         trackWizardEvent("channel_retest_started", {
           draftId: draft.draftId,
           catalogId: draft.catalogId,
@@ -463,7 +462,7 @@ export function ChannelSetupPage() {
     setPageNotice(null);
     setPageError(null);
     try {
-      if (draft && definition) {
+      if (definition) {
         trackWizardEvent("channel_finalize_started", {
           draftId: draft.draftId,
           catalogId: draft.catalogId,

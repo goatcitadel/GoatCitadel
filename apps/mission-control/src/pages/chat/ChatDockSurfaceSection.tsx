@@ -512,16 +512,6 @@ export function ChatDockSurfaceSection(
                       ]}
                     />
                   </label>
-                  {isCoworkSurface ? (
-                    <button
-                      type="button"
-                      disabled={!selectedSessionId || sending}
-                      onClick={() => void onSuggestDelegation()}
-                      className="gc-button"
-                    >
-                      Suggest delegation
-                    </button>
-                  ) : null}
                   <button
                     type="button"
                     disabled={!selectedSessionId || sending}

@@ -184,7 +184,6 @@ import type {
   TaskSubagentSession,
 } from "./types.js";
 import { recordClientDiagnostic } from "../state/dev-diagnostics-store";
-import { iterateSsePayloads, parseSseJson } from "./streaming.js";
 import { buildGatewayUrl, clearGatewayAuthState, readStoredGatewayAuthState } from "./client-core.js";
 import { computeReconnectDelay, isSseBridgeNotNeededError, issueSseBridgeToken } from "./sse-bridge.js";
 

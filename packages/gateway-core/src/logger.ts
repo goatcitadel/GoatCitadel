@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Structured logger for GoatCitadel services.
  *
@@ -48,8 +47,6 @@ function formatError(errorOrContext: unknown): LogContext {
 }
 
 function createLogger(component: string): Logger {
-  const prefix = `[goatcitadel:${component}]`;
-
   const write = (level: string, stream: "stdout" | "stderr", msg: string, context?: LogContext) => {
     const entry = {
       level,

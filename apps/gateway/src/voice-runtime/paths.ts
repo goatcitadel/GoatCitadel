@@ -3,7 +3,6 @@ import path from "node:path";
 import type { ManagedVoicePlatform } from "./catalog.js";
 
 const PREFERRED_HOME_NAME = ".GoatCitadel";
-const LEGACY_HOME_NAME = ".goatcitadel";
 
 export interface VoiceRuntimePaths {
   goatHome: string;
@@ -21,7 +20,6 @@ export function resolveGoatCitadelHome(): string {
     return path.resolve(envHome);
   }
   const preferred = path.join(os.homedir(), PREFERRED_HOME_NAME);
-  const legacy = path.join(os.homedir(), LEGACY_HOME_NAME);
   return preferred;
 }
 

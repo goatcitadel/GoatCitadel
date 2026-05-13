@@ -121,7 +121,6 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   });
   const routeCompositionPath = path.join(servicesDir, "gateway-route-service-composition.ts");
   const routeCompositionPortPath = path.join(servicesDir, "gateway-route-composition-port.ts");
-  const routeCompositionSource = await fs.readFile(routeCompositionPath, "utf8");
   const routeCompositionPortSource = await fs.readFile(routeCompositionPortPath, "utf8");
   const routeServiceFactorySource = await fs.readFile(path.join(servicesDir, "route-service-factory.ts"), "utf8");
   const gatewaySource = (await Promise.all(gatewaySourceFiles.map((filePath) => fs.readFile(filePath, "utf8")))).join(

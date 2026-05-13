@@ -2,8 +2,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "../styles/integrations.css";
 import {
-  commsSend,
-  evaluateUiChangeRisk,
   fetchChannelRuntimeStatus,
   fetchChannelSetupDefinitions,
   fetchIntegrationCatalog,
@@ -31,16 +29,9 @@ import type {
   DiscordRuntimeStatus,
 } from "@goatcitadel/contracts";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
-import { DataToolbar } from "../components/DataToolbar";
-import { FieldHelp } from "../components/FieldHelp";
 import { OperatorSplitLayout } from "../components/OperatorSplitLayout";
-import { SelectOrCustom } from "../components/SelectOrCustom";
-import { ConfigFormBuilder } from "../components/ConfigFormBuilder";
 import { ConfirmModal } from "../components/ConfirmModal";
-import { CardSkeleton } from "../components/CardSkeleton";
-import { HelpHint } from "../components/HelpHint";
 import { StatusChip } from "../components/StatusChip";
-import { GCSelect, GCSwitch } from "../components/ui";
 import { useAction } from "../hooks/useAction";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
@@ -48,34 +39,9 @@ import {
   type ChannelSetupPath,
   type UiRiskItem,
   type UiRiskLevel,
-  connectorSetupReady,
-  connectorSupportsDeliveryAction,
-  deriveOverallRisk,
-  describeChannelSetupPath,
-  describeMaturity,
-  evaluateLocalRisk,
-  extractUrlCandidates,
-  formatChannelSetupPath,
-  formatConnectorList,
-  formatKind,
-  formatMaturity,
-  formatRuntimeAvailability,
-  formatStatus,
-  getChannelSetupPathTone,
-  getConnectorMetadataStringList,
-  getConnectorRuntimePostureSummary,
-  getConnectorSetupDiagnostics,
-  getConnectorSupportNotes,
-  getConnectorSupportedAttachmentSources,
-  getConnectorSupportedDeliveryActions,
   guessDefaultChannelTarget,
   isDiscordGatewayConnection,
-  maxRisk,
-  mergeRiskItems,
-  renderConnectorApprovalDeliverySummary,
-  requiresExplicitChannelTarget,
   resolveChannelSetupPath,
-  sanitizeGuidedConfig,
 } from "./integrations-page-utils";
 import { IntegrationsCatalogPicker } from "./integrations/IntegrationsCatalogPicker";
 import { IntegrationsChannelTestBench } from "./integrations/IntegrationsChannelTestBench";
@@ -92,7 +58,6 @@ import { useIntegrationsRiskReview } from "./integrations/useIntegrationsRiskRev
 import { useIntegrationsRuntimeActions } from "./integrations/useIntegrationsRuntimeActions";
 
 import {
-  isAbortError,
   KIND_DESCRIPTIONS,
   KIND_OPTIONS,
   STATUS_OPTIONS,
@@ -693,72 +658,71 @@ export function IntegrationsPage({ view = "overview" }: IntegrationsPageProps) {
         className="integrations-operator-layout"
         primary={
           <div className="integrations-operator-main">
-          <IntegrationsCatalogPicker<IntegrationKind>
-            isChannelsView={isChannelsView}
-            catalog={catalog}
-            selectedCatalogId={selectedCatalogId}
-            onSelectCatalogId={setSelectedCatalogId}
-            guidedChannelCatalogIds={guidedChannelCatalogIds}
-            channelCatalogTruthSummary={channelCatalogTruthSummary}
-            isInitialLoading={isInitialLoading}
-            kindFilter={kindFilter}
-            onKindFilterChange={(value) => {
-              setKindFilter(value);
-              setSelectedCatalogId("");
-              setFormSchema(undefined);
-            }}
-            kindOptions={KIND_OPTIONS}
-            scopeSubtitle={
-              kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]
-            }
-          />
+            <IntegrationsCatalogPicker<IntegrationKind>
+              isChannelsView={isChannelsView}
+              catalog={catalog}
+              selectedCatalogId={selectedCatalogId}
+              onSelectCatalogId={setSelectedCatalogId}
+              guidedChannelCatalogIds={guidedChannelCatalogIds}
+              channelCatalogTruthSummary={channelCatalogTruthSummary}
+              isInitialLoading={isInitialLoading}
+              kindFilter={kindFilter}
+              onKindFilterChange={(value) => {
+                setKindFilter(value);
+                setSelectedCatalogId("");
+                setFormSchema(undefined);
+              }}
+              kindOptions={KIND_OPTIONS}
+              scopeSubtitle={
+                kindFilter === "all" ? "Showing all available catalog entries." : KIND_DESCRIPTIONS[kindFilter]
+              }
+            />
 
-          <ChangeReviewPanel
-            title="Pre-Save Safety Check"
-            overall={changeReview.overall}
-            items={changeReview.items}
-            requireCriticalConfirm
-            criticalConfirmed={criticalConfirmed}
-            onCriticalConfirmChange={setCriticalConfirmed}
-          />
+            <ChangeReviewPanel
+              title="Pre-Save Safety Check"
+              overall={changeReview.overall}
+              items={changeReview.items}
+              requireCriticalConfirm
+              criticalConfirmed={criticalConfirmed}
+              onCriticalConfirmChange={setCriticalConfirmed}
+            />
 
-          <IntegrationsCreateConnectionPanel
-            createConnectionTitle={createConnectionTitle}
-            createConnectionSubtitle={createConnectionSubtitle}
-            isInitialLoading={isInitialLoading}
-            selectedCatalogId={selectedCatalogId}
-            onSelectedCatalogIdChange={setSelectedCatalogId}
-            catalogOptions={catalogOptions}
-            label={label}
-            onLabelChange={setLabel}
-            selectedCatalog={selectedCatalog}
-            selectedCatalogSetupPath={selectedCatalogSetupPath}
-            selectedCatalogIsRunnable={selectedCatalogIsRunnable}
-            status={status}
-            onStatusChange={setStatus}
-            statusOptions={STATUS_OPTIONS}
-            enabled={enabled}
-            onEnabledChange={setEnabled}
-            showAdvancedJson={showAdvancedJson}
-            onShowAdvancedJsonChange={setShowAdvancedJson}
-            simpleFormLabel={simpleFormLabel}
-            simpleFormSelectionLabel={simpleFormSelectionLabel}
-            guidedModeSummary={guidedModeSummary}
-            advancedModeSummary={advancedModeSummary}
-            selectedModeCallout={selectedModeCallout}
-            isFormSchemaLoading={isFormSchemaLoading}
-            formSchema={formSchema}
-            guidedConfig={guidedConfig}
-            onGuidedConfigChange={setGuidedConfig}
-            configJson={configJson}
-            onConfigJsonChange={setConfigJson}
-            blockCreate={blockCreate}
-            createPending={createAction.pending}
-            onCreate={() => void onCreate()}
-          />
+            <IntegrationsCreateConnectionPanel
+              createConnectionTitle={createConnectionTitle}
+              createConnectionSubtitle={createConnectionSubtitle}
+              isInitialLoading={isInitialLoading}
+              selectedCatalogId={selectedCatalogId}
+              onSelectedCatalogIdChange={setSelectedCatalogId}
+              catalogOptions={catalogOptions}
+              label={label}
+              onLabelChange={setLabel}
+              selectedCatalog={selectedCatalog}
+              selectedCatalogSetupPath={selectedCatalogSetupPath}
+              selectedCatalogIsRunnable={selectedCatalogIsRunnable}
+              status={status}
+              onStatusChange={setStatus}
+              statusOptions={STATUS_OPTIONS}
+              enabled={enabled}
+              onEnabledChange={setEnabled}
+              showAdvancedJson={showAdvancedJson}
+              onShowAdvancedJsonChange={setShowAdvancedJson}
+              simpleFormLabel={simpleFormLabel}
+              simpleFormSelectionLabel={simpleFormSelectionLabel}
+              guidedModeSummary={guidedModeSummary}
+              advancedModeSummary={advancedModeSummary}
+              selectedModeCallout={selectedModeCallout}
+              isFormSchemaLoading={isFormSchemaLoading}
+              formSchema={formSchema}
+              guidedConfig={guidedConfig}
+              onGuidedConfigChange={setGuidedConfig}
+              configJson={configJson}
+              onConfigJsonChange={setConfigJson}
+              blockCreate={blockCreate}
+              createPending={createAction.pending}
+              onCreate={() => void onCreate()}
+            />
           </div>
         }
-
         inspector={
           <div className="integrations-operator-side">
             <IntegrationsConnectionsTable

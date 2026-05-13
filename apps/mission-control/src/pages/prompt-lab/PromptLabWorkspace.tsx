@@ -357,7 +357,7 @@ export function PromptLabWorkspace(props: PromptLabWorkspaceProps) {
                 )}
               </section>
             </div>
-            {selectedTest && selectedPlaceholders.length > 0 ? (
+            {selectedPlaceholders.length > 0 ? (
               <section className="status-banner warning prompt-lab-placeholder-banner">
                 <p className="prompt-lab-placeholder-copy">
                   This test has placeholder tokens. Fill them before running.

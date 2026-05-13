@@ -449,14 +449,6 @@ function fileContains(file, patterns) {
   };
 }
 
-function behavioralCheck(title, run) {
-  return {
-    kind: "behavioral",
-    title,
-    run,
-  };
-}
-
 function commandCheck(title, command, args, options = {}) {
   return {
     kind: "command",

@@ -631,7 +631,6 @@ export class ChatAgentOrchestrator {
 
     if (
       !assistantContent &&
-      !approvalPayload &&
       input.toolAutonomy !== "manual" &&
       input.mode !== "code" &&
       !promptLabShouldInspectFilesForTurn &&
@@ -702,7 +701,6 @@ export class ChatAgentOrchestrator {
 
     if (
       !assistantContent &&
-      !approvalPayload &&
       input.toolAutonomy !== "manual" &&
       promptLabCoworkPlanningStatusPrefetch &&
       toolRunCount === 0
@@ -752,7 +750,6 @@ export class ChatAgentOrchestrator {
 
     if (
       !assistantContent &&
-      !approvalPayload &&
       input.toolAutonomy !== "manual" &&
       (promptLabExplicitToolsWithRequiredEvidence ||
         promptLabContract.repoGroundedAssist ||
@@ -1154,7 +1151,7 @@ export class ChatAgentOrchestrator {
                 effectiveSearchRun.record.result,
               );
               for (const filePath of concreteReadPaths) {
-                if (toolRunCount >= executionBudget.maxToolRunsPerTurn || approvalPayload) {
+                if (toolRunCount >= executionBudget.maxToolRunsPerTurn) {
                   break;
                 }
                 throwIfChatTurnCancelled(input);
@@ -5021,7 +5018,7 @@ function looksLikeClarificationAnswer(answer: string, question: string): boolean
   // Definition/qualifier questions
   if (question.includes("threshold") || question.includes("criteria") || question.includes("defining")) {
     return (
-      /\b(defined as|definition|means|self-reported|threshold|criteria|measured)\b/.test(answer) || /["""]/.test(answer)
+      /\b(defined as|definition|means|self-reported|threshold|criteria|measured)\b/.test(answer) || answer.includes('"')
     );
   }
   // Timeframe questions
@@ -9248,17 +9245,13 @@ function buildGuidanceLoadingChainEvidenceFallback(input: {
       : undefined,
     "",
     "## Observed Precedence",
-    helperEvidence && serviceEvidence
-      ? `- Workspace guidance is resolved through the same helper path as global guidance, then \`${serviceEvidence.path}\` proves precedence with \`const selected = workspaceDoc.exists ? workspaceDoc : globalDoc.exists ? globalDoc : undefined\`: workspace wins when present, global is only the fallback. The selected scope remains visible through \`workspaceFilesUsed\` and \`globalFilesUsed\`, and the generated runtime instruction says workspace overrides take precedence over global defaults.`
-      : "- The current concrete reads do not fully prove precedence, so the answer should name that gap explicitly.",
+    `- Workspace guidance is resolved through the same helper path as global guidance, then \`${serviceEvidence.path}\` proves precedence with \`const selected = workspaceDoc.exists ? workspaceDoc : globalDoc.exists ? globalDoc : undefined\`: workspace wins when present, global is only the fallback. The selected scope remains visible through \`workspaceFilesUsed\` and \`globalFilesUsed\`, and the generated runtime instruction says workspace overrides take precedence over global defaults.`,
     "",
     "## Still Ambiguous",
     `- ${stillUnverifiedSummary}`,
     "",
     "## Current Summary",
-    helperEvidence && serviceEvidence
-      ? "- The repo-root/global guidance file and workspace override file are discovered/read in the helper layer, surfaced by the gateway service as distinct global/workspace guidance records, and collapsed by `resolveRuntimeGuidance(...)` into one effective runtime selection before chat turn preparation consumes it."
-      : "- The concrete reads show part of the guidance chain, but not every hop, so any missing layer should be described as unverified rather than inferred.",
+    "- The repo-root/global guidance file and workspace override file are discovered/read in the helper layer, surfaced by the gateway service as distinct global/workspace guidance records, and collapsed by `resolveRuntimeGuidance(...)` into one effective runtime selection before chat turn preparation consumes it.",
     "",
     exactCitationAppendix,
     "## Exact files used",

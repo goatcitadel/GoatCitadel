@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, max-lines -- Skills remains a single operator surface while capability detail, proposal, and lifecycle controls settle. */
+/* eslint-disable max-lines -- Skills remains a single operator surface while capability detail, proposal, and lifecycle controls settle. */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type {
   CandidateSkillDetailRecord,
@@ -48,10 +48,7 @@ import {
   BANKR_MIGRATION_DOC_PATH,
   BANKR_MIGRATION_TEMPLATE_PATH,
   IMPORT_PROVIDER_OPTIONS,
-  SKILL_CATEGORY_RULES,
-  SKILL_FAMILY_TO_CATEGORY,
   STATE_OPTIONS,
-  deriveCategoryLabel,
   deriveSkillCategoryLabel,
   deriveSourceCategoryLabel,
   describeValidationTrust,
@@ -122,15 +119,21 @@ export function SkillsPage() {
       setIsInitialLoading(true);
     }
     try {
-      const [skillsResponse, policyResponse, importHistoryResponse, catalogResponse, proposalsResponse, harnessAuditResponse] =
-        await Promise.all([
-          fetchSkills(),
-          includeStatic ? fetchSkillActivationPolicies() : Promise.resolve(null),
-          includeStatic ? fetchSkillImportHistory(30) : Promise.resolve(null),
-          fetchCapabilityCatalog("inspectable"),
-          fetchCapabilityProposals(100),
-          includeStatic ? fetchHarnessAuditReport() : Promise.resolve(null),
-        ]);
+      const [
+        skillsResponse,
+        policyResponse,
+        importHistoryResponse,
+        catalogResponse,
+        proposalsResponse,
+        harnessAuditResponse,
+      ] = await Promise.all([
+        fetchSkills(),
+        includeStatic ? fetchSkillActivationPolicies() : Promise.resolve(null),
+        includeStatic ? fetchSkillImportHistory(30) : Promise.resolve(null),
+        fetchCapabilityCatalog("inspectable"),
+        fetchCapabilityProposals(100),
+        includeStatic ? fetchHarnessAuditReport() : Promise.resolve(null),
+      ]);
       setSkills(skillsResponse.items);
       setCapabilityCatalog(catalogResponse.items);
       setCapabilityProposals(proposalsResponse.items);
@@ -199,8 +202,7 @@ export function SkillsPage() {
     () => skills.filter((skill) => (stateFilter === "all" ? true : skill.state === stateFilter)),
     [skills, stateFilter],
   );
-  const selectedSkill =
-    filteredSkills.find((skill) => skill.skillId === selectedSkillId) ?? filteredSkills[0] ?? null;
+  const selectedSkill = filteredSkills.find((skill) => skill.skillId === selectedSkillId) ?? filteredSkills[0] ?? null;
   const candidateEntries = useMemo(
     () => capabilityCatalog.filter((entry) => entry.kind === "candidate_skill"),
     [capabilityCatalog],
@@ -518,8 +520,12 @@ export function SkillsPage() {
             }
             center={
               <div className="workflow-summary-strip">
-                <StatusChip tone="success">{skills.filter((skill) => skill.state === "enabled").length} enabled</StatusChip>
-                <StatusChip tone="warning">{skills.filter((skill) => skill.state === "sleep").length} sleeping</StatusChip>
+                <StatusChip tone="success">
+                  {skills.filter((skill) => skill.state === "enabled").length} enabled
+                </StatusChip>
+                <StatusChip tone="warning">
+                  {skills.filter((skill) => skill.state === "sleep").length} sleeping
+                </StatusChip>
                 <StatusChip tone="muted">{filteredSkills.length} visible</StatusChip>
               </div>
             }
@@ -536,7 +542,9 @@ export function SkillsPage() {
             subtitle="Review installed skills, then inspect and adjust the selected skill without losing the table."
           >
             <div className="stack-md">
-              {groupedSkills.length === 0 ? <p className="table-subtext">No installed skills match the current filter.</p> : null}
+              {groupedSkills.length === 0 ? (
+                <p className="table-subtext">No installed skills match the current filter.</p>
+              ) : null}
               {groupedSkills.map((section) => (
                 <div key={section.category} className="stack-sm">
                   <p>
@@ -650,7 +658,8 @@ export function SkillsPage() {
                   disabled={
                     busySkillId === selectedSkill.skillId ||
                     ((stateDraftBySkill[selectedSkill.skillId] ?? selectedSkill.state) === selectedSkill.state &&
-                      (noteDraftBySkill[selectedSkill.skillId] ?? selectedSkill.note ?? "") === (selectedSkill.note ?? ""))
+                      (noteDraftBySkill[selectedSkill.skillId] ?? selectedSkill.note ?? "") ===
+                        (selectedSkill.note ?? ""))
                   }
                   onClick={() => void onSaveSkillState(selectedSkill)}
                   className="gc-button"
@@ -704,9 +713,7 @@ export function SkillsPage() {
         {harnessAudit ? (
           <div className="stack-md">
             <div className="workflow-summary-strip">
-              <StatusChip tone={harnessAuditTone(harnessAudit.overallStatus)}>
-                {harnessAudit.overallStatus}
-              </StatusChip>
+              <StatusChip tone={harnessAuditTone(harnessAudit.overallStatus)}>{harnessAudit.overallStatus}</StatusChip>
               <StatusChip tone="default">{harnessAudit.overallScore}/100 overall</StatusChip>
               {harnessAudit.strategyGlossary.map((item) => (
                 <StatusChip key={item.tag} tone="muted">
@@ -720,7 +727,9 @@ export function SkillsPage() {
                 <li key={pillar.pillarId}>
                   <strong>{pillar.label}</strong> - {pillar.score}/100
                   <div className="prompt-lab-test-meta">
-                    <span className={`prompt-lab-chip run-${pillar.status === "strong" ? "completed" : pillar.status === "watch" ? "running" : "failed"}`}>
+                    <span
+                      className={`prompt-lab-chip run-${pillar.status === "strong" ? "completed" : pillar.status === "watch" ? "running" : "failed"}`}
+                    >
                       {pillar.status}
                     </span>
                     <span>{pillar.nativeDestination}</span>
@@ -742,7 +751,8 @@ export function SkillsPage() {
                   <strong>candidate</strong>: staged capability artifact that still needs promotion or activation.
                 </li>
                 <li>
-                  <strong>activated capability</strong>: live only after explicit review, approval, and destination-specific promotion.
+                  <strong>activated capability</strong>: live only after explicit review, approval, and
+                  destination-specific promotion.
                 </li>
               </ul>
             </div>
@@ -1416,7 +1426,6 @@ export function SkillsPage() {
           ) : null}
         </div>
       </Panel>
-
     </section>
   );
 }

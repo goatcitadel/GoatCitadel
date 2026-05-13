@@ -136,7 +136,6 @@ const IMPROVEMENT_WEEKLY_DEDUP_SETTING_KEY = "improvement_weekly_last_week_key_v
 const IMPROVEMENT_TUNE_KEY_BLOCKER_TEMPLATE = "improvement_tune_blocker_template_v1";
 const IMPROVEMENT_TUNE_KEY_RETRY_THRESHOLD = "improvement_tune_retry_threshold_v1";
 const IMPROVEMENT_TUNE_KEY_LIVE_INTENT = "improvement_tune_live_intent_threshold_v1";
-const IMPROVEMENT_TUNE_KEY_REFUSAL_STYLE = "improvement_tune_refusal_style_v1";
 const IMPROVEMENT_REPAIR_POLICY_CONFIG_SETTING_KEY = "improvement_repair_policy_config_v1";
 const IMPROVEMENT_ROUTING_POLICY_CONFIG_SETTING_KEY = "improvement_routing_policy_config_v1";
 const IMPROVEMENT_SIGNAL_ORIGINS = new Set<ImprovementSignalOrigin>([
@@ -152,13 +151,6 @@ const IMPROVEMENT_CANDIDATE_KINDS = new Set<ImprovementCandidateKind>([
   "repair_policy",
   "routing_policy",
   "skill_revision",
-]);
-const IMPROVEMENT_CANDIDATE_OPEN_STATUSES = new Set<ImprovementCandidateStatus>([
-  "proposed",
-  "evaluating",
-  "ready_for_approval",
-  "approval_pending",
-  "approved",
 ]);
 const IMPROVEMENT_WATCH_SIGNAL_TARGET = 20;
 const IMPROVEMENT_SIGNAL_SCHEMA_VERSION = "1.1.1";
@@ -732,7 +724,7 @@ export class ImprovementService {
     const reconciledActivation = latestActivation ? this.maybeAdvanceActivation(latestActivation) : undefined;
     const supportingSignals = this.listSignalsForCandidate(candidateId);
     return {
-      candidate: this.readImprovementCandidate(candidateId),
+      candidate,
       currentRevision: this.readCurrentRevision(candidateId),
       supportingSignals,
       latestEvaluation: this.readLatestEvaluation(candidateId),

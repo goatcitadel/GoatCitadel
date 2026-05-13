@@ -87,7 +87,9 @@ export function ChatSurfaceLayout({
             <SheetContent side="left" className="chat-v11-session-sheet">
               <SheetHeader className="sr-only">
                 <SheetTitle>Conversation history</SheetTitle>
-                <SheetDescription>Browse recent sessions and switch context without leaving the current surface.</SheetDescription>
+                <SheetDescription>
+                  Browse recent sessions and switch context without leaving the current surface.
+                </SheetDescription>
               </SheetHeader>
               {sessionRail}
             </SheetContent>
@@ -98,11 +100,8 @@ export function ChatSurfaceLayout({
   }
   const workflowIsPrimary = layout.workflowPlacement === "primary" && workflowColumn;
   const artifactColumn = workflowIsPrimary ? workflowColumn : primaryColumn;
-  const supportThreadColumn =
-    layout.threadPlacement === "support" && (hasActiveSession || layout.idleSupportVisibility === "visible")
-      ? primaryColumn
-      : null;
-  const effectiveDockOpen = hasActiveSession ? dockOpen : layout.idleDockOpen;
+  const supportThreadColumn = layout.threadPlacement === "support" ? primaryColumn : null;
+  const effectiveDockOpen = dockOpen;
   const desktopDrawerDock = !compactSecondaryPanels && effectiveDockOpen && layout.dockBehavior === "drawer";
   const inlineDock = !compactSecondaryPanels && effectiveDockOpen && layout.dockBehavior !== "drawer";
   const useResizableDesktopLayout = !compactSecondaryPanels && !stackedDesktopPanels;
@@ -132,7 +131,7 @@ export function ChatSurfaceLayout({
   const desktopMainGrid =
     useResizableDesktopLayout && (supportPane || dockPane) ? (
       <div
-        className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"} chat-v11-main-grid-resizable`}
+        className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"} is-active chat-v11-main-grid-resizable`}
       >
         {supportPane ? (
           <ResizablePaneLayout
@@ -206,7 +205,7 @@ export function ChatSurfaceLayout({
       </div>
     ) : (
       <div
-        className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"}${hasActiveSession ? " is-active" : " is-idle"}`}
+        className={`chat-v11-main-grid ${layout.mainGridClassName}${mode === "cowork" ? " with-cowork" : ""}${mode === "code" ? " with-code" : ""}${effectiveDockOpen ? " with-dock-open" : " with-dock-collapsed"} is-active`}
       >
         {artifactPane}
         {supportPane}
@@ -223,7 +222,7 @@ export function ChatSurfaceLayout({
       data-support-thread-behavior={layout.supportThreadBehavior}
       data-dock-behavior={layout.dockBehavior}
       data-desktop-density={layout.desktopDensity}
-      data-session-state={hasActiveSession ? "active" : "idle"}
+      data-session-state="active"
       data-idle-min-height={layout.idleMinHeight}
     >
       {inlineSessionRail ? (
@@ -248,7 +247,9 @@ export function ChatSurfaceLayout({
           <SheetContent side="left" className="chat-v11-session-sheet">
             <SheetHeader className="sr-only">
               <SheetTitle>Conversation history</SheetTitle>
-              <SheetDescription>Browse recent sessions and switch context without leaving the current surface.</SheetDescription>
+              <SheetDescription>
+                Browse recent sessions and switch context without leaving the current surface.
+              </SheetDescription>
             </SheetHeader>
             {sessionRail}
           </SheetContent>
@@ -259,13 +260,15 @@ export function ChatSurfaceLayout({
           <SheetContent side="right" className="mission-context-dock-drawer">
             <SheetHeader className="sr-only">
               <SheetTitle>Context dock</SheetTitle>
-              <SheetDescription>Review supporting context, artifacts, and operator controls for the active session.</SheetDescription>
+              <SheetDescription>
+                Review supporting context, artifacts, and operator controls for the active session.
+              </SheetDescription>
             </SheetHeader>
             {contextDock}
           </SheetContent>
         </Sheet>
       ) : null}
-      {compactSecondaryPanels && hasActiveSession ? (
+      {compactSecondaryPanels ? (
         <Drawer open={effectiveDockOpen} onOpenChange={onDockOpenChange} shouldScaleBackground={false}>
           <DrawerContent className="mission-context-dock-drawer">
             <DrawerHeader className="sr-only">

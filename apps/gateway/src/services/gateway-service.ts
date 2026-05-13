@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -10,11 +9,6 @@ import { EventIngestService, logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("gateway-service");
 import { MeshService } from "@goatcitadel/mesh-core";
-import {
-  buildInstalledIntegrationPluginRecord,
-  resolveIntegrationPluginInstallMetadata,
-} from "./integration-plugin-author-contract.js";
-import { sendTelegramTypingIndicator } from "./telegram-typing.js";
 import { OrchestrationEngine, WorktreeManager, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
   ToolPolicyEngine,
@@ -25,17 +19,12 @@ import {
 } from "@goatcitadel/policy-engine";
 import { SkillsService } from "@goatcitadel/skills";
 import {
-  DEFAULT_SESSION_AUTONOMY_PREFS,
   type Storage,
   type SessionAutonomyPrefsPatchInput,
   type SessionAutonomyPrefsRecord,
 } from "@goatcitadel/storage";
 import {
-  applyChatModePresetToPatch,
-  buildChatModePrefsPatch,
   chatModeAllowsDynamicTeamGrowth,
-  chatModeRequiresProjectBinding,
-  clampInt,
   ConflictError,
   inferProviderForModelId,
   isChatTurnActiveStatus,
@@ -49,7 +38,6 @@ import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
-import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type {
   DatabaseCutoverProfile,
@@ -322,27 +310,13 @@ import {
   inferMcpToolsForServer,
   invokeMcpRuntimeTool,
 } from "./mcp-runtime.js";
-import {
-  extractLearnedMemoryCandidates,
-  looksLowConfidenceResponse,
-  shouldExtractLearnedMemoryContent,
-} from "./learned-memory-utils.js";
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
-import {
-  assertChatSessionActive,
-  buildChatSessionUpdatedPayload,
-  deriveChatSessionTitleFromContent,
-  shouldAllowCrossProviderFallback,
-} from "./chat-session-utils.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js";
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
-import { executeOrchestrationPlan } from "../orchestration/engine.js";
-import { CHAT_MODE_POLICY } from "../orchestration/policies/chat-policy.js";
-import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
-import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
+import { buildOrchestrationPlan } from "../orchestration/router.js";
 import type {
   OrchestrationExecutionResult,
   OrchestrationPlan as ModeOrchestrationPlan,
@@ -365,23 +339,12 @@ import {
   resolveDevDiagnosticsEnabled,
   resolveDevDiagnosticsVerbose,
 } from "../dev-diagnostics/service.js";
-import {
-  installManagedVoiceRuntime,
-  removeManagedVoiceModel,
-  selectManagedVoiceModel,
-} from "../voice-runtime/installer.js";
-import { getManagedVoiceRuntimeStatus } from "../voice-runtime/status.js";
 import { serializePathWithinRoot } from "./security-utils.js";
-import { buildVoiceControlStartFailure } from "./voice-control-guard.js";
 import { MediaVoiceService } from "./media-voice-service.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
   CronAutomationService,
-  IMPROVEMENT_WEEKLY_JOB_ID,
   MEMORY_FLUSH_DAILY_JOB_ID,
-  normalizeCronJobId,
-  normalizeCronJobName,
-  normalizeCronSchedule,
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
@@ -389,11 +352,7 @@ import * as orchestrationLifecycleService from "./orchestration-lifecycle-servic
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
 import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/update-review.js";
-import {
-  createGatewayAuthCredentialPlan,
-  readAssistantAuthConfigSnapshotSync,
-  resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner,
-} from "./gateway/auth-credential-planner.js";
+import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
   composeGatewayRouteServices,
@@ -407,7 +366,6 @@ import {
   type GatewayRouteCompositionPort,
 } from "./gateway-route-service-composition.js";
 import { RealtimeEventService } from "./realtime-event-service.js";
-import { verifyBackupAtPath } from "./gateway/backup-verify.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
@@ -453,16 +411,7 @@ import type {
   RemoteApprovalActionTokenIssueResult,
 } from "./approval-types.js";
 import {
-  buildCompanionSigningPayload,
-  decodeBase64Url,
-  isCompanionSessionOperatorActive,
   isRecord,
-  normalizeCompanionAuditEvent,
-  normalizeCompanionNonce,
-  normalizeCompanionRequestPath,
-  normalizeCompanionSignature,
-  toCompanionSessionAdminRecord,
-  toCompanionSessionInfoResponse,
   type CompanionAccessValidationResult,
   type CompanionSessionRecord,
 } from "./companion-auth-helpers.js";
@@ -472,21 +421,7 @@ import type {
   PersistableChatStreamChunk,
   PreparedChatExecutionPlanResolution,
 } from "./chat-turn-types.js";
-import {
-  buildDelegationFailureGuidance,
-  buildEmptyAssistantTurnFallbackText,
-  ChatTurnCancelledError,
-  dedupeChatCitations,
-  DEFAULT_DELEGATION_ROLES,
-  detectDelegationRoles,
-  inferDegradedAssistantTurnFailure,
-  isChatTurnCancelledError,
-  mergeExecutionPlanStepStatuses,
-  renderExecutionPlanAsMarkdown,
-  splitIntoChunks,
-  toTitleCase,
-  truncateSummaryLine,
-} from "./chat-turn-helpers.js";
+import { DEFAULT_DELEGATION_ROLES, detectDelegationRoles, truncateSummaryLine } from "./chat-turn-helpers.js";
 import {
   buildRoleGapSpecialistSuggestion,
   buildSpecialistSuggestionFromCapability,
@@ -496,26 +431,13 @@ import {
   normalizeSpecialistCandidateFingerprint,
   type ResolvedRuntimeGuidance,
 } from "./chat-turn-planning-helpers.js";
-import {
-  buildMemoryContextSystemMessage,
-  calculateSavings,
-  CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
-  createChatCompletionDeadline,
-  delayChatCompletionRetry,
-  extractPromptFromMessages,
-  getRemainingChatCompletionTimeoutMs,
-  normalizeChatCompletionAttemptError,
-  normalizeToolProtocolRetryRequest,
-  shouldRetryToolProtocolError,
-  shouldRetryTransientProviderError,
-} from "./llm-completion-helpers.js";
+import { buildMemoryContextSystemMessage } from "./llm-completion-helpers.js";
 import { ChatProjectService } from "./chat-project-service.js";
 import { DurableRunService } from "./durable-run-service.js";
 import { DurableOperatorService } from "./durable-operator-service.js";
 import { HooksService } from "./hooks-service.js";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
-import { parseChatModelCommandTarget } from "./chat-model-command.js";
-import { PromptPackService, normalizePromptTestCode } from "./prompt-pack-service.js";
+import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
@@ -532,7 +454,6 @@ import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
-import { resolveChannelSendAttachments } from "./channel-attachment-payload.js";
 import {
   commsSend as commsSendImpl,
   commsReact as commsReactImpl,
@@ -563,38 +484,9 @@ const MCP_TOOL_FIRST_APPROVAL_SETTING_KEY = "mcp_tool_first_approval_v1";
 const DISCORD_PAIRINGS_SETTING_KEY = "discord_pairings_v1";
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const FEATURE_FLAGS_SETTING_KEY = "feature_flags_v1";
-const DURABLE_RETRY_POLICY_DEFAULT: DurableRetryPolicy = {
-  maxAttempts: 3,
-  baseDelayMs: 5_000,
-  maxDelayMs: 60_000,
-  backoffMultiplier: 2,
-};
 const CHAT_STREAM_EVENT_POLL_INTERVAL_MS = 200;
 const CHAT_STREAM_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
-import {
-  COMPANION_ACCESS_TOKEN_BYTES,
-  COMPANION_ACCESS_TOKEN_TTL_MS,
-  COMPANION_MAX_PUBLIC_KEY_PEM_LENGTH,
-  COMPANION_REFRESH_TOKEN_BYTES,
-  COMPANION_REFRESH_TOKEN_TTL_MS,
-  COMPANION_REQUEST_CLOCK_SKEW_MS,
-  COMPANION_REQUEST_REPLAY_TTL_MS,
-  COMPANION_SIGNATURE_ALGORITHM,
-  DEVICE_ACCESS_APPROVAL_KIND,
-  DEVICE_ACCESS_REQUEST_POLL_AFTER_MS,
-  DEVICE_ACCESS_REQUEST_TTL_MS,
-  DEVICE_ACCESS_SECRET_BYTES,
-  assertCompanionSigningPublicKeyPem,
-  hashSensitiveToken,
-  inferBrowserFromUserAgent,
-  inferPlatformFromUserAgent,
-  mapDeviceAccessStatusResponse,
-  normalizeCompanionSigningPublicKeyPem,
-  normalizeDeviceAccessLabel,
-  normalizeOptionalDeviceAccessText,
-  timingSafeStringEqual,
-  toDeviceAccessGrantRecord,
-} from "./device-access-helpers.js";
+import { hashSensitiveToken } from "./device-access-helpers.js";
 
 export const MEMORY_ITEM_STATUS_VALUES = new Set(["active", "forgotten"]);
 
@@ -605,16 +497,6 @@ const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
 const BANKR_OPTIONAL_MIGRATION_MESSAGE =
   "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
 const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
-const PROACTIVE_SCHEDULER_INTERVAL_MS = 120_000;
-const PROACTIVE_SCHEDULER_CONCURRENCY = 8;
-const PROACTIVE_MIN_IDLE_SECONDS = 90;
-const PROACTIVE_SAFE_TOOL_ALLOWLIST = new Set([
-  "time.now",
-  "browser.search",
-  "browser.navigate",
-  "browser.extract",
-  "http.get",
-]);
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = ["browser.search", "browser.navigate", "browser.extract", "http.get"] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
@@ -6890,55 +6772,6 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord | undefi
   };
 }
 
-function extractAssistantContent(response: ChatCompletionResponse): string {
-  const choice = response.choices?.[0];
-  const message = choice?.message;
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const content = (message as Record<string, unknown>).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    const text = content
-      .map((part) => {
-        const value = part as Record<string, unknown>;
-        return typeof value.text === "string" ? value.text : "";
-      })
-      .join("")
-      .trim();
-    return text;
-  }
-  return "";
-}
-
-function parseUsageFromChatResponse(response: ChatCompletionResponse): {
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
-  costUsd?: number;
-} {
-  const usage = (response.usage ?? {}) as Record<string, unknown>;
-  return {
-    inputTokens: readNumber(usage.prompt_tokens) ?? readNumber(usage.input_tokens),
-    outputTokens: readNumber(usage.completion_tokens) ?? readNumber(usage.output_tokens),
-    cachedInputTokens: readNumber(usage.cached_prompt_tokens) ?? readNumber(usage.cached_input_tokens),
-    costUsd: readNumber(usage.cost_usd) ?? readNumber(usage.total_cost_usd),
-  };
-}
-
-function readNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
 interface McpAuthStateRecord {
   accessTokenRef?: string;
   refreshTokenRef?: string;
@@ -7170,41 +7003,6 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
   };
 }
 
-function looksSensitive(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return (
-    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized) ||
-    /\bsk-[a-z0-9]{8,}\b/i.test(normalized) ||
-    /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
-  );
-}
-
-function normalizeMemoryText(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[`*_>#]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function memoryTextOverlap(left: string, right: string): number {
-  if (!left || !right) {
-    return 0;
-  }
-  const leftTokens = new Set(left.split(" ").filter((token) => token.length > 2));
-  const rightTokens = new Set(right.split(" ").filter((token) => token.length > 2));
-  if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return 0;
-  }
-  let matches = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) {
-      matches += 1;
-    }
-  }
-  return matches / Math.max(leftTokens.size, rightTokens.size);
-}
-
 function getZonedDateParts(
   date: Date,
   timeZone: string,
@@ -7250,15 +7048,6 @@ function getZonedDateParts(
     hour: Number.parseInt(read("hour"), 10),
     minute: Number.parseInt(read("minute"), 10),
   };
-}
-
-function toWeekKeyForTimezone(date: Date, timeZone: string): string {
-  const parts = getZonedDateParts(date, timeZone);
-  const anchor = new Date(Date.UTC(parts.year, parts.month - 1, parts.day - parts.weekday));
-  const yyyy = anchor.getUTCFullYear();
-  const mm = String(anchor.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(anchor.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 function toDayKeyForTimezone(date: Date, timeZone: string): string {
@@ -7407,84 +7196,6 @@ function parseSimpleCronSchedule(value: string): {
     wildcardMinute,
     wildcardHour,
     wildcardWeekday,
-  };
-}
-
-function truncateForModelJudge(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return `${value.slice(0, maxChars)}\n...[truncated]`;
-}
-
-function extractPromptPlaceholders(prompt: string): string[] {
-  const matches = prompt.match(/<[^<>\n]{3,160}>/g) ?? [];
-  const unique = new Set<string>();
-  for (const match of matches) {
-    const trimmed = match.trim();
-    const inner = trimmed.slice(1, -1).trim();
-    if (!inner) {
-      continue;
-    }
-    const looksLikePlaceholder =
-      /[A-Z]{2,}/.test(inner) || /[_ ]/.test(inner) || /\b(PASTE|LOCAL|URL|TOPIC|PATH|EXAMPLE|YOUR)\b/i.test(inner);
-    if (!looksLikePlaceholder) {
-      continue;
-    }
-    unique.add(`<${inner}>`);
-  }
-  return Array.from(unique);
-}
-
-function normalizePromptPlaceholderKey(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const inner = trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1).trim() : trimmed;
-  return inner.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function applyPromptPlaceholderValues(
-  prompt: string,
-  placeholderValues?: Record<string, string>,
-): {
-  prompt: string;
-  missingPlaceholders: string[];
-} {
-  const placeholders = extractPromptPlaceholders(prompt);
-  if (placeholders.length === 0) {
-    return {
-      prompt,
-      missingPlaceholders: [],
-    };
-  }
-
-  const replacements = new Map<string, string>();
-  for (const [rawKey, rawValue] of Object.entries(placeholderValues ?? {})) {
-    const key = normalizePromptPlaceholderKey(rawKey);
-    const value = rawValue.trim();
-    if (!key || !value) {
-      continue;
-    }
-    replacements.set(key, value);
-  }
-
-  let resolvedPrompt = prompt;
-  const missingPlaceholders: string[] = [];
-  for (const placeholder of placeholders) {
-    const key = normalizePromptPlaceholderKey(placeholder);
-    const replacement = replacements.get(key);
-    if (!replacement) {
-      missingPlaceholders.push(placeholder);
-      continue;
-    }
-    resolvedPrompt = resolvedPrompt.split(placeholder).join(replacement);
-  }
-
-  return {
-    prompt: resolvedPrompt,
-    missingPlaceholders,
   };
 }
 

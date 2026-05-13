@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, max-lines, react-hooks/exhaustive-deps */
+/* eslint-disable max-lines, react-hooks/exhaustive-deps */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { providerTemplates, type DeviceAccessGrantRecord } from "@goatcitadel/contracts";
 import {
@@ -32,24 +32,17 @@ import { SettingsModelsSection } from "./settings/SettingsModelsSection";
 import { SettingsTestsSection } from "./settings/SettingsTestsSection";
 import { SettingsVoiceSection } from "./settings/SettingsVoiceSection";
 import { SettingsSectionNav } from "./settings/SettingsSectionNav";
-import { formatDeploymentProfileLabel } from "./settings-page-utils";
 import { ChangeReviewPanel } from "../components/ChangeReviewPanel";
-import { FieldHelp } from "../components/FieldHelp";
-import { HelpHint } from "../components/HelpHint";
 import {
   createEmptyLlmTransportDraft,
   draftFromRequestConfig,
-  LlmTransportFields,
   requestConfigFromDraft,
 } from "../components/LlmTransportFields";
-import { Panel } from "../components/Panel";
 import { PageGuideCard } from "../components/PageGuideCard";
 import { PageHeader } from "../components/PageHeader";
-import { SelectOrCustom, type SelectOption } from "../components/SelectOrCustom";
-import { StatusChip } from "../components/StatusChip";
-import { GCSelect, GCSwitch } from "../components/ui";
+import type { SelectOption } from "../components/SelectOrCustom";
 import { pageCopy } from "../content/copy";
-import { dedupeProviderModels, previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
+import { previewProviderModels, useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import type { SettingsTab } from "../content/page-registry";
 import {
@@ -73,7 +66,6 @@ import {
   resolveAuthStorageMode,
   resolveModelDraftHydration,
   resolveProviderModelSelection,
-  resolveSettingsTabSection,
   resolveSettingsTabSections,
   scrollToSettingsSection,
 } from "./settings/settings-page-helpers";

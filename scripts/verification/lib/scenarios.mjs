@@ -60,10 +60,6 @@ const TAB_ROUTES = [
   { tab: "mcp", title: "MCP" },
 ];
 
-const SURFACE_REGRESSION_ROUTES = RELEASE_SURFACE_MANIFEST;
-const VISUAL_REGRESSION_ROUTES = RELEASE_SURFACE_MANIFEST;
-const VISUAL_REGRESSION_VARIANTS = RELEASE_SURFACE_VARIANTS;
-
 const NEXT_UI_PACKAGE = "@goatcitadel/mission-control-next";
 const VISUAL_BASELINE_ROOT_DIR = path.join(repoRoot, "scripts", "verification", "baselines", "visual");
 const API_COMPAT_BASELINE_PATH = path.join(

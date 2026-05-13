@@ -1354,26 +1354,12 @@ function workspacePackageNeedsBuild(workspacePackage) {
   return !fs.existsSync(path.join(appDir, "packages", packageDirName, "dist", "index.js"));
 }
 
-function maybeShowVersion(cmd, cmdArgs) {
-  const result = spawnCommandSync(cmd, cmdArgs, { encoding: "utf8" });
-  if (result.error) {
-    console.log(`  ${cmd}: not found`);
-    return;
-  }
-  const out = (result.stdout || result.stderr || "").trim();
-  console.log(`  ${cmd}: ${out || "ok"}`);
-}
-
 function requireCommand(cmd) {
   const resolved = resolveCommandExecutable(cmd);
   if (!resolved) {
     throw new Error(`Missing required command: ${cmd}`);
   }
   return resolved;
-}
-
-function commandAvailable(cmd) {
-  return resolveCommandExecutable(cmd) !== null;
 }
 
 function resolveCommandExecutable(cmd) {
