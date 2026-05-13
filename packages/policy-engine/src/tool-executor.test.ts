@@ -2264,6 +2264,92 @@ describe("executeTool", () => {
     });
   });
 
+  it("resolves BlueBubbles chat identifier targets from direct chat identifiers", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.IMESSAGE_PASSWORD = "bb-password";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                guid: "iMessage;-;+15559876543",
+                identifier: "team-thread",
+                participants: [{ address: "+15559876543" }],
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { guid: "bb-msg-chat-ident" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-imessage-ident",
+          key: "imessage",
+          config: {
+            bridgeUrl: "http://127.0.0.1:1234",
+            passwordEnv: "IMESSAGE_PASSWORD",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-imessage-ident",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-22T00:00:00.000Z",
+          updatedAt: "2026-03-22T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-imessage-ident",
+          target: "chat_identifier:team-thread",
+          message: "Identifier resolved.",
+        },
+        agentId: "operator",
+        sessionId: "sess-imessage-ident",
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["127.0.0.1"],
+        },
+      },
+      commsStorage,
+    );
+
+    const sendCallArgs = fetchMock.mock.calls[1] as unknown[] | undefined;
+    const sendBody = (sendCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
+    expect(String(sendBody ?? "")).toContain('"chatGuid":"iMessage;-;+15559876543"');
+    expect(String(sendBody ?? "")).toContain('"message":"Identifier resolved."');
+    expect(result).toMatchObject({
+      status: "sent",
+      providerMessageId: "bb-msg-chat-ident",
+    });
+  });
+
   it("sends iMessage attachments through BlueBubbles multipart delivery", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     process.env.IMESSAGE_PASSWORD = "bb-password";

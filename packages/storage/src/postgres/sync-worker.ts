@@ -123,6 +123,9 @@ export async function handlePostgresSyncWorkerRequest(
       };
     }
     case "tx_begin": {
+      if (runtime.transactions.has(request.txId)) {
+        throw new Error(`Postgres transaction ${request.txId} is already active`);
+      }
       const client = await runtime.pool.connect();
       await client.query("BEGIN");
       runtime.transactions.set(request.txId, client);

@@ -3589,6 +3589,11 @@ async function resolveBlueBubblesChatGuid(
         if (guidIdentifier && guidIdentifier === target.chatIdentifier) {
           return guid;
         }
+        const directIdentifier =
+          asString(chat.identifier) ?? asString(chat.chatIdentifier) ?? asString(chat.chat_identifier);
+        if (directIdentifier && directIdentifier === target.chatIdentifier) {
+          return guid ?? directIdentifier;
+        }
       }
       if (normalizedHandle) {
         const guid = extractBlueBubblesChatGuid(chat);

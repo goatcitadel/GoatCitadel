@@ -4,6 +4,11 @@ import path from "node:path";
 const repoRoot = process.cwd();
 const coveragePolicyPath = path.join(repoRoot, "coverage-policy.json");
 const sourceRoots = ["apps", "packages"];
+const allowedExclusionCategories = new Set([
+  "generated-static-adapter",
+  "test-harness-setup",
+  "type-only-barrel",
+]);
 const ignoredDirs = new Set([
   ".git",
   ".turbo",
@@ -68,13 +73,54 @@ if (coverageFiles.length === 0) {
 }
 
 async function readCoveragePolicy() {
+  let raw = "";
   try {
-    const parsed = JSON.parse(await fs.readFile(coveragePolicyPath, "utf8"));
-    const exclusions = Array.isArray(parsed.exclusions) ? parsed.exclusions : [];
-    return exclusions.map((entry) => globToRegExp(normalizePath(String(entry.pattern ?? ""))));
-  } catch {
-    return [];
+    raw = await fs.readFile(coveragePolicyPath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
   }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${path.relative(repoRoot, coveragePolicyPath)}.`, { cause: error });
+  }
+
+  if (!parsed || typeof parsed !== "object" || parsed.version !== 1) {
+    throw new Error("coverage-policy.json must be an object with version 1.");
+  }
+  if (!Array.isArray(parsed.exclusions)) {
+    throw new Error("coverage-policy.json must define an exclusions array.");
+  }
+  const declaredCategories = Array.isArray(parsed.allowedReasonCategories) ? parsed.allowedReasonCategories : [];
+  for (const category of declaredCategories) {
+    if (!allowedExclusionCategories.has(category)) {
+      throw new Error(`coverage-policy.json declares unsupported exclusion category ${JSON.stringify(category)}.`);
+    }
+  }
+
+  return parsed.exclusions.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`coverage-policy.json exclusions[${index}] must be an object.`);
+    }
+    const pattern = typeof entry.pattern === "string" ? entry.pattern.trim() : "";
+    if (!pattern) {
+      throw new Error(`coverage-policy.json exclusions[${index}] must define pattern.`);
+    }
+    if (!allowedExclusionCategories.has(entry.reasonCategory)) {
+      throw new Error(
+        `coverage-policy.json exclusions[${index}] has unsupported reasonCategory ${JSON.stringify(entry.reasonCategory)}.`,
+      );
+    }
+    if (typeof entry.reason !== "string" || entry.reason.trim().length < 10) {
+      throw new Error(`coverage-policy.json exclusions[${index}] must include a specific reason.`);
+    }
+    return globToRegExp(normalizePath(pattern));
+  });
 }
 
 async function resolveCoverageFiles(rawTarget) {

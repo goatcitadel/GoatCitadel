@@ -501,7 +501,15 @@ function dedupeStrings(values: Array<string | undefined>): string[] {
   return deduped;
 }
 
-export * from "./sqlite.js";
+export { createDatabase, createSqliteSchemaBlueprint, ensureParentDir } from "./sqlite.js";
+export type {
+  SqliteOptions,
+  SqliteSchemaBlueprint,
+  SqliteSchemaColumnBlueprint,
+  SqliteSchemaForeignKeyBlueprint,
+  SqliteSchemaIndexBlueprint,
+  SqliteSchemaTableBlueprint,
+} from "./sqlite.js";
 export * from "./db.js";
 export * from "./session-repo.js";
 export * from "./idempotency-repo.js";
@@ -513,7 +521,8 @@ export * from "./approval-event-repo.js";
 export * from "./pending-approval-action-repo.js";
 export * from "./cost-ledger-repo.js";
 export * from "./orchestration-repo.js";
-export * from "./task-repo.js";
+export { TaskRepository } from "./task-repo.js";
+export type { TaskListQuery, TaskStatusCount } from "./task-repo.js";
 export * from "./task-activity-repo.js";
 export * from "./task-deliverable-repo.js";
 export * from "./task-subagent-repo.js";
@@ -568,7 +577,7 @@ export * from "./gateway-sql-repo.js";
 export * from "./assembly-repo.js";
 export * from "./request-attribution.js";
 export * from "./remote-action-token-repo.js";
-export * from "./approval-inbox-repo.js";
+export { ApprovalInboxRepository } from "./approval-inbox-repo.js";
 export * from "./approval-effect-repo.js";
 export * from "./transcript-outbox-repo.js";
 export * from "./realtime-stream-lease-repo.js";

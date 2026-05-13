@@ -80,9 +80,9 @@ describe("isHostAllowed", () => {
   });
 
   it("parses host:port strings and explicit loopback patterns", () => {
-    expect(evaluateHostEgress("exa mple.com:443/v1/models", ["exa mple.com:443"])).toMatchObject({
+    expect(evaluateHostEgress("example.com:443/v1/models", ["example.com:443"])).toMatchObject({
       allowed: true,
-      hostname: "exa mple.com",
+      hostname: "example.com",
     });
     expect(evaluateHostEgress("localhost:8787", ["localhost:8787"])).toMatchObject({
       allowed: true,
@@ -97,6 +97,23 @@ describe("isHostAllowed", () => {
       hostname: "::1",
       matchedAllowlistPattern: "[::1]:11434",
     });
+  });
+
+  it("fails closed for malformed URL-like and hostname inputs", () => {
+    for (const host of [
+      "https://exa mple.com/path",
+      "http://999.999.999.999/path",
+      "999.999.999.999",
+      "1.2.3.999",
+      "1.2.3.4.5",
+      "example.com:not-a-port",
+      "exa mple.com:443/v1/models",
+    ]) {
+      expect(evaluateHostEgress(host, ["*"]), host).toMatchObject({
+        allowed: false,
+        approvalState: "blocked",
+      });
+    }
   });
 
   it("blocks every private, malformed, multicast, and unique-local address family", () => {

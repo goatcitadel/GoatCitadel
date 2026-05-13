@@ -212,6 +212,37 @@ test("manages worker transaction lifecycle with commit rollback close and missin
   );
 });
 
+test("rejects duplicate Postgres worker transaction ids without replacing the active client", async () => {
+  const firstClient = createFakeTransactionClient();
+  let connectCount = 0;
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onConnect: async () => {
+          connectCount += 1;
+          return firstClient;
+        },
+      }),
+    },
+  );
+
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, { kind: "tx_begin", txId: "tx-dupe", mode: "deferred" }),
+    true,
+  );
+  await assert.rejects(
+    handlePostgresSyncWorkerRequest(runtime, { kind: "tx_begin", txId: "tx-dupe", mode: "deferred" }),
+    /already active/,
+  );
+  assert.equal(connectCount, 1);
+  assert.equal(runtime.transactions.get("tx-dupe"), firstClient);
+  assert.equal(firstClient.released, false);
+
+  assert.equal(await handlePostgresSyncWorkerRequest(runtime, { kind: "tx_rollback", txId: "tx-dupe" }), true);
+  assert.equal(firstClient.released, true);
+});
+
 test("posts success and serialized error responses to sync message ports", async () => {
   const successRuntime = createPostgresSyncWorkerRuntime(
     { database: "goatcitadel" },

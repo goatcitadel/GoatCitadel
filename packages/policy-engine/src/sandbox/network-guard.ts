@@ -11,7 +11,16 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
   const parsed = parseHost(hostOrUrl);
   const host = parsed.host.toLowerCase();
   const hostname = parsed.hostname.toLowerCase();
-  const isPrivateOrReserved = isPrivateOrReservedHost(hostname);
+
+  if (parsed.invalidReason) {
+    return {
+      target: hostOrUrl,
+      hostname,
+      allowed: false,
+      approvalState: "blocked",
+      reason: parsed.invalidReason,
+    };
+  }
 
   if (!host && !hostname) {
     return {
@@ -23,6 +32,7 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
     };
   }
 
+  const isPrivateOrReserved = isPrivateOrReservedHost(hostname);
   const matchedPattern = allowlist.find(
     (pattern) => matchesAllowlistPattern(host, pattern) || matchesAllowlistPattern(hostname, pattern),
   );
@@ -119,45 +129,85 @@ export function assertHostAllowedInDangerProfile(hostOrUrl: string, allowlist: s
   }
 }
 
-function parseHost(hostOrUrl: string): { host: string; hostname: string } {
+function parseHost(hostOrUrl: string): { host: string; hostname: string; invalidReason?: string } {
+  const trimmed = hostOrUrl.trim();
+  if (!trimmed) {
+    return { host: "", hostname: "" };
+  }
+
   try {
-    const parsed = new URL(hostOrUrl);
-    return {
-      host: parsed.host || hostOrUrl,
-      hostname: parsed.hostname || hostOrUrl,
-    };
-  } catch {
-    const trimmed = hostOrUrl.trim();
-    if (!trimmed) {
-      return { host: "", hostname: "" };
-    }
-
-    if (trimmed.startsWith("[")) {
-      const end = trimmed.indexOf("]");
-      if (end > 0) {
-        return {
-          host: trimmed,
-          hostname: trimmed.slice(1, end),
-        };
-      }
-    }
-
-    const firstSlash = trimmed.indexOf("/");
-    const withoutPath = firstSlash >= 0 ? trimmed.slice(0, firstSlash) : trimmed;
-    const colonCount = (withoutPath.match(/:/g) ?? []).length;
-    if (colonCount === 1) {
-      const [hostname] = withoutPath.split(":");
+    const parsed = new URL(trimmed);
+    if (parsed.host || parsed.hostname) {
       return {
-        host: withoutPath,
-        hostname: hostname ?? withoutPath,
+        host: parsed.host,
+        hostname: parsed.hostname,
       };
     }
+    if (trimmed.includes("://")) {
+      return invalidHost(hostOrUrl, "Host URL is malformed.");
+    }
+  } catch {
+    if (trimmed.includes("://")) {
+      return invalidHost(hostOrUrl, "Host URL is malformed.");
+    }
+  }
 
+  const firstSlash = trimmed.indexOf("/");
+  const withoutPath = firstSlash >= 0 ? trimmed.slice(0, firstSlash) : trimmed;
+
+  if (withoutPath.startsWith("[")) {
+    const end = withoutPath.indexOf("]");
+    if (end > 0) {
+      const host = withoutPath.slice(0, end + 1);
+      const portSuffix = withoutPath.slice(end + 1);
+      if (portSuffix && !/^:\d+$/.test(portSuffix)) {
+        return invalidHost(hostOrUrl, "Host port is malformed.");
+      }
+      return {
+        host: `${host}${portSuffix}`,
+        hostname: withoutPath.slice(1, end),
+      };
+    }
+  }
+
+  if (/\s/.test(withoutPath)) {
+    return invalidHost(hostOrUrl, "Host contains invalid whitespace.");
+  }
+  const colonCount = (withoutPath.match(/:/g) ?? []).length;
+  if (colonCount === 1) {
+    const [hostname, port] = withoutPath.split(":");
+    if (port && !/^\d+$/.test(port)) {
+      return invalidHost(hostOrUrl, "Host port is malformed.");
+    }
+    if (isMalformedIpv4Literal(hostname ?? "")) {
+      return invalidHost(hostOrUrl, "IPv4 host is malformed.");
+    }
     return {
       host: withoutPath,
-      hostname: withoutPath,
+      hostname: hostname ?? withoutPath,
     };
   }
+
+  if (isMalformedIpv4Literal(withoutPath)) {
+    return invalidHost(hostOrUrl, "IPv4 host is malformed.");
+  }
+
+  return {
+    host: withoutPath,
+    hostname: withoutPath,
+  };
+}
+
+function invalidHost(input: string, reason: string): { host: string; hostname: string; invalidReason: string } {
+  return {
+    host: "",
+    hostname: "",
+    invalidReason: `${reason} ${input}`,
+  };
+}
+
+function isMalformedIpv4Literal(hostname: string): boolean {
+  return /^\d+(?:\.\d+)+$/.test(hostname) && isIP(hostname) !== 4;
 }
 
 function matchesAllowlistPattern(candidate: string, pattern: string): boolean {

@@ -157,15 +157,15 @@ describe("ChatDelegationRunRepository", () => {
 
     setRawField(db, "run-a", "roles_json", "[]");
     setRawField(db, "run-a", "mode", "fanout");
-    assert.throws(() => repo.get("run-a"), /Delegation run run-a not found/);
-    assert.deepEqual(repo.listBySession("session-a"), []);
+    assert.throws(() => repo.get("run-a"), /corrupt or uses unsupported persisted values/);
+    assert.throws(() => repo.listBySession("session-a"), /list row 0.*corrupt/);
 
     setRawField(db, "run-a", "mode", "parallel");
     setRawField(db, "run-a", "visibility", "visible");
-    assert.throws(() => repo.get("run-a"), /Delegation run run-a not found/);
+    assert.throws(() => repo.get("run-a"), /corrupt or uses unsupported persisted values/);
 
     setRawField(db, "run-a", "visibility", null);
     setRawField(db, "run-a", "status", "cancelled");
-    assert.throws(() => repo.get("run-a"), /Delegation run run-a not found/);
+    assert.throws(() => repo.get("run-a"), /corrupt or uses unsupported persisted values/);
   });
 });

@@ -76,9 +76,13 @@ export class ChatDelegationRunRepository {
   }
 
   public get(runId: string): ChatDelegationRunRecord {
-    const row = toChatDelegationRunRow(this.getStmt.get(runId));
-    if (!row) {
+    const raw = this.getStmt.get(runId);
+    if (!raw) {
       throw new NotFoundError({ entity: "Delegation run", id: runId });
+    }
+    const row = toChatDelegationRunRow(raw);
+    if (!row) {
+      throw new Error(`Delegation run ${runId} is corrupt or uses unsupported persisted values`);
     }
     return mapRow(row);
   }
@@ -162,12 +166,20 @@ export class ChatDelegationRunRepository {
   }
 
   public listBySession(sessionId: string, limit = 100): ChatDelegationRunRecord[] {
-    const rows = toChatDelegationRunRows(
-      this.listBySessionStmt.all({
-        sessionId,
-        limit: Math.max(1, Math.min(limit, 1000)),
-      }),
-    );
+    const rawRows = this.listBySessionStmt.all({
+      sessionId,
+      limit: Math.max(1, Math.min(limit, 1000)),
+    });
+    if (!Array.isArray(rawRows)) {
+      throw new Error(`Delegation run list for session ${sessionId} is corrupt`);
+    }
+    const rows = rawRows.map((row, index) => {
+      const mapped = toChatDelegationRunRow(row);
+      if (!mapped) {
+        throw new Error(`Delegation run list row ${index} for session ${sessionId} is corrupt`);
+      }
+      return mapped;
+    });
     return rows.map(mapRow);
   }
 }
@@ -217,10 +229,6 @@ function isVisibility(value: unknown): value is ChatOrchestrationVisibility {
 
 function toChatDelegationRunRow(value: unknown): ChatDelegationRunRow | undefined {
   return isChatDelegationRunRow(value) ? value : undefined;
-}
-
-function toChatDelegationRunRows(value: unknown): ChatDelegationRunRow[] {
-  return Array.isArray(value) ? value.filter(isChatDelegationRunRow) : [];
 }
 
 function mapRow(row: ChatDelegationRunRow): ChatDelegationRunRecord {

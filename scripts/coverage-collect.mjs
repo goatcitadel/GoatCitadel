@@ -40,11 +40,14 @@ const PRODUCTION_RISK_TIERS = [
   },
   {
     id: "mission-control",
-    label: "Mission Control",
+    label: "Mission Control UI Surfaces",
     lineThreshold: 75,
     branchThreshold: 60,
     sourcePrefixes: [
       "apps/mission-control/src/",
+      "apps/mission-control-next/src/",
+      "packages/mission-control-shared/src/",
+      "packages/threaded-surface-core/src/",
     ],
   },
 ];
