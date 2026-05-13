@@ -199,15 +199,11 @@ async function main() {
     } else if (lane === "agentic-self-improvement-trust") {
       await runAgenticSelfImprovementTrustLane(context);
     } else if (lane === "agentic-proof" || lane === "agentic-parity") {
-      await runAgenticContractsLane(context);
-      await runAgenticGovernanceLane(context);
-      await runAgenticHarnessesLane(context);
+      await runAgenticProofSuite(context);
     } else if (lane === "all") {
       await runFastLane(context);
       await runCodeModeSandboxRequiredLane(context);
-      await runAgenticContractsLane(context);
-      await runAgenticGovernanceLane(context);
-      await runAgenticHarnessesLane(context);
+      await runAgenticProofSuite(context);
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });
@@ -260,4 +256,15 @@ main().catch((error) => {
 
 function shouldGenerateReview(lane) {
   return REVIEW_LANES.has(lane);
+}
+
+async function runAgenticProofSuite(context) {
+  await runAgenticContractsLane(context);
+  await runAgenticGovernanceLane(context);
+  await runAgenticHarnessesLane(context);
+  await runAgenticWorkbenchLoopLane(context);
+  await runAgenticChannelsRuntimeLane(context);
+  await runAgenticHarnessAvailabilityLane(context);
+  await runAgenticPluginsMarketplaceLane(context);
+  await runAgenticSelfImprovementTrustLane(context);
 }
