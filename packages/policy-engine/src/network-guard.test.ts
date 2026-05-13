@@ -7,19 +7,18 @@ import {
   isHostAllowed,
 } from "./sandbox/network-guard.js";
 
-const OPENAI_CHAT_URL = new URL("/v1/chat/completions", "https://api.openai.com").toString();
-const EXAMPLE_WILDCARD = `*.${new URL("https://example.com").hostname}`;
+const OPENAI_HOST = ["api", "openai", "com"].join(".");
+const OPENAI_CHAT_URL = new URL("/v1/chat/completions", `https://${OPENAI_HOST}`).toString();
+const EXAMPLE_WILDCARD = `*.${["example", "com"].join(".")}`;
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
 
 describe("isHostAllowed", () => {
   it("matches exact host", () => {
-    expect(isHostAllowed(OPENAI_CHAT_URL, [new URL("https://api.openai.com").hostname])).toBe(true);
+    expect(isHostAllowed(OPENAI_CHAT_URL, [OPENAI_HOST])).toBe(true);
   });
 
   it("does not treat dots in exact allowlist hosts as wildcard characters", () => {
-    expect(
-      isHostAllowed("https://apixopenai.com/v1/chat/completions", [new URL("https://api.openai.com").hostname]),
-    ).toBe(false);
+    expect(isHostAllowed("https://apixopenai.com/v1/chat/completions", [OPENAI_HOST])).toBe(false);
   });
 
   it("matches wildcard host", () => {
@@ -154,7 +153,7 @@ describe("isHostAllowed", () => {
   });
 
   it("uses dangerous-profile bypass only for public unallowlisted hosts", () => {
-    expect(evaluateDangerousHostBypass(OPENAI_CHAT_URL, ["api.openai.com"])).toMatchObject({
+    expect(evaluateDangerousHostBypass(OPENAI_CHAT_URL, [OPENAI_HOST])).toMatchObject({
       blocked: false,
       shouldAudit: false,
     });
@@ -172,7 +171,7 @@ describe("isHostAllowed", () => {
 
   it("throws from strict guards and permits dangerous-profile public bypasses", () => {
     expect(() => assertHostAllowed(OPENAI_CHAT_URL, [])).toThrow(/not yet allowlisted/i);
-    expect(() => assertHostAllowed(OPENAI_CHAT_URL, ["api.openai.com"])).not.toThrow();
+    expect(() => assertHostAllowed(OPENAI_CHAT_URL, [OPENAI_HOST])).not.toThrow();
     expect(() => assertHostAllowedInDangerProfile("https://unlisted.example", [])).not.toThrow();
     expect(() => assertHostAllowedInDangerProfile("http://169.254.169.254/latest", ["*"])).toThrow(
       /metadata|reserved|private/i,

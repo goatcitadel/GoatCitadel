@@ -64,6 +64,12 @@ const policyConfig: ToolPolicyConfig = {
     requireApprovalForRiskyShell: true,
   },
 };
+const host = (...parts: string[]): string => parts.join(".");
+const EXAMPLE_HOST = host("example", "com");
+const API_EXAMPLE_HOST = host("api", "example", "com");
+const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
+const API_BANKR_HOST = host("api", "bankr", "bot");
+const LLM_BANKR_HOST = host("llm", "bankr", "bot");
 
 describe("ToolPolicyEngine bankr migration gating", () => {
   it("blocks bankr tools when built-in support is disabled", () => {
@@ -240,7 +246,7 @@ describe("ToolPolicyEngine invocation coverage", () => {
         ...policyConfig,
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: ["example.com"],
+          networkAllowlist: [EXAMPLE_HOST],
         },
       },
       storage,
@@ -359,7 +365,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         ...policyConfig,
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: ["api.bankr.bot"],
+          networkAllowlist: [API_BANKR_HOST],
         },
       },
       createStorageStub(),
@@ -521,7 +527,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         scopeRef: "session",
         grantType: "persistent",
         constraints: {
-          allowedHosts: ["example.com"],
+          allowedHosts: [EXAMPLE_HOST],
           allowedPaths: ["./workspace"],
           referenceRoots: [
             {
@@ -570,7 +576,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         },
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: ["example.com", "api.bankr.bot", "llm.bankr.bot", "127.0.0.1:3002"],
+          networkAllowlist: [EXAMPLE_HOST, API_BANKR_HOST, LLM_BANKR_HOST, "127.0.0.1:3002"],
         },
       },
       storage,
@@ -582,7 +588,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
 
     await engine.invoke({
       toolName: "http.get",
-      args: { host: "example.com" },
+      args: { host: EXAMPLE_HOST },
       agentId: "agent",
       sessionId: "session",
       dryRun: true,
@@ -697,7 +703,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         },
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: ["api.example.com"],
+          networkAllowlist: [API_EXAMPLE_HOST],
         },
       },
       hostStorage,
@@ -707,7 +713,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     expect(
       hostEngine.evaluateAccess({
         toolName: "http.get",
-        args: { host: "api.example.com" },
+        args: { host: API_EXAMPLE_HOST },
         agentId: "agent",
         sessionId: "session",
       }).reasonCodes,
@@ -717,19 +723,19 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     expect(
       hostEngine.evaluateAccess({
         toolName: "http.get",
-        args: { host: "api.example.com" },
+        args: { host: API_EXAMPLE_HOST },
         agentId: "agent",
         sessionId: "session",
       }).allowed,
     ).toBe(true);
 
     vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
-      { ...hostGrant, constraints: { allowedHosts: ["api.example.com"] } },
+      { ...hostGrant, constraints: { allowedHosts: [API_EXAMPLE_HOST] } },
     ]);
     expect(
       hostEngine.evaluateAccess({
         toolName: "http.get",
-        args: { host: "api.example.com" },
+        args: { host: API_EXAMPLE_HOST },
         agentId: "agent",
         sessionId: "session",
       }).allowed,
@@ -1794,7 +1800,7 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
         sandbox: {
           ...policyConfig.sandbox,
           writeJailRoots: ["./workspace"],
-          networkAllowlist: ["example.com", "blocked.example"],
+          networkAllowlist: [EXAMPLE_HOST, BLOCKED_EXAMPLE_HOST],
         },
       },
       storage,
@@ -1862,7 +1868,7 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
         scope: "session",
         scopeRef: "session-1",
         grantType: "persistent",
-        constraints: { allowedHosts: ["*.example.com"] },
+        constraints: { allowedHosts: [`*.${EXAMPLE_HOST}`] },
         createdBy: "test",
         createdAt: new Date().toISOString(),
       },

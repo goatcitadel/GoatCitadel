@@ -626,23 +626,14 @@ function migrateLegacyGatewayAuthStorage(): void {
   if (typeof window === "undefined") {
     return;
   }
-  const sessionRaw = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
-  const localRaw = window.localStorage.getItem(AUTH_STORAGE_KEY);
-  if (sessionRaw || !localRaw) {
+  if (window.sessionStorage.getItem(AUTH_STORAGE_KEY)) {
     return;
   }
-  const sanitized = parseStoredGatewayAuthState(localRaw);
-  if (!sanitized) {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY);
-    return;
-  }
-  const raw = JSON.stringify(sanitized);
-  window.sessionStorage.setItem(AUTH_STORAGE_KEY, raw);
   if (getGatewayAuthStorageMode() !== "persistent") {
     window.localStorage.removeItem(AUTH_STORAGE_KEY);
     return;
   }
-  window.localStorage.setItem(AUTH_STORAGE_KEY, raw);
+  readStoredGatewayAuthStateFromStorage(window.localStorage);
 }
 
 function readApiErrorMessage(body: unknown): string | undefined {
@@ -666,9 +657,8 @@ function readStoredGatewayAuthStateFromStorage(storage: Storage): GatewayAuthSta
     storage.removeItem(AUTH_STORAGE_KEY);
     return undefined;
   }
-  const sanitizedRaw = JSON.stringify(parsed);
-  if (sanitizedRaw !== raw) {
-    storage.setItem(AUTH_STORAGE_KEY, sanitizedRaw);
+  if (storedGatewayAuthContainsPassword(raw)) {
+    storage.removeItem(AUTH_STORAGE_KEY);
   }
   return parsed;
 }
@@ -678,6 +668,20 @@ function parseStoredGatewayAuthState(raw: string): GatewayAuthState | undefined 
     return normalizeStoredGatewayAuthState(JSON.parse(raw));
   } catch {
     return undefined;
+  }
+}
+
+function storedGatewayAuthContainsPassword(raw: string): boolean {
+  try {
+    const value = JSON.parse(raw);
+    return Boolean(
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.prototype.hasOwnProperty.call(value, "password"),
+    );
+  } catch {
+    return false;
   }
 }
 

@@ -150,10 +150,8 @@ describe("client-core", () => {
       JSON.stringify({ token: " legacy-token ", extra: "ignored", tokenQueryParam: "" }),
     );
     window.localStorage.setItem("goatcitadel.gateway.auth.storageMode", "session");
-    expect(readStoredGatewayAuthState()).toEqual({
-      token: "legacy-token",
-      tokenQueryParam: "access_token",
-    });
+    expect(readStoredGatewayAuthState()).toBeUndefined();
+    expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
     expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
 
     window.sessionStorage.clear();
@@ -164,6 +162,15 @@ describe("client-core", () => {
 
     window.sessionStorage.clear();
     window.localStorage.setItem("goatcitadel.gateway.auth", "{bad local json");
+    expect(readStoredGatewayAuthState()).toBeUndefined();
+    expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
+
+    window.sessionStorage.clear();
+    window.localStorage.setItem("goatcitadel.gateway.auth.storageMode", "persistent");
+    window.localStorage.setItem(
+      "goatcitadel.gateway.auth",
+      JSON.stringify({ mode: "basic", username: "user", password: "old-secret" }),
+    );
     expect(readStoredGatewayAuthState()).toBeUndefined();
     expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
 

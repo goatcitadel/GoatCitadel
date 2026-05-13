@@ -352,7 +352,7 @@ describe("isTrustedGatewayHost", () => {
     disconnect();
   });
 
-  it("migrates legacy localStorage auth into session storage", () => {
+  it("drops legacy session-mode localStorage auth instead of rehydrating web storage", () => {
     window.localStorage.setItem(
       "goatcitadel.gateway.auth",
       JSON.stringify({
@@ -364,8 +364,8 @@ describe("isTrustedGatewayHost", () => {
 
     const migrated = readStoredGatewayAuthState();
 
-    expect(migrated).toMatchObject({ token: "legacy-token" });
-    expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).toContain("legacy-token");
+    expect(migrated).toBeUndefined();
+    expect(window.sessionStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
     expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
   });
 

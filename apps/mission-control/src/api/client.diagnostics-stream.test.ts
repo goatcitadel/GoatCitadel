@@ -96,10 +96,13 @@ describe("connectDevDiagnosticsStream", () => {
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
-    window.localStorage.setItem("goatcitadel.gateway.auth", JSON.stringify({
-      mode: "token",
-      token: "operator-token",
-    }));
+    window.sessionStorage.setItem(
+      "goatcitadel.gateway.auth",
+      JSON.stringify({
+        mode: "token",
+        token: "operator-token",
+      }),
+    );
 
     const { connectDevDiagnosticsStream } = await import("./client");
     const close = connectDevDiagnosticsStream(() => undefined);
