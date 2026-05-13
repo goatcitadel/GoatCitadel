@@ -2,13 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { repoRoot } from "./shared.mjs";
 
-const ARCHITECTURE_BASELINE_PATH = path.join(
-  repoRoot,
-  "scripts",
-  "verification",
-  "baselines",
-  "architecture-metrics.json",
-);
+function getArchitectureBaselinePath(rootDir = repoRoot) {
+  return path.join(rootDir, "scripts", "verification", "baselines", "architecture-metrics.json");
+}
+
+const ARCHITECTURE_BASELINE_PATH = getArchitectureBaselinePath(repoRoot);
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "addonsService",
   "approvalRuntime",
@@ -54,15 +52,18 @@ const EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS = [
   ">;",
 ].join("\n");
 
+/** Escapes regex metacharacters so a string can be embedded as a literal RegExp fragment. */
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Extracts a complete exported TypeScript type alias declaration, or an empty string when missing. */
 function extractExportedTypeAlias(source, aliasName) {
   const aliasPattern = new RegExp(String.raw`export type ${escapeRegExp(aliasName)}\s*=[\s\S]*?;`);
   return source.match(aliasPattern)?.[0] ?? "";
 }
 
+/** Extracts the body of an exported TypeScript interface by matching the outer brace pair. */
 function extractInterfaceBody(source, interfaceName) {
   const declarationPattern = new RegExp(String.raw`\bexport\s+interface\s+${escapeRegExp(interfaceName)}\b`);
   const declarationMatch = declarationPattern.exec(source);
@@ -91,6 +92,7 @@ function extractInterfaceBody(source, interfaceName) {
   return "";
 }
 
+/** Collects architecture-boundary metrics used by the baseline comparison gate. */
 export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const gatewaySrcDir = path.join(rootDir, "apps", "gateway", "src");
   const routesDir = path.join(rootDir, "apps", "gateway", "src", "routes");
@@ -257,7 +259,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
 }
 
 export async function readArchitectureMetricsBaseline(rootDir = repoRoot) {
-  const baselinePath = path.join(rootDir, "scripts", "verification", "baselines", "architecture-metrics.json");
+  const baselinePath = getArchitectureBaselinePath(rootDir);
   try {
     const raw = await fs.readFile(baselinePath, "utf8");
     return JSON.parse(raw);
