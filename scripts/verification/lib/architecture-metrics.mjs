@@ -565,20 +565,26 @@ export function compareArchitectureMetrics(metrics, baseline) {
 }
 
 async function listFiles(rootDir, predicate) {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const fullPath = path.join(rootDir, entry.name);
+  const files = [];
+  const directoriesToVisit = [rootDir];
+
+  while (directoriesToVisit.length > 0) {
+    const currentDir = directoriesToVisit.pop();
+    const entries = await fs.readdir(currentDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        return listFiles(fullPath, predicate);
+        directoriesToVisit.push(fullPath);
+        continue;
       }
       if (predicate(fullPath)) {
-        return [fullPath];
+        files.push(fullPath);
       }
-      return [];
-    }),
-  );
-  return files.flat();
+    }
+  }
+
+  return files;
 }
 
 async function countPatternAcrossFiles(filePaths, pattern) {
@@ -807,12 +813,20 @@ function classifyGatewayMethodRegion(methodName) {
 }
 
 async function countBoundGatewayRoutePortMethods(source, serviceFiles) {
-  const match = source.match(/export function createBoundGatewayRouteServiceDependencies[\s\S]*?\n}\n/);
-  if (!match) {
+  const sourceFile = createMetricsSourceFile(source);
+  const targetFunction = sourceFile.statements.find(
+    (statement) =>
+      ts.isFunctionDeclaration(statement) &&
+      hasExportModifier(statement) &&
+      statement.name?.text === "createBoundGatewayRouteServiceDependencies",
+  );
+  if (!targetFunction?.body) {
     return 0;
   }
+
+  const functionSource = source.slice(targetFunction.body.getStart(sourceFile), targetFunction.body.end);
   let total = 0;
-  for (const call of match[0].matchAll(/bindRoutePort\(\s*source\s*,\s*([A-Za-z0-9_]+)\s*\)/g)) {
+  for (const call of functionSource.matchAll(/bindRoutePort\(\s*source\s*,\s*([A-Za-z0-9_]+)\s*\)/g)) {
     const methodsName = call[1];
     const declaration = await findExportedConstArrayDeclaration(methodsName, serviceFiles);
     if (!declaration) {
@@ -950,11 +964,24 @@ function normalizeTypeAlias(source) {
     .join("\n");
 }
 
-function countMatches(content, pattern) {
+const countMatchesRegexCache = new Map();
+
+function getCachedGlobalRegex(pattern) {
   const flagSet = new Set(pattern.flags.split(""));
   flagSet.add("g");
   const flags = [...flagSet].join("");
-  const regex = new RegExp(pattern.source, flags);
+  const cacheKey = `${pattern.source}\u0000${flags}`;
+  let regex = countMatchesRegexCache.get(cacheKey);
+  if (!regex) {
+    regex = new RegExp(pattern.source, flags);
+    countMatchesRegexCache.set(cacheKey, regex);
+  }
+  return regex;
+}
+
+function countMatches(content, pattern) {
+  const regex = getCachedGlobalRegex(pattern);
+  regex.lastIndex = 0;
   let count = 0;
   let match;
   while ((match = regex.exec(content)) !== null) {
